@@ -30,6 +30,7 @@ const harness = vi.hoisted(() => ({
   localUpdates: [] as Array<Record<string, unknown>>,
   backListeners: [] as Array<() => boolean>,
   focused: true,
+  routeParams: {} as Record<string, string>,
 }));
 
 vi.mock('expo-router', () => ({
@@ -91,7 +92,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@/lib/motion', () => ({ useReducedMotion: () => true }));
 // The first run is drawn dark and raises its own light status bar while it is in front.
-vi.mock('@react-navigation/native', () => ({ useIsFocused: () => harness.focused, useRoute: () => ({ params: {} }) }));
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => harness.focused, useRoute: () => ({ params: harness.routeParams }) }));
 vi.mock('expo-status-bar', () => ({ StatusBar: () => null }));
 
 vi.mock('@/lib/onboarding', async () => {
@@ -168,6 +169,7 @@ import { AccountDeletingError, ApiError, SessionMergedError } from '../lib/api-c
 import { trackOnboardingEvent } from '../lib/onboarding';
 import { HANDLE_CHECK_DELAY_MS } from '../lib/use-handle-availability';
 import { welcomeCreditsQueryKey } from '../lib/use-onboarding-destination';
+import { resetWelcomePopupThisRun, welcomeReturnPath } from '../lib/welcome-popup';
 
 function renderScreen(queryClient: QueryClient) {
   return renderer.create(
@@ -847,6 +849,38 @@ describe('handing the welcome credits to the popup over Home', () => {
     expect(harness.localUpdates).toContainEqual(expect.objectContaining({ status: 'completed' }));
     expect(router.replace).toHaveBeenCalledWith('/(tabs)');
     act(() => tree?.unmount());
+  });
+
+  // From a sign-up a screen asked for (a creator's Generate): back to that screen,
+  // which the welcome popup now offers the credits on (owner, 2026-11-09).
+  it('marks the screen a sign-up was asked from as it goes back there with the name saved', async () => {
+    resetWelcomePopupThisRun();
+    harness.routeParams = { returnTo: '/(tabs)/creator?tool=image' };
+    harness.api.getProfile.mockReset().mockResolvedValue(profile);
+    harness.api.getWelcomeCredits.mockReset()
+      .mockResolvedValueOnce(welcome)
+      .mockResolvedValue(eligible);
+    harness.api.validateProfile.mockReset().mockResolvedValue({ ok: true });
+    harness.api.updateProfile.mockReset().mockImplementation(async (body: Record<string, unknown>) => ({ ...profile, ...body }));
+    vi.mocked(router.replace).mockClear();
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        tree = renderScreen(queryClient);
+        await settle();
+      });
+      expect(welcomeReturnPath()).toBeNull();
+      await saveHandle(tree!);
+
+      expect(harness.api.claimWelcomeCredits).not.toHaveBeenCalled();
+      expect(router.replace).toHaveBeenCalledWith('/(tabs)/creator?tool=image');
+      expect(welcomeReturnPath()).toBe('/creator');
+    } finally {
+      harness.routeParams = {};
+      resetWelcomePopupThisRun();
+      act(() => tree?.unmount());
+    }
   });
 
   it('still says when a sign-in was paid out on a previous account', async () => {

@@ -3,8 +3,8 @@ import type { Metadata } from 'next';
 import { createNoIndexMetadata } from '@/lib/seo';
 
 export const metadata: Metadata = createNoIndexMetadata(
-    'Log In',
-    'Sign in to your Magic Booklet account to manage credits, projects, and AI generation workflows.'
+    'Sign in',
+    'Sign in to Magic Booklet with Apple or Google, or with the email your account was made with.'
 );
 
 export default function LoginLayout({ children }: { children: React.ReactNode }) {

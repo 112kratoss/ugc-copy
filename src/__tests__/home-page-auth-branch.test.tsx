@@ -42,11 +42,6 @@ vi.mock('@/app/home/WorkspaceCard', () => ({
   default: () => <div data-testid="workspace-card" />,
 }));
 
-// Reads the browser Supabase client, which needs env this test does not set.
-vi.mock('@/app/home/WelcomeCreditsCard', () => ({
-  default: () => null,
-}));
-
 vi.mock('@/app/feed/FeedClient', () => ({
   default: (props: Record<string, unknown>) => {
     feedClientPropsMock(props);

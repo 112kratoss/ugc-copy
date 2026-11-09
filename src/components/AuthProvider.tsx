@@ -68,6 +68,19 @@ interface AuthContextValue {
     refreshSessionState: () => Promise<void>;
 }
 
+/**
+ * A new balance, told to everything on the page that draws one: the header
+ * (`AppShellAccount`, which takes the figure at once and reads it again) and
+ * every provider (each takes it into its own balance). They listen on the
+ * window because the shell sits above every route's provider.
+ */
+function announceCredits(nextCredits: number | null, options?: CreditUpdateOptions) {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('credits_updated', {
+        detail: { credits: nextCredits, marketplaceSpendableCredits: options?.marketplaceSpendableCredits },
+    }));
+}
+
 const anonymousAuthContext: AuthContextValue = {
     session: null,
     user: null,
@@ -77,7 +90,11 @@ const anonymousAuthContext: AuthContextValue = {
     signedOut: false,
     signedOutHere: false,
     isLoading: false,
-    updateCredits: () => undefined,
+    // Outside a provider (the root layout's own components, a page drawn
+    // without one) a balance still has to reach the header: a no-op here left
+    // it at 0 after the welcome claim, made on a page with no provider, until
+    // a full reload (2026-11-05).
+    updateCredits: announceCredits,
     refreshSessionState: async () => undefined,
 };
 
@@ -533,12 +550,7 @@ export function AuthProvider({
 
     const updateCredits = (nextCredits: number | null, options?: CreditUpdateOptions) => {
         setBalance((current) => balanceAfterTotal(current, nextCredits, options));
-
-        if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('credits_updated', {
-                detail: { credits: nextCredits, marketplaceSpendableCredits: options?.marketplaceSpendableCredits },
-            }));
-        }
+        announceCredits(nextCredits, options);
     };
 
     const resolvedIsLoading = !hasResolvedInitialState

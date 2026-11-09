@@ -1,12 +1,11 @@
-import { BadgeCheck, CheckCircle2, Sparkles } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import { redirect } from 'next/navigation';
 
-import DeferredCreatorProfileCard from './DeferredCreatorProfileCard';
 import { loadOwnerProfile } from './load-owner-profile';
 import OwnerProfileMediaHub, { type OwnerWalletBalance } from './OwnerProfileMediaHub';
 import { isGuestUser } from '@/lib/account-identity';
+import { buildCreatorNameStepPath, isOldProfileSetupPath } from '@/lib/auth-onboarding';
 import { getCreatorPayoutState } from '@/lib/creator-payouts';
-import { getSafeProfileNextPath } from '@/lib/profile';
 import { createServiceClient } from '@/lib/server-helpers';
 import { getServerAuthState } from '@/lib/supabase-server';
 
@@ -64,14 +63,16 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
       ? `/creations?${new URLSearchParams({ generation: legacyGenerationId })}`
       : '/creations');
   }
-  const requestedNextPath = getParam(resolvedSearchParams.next);
-  const nextPath = getSafeProfileNextPath(requestedNextPath);
   const profileReturnPath = buildProfileReturnPath(resolvedSearchParams);
+  // A first-profile link from before the creator-name step (a bookmark, the
+  // history, Home's welcome card) opens the step, on the way to its `next`.
+  if (isOldProfileSetupPath(profileReturnPath)) {
+    redirect(buildCreatorNameStepPath(profileReturnPath));
+  }
   const [
     {
       initialProfile,
       loadError,
-      readiness,
       publicProfileUsername,
       publicProfilePath,
       publicProfileDisplayName,
@@ -82,26 +83,6 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
     loadOwnerProfile(profileReturnPath, { includeTotals: true }),
     loadWalletBalance(),
   ]);
-  const isFirstRunProfile = !readiness.publicPublishReady;
-  const setupSteps = [
-    {
-      label: 'Claim handle',
-      done: readiness.hasClaimedHandle,
-      detail: readiness.hasClaimedHandle
-        ? `@${publicProfileUsername}`
-        : 'Choose a custom handle for your public URL',
-    },
-    {
-      label: 'Add your name',
-      done: readiness.hasDisplayName,
-      detail: 'Required before you publish publicly',
-    },
-    {
-      label: 'Add an avatar',
-      done: readiness.hasAvatar,
-      detail: 'Recommended — builds buyer trust',
-    },
-  ];
 
   return (
     <div className="ui-page ui-page-ambient min-h-screen">
@@ -114,57 +95,16 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
             Creator account
           </div>
           <h1 className="text-2xl font-extrabold tracking-tight text-[var(--ui-text-primary)] sm:text-4xl">
-            {isFirstRunProfile ? 'Set up your creator profile' : 'Profile'}
+            Profile
           </h1>
           <p className="mt-2 hidden max-w-2xl text-sm leading-6 text-zinc-400 sm:block">
-            {isFirstRunProfile
-              ? 'Choose the identity your public posts will point to. Optional details can wait.'
-              : 'Your identity, creator account, and published work in one place.'}
+            Your identity, creator account, and published work in one place.
           </p>
         </header>
 
-        {isFirstRunProfile ? (
-          <>
-            <section className="mb-7 rounded-3xl border border-[rgba(255,122,89,0.2)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
-              <div className="max-w-2xl">
-                <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(255,122,89,0.24)] bg-[var(--ui-primary-soft)] px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-primary-strong)]">
-                  <BadgeCheck className="h-3.5 w-3.5" aria-hidden />
-                  Profile setup
-                </div>
-                <h2 className="mt-4 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-                  Claim the identity your posts and recipes will point to
-                </h2>
-                <p className="mt-3 max-w-xl text-sm leading-7 text-zinc-300">
-                  Start with a handle and display name. An avatar builds trust; your bio, cover, links, and location can wait.
-                </p>
-              </div>
-              <div className="mt-6 grid gap-3 md:grid-cols-3">
-                {setupSteps.map((step) => (
-                  <div
-                    key={step.label}
-                    className={`rounded-2xl border p-4 ${step.done
-                      ? 'border-emerald-300/20 bg-emerald-500/10'
-                      : 'border-white/8 bg-white/[0.03]'}`}
-                  >
-                    <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                      <CheckCircle2 className={`h-4 w-4 ${step.done ? 'text-emerald-300' : 'text-zinc-500'}`} aria-hidden />
-                      {step.label}
-                    </div>
-                    <p className="mt-2 text-xs leading-5 text-zinc-400">{step.detail}</p>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <DeferredCreatorProfileCard
-              initialProfile={initialProfile}
-              loadError={loadError}
-              onboardingMode
-              nextPath={nextPath}
-              returnAfterSave={Boolean(requestedNextPath)}
-            />
-          </>
-        ) : initialProfile ? (
+        {/* No setup mode of its own: a new account chooses its creator name at
+            /onboarding, and Edit profile changes it afterwards. */}
+        {initialProfile ? (
           <OwnerProfileMediaHub
             creator={{
               id: initialProfile.id,

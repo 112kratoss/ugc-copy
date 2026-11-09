@@ -12,7 +12,8 @@ const harness = vi.hoisted(() => ({
   updateCredits: vi.fn(),
   refreshProfile: vi.fn(async () => undefined),
   welcome: { status: 'eligible', identityComplete: true, amount: 25 } as Record<string, unknown> | undefined,
-  focused: true,
+  // The screen in front, as expo-router names it: Home is `/`.
+  pathname: '/',
   reducedMotion: true,
   haptics: [] as string[],
   announced: [] as string[],
@@ -42,7 +43,7 @@ vi.mock('react-native-svg', () => ({
   default: ({ children }: MockProps) => React.createElement('svg', null, children),
   Circle: (props: MockProps) => React.createElement('circle', props),
 }));
-vi.mock('@react-navigation/native', () => ({ useIsFocused: () => harness.focused }));
+vi.mock('expo-router', () => ({ usePathname: () => harness.pathname }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({}) }));
 vi.mock('@/components/ui', () => ({
   AppText: ({ children }: MockProps) => React.createElement('app-text', null, children),
@@ -75,7 +76,7 @@ vi.mock('@/lib/use-onboarding-destination', () => ({
 
 import { CLAIM_CONFETTI_MS } from '../components/claim-confetti';
 import { WelcomeCreditsPopup } from '../components/welcome-credits-popup';
-import { resetWelcomePopupThisRun, wasWelcomePopupDismissedThisRun, WELCOME_COUNT_UP_MS } from '../lib/welcome-popup';
+import { markWelcomeReturn, resetWelcomePopupThisRun, wasWelcomePopupDismissedThisRun, WELCOME_COUNT_UP_MS } from '../lib/welcome-popup';
 
 const trees: renderer.ReactTestRenderer[] = [];
 // Every host view measures to the same window frame, so the figure has an origin for the burst.
@@ -105,7 +106,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
     harness.refreshProfile.mockClear();
     harness.welcome = { status: 'eligible', identityComplete: true, amount: 25 };
     harness.user = { id: 'creator-1' };
-    harness.focused = true;
+    harness.pathname = '/';
     harness.reducedMotion = true;
     harness.haptics.length = 0;
     harness.announced.length = 0;
@@ -129,14 +130,29 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
       () => { harness.user = null; },
       () => { harness.welcome = { status: 'not_eligible', identityComplete: false, amount: 25 }; },
       () => { harness.welcome = { status: 'claimed', identityComplete: true, amount: 25 }; },
-      () => { harness.focused = false; },
+      () => { harness.pathname = '/post/123'; },
+      () => { harness.pathname = '/creator'; },
     ]) {
       harness.user = { id: 'creator-1' };
       harness.welcome = { status: 'eligible', identityComplete: true, amount: 25 };
-      harness.focused = true;
+      harness.pathname = '/';
       setup();
       expect(mount().toJSON()).toBeNull();
     }
+  });
+
+  // A sign-up from a creator's Generate went back to the creator with no popup
+  // and 0 credits, and the creator offered a top-up (iPhone simulator, 2026-11-09).
+  it('offers the credits on the screen a finished sign-up went back to, and on no other', () => {
+    markWelcomeReturn('/(tabs)/creator?tool=image');
+    harness.pathname = '/creator';
+    const tree = mount();
+    expect(text(tree)).toContain('Claim your welcome credits');
+    act(() => tree.unmount());
+    trees.splice(trees.indexOf(tree), 1);
+
+    harness.pathname = '/create/image';
+    expect(mount().toJSON()).toBeNull();
   });
 
   it('claims on tap: a light tap, the balance, the count, the success haptic and a word for VoiceOver', async () => {

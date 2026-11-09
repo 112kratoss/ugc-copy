@@ -9,9 +9,6 @@ import CreatorProfileCardFallback from './CreatorProfileCardFallback';
 interface DeferredCreatorProfileCardProps {
   initialProfile: EditableCreatorProfile | null;
   loadError: string | null;
-  onboardingMode?: boolean;
-  nextPath?: string;
-  returnAfterSave?: boolean;
   collapseOptionalDetails?: boolean;
   hideIntro?: boolean;
 }
@@ -63,8 +60,7 @@ function useDeferredUntilIdle() {
 }
 
 export default function DeferredCreatorProfileCard(props: DeferredCreatorProfileCardProps) {
-  const isDeferredReady = useDeferredUntilIdle();
-  const isReady = props.onboardingMode || isDeferredReady;
+  const isReady = useDeferredUntilIdle();
 
   return (
     <DeferredCardPropsContext.Provider value={props}>

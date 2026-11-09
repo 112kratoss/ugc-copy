@@ -47,12 +47,6 @@ const EXEMPT: Array<{ file: string; token: string; count: number; why: string }>
     count: 1,
     why: "the 16px native checkbox of From this creation, which keeps the platform's own small rounded square",
   },
-  {
-    file: 'src/app/welcome-reward-celebration.css',
-    token: 'border-radius: 2px',
-    count: 1,
-    why: 'confetti pieces a few pixels across, a drawing rather than a surface',
-  },
 ];
 
 const ROUNDED = /^rounded(?:-(?:t|b|l|r|tl|tr|bl|br|s|e|ss|se|es|ee))?(?:-(.+))?$/;

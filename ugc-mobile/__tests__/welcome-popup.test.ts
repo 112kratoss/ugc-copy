@@ -2,17 +2,23 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   dismissWelcomePopupThisRun,
+  isWelcomePopupPlace,
+  markWelcomeReturn,
   resetWelcomePopupThisRun,
   shouldShowWelcomePopup,
+  subscribeToWelcomeReturn,
   wasWelcomePopupDismissedThisRun,
   WELCOME_COUNT_UP_MS,
   welcomeCountUpTicks,
   welcomeFillProgress,
+  welcomeReturnPath,
+  welcomeRoutePath,
 } from '../lib/welcome-popup';
+import * as shared from '../lib/welcome-popup-policy/welcome-popup-policy';
 
 describe('when the welcome-credits popup shows over Home (owner 11-09)', () => {
   const eligible = { status: 'eligible' as const, identityComplete: true };
-  const base = { signedIn: true, welcome: eligible, homeFocused: true, dismissed: false };
+  const base = { signedIn: true, welcome: eligible, offeredHere: true, dismissed: false };
 
   beforeEach(() => resetWelcomePopupThisRun());
 
@@ -22,7 +28,7 @@ describe('when the welcome-credits popup shows over Home (owner 11-09)', () => {
 
   it('stays away otherwise', () => {
     expect(shouldShowWelcomePopup({ ...base, signedIn: false })).toBe(false);
-    expect(shouldShowWelcomePopup({ ...base, homeFocused: false })).toBe(false);
+    expect(shouldShowWelcomePopup({ ...base, offeredHere: false })).toBe(false);
     expect(shouldShowWelcomePopup({ ...base, dismissed: true })).toBe(false);
     expect(shouldShowWelcomePopup({ ...base, welcome: null })).toBe(false);
     expect(shouldShowWelcomePopup({ ...base, welcome: { ...eligible, identityComplete: false } })).toBe(false);
@@ -37,6 +43,15 @@ describe('when the welcome-credits popup shows over Home (owner 11-09)', () => {
     expect(wasWelcomePopupDismissedThisRun('a')).toBe(true);
     expect(wasWelcomePopupDismissedThisRun('b')).toBe(false);
     expect(wasWelcomePopupDismissedThisRun(null)).toBe(false);
+  });
+});
+
+describe('the rules shared with the web', () => {
+  it('are the shared module itself, so the web’s popup offers and fills by the same rules', () => {
+    expect(shouldShowWelcomePopup).toBe(shared.shouldShowWelcomePopup);
+    expect(welcomeFillProgress).toBe(shared.welcomeFillProgress);
+    expect(welcomeCountUpTicks).toBe(shared.welcomeCountUpTicks);
+    expect(WELCOME_COUNT_UP_MS).toBe(shared.WELCOME_COUNT_UP_MS);
   });
 });
 
@@ -65,5 +80,43 @@ describe('the fill while the credits count up (owner 11-09: "like games with fil
       expect(value - previous).toBeLessThanOrEqual(1);
       previous = value;
     }
+  });
+});
+
+// A sign-up started from a creator's Generate went back to the creator with no
+// popup and 0 credits, and the creator offered a top-up (found reading the code
+// on 2026-11-09, seen on the iPhone simulator the same day).
+describe('the screen a sign-up returned to (owner 11-09: the popup shows there too)', () => {
+  beforeEach(() => resetWelcomePopupThisRun());
+
+  it('reads a route as expo-router names the screen in front: no groups, no query, no trailing slash', () => {
+    expect(welcomeRoutePath('/(tabs)/creator?tool=image&guided=1')).toBe('/creator');
+    expect(welcomeRoutePath('/(tabs)')).toBe('/');
+    expect(welcomeRoutePath('/(tabs)/index')).toBe('/');
+    expect(welcomeRoutePath('/create/video?remix=abc#top')).toBe('/create/video');
+    expect(welcomeRoutePath('/post/123/')).toBe('/post/123');
+    expect(welcomeRoutePath('/')).toBe('/');
+  });
+
+  it('offers it on Home, and on the screen a finished sign-up went back to', () => {
+    expect(isWelcomePopupPlace({ pathname: '/', returnedTo: null })).toBe(true);
+    expect(isWelcomePopupPlace({ pathname: '/creator', returnedTo: null })).toBe(false);
+
+    markWelcomeReturn('/(tabs)/creator?tool=image');
+    expect(welcomeReturnPath()).toBe('/creator');
+    expect(isWelcomePopupPlace({ pathname: '/creator', returnedTo: welcomeReturnPath() })).toBe(true);
+    expect(isWelcomePopupPlace({ pathname: '/create/image', returnedTo: welcomeReturnPath() })).toBe(false);
+    expect(isWelcomePopupPlace({ pathname: '/onboarding', returnedTo: welcomeReturnPath() })).toBe(false);
+  });
+
+  it('tells whoever listens, and is forgotten at the next app start', () => {
+    const heard: Array<string | null> = [];
+    const stop = subscribeToWelcomeReturn(() => heard.push(welcomeReturnPath()));
+    markWelcomeReturn('/create/motion');
+    stop();
+    markWelcomeReturn('/create/image');
+    expect(heard).toEqual(['/create/motion']);
+    resetWelcomePopupThisRun();
+    expect(welcomeReturnPath()).toBeNull();
   });
 });

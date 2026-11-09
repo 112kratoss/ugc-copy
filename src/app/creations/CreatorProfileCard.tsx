@@ -3,35 +3,25 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, AtSign, BadgeCheck, CheckCircle2, ExternalLink, Loader2, Save, UserRound, Camera, ImagePlus, Globe2, MapPin, Minus, Plus, RotateCcw } from 'lucide-react';
+import { AtSign, ExternalLink, Loader2, Save, UserRound, Camera, ImagePlus, Globe2, MapPin, Minus, Plus, RotateCcw } from 'lucide-react';
 
 import {
   buildProfileSaveBody,
   getCreatorProfileReadiness,
-  getSafeProfileNextPath,
-  isGeneratedProfileUsername,
   type EditableCreatorProfile,
   type ProfileFieldErrors,
   type ProfileUpdatePayload,
 } from '@/lib/profile';
-import {
-  PROFILE_ONBOARDING_SKIPPED_METADATA_KEY,
-  PROFILE_ONBOARDING_SKIPPED_VERSION,
-} from '@/lib/auth-onboarding';
 import { uploadProfileMediaWithSignedIntent } from '@/lib/profile-media-upload';
 import { supabase } from '@/lib/supabase';
 import { useLeaveGuard } from '@/lib/use-leave-guard';
 import type { ConfirmationRequest } from '@/components/feedback-state';
-import { useConfirmation } from '@/components/useConfirmation';
 
 interface CreatorProfileCardProps {
   initialProfile: EditableCreatorProfile | null;
   loadError: string | null;
   onProfileSaved?: (profile: EditableCreatorProfile) => void;
   isEmbedded?: boolean;
-  onboardingMode?: boolean;
-  nextPath?: string;
-  returnAfterSave?: boolean;
   collapseOptionalDetails?: boolean;
   hideIntro?: boolean;
 }
@@ -43,10 +33,6 @@ const LEAVE_WITHOUT_SAVING: ConfirmationRequest = {
   confirmLabel: 'Leave without saving',
   cancelLabel: 'Keep editing',
   tone: 'danger',
-};
-const LEAVE_SETUP_WITHOUT_SAVING: ConfirmationRequest = {
-  ...LEAVE_WITHOUT_SAVING,
-  title: 'Leave profile setup?',
 };
 const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_BIO_LENGTH = 280;
@@ -242,9 +228,6 @@ export default function CreatorProfileCard({
   loadError,
   onProfileSaved,
   isEmbedded = false,
-  onboardingMode = false,
-  nextPath = '/creations',
-  returnAfterSave = false,
   collapseOptionalDetails = false,
   hideIntro = false,
 }: CreatorProfileCardProps) {
@@ -254,7 +237,6 @@ export default function CreatorProfileCard({
   const [fieldErrors, setFieldErrors] = useState<ProfileFieldErrors>(EMPTY_ERRORS);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [isSkipping, setIsSkipping] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
@@ -268,8 +250,6 @@ export default function CreatorProfileCard({
   const avatarCropControlRef = useRef<HTMLButtonElement | null>(null);
   const coverCropControlRef = useRef<HTMLButtonElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
-  const optionalDetailsRef = useRef<HTMLDetailsElement | null>(null);
-  const askToConfirm = useConfirmation();
 
   const validateProfileImage = (file: File, field: 'avatarUrl' | 'coverUrl') => {
     if (!file.type.startsWith('image/')) {
@@ -583,13 +563,6 @@ export default function CreatorProfileCard({
       return;
     }
 
-    if (
-      onboardingMode
-      && ['bio', 'coverUrl', 'websiteUrl', 'location', 'twitterHandle', 'instagramHandle', 'tiktokHandle'].includes(firstField)
-    ) {
-      optionalDetailsRef.current?.setAttribute('open', '');
-    }
-
     window.setTimeout(() => {
       const target = formRef.current?.querySelector<HTMLElement>(`[name="${firstField}"]`);
       target?.focus();
@@ -613,32 +586,6 @@ export default function CreatorProfileCard({
     setFieldErrors(EMPTY_ERRORS);
     setFormError(null);
     setSuccessMessage('Unsaved changes reset.');
-  };
-
-  const continueWithoutSaving = async () => {
-    if (isDirty && !(await askToConfirm(LEAVE_SETUP_WITHOUT_SAVING))) {
-      return;
-    }
-
-    setIsSkipping(true);
-    try {
-      const { error } = await supabase.auth.updateUser({
-        data: {
-          [PROFILE_ONBOARDING_SKIPPED_METADATA_KEY]: PROFILE_ONBOARDING_SKIPPED_VERSION,
-        },
-      });
-      if (error) {
-        console.warn('Could not remember skipped creator onboarding:', error.message);
-      }
-    } catch (error) {
-      console.warn('Could not remember skipped creator onboarding:', error);
-    } finally {
-      leaveEditor(() => {
-        router.replace(getSafeProfileNextPath(nextPath));
-        router.refresh();
-      });
-      setIsSkipping(false);
-    }
   };
 
   const updateField = (key: keyof EditableCreatorProfile, value: string) => {
@@ -675,14 +622,10 @@ export default function CreatorProfileCard({
     });
     if (!form.username.trim()) {
       clientErrors.username = 'Choose a public handle.';
-    } else if (onboardingMode && isGeneratedProfileUsername(form.username)) {
-      clientErrors.username = 'Replace the generated handle with one that feels like yours.';
-    } else if (onboardingMode && !submissionReadiness.hasClaimedHandle) {
-      clientErrors.username = 'Use 3–24 lowercase letters, numbers, or hyphens.';
     }
-    // Not onboarding-only: the field is labelled Required everywhere, and the
-    // server rejects a blank one on every save, so catching it here keeps that
-    // rejection from costing a round trip.
+    // The field is labelled Required, and the server rejects a blank one on
+    // every save, so catching it here keeps that rejection from costing a
+    // round trip.
     if (!submissionReadiness.hasDisplayName) {
       clientErrors.displayName = 'Add the name you want people to see.';
     }
@@ -865,22 +808,12 @@ export default function CreatorProfileCard({
       });
       setForm(nextProfile);
       setSavedProfile(nextProfile);
-      setSuccessMessage(
-        onboardingMode
-          ? 'Creator profile saved. Continuing…'
-          : returnAfterSave
-            ? 'Creator profile saved. Returning…'
-            : 'Creator profile updated.'
-      );
+      setSuccessMessage('Creator profile updated.');
       onProfileSaved?.(nextProfile);
 
       if (!isEmbedded) {
-        const destination = returnAfterSave
-          || (onboardingMode && getCreatorProfileReadiness(nextProfile).publicPublishReady)
-          ? getSafeProfileNextPath(nextPath)
-          : '/profile';
         leaveEditor(() => {
-          router.replace(destination);
+          router.replace('/profile');
           router.refresh();
         });
       }
@@ -922,11 +855,6 @@ export default function CreatorProfileCard({
     : null;
   const avatarPreviewStyle = avatarPreview ? getMediaObjectStyle(avatarCrop) : undefined;
   const coverPreviewStyle = coverPreview ? getMediaObjectStyle(coverCrop) : undefined;
-  const essentialTasks = [
-    { label: 'Custom handle', done: currentReadiness.hasClaimedHandle },
-    { label: 'Display name', done: currentReadiness.hasDisplayName },
-  ];
-  const completedEssentialCount = essentialTasks.filter((task) => task.done).length;
 
   const profileStoryFields = (
     <div className="grid gap-6 md:grid-cols-2">
@@ -1103,9 +1031,7 @@ export default function CreatorProfileCard({
   );
 
   const optionalProfileFields = (
-    <div className={onboardingMode
-      ? 'p-5 sm:p-6'
-      : 'rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6'}>
+    <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
       <div className="mb-6">
         <h3 className="text-lg font-semibold text-white">More about you</h3>
         <p className="mt-1 text-sm leading-6 text-zinc-400">
@@ -1154,96 +1080,6 @@ export default function CreatorProfileCard({
           )}
         </div>
       )}
-
-      {onboardingMode ? (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(300px,0.55fr)]">
-          <div className="rounded-3xl border border-white/8 bg-zinc-950/70 p-5">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-[var(--ui-primary)]">
-              <BadgeCheck className="h-4 w-4" />
-              Profile essentials
-            </div>
-            <p className="mt-4 text-lg font-semibold text-white">
-              {completedEssentialCount} of {essentialTasks.length} essentials complete
-            </p>
-            <div
-              role="progressbar"
-              aria-label="Profile essentials completed"
-              aria-valuemin={0}
-              aria-valuemax={essentialTasks.length}
-              aria-valuenow={completedEssentialCount}
-              className="mt-3 h-2 overflow-hidden rounded-full bg-white/8"
-            >
-              <div
-                className="h-full rounded-full bg-[var(--ui-primary)] transition-[width] duration-200"
-                style={{ width: `${(completedEssentialCount / essentialTasks.length) * 100}%` }}
-              />
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {essentialTasks.map((task) => (
-                <span
-                  key={task.label}
-                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${
-                    task.done
-                      ? 'border-emerald-300/20 bg-emerald-500/10 text-emerald-50'
-                      : 'border-white/10 bg-white/[0.03] text-zinc-300'
-                  }`}
-                >
-                  <CheckCircle2 className={`h-3.5 w-3.5 ${task.done ? 'text-emerald-300' : 'text-zinc-500'}`} />
-                  {task.label}
-                </span>
-              ))}
-            </div>
-            <p className="mt-4 text-sm leading-7 text-zinc-400">
-              {currentReadiness.publicPublishReady
-                ? 'Your essentials are ready. Save and continue to the creation you chose.'
-                : 'Choose a custom handle and display name. You can add every other detail later.'}
-            </p>
-            <p className={`mt-3 flex items-center gap-2 text-sm ${currentReadiness.hasAvatar ? 'text-emerald-200' : 'text-zinc-500'}`}>
-              <CheckCircle2 className="h-4 w-4" aria-hidden />
-              {currentReadiness.hasAvatar ? 'Avatar added — ready to build buyer trust.' : 'Avatar recommended — builds buyer trust.'}
-            </p>
-          </div>
-
-          <div className="rounded-3xl border border-white/8 bg-[linear-gradient(180deg,rgba(14,18,25,0.96),rgba(7,9,12,0.98))] p-5">
-            <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Public preview</div>
-            <div className="mt-4 overflow-hidden rounded-2xl border border-white/8 bg-black/35">
-              <div className="h-20 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.28),transparent_42%),linear-gradient(135deg,rgba(16,185,129,0.16),rgba(59,130,246,0.1))]">
-                {(coverPreview || form.coverUrl) ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={coverPreview || form.coverUrl}
-                    alt=""
-                    className="h-full w-full object-cover"
-                    style={coverPreviewStyle}
-                  />
-                ) : null}
-              </div>
-              <div className="px-4 pb-4">
-                <div className="-mt-7 h-14 w-14 overflow-hidden rounded-full border border-white/15 bg-zinc-950">
-                  {(avatarPreview || form.avatarUrl) ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={avatarPreview || form.avatarUrl}
-                      alt=""
-                      className="h-full w-full object-cover"
-                      style={avatarPreviewStyle}
-                    />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center text-zinc-500">
-                      <UserRound className="h-6 w-6" />
-                    </div>
-                  )}
-                </div>
-                <div className="mt-3 text-sm font-semibold text-white">{form.displayName.trim() || 'Creator name'}</div>
-                <div className="mt-1 text-xs text-zinc-500">@{normalizedUsername || 'creator-name'}</div>
-                <p className="mt-3 line-clamp-2 text-xs leading-5 text-zinc-400">
-                  {form.bio.trim() || 'A short creator bio will appear here.'}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       <form ref={formRef} id="creator-profile-form" onSubmit={handleSubmit} noValidate className="space-y-6">
         <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
@@ -1371,7 +1207,7 @@ export default function CreatorProfileCard({
           </div>
         </div>
 
-        {collapseOptionalDetails && !onboardingMode ? (
+        {collapseOptionalDetails ? (
           <>
             <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
               <div className="mb-6">
@@ -1380,7 +1216,7 @@ export default function CreatorProfileCard({
               </div>
               {profileStoryFields}
             </div>
-            <details ref={optionalDetailsRef} className="group rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]">
+            <details className="group rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]">
               <summary className="ui-focus-ring flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 rounded-3xl px-5 py-4 text-sm font-bold text-[var(--ui-text-primary)] marker:content-none sm:px-6">
                 <span>
                   Links and location
@@ -1391,27 +1227,12 @@ export default function CreatorProfileCard({
               <div className="border-t border-[var(--ui-border-subtle)] p-5 sm:p-6">{profileLinkFields}</div>
             </details>
           </>
-        ) : onboardingMode ? (
-          <details ref={optionalDetailsRef} className="group rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]">
-            <summary className="ui-focus-ring flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 rounded-3xl px-5 py-4 text-sm font-bold text-[var(--ui-text-primary)] marker:content-none sm:px-6">
-              <span>
-                Add optional details
-                <span className="ml-2 font-normal text-[var(--ui-text-muted)]">Bio, cover, links, and location</span>
-              </span>
-              <Plus className="h-4 w-4 transition-transform group-open:rotate-45" aria-hidden />
-            </summary>
-            <div className="border-t border-[var(--ui-border-subtle)]">{optionalProfileFields}</div>
-          </details>
         ) : optionalProfileFields}
 
         <div className="rounded-3xl border border-[rgba(255,122,89,0.24)] bg-[var(--ui-primary-soft)] p-6 backdrop-blur-md">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-sm text-zinc-400">
-              {onboardingMode ? (
-                'Only the handle and display name are required to continue.'
-              ) : (
-                'Changes appear anywhere your creator identity is shown.'
-              )}
+              Changes appear anywhere your creator identity is shown.
             </div>
             <div className="flex flex-col items-start gap-3 sm:items-end">
               <div aria-live="polite" aria-atomic="true">
@@ -1423,36 +1244,19 @@ export default function CreatorProfileCard({
                   <button
                     type="button"
                     onClick={resetForm}
-                    disabled={isSaving || isSkipping}
+                    disabled={isSaving}
                     className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full px-4 text-sm font-bold text-[var(--ui-text-muted)] transition hover:bg-white/5 hover:text-white disabled:opacity-60"
                   >
                     <RotateCcw className="h-4 w-4" aria-hidden /> Reset changes
                   </button>
                 ) : null}
-                {onboardingMode ? (
-                  <button
-                    type="button"
-                    onClick={() => void continueWithoutSaving()}
-                    disabled={isSaving || isSkipping}
-                    className="ui-focus-ring inline-flex min-h-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-5 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] hover:text-white disabled:opacity-60"
-                  >
-                    {isSkipping ? 'Skipping…' : 'Skip for now'}
-                  </button>
-                ) : null}
                 <button
                   type="submit"
-                  disabled={isSaving || isSkipping || (!onboardingMode && !returnAfterSave && !isDirty)}
+                  disabled={isSaving || !isDirty}
                   className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-7 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : !onboardingMode ? <Save className="h-4 w-4" aria-hidden /> : null}
-                  {isSaving
-                    ? 'Saving…'
-                    : onboardingMode
-                      ? 'Save and continue'
-                      : returnAfterSave
-                        ? 'Save and return'
-                        : 'Save changes'}
-                  {!isSaving && (onboardingMode || returnAfterSave) ? <ArrowRight className="h-4 w-4" aria-hidden /> : null}
+                  {isSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Save className="h-4 w-4" aria-hidden />}
+                  {isSaving ? 'Saving…' : 'Save changes'}
                 </button>
               </div>
             </div>

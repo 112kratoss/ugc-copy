@@ -46,9 +46,12 @@
 @source "../components/AppShellCreateMenu.tsx";
 @source "../components/AppleLogo.tsx";
 @source "../components/AuthProvider.tsx";
+@source "../components/BrandWordmark.tsx";
+@source "../components/ClaimConfetti.tsx";
 @source "../components/CreatorIdentity.tsx";
 @source "../components/DeferredAppShellAccount.tsx";
 @source "../components/DeferredGenerationNotifications.tsx";
+@source "../components/DeferredWelcomeCreditsPopup.tsx";
 @source "../components/DesignSystem.tsx";
 @source "../components/FeatureLandingPage.tsx";
 @source "../components/FeedbackViewport.tsx";
@@ -80,6 +83,8 @@
 @source "../components/TabLoadingShell.tsx";
 @source "../components/TextPostPreviewCard.tsx";
 @source "../components/UnavailableMediaNote.tsx";
+@source "../components/WelcomeCreditsGate.tsx";
+@source "../components/WelcomeCreditsPopup.tsx";
 @source "../components/WhatsNewModelsCard.tsx";
 @source "../components/app-shell-auth-state.ts";
 @source "../components/app-shell-nav.ts";
@@ -745,6 +750,284 @@ button:disabled,
 }
 
 /*
+ * The welcome-credits popup (`src/components/WelcomeCreditsPopup.tsx`), the
+ * app's card on the web (owner, 2026-11-09): a white card in the app's light
+ * palette (`ugc-mobile/lib/theme.ts`) over the dimmed page, the shared Close
+ * on a white disc below it, the claim's confetti over both. Named classes
+ * here because a sign-up can come back to a public page as well as a
+ * signed-in one. Every motion is the Web Animations API's, from script: the
+ * entrance, the fill, the pop, the exit and the confetti, none of it under
+ * reduced motion. At the modals' layer.
+ */
+.ui-welcome-popup {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1.5rem 2rem;
+}
+
+/* Leaving: the page is the person's again while the confetti falls. */
+.ui-welcome-popup[data-leaving] {
+  pointer-events: none;
+}
+
+/* Inside the popup's own stacking context: the dim, then the card, then the confetti. */
+.ui-welcome-dim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(4, 4, 6, 0.74);
+}
+
+.ui-welcome-stack {
+  position: relative;
+  z-index: 81;
+  display: flex;
+  width: 100%;
+  max-width: 340px;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  margin: auto;
+}
+
+.ui-welcome-card {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  overflow: hidden;
+  border: 1px solid rgba(28, 20, 15, 0.12);
+  border-radius: var(--ui-radius-2xl);
+  background: #ffffff;
+  padding: 2rem 1.25rem 1.25rem;
+  color: #1c140f;
+  text-align: center;
+  color-scheme: light;
+}
+
+/* A warm wash behind the badge, fading into the white below. */
+.ui-welcome-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: calc(108px + 2rem + 68px);
+  background: linear-gradient(#fbe3da, #ffffff);
+  pointer-events: none;
+}
+
+.ui-welcome-card > * {
+  position: relative;
+}
+
+.ui-welcome-card :focus-visible,
+.ui-welcome-close:focus-visible {
+  outline: 2px solid #d4572f;
+  outline-offset: 2px;
+}
+
+.ui-welcome-ring {
+  display: flex;
+  width: 108px;
+  height: 108px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.ui-welcome-ring-track {
+  position: absolute;
+  inset: 0;
+}
+
+.ui-welcome-ring-rest {
+  stroke: #f6d2c4;
+}
+
+.ui-welcome-ring-fill {
+  stroke: #ff7a59;
+}
+
+.ui-welcome-badge {
+  display: flex;
+  width: 72px;
+  height: 72px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--ui-radius-pill);
+  background: linear-gradient(135deg, #ffa463, #f4552a);
+  box-shadow: 0 8px 22px rgba(244, 85, 42, 0.3);
+  color: #1a0d08;
+}
+
+.ui-welcome-badge-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.ui-welcome-figure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.ui-welcome-figure-number {
+  display: inline-block;
+  font-size: 60px;
+  font-weight: 800;
+  line-height: 68px;
+  letter-spacing: -0.6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-welcome-figure-number[data-claimed] {
+  color: #a83d1c;
+}
+
+.ui-welcome-figure-label {
+  color: #5f5750;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 18px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+
+.ui-welcome-keep {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.ui-welcome-title {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 28px;
+  letter-spacing: -0.1px;
+}
+
+.ui-welcome-note,
+.ui-welcome-referral {
+  color: #5f5750;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 17px;
+}
+
+.ui-welcome-message {
+  color: #b4233c;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.ui-welcome-added {
+  display: flex;
+  min-height: 44px;
+  align-self: stretch;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: #136c48;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 18px;
+}
+
+.ui-welcome-added-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.ui-welcome-claim {
+  align-self: stretch;
+}
+
+.ui-welcome-claim[aria-disabled='true'] {
+  cursor: progress;
+  opacity: 0.8;
+}
+
+.ui-welcome-spinner {
+  width: 1rem;
+  height: 1rem;
+  animation: ui-welcome-spin 0.9s linear infinite;
+}
+
+@keyframes ui-welcome-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ui-welcome-close {
+  display: inline-flex;
+  width: 48px;
+  height: 48px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--ui-radius-pill);
+  background: #ffffff;
+  color: #1c140f;
+}
+
+.ui-welcome-close:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.ui-welcome-close-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.ui-welcome-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.ui-welcome-confetti {
+  position: fixed;
+  inset: 0;
+  z-index: 82;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ui-welcome-confetti-piece {
+  position: absolute;
+  left: var(--confetti-x);
+  top: var(--confetti-y);
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+.ui-welcome-confetti-piece > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.ui-welcome-confetti-round {
+  border-radius: var(--ui-radius-pill);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-welcome-spinner {
+    animation: none;
+  }
+}
+
+/*
  * The home layout (feed column + context rail) is shared by the public and
  * the authenticated home variants, so it does not depend on utility ordering:
  * authenticated routes load `non-public-utilities.css` AFTER this sheet, and
@@ -1056,6 +1339,32 @@ button:disabled,
 .app-shell-search,
 .app-shell-create,
 .app-shell-create-label {
+  display: none;
+}
+
+/* A visitor's "Sign in · 25 free credits" (AppShellAccountFallback.tsx) keeps "25 free" on a
+   phone, where "credits" would push a page's title out of the bar (the creators' "Create" at
+   390px), and drops its crown too on the narrowest. */
+@media (max-width: 419px) {
+  .app-shell-sign-in-credits {
+    display: none;
+  }
+}
+
+@media (max-width: 359px) {
+  .app-shell-sign-in-crown {
+    display: none;
+  }
+}
+
+/* The welcome credits are promised only where this browser's account has not had them
+   (src/lib/welcome-promise.ts): the root layout marks a spent record on <html> before the page
+   draws, so a promise drawn by the server, or before the page's script runs, never shows. */
+html[data-welcome-promise='spent'] .welcome-promise-only {
+  display: none;
+}
+
+html:not([data-welcome-promise='spent']) .welcome-promise-spent-only {
   display: none;
 }
 
@@ -1470,5 +1779,261 @@ button:disabled,
   .ui-button:hover,
   .ui-button:active {
     transform: none;
+  }
+}
+
+/* The sign-in page (src/app/login/), the app's one sign-in page (#731) on the web.
+
+   The wall of creations (SignInWall.tsx): columns tilted -10deg that drift past each other.
+   Each column is its six pictures twice over, a gap under every tile, and slides by half its
+   own height, one set, before it starts again, so the loop has no seam. The columns' box covers
+   the tilted window (cos 10deg = 0.985, sin 10deg = 0.174; lvh, so a phone's toolbars coming
+   and going never resize it), and one set is taller than that box, so a column covers it from
+   one end of its slide to the other. A screen gets more columns only while it is wide enough
+   for them (min-aspect-ratio): a tall one keeps fewer, larger tiles, which the cover needs.
+   Only transforms move. The wall, its shade and the form's scrim are placed in the page's root,
+   which fills the window, not fixed to it: nothing here is a layer over the page. */
+.sign-in-wall {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #000;
+  pointer-events: none;
+  user-select: none;
+}
+
+.sign-in-wall-frame {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-10deg);
+}
+
+.sign-in-wall-columns {
+  --sign-in-wall-gap: 10px;
+  /* One set's slide at about the app's 14px a second (DRIFT_SPEED in media-wall.tsx) for the
+     tiles of this size; the even columns take 1.25 of it, the app's 0.8 pace. */
+  --sign-in-wall-lap: 82s;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  gap: var(--sign-in-wall-gap);
+  width: calc(98.5vw + 17.4vh + 2 * var(--sign-in-wall-gap));
+  width: calc(98.5vw + 17.4lvh + 2 * var(--sign-in-wall-gap));
+  height: calc(17.4vw + 98.5vh);
+  height: calc(17.4vw + 98.5lvh);
+  translate: -50% -50%;
+}
+
+.sign-in-wall-column {
+  flex: 1 1 0;
+  min-width: 0;
+  animation: sign-in-wall-up var(--sign-in-wall-lap) linear infinite;
+  /* Every column starts at the visit's point along its own loop (--sign-in-wall-start). */
+  animation-delay: calc(var(--sign-in-wall-start, 0) * var(--sign-in-wall-lap) * -1);
+}
+
+/* Neighbours drift opposite ways, and at their own pace, so rows never line up. */
+.sign-in-wall-column:nth-child(even) {
+  animation-name: sign-in-wall-down;
+  animation-duration: calc(var(--sign-in-wall-lap) * 1.25);
+  animation-delay: calc(var(--sign-in-wall-start, 0) * var(--sign-in-wall-lap) * -1.25);
+}
+
+/* Five columns on a phone, as the app draws; more on wider screens, so a tile keeps about a
+   phone's size. */
+.sign-in-wall-column:nth-child(n + 6) {
+  display: none;
+}
+
+@media (min-width: 640px) and (min-aspect-ratio: 3 / 5) {
+  .sign-in-wall-columns {
+    --sign-in-wall-lap: 110s;
+  }
+
+  .sign-in-wall-column:nth-child(-n + 7) {
+    display: block;
+  }
+}
+
+@media (min-width: 1280px) and (min-aspect-ratio: 4 / 5) {
+  .sign-in-wall-columns {
+    --sign-in-wall-gap: 12px;
+    --sign-in-wall-lap: 130s;
+  }
+
+  .sign-in-wall-column:nth-child(-n + 9) {
+    display: block;
+  }
+}
+
+@media (min-width: 1920px) and (min-aspect-ratio: 11 / 10) {
+  .sign-in-wall-columns {
+    --sign-in-wall-lap: 145s;
+  }
+
+  .sign-in-wall-column:nth-child(-n + 11) {
+    display: block;
+  }
+}
+
+.sign-in-wall-tile {
+  aspect-ratio: 9 / 16;
+  margin-bottom: var(--sign-in-wall-gap);
+  overflow: hidden;
+  border-radius: 12px;
+  background: #151518;
+}
+
+.sign-in-wall-tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+@keyframes sign-in-wall-up {
+  from {
+    transform: translateY(25%);
+  }
+
+  to {
+    transform: translateY(-25%);
+  }
+}
+
+@keyframes sign-in-wall-down {
+  from {
+    transform: translateY(-25%);
+  }
+
+  to {
+    transform: translateY(25%);
+  }
+}
+
+/* Over the wall: dark at the top for the headline and at the bottom for the buttons, lighter
+   between, where the pictures show (SIGN_IN_WALL_SHADE in ugc-mobile/lib/theme.ts). From 768px
+   the page is one centred column, so the shade darkens around it instead. */
+.sign-in-shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.78) 0%, rgba(0, 0, 0, 0.66) 30%, rgba(0, 0, 0, 0.62) 45%, rgba(0, 0, 0, 0.4) 57%, rgba(0, 0, 0, 0.88) 76%, rgba(0, 0, 0, 0.97) 100%);
+}
+
+@media (min-width: 768px) {
+  .sign-in-shade {
+    background:
+      radial-gradient(ellipse 44rem 38rem at 50% 50%, rgba(0, 0, 0, 0.86) 0%, rgba(0, 0, 0, 0.76) 50%, rgba(0, 0, 0, 0.46) 100%),
+      rgba(0, 0, 0, 0.2);
+  }
+}
+
+/* Deeper behind the email form, where fields are read and typed in. */
+.sign-in-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.7);
+  opacity: 0;
+  transition: opacity 360ms cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+.sign-in-scrim[data-shown] {
+  opacity: 1;
+}
+
+/* The page's two halves, one over the other, each scrolling only when it has to. Turning to
+   the form (about 360ms, the app's TURN_MS): the choices fade within the first half of it as
+   they rise 28px, and the form rises 36px into place, showing from a fifth of the way. Back,
+   the other way round. A half away is hidden once its fade is done. */
+.sign-in-half {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.sign-in-choices {
+  transition:
+    opacity 200ms ease-out 160ms,
+    transform 360ms cubic-bezier(0.33, 1, 0.68, 1),
+    visibility 0s linear 0s;
+}
+
+.sign-in-choices[data-away] {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-28px);
+  transition:
+    opacity 180ms ease-out,
+    transform 360ms cubic-bezier(0.33, 1, 0.68, 1),
+    visibility 0s linear 360ms;
+}
+
+.sign-in-email {
+  transition:
+    opacity 240ms ease-out 72ms,
+    transform 360ms cubic-bezier(0.33, 1, 0.68, 1),
+    visibility 0s linear 0s;
+}
+
+.sign-in-email[data-away] {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(36px);
+  transition:
+    opacity 200ms ease-out 40ms,
+    transform 360ms cubic-bezier(0.33, 1, 0.68, 1),
+    visibility 0s linear 360ms;
+}
+
+/* 16px, or a phone's browser zooms in on the field it focuses. */
+.sign-in-field-input {
+  flex: 1 1 0%;
+  min-width: 0;
+  padding-block: 12px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #fff;
+  caret-color: var(--ui-primary);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.sign-in-field-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* A saved login the browser fills in keeps the pill's own ground and white text. */
+.sign-in-field-input:-webkit-autofill {
+  -webkit-text-fill-color: #fff;
+  box-shadow: 0 0 0 1000px #0b0b0d inset;
+  caret-color: var(--ui-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The wall stands still, where the visit's start put it. */
+  .sign-in-wall-column {
+    animation: none !important;
+    transform: translateY(calc((0.25 - 0.5 * var(--sign-in-wall-start, 0)) * 100%));
+  }
+
+  .sign-in-wall-column:nth-child(even) {
+    transform: translateY(calc((0.5 * var(--sign-in-wall-start, 0) - 0.25) * 100%));
+  }
+
+  /* The page turns at once: no half waits for the other. */
+  .sign-in-choices,
+  .sign-in-choices[data-away],
+  .sign-in-email,
+  .sign-in-email[data-away],
+  .sign-in-scrim {
+    transition-delay: 0s !important;
   }
 }

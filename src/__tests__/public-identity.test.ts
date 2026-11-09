@@ -96,6 +96,8 @@ describe('saving the name and handle before a public post', () => {
       ok: false,
       errors: { username: 'That username is already taken.' },
       message: 'That username is already taken.',
+      // The name step says "just claimed" for a 409 on a handle its check had seen free.
+      status: 409,
     });
   });
 });

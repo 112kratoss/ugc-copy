@@ -111,6 +111,8 @@ describe('app shell navigation', () => {
     expect(isMinimalAppChromePath('/auth/reset-password')).toBe(true);
     expect(isMinimalAppChromePath('/r/friend123')).toBe(true);
     expect(isMinimalAppChromePath('/child-safety')).toBe(true);
+    // The creator-name step after sign-up stands alone, as the app's does.
+    expect(isMinimalAppChromePath('/onboarding')).toBe(true);
     expect(isMinimalAppChromePath('/showcase')).toBe(false);
   });
 

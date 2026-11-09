@@ -232,7 +232,7 @@ describe('AppShellAccount', () => {
 
     render(<AppShellAccount />);
 
-    expect(await screen.findByRole('link', { name: 'Sign in' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Sign in for 25 free credits' })).toBeInTheDocument();
     expect(mocks.select).not.toHaveBeenCalled();
   });
 
@@ -251,7 +251,7 @@ describe('AppShellAccount', () => {
       render(<AppShellAccount />);
 
       expect(await screen.findByRole('button', { name: 'Open account menu for creator' })).toBeInTheDocument();
-      expect(screen.queryByRole('link', { name: 'Sign in' })).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Sign in for 25 free credits' })).toBeNull();
       expect(mocks.select).not.toHaveBeenCalled();
       expect(mocks.getUser).toHaveBeenCalledTimes(1);
 
@@ -276,7 +276,7 @@ describe('AppShellAccount', () => {
         await vi.advanceTimersByTimeAsync(2_000);
       });
 
-      expect(await screen.findByRole('link', { name: 'Sign in' })).toBeInTheDocument();
+      expect(await screen.findByRole('link', { name: 'Sign in for 25 free credits' })).toBeInTheDocument();
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });
@@ -393,6 +393,31 @@ describe('AppShellAccount', () => {
     expect(screen.getByText('77 credits')).toBeInTheDocument();
     expect(screen.queryByText('9999 credits')).toBeNull();
   });
+  // The welcome popup holds the new balance back until its figure lands, then
+  // announces it: the header moves with the landing, not a read later.
+  it('draws the balance a credits_updated event carries at once, while its read is still out', async () => {
+    render(<AppShellAccount />);
+    expect(await screen.findByText('1295 credits')).toBeInTheDocument();
+    mocks.maybeSingle.mockImplementation(() => new Promise(() => {}));
+    await waitFor(() => {
+      act(() => window.dispatchEvent(new CustomEvent('credits_updated', { detail: { credits: 1320 } })));
+      expect(screen.getByText('1320 credits')).toBeInTheDocument();
+    });
+  });
+
+  it('takes no announced balance for an account that is no longer the one shown', async () => {
+    render(<AppShellAccount />);
+    expect(await screen.findByText('1295 credits')).toBeInTheDocument();
+    mocks.getUser.mockImplementationOnce(() => new Promise(() => {}));
+    act(() => appShellAuthCallback?.('SIGNED_IN', {
+      ...authenticatedSession,
+      access_token: 'second-access-token',
+      user: { ...authenticatedSession.user, id: 'user-2' },
+    }));
+    act(() => window.dispatchEvent(new CustomEvent('credits_updated', { detail: { credits: 9999 } })));
+    expect(screen.queryByText('9999 credits')).toBeNull();
+  });
+
   it('invalidates a pending credit refresh immediately when another account starts verification', async () => {
     render(<AppShellAccount />);
     expect(await screen.findByText('1295 credits')).toBeInTheDocument();
@@ -445,7 +470,7 @@ describe('AppShellAccount', () => {
       await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
       expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'local' });
       expect(document.cookie).toBe('sb-another-project-auth-token=theirs');
-      expect(screen.getByRole('link', { name: 'Sign in' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Sign in for 25 free credits' })).toBeInTheDocument();
     });
 
     it('ends the session in this browser when the sign-out throws', async () => {
@@ -662,7 +687,7 @@ describe('AppShellAccount', () => {
       expect(mocks.signOut).toHaveBeenCalledTimes(1);
       expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'global' });
       expect(mocks.clearPersistedCreatorData).toHaveBeenCalledWith('user-1');
-      expect(screen.getByRole('link', { name: 'Sign in' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Sign in for 25 free credits' })).toBeInTheDocument();
     });
 
     // The phones lose their session with this and cannot retire their own push
@@ -827,14 +852,14 @@ describe('the header Sign in link', () => {
 
     render(<AppShellAccountFallback />);
 
-    expect(screen.getByRole('link', { name: 'Sign in' })).toHaveAttribute('href', href);
+    expect(screen.getByRole('link', { name: 'Sign in for 25 free credits' })).toHaveAttribute('href', href);
   });
 
   // The router changes a query with history.pushState, which no event reports.
   it('reads a query the page changed after it drew, as the visitor reaches for the link', () => {
     visit('/search', 'q=cats');
     render(<AppShellAccountFallback />);
-    const link = screen.getByRole('link', { name: 'Sign in' });
+    const link = screen.getByRole('link', { name: 'Sign in for 25 free credits' });
     expect(link).toHaveAttribute('href', '/login?returnUrl=%2Fsearch%3Fq%3Dcats');
 
     window.history.pushState(null, '', '/search?q=dogs');
@@ -859,7 +884,7 @@ describe('the header Sign in link', () => {
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
 
-    expect(screen.getByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/login?returnUrl=%2Fsearch%3Fq%3Ddogs');
+    expect(screen.getByRole('link', { name: 'Sign in for 25 free credits' })).toHaveAttribute('href', '/login?returnUrl=%2Fsearch%3Fq%3Ddogs');
   });
 
   it('returns to Home when the router has no path to give', () => {
@@ -868,6 +893,38 @@ describe('the header Sign in link', () => {
 
     render(<AppShellAccountFallback />);
 
-    expect(screen.getByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/login?returnUrl=%2F');
+    expect(screen.getByRole('link', { name: 'Sign in for 25 free credits' })).toHaveAttribute('href', '/login?returnUrl=%2F');
+  });
+
+  // The app's Home says it so (owner, 2026-11-08): the welcome credits in place of a balance.
+  it('reads "Sign in · 25 free credits", the amount in coral, and keeps "25 free" on a narrow phone', () => {
+    visit('/showcase', '');
+
+    const { container } = render(<AppShellAccountFallback />);
+
+    const link = screen.getByRole('link', { name: 'Sign in for 25 free credits' });
+    expect(link).toHaveTextContent(/^Sign in·25 free credits$/);
+    const amount = within(link).getByText(/^25 free/);
+    expect(amount).toHaveClass('text-[var(--ui-primary)]');
+    // `.app-shell-sign-in-credits` and `.app-shell-sign-in-crown` give way below 420px and 360px (globals.css).
+    expect(within(amount).getByText('credits')).toHaveClass('app-shell-sign-in-credits');
+    expect(container.querySelector('svg.app-shell-sign-in-crown')).toHaveAttribute('aria-hidden', 'true');
+    // No coral fill any more: coral words cannot sit on one.
+    expect(link.className).not.toContain('bg-[var(--ui-primary)]');
+    // The promise is hidden from the first paint where it was spent (welcome-promise.ts).
+    expect(amount.parentElement).toHaveClass('welcome-promise-only');
+  });
+
+  // Owner, 2026-11-09: signed up, claimed, signed out, and still offered 25 credits (#738's rule).
+  it('reads just "Sign in" where this browser’s account has had its welcome credits', () => {
+    window.localStorage.setItem('magicbooklet.welcome-promise.spent.v1', '2026-11-09T10:00:00.000Z');
+    visit('/showcase', '');
+
+    render(<AppShellAccountFallback />);
+
+    const link = screen.getByRole('link', { name: 'Sign in' });
+    expect(link).toHaveTextContent(/^Sign in$/);
+    expect(link).toHaveAttribute('href', '/login?returnUrl=%2Fshowcase');
+    window.localStorage.removeItem('magicbooklet.welcome-promise.spent.v1');
   });
 });

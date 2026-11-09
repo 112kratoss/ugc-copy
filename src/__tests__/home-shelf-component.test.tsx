@@ -135,8 +135,24 @@ describe('HomeShelf', () => {
     expect(cards()[1]).toHaveTextContent('Free to try');
     expect(cards()[2]).not.toHaveTextContent('Free to try');
 
+    // "Free to try" is the welcome promise, which the root's mark hides where it was spent; a launch is not.
+    expect(screen.getByText('Free to try')).toHaveClass('welcome-promise-only');
+    expect(screen.getByText('New model')).not.toHaveClass('welcome-promise-only');
+
     rerender(<HomeShelf items={SHELF} offerFreeToTry={false} />);
     expect(screen.queryByText('Free to try')).toBeNull();
+  });
+
+  // Owner, 2026-11-09: signed up, claimed, signed out, and still offered the credits (#738's rule).
+  it('offers nothing "Free to try" where this browser’s account has had the welcome credits', () => {
+    window.localStorage.setItem('magicbooklet.welcome-promise.spent.v1', '2026-11-09T10:00:00.000Z');
+    try {
+      render(<HomeShelf items={[creation('a', { badge: 'new-model' }), creation('b'), creation('c')]} offerFreeToTry />);
+      expect(screen.queryByText('Free to try')).toBeNull();
+      expect(screen.getByText('New model')).toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem('magicbooklet.welcome-promise.spent.v1');
+    }
   });
 
   it('plays the clip of the first card in view only, and hands it on, on a touch screen as with a mouse', () => {

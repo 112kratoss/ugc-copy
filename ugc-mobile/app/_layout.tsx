@@ -25,6 +25,7 @@ import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { MediaZoomFlightLayer, noteRootScreenTransitionStart } from '@/components/media-zoom';
 import { ZoomPostChrome, ZoomPostPreparer } from '@/components/zoom-post-chrome';
 import { OverlayHost } from '@/components/overlay-host';
+import { WelcomeCreditsPopup } from '@/components/welcome-credits-popup';
 import { PublicIdentitySheetHost } from '@/components/public-identity-sheet';
 import { SaverNoticeBar, SaverNoticeSync } from '@/components/saver-notice-bar';
 import { RecipeUnlockedNotice } from '@/components/recipe-unlocked-notice';
@@ -454,6 +455,11 @@ function RootLayoutNav() {
                 {/* "Recipe unlocked", with the way to Unlocked recipes, after any
                     unlock (lib/recipe-unlocked-notice.ts). */}
                 <RecipeUnlockedNotice />
+                {/* The welcome credits, over Home and over the screen a sign-up
+                    went back to (lib/welcome-popup.ts): mounted once here so a
+                    sign-up asked for on a creator offers them on the creator,
+                    not a top-up (owner, 2026-11-09). */}
+                <WelcomeCreditsPopup />
                 {/* Above every screen: the flight a tapped tile's picture makes
                     to the full screen and back, which no screen change can
                     interrupt. Nothing is rendered unless a post is opening or

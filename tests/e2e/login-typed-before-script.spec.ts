@@ -2,7 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 
 /**
  * What a visitor types into /login's sign-in form before the page's script has run is what the
- * sign-in sends, and the fields keep it (2026-11-01).
+ * sign-in sends, and the fields keep it (2026-11-01). The form is the page's email half, which
+ * `email=1` opens on, as the choices' "Sign in" link does before the script runs.
  *
  * The server's HTML draws the form before any script runs, so on a slow connection a visitor can
  * type their email and password first. React never hears that typing, and this React build
@@ -62,7 +63,7 @@ test(`/login: an email and password typed before the page's script runs are what
 
   // No timeout of its own: this can be the run's first request for the route, which waits for
   // its compile, and on a busy machine that outlasts any fixed wait (.claude/rules/e2e.md).
-  await page.goto('/login?redirect=%2Fcreate-image', { waitUntil: 'commit' });
+  await page.goto('/login?redirect=%2Fcreate-image&email=1', { waitUntil: 'commit' });
   await expect(page.locator('#login-password')).toBeVisible(COLD_PAGE);
   // Else the page's script was never asked for here, and the typing below would reach a live page.
   await expect.poll(chunk.requests, { ...COLD_PAGE, message: 'the page asks for its own chunk, which is held' }).toBeGreaterThan(0);

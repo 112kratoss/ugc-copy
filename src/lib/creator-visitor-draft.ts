@@ -1,3 +1,4 @@
+import { creatorSignUpReturnPath } from '@/lib/auth-onboarding';
 import { CREATOR_DRAFT_TOOLS, moveCreatorToolData, type CreatorDraftTool } from '@/lib/persisted-media';
 
 /**
@@ -6,9 +7,9 @@ import { CREATOR_DRAFT_TOOLS, moveCreatorToolData, type CreatorDraftTool } from 
  * set up is what they sign in for, so it must be there when they come back.
  *
  * Their draft is saved like an account's, under an owner that is never an
- * account id (those are UUIDs). Leaving for sign-in from the creator's sign-up
- * sheet stores a one-time nonce for that creator here and carries it on the way
- * back (`?handover=`, `creatorSignUpReturnPath`). Only a page that comes back with
+ * account id (those are UUIDs). Leaving for the sign-in page from the creator
+ * (`creatorSignInPath`) stores a one-time nonce for that creator here and carries
+ * it on the way back (`?handover=`, `creatorSignUpReturnPath`). Only a page that comes back with
  * the same nonce, within the hour, moves the draft to the account signed in,
  * replacing the account's own draft for that tool. A sign-up abandoned on the
  * way, or any other sign-in on the browser, carries no nonce and moves nothing,
@@ -81,6 +82,23 @@ export function markVisitorDraftForHandover(tool: CreatorDraftTool, now = Date.n
   } catch {
     return null;
   }
+}
+
+/**
+ * The sign-in page for a press on a creator that needs an account (Generate, Enhance, preparing a
+ * reference), which the creators open in place of their sign-up sheet (owner, 2026-11-09). It
+ * comes back to this creator at the address it is at. When the page's draft is the visitor's, the
+ * draft is marked for the account first and the way back carries the mark (`?handover=`), which
+ * also tells the sign-in page to say the draft stays. A page whose session lapsed keeps its
+ * account's draft under the account already, and marks nothing.
+ */
+export function creatorSignInPath(
+  tool: CreatorDraftTool,
+  handsOverDraft: boolean,
+  here = `${window.location.pathname}${window.location.search}`,
+): string {
+  const returnPath = creatorSignUpReturnPath(here, handsOverDraft ? markVisitorDraftForHandover(tool) : null);
+  return `/login?returnUrl=${encodeURIComponent(returnPath)}`;
 }
 
 /** Whether this page came back from this creator's sign-up with its nonce, within the hour. */

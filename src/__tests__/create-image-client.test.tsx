@@ -1636,7 +1636,7 @@ describe('CreateImageClient generation pipeline', () => {
       const CARRIED = 'A corgi astronaut on the moon, cinematic';
       const page = () => <CreateImageClient prefill={{}} handoverNonce="nonce-1" />;
       const box = () => screen.getByPlaceholderText(PROMPT_PLACEHOLDER);
-      // keepsVisitorForm: the sign-up sheet's hand-over led here and its move gave up or failed.
+      // keepsVisitorForm: the sign-in hand-over led here and its move gave up or failed.
       function ownDraftAs(owner: string | null, carriedDraft = false, keepsVisitorForm = false) {
         draftOwnerOverride.current = { owner, carriedDraft, keepsVisitorForm };
       }
@@ -1713,7 +1713,7 @@ describe('CreateImageClient generation pipeline', () => {
         expect(promptsSavedFor('user-3')).not.toContain('Asha’s harbour at dusk');
       });
 
-      it('leaves a visitor’s words behind when an account signs in without the sign-up sheet', async () => {
+      it('leaves a visitor’s words behind when an account signs in without the creator’s hand-over', async () => {
         installFetch();
         ownDraftAs('visitor');
         const view = render(page());
@@ -1890,7 +1890,7 @@ describe('CreateImageClient generation pipeline', () => {
         expect(screen.queryByAltText('Asha’s harbour')).not.toBeInTheDocument();
       });
 
-      it('leaves a visitor’s pictures behind when an account signs in without the sign-up sheet', async () => {
+      it('leaves a visitor’s pictures behind when an account signs in without the creator’s hand-over', async () => {
         installFetch();
         keepPictures({ visitor: [picture('Neon koi', 'koi')] });
         ownDraftAs('visitor');
@@ -1906,7 +1906,7 @@ describe('CreateImageClient generation pipeline', () => {
         expect(picturesSavedFor('user-1')).not.toContain('koi.png');
       });
 
-      it('keeps the pictures the sign-up sheet’s hand-over carried', async () => {
+      it('keeps the pictures the sign-in hand-over carried', async () => {
         installFetch();
         // The page opened before its session came, on the visitor's pictures.
         keepPictures({ visitor: [picture('Corgi astronaut', 'corgi')] });
@@ -1924,7 +1924,7 @@ describe('CreateImageClient generation pipeline', () => {
         expect(screen.getByAltText('Corgi astronaut')).toBeInTheDocument();
       });
 
-      it('keeps the visitor’s pictures and words when the sign-up sheet’s hand-over gives up', async () => {
+      it('keeps the visitor’s pictures and words when the sign-in hand-over gives up', async () => {
         installFetch();
         // The page opened before its session came, on the visitor's pictures and words. The account
         // the visitor signs up with has older pictures of its own saved.
@@ -2300,7 +2300,10 @@ describe('CreateImageClient generation pipeline', () => {
       expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('');
       typePrompt('A lighthouse in fog');
       fireEvent.click(screen.getByRole('button', { name: 'Sign up to generate' }));
-      expect(await screen.findByRole('dialog', { name: 'Continue to generate' })).toBeInTheDocument();
+      // The sign-in page, with the visitor's draft marked for the account (owner, 2026-11-09).
+      await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith(expect.stringMatching(/^\/login\?returnUrl=%2F.*handover%3D[A-Za-z0-9-]{8,64}$/)));
+      expect(saveCreatorDraftMock).toHaveBeenCalledWith('image', 'visitor', expect.objectContaining({ prompt: 'A lighthouse in fog' }));
+      window.localStorage.removeItem('magicbooklet:creator-draft-handover');
     });
 
     it('keeps the page through a session that lapses', async () => {
@@ -2318,7 +2321,8 @@ describe('CreateImageClient generation pipeline', () => {
 
       expect(screen.getByAltText('Asha’s harbour')).toBeInTheDocument();
       expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('Asha’s harbour at dusk');
-      expect(screen.queryByRole('dialog', { name: 'Continue to generate' })).toBeNull();
+      // Not a visitor's page: its Generate signs in again on the sign-in page, as before.
+      expect(screen.queryByRole('button', { name: 'Sign up to generate' })).toBeNull();
     });
 
     it('drops the earlier account’s remix pictures and its own, and reads the remix again for the next', async () => {

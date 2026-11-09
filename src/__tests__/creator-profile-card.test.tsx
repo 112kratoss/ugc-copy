@@ -628,28 +628,6 @@ describe('CreatorProfileCard', () => {
     expect(screen.getByPlaceholderText('Your creator name')).toBeRequired();
   });
 
-  it('shows first-run setup progress when used for onboarding', () => {
-    render(
-      <CreatorProfileCard
-        initialProfile={{
-          ...profile,
-          username: 'starter-name',
-          displayName: '',
-          bio: '',
-          avatarUrl: '',
-        }}
-        loadError={null}
-        onboardingMode
-      />
-    );
-
-    expect(screen.getByText(/profile essentials/i)).toBeInTheDocument();
-    expect(screen.getByText(/public preview/i)).toBeInTheDocument();
-    expect(screen.getByText(/1 of 2 essentials complete/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /save and continue/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /skip for now/i })).toBeInTheDocument();
-  });
-
   it('lets creators preserve their public website, location, and social handles', () => {
     render(
       <CreatorProfileCard
@@ -667,24 +645,12 @@ describe('CreatorProfileCard', () => {
   // A photo is never required to publish or sell (marketplace-trust.ts); two
   // lines said it was required before selling recipes.
   it('recommends a photo for buyer trust without calling it a requirement', () => {
-    const { unmount } = render(
+    render(
       <CreatorProfileCard initialProfile={{ ...profile, avatarUrl: '' }} loadError={null} />
     );
 
     expect(screen.getByText('Recommended — builds buyer trust. JPG, PNG, or WebP up to 5MB.')).toBeInTheDocument();
     expect(screen.queryByText(/required before selling/i)).not.toBeInTheDocument();
-    unmount();
-
-    render(
-      <CreatorProfileCard
-        initialProfile={{ ...profile, avatarUrl: '' }}
-        loadError={null}
-        onboardingMode
-      />
-    );
-
-    expect(screen.getByText('Avatar recommended — builds buyer trust.')).toBeInTheDocument();
-    expect(screen.queryByText(/before selling/i)).not.toBeInTheDocument();
   });
 
   // The server stores the handle from a handle or the platform's own profile
@@ -723,134 +689,36 @@ describe('CreatorProfileCard', () => {
     await waitFor(() => expect(screen.getByLabelText(/instagram handle/i)).toHaveFocus());
   });
 
-  it('keeps optional details collapsed during first-run setup', () => {
-    render(
-      <CreatorProfileCard
-        initialProfile={{
-          ...profile,
-          username: 'creator-a1b2c3d4',
-          displayName: '',
-          avatarUrl: '',
-        }}
-        loadError={null}
-        onboardingMode
-      />
-    );
-
-    expect(screen.getByText(/add optional details/i).closest('details')).not.toHaveAttribute('open');
-    expect(screen.getByLabelText(/username required/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/display name required/i)).toBeInTheDocument();
-  });
-
-  it('focuses the generated handle and explains how to finish essentials', async () => {
-    render(
-      <CreatorProfileCard
-        initialProfile={{
-          ...profile,
-          username: 'creator-a1b2c3d4',
-          displayName: '',
-          avatarUrl: '',
-        }}
-        loadError={null}
-        onboardingMode
-      />
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /save and continue/i }));
-
-    await waitFor(() => {
-      expect(screen.getByLabelText(/username required/i)).toHaveFocus();
-    });
-    expect(screen.getByText(/replace the generated handle/i)).toBeInTheDocument();
-    expect(screen.getByText(/complete the highlighted essentials/i)).toBeInTheDocument();
-    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
-  });
-
-  it('returns to the preserved creation after onboarding save', async () => {
-    const fetchMock = vi.mocked(fetch);
-    fetchMock.mockImplementation(async (input) => {
-      const url = String(input);
-      if (url.endsWith('/api/profile/validate')) {
-        return { ok: true, json: async () => ({ ok: true }) } as Response;
-      }
-      if (url.endsWith('/api/profile')) {
-        return {
-          ok: true,
-          json: async () => ({
-            ...profile,
-            username: 'my-studio',
-            displayName: 'My Studio',
-          }),
-        } as Response;
-      }
-      throw new Error(`Unexpected fetch to ${url}`);
-    });
-
-    render(
-      <CreatorProfileCard
-        initialProfile={{ ...profile, username: 'my-studio', displayName: 'My Studio' }}
-        loadError={null}
-        onboardingMode
-        nextPath="/create-video?model=kling"
-      />
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /save and continue/i }));
-
-    await waitFor(() => {
-      expect(routerMocks.replace).toHaveBeenCalledWith('/create-video?model=kling');
-    });
-    expect(routerMocks.refresh).toHaveBeenCalled();
-  });
-
-  it('returns a ready creator to the interrupted task after a repair save', async () => {
+  // The creator name is chosen at /onboarding now (owner, 2026-11-09): the
+  // editor has no setup mode, no "Skip for now", and records no deferral.
+  it('edits an unfinished profile as any other, with no way to skip it', async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const url = String(input);
       if (url.endsWith('/api/profile/validate')) {
         return { ok: true, json: async () => ({ ok: true }) } as Response;
       }
       if (url.endsWith('/api/profile')) {
-        return { ok: true, json: async () => profile } as Response;
+        return { ok: true, json: async () => ({ ...profile, username: 'my-studio', displayName: 'My Studio' }) } as Response;
       }
       throw new Error(`Unexpected fetch to ${url}`);
     });
-
-    render(
-      <CreatorProfileCard
-        initialProfile={profile}
-        loadError={null}
-        nextPath="/post/new?generationId=gen-1"
-        returnAfterSave
-      />
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /save and return/i }));
-
-    await waitFor(() => {
-      expect(routerMocks.replace).toHaveBeenCalledWith('/post/new?generationId=gen-1');
-    });
-    expect(routerMocks.refresh).toHaveBeenCalled();
-  });
-
-  it('allows onboarding to be skipped without losing the intended destination', async () => {
     render(
       <CreatorProfileCard
         initialProfile={{ ...profile, username: 'creator-a1b2c3d4', displayName: '' }}
         loadError={null}
-        onboardingMode
-        nextPath="/create-image?model=gpt-image-2"
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /skip for now/i }));
+    expect(screen.queryByRole('button', { name: /skip for now/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/profile essentials/i)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/username required/i), { target: { value: 'my-studio' } });
+    fireEvent.change(screen.getByLabelText(/display name required/i), { target: { value: 'My Studio' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
     await waitFor(() => {
-      expect(routerMocks.replace).toHaveBeenCalledWith('/create-image?model=gpt-image-2');
+      expect(routerMocks.replace).toHaveBeenCalledWith('/profile');
     });
-    expect(supabaseMocks.updateUser).toHaveBeenCalledWith({
-      data: { creator_profile_onboarding_skipped_version: 1 },
-    });
-    expect(routerMocks.refresh).toHaveBeenCalled();
+    expect(supabaseMocks.updateUser).not.toHaveBeenCalled();
   });
 
   it('uses the avatar image itself for drag and scroll cropping', () => {

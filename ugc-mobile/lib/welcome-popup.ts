@@ -1,13 +1,14 @@
-import type { WelcomeCreditResponse } from './types';
+import { useSyncExternalStore } from 'react';
 
 /**
- * The welcome-credits popup over Home (owner, 2026-11-09: "the kling one looks
- * live and cheerful", a Claim button, a celebration, haptics while the credits
- * count up; redesigned the same day: "the credits increasing with the haptics
- * ... like games with filling animations", confetti "with a premium feel",
- * the popup closing as the confetti pops). It offers the credits to a
- * signed-in account that has its creator name and has not claimed them yet.
- * Closing it waits until the next app start.
+ * The welcome-credits popup (owner, 2026-11-09: "the kling one looks live and
+ * cheerful", a Claim button, a celebration, haptics while the credits count
+ * up; redesigned the same day: "the credits increasing with the haptics ...
+ * like games with filling animations", confetti "with a premium feel", the
+ * popup closing as the confetti pops). It offers the credits to a signed-in
+ * account that has its creator name and has not claimed them yet, on Home and
+ * on the screen a sign-up went back to (owner, 2026-11-09: "the page a sign-up
+ * returns to"). Closing it waits until the next app start.
  */
 const dismissedThisRun = new Set<string>();
 
@@ -23,46 +24,71 @@ export function wasWelcomePopupDismissedThisRun(userId: string | null | undefine
 /** For tests: a fresh app start. */
 export function resetWelcomePopupThisRun() {
   dismissedThisRun.clear();
-}
-
-export function shouldShowWelcomePopup({
-  signedIn,
-  welcome,
-  homeFocused,
-  dismissed,
-}: {
-  signedIn: boolean;
-  welcome: Pick<WelcomeCreditResponse, 'status' | 'identityComplete'> | null | undefined;
-  homeFocused: boolean;
-  dismissed: boolean;
-}): boolean {
-  return signedIn && homeFocused && !dismissed
-    && Boolean(welcome?.identityComplete) && welcome?.status === 'eligible';
-}
-
-/** How long the figure takes to fill from 0 to the total once the claim lands. */
-export const WELCOME_COUNT_UP_MS = 1300;
-
-/**
- * How far the fill has got at `elapsed` ms, 0..1: a game's counter, fast off
- * the mark and slowing as it lands (ease-out quad), so the first credits fly
- * by in a blur of ticks and the last few arrive one at a time. (A cubic held
- * the figure on the second-to-last credit for half a second: a stall, not a
- * landing.)
- */
-export function welcomeFillProgress(elapsed: number, duration = WELCOME_COUNT_UP_MS): number {
-  const t = Math.min(1, Math.max(0, elapsed / duration));
-  return 1 - (1 - t) ** 2;
+  setReturnedTo(null);
 }
 
 /**
- * The credits at which the count-up gives a haptic tick: every single credit
- * on the way up, the last excluded (it gets the success haptic instead), as a
- * picker ticks past each row. The ease-out curve spaces them: a rattle at the
- * start, distinct taps at the end.
+ * A route as expo-router's `usePathname()` names the screen it opens: without
+ * its groups, query, hash or trailing slash (`/(tabs)/creator?tool=image` is
+ * `/creator`, `/(tabs)` is `/`).
  */
-export function welcomeCountUpTicks(amount: number): number[] {
-  const ticks: number[] = [];
-  for (let value = 1; value < amount; value += 1) ticks.push(value);
-  return ticks;
+export function welcomeRoutePath(route: string): string {
+  const segments = route.split(/[?#]/, 1)[0]
+    .split('/')
+    .filter((segment) => segment && !/^\(.*\)$/.test(segment));
+  if (segments[segments.length - 1] === 'index') segments.pop();
+  return `/${segments.join('/')}`;
 }
+
+/*
+ * The screen a sign-up went back to: onboarding marks it as it leaves, with the
+ * name saved, for the screen that asked for an account (a creator's Generate,
+ * a Like, a Follow), and the popup offers the credits there as on Home. Kept
+ * for the run, like a close.
+ */
+let returnedTo: string | null = null;
+const returnListeners = new Set<() => void>();
+
+function setReturnedTo(next: string | null) {
+  if (next === returnedTo) return;
+  returnedTo = next;
+  returnListeners.forEach((listener) => listener());
+}
+
+export function markWelcomeReturn(route: string | null | undefined) {
+  setReturnedTo(route ? welcomeRoutePath(route) : null);
+}
+
+export function welcomeReturnPath(): string | null {
+  return returnedTo;
+}
+
+export function subscribeToWelcomeReturn(listener: () => void) {
+  returnListeners.add(listener);
+  return () => {
+    returnListeners.delete(listener);
+  };
+}
+
+/** The screen a sign-up went back to, for a component to follow. */
+export function useWelcomeReturnPath(): string | null {
+  return useSyncExternalStore(subscribeToWelcomeReturn, welcomeReturnPath, welcomeReturnPath);
+}
+
+/** Whether the screen in front offers the popup: Home, or the screen a sign-up went back to. */
+export function isWelcomePopupPlace({ pathname, returnedTo: returned }: { pathname: string | null | undefined; returnedTo: string | null }) {
+  if (!pathname) return false;
+  const path = welcomeRoutePath(pathname);
+  return path === '/' || (returned !== null && path === returned);
+}
+
+/**
+ * Who it is offered to and the fill it counts up on are shared with the web
+ * (`welcome-popup-policy/`); the app keeps only its memory of a close.
+ */
+export {
+  shouldShowWelcomePopup,
+  WELCOME_COUNT_UP_MS,
+  welcomeCountUpTicks,
+  welcomeFillProgress,
+} from './welcome-popup-policy/welcome-popup-policy';

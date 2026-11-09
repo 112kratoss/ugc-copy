@@ -35,7 +35,6 @@ export default async function EditProfilePage() {
           loadError={loadError}
           collapseOptionalDetails
           hideIntro
-          nextPath="/profile"
         />
       </div>
     </div>

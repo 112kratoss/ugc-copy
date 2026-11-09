@@ -3,7 +3,6 @@ import { Suspense, use } from 'react';
 
 import AnonymousHome from '@/components/AnonymousHome';
 import { HOME_FEED_DETAIL_CONTEXT, HomeFeedSkeleton } from '@/components/HomeFeedSkeleton';
-import WelcomeCreditsCard from '@/app/home/WelcomeCreditsCard';
 import HomeExperience from '@/components/HomeExperience';
 import HomeShelf, { HomeShelfPlaceholder } from '@/components/HomeShelf';
 import WhatsNewModelsCard from '@/components/WhatsNewModelsCard';
@@ -128,12 +127,9 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
         </Suspense>
       )}
       inlineStrip={(
-        <>
-          <WelcomeCreditsCard />
-          <Suspense fallback={null}>
-            <HomeWorkspaceSection data={workspacePromise} variant="inline" />
-          </Suspense>
-        </>
+        <Suspense fallback={null}>
+          <HomeWorkspaceSection data={workspacePromise} variant="inline" />
+        </Suspense>
       )}
       feed={(
         <Suspense fallback={<HomeFeedSkeleton />}>
@@ -142,7 +138,6 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
       )}
       rail={(
         <>
-          <WelcomeCreditsCard />
           <Suspense fallback={<WorkspaceRailFallback />}>
             <HomeWorkspaceSection data={workspacePromise} variant="rail" />
           </Suspense>

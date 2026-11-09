@@ -113,35 +113,6 @@ vi.mock('@/app/creations/CreatorProfileCard', () => ({
   ),
 }));
 
-vi.mock('@/app/profile/DeferredCreatorProfileCard', () => ({
-  default: ({
-    initialProfile,
-    isLoading,
-    loadError,
-    onboardingMode,
-    nextPath,
-    returnAfterSave,
-  }: {
-    initialProfile: { username?: string | null; displayName?: string; avatarUrl?: string } | null;
-    isLoading: boolean;
-    loadError: string | null;
-    onboardingMode?: boolean;
-    nextPath?: string;
-    returnAfterSave?: boolean;
-  }) => (
-    <div
-      data-testid="deferred-creator-profile-card"
-      data-onboarding={onboardingMode ? 'true' : 'false'}
-      data-next-path={nextPath}
-      data-display-name={initialProfile?.displayName}
-      data-avatar-url={initialProfile?.avatarUrl}
-      data-return-after-save={returnAfterSave ? 'true' : 'false'}
-    >
-      {isLoading ? 'loading' : loadError ?? initialProfile?.username ?? 'empty'}
-    </div>
-  ),
-}));
-
 vi.mock('@/app/profile/OwnerProfileMediaHub', () => ({
   default: ({
     creator,
@@ -355,7 +326,9 @@ describe('ProfilePage', () => {
       .rejects.toThrow(/^NEXT_REDIRECT:\/creations\?generation=gen-2$/);
   });
 
-  it('keeps first-time users on /profile and prefills the suggested username', async () => {
+  // The creator name is chosen at /onboarding (owner, 2026-11-09): the profile
+  // has no setup mode, and an account without a name sees its profile.
+  it('draws the profile, with no setup mode, for an account without a creator name', async () => {
     profileState = {
       id: 'a1b2c3d4-1111-2222-3333-444455556666',
       username: null,
@@ -371,16 +344,15 @@ describe('ProfilePage', () => {
       credits: 10,
     };
 
-    render(await ProfilePage({}));
+    render(await ProfilePage({ searchParams: Promise.resolve({ next: '/create-image?model=gpt-image-2' }) }));
 
-    expect(await screen.findByText('creator-a1b2c3d4')).toBeInTheDocument();
-    expect(screen.getByText(/profile setup/i)).toBeInTheDocument();
-    // A photo is never required to sell.
-    expect(screen.getByText('Recommended — builds buyer trust')).toBeInTheDocument();
-    expect(screen.queryByText(/required before selling/i)).not.toBeInTheDocument();
-    expect(screen.getByTestId('deferred-creator-profile-card')).toHaveAttribute('data-onboarding', 'true');
-    expect(screen.getByTestId('deferred-creator-profile-card')).toHaveAttribute('data-display-name', 'OAuth Creator');
-    expect(screen.getByTestId('deferred-creator-profile-card')).toHaveAttribute('data-avatar-url', 'https://cdn.example.com/oauth-avatar.jpg');
+    const hub = screen.getByTestId('owner-profile-media-hub');
+    expect(hub).toHaveAttribute('data-creator-name', 'OAuth Creator');
+    expect(hub).toHaveAttribute('data-username', '');
+    expect(screen.getByRole('heading', { level: 1, name: 'Profile' })).toBeInTheDocument();
+    expect(screen.queryByText(/profile setup/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/set up your creator profile/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /view public profile/i })).not.toBeInTheDocument();
     expect(mockRedirect).not.toHaveBeenCalled();
   });
 
@@ -389,40 +361,19 @@ describe('ProfilePage', () => {
 
     render(await ProfilePage({}));
 
-    expect(await screen.findByText('creator-a1b2c3d4')).toBeInTheDocument();
+    expect(screen.getByTestId('owner-profile-media-hub')).toHaveAttribute('data-creator-name', 'OAuth Creator');
     expect(screen.queryByText(/profile not found/i)).not.toBeInTheDocument();
     expect(mockRedirect).not.toHaveBeenCalled();
   });
 
-  it('preserves a safe creation destination through setup', async () => {
-    profileState = {
-      id: 'a1b2c3d4-1111-2222-3333-444455556666',
-      username: 'creator-a1b2c3d4',
-      display_name: 'Creator Name',
-      bio: null,
-      avatar_url: null,
-      cover_url: null,
-      website_url: null,
-      twitter_handle: null,
-      instagram_handle: null,
-      tiktok_handle: null,
-      location: null,
-      credits: 10,
-    };
-
-    render(await ProfilePage({
-      searchParams: Promise.resolve({ next: '/create-image?model=gpt-image-2' }),
-    }));
-
-    expect(screen.getByTestId('deferred-creator-profile-card')).toHaveAttribute(
-      'data-next-path',
-      '/create-image?model=gpt-image-2'
-    );
-    expect(screen.getByTestId('deferred-creator-profile-card')).toHaveAttribute(
-      'data-return-after-save',
-      'true'
-    );
-    expect(screen.queryByRole('link', { name: /view public profile/i })).not.toBeInTheDocument();
+  it('opens the creator-name step for a first-profile link from before it', async () => {
+    await expect(ProfilePage({
+      searchParams: Promise.resolve({
+        welcome: '1',
+        next: '/welcome-reward?next=%2Fcreate-image%3Fmodel%3Dgpt-image-2',
+      }),
+    })).rejects.toThrow(/^NEXT_REDIRECT:\/onboarding\?next=%2Fcreate-image%3Fmodel%3Dgpt-image-2$/);
+    expect(getServerAuthStateMock).not.toHaveBeenCalled();
   });
 
   it('does not restart onboarding for a ready profile just because welcome remains in the URL', async () => {

@@ -231,7 +231,7 @@ describe('the form a creator holds', () => {
   it.each<[string, Owned[], number[]]>([
     ['another account signing in from another tab', [owned('user-1'), owned('user-2')], [0, 1]],
     ['another account after a sign-out', [owned('user-1'), owned(null), owned('user-2')], [0, 0, 1]],
-    ['an account signing in on a visitor’s page without the sign-up sheet', [owned('visitor'), owned('user-1')], [0, 1]],
+    ['an account signing in on a visitor’s page without the creator’s hand-over', [owned('visitor'), owned('user-1')], [0, 1]],
     ['a hand-over that carried the visitor’s draft', [owned('visitor'), owned(null), owned('user-1')], [0, 0, 1]],
     ['the visitor, and then another account, after the hand-over’s account left', [owned('visitor'), owned('user-1', true), owned('visitor'), owned('user-2')], [0, 0, 1, 2]],
     // Owner, 2026-11-01, "Yes, clear it": a sign-out made in this browser gives the page to the visitor.

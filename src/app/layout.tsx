@@ -1,15 +1,18 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import Script from "next/script";
+import { Suspense } from "react";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 
 import { siteConfig } from "@/lib/seo";
 import { TYPED_BEFORE_HYDRATION_CAPTURE } from "@/lib/typed-before-hydration";
 import { APP_SHELL_SIDEBAR_RESTORE } from "@/lib/app-shell-sidebar-restore";
+import { WELCOME_PROMISE_RESTORE } from "@/lib/welcome-promise-restore";
 
 import "./globals.css";
 import AppShell from "@/components/AppShell";
 import DeferredGenerationNotifications from "@/components/DeferredGenerationNotifications";
+import DeferredWelcomeCreditsPopup from "@/components/DeferredWelcomeCreditsPopup";
 import FeedbackViewport from "@/components/FeedbackViewport";
 import NavigationProgress from "@/components/NavigationProgress";
 
@@ -105,6 +108,8 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: TYPED_BEFORE_HYDRATION_CAPTURE }} />
         {/* The sidebar hidden in this browser, marked on the root element before the shell is drawn (`src/lib/app-shell-sidebar-restore.ts`). */}
         <script dangerouslySetInnerHTML={{ __html: APP_SHELL_SIDEBAR_RESTORE }} />
+        {/* No promise of the welcome credits where this browser's account has had them, from the first paint (`src/lib/welcome-promise-restore.ts`). */}
+        <script dangerouslySetInnerHTML={{ __html: WELCOME_PROMISE_RESTORE }} />
         <a
           href="#main-content"
           className="ui-focus-ring fixed left-4 top-3 z-[120] -translate-y-24 rounded-full bg-[var(--ui-primary)] px-4 py-3 text-sm font-bold text-[var(--ui-primary-on)] transition focus:translate-y-0"
@@ -119,6 +124,10 @@ export default function RootLayout({
         <NavigationProgress />
         <AppShell>{children}</AppShell>
         <DeferredGenerationNotifications />
+        {/* The welcome credits, offered once an account has its name (Home, the creators, the page a sign-up returned to). It reads the query: a boundary of its own keeps every page drawn ahead of time. */}
+        <Suspense fallback={null}>
+          <DeferredWelcomeCreditsPopup />
+        </Suspense>
         {/* Toasts and confirmations for every route; talks to feedback-state. */}
         <FeedbackViewport />
         {speedInsightsEnabled ? (

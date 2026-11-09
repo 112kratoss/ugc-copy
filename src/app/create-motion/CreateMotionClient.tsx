@@ -51,9 +51,8 @@ import {
     settingsVariants,
     useQuotePrices,
 } from '@/lib/use-quote-prices';
-import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
-import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
+import { creatorSignInPath, VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
 import { useCreatorDraftOwner, useCreatorForm, useCreatorSignOut, type CreatorDraftOwner, type CreatorForm } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
@@ -313,7 +312,9 @@ function MotionCreator({
     // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
     // signed-in face, and its Generate signs in again on the login page.
     const isVisitor = draftOwner === VISITOR_DRAFT_OWNER;
-    const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
+    // One trip to sign in: a second press (a double-click on Generate) would mark the draft again
+    // under a new nonce, and the first trip's way back would then carry one that moves nothing.
+    const leavingForSignInRef = useRef(false);
     const [selectedModel, setSelectedModel] = useState<ModelId>((opening?.modelId ?? 'kling-3.0') as ModelId);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     // Open settings price each of their options; the bar says when they open and close.
@@ -873,10 +874,15 @@ function MotionCreator({
         router.push(`/login?returnUrl=${encodeURIComponent(returnTo)}`);
     };
 
-    /** Asks a visitor to sign up for what they pressed, with the form saved for the way back. */
-    const openSignUp = async (reason: CreatorSignUpReason) => {
+    /**
+     * Sends a visitor to the sign-in page for what they pressed (owner, 2026-11-09: the page, not a
+     * sheet), with the form saved for the way back and the draft marked for the account.
+     */
+    const openSignUp = async () => {
+        if (leavingForSignInRef.current) return;
+        leavingForSignInRef.current = true;
         await flushDraftSave();
-        setSignUpReason(reason);
+        router.push(creatorSignInPath('motion', draftOwner === VISITOR_DRAFT_OWNER));
     };
 
     /** Onto the current build, with the draft saved first: it comes back after the reload. */
@@ -1363,7 +1369,7 @@ function MotionCreator({
         if (isVisitor) {
             // Signed out: the sign-up comes back here, on this page's own link, with the
             // draft saved, and nothing runs until Generate is pressed again.
-            await openSignUp('generate');
+            await openSignUp();
             return;
         }
         await startFreshRun();
@@ -1955,7 +1961,7 @@ function MotionCreator({
                                 hasReferenceVideo: Boolean(referenceVideoFile || referenceVideo),
                             }}
                             disabled={isGenerating}
-                            onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
+                            onRequireAccount={isVisitor ? () => void openSignUp() : undefined}
                         />
 
                         <CreatorColumnBar
@@ -2065,19 +2071,6 @@ function MotionCreator({
                         )}
                     </CreatorCanvas>
                 }
-            />
-
-            <CreatorSignUpSheet
-                reason={signUpReason}
-                handsOverDraft={draftOwner === VISITOR_DRAFT_OWNER}
-                tool="motion"
-                welcomeCredits={visitorWelcomeCredits}
-                runCost={estimatedCost}
-                modelName={model.displayName}
-                settingsSummary={settingsSummary}
-                keepsPrompt={Boolean(prompt.trim())}
-                keepsImages={Boolean(characterImageFile || referenceVideoFile)}
-                onClose={() => setSignUpReason(null)}
             />
 
             <StudioMediaPreviewModal

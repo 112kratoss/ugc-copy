@@ -329,11 +329,32 @@ export function getSafeProfileNextPath(
     || safetyCandidate.startsWith('//')
     || safetyCandidate.includes('\\')
     || /[\u0000-\u001F\u007F]/.test(safetyCandidate)
+    || resolvesOffSite(candidate)
+    || resolvesOffSite(safetyCandidate)
   ) {
     return fallback;
   }
 
   return candidate;
+}
+
+const SAFE_PATH_BASE = 'https://magicbooklet.local';
+
+/**
+ * Whether a path the checks above let through still resolves to another host
+ * once a URL parser reads it. "/.//evil.com", "/..//evil.com" and
+ * "/%2e//evil.com" start with one slash, but the parser drops the dot segment
+ * and leaves the pathname "//evil.com": anything that re-serialises the path
+ * (`withCreatorWelcome` puts `url.pathname` back together) hands the browser a
+ * protocol-relative address, an open redirect after sign-up.
+ */
+function resolvesOffSite(path: string): boolean {
+  try {
+    const url = new URL(path, SAFE_PATH_BASE);
+    return url.origin !== SAFE_PATH_BASE || url.pathname.startsWith('//');
+  } catch {
+    return true;
+  }
 }
 
 export function buildCreatorProfilePath(username: string): string {

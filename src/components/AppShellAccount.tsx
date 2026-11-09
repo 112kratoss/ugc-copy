@@ -341,10 +341,21 @@ export default function AppShellAccount({
   useEffect(() => {
     let isActive = true;
 
-    function refreshCredits() {
+    function refreshCredits(event: Event) {
       const userId = session?.user?.id;
       const identity = creditIdentityRef.current;
       if (!userId || identity?.userId !== userId) return;
+
+      // The balance an answer carries (a claim, a spend) is drawn at once, so
+      // the figure here moves with what the page shows: the welcome popup
+      // announces the grant as its count lands. The read below confirms it.
+      const announced = (event as CustomEvent<{ credits?: unknown } | null>).detail?.credits;
+      if (typeof announced === 'number') {
+        setProfile((current) => creditIdentityRef.current === identity ? {
+          ...(current ?? { display_name: null, avatar_url: null }),
+          credits: announced,
+        } : current);
+      }
 
       supabase
         .from('profiles')

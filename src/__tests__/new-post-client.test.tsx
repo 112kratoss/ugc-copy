@@ -1764,7 +1764,7 @@ describe('NewPostClient', () => {
     expect(alert).toHaveTextContent(/custom handle/i);
     expect(alert.closest('[data-composer-section]')).toHaveAttribute('data-composer-section', 'publish');
     const repairLink = screen.getByRole('link', { name: /complete profile in a new tab/i });
-    expect(repairLink).toHaveAttribute('href', '/profile?source=post-composer');
+    expect(repairLink).toHaveAttribute('href', '/profile/edit?source=post-composer');
     expect(repairLink).toHaveAttribute('target', '_blank');
   });
 
