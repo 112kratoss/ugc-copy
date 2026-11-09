@@ -340,7 +340,27 @@ Verified on production on 2026-11-09, with the OAuth server on (issuer
   `authorization_response_iss_parameter_supported`, which is why Codex's redirect carries its
   callback ID ("Registered clients", above).
 
-Checks 3 to 5 need a real client connected end to end.
+Checks 3 and 4, on 2026-11-09 with the Claude Code client on the dev Mac (the release of
+`e8b4a1766`, then of `48af4d7f1` at 20:24 UTC):
+
+- Check 3: `claude mcp add` at user scope with `--callback-port 8976`, then `claude mcp login
+  magicbooklet` (it needs a terminal, and gives up after about five minutes without an answer)
+  opened `/oauth/consent`, which sent a signed-out browser to `/login` and back; Allow landed on
+  Claude Code's callback page and `claude mcp get magicbooklet` reported Connected. A second
+  authorize for the same account and client came back approved with no click.
+- Check 4: `list_models` and `quote_generation` answered from a Claude Code session (catalog
+  revision `kie-models-20261105`). The 45-second wait on a running creation was not exercised:
+  none was running, and nothing was started for the check.
+- The other tools, with a token from the same client: `tools/list` names eleven tools;
+  `list_creations`, `get_generation` with `include_preview` (one image block), `get_post`, and
+  `publish_post` on a creation already posted (`already_published`, nothing changed) answered
+  in about a second; `delete_post` of an unknown id answered `NOT_FOUND`; `upload_input` refused
+  an `http` URL (`INVALID_URL`) and `localhost` and `169.254.169.254` (`PRIVATE_ADDRESS`), and
+  staged a small picture by base64 and one by a public `https` URL; each call left its row in
+  `agent_tool_calls`. Connected apps on `/profile/edit` listed Claude Code with Disconnect.
+  `create_media` and a first new post were left for the owner: both act on the account.
+
+Check 5 is still open.
 
 ## Verifying a deployment
 
@@ -524,6 +544,10 @@ already be true; a correction later costs a version bump of `server.json` and
    The login prints an "Expected proof record"; it must match what step 2 fetched.
 4. Publish: `mcp-publisher publish` ("Successfully published", with the version), then check
    `curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=com.magicbooklet/mcp"`.
+
+Published first on 2026-11-09 at 20:28 UTC: `com.magicbooklet/mcp` 1.1.0, `status: active` and
+`isLatest` in the registry's answer, by the HTTP method above; `mcp-publisher logout` clears the
+saved login afterwards.
 
 A later publish (a new description, say) needs a new `version`: the registry refuses one it
 already has. `server.json`'s version and the server's own `MCP_SERVER_VERSION` move together;

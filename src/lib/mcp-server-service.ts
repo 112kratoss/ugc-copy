@@ -92,6 +92,13 @@ export const MCP_GENERATION_WAIT_SUGGESTED_SECONDS = 30;
 export const MCP_GENERATION_POLL_INTERVAL_MS = 3_000;
 export const MCP_LIST_PAGE_MAX = 50;
 
+/** How upload_input's answer names the file it staged, each kind with its own article. */
+const STAGED_KIND_NOUN: Record<'image' | 'video' | 'audio', string> = {
+  image: 'an image',
+  video: 'a video',
+  audio: 'an audio file',
+};
+
 const CATALOG_PLATFORM = 'web' as const;
 
 export type McpToolName =
@@ -1108,7 +1115,7 @@ const uploadInputTool = defineTool({
     }
     return toolSuccess(
       [
-        `Staged a ${staged.kind} of ${staged.bytes} bytes (${staged.mimeType}).`,
+        `Staged ${STAGED_KIND_NOUN[staged.kind]} of ${staged.bytes} bytes (${staged.mimeType}).`,
         'In create_media.inputs[], send this input\'s url and storage_path with the slot and kind get_model names for it.',
         `The staged file is kept about two hours for a run; its URL lasts ${Math.round(staged.expiresInSeconds / 60)} minutes.`,
       ].join(' '),
