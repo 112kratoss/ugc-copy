@@ -2,6 +2,7 @@ import { postMediaStorageBucket, removePostMediaObjects } from '@/lib/post-media
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { runPagedQuery } from '@/lib/admin-paged-query';
+import { listAgentPublishedPosts } from '@/lib/agent-tool-calls';
 import {
   getCanonicalStoredMediaLocation,
   getUserOwnedStoredMediaLocation,
@@ -84,6 +85,22 @@ export type SubjectModerationQueueItem = {
 export type ModerationQueueSnapshot = {
   postReports: PostModerationQueueItem[];
   subjectReports: SubjectModerationQueueItem[];
+};
+
+/**
+ * Where a queue listing's posts came from: `agent` keeps only reports of posts an agent published
+ * through the MCP server (`agent_tool_calls`, `src/lib/agent-tool-calls.ts`).
+ */
+export type ModerationQueueSource = 'agent';
+
+/** A post an agent published, with the post as the queue describes one; `post` is null once it is deleted. */
+export type AgentPublishedPostItem = {
+  postId: string;
+  userId: string;
+  /** The OAuth client the agent connected through (Claude Code, ChatGPT, …). */
+  clientId: string;
+  publishedAt: string;
+  post: PostModerationQueueItem['post'];
 };
 
 /** Post reports carry an explicit `resolution_action`; subject reports encode it in `status`. */
@@ -571,17 +588,7 @@ function toPostReportItem(
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    post: post
-      ? {
-          id: post.id,
-          userId: post.user_id,
-          title: post.title,
-          visibility: post.visibility,
-          reviewStatus: post.review_status,
-          reportCount: post.report_count,
-          createdAt: post.created_at,
-        }
-      : null,
+    post: toQueuePost(post),
   };
 }
 
@@ -635,26 +642,85 @@ function toSubjectReportItem(
   };
 }
 
-export async function listOpenModerationReports(
+function toQueuePost(post: PostRow | null | undefined): PostModerationQueueItem['post'] {
+  return post
+    ? {
+        id: post.id,
+        userId: post.user_id,
+        title: post.title,
+        visibility: post.visibility,
+        reviewStatus: post.review_status,
+        reportCount: post.report_count,
+        createdAt: post.created_at,
+      }
+    : null;
+}
+
+/**
+ * The posts agents published through the MCP server, newest first, each with the post as it
+ * stands (null once deleted), so an operator can review what agents put on the feed whether or
+ * not anyone reported it. The MCP server's `publish_post` records each publication in
+ * `agent_tool_calls`; this joins that record to `posts`.
+ */
+export async function listAgentPublishedPostsForModeration(
   supabase: SupabaseClient,
   options: { limit?: number } = {},
+): Promise<AgentPublishedPostItem[]> {
+  const limit = normalizeLimit(options.limit);
+  let published: Awaited<ReturnType<typeof listAgentPublishedPosts>>;
+  try {
+    published = await listAgentPublishedPosts(supabase, { limit });
+  } catch (error) {
+    throw databaseError('Failed to list agent-published posts', error);
+  }
+  const postsById = await hydrateReportedPosts(supabase, published.map((item) => ({ post_id: item.postId })));
+  return published.map((item) => ({
+    postId: item.postId,
+    userId: item.userId,
+    clientId: item.clientId,
+    publishedAt: item.publishedAt,
+    post: toQueuePost(postsById.get(item.postId)),
+  }));
+}
+
+export async function listOpenModerationReports(
+  supabase: SupabaseClient,
+  options: { limit?: number; source?: ModerationQueueSource } = {},
 ): Promise<ModerationQueueSnapshot> {
   const limit = normalizeLimit(options.limit);
+
+  // `source: 'agent'` narrows the queue to reports of posts agents published. Subject reports
+  // (users, generations, comments, templates) are not posts, so the filter leaves them out.
+  let agentPostIds: string[] | null = null;
+  if (options.source === 'agent') {
+    try {
+      agentPostIds = (await listAgentPublishedPosts(supabase, { limit: MAX_QUEUE_LIMIT })).map((item) => item.postId);
+    } catch (error) {
+      throw databaseError('Failed to list agent-published posts', error);
+    }
+    if (agentPostIds.length === 0) return { postReports: [], subjectReports: [] };
+  }
+
+  let postReportQuery = supabase
+    .from('post_reports')
+    .select('id, post_id, bundle_id, reporter_user_id, reason, details, status, created_at, updated_at')
+    .eq('status', 'open');
+  if (agentPostIds) postReportQuery = postReportQuery.in('post_id', agentPostIds);
+
   const [postReportResult, subjectReportResult] = await Promise.all([
-    supabase
-      .from('post_reports')
-      .select('id, post_id, bundle_id, reporter_user_id, reason, details, status, created_at, updated_at')
-      .eq('status', 'open')
+    postReportQuery
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
       .limit(limit),
-    supabase
-      .from('moderation_reports')
-      .select(SUBJECT_REPORT_COLUMNS)
-      .in('status', ['open', 'reviewing'])
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
-      .limit(limit),
+    agentPostIds
+      ? Promise.resolve({ data: [], error: null })
+      : supabase
+        .from('moderation_reports')
+        .select(SUBJECT_REPORT_COLUMNS)
+        .in('status', ['open', 'reviewing'])
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(limit),
   ]);
 
   if (postReportResult.error) {

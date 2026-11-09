@@ -3,9 +3,11 @@ import { pathToFileURL } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 
 import {
+  listAgentPublishedPostsForModeration,
   listOpenModerationReports,
   resolvePostReport,
   resolveSubjectReport,
+  type ModerationQueueSource,
   type PostReportResolution,
 } from '../../src/lib/moderation-ops';
 
@@ -138,7 +140,7 @@ const USAGE = `
 Magicbooklet moderation operations (service role only)
 
 Usage:
-  npm run ops:moderation -- list [--limit 50] [--json]
+  npm run ops:moderation -- list [--limit 50] [--source agent] [--json]
   npm run ops:moderation -- take-down-post --report-id <uuid> --reviewer-id <uuid> --confirm [--note "..."]
   npm run ops:moderation -- dismiss-post --report-id <uuid> --reviewer-id <uuid> --confirm [--note "..."]
   npm run ops:moderation -- resolve-subject --report-id <uuid> --reviewer-id <uuid> --confirm
@@ -152,6 +154,10 @@ Environment:
 
 Notes:
   - Apply all pending Supabase migrations before using mutation commands.
+  - --source agent lists the posts AI agents published through the MCP server (from the
+    agent_tool_calls audit table, newest first, with each post's state) and narrows the open
+    post reports to those posts; subject reports are left out of that view. Take one down with
+    take-down-post on its report, as for any post.
   - reviewer-id must identify the staff member's real auth.users row.
   - Resolving a comment report atomically removes the comment and resolves duplicate reports.
   - Resolving a template report takes the template down (it leaves the catalog, its page answers
@@ -214,9 +220,34 @@ function optionalLimit(flags: Map<string, string | true>) {
   return Number(raw);
 }
 
+function optionalSource(flags: Map<string, string | true>): ModerationQueueSource | undefined {
+  const raw = flags.get('--source');
+  if (raw === undefined) return undefined;
+  if (raw !== 'agent') {
+    throw new Error('--source takes agent (posts published by AI agents through the MCP server).');
+  }
+  return raw;
+}
+
 function summarizeDetails(value: string | null) {
   if (!value) return '';
   return value.length <= 100 ? value : `${value.slice(0, 97)}...`;
+}
+
+function printAgentPosts(posts: Awaited<ReturnType<typeof listAgentPublishedPostsForModeration>>) {
+  console.log(`Posts published by agents: ${posts.length}`);
+  if (posts.length > 0) {
+    console.table(posts.map((item) => ({
+      post_id: item.postId,
+      client_id: item.clientId,
+      user_id: item.userId,
+      published_at: item.publishedAt,
+      post_status: item.post ? item.post.reviewStatus : 'deleted',
+      visibility: item.post?.visibility ?? '',
+      report_count: item.post?.reportCount ?? '',
+      post_title: item.post?.title ?? '',
+    })));
+  }
 }
 
 function printQueue(snapshot: Awaited<ReturnType<typeof listOpenModerationReports>>) {
@@ -279,10 +310,15 @@ export async function runModerationOps(
   });
 
   if (command === 'list') {
-    const snapshot = await listOpenModerationReports(supabase, { limit: optionalLimit(flags) });
+    const limit = optionalLimit(flags);
+    const source = optionalSource(flags);
+    const snapshot = await listOpenModerationReports(supabase, { limit, ...(source ? { source } : {}) });
+    // The agent view lists what agents published first, reported or not, then the reports of it.
+    const agentPosts = source === 'agent' ? await listAgentPublishedPostsForModeration(supabase, { limit }) : null;
     if (flags.get('--json') === true) {
-      console.log(JSON.stringify(snapshot, null, 2));
+      console.log(JSON.stringify(agentPosts ? { agentPosts, ...snapshot } : snapshot, null, 2));
     } else {
+      if (agentPosts) printAgentPosts(agentPosts);
       printQueue(snapshot);
     }
     return;
