@@ -1,7 +1,7 @@
 /**
  * `next/font/google` under vitest. Next's compiler replaces each loader call at build time and the
  * package's runtime module exports nothing, so a component that imports a face
- * (`src/lib/display-fonts.ts`) would throw "is not a function" in a test. Each loader here answers
+ * (`src/lib/display-font.ts`, `src/lib/handwriting-font.ts`) would throw "is not a function" in a test. Each loader here answers
  * what Next's would, a class and a style named for its family, so a test can see which face an
  * element was given (`font-<family>`).
  */
