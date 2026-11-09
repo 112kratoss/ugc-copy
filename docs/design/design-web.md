@@ -133,6 +133,7 @@ Rules:
   - Durations are `--ui-duration-fast` 160ms, `--ui-duration-base` 180ms and `--ui-duration-reveal` 240ms, on `--ui-ease-standard` (`cubic-bezier(0.2, 0, 0, 1)`).
   - Entrances use `.ui-enter`, `.ui-enter-pop`, and `.ui-stagger` (35ms steps).
   - `prefers-reduced-motion` cuts every animation and transition to nothing and turns off smooth scrolling, app-wide.
+  - **The first sign-up intro** (`src/components/onboarding/FirstSignUpIntro.tsx`, the app's first-open intro, over `/onboarding`'s name step once per browser; owner, 2026-11-09) keeps the app's own clock (`src/lib/first-sign-up-intro-timeline.ts`, held to the app's by its test) rather than these durations: the words, their notes and the dust are drawn on a canvas, released as the dust goes, and the note from the team runs on the Web Animations API. Under reduced motion it still cross-fades, the words to the note, with no dust and no writing: the app-wide rule stops CSS animations, and these fades are opacity alone.
 
 ## Icons
 
