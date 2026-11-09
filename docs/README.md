@@ -13,7 +13,7 @@ Live runbooks are at the root of this folder; everything dated or reference-only
 - [feed-algorithm-operations.md](feed-algorithm-operations.md) — For You ranking versions: the scorecard (including the viewer-grain, position and format sections and the SRM check), activating a version and rolling back, experiments, kill switches, and training a draft version from the delivery facts (`ops:feed-ranker`).
 - [mobile-store-product-catalog.md](mobile-store-product-catalog.md) — IAP tier provisioning.
 - [post-resource-bundle-v1.md](post-resource-bundle-v1.md) — paid resource bundles.
-- [mcp-server-operations.md](mcp-server-operations.md) — the agents' MCP server (`/api/mcp`): enabling Supabase Auth's OAuth server, registering each agent client and its redirect URIs, the kill switch, reading the logs, revoking a client.
+- [mcp-server-operations.md](mcp-server-operations.md) — the agents' MCP server (`/api/mcp`): enabling Supabase Auth's OAuth server, registering each agent client and its redirect URIs, the kill switch, reading the logs and the `agent_tool_calls` audit table, the publishing rules (the daily cap, the moderation filter), Connected apps, revoking a client.
 - [scaling-audit.md](scaling-audit.md) — scaling entry point; [scaling-certification-runbook.md](scaling-certification-runbook.md) and [supabase-performance-inspection.md](supabase-performance-inspection.md) sit beside it.
 
 ## Folders

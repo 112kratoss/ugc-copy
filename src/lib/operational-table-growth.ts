@@ -84,6 +84,10 @@ export const OPERATIONAL_TABLE_ROW_BUDGETS: Record<string, { warning: number; de
   // Live anonymous users: idle ones are deleted after 90 days, or 180 days
   // with content, so a climb here means guests are not being retired.
   guest_identities: { warning: 50_000, degraded: 250_000 },
+  // The MCP server's audit ledger: one row per agent tool call, polls included, kept for
+  // good until a pruning migration (the runbook's retention follow-up). A backstop against a
+  // runaway agent, sized far above any steady state today.
+  agent_tool_calls: { warning: 200_000, degraded: 1_000_000 },
 };
 
 const DEFAULT_BUDGET = { warning: 100_000, degraded: 500_000 };

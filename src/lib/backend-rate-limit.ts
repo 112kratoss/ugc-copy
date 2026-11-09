@@ -324,6 +324,31 @@ export const SHOWCASE_PUBLISH_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+/**
+ * Public posts an agent may publish for one account per UTC day (owner, 2026-11-09, the MCP
+ * server's phase 2), beside the publish route's own 20 per 10 minutes, which every publish still
+ * passes through. Not enforced through `check_backend_rate_limit`, which counts attempts: the tool
+ * counts the day's successful public publishes in `agent_tool_calls` before it publishes
+ * (`countAgentPublicPublishesSince`), so a refused publish spends nothing and a private post is
+ * not counted. The window is the UTC day, as the limiter's own windows are aligned.
+ */
+export const AGENT_PUBLISH_RATE_LIMIT = {
+  scope: 'agent:publish-public',
+  limit: 10,
+  windowSeconds: 24 * 60 * 60,
+} as const;
+
+/**
+ * `upload_input` calls per account (the MCP server): checked before any byte is fetched, so a
+ * loop of large or failing downloads is counted and stopped, where the sign step's own limit
+ * (`TEMPORARY_MEDIA_UPLOAD_SIGN_RATE_LIMIT`) would see only the downloads that reached it.
+ */
+export const AGENT_UPLOAD_INPUT_RATE_LIMIT = {
+  scope: 'agent:upload-input',
+  limit: 30,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const SHOWCASE_SHARE_RATE_LIMIT = {
   scope: 'showcase:share',
   limit: 120,

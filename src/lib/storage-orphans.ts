@@ -168,6 +168,8 @@ const RECIPE_COPY_SOURCES = 'where passed-on recipe copies came from: it names o
 /** Every other table, and why it is not read for references. */
 export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   account_deletion_wallet_records: NO_TEXT,
+  // The MCP server's audit ledger: tool names, codes and ids, one row per agent call.
+  agent_tool_calls: TELEMETRY,
   backend_job_locks: TELEMETRY,
   backend_job_runs: TELEMETRY,
   backend_rate_limits: TELEMETRY,
