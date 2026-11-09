@@ -6,6 +6,16 @@ const mocks = vi.hoisted(() => ({
   updateCredits: vi.fn(),
 }));
 
+// The shared welcome reader (welcome-credits-requests.ts) takes the token from the browser's
+// session: a signed-in one here, so its request reaches the stubbed fetch below.
+vi.mock('@/lib/supabase', () => ({
+  supabase: {
+    auth: {
+      getSession: async () => ({ data: { session: { access_token: 'token', user: { id: 'session-user' } } } }),
+    },
+  },
+}));
+
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: { access_token: 'token-1', user: { id: 'user-1' } },

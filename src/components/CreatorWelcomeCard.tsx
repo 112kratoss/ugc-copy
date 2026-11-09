@@ -8,7 +8,6 @@ import { useAuth } from '@/components/AuthProvider';
 import { Button, getAccentClasses, IconButton, Surface, Text } from '@/components/DesignSystem';
 import PublicIdentityFields from '@/components/PublicIdentityFields';
 import { withoutCreatorReturnFlags } from '@/lib/auth-onboarding';
-import type { WelcomeCreditStatus } from '@/lib/onboarding';
 import {
   claimPublicIdentity,
   getInitialPublicIdentity,
@@ -20,19 +19,13 @@ import {
 import { describeReferralClaim } from '@/lib/referral-claim-copy';
 import type { ProfileApiResponse } from '@/lib/profile';
 import { announceWelcomeOfferChanged } from '@/lib/welcome-credits-popup';
+import { readWelcomeCredits } from '@/lib/welcome-credits-requests';
 
 /**
  * What the post-auth redirect tells a creator about an account back from
  * sign-up: `?welcome=1`, with the invite's outcome as `?referral=`.
  */
 export type CreatorWelcome = { referral: string | null };
-
-type WelcomeCredits = {
-  status: WelcomeCreditStatus;
-  amount: number;
-  credits: number;
-  identityComplete: boolean;
-};
 
 type CardState =
   /** The name and handle unlock the credits (the claim refuses an account without them). */
@@ -50,14 +43,6 @@ type CardState =
 /** Why a sign-in that already had its welcome credits (on an account since deleted) gets none here. */
 const ALREADY_CLAIMED_NOTE = 'This sign-in already had its welcome credits on another account.';
 
-async function readWelcomeCredits(accessToken: string): Promise<WelcomeCredits> {
-  const response = await fetch('/api/credits/welcome', {
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-  });
-  const body = await response.json().catch(() => null) as (WelcomeCredits & { error?: string }) | null;
-  if (!response.ok || !body) throw new Error(body?.error || 'Your welcome credits could not be read.');
-  return body;
-}
 
 /**
  * The address without the flags that brought the account here, so a reload does
@@ -115,7 +100,8 @@ export default function CreatorWelcomeCard({
     if (!accessToken || !userId) return;
     let active = true;
     void Promise.all([
-      readWelcomeCredits(accessToken).catch(() => null),
+      // The shared reader, which also teaches the signed-out promise (welcome-promise.ts).
+      readWelcomeCredits().catch(() => null),
       loadOwnProfile(accessToken),
     ]).then(([credits, ownProfile]) => {
       if (!active) return;

@@ -3,6 +3,16 @@ import { StrictMode } from 'react';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The shared welcome reader (welcome-credits-requests.ts) takes the token from the browser's
+// session: a signed-in one here, so its request reaches the stubbed fetch below.
+vi.mock('@/lib/supabase', () => ({
+  supabase: {
+    auth: {
+      getSession: async () => ({ data: { session: { access_token: 'token', user: { id: 'session-user' } } } }),
+    },
+  },
+}));
+
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: { access_token: 'token-1', user: { id: 'user-1' } },

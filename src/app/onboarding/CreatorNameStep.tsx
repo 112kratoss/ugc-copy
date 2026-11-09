@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useReducer, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { WandSparkles } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
+import BrandWordmark from '@/components/BrandWordmark';
 import { Button, Kicker, Surface, Text } from '@/components/DesignSystem';
 import { HANDLE_CHECK_DELAY_MS } from '@/components/useHandleAvailability';
 import { withCreatorWelcome } from '@/lib/auth-onboarding';
@@ -28,6 +28,7 @@ import {
 } from '@/lib/public-identity';
 import { TYPED_INPUT_PROPS } from '@/lib/typed-before-hydration';
 import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
+import { readWelcomeCredits } from '@/lib/welcome-credits-requests';
 
 /** The server's caps: `validateProfileUpdate` in src/lib/profile.ts. */
 const DISPLAY_NAME_MAX_LENGTH = 60;
@@ -87,13 +88,11 @@ function useHandleCheckAnswers(
   }, [accessToken, question]);
 }
 
+// The app's lockup, as on the sign-in page before it (review of #744: the step drew the old tile).
 function BrandLockup() {
   return (
-    <div className="flex items-center justify-center gap-3 text-[var(--ui-text-primary)]">
-      <span aria-hidden className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--ui-primary)] text-[var(--ui-primary-on)]">
-        <WandSparkles className="h-5 w-5" strokeWidth={2.4} />
-      </span>
-      <span className="text-lg font-extrabold tracking-tight">Magic Booklet</span>
+    <div className="flex justify-center text-[var(--ui-text-primary)]">
+      <BrandWordmark className="text-xl" />
     </div>
   );
 }
@@ -158,16 +157,13 @@ export default function CreatorNameStep({
   }, [userId]);
 
   // The welcome credits wait on the name: said under the button, as the app does.
+  // Through the shared reader, which also teaches the signed-out promise (welcome-promise.ts).
   useEffect(() => {
     if (!accessToken) return undefined;
     let active = true;
-    void fetch('/api/credits/welcome', { headers: { Authorization: `Bearer ${accessToken}` } })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((body: { status?: unknown; amount?: unknown } | null) => {
-        if (!active || !body) return;
-        if (typeof body.status === 'string' && CREDITS_WAIT_ON_NAME.has(body.status) && typeof body.amount === 'number' && body.amount > 0) {
-          setCreditsAmount(body.amount);
-        }
+    void readWelcomeCredits()
+      .then((welcome) => {
+        if (active && CREDITS_WAIT_ON_NAME.has(welcome.status) && welcome.amount > 0) setCreditsAmount(welcome.amount);
       })
       .catch(() => undefined);
     return () => {
