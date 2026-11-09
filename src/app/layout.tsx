@@ -108,7 +108,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: TYPED_BEFORE_HYDRATION_CAPTURE }} />
         {/* The sidebar hidden in this browser, marked on the root element before the shell is drawn (`src/lib/app-shell-sidebar-restore.ts`). */}
         <script dangerouslySetInnerHTML={{ __html: APP_SHELL_SIDEBAR_RESTORE }} />
-        {/* No promise of the welcome credits where this browser's account has had them, from the first paint (`src/lib/welcome-promise-restore.ts`). */}
+        {/* No promise of the welcome credits where an account has signed in on this browser, from the first paint (`src/lib/welcome-promise-restore.ts`). */}
         <script dangerouslySetInnerHTML={{ __html: WELCOME_PROMISE_RESTORE }} />
         <a
           href="#main-content"

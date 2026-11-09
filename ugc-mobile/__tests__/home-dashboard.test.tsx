@@ -377,7 +377,7 @@ vi.mock('@/lib/feed-attention-view-model', async (importOriginal) => {
 });
 
 import { HomeDashboard } from '../components/home-dashboard';
-import { rememberWelcomeAnswer, resetWelcomePromiseForTests } from '../lib/welcome-promise';
+import { endWelcomePromise, resetWelcomePromiseForTests } from '../lib/welcome-promise';
 
 // The phone's welcome-credit record is a module singleton: each test starts on a fresh launch.
 afterEach(() => resetWelcomePromiseForTests());
@@ -1726,7 +1726,7 @@ describe('Home screen', () => {
     renderer.act(() => tree.unmount());
   });
 
-  it('only asks a guest to sign in, with no free credits, once an account on this phone has had them (owner 11-09)', () => {
+  it('only asks a guest to sign in, with no free credits, once an account has signed in on this phone (owner 11-09)', () => {
     authState.user = null;
     authState.identityUserId = 'guest-1';
     const { tree } = renderHome();
@@ -1735,7 +1735,7 @@ describe('Home screen', () => {
     renderer.act(() => header.unmount());
 
     renderer.act(() => {
-      rememberWelcomeAnswer('claimed');
+      endWelcomePromise();
     });
     header = renderHeader(tree);
     expect(hostProps(header, 'home-shelf').offerFreeToTry).toBe(false);

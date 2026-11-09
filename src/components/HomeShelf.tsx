@@ -57,7 +57,7 @@ export default function HomeShelf({
   // What the viewer has since blocked, hid or reported in the feed below
   // leaves the row too (`home-shelf-removals.ts`); too few left, no row.
   const removalsVersion = useSyncExternalStore(subscribeHomeShelfRemovals, getHomeShelfRemovalsVersion, () => 0);
-  // Not where this browser's account has had them (owner, 2026-11-09; `welcome-promise.ts`).
+  // Not where an account has signed in on this browser (owner, 2026-11-09; `welcome-promise.ts`).
   const welcomePromise = useWelcomePromise();
   const visibleItems = useMemo(() => {
     void removalsVersion;

@@ -298,7 +298,7 @@ function SignInWallBody({
 
           <View style={{ flex: 1, minHeight: 24 }} />
 
-          {/* The welcome credits, unless an account on this phone has had them
+          {/* The welcome credits, unless an account has signed in on this phone
               (owner, 2026-11-09; `lib/welcome-promise.ts`). */}
           <AppText variant="body" style={{ color: mediaColors.onMedia, textAlign: 'center', marginBottom: 14 }}>
             {welcomePromise ? (

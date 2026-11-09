@@ -10,7 +10,16 @@ import { wasSignedOutInBrowser } from '@/lib/browser-sign-out';
 import { resetShowcaseFeedEventQueueForTests, sendShowcaseFeedEvent } from '@/app/showcase/ShowcaseFeedInteraction';
 import { FEED_EVENT_OUTBOX_STORAGE_KEY } from '@/app/showcase/feed-event-outbox';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
+import { resetWelcomePromiseForTests, WELCOME_PROMISE_STORAGE_KEY } from '@/lib/welcome-promise';
 import { unsignedJwt } from '@/__tests__/fixtures/unsigned-jwt';
+
+/** A fresh browser for the welcome promise: no record, no mark on the root (`welcome-promise.ts`). */
+function forgetWelcomePromise() {
+  window.localStorage.removeItem(WELCOME_PROMISE_STORAGE_KEY);
+  window.localStorage.removeItem('magicbooklet.welcome-promise.spent.v1');
+  delete document.documentElement.dataset.welcomePromise;
+  resetWelcomePromiseForTests();
+}
 
 const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
@@ -100,6 +109,7 @@ describe('AppShellAccount', () => {
     mocks.router.push.mockReset();
     mocks.pathname = '/';
     appShellAuthCallback = null;
+    forgetWelcomePromise();
     mocks.signOut.mockResolvedValue({ error: null });
     mocks.clearPersistedCreatorData.mockResolvedValue(undefined);
 
@@ -234,6 +244,74 @@ describe('AppShellAccount', () => {
 
     expect(await screen.findByRole('link', { name: 'Sign in for 25 free credits' })).toBeInTheDocument();
     expect(mocks.select).not.toHaveBeenCalled();
+    // Nor is it taken for an account that signed in here: the welcome promise stands.
+    expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).toBeNull();
+  });
+
+  // Owner, 2026-11-09: an account made before the welcome program signed in, opened Home and
+  // signed out, and the top bar still read "Sign in · 25 free credits" ("Still says 25"). They
+  // chose "Any sign-in ends it". The header is on every page an account opens, and an account it
+  // has verified is enough: what the account was told about its welcome credits plays no part.
+  describe('the welcome promise', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('ends for this browser once the header has verified an account, whatever its welcome credits', async () => {
+      render(<AppShellAccount />);
+
+      expect(await screen.findByText('1295 credits')).toBeInTheDocument();
+      expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).not.toBeNull();
+      expect(document.documentElement.dataset.welcomePromise).toBe('spent');
+    });
+
+    it('leaves the header reading just "Sign in" after the account signs out', async () => {
+      render(<AppShellAccount />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
+
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+
+      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+      expect(screen.getByRole('link', { name: 'Sign in' })).toHaveTextContent(/^Sign in$/);
+    });
+
+    it('stands for a guest’s session', async () => {
+      mocks.getUser.mockResolvedValue({
+        data: { user: { ...authenticatedSession.user, is_anonymous: true } },
+        error: null,
+      });
+      render(<AppShellAccount />);
+
+      expect(await screen.findByRole('button', { name: 'Open account menu for Test Creator' })).toBeInTheDocument();
+      expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).toBeNull();
+    });
+
+    // Review of #746: through an outage the header keeps the account, and one signing out from
+    // that page would otherwise still be promised the credits it had.
+    it('ends for an account the header keeps while Supabase Auth cannot answer', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout'] });
+      mocks.getUser.mockResolvedValue({ data: { user: null }, error: unreachable });
+
+      render(<AppShellAccount />);
+
+      expect(await screen.findByRole('button', { name: 'Open account menu for creator' })).toBeInTheDocument();
+      expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).not.toBeNull();
+    });
+
+    it('stands for a guest’s session the header keeps while Supabase Auth cannot answer', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout'] });
+      const guest = { ...authenticatedSession, user: { ...authenticatedSession.user, is_anonymous: true } };
+      mocks.onAuthStateChange.mockImplementation((callback) => {
+        queueMicrotask(() => callback('INITIAL_SESSION', guest));
+        return { data: { subscription: { unsubscribe: vi.fn() } } };
+      });
+      mocks.getUser.mockResolvedValue({ data: { user: null }, error: unreachable });
+
+      render(<AppShellAccount />);
+
+      expect(await screen.findByRole('button', { name: 'Open account menu for creator' })).toBeInTheDocument();
+      expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).toBeNull();
+    });
   });
 
   // Audit 01-10: an Auth outage is not a sign-out.
@@ -276,7 +354,9 @@ describe('AppShellAccount', () => {
         await vi.advanceTimersByTimeAsync(2_000);
       });
 
-      expect(await screen.findByRole('link', { name: 'Sign in for 25 free credits' })).toBeInTheDocument();
+      // Signed out, and promised nothing: the account the header kept signed in here before its
+      // session ended (owner, 2026-11-09: "Any sign-in ends it"; review of #746).
+      expect(await screen.findByRole('link', { name: 'Sign in' })).toBeInTheDocument();
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });
@@ -470,7 +550,8 @@ describe('AppShellAccount', () => {
       await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
       expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'local' });
       expect(document.cookie).toBe('sb-another-project-auth-token=theirs');
-      expect(screen.getByRole('link', { name: 'Sign in for 25 free credits' })).toBeInTheDocument();
+      // An account signed in here: no welcome credits promised (owner, 2026-11-09).
+      expect(screen.getByRole('link', { name: 'Sign in' })).toBeInTheDocument();
     });
 
     it('ends the session in this browser when the sign-out throws', async () => {
@@ -687,7 +768,7 @@ describe('AppShellAccount', () => {
       expect(mocks.signOut).toHaveBeenCalledTimes(1);
       expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'global' });
       expect(mocks.clearPersistedCreatorData).toHaveBeenCalledWith('user-1');
-      expect(screen.getByRole('link', { name: 'Sign in for 25 free credits' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Sign in' })).toBeInTheDocument();
     });
 
     // The phones lose their session with this and cannot retire their own push
@@ -834,6 +915,10 @@ describe('the header Sign in link', () => {
     mocks.pathname = pathname;
     window.history.replaceState(null, '', `${pathname}${search ? `?${search}` : ''}`);
   }
+
+  beforeEach(() => {
+    forgetWelcomePromise();
+  });
 
   afterEach(() => {
     window.history.replaceState(null, '', '/');

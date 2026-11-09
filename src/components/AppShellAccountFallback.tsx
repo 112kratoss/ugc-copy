@@ -45,7 +45,7 @@ export default function AppShellAccountFallback({ pathname: shellPathname }: { p
   // for the link renders it again with the address bar's query. (useSearchParams
   // would need a Suspense boundary around the header on every static page.)
   const [, rereadSearch] = useReducer((count: number) => count + 1, 0);
-  // Just "Sign in" once this browser's account has had its welcome credits (owner, 2026-11-09).
+  // Just "Sign in" once an account has signed in on this browser (owner, 2026-11-09).
   const welcomePromise = useWelcomePromise();
 
   // In place of a balance a visitor does not have: the welcome credits, and the page that gets

@@ -102,7 +102,7 @@ export default function LoginClient({
     useFieldValueBeforeHydration(passwordRef, { drawn: password, onValue: setPassword });
     const onEmail = half === 'email';
     const returnNote = creatorReturnNote(redirectTo);
-    // The welcome credits, unless this browser's account has had them (owner, 2026-11-09).
+    // The welcome credits, unless an account has signed in on this browser (owner, 2026-11-09).
     const welcomePromise = useWelcomePromise();
     const promisesCredits = welcomeCredits !== null && welcomePromise;
 
