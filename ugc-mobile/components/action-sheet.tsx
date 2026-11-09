@@ -181,13 +181,12 @@ function ActionSheetSurface({
   );
 }
 
-// The card's own geometry. Not spacing tokens: this is the shape of one
-// surface. The radius is large and continuous so the card reads as a lifted
-// object rather than a page edge; the rows inside step down from it so the
+// The card's own geometry. The card is the outermost container, so its corner
+// is the scale's largest step; the rows inside step down from it so the
 // corners nest (outer radius minus the padding between them).
 const CARD_SCREEN_INSET = 8;
-const CARD_RADIUS = 32;
-const CARD_PADDING = 10;
+const CARD_RADIUS = appTheme.radii.xl;
+const CARD_PADDING = 8;
 const ROW_RADIUS = CARD_RADIUS - CARD_PADDING;
 const ROW_PADDING = 16;
 const ROW_GAP = 6;
