@@ -11,7 +11,12 @@ import {
   registerIdentityAdmissionContext,
 } from '@/lib/identity-admission-assertion';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
-import { withRegionalIdentityAdmission } from '@/lib/regional-identity-admission';
+import {
+  rebuildAdmittedRequest,
+  usesRouteOwnedIdentityAdmission,
+  withRouteOwnedIdentityAdmission,
+} from '@/lib/route-owned-identity-admission';
+import { evaluateUserFacingRouteIdentity } from '@/lib/route-identity-admission';
 
 vi.mock('@supabase/supabase-js', async (original) => ({
   ...await original<typeof import('@supabase/supabase-js')>(),
@@ -24,15 +29,15 @@ vi.mock('@/lib/showcase-feed-route-adapter-service', () => ({
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 function client(admission: unknown = {
   state: 'active', session_valid: true, banned: false, created_at: '2026-09-21T00:00:00Z',
-}, error: unknown = null) {
+}, error: unknown = null, claims: Record<string, unknown> = { sub: USER_ID, role: 'authenticated', is_anonymous: false }) {
   return {
     auth: { getClaims: vi.fn(async () => ({
-      data: { claims: { sub: USER_ID, role: 'authenticated', is_anonymous: false } }, error: null,
+      data: { claims }, error: null,
     })) },
     rpc: vi.fn(async () => ({ data: admission, error })),
   };
 }
-function request(method = 'GET', path = '/api/showcase/feed?sort=for-you') {
+function request(method = 'GET', path = '/api/showcase/feed?sort=for-you', body?: string) {
   return new NextRequest(`https://magicbooklet.test${path}`, {
     method,
     headers: {
@@ -40,22 +45,42 @@ function request(method = 'GET', path = '/api/showcase/feed?sort=for-you') {
       'x-performance-monitor': 'load',
       [IDENTITY_ADMISSION_HEADER]: 'forged',
       [IDENTITY_PROXY_TIMING_HEADER]: 'route-identity;dur=999999',
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
     },
+    ...(body === undefined ? {} : { body }),
   });
 }
 
-describe('regional feed identity admission', () => {
+describe('route-owned identity admission', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv('IDENTITY_ADMISSION_SECRET', 'test-secret-with-at-least-32-characters');
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it('defers only feed GET/HEAD and strips caller assertions in the proxy', async () => {
-    for (const method of ['GET', 'HEAD']) {
+  it('lists the feed reads and every method of the MCP server, and nothing else', () => {
+    expect(usesRouteOwnedIdentityAdmission(request('GET'))).toBe(true);
+    expect(usesRouteOwnedIdentityAdmission(request('HEAD'))).toBe(true);
+    expect(usesRouteOwnedIdentityAdmission(request('POST', '/api/showcase/feed'))).toBe(false);
+    for (const method of ['GET', 'POST', 'DELETE', 'OPTIONS']) {
+      expect(usesRouteOwnedIdentityAdmission(request(method, '/api/mcp')), method).toBe(true);
+    }
+    expect(usesRouteOwnedIdentityAdmission(request('POST', '/api/mcp/other'))).toBe(false);
+    expect(usesRouteOwnedIdentityAdmission(request('GET', '/api/showcase/feed/events'))).toBe(false);
+    expect(usesRouteOwnedIdentityAdmission(request('GET', '/api/generations'))).toBe(false);
+  });
+
+  it('defers only the listed requests and strips caller assertions in the proxy', async () => {
+    for (const [method, path] of [
+      ['GET', '/api/showcase/feed'],
+      ['HEAD', '/api/showcase/feed'],
+      ['POST', '/api/mcp'],
+      ['GET', '/api/mcp'],
+      ['DELETE', '/api/mcp'],
+    ]) {
       const createUserClient = vi.fn();
-      const response = await proxy(request(method), { createUserClient });
-      expect(createUserClient).not.toHaveBeenCalled();
+      const response = await proxy(request(method, path), { createUserClient });
+      expect(createUserClient, `${method} ${path}`).not.toHaveBeenCalled();
       expect(response.headers.get(`x-middleware-request-${IDENTITY_ADMISSION_HEADER}`)).toBeNull();
       expect(response.headers.get(`x-middleware-request-${IDENTITY_PROXY_TIMING_HEADER}`)).not.toContain('999999');
     }
@@ -71,7 +96,7 @@ describe('regional feed identity admission', () => {
     }
   });
 
-  it('runs fresh admission at both actual route exports before handing off to the adapter', async () => {
+  it('runs fresh admission at both actual feed exports before handing off to the adapter', async () => {
     for (const [method, handler] of [['GET', GET], ['HEAD', HEAD]] as const) {
       const identity = client();
       vi.mocked(createClient).mockReturnValue(identity as unknown as ReturnType<typeof createClient>);
@@ -122,7 +147,7 @@ describe('regional feed identity admission', () => {
       expect(admitted.headers.has(IDENTITY_PROXY_TIMING_HEADER)).toBe(false);
       return new Response('public');
     });
-    expect((await withRegionalIdentityAdmission(req, handler, { createUserClient })).status).toBe(200);
+    expect((await withRouteOwnedIdentityAdmission(req, handler, { createUserClient })).status).toBe(200);
     expect(createUserClient).not.toHaveBeenCalled();
   });
 
@@ -138,9 +163,25 @@ describe('regional feed identity admission', () => {
       expect(admitted.headers.get(IDENTITY_ADMISSION_HEADER)).not.toBe('forged');
       return new Response('feed');
     });
-    expect((await withRegionalIdentityAdmission(proxied, handler, {
+    expect((await withRouteOwnedIdentityAdmission(proxied, handler, {
       createUserClient: () => client(),
     })).status).toBe(200);
     expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('rebuilds an admitted POST with its body, the fresh assertion and none of the caller\'s', async () => {
+    const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    const original = request('POST', '/api/mcp', body);
+    const identity = client(undefined, null, { sub: USER_ID, role: 'authenticated', is_anonymous: false, client_id: 'client-claude' });
+    const admission = await evaluateUserFacingRouteIdentity(original, { createUserClient: () => identity });
+    expect(admission.rejection).toBeNull();
+    expect(admission.claims?.client_id).toBe('client-claude');
+    const admitted = await rebuildAdmittedRequest(original, admission);
+    expect(admitted.method).toBe('POST');
+    expect(await admitted.text()).toBe(body);
+    expect(admitted.headers.get('content-type')).toBe('application/json');
+    expect(admitted.headers.get(IDENTITY_ADMISSION_HEADER)).not.toBe('forged');
+    expect(admitted.headers.get(IDENTITY_ADMISSION_HEADER)).toBe(admission.assertion);
+    expect(admitted.headers.get(IDENTITY_PROXY_TIMING_HEADER)).toMatch(/^route-identity;dur=/);
   });
 });

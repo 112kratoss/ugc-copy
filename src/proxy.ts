@@ -18,11 +18,12 @@ import {
 } from '@/lib/e2e-auth';
 import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
 import {
+  DEFERRED_IDENTITY_ADMISSION,
   createAdmittedIdentityHeaders,
   evaluateUserFacingRouteIdentity,
   type ProxyIdentityDependencies,
 } from '@/lib/route-identity-admission';
-import { usesRegionalIdentityAdmission } from '@/lib/regional-identity-admission';
+import { usesRouteOwnedIdentityAdmission } from '@/lib/route-owned-identity-admission';
 export { guardUserFacingRouteIdentity } from '@/lib/route-identity-admission';
 import mobileApiOperationsV1 from '../contracts/mobile-api-operations-v1.json';
 
@@ -283,10 +284,12 @@ export async function proxy(
   // Identity lifecycle admission applies to ordinary web requests as well as
   // identified mobile traffic. Keep it ahead of the mobile-only early return
   // so a stale merged/deleting JWT cannot reach a route adapter on the web.
-  // Only the explicitly wrapped feed reads defer admission to their regional
-  // handler. Compatibility/CORS still run here; caller assertions are stripped.
-  const identityAdmission = usesRegionalIdentityAdmission(request)
-    ? { assertion: null, durationMs: 0, verifyMs: 0, lifecycleMs: 0, rejection: null }
+  // Only the routes that own their admission (the feed's reads, the MCP
+  // server) defer it to their own handler. Compatibility/CORS still run here;
+  // caller assertions are stripped. An agent token on any other API route is
+  // refused by the evaluator itself (403 AGENT_TOKEN_NOT_ALLOWED).
+  const identityAdmission = usesRouteOwnedIdentityAdmission(request)
+    ? DEFERRED_IDENTITY_ADMISSION
     : await evaluateUserFacingRouteIdentity(request, identityDependencies);
   if (identityAdmission.rejection) {
     return isMobilePath

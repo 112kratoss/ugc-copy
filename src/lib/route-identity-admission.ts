@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, isAuthRetryableFetchError, type User } from '@supabase/supabase-js';
+import { isAgentToken, routeAcceptsAgentToken } from '@/lib/agent-token';
 import { routeIdentityPolicyForRequest } from '@/lib/route-identity-policy';
 import {
   IDENTITY_ADMISSION_HEADER,
@@ -7,7 +8,7 @@ import {
   signIdentityAdmission,
 } from '@/lib/identity-admission-assertion';
 
-type ProxyIdentityClaims = Record<string, unknown>;
+export type ProxyIdentityClaims = Record<string, unknown>;
 
 type ProxyIdentityClient = {
   auth: {
@@ -24,13 +25,29 @@ export type ProxyIdentityDependencies = {
   signIdentityAdmission?: typeof signIdentityAdmission;
 };
 
-type ProxyIdentityAdmission = {
+export type ProxyIdentityAdmission = {
   assertion: string | null;
+  /**
+   * The token's verified claims, once its signature and expiry have been checked; null before
+   * that and for a request that sent no token. Route-owned admission reads the agent-token
+   * claim from them (`agent-token.ts`); nothing here comes from a caller-controlled header.
+   */
+  claims: ProxyIdentityClaims | null;
   durationMs: number;
   verifyMs: number;
   lifecycleMs: number;
   rejection: NextResponse | null;
 };
+
+/** The admission of a request the proxy leaves to its route (`route-owned-identity-admission.ts`). */
+export const DEFERRED_IDENTITY_ADMISSION: ProxyIdentityAdmission = Object.freeze({
+  assertion: null,
+  claims: null,
+  durationMs: 0,
+  verifyMs: 0,
+  lifecycleMs: 0,
+  rejection: null,
+});
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
@@ -106,11 +123,13 @@ export async function evaluateUserFacingRouteIdentity(
   const startedAt = performance.now();
   let verifyMs = 0;
   let lifecycleMs = 0;
+  let verifiedClaims: ProxyIdentityClaims | null = null;
   const result = (
     rejection: NextResponse | null,
     assertion: string | null = null,
   ): ProxyIdentityAdmission => ({
     assertion,
+    claims: verifiedClaims,
     durationMs: performance.now() - startedAt,
     verifyMs,
     lifecycleMs,
@@ -147,6 +166,19 @@ export async function evaluateUserFacingRouteIdentity(
       : null;
     if (!userId || claims.role !== 'authenticated') {
       return result(unauthorizedRejection());
+    }
+    verifiedClaims = claims;
+
+    // An agent's token (issued by Supabase Auth's OAuth server to an MCP client, and carrying
+    // that client's id) drives only the MCP server, whose own admission requires the claim.
+    // Refused before the lifecycle round trip: a leaked agent token can then do only what the
+    // consent screen said, on the one route built for it (agent-token.ts).
+    if (isAgentToken(claims) && !routeAcceptsAgentToken(request.nextUrl.pathname)) {
+      return result(identityRejection(
+        403,
+        'AGENT_TOKEN_NOT_ALLOWED',
+        'An agent token can only be used with the MCP server.',
+      ));
     }
 
     const lifecycleStartedAt = performance.now();

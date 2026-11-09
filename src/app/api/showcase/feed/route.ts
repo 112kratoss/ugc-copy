@@ -1,10 +1,10 @@
 import { NextRequest } from 'next/server';
 
 import { getShowcaseFeedRouteResponse } from '@/lib/showcase-feed-route-adapter-service';
-import { withRegionalIdentityAdmission } from '@/lib/regional-identity-admission';
+import { withRouteOwnedIdentityAdmission } from '@/lib/route-owned-identity-admission';
 
 export async function GET(request: NextRequest) {
-  return withRegionalIdentityAdmission(request, (admitted) =>
+  return withRouteOwnedIdentityAdmission(request, (admitted) =>
     getShowcaseFeedRouteResponse({ request: admitted }));
 }
 

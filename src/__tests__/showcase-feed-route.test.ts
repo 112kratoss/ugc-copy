@@ -22,7 +22,7 @@ const getUserMock = vi.fn(async () => ({
 
 // The actual route now checks fresh admission before the adapter. Keep this
 // cache/payload suite isolated from the network; rejection and assertion reuse
-// are exercised through the real exports in regional-identity-admission.test.
+// are exercised through the real exports in route-owned-identity-admission.test.
 vi.mock('@supabase/supabase-js', async (original) => ({
   ...await original<typeof import('@supabase/supabase-js')>(),
   createClient: () => ({
