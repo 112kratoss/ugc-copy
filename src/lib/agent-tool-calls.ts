@@ -13,7 +13,58 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 export const AGENT_TOOL_CALLS_TABLE = 'agent_tool_calls';
 
+/**
+ * What a successful `publish_post` records in the row's `code` column (an error code otherwise):
+ * which of its answers it gave, so the daily cap counts public publications and the moderation
+ * list sees the posts the agent made or changed.
+ */
+export const AGENT_PUBLISH_RECORD_CODES = {
+  /** A new public post, or an existing post made public: what the daily cap counts. */
+  PUBLISHED_PUBLIC: 'PUBLISHED_PUBLIC',
+  /** A new private post. */
+  PUBLISHED_PRIVATE: 'PUBLISHED_PRIVATE',
+  /** An existing public post made private. */
+  MADE_PRIVATE: 'MADE_PRIVATE',
+  /** The existing post returned as it was; the row names no post (the agent made none). */
+  ALREADY_PUBLISHED: 'ALREADY_PUBLISHED',
+} as const;
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/** Midnight UTC of the day `now` falls in: the start of the daily cap's window. */
+export function startOfUtcDay(now: number): Date {
+  const date = new Date(now);
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+/** The next midnight UTC: when the daily cap's window resets. */
+export function nextUtcMidnight(now: number): Date {
+  const start = startOfUtcDay(now);
+  return new Date(start.getTime() + 24 * 60 * 60 * 1000);
+}
+
+/**
+ * How many public publications an agent made for the account since `since` (the day's start):
+ * the daily cap's count, read from the ledger rather than the attempt-counting limiter, so a
+ * refused publish spends nothing. The row is written behind the answer, so two publishes a few
+ * hundred milliseconds apart may both pass the count; the cap is a guard against a loop, not an
+ * exact quota, and the runbook says so.
+ */
+export async function countAgentPublicPublishesSince(
+  admin: SupabaseClient,
+  { userId, since }: { userId: string; since: Date },
+): Promise<number> {
+  const { count, error } = await admin
+    .from(AGENT_TOOL_CALLS_TABLE)
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('tool', 'publish_post')
+    .eq('ok', true)
+    .eq('code', AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PUBLIC)
+    .gte('created_at', since.toISOString());
+  if (error) throw error;
+  return count ?? 0;
+}
 
 export type AgentToolCallRow = {
   user_id: string;

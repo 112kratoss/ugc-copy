@@ -5,18 +5,31 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 
 import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
-import { stageAgentInput, AGENT_BASE64_MAX_BYTES, AGENT_UPLOAD_MAX_BYTES_BY_KIND } from '@/lib/agent-input-upload';
-import { readPostForAgent, type AgentPostView } from '@/lib/agent-post-read';
+import {
+  AGENT_BASE64_MAX_BYTES,
+  AGENT_BASE64_MAX_CHARACTERS,
+  AGENT_URL_FETCH_MAX_BYTES_BY_KIND,
+  stageAgentInput,
+} from '@/lib/agent-input-upload';
+import { agentPostState, readPostForAgent, type AgentPostState, type AgentPostView } from '@/lib/agent-post-read';
 import { buildAgentPublishRequest } from '@/lib/agent-publish-request';
-import { uuidOrNull } from '@/lib/agent-tool-calls';
+import {
+  AGENT_PUBLISH_RECORD_CODES,
+  countAgentPublicPublishesSince,
+  nextUtcMidnight,
+  startOfUtcDay,
+  uuidOrNull,
+} from '@/lib/agent-tool-calls';
 import { logBackendError } from '@/lib/backend-logger';
 import {
   AGENT_PUBLISH_RATE_LIMIT,
+  AGENT_UPLOAD_INPUT_RATE_LIMIT,
   BackendRateLimitError,
   OWNER_GENERATIONS_READ_RATE_LIMIT,
   SHOWCASE_PUBLISH_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { getCreationPostTitleSuggestion } from '@/lib/creation-post-title';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { createGenerationModelQuote } from '@/lib/generation-model-quote-service';
@@ -127,6 +140,8 @@ export type McpToolServices = {
   readCreditBalance: (admin: SupabaseClient, userId: string) => Promise<number>;
   /** The creation a publish is asked for, as the publish service will judge it; null for none. */
   readCreationForPublish: (admin: SupabaseClient, params: { generationId: string; userId: string }) => Promise<CreationForPublish | null>;
+  /** The day's public publications by agents for the account: the daily cap's count. */
+  countAgentPublicPublishesSince: typeof countAgentPublicPublishesSince;
   /** Whether a creation's owner is the caller or an identity linked to the caller (a guest's run). */
   isOwnOrLinkedAccountId: typeof isOwnOrLinkedAccountId;
   promptEnhancementCost: () => number;
@@ -139,8 +154,16 @@ export type CreationForPublish = {
   userId: string;
   status: string;
   prompt: string | null;
-  /** The post this creation already has, where it has one. */
-  post: { id: string; visibility: 'public' | 'private' } | null;
+  title: string | null;
+  model: string | null;
+  category: string | null;
+  creationMode: string | null;
+  /** Set where the creator archived the creation: nothing of it is published by an agent. */
+  archivedAt: string | null;
+  /** Set where an operator removed the creation: it does not exist for an agent. */
+  moderationRemovedAt: string | null;
+  /** The post this creation already has, where it has one, with its state as the post page reads it. */
+  post: { id: string; visibility: 'public' | 'private'; state: AgentPostState } | null;
 };
 
 export async function readCreationForPublish(
@@ -151,20 +174,42 @@ export async function readCreationForPublish(
   // (`showcase-publish-service.ts` says why), and the post is the caller's own, filed under the
   // account as the publish service files it, whichever linked identity made the creation.
   const [generation, post] = await Promise.all([
-    admin.from('generations').select('id, user_id, status, prompt').eq('id', generationId).maybeSingle(),
-    admin.from('posts').select('id, visibility').eq('generation_id', generationId).eq('user_id', userId).maybeSingle(),
+    admin
+      .from('generations')
+      .select('id, user_id, status, prompt, title, model, category, creation_mode, archived_at, moderation_removed_at')
+      .eq('id', generationId)
+      .maybeSingle(),
+    admin
+      .from('posts')
+      .select('id, visibility, review_status, archived_at, tombstoned_at')
+      .eq('generation_id', generationId)
+      .eq('user_id', userId)
+      .maybeSingle(),
   ]);
   if (generation.error) throw generation.error;
   if (post.error) throw post.error;
-  const row = generation.data as { id: string; user_id: string; status: string; prompt: string | null } | null;
+  const row = generation.data as {
+    id: string; user_id: string; status: string; prompt: string | null; title: string | null; model: string | null;
+    category: string | null; creation_mode: string | null; archived_at: string | null; moderation_removed_at: string | null;
+  } | null;
   if (!row) return null;
-  const existing = post.data as { id: string; visibility: string } | null;
+  const existing = post.data as {
+    id: string; visibility: string | null; review_status: string | null; archived_at: string | null; tombstoned_at: string | null;
+  } | null;
   return {
     id: row.id,
     userId: row.user_id,
     status: row.status,
     prompt: row.prompt,
-    post: existing ? { id: existing.id, visibility: existing.visibility === 'public' ? 'public' : 'private' } : null,
+    title: row.title,
+    model: row.model,
+    category: row.category,
+    creationMode: row.creation_mode,
+    archivedAt: row.archived_at,
+    moderationRemovedAt: row.moderation_removed_at,
+    post: existing
+      ? { id: existing.id, visibility: existing.visibility === 'public' ? 'public' : 'private', state: agentPostState(existing) }
+      : null,
   };
 }
 
@@ -218,6 +263,7 @@ export function defaultMcpToolServices(): McpToolServices {
     enforceBackendRateLimit,
     readCreditBalance,
     readCreationForPublish,
+    countAgentPublicPublishesSince,
     isOwnOrLinkedAccountId,
     promptEnhancementCost: getPromptEnhancementCost,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -238,6 +284,12 @@ export interface McpToolDefinition<Schema extends AnySchema = AnySchema> {
   // tool whose handler takes its own schema's output is assignable to the registry's element
   // type, while the SDK still gives each handler the arguments its schema parsed.
   handle(args: z.output<Schema>, context: McpToolContext): Promise<CallToolResult>;
+  /**
+   * What a successful answer records in the audit row beyond the defaults (`runMcpTool`): a
+   * `code` naming which answer it was, and the post it names, where the tool distinguishes an
+   * answer that made or changed a post from one that only described it.
+   */
+  audit?(structured: Record<string, unknown>): { code?: string | null; postId?: string | null };
 }
 
 function defineTool<Schema extends AnySchema>(definition: McpToolDefinition<Schema>): McpToolDefinition {
@@ -825,14 +877,17 @@ const getGenerationTool = defineTool({
     'Read one of the creator\'s runs: its status (pending, processing, succeeded or failed), its outputs with a permanent magicbooklet.com link and a signed media URL (good for about an hour), what it cost, and why it failed when it did (a failed run\'s credits come back).',
     `Pass wait_seconds to wait for a running generation before answering (${MCP_GENERATION_WAIT_SUGGESTED_SECONDS} is the suggested wait; ${MCP_GENERATION_WAIT_MAX_SECONDS} is the most, and only for a client whose request timeout is well over a minute), and call again while settled is false.`,
     'Images finish within a minute; videos take a few minutes. Give the person the permanent link; the signed URL expires.',
+    'Pass include_preview true on the call that reads a finished picture to get it inline as an image block (its preview, under half a megabyte); leave it out while polling, so answers stay small.',
   ].join(' '),
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   inputSchema: z.object({
     generation_id: GENERATION_ID,
     wait_seconds: z.int().min(0).max(MCP_GENERATION_WAIT_MAX_SECONDS).optional()
       .describe(`How long to wait for the run to finish before answering: ${MCP_GENERATION_WAIT_SUGGESTED_SECONDS} suggested, ${MCP_GENERATION_WAIT_MAX_SECONDS} at most.`),
+    include_preview: z.boolean().optional()
+      .describe('True to receive a finished picture inline as an image block (its preview, under half a megabyte). Default false: leave it out while polling.'),
   }),
-  async handle({ generation_id: generationId, wait_seconds: waitSeconds = 0 }, context) {
+  async handle({ generation_id: generationId, wait_seconds: waitSeconds = 0, include_preview: includePreview = false }, context) {
     const { services } = context;
     const limited = await refuseReadOverLimit(context);
     if (limited) return limited;
@@ -871,9 +926,9 @@ const getGenerationTool = defineTool({
       outputs,
     });
     // A finished picture travels inline too, from its preview, for the clients that draw an image
-    // block; a preview that is missing, too large or slow leaves the answer as it is
-    // (`mcp-preview-image.ts`).
-    const previewUrl = summary.status === 'succeeded' && summary.kind === 'image'
+    // block, when the caller asked (a poll stays small); a preview that is missing, too large or
+    // slow leaves the answer as it is (`mcp-preview-image.ts`).
+    const previewUrl = includePreview && summary.status === 'succeeded' && summary.kind === 'image'
       ? stringOrNull(outputs[0]?.preview_url)
       : null;
     if (previewUrl) {
@@ -996,9 +1051,6 @@ const enhancePromptTool = defineTool({
 // ---------------------------------------------------------------------------------------------
 // upload_input
 
-/** The most characters a base64 argument may be: the decoded cap, encoded, with padding. */
-const AGENT_BASE64_MAX_CHARACTERS = Math.ceil(AGENT_BASE64_MAX_BYTES / 3) * 4 + 64;
-
 function megabytes(bytes: number): string {
   return `${Math.round(bytes / (1024 * 1024))} MB`;
 }
@@ -1008,7 +1060,7 @@ const uploadInputTool = defineTool({
   title: 'Stage an input file',
   description: [
     'Stage a picture, clip or track of the person\'s own for a run, and get back the input create_media takes for it.',
-    `Give url (a public https URL this server fetches: at most ${megabytes(AGENT_UPLOAD_MAX_BYTES_BY_KIND.image)} for a picture, ${megabytes(AGENT_UPLOAD_MAX_BYTES_BY_KIND.video)} for a clip, ${megabytes(AGENT_UPLOAD_MAX_BYTES_BY_KIND.audio)} for a track; one redirect on the same host is followed) or base64 with mime_type (at most ${megabytes(AGENT_BASE64_MAX_BYTES)} decoded; send a larger file by url).`,
+    `Give url (a public https URL this server fetches: at most ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.image)} for a picture, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.video)} for a clip, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.audio)} for a track; one redirect on the same host is followed) or base64 with mime_type (at most ${megabytes(AGENT_BASE64_MAX_BYTES)} decoded; send a larger file by url).`,
     'The answer\'s input (url and storage_path) goes into create_media.inputs[] with the slot and kind get_model names; the staged file is kept for a run for about two hours and the signed URL for about an hour, so stage right before you create.',
     'Only public hosts are fetched (PRIVATE_ADDRESS otherwise), and only the picture, clip and track types Magicbooklet takes (UNSUPPORTED_MEDIA). The creator\'s own outputs need no staging: pass their URL from get_generation or list_creations.',
   ].join(' '),
@@ -1029,6 +1081,13 @@ const uploadInputTool = defineTool({
       return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, 'mime_type is required with base64: the file\'s own type.', {
         field_errors: { mime_type: 'Required with base64.' },
       });
+    }
+    // Counted before any byte is fetched, so a loop of large or failing downloads is stopped here.
+    try {
+      await context.services.enforceBackendRateLimit(context.createAdminSupabase(), { ...AGENT_UPLOAD_INPUT_RATE_LIMIT, key: context.userId });
+    } catch (error) {
+      if (error instanceof BackendRateLimitError) return rateLimited(error.retryAfterSeconds);
+      throw error;
     }
     const staged = await context.services.stageAgentInput({
       admin: context.createAdminSupabase(),
@@ -1102,10 +1161,9 @@ function describeState(post: AgentPostView): string {
 /** The publish service's refusals, as stable codes with the next step. */
 function publishRefusal(result: { status: number; body: { error: string; field?: string; code?: string } }): CallToolResult {
   const { status, body } = result;
-  if (status === 403) {
-    return toolFailure(MCP_ERROR_CODES.NOT_OWNER, 'This creation is not the creator\'s to publish. list_creations lists theirs.');
-  }
-  if (status === 404) {
+  // Another creator's creation and a missing one answer alike: what exists under an id that is
+  // not the caller's is not the caller's to learn (the service's own rule for template results).
+  if (status === 403 || status === 404) {
     return toolFailure(MCP_ERROR_CODES.NOT_FOUND, 'No such creation of this creator\'s. list_creations lists theirs.');
   }
   if (status === 400 && /has not succeeded|no media to publish/iu.test(body.error)) {
@@ -1125,9 +1183,16 @@ function publishRefusal(result: { status: number; body: { error: string; field?:
   return toolFailure(MCP_ERROR_CODES.UNAVAILABLE, `${body.error} Try again in a moment.`);
 }
 
+/**
+ * The two limits a publish passes, in order: the web's publish limit, which counts attempts as
+ * the route does, and the agent's daily cap on public posts, which counts only publications. The
+ * cap is read from the audit ledger (`countAgentPublicPublishesSince`: today's rows recorded
+ * PUBLISHED_PUBLIC), never from the attempt-counting limiter, so a publish the service refuses
+ * spends nothing of it. The row is written behind the answer, so two publishes a moment apart
+ * may both pass; the cap is a guard against a loop, not an exact quota, and the runbook says so.
+ */
 async function refusePublishOverLimit(context: McpToolContext, makesPublic: boolean): Promise<CallToolResult | null> {
   const admin = context.createAdminSupabase();
-  // The publish route's own limit first, as every publish passes through it on the web.
   try {
     await context.services.enforceBackendRateLimit(admin, { ...SHOWCASE_PUBLISH_RATE_LIMIT, key: context.userId });
   } catch (error) {
@@ -1138,19 +1203,17 @@ async function refusePublishOverLimit(context: McpToolContext, makesPublic: bool
       { retry_after_seconds: error.retryAfterSeconds, reset_at: error.state.resetAt, limit: error.state.limit },
     );
   }
-  // Then the agent's daily cap on public posts, counted only where this call makes one.
   if (!makesPublic) return null;
-  try {
-    await context.services.enforceBackendRateLimit(admin, { ...AGENT_PUBLISH_RATE_LIMIT, key: context.userId });
-    return null;
-  } catch (error) {
-    if (!(error instanceof BackendRateLimitError)) throw error;
-    return toolFailure(
-      MCP_ERROR_CODES.RATE_LIMITED,
-      `An agent may publish ${AGENT_PUBLISH_RATE_LIMIT.limit} public posts a day for this creator, and that many are published. The next is allowed at ${error.state.resetAt}; a private post (visibility private) is not counted.`,
-      { retry_after_seconds: error.retryAfterSeconds, reset_at: error.state.resetAt, limit: error.state.limit },
-    );
-  }
+  const now = context.services.now();
+  const published = await context.services.countAgentPublicPublishesSince(admin, { userId: context.userId, since: startOfUtcDay(now) });
+  if (published < AGENT_PUBLISH_RATE_LIMIT.limit) return null;
+  const resetAt = nextUtcMidnight(now);
+  const retryAfterSeconds = Math.max(1, Math.ceil((resetAt.getTime() - now) / 1000));
+  return toolFailure(
+    MCP_ERROR_CODES.RATE_LIMITED,
+    `An agent may publish ${AGENT_PUBLISH_RATE_LIMIT.limit} public posts per UTC day for this creator, and that many are published today. The next is allowed at ${resetAt.toISOString()}; a private post (visibility private) is not counted.`,
+    { retry_after_seconds: retryAfterSeconds, reset_at: resetAt.toISOString(), limit: AGENT_PUBLISH_RATE_LIMIT.limit, published_today: published },
+  );
 }
 
 const publishPostTool = defineTool({
@@ -1159,15 +1222,15 @@ const publishPostTool = defineTool({
   description: [
     'Publish one of the creator\'s finished creations as a post on their profile and in the Magicbooklet showcase.',
     'The post is public at once (visibility public, the default): anyone can see it, and it enters the feed and the moderation queue as any post does. Pass visibility private instead to keep it on the creator\'s profile, visible to them alone, which they can make public later. Tell the person before you publish, and give them post_url after.',
-    `Only the creator's own succeeded creation publishes (NOT_OWNER or NOT_READY otherwise); get_generation says when a run has succeeded. Give a title of at least 6 characters; description, body (the post's text) and category are optional.`,
+    `Only the creator's own succeeded creation publishes (NOT_FOUND for any other creation, NOT_READY for a run still going or a creation its creator archived); get_generation says when a run has succeeded. Give a title of at least 6 characters, or leave it out for the title the web suggests from the creation; description, body (the post's text) and category are optional.`,
     'allow_remixes (default true) publishes the creation\'s recipe with the post, free, so others can remix it: its exact prompt and the saved inputs it may share. False posts the media alone, with no recipe.',
-    `Publishing the same creation again returns its existing post with already_published true and changes nothing, unless visibility is given and differs, which changes the post's visibility. Public posts by an agent are capped at ${AGENT_PUBLISH_RATE_LIMIT.limit} per creator per day (RATE_LIMITED says when the next is allowed).`,
+    `Publishing the same creation again returns its existing post with already_published true and changes nothing, unless visibility is given and differs, which changes the post's visibility. Public posts by an agent are capped at ${AGENT_PUBLISH_RATE_LIMIT.limit} per creator per UTC day, counting publications, not refused attempts (RATE_LIMITED says when the next is allowed).`,
   ].join(' '),
   // Open world: the post is seen by everyone, outside the agent's conversation.
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   inputSchema: z.object({
     generation_id: GENERATION_ID,
-    title: z.string().trim().min(1).max(TITLE_MAX_LENGTH).optional().describe(`The post's title, at most ${TITLE_MAX_LENGTH} characters; 6 or more for a post with a recipe. Left out, the creation's own title is used.`),
+    title: z.string().trim().min(1).max(TITLE_MAX_LENGTH).optional().describe(`The post's title, at most ${TITLE_MAX_LENGTH} characters; 6 or more for a post with a recipe. Left out, the creation's own title is used, else the title the web's Publish suggests from its prompt.`),
     description: z.string().trim().max(DESCRIPTION_MAX_LENGTH).optional().describe('A short description under the title.'),
     body: z.string().trim().max(BODY_MAX_LENGTH).optional().describe('The post\'s text, shown with the media.'),
     category: z.enum(['image', 'video']).optional().describe('How the post is filed; left out, the creation decides.'),
@@ -1178,12 +1241,22 @@ const publishPostTool = defineTool({
   async handle(args, context) {
     const { services } = context;
     const admin = context.createAdminSupabase();
+    const notFound = () => toolFailure(
+      MCP_ERROR_CODES.NOT_FOUND,
+      `No creation ${args.generation_id} exists for this creator. list_creations lists theirs.`,
+      { generation_id: args.generation_id },
+    );
     const creation = await services.readCreationForPublish(admin, { generationId: args.generation_id, userId: context.userId });
-    if (!creation) {
-      return toolFailure(MCP_ERROR_CODES.NOT_FOUND, `No creation ${args.generation_id} exists for this creator. list_creations lists theirs.`, { generation_id: args.generation_id });
-    }
-    if (!(await services.isOwnOrLinkedAccountId(admin, context.userId, creation.userId))) {
-      return toolFailure(MCP_ERROR_CODES.NOT_OWNER, 'This creation is not the creator\'s to publish. list_creations lists theirs.', { generation_id: args.generation_id });
+    // A missing creation, another creator's, and one an operator removed answer alike: nothing
+    // about what exists under an id that is not the caller's to publish.
+    if (!creation || creation.moderationRemovedAt) return notFound();
+    if (!(await services.isOwnOrLinkedAccountId(admin, context.userId, creation.userId))) return notFound();
+    if (creation.archivedAt) {
+      return toolFailure(
+        MCP_ERROR_CODES.NOT_READY,
+        `Creation ${args.generation_id} is archived; the creator restores it on the website before it can be published.`,
+        { generation_id: args.generation_id, status: 'archived' },
+      );
     }
     if (creation.status !== 'succeeded') {
       return toolFailure(
@@ -1206,9 +1279,10 @@ const publishPostTool = defineTool({
       const existing = creation.post;
       const url = postUrl(context.siteOrigin, existing.id);
       if (!args.visibility || args.visibility === existing.visibility) {
+        const state = existing.state === 'live' ? 'live, public' : existing.state === 'private' ? 'private' : `${existing.visibility}, but ${existing.state}`;
         return toolSuccess(
-          `Creation ${args.generation_id} is already published as post ${existing.id} (${existing.visibility}): ${url}. Nothing was changed; its text and recipe stay as the creator left them.`,
-          { post_id: existing.id, post_url: url, visibility: existing.visibility, already_published: true, visibility_changed: false },
+          `Creation ${args.generation_id} is already published as post ${existing.id} (${state}): ${url}. Nothing was changed; its text and recipe stay as the creator left them.`,
+          { post_id: existing.id, post_url: url, visibility: existing.visibility, state: existing.state, already_published: true, visibility_changed: false },
         );
       }
       // A visibility change alone: the service republishes the stored post as it is.
@@ -1218,22 +1292,40 @@ const publishPostTool = defineTool({
       if (!result.ok) return publishRefusal(result);
       return toolSuccess(
         `Post ${existing.id} is now ${result.body.visibility}: ${url}.${result.body.visibility === 'public' ? ' Anyone can see it.' : ' Only the creator sees it.'}`,
-        { post_id: existing.id, post_url: url, visibility: result.body.visibility, already_published: true, visibility_changed: true },
+        {
+          post_id: existing.id,
+          post_url: url,
+          visibility: result.body.visibility,
+          state: result.body.visibility === 'public' ? 'live' : 'private',
+          already_published: true,
+          visibility_changed: true,
+        },
       );
     }
 
     const visibility = args.visibility ?? 'public';
+    const allowRemixes = args.allow_remixes ?? true;
+    // No title given: the web's Publish never sends an empty one; it starts from the creation's
+    // own title, else a title suggested from the prompt (the prompt is public in a free recipe, so
+    // nothing is kept private here), and a compose request without one is refused by the service.
+    const title = args.title
+      ?? getCreationPostTitleSuggestion(
+        creation.title,
+        { prompt: creation.prompt, model: creation.model, category: creation.category, creationMode: creation.creationMode },
+        false,
+      )?.title
+      ?? undefined;
     const limited = await refusePublishOverLimit(context, visibility === 'public');
     if (limited) return limited;
     const result = await makePost(buildAgentPublishRequest({
       generationId: args.generation_id,
-      title: args.title,
+      title,
       description: args.description,
       body: args.body,
       category: args.category,
       visibility,
       isNsfw: args.is_nsfw,
-      allowRemixes: args.allow_remixes ?? true,
+      allowRemixes,
       creationPrompt: creation.prompt,
     }));
     if (!result.ok) return publishRefusal(result);
@@ -1252,6 +1344,7 @@ const publishPostTool = defineTool({
         post_id: postId,
         post_url: url,
         visibility: result.body.visibility,
+        state: result.body.visibility === 'public' ? 'live' : 'private',
         already_published: false,
         visibility_changed: false,
         recipe_included: recipeIncluded,
@@ -1261,6 +1354,16 @@ const publishPostTool = defineTool({
           : {}),
       },
     );
+  },
+  // The audit row: which answer this was, and the post only where the agent made or changed one,
+  // so the daily cap counts public publications and moderation lists no post a creator published
+  // by hand (`agent-tool-calls.ts`).
+  audit(structured) {
+    const alreadyPublished = structured.already_published === true;
+    const changed = structured.visibility_changed === true;
+    if (alreadyPublished && !changed) return { code: AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED, postId: null };
+    if (structured.visibility === 'public') return { code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PUBLIC };
+    return { code: changed ? AGENT_PUBLISH_RECORD_CODES.MADE_PRIVATE : AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PRIVATE };
   },
 });
 
@@ -1275,6 +1378,8 @@ const getPostTool = defineTool({
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   inputSchema: z.object({ post_id: POST_ID }),
   async handle({ post_id: postId }, context) {
+    const limited = await refuseReadOverLimit(context);
+    if (limited) return limited;
     const read = await context.services.readPostForAgent(context.createAdminSupabase(), { postId, viewerUserId: context.userId });
     if (!read.ok) {
       return read.code === 'NOT_FOUND'
@@ -1393,12 +1498,15 @@ export async function runMcpTool(
     const error = isRecord(structured.error) ? structured.error : null;
     // A replay under an idempotency key answers the run started earlier: its cost was logged then.
     const charged = !result.isError && CHARGING_TOOLS.has(tool.name) && structured.idempotent_replay !== true;
+    // A successful answer may say which answer it was, and whether it names a post the agent made
+    // or changed (publish_post does); a failure records its code.
+    const audit = !result.isError && tool.audit ? tool.audit(structured) : {};
     report({
       outcome: result.isError ? 'error' : 'ok',
-      code: typeof error?.code === 'string' ? error.code : null,
+      code: typeof error?.code === 'string' ? error.code : audit.code ?? null,
       costCredits: charged ? numberOrNull(structured.cost_credits) : null,
       generationId: uuidOrNull(structured.generation_id) ?? uuidOrNull(argsRecord.generation_id),
-      postId: uuidOrNull(structured.post_id) ?? uuidOrNull(argsRecord.post_id),
+      postId: audit.postId === null ? null : uuidOrNull(audit.postId ?? structured.post_id) ?? uuidOrNull(argsRecord.post_id),
     });
     return result;
   } catch (error) {

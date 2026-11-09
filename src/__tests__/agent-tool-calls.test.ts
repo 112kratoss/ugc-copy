@@ -2,10 +2,14 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  AGENT_PUBLISH_RECORD_CODES,
   AGENT_TOOL_CALLS_TABLE,
   buildAgentToolCallRow,
+  countAgentPublicPublishesSince,
   listAgentPublishedPosts,
+  nextUtcMidnight,
   recordAgentToolCall,
+  startOfUtcDay,
   uuidOrNull,
 } from '@/lib/agent-tool-calls';
 
@@ -60,6 +64,41 @@ describe('the audit row', () => {
     expect(await recordAgentToolCall(refused, row)).toEqual({ ok: false, error: { message: 'permission denied' } });
     const broken = { from: () => { throw new Error('no client'); } } as unknown as SupabaseClient;
     expect(await recordAgentToolCall(broken, row)).toMatchObject({ ok: false, error: expect.any(Error) });
+  });
+});
+
+describe('the daily cap\'s count', () => {
+  it('counts the UTC day\'s rows recorded PUBLISHED_PUBLIC for the account, and nothing else', async () => {
+    const query = {
+      select: vi.fn(() => query),
+      eq: vi.fn(() => query),
+      gte: vi.fn(async () => ({ count: 7, error: null })),
+    };
+    const admin = { from: vi.fn(() => query) } as unknown as SupabaseClient;
+    const since = new Date('2026-11-10T00:00:00.000Z');
+    expect(await countAgentPublicPublishesSince(admin, { userId: USER_ID, since })).toBe(7);
+    expect(vi.mocked(admin.from)).toHaveBeenCalledWith(AGENT_TOOL_CALLS_TABLE);
+    expect(query.select).toHaveBeenCalledWith('id', { count: 'exact', head: true });
+    expect(query.eq.mock.calls).toEqual([
+      ['user_id', USER_ID],
+      ['tool', 'publish_post'],
+      ['ok', true],
+      ['code', AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PUBLIC],
+    ]);
+    expect(query.gte).toHaveBeenCalledWith('created_at', '2026-11-10T00:00:00.000Z');
+
+    const empty = { select: () => empty, eq: () => empty, gte: async () => ({ count: null, error: null }) };
+    expect(await countAgentPublicPublishesSince({ from: () => empty } as unknown as SupabaseClient, { userId: USER_ID, since })).toBe(0);
+    const broken = { select: () => broken, eq: () => broken, gte: async () => ({ count: null, error: { message: 'down' } }) };
+    await expect(countAgentPublicPublishesSince({ from: () => broken } as unknown as SupabaseClient, { userId: USER_ID, since })).rejects.toEqual({ message: 'down' });
+  });
+
+  it('measures the window as the UTC day, whatever the server\'s clock zone', () => {
+    const now = Date.parse('2026-11-10T18:36:11.000Z');
+    expect(startOfUtcDay(now).toISOString()).toBe('2026-11-10T00:00:00.000Z');
+    expect(nextUtcMidnight(now).toISOString()).toBe('2026-11-11T00:00:00.000Z');
+    expect(startOfUtcDay(Date.parse('2026-11-10T00:00:00.000Z')).toISOString()).toBe('2026-11-10T00:00:00.000Z');
+    expect(nextUtcMidnight(Date.parse('2026-12-31T23:59:59.999Z')).toISOString()).toBe('2027-01-01T00:00:00.000Z');
   });
 });
 
