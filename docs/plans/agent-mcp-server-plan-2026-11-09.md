@@ -267,6 +267,11 @@ and connect once from each.
 
 ### Phase 2 — job 2 (publish) and inputs
 
+Status: built 2026-11-10 on `feat/mcp-phase2` (the four tools, the `agent_tool_calls` migration
+and its audit write, `AGENT_PUBLISH_RATE_LIMIT`, Connected apps on `/profile/edit`, the
+moderation filter, image blocks); the owner's steps below are open. The post page is
+`/showcase/<id>`, so `post_url` names that, not `/post/<id>`.
+
 - `publish_post`, `get_post`, `delete_post`, `upload_input` in the registry.
 - Migration `agent_tool_calls` (id, user_id, client_id, tool, ok, generation_id, post_id,
   cost_credits, created_at; owner-read RLS; service-role write) with its `*-migration.test.ts`
