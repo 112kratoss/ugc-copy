@@ -26,7 +26,7 @@ import { isMinimalAppChromePath } from '@/components/app-shell-nav';
 const ROOT = process.cwd();
 const SCANNED = ['src/app', 'src/components'];
 // Routes the shell draws without its chrome, bottom navigation included (isMinimalAppChromePath).
-const WITHOUT_NAV = ['admin', 'auth', 'child-safety', 'login', 'r'];
+const WITHOUT_NAV = ['admin', 'auth', 'child-safety', 'login', 'onboarding', 'r'];
 // Inside another overlay's layer, where the class's own layer is local.
 const INSIDE_ANOTHER_LAYER: Array<{ file: string; classes: string; count: number; why: string }> = [
   {

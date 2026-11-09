@@ -41,12 +41,17 @@ describe('DeferredCreatorProfileCard', () => {
   // Between the idle wait and the editor's code arriving the page drew
   // nothing at all (`dynamic` had no loading component).
   it('keeps the skeleton up while the editor code downloads, then draws the editor', async () => {
-    // Setup skips the idle wait, so the editor's code is asked for at once.
-    render(<DeferredCreatorProfileCard initialProfile={profile} loadError={null} onboardingMode />);
+    render(<DeferredCreatorProfileCard initialProfile={profile} loadError={null} />);
 
     const skeleton = await screen.findByRole('region', { name: 'Loading the profile editor' });
     expect(skeleton).toHaveAttribute('aria-busy', 'true');
     expect(skeleton).toHaveTextContent('Test Creator');
+    // Past the idle wait (jsdom has no requestIdleCallback: 650 ms), the
+    // editor's code is asked for and the skeleton stays while it downloads.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    });
+    expect(screen.getByRole('region', { name: 'Loading the profile editor' })).toHaveTextContent('Test Creator');
     expect(screen.queryByRole('form', { name: 'Profile editor' })).not.toBeInTheDocument();
 
     await act(async () => {

@@ -6,6 +6,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 
 import {
+  creatorNameStepNextPath,
   getSafeAuthNextPath,
   isCreatorSignUpReturn,
   isPasswordRecoveryPath,
@@ -52,11 +53,12 @@ export async function resolveServerPostAuthPath(
     return safeNext;
   }
 
-  // A creator's sign-up sheet asks for the name and handle in its own card, which
-  // also adds the welcome credits, so an account that skipped profile setup is still
-  // greeted there.
-  if (options.skipProfileOnboarding && !isCreatorSignUpReturn(safeNext)) {
-    return safeNext;
+  // "Set up later", chosen before the name was required, is honoured: such an
+  // account is not sent to the name step, so it needs no profile read, unless a
+  // creator's sign-up return greets it (it is greeted only without a name).
+  const destination = creatorNameStepNextPath(safeNext);
+  if (options.skipProfileOnboarding && !isCreatorSignUpReturn(destination)) {
+    return destination;
   }
 
   const { data, error } = await supabase
@@ -80,6 +82,7 @@ export async function resolveServerPostAuthPath(
           coverUrl: profile.cover_url,
         }
       : null,
-    safeNext
+    safeNext,
+    { identityDeferred: options.skipProfileOnboarding === true }
   );
 }

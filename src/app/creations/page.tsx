@@ -47,6 +47,7 @@ import { isAudioModel, isImageModel, isMotionModel } from '@/lib/client-generati
 import { pushToast, requestConfirmation } from '@/components/feedback-state';
 import { HOME_WORKSPACE_ACTIVE_STATUSES } from '@/lib/home-dashboard';
 import { reportGeneration } from '@/lib/moderation-client';
+import { buildCreatorNameStepPath } from '@/lib/auth-onboarding';
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
 import { resolveRemixTool } from '@/lib/remix-tools';
 import {
@@ -1731,6 +1732,11 @@ export default function CreationsPage() {
     const archivedPostCount = posts.length - activePostCount;
     const unlistedPostCount = posts.filter((post) => !post.archivedAt && post.visibility === 'unlisted').length;
     const isProfileIncomplete = !profileReadiness.profileComplete;
+    // An account with no creator name sets it up at the name step, which comes
+    // back here; /profile has no setup mode of its own any more.
+    const profileSetupHref = profileReadiness.publicPublishReady
+        ? '/profile?next=%2Fcreations'
+        : buildCreatorNameStepPath('/creations');
     const hasPortfolioProof = successfulGenerations.length > 0 && activePortfolioPostCount > 0;
     const shouldShowPortfolioStarter = activeView === 'creations' && !isLoading && (
         successfulGenerations.length === 0 ||
@@ -1855,7 +1861,7 @@ export default function CreationsPage() {
                             </div>
                             <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
                                 <Link
-                                    href="/profile?next=%2Fcreations"
+                                    href={profileSetupHref}
                                     className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200"
                                 >
                                     <UserRound className="h-4 w-4" />
@@ -2032,7 +2038,7 @@ export default function CreationsPage() {
                                 <Wand2 className="h-4 w-4" />
                                 Choose a creator tool
                             </Link>
-                            <Link href="/profile?next=%2Fcreations" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-6 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]">
+                            <Link href={profileSetupHref} className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-6 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]">
                                 <UserRound className="h-4 w-4" />
                                 Set up profile
                             </Link>

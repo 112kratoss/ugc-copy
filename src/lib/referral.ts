@@ -2,7 +2,7 @@ import 'server-only';
 
 import { createHmac } from 'node:crypto';
 
-import { CREATOR_WELCOME_PARAM, isCreatorPath } from '@/lib/auth-onboarding';
+import { CREATOR_NAME_STEP_PATH, CREATOR_WELCOME_PARAM, isCreatorPath } from '@/lib/auth-onboarding';
 import { REFERRAL_CLAIM_REASON_PATTERN, REFERRAL_CLAIM_STATUS_PARAM } from '@/lib/referral-claim-copy';
 import { logBackendWarning } from '@/lib/backend-logger';
 import { getClientNetworkKey } from '@/lib/client-network-key';
@@ -124,7 +124,6 @@ export { REFERRAL_CLAIM_STATUS_PARAM };
 
 const REFERRAL_PATH_BASE = 'https://magicbooklet.local';
 const WELCOME_REWARD_PATH = '/welcome-reward';
-const PROFILE_SETUP_PATH = '/profile';
 
 /**
  * What a post-auth redirect tells the new account about the invite it opened:
@@ -148,10 +147,11 @@ export function referralClaimStatus(outcome: {
 
 /**
  * Puts the claim status on the page a post-auth destination leads to that
- * greets a new account: the welcome-reward page, usually the `next` of
- * `/profile` since a new account sets up its profile first, or a creator a
- * sign-up came back to (its welcome card). Any other destination drops the
- * status rather than carry it somewhere that cannot show it.
+ * greets a new account: the `next` of the creator-name step, which a new
+ * account passes first and which opens `next` with `welcome=1`; the
+ * welcome-reward page; or a creator a sign-up came back to (its welcome card).
+ * Any other destination drops the status rather than carry it somewhere that
+ * cannot show it.
  */
 export function withReferralClaimStatus(destination: string, status: string | null): string {
   if (!status) return destination;
@@ -166,16 +166,14 @@ export function withReferralClaimStatus(destination: string, status: string | nu
       url.searchParams.set(REFERRAL_CLAIM_STATUS_PARAM, status);
       return `${url.pathname}${url.search}${url.hash}`;
     }
-    if (url.pathname !== PROFILE_SETUP_PATH) return destination;
+    if (url.pathname !== CREATOR_NAME_STEP_PATH) return destination;
 
     const nested = url.searchParams.get('next');
     if (!nested || !nested.startsWith('/') || nested.startsWith('//')) return destination;
     const nestedUrl = new URL(nested, REFERRAL_PATH_BASE);
-    if (nestedUrl.origin !== REFERRAL_PATH_BASE || nestedUrl.pathname !== WELCOME_REWARD_PATH) {
-      return destination;
-    }
+    if (nestedUrl.origin !== REFERRAL_PATH_BASE) return destination;
     nestedUrl.searchParams.set(REFERRAL_CLAIM_STATUS_PARAM, status);
-    url.searchParams.set('next', `${nestedUrl.pathname}${nestedUrl.search}`);
+    url.searchParams.set('next', `${nestedUrl.pathname}${nestedUrl.search}${nestedUrl.hash}`);
     return `${url.pathname}${url.search}${url.hash}`;
   } catch {
     return destination;

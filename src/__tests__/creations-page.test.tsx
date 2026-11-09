@@ -224,6 +224,35 @@ describe('CreationsPage', () => {
     expect(screen.getByText('UNLOCKED RECIPES')).toBeInTheDocument();
   });
 
+  // /profile has no setup mode any more (owner, 2026-11-09): an account with no
+  // creator name chooses one at the name step, which comes back to Studio.
+  it('sends Set up profile to the name step for an account with no creator name', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/generations')) return Promise.resolve(jsonResponse({ generations: [] }));
+      if (url.startsWith('/api/posts')) return Promise.resolve(jsonResponse({ posts: [] }));
+      if (url === '/api/profile') return Promise.resolve(jsonResponse({ username: 'creator-a1b2c3d4', displayName: '' }));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<CreationsPage />);
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === '/api/profile')).toBe(true));
+    const links = await screen.findAllByRole('link', { name: /set up profile/i });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link).toHaveAttribute('href', '/onboarding?next=%2Fcreations');
+    }
+  });
+
+  it('keeps a named account’s profile links on its profile', async () => {
+    render(<CreationsPage />);
+
+    // The default profile has its name and handle.
+    expect(await screen.findByRole('link', { name: /complete profile/i })).toHaveAttribute('href', '/profile?next=%2Fcreations');
+    expect(screen.getByRole('link', { name: /set up profile/i })).toHaveAttribute('href', '/profile?next=%2Fcreations');
+  });
+
   it('keeps the visibility filter in the URL and counts the current section in the header', async () => {
     navigationState.searchParams = new URLSearchParams('view=posts&visibility=private');
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {

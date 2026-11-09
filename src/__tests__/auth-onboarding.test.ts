@@ -3,13 +3,16 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAuthCodeErrorPath,
   buildAuthContinuePath,
+  buildCreatorNameStepPath,
   buildProfileSetupPath,
+  creatorNameStepNextPath,
   getPasswordRecoveryNextPath,
   getSafeAuthNextPath,
   hasSkippedProfileOnboarding,
   creatorSignUpReturnPath,
   isCreatorPath,
   isCreatorSignUpReturn,
+  isOldProfileSetupPath,
   resolvePostAuthPath,
   withCreatorWelcome,
   withoutCreatorReturnFlags,
@@ -21,17 +24,22 @@ import {
 } from '@/lib/password-policy';
 
 describe('auth onboarding destinations', () => {
-  it('preserves safe local creation intent through setup and continuation', () => {
+  it('preserves safe local creation intent through the name step and continuation', () => {
     const next = '/create/video?model=kling&recipe=ugc';
 
-    expect(buildProfileSetupPath(next)).toBe(
-      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate%252Fvideo%253Fmodel%253Dkling%2526recipe%253Dugc'
+    expect(buildCreatorNameStepPath(next)).toBe(
+      '/onboarding?next=%2Fcreate%2Fvideo%3Fmodel%3Dkling%26recipe%3Dugc'
     );
     expect(buildAuthContinuePath(next)).toBe(
       '/auth/continue?next=%2Fcreate%2Fvideo%3Fmodel%3Dkling%26recipe%3Dugc'
     );
     expect(buildAuthCodeErrorPath(next)).toBe(
       '/auth/auth-code-error?next=%2Fcreate%2Fvideo%3Fmodel%3Dkling%26recipe%3Dugc'
+    );
+    // Home's welcome card still builds the old first-profile link, which /profile
+    // sends on to the name step.
+    expect(buildProfileSetupPath(next)).toBe(
+      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate%252Fvideo%253Fmodel%253Dkling%2526recipe%253Dugc'
     );
   });
 
@@ -40,59 +48,88 @@ describe('auth onboarding destinations', () => {
     expect(getSafeAuthNextPath('//attacker.example')).toBe('/create');
     expect(getSafeAuthNextPath('/\\attacker.example')).toBe('/create');
     expect(getSafeAuthNextPath('%2F%2Fattacker.example')).toBe('/create');
+    expect(buildCreatorNameStepPath('https://attacker.example')).toBe('/onboarding?next=%2Fcreate');
   });
 
-  it('sends missing or incomplete profiles through setup with their intent intact', () => {
-    expect(resolvePostAuthPath(null, null)).toBe(
-      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate'
-    );
-    expect(resolvePostAuthPath(null, '/create')).toBe(
-      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate'
-    );
+  // Owner, 2026-11-09: the app's required creator name, on the web. No profile
+  // setup and no welcome-reward hop: the step opens `next` with `welcome=1`.
+  it('sends an account without a creator name to the name step, its intent intact', () => {
+    expect(resolvePostAuthPath(null, null)).toBe('/onboarding?next=%2Fcreate');
+    expect(resolvePostAuthPath(null, '/create')).toBe('/onboarding?next=%2Fcreate');
     expect(resolvePostAuthPath({
       username: 'creator-a1b2c3d4',
       displayName: 'New creator',
-    }, '/create/image')).toBe(
-      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate%252Fimage'
+    }, '/create/image')).toBe('/onboarding?next=%2Fcreate%2Fimage');
+    // A handle without a name is not a creator name yet either.
+    expect(resolvePostAuthPath({ username: 'maya-k', displayName: '  ' }, '/showcase')).toBe(
+      '/onboarding?next=%2Fshowcase'
     );
-    expect(resolvePostAuthPath(
-      null,
-      '/profile?next=%2Fcreations'
-    )).toBe('/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreations');
+    expect(resolvePostAuthPath(null, '/profile?next=%2Fcreations')).toBe(
+      '/onboarding?next=%2Fprofile%3Fnext%3D%252Fcreations'
+    );
+  });
+
+  it('never wraps the name step, or an old first-profile link, inside the name step', () => {
+    const oldLink = '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate%252Fimage';
+    expect(isOldProfileSetupPath(oldLink)).toBe(true);
+    // The profile opened back from the name step is not an old link.
+    expect(isOldProfileSetupPath('/profile?welcome=1')).toBe(false);
+    expect(isOldProfileSetupPath('/profile?next=%2Fcreate')).toBe(false);
+    expect(creatorNameStepNextPath(oldLink)).toBe('/create/image');
+    expect(creatorNameStepNextPath('/onboarding?next=%2Fcreations')).toBe('/creations');
+    expect(creatorNameStepNextPath('/onboarding')).toBe('/create');
+    expect(creatorNameStepNextPath('/onboarding?next=%2Fonboarding%3Fnext%3D%252Fhome')).toBe('/home');
+    // The welcome-reward page on its own is a page like any other until it goes.
+    expect(creatorNameStepNextPath('/welcome-reward?next=%2Fcreate')).toBe('/welcome-reward?next=%2Fcreate');
+    expect(resolvePostAuthPath(null, oldLink)).toBe('/onboarding?next=%2Fcreate%2Fimage');
+    expect(resolvePostAuthPath(null, '/onboarding?next=%2Fcreations')).toBe('/onboarding?next=%2Fcreations');
   });
 
   it('returns ready profiles to the requested route', () => {
-    expect(resolvePostAuthPath({
-      username: 'athul-creates',
-      displayName: 'Athul Creates',
-    }, '/create/motion?source=showcase')).toBe('/create/motion?source=showcase');
+    const ready = { username: 'athul-creates', displayName: 'Athul Creates' };
+    expect(resolvePostAuthPath(ready, '/create/motion?source=showcase')).toBe('/create/motion?source=showcase');
+    // Straight past a setup step it had been sent to before signing in.
+    expect(resolvePostAuthPath(ready, '/onboarding?next=%2Fcreations')).toBe('/creations');
+    expect(resolvePostAuthPath(ready, '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate')).toBe('/create');
   });
 
-  // A visitor signs up at a creator's Generate (owner, 2026-10-28): the creator asks
-  // for the name and handle itself, in the card that adds the welcome credits. The
-  // sheet marks its own way back (`handover`), so only that sign-in skips onboarding.
-  it('sends a sign-up from a creator’s sheet straight back to it, flagged for its welcome card', () => {
-    expect(resolvePostAuthPath(null, '/create-video?handover=nonce-1234')).toBe(
-      '/create-video?handover=nonce-1234&welcome=1'
-    );
+  // A visitor signs up at a creator's Generate (owner, 2026-10-28). The creator
+  // name comes first now (owner, 2026-11-09), and the step comes back to the
+  // creator with the sheet's hand-over nonce and the welcome flag.
+  it('takes a sign-up from a creator’s sheet through the name step and back to it', () => {
+    const fromSheet = '/create-video?handover=nonce-1234';
+    expect(resolvePostAuthPath(null, fromSheet)).toBe('/onboarding?next=%2Fcreate-video%3Fhandover%3Dnonce-1234');
     expect(resolvePostAuthPath({
       username: 'creator-a1b2c3d4',
       displayName: 'New creator',
-    }, '/create-image?handover=nonce-1234')).toBe('/create-image?handover=nonce-1234&welcome=1');
+    }, '/create-image?handover=nonce-1234')).toBe('/onboarding?next=%2Fcreate-image%3Fhandover%3Dnonce-1234');
+    // Where the step opens once the name is saved.
+    expect(withCreatorWelcome(creatorNameStepNextPath('/create-video?handover=nonce-1234'))).toBe(
+      '/create-video?handover=nonce-1234&welcome=1'
+    );
     // A ready account comes back as it went, with nothing to greet.
     expect(resolvePostAuthPath({
       username: 'athul-creates',
       displayName: 'Athul Creates',
-    }, '/create-video?handover=nonce-1234')).toBe('/create-video?handover=nonce-1234');
+    }, fromSheet)).toBe(fromSheet);
   });
 
-  it('keeps the usual onboarding for a sign-in that only returns to a creator', () => {
+  it('honours a "Set up later" from before the name was required', () => {
+    expect(resolvePostAuthPath(null, '/create', { identityDeferred: true })).toBe('/create');
+    expect(resolvePostAuthPath(null, '/onboarding?next=%2Fcreations', { identityDeferred: true })).toBe('/creations');
+    // A creator's sign-up return still greets it (its card asks for the name).
+    expect(resolvePostAuthPath(null, '/create-video?handover=nonce-1234', { identityDeferred: true })).toBe(
+      '/create-video?handover=nonce-1234&welcome=1'
+    );
+  });
+
+  it('takes a sign-in that only returns to a creator through the name step too', () => {
     // A remix link's sign-in, or the top bar's Sign in on a creator.
     expect(resolvePostAuthPath(null, '/create-motion?remix=gen-1&remixPost=post-1')).toBe(
-      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate-motion%253Fremix%253Dgen-1%2526remixPost%253Dpost-1'
+      '/onboarding?next=%2Fcreate-motion%3Fremix%3Dgen-1%26remixPost%3Dpost-1'
     );
     expect(resolvePostAuthPath(null, '/create-workflow?handover=nonce-1234')).toBe(
-      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate-workflow%253Fhandover%253Dnonce-1234'
+      '/onboarding?next=%2Fcreate-workflow%3Fhandover%3Dnonce-1234'
     );
   });
 
@@ -115,11 +152,14 @@ describe('auth onboarding destinations', () => {
     expect(withoutCreatorReturnFlags('/create-image?remix=g&welcome=1&referral=applied&handover=x#top')).toBe('/create-image?remix=g#top');
   });
 
-  it('does not let profile setup intercept password recovery', () => {
+  it('does not let the name step intercept password recovery', () => {
     expect(resolvePostAuthPath(
       null,
       '/auth/reset-password?next=%2Fcreate'
     )).toBe('/auth/reset-password?next=%2Fcreate');
+    expect(resolvePostAuthPath(null, '/auth/reset-password?next=%2Fcreate', { identityDeferred: true })).toBe(
+      '/auth/reset-password?next=%2Fcreate'
+    );
     expect(getPasswordRecoveryNextPath(
       '/auth/reset-password?next=%2Fcreate%2Fvideo%3Fmodel%3Dkling'
     )).toBe('/create/video?model=kling');

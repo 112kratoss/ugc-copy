@@ -264,6 +264,8 @@ export function isMinimalAppChromePath(pathname: string) {
     pathname.startsWith('/auth/') ||
     pathname === '/login' ||
     pathname.startsWith('/login?') ||
+    // The creator-name step after sign-up stands alone, as the app's does.
+    pathname === '/onboarding' ||
     pathname.startsWith('/r/') ||
     // The admin console renders its own operator chrome and must not show the
     // consumer navigation, "Sign in" prompt, or mobile tab bar. An address
