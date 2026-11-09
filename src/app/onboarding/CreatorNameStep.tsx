@@ -258,6 +258,10 @@ export default function CreatorNameStep({
 
         <Surface as="section" variant="panel" padding="lg" className="mt-6">
           <form noValidate onSubmit={(event) => void save(event)} className="flex flex-col gap-5">
+            {/* The fields carry no name: Enter before the script runs submits the form
+                the browser's way, as a GET, which would write them into the address
+                (form-submit-method.test.ts). Only where the step leads goes along. */}
+            <input type="hidden" name="next" value={nextPath} />
             <div>
               <label htmlFor="creator-name-display-name" className="mb-2 block">
                 <Text as="span" variant="label">Display name</Text>
@@ -266,7 +270,6 @@ export default function CreatorNameStep({
                 ref={nameRef}
                 {...TYPED_INPUT_PROPS}
                 id="creator-name-display-name"
-                name="displayName"
                 type="text"
                 value={displayName}
                 disabled={fieldsLocked}
@@ -291,7 +294,6 @@ export default function CreatorNameStep({
                 ref={handleRef}
                 {...TYPED_INPUT_PROPS}
                 id="creator-name-handle"
-                name="username"
                 type="text"
                 value={username}
                 disabled={fieldsLocked}
