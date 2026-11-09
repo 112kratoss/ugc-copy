@@ -98,6 +98,11 @@ export default function WelcomeCreditsGate({ offeredHere, returned, page = '' }:
 
   // After an unread answer, the next page asks again: its key is the effect's input from then on.
   const retryOn = unread !== null && unread.userId === userId && unread.page !== page ? page : null;
+  // The page a failed read is recorded against, read when it fails rather than when it started.
+  const pageRef = useRef(page);
+  useEffect(() => {
+    pageRef.current = page;
+  }, [page]);
 
   useEffect(() => {
     if (!offeredHere || !userId || quietHere) return;
@@ -122,7 +127,7 @@ export default function WelcomeCreditsGate({ offeredHere, returned, page = '' }:
         // Unread: nothing is offered on this page; the next one asks again.
         if (active) {
           setAnswer(null);
-          setUnread({ userId, page });
+          setUnread({ userId, page: pageRef.current });
         }
       });
     return () => {
