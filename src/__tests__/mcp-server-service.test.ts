@@ -2,7 +2,15 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
-import { BackendRateLimitError } from '@/lib/backend-rate-limit';
+import type { AgentPostView } from '@/lib/agent-post-read';
+import { AGENT_PUBLISH_RECORD_CODES } from '@/lib/agent-tool-calls';
+import {
+  AGENT_PUBLISH_RATE_LIMIT,
+  AGENT_UPLOAD_INPUT_RATE_LIMIT,
+  BackendRateLimitError,
+  SHOWCASE_PUBLISH_RATE_LIMIT,
+} from '@/lib/backend-rate-limit';
+import { getCreationPostTitleSuggestion } from '@/lib/creation-post-title';
 import {
   MCP_GENERATION_POLL_INTERVAL_MS,
   MCP_SERVER_INSTRUCTIONS,
@@ -10,6 +18,7 @@ import {
   createMcpServer,
   registerMcpTools,
   runMcpTool,
+  type CreationForPublish,
   type McpToolCallRecord,
   type McpToolContext,
   type McpToolDefinition,
@@ -90,6 +99,61 @@ function generation(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function creation(overrides: Partial<CreationForPublish> = {}): CreationForPublish {
+  return {
+    id: GENERATION_ID,
+    userId: USER_ID,
+    status: 'succeeded',
+    prompt: 'a red bicycle at dawn, film grain',
+    title: null,
+    model: 'img-1',
+    category: 'image',
+    creationMode: null,
+    archivedAt: null,
+    moderationRemovedAt: null,
+    post: null,
+    ...overrides,
+  };
+}
+
+function post(overrides: Partial<AgentPostView> = {}): AgentPostView {
+  return {
+    postId: POST_ID,
+    ownerUserId: USER_ID,
+    generationId: GENERATION_ID,
+    title: 'Red bicycle',
+    description: null,
+    body: null,
+    category: 'image',
+    visibility: 'public',
+    state: 'live',
+    isNsfw: false,
+    remixesAllowed: true,
+    counts: { saves: 3, comments: 1, remixes: 0, shares: 2 },
+    createdAt: '2026-11-09T10:00:00Z',
+    isOwn: true,
+    ...overrides,
+  };
+}
+
+function published(overrides: Record<string, unknown> = {}) {
+  return {
+    ok: true as const,
+    body: {
+      success: true as const,
+      isPublic: true,
+      visibility: 'public' as const,
+      postId: POST_ID,
+      showcasePath: `/showcase/${POST_ID}`,
+      ownerPath: `/post/${POST_ID}/edit`,
+      resourceBundlePath: `/showcase/${POST_ID}#recipe`,
+      resourceBundleStatus: 'published' as const,
+      message: 'Successfully published to showcase',
+      ...overrides,
+    },
+  };
+}
+
 function clock() {
   let now = 1_000_000;
   const sleeps: number[] = [];
@@ -145,13 +209,30 @@ function harness(overrides: Partial<McpToolServices> = {}) {
         appliedSafeguards: [],
       },
     })) as unknown as McpToolServices['enhancePromptForUser'],
+    publishGenerationToShowcaseForRoute: vi.fn(async () => published()) as unknown as McpToolServices['publishGenerationToShowcaseForRoute'],
+    deleteOwnerPostForRoute: vi.fn(async () => ({ ok: true as const, body: { success: true as const, deleted: true as const } })) as unknown as McpToolServices['deleteOwnerPostForRoute'],
+    readPostForAgent: vi.fn(async () => ({ ok: true as const, post: post() })) as unknown as McpToolServices['readPostForAgent'],
+    stageAgentInput: vi.fn(async () => ({
+      ok: true as const,
+      input: { url: 'https://project.supabase.test/storage/v1/object/sign/uploads/x?token=read', storagePath: `uploads/${USER_ID}/staged-agent-image.jpg` },
+      kind: 'image' as const,
+      bytes: 4096,
+      mimeType: 'image/jpeg',
+      expiresInSeconds: 3600,
+      sourceUrl: 'https://cdn.example.com/a.jpg',
+    })) as unknown as McpToolServices['stageAgentInput'],
+    fetchImageContentBlock: vi.fn(async () => null) as unknown as McpToolServices['fetchImageContentBlock'],
     enforceBackendRateLimit: vi.fn(async () => undefined) as unknown as McpToolServices['enforceBackendRateLimit'],
     readCreditBalance: vi.fn(async () => 100),
+    readCreationForPublish: vi.fn(async () => creation()),
+    countAgentPublicPublishesSince: vi.fn(async () => 0) as unknown as McpToolServices['countAgentPublicPublishesSince'],
+    isOwnOrLinkedAccountId: vi.fn(async (_admin: unknown, userId: string, ownerUserId: string | null | undefined) => ownerUserId === userId) as unknown as McpToolServices['isOwnOrLinkedAccountId'],
     promptEnhancementCost: () => 1,
     sleep: time.sleep,
     now: time.now,
     ...overrides,
   };
+  const deferred: Array<Promise<unknown>> = [];
   const context: McpToolContext = {
     request: new Request(`${SITE}/api/mcp`, { method: 'POST', headers: { authorization: 'Bearer agent-token' } }),
     userId: USER_ID,
@@ -162,8 +243,9 @@ function harness(overrides: Partial<McpToolServices> = {}) {
     createAdminSupabase: () => admin,
     services,
     onToolCall: (record) => records.push(record),
+    runAfterResponse: (task) => { deferred.push(task()); },
   };
-  return { context, services, records, time, admin, user };
+  return { context, services, records, time, admin, user, deferred };
 }
 
 function structured(result: Awaited<ReturnType<McpToolDefinition['handle']>>): Record<string, unknown> {
@@ -181,24 +263,50 @@ function rateLimit(retryAfterSeconds: number) {
 describe('MCP tool registry', () => {
   it('holds every tool to a title, a description written for an agent, annotations and a schema', () => {
     expect(MCP_TOOLS.map((entry) => entry.name)).toEqual([
-      'list_models', 'get_model', 'quote_generation', 'create_media', 'get_generation', 'list_creations', 'enhance_prompt',
+      'list_models', 'get_model', 'quote_generation', 'upload_input', 'create_media', 'get_generation', 'list_creations',
+      'publish_post', 'get_post', 'delete_post', 'enhance_prompt',
     ]);
     for (const entry of MCP_TOOLS) {
       expect(entry.title.length, entry.name).toBeGreaterThan(3);
       // A description says when to call the tool and what to do with the answer, so it names
       // at least one other tool or the person the agent works for.
       expect(entry.description.length, entry.name).toBeGreaterThan(120);
-      expect(entry.description, entry.name).toMatch(/list_models|get_model|quote_generation|create_media|get_generation|list_creations|the person/);
+      expect(entry.description, entry.name).toMatch(/list_models|get_model|quote_generation|create_media|get_generation|list_creations|publish_post|the person/);
       expect(entry.inputSchema, entry.name).toBeInstanceOf(z.ZodObject);
       expect(typeof entry.annotations.readOnlyHint, entry.name).toBe('boolean');
-      expect(entry.annotations.openWorldHint, entry.name).toBe(false);
+      expect(typeof entry.annotations.openWorldHint, entry.name).toBe('boolean');
     }
     const readOnly = MCP_TOOLS.filter((entry) => entry.annotations.readOnlyHint).map((entry) => entry.name);
-    expect(readOnly).toEqual(['list_models', 'get_model', 'quote_generation', 'get_generation', 'list_creations']);
+    expect(readOnly).toEqual(['list_models', 'get_model', 'quote_generation', 'get_generation', 'list_creations', 'get_post']);
+    // Open world: a publish is seen by everyone, and an upload by URL reaches hosts outside Magicbooklet.
+    const openWorld = MCP_TOOLS.filter((entry) => entry.annotations.openWorldHint).map((entry) => entry.name);
+    expect(openWorld).toEqual(['upload_input', 'publish_post']);
     // Spends credits: asked about by clients that prompt on destructive tools.
     expect(tool('create_media').annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false });
     // Spends a credit too, so not read-only, but creates nothing lasting.
     expect(tool('enhance_prompt').annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    expect(tool('publish_post').annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true });
+    expect(tool('delete_post').annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
+    // The descriptions say what an agent must know before acting: the post is public at once, and how to keep it private.
+    expect(tool('publish_post').description).toMatch(/public at once/u);
+    expect(tool('publish_post').description).toMatch(/visibility private/u);
+    expect(tool('publish_post').description).toContain('already_published');
+    // The cap's window is the UTC day, and it counts publications: said where the agent reads it.
+    expect(tool('publish_post').description).toContain('per UTC day');
+    expect(tool('publish_post').description).toMatch(/not refused attempts/u);
+    expect(tool('get_generation').description).toContain('include_preview');
+    expect(tool('upload_input').description).toContain('25 MB for a picture, 50 MB for a clip, 50 MB for a track');
+    expect(tool('upload_input').description).toContain('at most 3 MB decoded');
+    expect(tool('create_media').description).toContain('upload_input');
+    // A staged file's storage_path rides with its URL into the run.
+    const staged = tool('create_media').inputSchema.parse({
+      kind: 'image', model_id: 'img-1', catalog_revision: 'rev-1', expected_cost_credits: 1, idempotency_key: 'k',
+      inputs: [{ slot: 'references', kind: 'image', url: 'https://project.supabase.test/sign/a.jpg', storage_path: 'uploads/u/a.jpg' }],
+    }) as { inputs: Array<Record<string, unknown>> };
+    expect(staged.inputs[0].storage_path).toBe('uploads/u/a.jpg');
+    expect(tool('upload_input').description).toContain('create_media');
+    expect(tool('delete_post').description).toMatch(/cannot be undone/u);
+    expect(MCP_SERVER_INSTRUCTIONS).toContain('publish_post');
   });
 
   it('registers each tool on the server with its title, description, schema and annotations', () => {
@@ -570,12 +678,42 @@ describe('get_generation', () => {
       }],
     });
     expect(text(result)).toContain('permanent link');
+    expect(text(result)).toContain('publish_post');
     // Four reads, one rate-limit check: polls count once per call.
     expect(listOwnerGenerationsForRoute).toHaveBeenCalledTimes(4);
     expect(services.enforceBackendRateLimit).toHaveBeenCalledTimes(1);
     const reads = listOwnerGenerationsForRoute.mock.calls.map(([input]) => Object.fromEntries(input.searchParams));
     expect(reads[0]).toEqual({ id: GENERATION_ID, detail: 'status', includeArchived: 'true' });
     expect(reads[3]).toEqual({ id: GENERATION_ID, includeArchived: 'true' });
+    // A poll never fetches the preview: the picture comes only when the caller asks for it.
+    expect(services.fetchImageContentBlock).not.toHaveBeenCalled();
+    expect(result.content).toHaveLength(1);
+  });
+
+  it('carries a finished picture inline as an image block from its preview when asked, and never for a clip', async () => {
+    const block = { type: 'image' as const, data: 'AAAA', mimeType: 'image/webp' };
+    const picture = harness({ fetchImageContentBlock: vi.fn(async () => block) as never });
+    const result = await tool('get_generation').handle({ generation_id: GENERATION_ID, include_preview: true }, picture.context);
+    expect(picture.services.fetchImageContentBlock).toHaveBeenCalledWith('https://cdn.magicbooklet.test/signed/preview.jpg?token=abc');
+    expect(result.content).toEqual([expect.objectContaining({ type: 'text' }), block]);
+    expect(structured(result)).toMatchObject({ status: 'succeeded', outputs: [expect.objectContaining({ kind: 'image' })] });
+
+    // Not asked for: the same finished picture answers text alone, with no fetch.
+    const quiet = harness({ fetchImageContentBlock: vi.fn(async () => block) as never });
+    const plain = await tool('get_generation').handle({ generation_id: GENERATION_ID }, quiet.context);
+    expect(quiet.services.fetchImageContentBlock).not.toHaveBeenCalled();
+    expect(plain.content).toHaveLength(1);
+
+    const clip = harness({
+      fetchImageContentBlock: vi.fn(async () => block) as never,
+      listOwnerGenerationsForRoute: vi.fn(async () => ({
+        generations: [generation({ category: 'video', media: { ...generation().media, kind: 'video' } })],
+        pagination: { limit: 80, hasMore: false, nextCursor: null },
+      })) as never,
+    });
+    const video = await tool('get_generation').handle({ generation_id: GENERATION_ID, include_preview: true }, clip.context);
+    expect(clip.services.fetchImageContentBlock).not.toHaveBeenCalled();
+    expect(video.content).toHaveLength(1);
   });
 
   it('stops at the wait and says the run is still going, with no outputs', async () => {
@@ -632,7 +770,8 @@ describe('list_creations', () => {
       generation_id: GENERATION_ID,
       posted: true,
       post_id: POST_ID,
-      post_url: `${SITE}/post/${POST_ID}`,
+      // The post page is /showcase/<id>; /post/<id> is only the editor's folder.
+      post_url: `${SITE}/showcase/${POST_ID}`,
       creation_url: `${SITE}/creations?generation=${GENERATION_ID}`,
       preview_url: 'https://cdn.magicbooklet.test/signed/preview.jpg?token=abc',
       cost_credits: 19,
@@ -682,16 +821,423 @@ describe('enhance_prompt', () => {
   });
 });
 
+describe('upload_input', () => {
+  it('stages a file by URL through the staging service and answers the input create_media takes', async () => {
+    const { context, services, admin } = harness();
+    const result = await tool('upload_input').handle({ url: 'https://cdn.example.com/a.jpg' }, context);
+    expect(result.isError).toBeUndefined();
+    expect(structured(result)).toEqual({
+      input: { url: 'https://project.supabase.test/storage/v1/object/sign/uploads/x?token=read', storage_path: `uploads/${USER_ID}/staged-agent-image.jpg` },
+      kind: 'image',
+      bytes: 4096,
+      mime_type: 'image/jpeg',
+      expires_in_seconds: 3600,
+      source_url: 'https://cdn.example.com/a.jpg',
+    });
+    expect(text(result)).toContain('create_media.inputs[]');
+    expect(services.stageAgentInput).toHaveBeenCalledWith({ admin, userId: USER_ID, source: { url: 'https://cdn.example.com/a.jpg' } });
+
+    await tool('upload_input').handle({ base64: 'AAAA', mime_type: 'image/png' }, context);
+    expect(services.stageAgentInput).toHaveBeenLastCalledWith({ admin, userId: USER_ID, source: { base64: 'AAAA', mimeType: 'image/png' } });
+    // Each call is counted against the account before any byte is fetched.
+    expect(vi.mocked(services.enforceBackendRateLimit).mock.calls.map(([, options]) => options)).toEqual([
+      { ...AGENT_UPLOAD_INPUT_RATE_LIMIT, key: USER_ID },
+      { ...AGENT_UPLOAD_INPUT_RATE_LIMIT, key: USER_ID },
+    ]);
+    expect(AGENT_UPLOAD_INPUT_RATE_LIMIT).toEqual({ scope: 'agent:upload-input', limit: 30, windowSeconds: 10 * 60 });
+  });
+
+  it('refuses a call over the upload limit before fetching anything', async () => {
+    const { context, services } = harness({ enforceBackendRateLimit: vi.fn(async () => { throw rateLimit(12); }) as never });
+    const result = await tool('upload_input').handle({ url: 'https://big.example/clip.mp4' }, context);
+    expect(toolFailureCode(result)).toBe('RATE_LIMITED');
+    expect(structured(result).error).toMatchObject({ retry_after_seconds: 12 });
+    expect(services.stageAgentInput).not.toHaveBeenCalled();
+  });
+
+  it('refuses neither or both sources, base64 without its type, and passes the staging codes on with the next step', async () => {
+    const { context, services } = harness();
+    expect(toolFailureCode(await tool('upload_input').handle({}, context))).toBe('INVALID_REQUEST');
+    expect(toolFailureCode(await tool('upload_input').handle({ url: 'https://x/a.jpg', base64: 'AAAA', mime_type: 'image/png' }, context))).toBe('INVALID_REQUEST');
+    expect(toolFailureCode(await tool('upload_input').handle({ base64: 'AAAA' }, context))).toBe('INVALID_REQUEST');
+    expect(services.stageAgentInput).not.toHaveBeenCalled();
+    expect(services.enforceBackendRateLimit).not.toHaveBeenCalled();
+    expect(tool('upload_input').inputSchema.safeParse({ url: 'not a url' }).success).toBe(false);
+
+    const refusals: Array<[Record<string, unknown>, string, RegExp]> = [
+      [{ code: 'PRIVATE_ADDRESS', message: 'Not public.', details: { host: 'db.internal' } }, 'PRIVATE_ADDRESS', /public host|base64/u],
+      [{ code: 'TOO_LARGE', message: 'Too big.', details: { max_bytes: 8 } }, 'TOO_LARGE', /by url/u],
+      [{ code: 'UNSUPPORTED_MEDIA', message: 'A page.' }, 'UNSUPPORTED_MEDIA', /A page/u],
+      [{ code: 'RATE_LIMITED', message: 'Wait.', retryAfterSeconds: 42 }, 'RATE_LIMITED', /42 seconds/u],
+      [{ code: 'UPLOAD_FAILED', message: 'Storage down.' }, 'UNAVAILABLE', /Try again/u],
+      [{ code: 'ACCOUNT_DELETION_IN_PROGRESS', message: 'Deleting.' }, 'ACCOUNT_DELETION_IN_PROGRESS', /Deleting/u],
+    ];
+    for (const [refusal, code, words] of refusals) {
+      const { context: other } = harness({ stageAgentInput: vi.fn(async () => ({ ok: false, ...refusal })) as never });
+      const source = code === 'TOO_LARGE' ? { base64: 'AAAA', mime_type: 'image/png' } : { url: 'https://cdn.example.com/a.jpg' };
+      const result = await tool('upload_input').handle(source, other);
+      expect(toolFailureCode(result), code).toBe(code);
+      expect(text(result), code).toMatch(words);
+    }
+  });
+});
+
+describe('publish_post', () => {
+  const args = { generation_id: GENERATION_ID, title: 'Red bicycle at dawn', body: 'Made on a Sunday.' };
+
+  async function publishBody(services: McpToolServices, call = 0): Promise<Record<string, unknown>> {
+    const [input] = vi.mocked(services.publishGenerationToShowcaseForRoute).mock.calls[call] as unknown as [{ body: Record<string, unknown> }];
+    return input.body;
+  }
+
+  it('publishes the creator\'s succeeded creation live, through the publish service, with the web\'s free recipe, under both limits', async () => {
+    const { context, services, admin } = harness();
+    const result = await tool('publish_post').handle(args, context);
+    expect(result.isError).toBeUndefined();
+    expect(structured(result)).toEqual({
+      post_id: POST_ID,
+      post_url: `${SITE}/showcase/${POST_ID}`,
+      visibility: 'public',
+      state: 'live',
+      already_published: false,
+      visibility_changed: false,
+      recipe_included: true,
+      recipe_status: 'published',
+    });
+    expect(text(result)).toMatch(/public now/u);
+    expect(text(result)).toContain(`${SITE}/showcase/${POST_ID}`);
+
+    expect(services.readCreationForPublish).toHaveBeenCalledWith(admin, { generationId: GENERATION_ID, userId: USER_ID });
+    const [input] = vi.mocked(services.publishGenerationToShowcaseForRoute).mock.calls[0] as unknown as [{ adminSupabase: unknown; userId: string; dependencies: { runAfterResponse?: unknown } }];
+    expect(input.adminSupabase).toBe(admin);
+    expect(input.userId).toBe(USER_ID);
+    expect(input.dependencies.runAfterResponse).toBe(context.runAfterResponse);
+    expect(await publishBody(services)).toEqual({
+      generationId: GENERATION_ID,
+      visibility: 'public',
+      shareInputMediaForRemix: false,
+      title: 'Red bicycle at dawn',
+      body: 'Made on a Sunday.',
+      allowRemixes: true,
+      includeGenerationReferences: true,
+      resourceBundle: expect.objectContaining({ accessMode: 'free', resources: expect.objectContaining({ promptText: 'a red bicycle at dawn, film grain' }) }),
+    });
+    // The web's publish limit, keyed on the creator; then the agent's daily cap, read from the
+    // ledger as the day's public publications rather than spent on the attempt.
+    const limits = vi.mocked(services.enforceBackendRateLimit).mock.calls.map(([, options]) => options);
+    expect(limits).toEqual([{ ...SHOWCASE_PUBLISH_RATE_LIMIT, key: USER_ID }]);
+    expect(services.countAgentPublicPublishesSince).toHaveBeenCalledWith(admin, { userId: USER_ID, since: new Date('1970-01-01T00:00:00.000Z') });
+    expect(AGENT_PUBLISH_RATE_LIMIT).toEqual({ scope: 'agent:publish-public', limit: 10, windowSeconds: 24 * 60 * 60 });
+  });
+
+  it('sends the title the web\'s Publish starts from when none is given: the creation\'s own, else one from its prompt', async () => {
+    const { context, services } = harness();
+    const { title: _omitted, ...withoutTitle } = args;
+    void _omitted;
+    const result = await tool('publish_post').handle(withoutTitle, context);
+    expect(result.isError).toBeUndefined();
+    const suggested = getCreationPostTitleSuggestion(null, { prompt: 'a red bicycle at dawn, film grain', model: 'img-1', category: 'image', creationMode: null }, false)?.title;
+    expect(typeof suggested).toBe('string');
+    expect((await publishBody(services)).title).toBe(suggested);
+
+    const own = harness({ readCreationForPublish: vi.fn(async () => creation({ title: 'The creation\'s own title' })) });
+    await tool('publish_post').handle(withoutTitle, own.context);
+    expect((await publishBody(own.services)).title).toBe('The creation\'s own title');
+  });
+
+  it('saves a private post without counting the daily cap, and posts the media alone with remixes off', async () => {
+    const { context, services } = harness({
+      publishGenerationToShowcaseForRoute: vi.fn(async () => published({ visibility: 'private', isPublic: false, resourceBundleStatus: null, message: 'Saved as a private post' })) as never,
+    });
+    const result = await tool('publish_post').handle({ ...args, visibility: 'private', allow_remixes: false, is_nsfw: true }, context);
+    expect(structured(result)).toMatchObject({ visibility: 'private', state: 'private', already_published: false, recipe_included: false });
+    expect(text(result)).toMatch(/Only the creator sees it/u);
+    expect(vi.mocked(services.enforceBackendRateLimit).mock.calls.map(([, options]) => options.scope)).toEqual([SHOWCASE_PUBLISH_RATE_LIMIT.scope]);
+    expect(services.countAgentPublicPublishesSince).not.toHaveBeenCalled();
+    expect(await publishBody(services)).toEqual({
+      generationId: GENERATION_ID,
+      visibility: 'private',
+      shareInputMediaForRemix: false,
+      title: 'Red bicycle at dawn',
+      body: 'Made on a Sunday.',
+      isNsfw: true,
+      resourceBundle: { accessMode: 'none' },
+    });
+  });
+
+  it('refuses another creator\'s, a removed and a missing creation alike (NOT_FOUND), and an unfinished or archived one (NOT_READY), before any limit is spent', async () => {
+    // Another creator's creation: nothing about what exists under an id that is not the caller's.
+    const other = harness({ readCreationForPublish: vi.fn(async () => creation({ userId: '99999999-9999-4999-8999-999999999999' })) });
+    const notOwner = await tool('publish_post').handle(args, other.context);
+    expect(toolFailureCode(notOwner)).toBe('NOT_FOUND');
+    expect(other.services.publishGenerationToShowcaseForRoute).not.toHaveBeenCalled();
+    expect(other.services.enforceBackendRateLimit).not.toHaveBeenCalled();
+    expect(other.services.countAgentPublicPublishesSince).not.toHaveBeenCalled();
+
+    // An operator's removal is never republished, and not described either.
+    const removed = harness({ readCreationForPublish: vi.fn(async () => creation({ moderationRemovedAt: '2026-11-09T00:00:00Z' })) });
+    expect(toolFailureCode(await tool('publish_post').handle(args, removed.context))).toBe('NOT_FOUND');
+    expect(removed.services.publishGenerationToShowcaseForRoute).not.toHaveBeenCalled();
+    expect(removed.services.isOwnOrLinkedAccountId).not.toHaveBeenCalled();
+
+    const archived = harness({ readCreationForPublish: vi.fn(async () => creation({ archivedAt: '2026-11-09T00:00:00Z' })) });
+    const shelved = await tool('publish_post').handle(args, archived.context);
+    expect(toolFailureCode(shelved)).toBe('NOT_READY');
+    expect(structured(shelved).error).toMatchObject({ status: 'archived' });
+    expect(archived.services.publishGenerationToShowcaseForRoute).not.toHaveBeenCalled();
+
+    const running = harness({ readCreationForPublish: vi.fn(async () => creation({ status: 'processing' })) });
+    const notReady = await tool('publish_post').handle(args, running.context);
+    expect(toolFailureCode(notReady)).toBe('NOT_READY');
+    expect(structured(notReady).error).toMatchObject({ status: 'processing' });
+    expect(text(notReady)).toContain('get_generation');
+
+    const missing = harness({ readCreationForPublish: vi.fn(async () => null) });
+    expect(toolFailureCode(await tool('publish_post').handle(args, missing.context))).toBe('NOT_FOUND');
+
+    // A creation a linked guest identity made is the account's own.
+    const linked = harness({
+      readCreationForPublish: vi.fn(async () => creation({ userId: '99999999-9999-4999-8999-999999999999' })),
+      isOwnOrLinkedAccountId: vi.fn(async () => true) as never,
+    });
+    expect((await tool('publish_post').handle(args, linked.context)).isError).toBeUndefined();
+  });
+
+  it('answers the daily cap RATE_LIMITED with the next UTC midnight once the day holds ten public publications, and the web limit with its wait', async () => {
+    const capped = harness({ countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
+    const result = await tool('publish_post').handle(args, capped.context);
+    expect(toolFailureCode(result)).toBe('RATE_LIMITED');
+    // The clock stands at 1,000 seconds into 1970-01-01 UTC: the window ends at the next midnight.
+    expect(structured(result).error).toMatchObject({ retry_after_seconds: 86_400 - 1_000, reset_at: '1970-01-02T00:00:00.000Z', limit: 10, published_today: 10 });
+    expect(text(result)).toContain('10 public posts per UTC day');
+    expect(text(result)).toContain('1970-01-02T00:00:00.000Z');
+    expect(text(result)).toContain('visibility private');
+    expect(capped.services.publishGenerationToShowcaseForRoute).not.toHaveBeenCalled();
+    // Nine published today: the tenth goes through.
+    const room = harness({ countAgentPublicPublishesSince: vi.fn(async () => 9) as never });
+    expect((await tool('publish_post').handle(args, room.context)).isError).toBeUndefined();
+
+    const busy = harness({ enforceBackendRateLimit: vi.fn(async () => { throw rateLimit(90); }) as never });
+    const limited = await tool('publish_post').handle(args, busy.context);
+    expect(toolFailureCode(limited)).toBe('RATE_LIMITED');
+    expect(text(limited)).toContain('90 seconds');
+    expect(busy.services.countAgentPublicPublishesSince).not.toHaveBeenCalled();
+  });
+
+  it('spends nothing of the daily cap on a publish the service refuses: the cap counts publications, from the ledger', async () => {
+    const { context, services, records } = harness({
+      publishGenerationToShowcaseForRoute: vi.fn(async () => ({ ok: false, status: 400, body: { error: 'Add your name and handle to publish publicly.', field: 'profile' } })) as never,
+    });
+    const result = await runMcpTool(tool('publish_post'), args, context);
+    expect(toolFailureCode(result)).toBe('INVALID_REQUEST');
+    // The cap was read, never spent: the only limiter call is the web's own, and the ledger row
+    // of this call carries the refusal's code, which the count ignores.
+    expect(vi.mocked(services.enforceBackendRateLimit).mock.calls.map(([, options]) => options.scope)).toEqual([SHOWCASE_PUBLISH_RATE_LIMIT.scope]);
+    expect(services.countAgentPublicPublishesSince).toHaveBeenCalledTimes(1);
+    expect(records).toEqual([expect.objectContaining({ tool: 'publish_post', outcome: 'error', code: 'INVALID_REQUEST', generationId: GENERATION_ID, postId: null })]);
+  });
+
+  it('returns the existing post for a creation published before, with its real state, changing nothing, and changes only an explicit visibility', async () => {
+    const existing = creation({ post: { id: POST_ID, visibility: 'public', state: 'live' } });
+    const same = harness({ readCreationForPublish: vi.fn(async () => existing) });
+    const again = await tool('publish_post').handle(args, same.context);
+    expect(again.isError).toBeUndefined();
+    expect(structured(again)).toEqual({ post_id: POST_ID, post_url: `${SITE}/showcase/${POST_ID}`, visibility: 'public', state: 'live', already_published: true, visibility_changed: false });
+    expect(text(again)).toContain('already published');
+    expect(same.services.publishGenerationToShowcaseForRoute).not.toHaveBeenCalled();
+    expect(same.services.enforceBackendRateLimit).not.toHaveBeenCalled();
+    expect(same.services.countAgentPublicPublishesSince).not.toHaveBeenCalled();
+    // The same visibility named explicitly changes nothing either.
+    expect(structured(await tool('publish_post').handle({ ...args, visibility: 'public' }, same.context))).toMatchObject({ already_published: true, visibility_changed: false });
+
+    // A post moderation hid, or the creator archived, is not described as live.
+    const hidden = harness({ readCreationForPublish: vi.fn(async () => creation({ post: { id: POST_ID, visibility: 'public', state: 'hidden' } })) });
+    const described = await tool('publish_post').handle(args, hidden.context);
+    expect(structured(described)).toMatchObject({ already_published: true, visibility: 'public', state: 'hidden' });
+    expect(text(described)).toContain('public, but hidden');
+
+    const flip = harness({
+      readCreationForPublish: vi.fn(async () => existing),
+      publishGenerationToShowcaseForRoute: vi.fn(async () => published({ visibility: 'private', isPublic: false })) as never,
+    });
+    const madePrivate = await tool('publish_post').handle({ ...args, visibility: 'private' }, flip.context);
+    expect(structured(madePrivate)).toEqual({ post_id: POST_ID, post_url: `${SITE}/showcase/${POST_ID}`, visibility: 'private', state: 'private', already_published: true, visibility_changed: true });
+    // A visibility change alone: no text, no recipe, so the stored post is carried forward as it is.
+    expect(await publishBody(flip.services)).toEqual({ generationId: GENERATION_ID, visibility: 'private' });
+    // Going private counts no public post.
+    expect(vi.mocked(flip.services.enforceBackendRateLimit).mock.calls.map(([, options]) => options.scope)).toEqual([SHOWCASE_PUBLISH_RATE_LIMIT.scope]);
+    expect(flip.services.countAgentPublicPublishesSince).not.toHaveBeenCalled();
+
+    const open = harness({ readCreationForPublish: vi.fn(async () => creation({ post: { id: POST_ID, visibility: 'private', state: 'private' } })) });
+    const madePublic = await tool('publish_post').handle({ ...args, visibility: 'public' }, open.context);
+    expect(structured(madePublic)).toMatchObject({ visibility: 'public', state: 'live', already_published: true, visibility_changed: true });
+    // Going public is a public publication: the day's count is read.
+    expect(vi.mocked(open.services.enforceBackendRateLimit).mock.calls.map(([, options]) => options.scope)).toEqual([SHOWCASE_PUBLISH_RATE_LIMIT.scope]);
+    expect(open.services.countAgentPublicPublishesSince).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps the publish service\'s refusals to stable codes with the next step', async () => {
+    const cases: Array<[Record<string, unknown>, string, RegExp?]> = [
+      // The service's own refusals of another's or a missing creation answer alike, disclosing nothing.
+      [{ status: 403, body: { error: 'Unauthorized: You do not own this creation' } }, 'NOT_FOUND'],
+      [{ status: 404, body: { error: 'Generation not found' } }, 'NOT_FOUND'],
+      [{ status: 400, body: { error: 'Cannot publish a generation that has not succeeded' } }, 'NOT_READY'],
+      [{ status: 400, body: { error: 'This creation has no media to publish yet' } }, 'NOT_READY'],
+      [{ status: 400, body: { error: 'Add a title for your post.', field: 'title' } }, 'INVALID_REQUEST'],
+      [{ status: 400, body: { error: 'A recipe needs a title of at least 6 characters.', field: 'title', code: 'RECIPE_TITLE_TOO_SHORT' } }, 'INVALID_REQUEST'],
+      [{ status: 400, body: { error: 'Share the recipe or post without one.', code: 'CREATION_RECIPE_REQUIRED', field: 'resourceBundle' } }, 'INVALID_REQUEST', /allow_remixes false/u],
+      [{ status: 409, body: { error: 'People have already unlocked this recipe.', code: 'RESOURCE_BUNDLE_LOCKED' } }, 'CONFLICT'],
+      [{ status: 500, body: { error: 'Failed to sync showcase post' } }, 'UNAVAILABLE'],
+    ];
+    for (const [answer, code, words] of cases) {
+      const { context } = harness({ publishGenerationToShowcaseForRoute: vi.fn(async () => ({ ok: false, ...answer })) as never });
+      const result = await tool('publish_post').handle(args, context);
+      expect(toolFailureCode(result), JSON.stringify(answer)).toBe(code);
+      if (words) expect(text(result)).toMatch(words);
+      if (code === 'INVALID_REQUEST' && (answer.body as { field?: string }).field === 'title') {
+        expect(structured(result).error).toMatchObject({ field_errors: { title: expect.any(String) } });
+      }
+    }
+  });
+});
+
+describe('get_post', () => {
+  it('reads a post through the agent read, with its state, link and the page\'s counts', async () => {
+    const { context, services, admin } = harness();
+    const result = await tool('get_post').handle({ post_id: POST_ID }, context);
+    expect(result.isError).toBeUndefined();
+    expect(structured(result)).toEqual({
+      post_id: POST_ID,
+      post_url: `${SITE}/showcase/${POST_ID}`,
+      generation_id: GENERATION_ID,
+      title: 'Red bicycle',
+      description: null,
+      body: null,
+      category: 'image',
+      visibility: 'public',
+      state: 'live',
+      is_nsfw: false,
+      allow_remixes: true,
+      counts: { saves: 3, comments: 1, remixes: 0, shares: 2 },
+      created_at: '2026-11-09T10:00:00Z',
+      is_own: true,
+    });
+    expect(text(result)).toContain('3 saves, 1 comment, 0 remixes, 2 shares');
+    expect(services.readPostForAgent).toHaveBeenCalledWith(admin, { postId: POST_ID, viewerUserId: USER_ID });
+
+    const hidden = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ state: 'hidden', visibility: 'public' }) })) as never });
+    expect(text(await tool('get_post').handle({ post_id: POST_ID }, hidden.context))).toContain('hidden by moderation');
+  });
+
+  it('answers NOT_FOUND for a post the agent may not see, and UNAVAILABLE for a failed read', async () => {
+    const missing = harness({ readPostForAgent: vi.fn(async () => ({ ok: false, code: 'NOT_FOUND' })) as never });
+    expect(toolFailureCode(await tool('get_post').handle({ post_id: POST_ID }, missing.context))).toBe('NOT_FOUND');
+    const down = harness({ readPostForAgent: vi.fn(async () => ({ ok: false, code: 'UNAVAILABLE' })) as never });
+    expect(toolFailureCode(await tool('get_post').handle({ post_id: POST_ID }, down.context))).toBe('UNAVAILABLE');
+  });
+
+  it('reads under the library limit, as every read does', async () => {
+    const { context, services } = harness();
+    await tool('get_post').handle({ post_id: POST_ID }, context);
+    expect(vi.mocked(services.enforceBackendRateLimit).mock.calls.map(([, options]) => options.scope)).toEqual(['owner-generations:read']);
+
+    const limited = harness({ enforceBackendRateLimit: vi.fn(async () => { throw rateLimit(12); }) as never });
+    const result = await tool('get_post').handle({ post_id: POST_ID }, limited.context);
+    expect(toolFailureCode(result)).toBe('RATE_LIMITED');
+    expect(limited.services.readPostForAgent).not.toHaveBeenCalled();
+  });
+});
+
+describe('delete_post', () => {
+  it('deletes the creator\'s own post through the delete service, without force unless asked', async () => {
+    const { context, services, admin } = harness();
+    const result = await tool('delete_post').handle({ post_id: POST_ID }, context);
+    expect(result.isError).toBeUndefined();
+    expect(structured(result)).toEqual({ post_id: POST_ID, deleted: true, tombstoned: false });
+    expect(services.deleteOwnerPostForRoute).toHaveBeenCalledWith({ adminSupabase: admin, ownerUserId: USER_ID, postId: POST_ID, forceDelete: false });
+
+    await tool('delete_post').handle({ post_id: POST_ID, force: true }, context);
+    expect(services.deleteOwnerPostForRoute).toHaveBeenLastCalledWith(expect.objectContaining({ forceDelete: true }));
+  });
+
+  it('refuses another creator\'s post (NOT_OWNER), one the agent may not see (NOT_FOUND), and asks before taking a post with buyers down', async () => {
+    const other = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ isOwn: false, ownerUserId: '99999999-9999-4999-8999-999999999999' }) })) as never });
+    expect(toolFailureCode(await tool('delete_post').handle({ post_id: POST_ID }, other.context))).toBe('NOT_OWNER');
+    expect(other.services.deleteOwnerPostForRoute).not.toHaveBeenCalled();
+
+    const missing = harness({ readPostForAgent: vi.fn(async () => ({ ok: false, code: 'NOT_FOUND' })) as never });
+    expect(toolFailureCode(await tool('delete_post').handle({ post_id: POST_ID }, missing.context))).toBe('NOT_FOUND');
+
+    const buyers = harness({
+      deleteOwnerPostForRoute: vi.fn(async () => ({ ok: false, status: 409, body: { error: 'People have already unlocked this post.', requiresForceDelete: true } })) as never,
+    });
+    const refused = await tool('delete_post').handle({ post_id: POST_ID }, buyers.context);
+    expect(toolFailureCode(refused)).toBe('POST_HAS_BUYERS');
+    expect(text(refused)).toContain('force true');
+
+    const tombstoned = harness({ deleteOwnerPostForRoute: vi.fn(async () => ({ ok: true, body: { success: true, deleted: true, tombstoned: true } })) as never });
+    const result = await tool('delete_post').handle({ post_id: POST_ID, force: true }, tombstoned.context);
+    expect(structured(result)).toMatchObject({ deleted: true, tombstoned: true });
+    expect(text(result)).toContain('keep their copy');
+
+    const limited = harness({
+      deleteOwnerPostForRoute: vi.fn(async () => ({ ok: false, status: 429, rateLimitError: rateLimit(30), body: { error: 'Too many', code: 'RATE_LIMITED', retryAfterSeconds: 30, limit: 60, resetAt: 'x' } })) as never,
+    });
+    expect(structured(await tool('delete_post').handle({ post_id: POST_ID }, limited.context)).error).toMatchObject({ code: 'RATE_LIMITED', retry_after_seconds: 30 });
+  });
+});
+
 describe('running a tool', () => {
+  it('records the creation and the post a call was about, from its answer or its arguments', async () => {
+    const { context, records } = harness();
+    await runMcpTool(tool('publish_post'), { generation_id: GENERATION_ID, title: 'Red bicycle at dawn' }, context);
+    expect(records[0]).toEqual(expect.objectContaining({ tool: 'publish_post', outcome: 'ok', code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PUBLIC, generationId: GENERATION_ID, postId: POST_ID, costCredits: null }));
+    await runMcpTool(tool('get_post'), { post_id: POST_ID }, context);
+    expect(records[1]).toEqual(expect.objectContaining({ tool: 'get_post', outcome: 'ok', code: null, generationId: GENERATION_ID, postId: POST_ID }));
+
+    const missing = harness({ readPostForAgent: vi.fn(async () => ({ ok: false, code: 'NOT_FOUND' })) as never });
+    await runMcpTool(tool('delete_post'), { post_id: POST_ID }, missing.context);
+    // A refusal names the post it was asked about, from the arguments.
+    expect(missing.records[0]).toEqual(expect.objectContaining({ tool: 'delete_post', outcome: 'error', code: 'NOT_FOUND', postId: POST_ID, generationId: null }));
+    // An argument that is not a UUID is no id.
+    await runMcpTool(tool('get_post'), { post_id: 'not-a-uuid' }, missing.context);
+    expect(missing.records[1]).toEqual(expect.objectContaining({ postId: null }));
+  });
+
+  it('records which answer a publish gave, and names a post only where the agent made or changed one', async () => {
+    const publish = { generation_id: GENERATION_ID, title: 'Red bicycle at dawn' };
+    // A republish that changed nothing: the post was the creator's doing, not the agent's.
+    const unchanged = harness({ readCreationForPublish: vi.fn(async () => creation({ post: { id: POST_ID, visibility: 'public', state: 'live' } })) });
+    await runMcpTool(tool('publish_post'), publish, unchanged.context);
+    expect(unchanged.records[0]).toEqual(expect.objectContaining({ outcome: 'ok', code: AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED, postId: null, generationId: GENERATION_ID }));
+
+    const madePrivate = harness({
+      readCreationForPublish: vi.fn(async () => creation({ post: { id: POST_ID, visibility: 'public', state: 'live' } })),
+      publishGenerationToShowcaseForRoute: vi.fn(async () => published({ visibility: 'private', isPublic: false })) as never,
+    });
+    await runMcpTool(tool('publish_post'), { ...publish, visibility: 'private' }, madePrivate.context);
+    expect(madePrivate.records[0]).toEqual(expect.objectContaining({ code: AGENT_PUBLISH_RECORD_CODES.MADE_PRIVATE, postId: POST_ID }));
+
+    const madePublic = harness({ readCreationForPublish: vi.fn(async () => creation({ post: { id: POST_ID, visibility: 'private', state: 'private' } })) });
+    await runMcpTool(tool('publish_post'), { ...publish, visibility: 'public' }, madePublic.context);
+    expect(madePublic.records[0]).toEqual(expect.objectContaining({ code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PUBLIC, postId: POST_ID }));
+
+    const privately = harness({
+      publishGenerationToShowcaseForRoute: vi.fn(async () => published({ visibility: 'private', isPublic: false, resourceBundleStatus: null })) as never,
+    });
+    await runMcpTool(tool('publish_post'), { ...publish, visibility: 'private' }, privately.context);
+    expect(privately.records[0]).toEqual(expect.objectContaining({ code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PRIVATE, postId: POST_ID }));
+  });
+
   it('records one call with its outcome and code, a cost only where the creator was charged, and turns a thrown error into an INTERNAL_ERROR result', async () => {
     const { context, records } = harness();
     // A quote's cost_credits is a price, not a charge: the log must not count it as spend.
     await runMcpTool(tool('quote_generation'), { kind: 'image', model_id: 'img-1' }, context);
-    expect(records).toEqual([expect.objectContaining({ tool: 'quote_generation', outcome: 'ok', code: null, costCredits: null })]);
+    expect(records).toEqual([expect.objectContaining({ tool: 'quote_generation', outcome: 'ok', code: null, costCredits: null, generationId: null, postId: null })]);
     await runMcpTool(tool('create_media'), {
       kind: 'image', model_id: 'img-1', catalog_revision: 'rev-1', prompt: 'a red bicycle', expected_cost_credits: 19, idempotency_key: 'run-7',
     }, context);
-    expect(records[1]).toEqual(expect.objectContaining({ tool: 'create_media', outcome: 'ok', costCredits: 19 }));
+    expect(records[1]).toEqual(expect.objectContaining({ tool: 'create_media', outcome: 'ok', costCredits: 19, generationId: GENERATION_ID }));
     await runMcpTool(tool('enhance_prompt'), { prompt: 'red bike', medium: 'image', model_id: 'img-1' }, context);
     expect(records[2]).toEqual(expect.objectContaining({ tool: 'enhance_prompt', outcome: 'ok', costCredits: 1 }));
 

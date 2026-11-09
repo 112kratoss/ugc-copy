@@ -28,7 +28,7 @@ The marketplace lives in Magic Booklet's app repository. To check out only the p
 claude plugin marketplace add 112kratoss/ugc-copy --sparse .claude-plugin plugins
 ```
 
-The Claude Code block on [magicbooklet.com/developers/mcp](https://magicbooklet.com/developers/mcp#claude-code) says whether Claude Code can sign in yet: while it shows "Coming soon", the plugin installs but cannot sign in. The same page sets the server up without the plugin, and in Claude.ai, ChatGPT, Codex and Cursor. Use the plugin or a server you added yourself, not both.
+[magicbooklet.com/developers/mcp](https://magicbooklet.com/developers/mcp#claude-code) sets the server up without the plugin, and in the other clients it supports. Use the plugin or a server you added yourself, not both.
 
 ## Your credits and your account
 

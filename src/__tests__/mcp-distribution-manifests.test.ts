@@ -77,11 +77,12 @@ const NEVER_PRE_APPROVED = ['create_media', 'enhance_prompt', 'publish_post', 'd
 const PLUGIN_TOOL_PREFIX = `mcp__plugin_${MCP_PLUGIN_NAME}_${MCP_SERVER_KEY}__`;
 
 /**
- * Tools the skills name that the server does not offer yet: phase 2's publishing and input tools
- * (`docs/plans/agent-mcp-server-plan-2026-11-09.md`, "Phase 2"). The day phase 2 lands they are in
- * `MCP_TOOLS`, and the test asks for each one to leave this list, so it only ever shrinks.
+ * Tools a skill may name before the server offers them, while the release that adds them is on its
+ * way. Empty since phase 2 (#749) shipped `publish_post`, `get_post`, `delete_post` and
+ * `upload_input`, so every name a skill uses is held to `MCP_TOOLS`. A name goes in only for the
+ * time between a skill and its tool landing, and the test asks for it to leave once it is offered.
  */
-const COMING_TOOLS = ['publish_post', 'get_post', 'delete_post', 'upload_input'];
+const COMING_TOOLS: readonly string[] = [];
 
 /**
  * A backticked name in a skill's body that reads as a tool: a verb, then what it acts on

@@ -267,6 +267,11 @@ and connect once from each.
 
 ### Phase 2 — job 2 (publish) and inputs
 
+Status: built 2026-11-10 on `feat/mcp-phase2` (the four tools, the `agent_tool_calls` migration
+and its audit write, `AGENT_PUBLISH_RATE_LIMIT`, Connected apps on `/profile/edit`, the
+moderation filter, image blocks); the owner's steps below are open. The post page is
+`/showcase/<id>`, so `post_url` names that, not `/post/<id>`.
+
 - `publish_post`, `get_post`, `delete_post`, `upload_input` in the registry.
 - Migration `agent_tool_calls` (id, user_id, client_id, tool, ok, generation_id, post_id,
   cost_credits, created_at; owner-read RLS; service-role write) with its `*-migration.test.ts`
@@ -288,10 +293,11 @@ skills, the registry entry and its `/.well-known/mcp-registry-auth` proof, and
 pre-registered public clients (runbook, "Distribution", which also has the Codex redirect URI
 Codex derives). The production clients for Claude, Claude Code, Cursor and Codex were registered
 on 2026-11-09, and the Codex client gained that derived redirect on 2026-11-10 (runbook,
-"Registered clients"). Merge order: phase 2 first, then this branch, whose page and skills
-describe phase 2's publishing as live. Left: ChatGPT's client (after its connector), one real
-Codex sign-in (runbook, switch-on check 5), the owner's steps below (the registry publish only
-once phase 2 is live), and `run_template`, still waiting for its usage check.
+"Registered clients"). Phase 2 merged first (#749) and this branch took it in, so the page's and
+the skills' publishing and Connected apps are live with this branch's release, and the registry
+entry is version 1.1.0, the server's. Left: ChatGPT's client (after its connector), one real Codex
+sign-in (runbook, switch-on check 5), the owner's steps below (the registry publish once this
+branch is released), and `run_template`, still waiting for its usage check.
 
 - `src/app/developers/mcp/page.tsx` — the setup page: one command or form per client, what the
   agent can do, how to revoke.

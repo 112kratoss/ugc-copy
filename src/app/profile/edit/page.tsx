@@ -3,6 +3,7 @@ import { ArrowLeft, Sparkles } from 'lucide-react';
 
 import DeferredCreatorProfileCard from '../DeferredCreatorProfileCard';
 import { loadOwnerProfile } from '../load-owner-profile';
+import ConnectedApps from './ConnectedApps';
 
 export default async function EditProfilePage() {
   const { initialProfile, loadError } = await loadOwnerProfile('/profile/edit');
@@ -36,6 +37,9 @@ export default async function EditProfilePage() {
           collapseOptionalDetails
           hideIntro
         />
+
+        {/* The agents this account approved through the MCP server's consent screen, each with Disconnect. */}
+        <ConnectedApps />
       </div>
     </div>
   );

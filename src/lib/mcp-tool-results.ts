@@ -20,8 +20,12 @@ export const MCP_ERROR_CODES = {
   INSUFFICIENT_CREDITS: 'INSUFFICIENT_CREDITS',
   /** The creator's own limit for this action is spent; wait `retry_after_seconds`. */
   RATE_LIMITED: 'RATE_LIMITED',
-  /** No such creation of this creator's, or no such model. */
+  /** No such creation of this creator's, no such post the agent may see, or no such model. */
   NOT_FOUND: 'NOT_FOUND',
+  /** The creation or the post exists but is another creator's; only its owner may publish or delete it. */
+  NOT_OWNER: 'NOT_OWNER',
+  /** The creation has not succeeded yet (or has no media), so it cannot be published; wait for get_generation. */
+  NOT_READY: 'NOT_READY',
   /** The catalog, the provider or a read is unavailable right now; try again shortly. */
   UNAVAILABLE: 'UNAVAILABLE',
   /** The arguments do not describe a run or a request the service takes; `field_errors` says which. */

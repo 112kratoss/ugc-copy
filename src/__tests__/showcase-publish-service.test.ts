@@ -2695,7 +2695,7 @@ describe('a creation’s recipe as the publish saves it', () => {
   // #677's re-reviews: the inputs were held back, but the exact prompt, which
   // Remix withholds from such a creation, still went in, added by the server
   // or sent as the composer's locked card.
-  it('adds nothing of a creation an operator removed, takes out the locked card sent for it, and says so', async () => {
+  it('adds nothing of a creation its creator archived, takes out the locked card sent for it, and says so', async () => {
     const lockedCard = {
       id: 'creation-prompt', type: 'prompt', role: 'primary', sectionId: null, title: 'Exact generation prompt',
       textContent: 'A product still lit like a window display.', sortOrder: 1, isPrimary: false, remixUse: 'text_template',
@@ -2703,12 +2703,26 @@ describe('a creation’s recipe as the publish saves it', () => {
     const { result, dependencies, written } = await publish(
       { includeGenerationReferences: true, resourceBundle: recipe([note, lockedCard]) },
       {},
-      { moderation_removed_at: '2026-11-02T00:00:00.000Z', archived_at: '2026-11-02T00:00:00.000Z' },
+      { archived_at: '2026-11-02T00:00:00.000Z' },
     );
 
     expect(result).toMatchObject({ ok: true, body: { recipeItemsAdded: [], referencesNotCopied: 1 } });
     expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
     expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes']);
+  });
+
+  // The MCP server's review (2026-11-10): an operator's removal was never republished by the web
+  // only because nothing in it offered a removed creation; a publish by id must refuse it.
+  it('refuses to publish a creation an operator removed, as plain not found, on every route', async () => {
+    const { result, dependencies } = await publish(
+      { title: 'Back again', resourceBundle: recipe([note]) },
+      {},
+      { moderation_removed_at: '2026-11-02T00:00:00.000Z' },
+    );
+
+    expect(result).toEqual({ ok: false, status: 404, body: { error: 'Generation not found' } });
+    expect(dependencies.publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
   });
 
   // #677's re-reviews: a publish writes over the creation's post as an edit

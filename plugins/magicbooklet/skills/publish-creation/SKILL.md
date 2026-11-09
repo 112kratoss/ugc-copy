@@ -13,8 +13,6 @@ A post goes out under the person's name, on their profile and in Explore. Publis
 
 If the Magic Booklet tools are missing, the server is not signed in: tell the person to run `/mcp`, pick the magicbooklet server and choose Authenticate.
 
-If `publish_post` is not among the Magic Booklet tools, this connection cannot publish yet: stop, say so, and tell the person they can post the creation on magicbooklet.com instead.
-
 ## 1. Pick the creation
 
 If they named one (a link, an id, or the run you just made), use it. Otherwise call `list_creations` and show the newest finished ones (`status` succeeded) with their links, and let them choose. A creation marked `posted` already has a post: ask before posting it again.

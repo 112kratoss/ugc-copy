@@ -83,6 +83,8 @@ function harness(overrides: {
   admission?: unknown;
   env?: Record<string, string | undefined>;
   services?: Partial<McpToolServices>;
+  /** The audit insert's answer; an error here must never reach the agent. */
+  auditInsert?: () => Promise<{ error: unknown }>;
 } = {}) {
   const identityClient = identity(overrides.claims === undefined ? AGENT_CLAIMS : overrides.claims, overrides.admission);
   const userClients: Array<{ request: Request; client: ReturnType<typeof routeClient> }> = [];
@@ -92,8 +94,16 @@ function harness(overrides: {
     userClients.push({ request, client });
     return client as unknown as SupabaseClient;
   });
-  const admin = { from: vi.fn() } as unknown as SupabaseClient;
+  const insert = vi.fn(overrides.auditInsert ?? (async () => ({ error: null })));
+  const from = vi.fn((table: string) => {
+    if (table !== 'agent_tool_calls') throw new Error(`unexpected table ${table}`);
+    return { insert };
+  });
+  const admin = { from } as unknown as SupabaseClient;
   const log = vi.fn();
+  // The route's `after`: every task is kept so a test can wait for the audit row behind the answer.
+  const deferred: Array<Promise<unknown>> = [];
+  const runAfterResponse = vi.fn((task: () => Promise<unknown>) => { deferred.push(task()); });
   const listOwnerGenerationsForRoute = vi.fn(async () => summaryPayload());
   const dependencies: McpRouteDependencies = {
     identity: { createUserClient: () => identityClient },
@@ -102,6 +112,7 @@ function harness(overrides: {
     siteUrl: SITE,
     kieApiKey: 'kie-test-key',
     log,
+    runAfterResponse,
     env: overrides.env ?? {},
     services: {
       listOwnerGenerationsForRoute: listOwnerGenerationsForRoute as unknown as McpToolServices['listOwnerGenerationsForRoute'],
@@ -109,7 +120,17 @@ function harness(overrides: {
       ...overrides.services,
     },
   };
-  return { handlers: createMcpRouteHandlers(dependencies), identityClient, createUserClient, userClients, log, listOwnerGenerationsForRoute };
+  return {
+    handlers: createMcpRouteHandlers(dependencies),
+    identityClient,
+    createUserClient,
+    userClients,
+    log,
+    listOwnerGenerationsForRoute,
+    insert,
+    runAfterResponse,
+    settled: async () => { await Promise.all(deferred); },
+  };
 }
 
 describe('MCP route adapter', () => {
@@ -291,9 +312,55 @@ describe('MCP route adapter', () => {
     expect(toolCalls).toHaveLength(1);
     const [level, , fields] = toolCalls[0] as [string, string, Record<string, unknown>];
     expect(level).toBe('info');
-    expect(fields).toMatchObject({ clientId: 'client-claude', userId: USER_ID, tool: 'list_creations', outcome: 'ok', code: null });
+    expect(fields).toMatchObject({ clientId: 'client-claude', userId: USER_ID, tool: 'list_creations', outcome: 'ok', code: null, generationId: null, postId: null });
     expect(typeof fields.elapsedMs).toBe('number');
     expect(JSON.stringify(fields)).not.toContain('bicycle');
+  });
+
+  it('writes one audit row per tool call behind the answer, under the service role, with the ids and never the prompt', async () => {
+    const { handlers, insert, runAfterResponse, settled } = harness();
+    const response = await handlers.POST(rpc('tools/call', { name: 'get_generation', arguments: { generation_id: GENERATION_ID } }));
+    expect(response.status).toBe(200);
+    expect((await response.json()).result.isError).toBeUndefined();
+    // Scheduled behind the answer, not awaited in front of it.
+    expect(runAfterResponse).toHaveBeenCalledTimes(1);
+    await settled();
+    expect(insert).toHaveBeenCalledTimes(1);
+    expect(insert).toHaveBeenCalledWith({
+      user_id: USER_ID,
+      client_id: 'client-claude',
+      tool: 'get_generation',
+      ok: true,
+      code: null,
+      generation_id: GENERATION_ID,
+      post_id: null,
+      cost_credits: null,
+    });
+    expect(JSON.stringify(insert.mock.calls)).not.toContain('bicycle');
+  });
+
+  it('records a refusal with its code, and a failed audit write never fails the tool\'s answer', async () => {
+    const { handlers, insert, log, settled } = harness({
+      auditInsert: async () => ({ error: { message: 'permission denied for table agent_tool_calls' } }),
+      services: {
+        listOwnerGenerationsForRoute: vi.fn(async () => ({
+          generations: [],
+          pagination: { limit: 1, hasMore: false, nextCursor: null },
+        })) as unknown as McpToolServices['listOwnerGenerationsForRoute'],
+      },
+    });
+    const response = await handlers.POST(rpc('tools/call', { name: 'get_generation', arguments: { generation_id: GENERATION_ID } }));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.result.isError).toBe(true);
+    expect(body.result.structuredContent.error.code).toBe('NOT_FOUND');
+    await settled();
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ tool: 'get_generation', ok: false, code: 'NOT_FOUND', generation_id: GENERATION_ID }));
+    // The failure is the operator's to see in the log, not the agent's.
+    const warnings = log.mock.calls.filter(([, event]) => event === 'mcp_tool_call_record_failed');
+    expect(warnings).toEqual([['warn', 'mcp_tool_call_record_failed', expect.objectContaining({
+      tool: 'get_generation', clientId: 'client-claude', userId: USER_ID, error: { message: 'permission denied for table agent_tool_calls' },
+    })]]);
   });
 
   it('answers a tool failure as a tool result with its code, logged as a warning', async () => {
@@ -318,7 +385,7 @@ describe('MCP route adapter', () => {
 
   it('answers an unknown tool as a JSON-RPC error, not a crash', async () => {
     const { handlers } = harness();
-    const response = await handlers.POST(rpc('tools/call', { name: 'publish_post', arguments: {} }));
+    const response = await handlers.POST(rpc('tools/call', { name: 'frobnicate_post', arguments: {} }));
     const body = await response.json();
     expect(body.error ?? body.result?.isError).toBeTruthy();
   });
