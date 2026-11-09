@@ -31,6 +31,7 @@ import { useNavigationBarSurface } from '@/lib/system-bars';
 import { appTheme, mediaColors, SIGN_IN_WALL_SHADE } from '@/lib/theme';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import { useHardwareBack } from '@/lib/use-hardware-back';
+import { useWelcomePromise } from '@/lib/welcome-promise';
 
 const SIDE = 20;
 /** The page turning between its two halves: quick enough to feel like one page. */
@@ -78,6 +79,7 @@ function SignInWallBody({
   emailNotice = null,
 }: SignInWallProps) {
   const theme = useAppTheme();
+  const welcomePromise = useWelcomePromise();
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
   const reducedMotion = useReducedMotion();
@@ -296,8 +298,12 @@ function SignInWallBody({
 
           <View style={{ flex: 1, minHeight: 24 }} />
 
+          {/* The welcome credits, unless an account on this phone has had them
+              (owner, 2026-11-09; `lib/welcome-promise.ts`). */}
           <AppText variant="body" style={{ color: mediaColors.onMedia, textAlign: 'center', marginBottom: 14 }}>
-            Join free and get <Text style={{ fontWeight: '700' }}>25 credits</Text> to start
+            {welcomePromise ? (
+              <>Join free and get <Text style={{ fontWeight: '700' }}>25 credits</Text> to start</>
+            ) : 'Sign in or join free to start creating.'}
           </AppText>
 
           {notice ? (

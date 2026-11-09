@@ -1,7 +1,7 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { readFileSync } from 'node:fs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Effects and state updates flush inside act(), as React expects of a test renderer.
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -187,12 +187,24 @@ vi.mock('@/lib/use-hardware-back', () => ({
 }));
 
 vi.mock('../assets/images/sign-in-wall/wall-01.jpg', () => ({ default: 1 }));
+// The phone's record of whether its account has had the welcome credits: none.
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: () => Promise.resolve(null),
+    setItem: () => Promise.resolve(),
+    removeItem: () => Promise.resolve(),
+  },
+}));
 
 import AuthRoute from '../app/auth';
 import JoinScreen from '../app/join';
 import { EmailSignInForm } from '../components/email-sign-in-form';
 import { MEDIA_WALL_TILES, mediaWallColumn, mediaWallGeometry } from '../components/media-wall';
 import { signInOpensOnEmailForm } from '../lib/join-navigation';
+import { rememberWelcomeAnswer, resetWelcomePromiseForTests } from '../lib/welcome-promise';
+
+// The phone's welcome-credit record is a module singleton: each test starts on a fresh launch.
+afterEach(() => resetWelcomePromiseForTests());
 
 async function routerMock() {
   const { router } = await import('expo-router');
@@ -263,6 +275,22 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     expect(tree.root.findByProps({ accessibilityLabel: 'Continue with Apple' }).props.buttonStyle).toBe('WHITE');
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Continue with Google' }).length).toBeGreaterThan(0);
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Email' })).toHaveLength(0);
+  });
+
+  it('promises the welcome credits, unless an account on this phone has had them (owner 11-09)', () => {
+    paramsState.params = { returnTo: '/profile' };
+    let tree = render(<JoinScreen />);
+    expect(JSON.stringify(tree.toJSON())).toContain('Join free and get ');
+    renderer.act(() => tree.unmount());
+
+    renderer.act(() => {
+      rememberWelcomeAnswer('claimed');
+    });
+    tree = render(<JoinScreen />);
+    const text = JSON.stringify(tree.toJSON());
+    expect(text).toContain('Sign in or join free to start creating.');
+    expect(text).not.toContain('25 credits');
+    renderer.act(() => tree.unmount());
   });
 
   /** The email half's form, where the fields and its own Apple and Google sit. */

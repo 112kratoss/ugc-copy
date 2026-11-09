@@ -1,4 +1,5 @@
 import { useQuery, type QueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 
 import { useAuth } from './auth';
 import { useOnboarding } from './onboarding';
@@ -8,6 +9,7 @@ import {
   type OnboardingDestination,
 } from './onboarding-destination';
 import type { WelcomeCreditResponse } from './types';
+import { rememberWelcomeAnswer } from './welcome-promise';
 
 const WELCOME_CREDITS_QUERY_SCOPE = 'welcome-credits';
 
@@ -23,7 +25,8 @@ export function welcomeCreditsQueryKey(userId: string | undefined) {
  * back here keeps the start-up reopen (`components/setup-reopen.tsx`) from
  * judging a setup unfinished from the copy it took at sign-in (the removed
  * Home card once reopened a finished flow that way). Seeding the cache costs
- * no request.
+ * no request. The phone learns the answer from there too, when it is the
+ * signed-in account's (`useWelcomeCreditsQuery`).
  */
 export function primeWelcomeCredits(
   queryClient: Pick<QueryClient, 'setQueryData'>,
@@ -60,7 +63,7 @@ export function invalidateWelcomeCredits(queryClient: Pick<QueryClient, 'invalid
  */
 export function useWelcomeCreditsQuery() {
   const { api, user } = useAuth();
-  return useQuery<WelcomeCreditResponse>({
+  const query = useQuery<WelcomeCreditResponse>({
     queryKey: welcomeCreditsQueryKey(user?.id),
     enabled: Boolean(user),
     queryFn: () => api.getWelcomeCredits(),
@@ -69,6 +72,15 @@ export function useWelcomeCreditsQuery() {
     // launch, and again only when Edit Profile or a claimed name invalidates it.
     staleTime: (query) => (isWelcomeCreditAnswerSettled(query.state.data) ? Infinity : WELCOME_CREDITS_STALE_MS),
   });
+  // What the phone promises the next signed-out visitor follows the account
+  // signed in now (`lib/welcome-promise.ts`), read from the answer under that
+  // account's own key: a fetch or a prime still in flight when the account
+  // changed lands under the old account's key and is never seen here.
+  const status = user ? query.data?.status : undefined;
+  useEffect(() => {
+    if (status) rememberWelcomeAnswer(status);
+  }, [status]);
+  return query;
 }
 
 const WELCOME_CREDITS_STALE_MS = 1000 * 60;
