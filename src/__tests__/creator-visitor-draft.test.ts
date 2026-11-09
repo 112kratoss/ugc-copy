@@ -131,4 +131,34 @@ describe('a visitor’s creator draft and the sign-in that comes back for it', (
       setItem.mockRestore();
     }
   });
+
+  // The creators open the sign-in page in place of their sign-up sheet (owner, 2026-11-09).
+  it('sends a visitor’s press to the sign-in page, back to this creator with the draft marked for the account', async () => {
+    const { creatorSignInPath, hasVisitorDraftHandover } = await loadModule();
+
+    const path = creatorSignInPath('video', true, '/create-video?prompt=boat&model=kling-3.0-video&welcome=1');
+
+    const url = new URL(path, 'https://magicbooklet.com');
+    expect(url.pathname).toBe('/login');
+    const returnUrl = url.searchParams.get('returnUrl') ?? '';
+    // The link's own settings go: the saved draft carries them back, edits included.
+    expect(returnUrl).toMatch(/^\/create-video\?handover=[A-Za-z0-9-]{8,64}$/);
+    const nonce = new URL(returnUrl, 'https://magicbooklet.com').searchParams.get('handover');
+    expect(hasVisitorDraftHandover('video', nonce)).toBe(true);
+  });
+
+  it('marks nothing for a page whose draft is an account’s, and comes back to it as it was', async () => {
+    const { creatorSignInPath } = await loadModule();
+
+    expect(creatorSignInPath('image', false, '/create-image?prompt=boat&welcome=1'))
+      .toBe(`/login?returnUrl=${encodeURIComponent('/create-image?prompt=boat')}`);
+    expect(window.localStorage.getItem(MARK_KEY)).toBeNull();
+  });
+
+  it('reads the address the page is at when none is given', async () => {
+    const { creatorSignInPath } = await loadModule();
+    window.history.replaceState(null, '', '/create-motion?prompt=dance');
+
+    expect(creatorSignInPath('motion', false)).toBe(`/login?returnUrl=${encodeURIComponent('/create-motion?prompt=dance')}`);
+  });
 });

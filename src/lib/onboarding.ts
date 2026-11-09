@@ -2,6 +2,14 @@ export const ONBOARDING_FLOW_VERSION = 1;
 export const ONBOARDING_VARIANT = 'creator_pack_v1';
 export const WELCOME_CREDIT_PROGRAM_KEY = 'welcome_credits_v1';
 
+/**
+ * The welcome credits a sign-up prompt names where the program's own amount is not at hand: the
+ * top bar's "Sign in · 25 free credits", drawn on every page before any request. The app's Home
+ * names the same 25 (`ugc-mobile/components/home-dashboard.tsx`). What an account is given is the
+ * program's (`credit_grant_programs`), which the sign-in page and the creators read and say.
+ */
+export const WELCOME_CREDITS_SHOWN = 25;
+
 export const onboardingGoals = ['image', 'video', 'motion'] as const;
 export type OnboardingGoal = (typeof onboardingGoals)[number];
 
