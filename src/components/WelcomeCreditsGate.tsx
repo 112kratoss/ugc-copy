@@ -18,7 +18,6 @@ import {
 import { readWelcomeCredits, type WelcomeCreditAnswer } from '@/lib/welcome-credits-requests';
 
 import { shouldShowWelcomePopup } from '../../ugc-mobile/lib/welcome-popup-policy/welcome-popup-policy';
-import { recordWelcomeAnswer } from '@/lib/welcome-promise';
 
 // The card, its claim and its confetti load only for an account it is offered to.
 const WelcomeCreditsPopup = dynamic(() => import('./WelcomeCreditsPopup'), { ssr: false, loading: () => null });
@@ -83,15 +82,9 @@ export default function WelcomeCreditsGate({ offeredHere, returned, page = '' }:
     return () => window.removeEventListener(WELCOME_OFFER_CHANGED_EVENT, askAgain);
   }, []);
 
-  const settledHere = userId !== null && isWelcomeSettledHere(userId);
-  const quietHere = userId !== null && (wasWelcomePopupClosedThisSession(userId) || settledHere);
-
-  // An account this browser knows has had its credits is never asked again, so the read below
-  // (which teaches the signed-out promise, welcome-promise.ts) never runs for it: say it here,
-  // or a browser that settled it before the promise existed keeps promising them after sign-out.
-  useEffect(() => {
-    if (settledHere) recordWelcomeAnswer('claimed');
-  }, [settledHere]);
+  // The signed-out promise is not this gate's: the header ends it for any account it keeps
+  // (`welcome-promise.ts`), so an account never asked here needs nothing from it.
+  const quietHere = userId !== null && (wasWelcomePopupClosedThisSession(userId) || isWelcomeSettledHere(userId));
   const answerHere = answer && answer.userId === userId ? answer : null;
   // The last answer read, consulted (not followed) by the read below.
   const kept = useRef<Answer | null>(null);

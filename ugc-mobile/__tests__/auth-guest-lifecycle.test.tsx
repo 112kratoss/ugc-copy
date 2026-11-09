@@ -24,6 +24,8 @@ const state = vi.hoisted(() => {
     clearSearchHistory: vi.fn(),
     deleteAccount: vi.fn(),
     dismissTo: vi.fn(),
+    // The welcome promise to guests on this phone (lib/welcome-promise.ts).
+    endWelcomePromise: vi.fn(),
     getAccessToken: null as null | (() => Promise<string | null>),
     getSession: vi.fn(),
     mergeGuestAccount: vi.fn(),
@@ -162,6 +164,13 @@ vi.mock('../lib/supabase-auth-recovery', () => ({
   normalizeSupabaseAuthError: (error: unknown) => error,
 }));
 vi.mock('../lib/supabase-session-probe', () => ({ probeSupabaseSession: vi.fn() }));
+vi.mock('../lib/welcome-promise', () => ({
+  endWelcomePromise: state.endWelcomePromise,
+  loadWelcomePromise: async () => undefined,
+  resetWelcomePromiseForTests: () => undefined,
+  useWelcomePromise: () => true,
+  WELCOME_PROMISE_STORAGE_KEY: 'magicbooklet.welcome-promise.spent.v1',
+}));
 vi.mock('../lib/supabase', () => ({
   clearPersistedSupabaseAuthSession: vi.fn(async () => undefined),
   duringSignOut: (work: () => Promise<unknown>) => work(),
@@ -330,6 +339,7 @@ beforeEach(() => {
   state.clearSearchHistory.mockReset().mockResolvedValue(undefined);
   state.deleteAccount.mockReset();
   state.dismissTo.mockReset();
+  state.endWelcomePromise.mockReset();
   state.signInWithGoogleOAuth.mockReset();
   vi.mocked(signInWithNativeApple).mockReset();
   state.getSession.mockReset().mockResolvedValue({ data: { session: null }, error: null });
@@ -1444,6 +1454,40 @@ describe('the push registration and the session it was confirmed in', () => {
     state.getSession.mockResolvedValueOnce(refused());
     const { unmount } = await mount();
     expect(forgetLastPushRegistration).toHaveBeenCalled();
+    unmount();
+  });
+});
+
+// Owner, 2026-11-09, shown that an account made before the welcome program kept the promise ("Still
+// says 25"): "Any sign-in ends it" (lib/welcome-promise.ts). The provider is the one place every
+// sign-in passes, whatever screen it starts from, so the promise ends here and nowhere else.
+describe('the welcome promise to guests on this phone', () => {
+  it('ends when an account is restored at launch', async () => {
+    const { unmount } = await mount(accountA());
+    expect(state.endWelcomePromise).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('ends when a guest signs in to an account', async () => {
+    signInLandsOn(accountA());
+    state.mergeGuestAccount.mockResolvedValue({ status: 'merged', creditsMoved: 0, promotionalCreditsMoved: 0, credits: 0 });
+    const { latest, unmount } = await mount(guestSession());
+    expect(state.endWelcomePromise).not.toHaveBeenCalled();
+
+    await renderer.act(async () => {
+      await latest.current?.signInWithPassword('a@example.com', 'correct-Horse-1');
+    });
+    await flush();
+
+    expect(latest.current?.user?.id).toBe('account-a');
+    expect(state.endWelcomePromise).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('stands for a guest', async () => {
+    const { latest, unmount } = await mount(guestSession());
+    expect(latest.current?.isGuest).toBe(true);
+    expect(state.endWelcomePromise).not.toHaveBeenCalled();
     unmount();
   });
 });
