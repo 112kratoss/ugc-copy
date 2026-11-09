@@ -46,9 +46,11 @@
 @source "../components/AppShellCreateMenu.tsx";
 @source "../components/AppleLogo.tsx";
 @source "../components/AuthProvider.tsx";
+@source "../components/ClaimConfetti.tsx";
 @source "../components/CreatorIdentity.tsx";
 @source "../components/DeferredAppShellAccount.tsx";
 @source "../components/DeferredGenerationNotifications.tsx";
+@source "../components/DeferredWelcomeCreditsPopup.tsx";
 @source "../components/DesignSystem.tsx";
 @source "../components/FeatureLandingPage.tsx";
 @source "../components/FeedbackViewport.tsx";
@@ -80,6 +82,8 @@
 @source "../components/TabLoadingShell.tsx";
 @source "../components/TextPostPreviewCard.tsx";
 @source "../components/UnavailableMediaNote.tsx";
+@source "../components/WelcomeCreditsGate.tsx";
+@source "../components/WelcomeCreditsPopup.tsx";
 @source "../components/WhatsNewModelsCard.tsx";
 @source "../components/app-shell-auth-state.ts";
 @source "../components/app-shell-nav.ts";
@@ -740,6 +744,284 @@ button:disabled,
   .ui-toast,
   .ui-confirm-backdrop,
   .ui-confirm-dialog {
+    animation: none;
+  }
+}
+
+/*
+ * The welcome-credits popup (`src/components/WelcomeCreditsPopup.tsx`), the
+ * app's card on the web (owner, 2026-11-09): a white card in the app's light
+ * palette (`ugc-mobile/lib/theme.ts`) over the dimmed page, the shared Close
+ * on a white disc below it, the claim's confetti over both. Named classes
+ * here because a sign-up can come back to a public page as well as a
+ * signed-in one. Every motion is the Web Animations API's, from script: the
+ * entrance, the fill, the pop, the exit and the confetti, none of it under
+ * reduced motion. At the modals' layer.
+ */
+.ui-welcome-popup {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1.5rem 2rem;
+}
+
+/* Leaving: the page is the person's again while the confetti falls. */
+.ui-welcome-popup[data-leaving] {
+  pointer-events: none;
+}
+
+/* Inside the popup's own stacking context: the dim, then the card, then the confetti. */
+.ui-welcome-dim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(4, 4, 6, 0.74);
+}
+
+.ui-welcome-stack {
+  position: relative;
+  z-index: 81;
+  display: flex;
+  width: 100%;
+  max-width: 340px;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  margin: auto;
+}
+
+.ui-welcome-card {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  overflow: hidden;
+  border: 1px solid rgba(28, 20, 15, 0.12);
+  border-radius: var(--ui-radius-2xl);
+  background: #ffffff;
+  padding: 2rem 1.25rem 1.25rem;
+  color: #1c140f;
+  text-align: center;
+  color-scheme: light;
+}
+
+/* A warm wash behind the badge, fading into the white below. */
+.ui-welcome-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: calc(108px + 2rem + 68px);
+  background: linear-gradient(#fbe3da, #ffffff);
+  pointer-events: none;
+}
+
+.ui-welcome-card > * {
+  position: relative;
+}
+
+.ui-welcome-card :focus-visible,
+.ui-welcome-close:focus-visible {
+  outline: 2px solid #d4572f;
+  outline-offset: 2px;
+}
+
+.ui-welcome-ring {
+  display: flex;
+  width: 108px;
+  height: 108px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.ui-welcome-ring-track {
+  position: absolute;
+  inset: 0;
+}
+
+.ui-welcome-ring-rest {
+  stroke: #f6d2c4;
+}
+
+.ui-welcome-ring-fill {
+  stroke: #ff7a59;
+}
+
+.ui-welcome-badge {
+  display: flex;
+  width: 72px;
+  height: 72px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--ui-radius-pill);
+  background: linear-gradient(135deg, #ffa463, #f4552a);
+  box-shadow: 0 8px 22px rgba(244, 85, 42, 0.3);
+  color: #1a0d08;
+}
+
+.ui-welcome-badge-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.ui-welcome-figure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.ui-welcome-figure-number {
+  display: inline-block;
+  font-size: 60px;
+  font-weight: 800;
+  line-height: 68px;
+  letter-spacing: -0.6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-welcome-figure-number[data-claimed] {
+  color: #a83d1c;
+}
+
+.ui-welcome-figure-label {
+  color: #5f5750;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 18px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+
+.ui-welcome-keep {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.ui-welcome-title {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 28px;
+  letter-spacing: -0.1px;
+}
+
+.ui-welcome-note,
+.ui-welcome-referral {
+  color: #5f5750;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 17px;
+}
+
+.ui-welcome-message {
+  color: #b4233c;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.ui-welcome-added {
+  display: flex;
+  min-height: 44px;
+  align-self: stretch;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: #136c48;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 18px;
+}
+
+.ui-welcome-added-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.ui-welcome-claim {
+  align-self: stretch;
+}
+
+.ui-welcome-claim[aria-disabled='true'] {
+  cursor: progress;
+  opacity: 0.8;
+}
+
+.ui-welcome-spinner {
+  width: 1rem;
+  height: 1rem;
+  animation: ui-welcome-spin 0.9s linear infinite;
+}
+
+@keyframes ui-welcome-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ui-welcome-close {
+  display: inline-flex;
+  width: 48px;
+  height: 48px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--ui-radius-pill);
+  background: #ffffff;
+  color: #1c140f;
+}
+
+.ui-welcome-close:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.ui-welcome-close-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.ui-welcome-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.ui-welcome-confetti {
+  position: fixed;
+  inset: 0;
+  z-index: 82;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ui-welcome-confetti-piece {
+  position: absolute;
+  left: var(--confetti-x);
+  top: var(--confetti-y);
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+.ui-welcome-confetti-piece > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.ui-welcome-confetti-round {
+  border-radius: var(--ui-radius-pill);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-welcome-spinner {
     animation: none;
   }
 }

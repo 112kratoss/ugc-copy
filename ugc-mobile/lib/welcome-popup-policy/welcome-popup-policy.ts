@@ -63,8 +63,7 @@ export function welcomeFillProgress(elapsed: number, duration = WELCOME_COUNT_UP
  * The credits at which the count-up gives a haptic tick: every single credit
  * on the way up, the last excluded (it gets the success haptic instead), as a
  * picker ticks past each row. The ease-out curve spaces them: a rattle at the
- * start, distinct taps at the end. (The web has no haptics; it reads the same
- * list for the credits its figure must show one by one.)
+ * start, distinct taps at the end. (The web has no haptics.)
  */
 export function welcomeCountUpTicks(amount: number): number[] {
   const ticks: number[] = [];
