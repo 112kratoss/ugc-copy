@@ -111,7 +111,7 @@ const WELCOME_REWARD_PATH = '/welcome-reward';
 
 /**
  * A first-profile link from before the name step, `/profile?welcome=1&next=…`
- * (`buildProfileSetupPath`). `/profile?welcome=1` alone is not one: that is the
+ * (what sign-in and Home's old welcome card used to build). `/profile?welcome=1` alone is not one: that is the
  * profile opened back from the name step.
  */
 export function isOldProfileSetupPath(path: string): boolean {
@@ -147,21 +147,6 @@ export function creatorNameStepNextPath(path: string | null | undefined): string
 
 export function buildCreatorNameStepPath(next: string | null | undefined): string {
   return `${CREATOR_NAME_STEP_PATH}?next=${encodeURIComponent(creatorNameStepNextPath(next))}`;
-}
-
-/**
- * The first-profile link from before the name step. Only Home's welcome card
- * (`WelcomeCreditsCard`, which the welcome popup replaces) still builds it, and
- * `/profile` sends it on to the name step.
- */
-export function buildProfileSetupPath(next: string | null | undefined): string {
-  const safeNext = getSafeAuthNextPath(next);
-  return `/profile?welcome=1&next=${encodeURIComponent(buildWelcomeRewardPath(safeNext))}`;
-}
-
-export function buildWelcomeRewardPath(next: string | null | undefined): string {
-  const safeNext = getSafeAuthNextPath(next);
-  return `/welcome-reward?next=${encodeURIComponent(safeNext)}`;
 }
 
 export function buildAuthContinuePath(next: string | null | undefined): string {

@@ -4,7 +4,6 @@ import {
   buildAuthCodeErrorPath,
   buildAuthContinuePath,
   buildCreatorNameStepPath,
-  buildProfileSetupPath,
   creatorNameStepNextPath,
   getPasswordRecoveryNextPath,
   getSafeAuthNextPath,
@@ -35,11 +34,6 @@ describe('auth onboarding destinations', () => {
     );
     expect(buildAuthCodeErrorPath(next)).toBe(
       '/auth/auth-code-error?next=%2Fcreate%2Fvideo%3Fmodel%3Dkling%26recipe%3Dugc'
-    );
-    // Home's welcome card still builds the old first-profile link, which /profile
-    // sends on to the name step.
-    expect(buildProfileSetupPath(next)).toBe(
-      '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate%252Fvideo%253Fmodel%253Dkling%2526recipe%253Dugc'
     );
   });
 
