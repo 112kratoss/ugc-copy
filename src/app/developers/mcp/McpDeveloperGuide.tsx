@@ -37,6 +37,7 @@ import { buildBreadcrumbSchema, buildFaqSchema } from '@/lib/seo';
 
 import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../../../ugc-mobile/lib/model-catalog/protocol';
 import CopyableCode from './CopyableCode';
+import { connectSentence } from './mcp-page-copy';
 
 const ENHANCEMENT_COST = `${PROMPT_ENHANCEMENT_COST_CREDITS} credit${PROMPT_ENHANCEMENT_COST_CREDITS === 1 ? '' : 's'}`;
 
@@ -129,7 +130,11 @@ type ClientSetup = {
 };
 
 function clientSetups(clientIds: McpClientIds): ClientSetup[] {
-  const serverUrlStep = (text: ReactNode): SetupStep => ({ text, code: { value: MCP_SERVER_URL, label: 'the server URL' } });
+  // Each copy button names its client, so a screen reader's list of them tells them apart.
+  const serverUrlStep = (text: ReactNode, client: string): SetupStep => ({
+    text,
+    code: { value: MCP_SERVER_URL, label: `the ${client} server URL` },
+  });
 
   return [
     {
@@ -138,7 +143,7 @@ function clientSetups(clientIds: McpClientIds): ClientSetup[] {
       name: 'Claude.ai and Claude Desktop',
       steps: [
         { text: <>In Claude, open <strong>Customize → Connectors</strong> and choose <strong>Add custom connector</strong>.</> },
-        serverUrlStep(<>Name it Magic Booklet and enter the server URL.</>),
+        serverUrlStep(<>Name it Magic Booklet and enter the server URL.</>, 'Claude'),
         {
           text: (
             <>
@@ -158,7 +163,7 @@ function clientSetups(clientIds: McpClientIds): ClientSetup[] {
       name: 'Claude Code',
       steps: [
         {
-          text: 'Add the server from any terminal.',
+          text: 'Add the server from any terminal. It is added for your user, so every project you open in Claude Code has it.',
           code: { value: claudeCodeAddCommand(clientIds.claudeCode), label: 'the Claude Code command' },
         },
         {
@@ -173,7 +178,7 @@ function clientSetups(clientIds: McpClientIds): ClientSetup[] {
       ],
       alternative: {
         title: 'Or install the plugin',
-        text: 'The Magic Booklet plugin adds the same server and two skills: one that takes a UGC ad from brief to post, and one that publishes a creation. Sign in with /mcp as above.',
+        text: 'The Magic Booklet plugin adds the same server and two skills: one that takes a UGC ad from brief to post, and one that publishes a creation. Sign in with /mcp as above. Use the command or the plugin, not both: each would add its own magicbooklet server and ask you to sign in again.',
         steps: [
           { text: 'Add the marketplace:', code: { value: MCP_PLUGIN_MARKETPLACE_ADD_COMMAND, label: 'the marketplace command' } },
           { text: 'Install the plugin:', code: { value: MCP_PLUGIN_INSTALL_COMMAND, label: 'the plugin install command' } },
@@ -194,7 +199,7 @@ function clientSetups(clientIds: McpClientIds): ClientSetup[] {
             </>
           ),
         },
-        serverUrlStep(<>Name it Magic Booklet and, under <strong>Connection</strong>, enter the server URL.</>),
+        serverUrlStep(<>Name it Magic Booklet and, under <strong>Connection</strong>, enter the server URL.</>, 'ChatGPT'),
         {
           text: <>For authentication choose <strong>OAuth</strong> and enter this client ID.</>,
           code: { value: clientIds.chatgpt, label: 'the ChatGPT client ID' },
@@ -364,8 +369,8 @@ export default function McpDeveloperGuide({ clientIds }: { clientIds: McpClientI
             <Kicker icon={Plug}>MCP server</Kicker>
             <Text as="h1" variant="pageTitle">Connect your AI agent to Magic Booklet</Text>
             <Text variant="body" className="text-lg leading-8">
-              Magic Booklet runs a remote MCP server. Connect Claude, ChatGPT, Codex or Cursor once, and your agent can
-              make images and videos with your credits, follow each run to the end and publish the ones you choose.
+              Magic Booklet runs a remote MCP server. {connectSentence(clientIds)} A connected agent can make images and
+              videos with your credits, follow each run to the end and publish the ones you choose.
             </Text>
             <div className="space-y-2">
               <Text variant="label">Server URL</Text>

@@ -287,14 +287,17 @@ skills, the registry entry and its `/.well-known/mcp-registry-auth` proof, and
 `resource_documentation` restored. Dynamic registration stays off; Codex and Cursor use
 pre-registered public clients (runbook, "Distribution", which also has the Codex redirect URI
 Codex derives). The production clients for Claude, Claude Code, Cursor and Codex were registered
-on 2026-11-09 (runbook, "Registered clients"). Left: the Codex client's
-`http://127.0.0.1:8977/callback/PPpoTd8EYBlz` redirect, ChatGPT's client (after its connector),
-the owner's steps below, and `run_template`, still waiting for its usage check.
+on 2026-11-09, and the Codex client gained that derived redirect on 2026-11-10 (runbook,
+"Registered clients"). Merge order: phase 2 first, then this branch, whose page and skills
+describe phase 2's publishing as live. Left: ChatGPT's client (after its connector), one real
+Codex sign-in (runbook, switch-on check 5), the owner's steps below (the registry publish only
+once phase 2 is live), and `run_template`, still waiting for its usage check.
 
 - `src/app/developers/mcp/page.tsx` — the setup page: one command or form per client, what the
   agent can do, how to revoke.
 - A Claude Code plugin marketplace in this public repo (`.claude-plugin/marketplace.json`,
-  `plugins/magicbooklet/.mcp.json` with `"type": "http"`, skills such as a UGC-ad flow that
+  `plugins/magicbooklet/` declaring the `"type": "http"` server in its `plugin.json`, since the
+  repo's agent guard refuses every `.mcp.json`, and skills such as a UGC-ad flow that
   chains quote → create → wait → publish), installed with `claude plugin marketplace add`.
 - Official MCP registry entry `com.magicbooklet/mcp` (`/.well-known/mcp-registry-auth` or a DNS
   TXT record).
@@ -311,9 +314,9 @@ submission, the registry publish.
 | Client | How a creator connects | Client we register |
 |---|---|---|
 | Claude.ai, Claude Desktop | Customize → Connectors → Add custom connector → URL `https://magicbooklet.com/api/mcp`, client id under Advanced settings, no secret | public, redirect `https://claude.ai/api/mcp/auth_callback` |
-| Claude Code | `claude mcp add --transport http --client-id <id> --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp`, then `/mcp`; or the plugin | public, redirect `http://localhost:8976/callback` |
+| Claude Code | `claude mcp add --transport http --scope user --client-id <id> --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp`, then `/mcp`; or the plugin, not both | public, redirect `http://localhost:8976/callback` |
 | ChatGPT | Plugins → + → Add custom MCP server with the URL and, under OAuth, the client id | public (the page shows no secret), redirect per connector from its management page |
-| Codex | `codex mcp add magicbooklet --url https://magicbooklet.com/api/mcp --oauth-client-id <id>`, `callback_port = 8977` in `config.toml`, then `codex mcp login magicbooklet` | public, redirect `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` |
+| Codex | `codex mcp add magicbooklet --url https://magicbooklet.com/api/mcp --oauth-client-id <id>`, `callback_port = 8977` in `config.toml`, then `codex mcp login magicbooklet` | public, redirect `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` (and its `localhost` spare) |
 | Cursor | `auth.CLIENT_ID` on the server's entry in `.cursor/mcp.json` | public, redirects `http://localhost:8787/callback` and `https://www.cursor.com/agents/mcp/oauth/callback` |
 
 The page reads every value from `src/lib/mcp-client-directory.ts` (2026-11-10, phase 3).

@@ -49,11 +49,12 @@ function readJson<T>(...segments: string[]): T {
   return JSON.parse(readFileSync(path.join(...segments), 'utf8')) as T;
 }
 
-/** The frontmatter these skills use: one-line `key: value` fields and an `allowed-tools` list. */
-function readSkillFrontmatter(file: string): { fields: Record<string, string>; allowedTools: string[] } {
+/** The frontmatter these skills use (one-line `key: value` fields and an `allowed-tools` list), and the body. */
+function readSkill(file: string): { fields: Record<string, string>; allowedTools: string[]; body: string } {
   const text = readFileSync(file, 'utf8');
   const match = /^---\n([\s\S]*?)\n---\n/.exec(text);
   if (!match) throw new Error(`${file} has no frontmatter on its first line`);
+  const body = text.slice(match[0].length);
   const fields: Record<string, string> = {};
   const allowedTools: string[] = [];
   let inToolList = false;
@@ -68,12 +69,26 @@ function readSkillFrontmatter(file: string): { fields: Record<string, string>; a
     inToolList = field[1] === 'allowed-tools' && field[2] === '';
     if (!inToolList) fields[field[1]] = field[2];
   }
-  return { fields, allowedTools };
+  return { fields, allowedTools, body };
 }
 
 /** Tools that spend credits or act in public: a skill never runs one without the permission prompt. */
 const NEVER_PRE_APPROVED = ['create_media', 'enhance_prompt', 'publish_post', 'delete_post', 'upload_input'];
 const PLUGIN_TOOL_PREFIX = `mcp__plugin_${MCP_PLUGIN_NAME}_${MCP_SERVER_KEY}__`;
+
+/**
+ * Tools the skills name that the server does not offer yet: phase 2's publishing and input tools
+ * (`docs/plans/agent-mcp-server-plan-2026-11-09.md`, "Phase 2"). The day phase 2 lands they are in
+ * `MCP_TOOLS`, and the test asks for each one to leave this list, so it only ever shrinks.
+ */
+const COMING_TOOLS = ['publish_post', 'get_post', 'delete_post', 'upload_input'];
+
+/**
+ * A backticked name in a skill's body that reads as a tool: a verb, then what it acts on
+ * (`create_media`, `get_generation`). Parameter and field names (`wait_seconds`, `cost_credits`)
+ * start with no such verb and are left alone.
+ */
+const TOOL_LIKE_NAME = /^(?:list|get|quote|create|enhance|publish|delete|upload|update|run|search|remove|set)_[a-z]+(?:_[a-z]+)*$/;
 
 describe('the Claude Code plugin marketplace', () => {
   const marketplace = readJson<Marketplace>(ROOT, '.claude-plugin', 'marketplace.json');
@@ -125,9 +140,9 @@ describe('the Claude Code plugin marketplace', () => {
     expect(skills).toEqual(['create-ugc-ad', 'publish-creation']);
 
     const readOnlyTools = new Set<string>(MCP_TOOLS.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name));
-    const knownTools = new Set<string>(MCP_TOOLS.map((tool) => tool.name));
+    const offeredTools = new Set<string>(MCP_TOOLS.map((tool) => tool.name));
     for (const skill of skills) {
-      const { fields, allowedTools } = readSkillFrontmatter(path.join(skillsDir, skill, 'SKILL.md'));
+      const { fields, allowedTools } = readSkill(path.join(skillsDir, skill, 'SKILL.md'));
       expect(fields.name, skill).toBe(skill);
       expect(fields.description?.length, `${skill} needs a description`).toBeGreaterThan(40);
       // The Agent Skills fields alone, so the skill uploads to claude.ai as it is.
@@ -138,12 +153,35 @@ describe('the Claude Code plugin marketplace', () => {
         expect(tool.startsWith(PLUGIN_TOOL_PREFIX), `${skill}: ${tool}`).toBe(true);
         const name = tool.slice(PLUGIN_TOOL_PREFIX.length);
         expect(NEVER_PRE_APPROVED, `${skill} must not pre-approve ${name}`).not.toContain(name);
-        if (knownTools.has(name)) expect(readOnlyTools.has(name), `${skill}: ${name} is not read-only`).toBe(true);
+        // A name the server does not offer is checked against the coming list, never skipped.
+        expect(offeredTools.has(name) || COMING_TOOLS.includes(name), `${skill} pre-approves ${name}, which no tool is called`)
+          .toBe(true);
+        if (offeredTools.has(name)) expect(readOnlyTools.has(name), `${skill}: ${name} is not read-only`).toBe(true);
       }
     }
     // The registry's charging tools exist under the names the list keeps out.
-    expect(knownTools.has('create_media')).toBe(true);
-    expect(knownTools.has('enhance_prompt')).toBe(true);
+    expect(offeredTools.has('create_media')).toBe(true);
+    expect(offeredTools.has('enhance_prompt')).toBe(true);
+  });
+
+  it('names only tools the server offers, or phase 2’s coming ones, which leave the list once live', () => {
+    const offeredTools = new Set<string>(MCP_TOOLS.map((tool) => tool.name));
+    for (const coming of COMING_TOOLS) {
+      expect(offeredTools.has(coming), `${coming} is offered now: remove it from COMING_TOOLS`).toBe(false);
+    }
+    const knownTools = new Set<string>([...offeredTools, ...COMING_TOOLS]);
+    const skillsDir = path.join(PLUGIN_ROOT, 'skills');
+    for (const skill of readdirSync(skillsDir)) {
+      const { body } = readSkill(path.join(skillsDir, skill, 'SKILL.md'));
+      const toolNames = [...body.matchAll(/`([a-z][a-z_]*)`/g)]
+        .map((match) => match[1])
+        .filter((name) => knownTools.has(name) || TOOL_LIKE_NAME.test(name));
+      // Each skill drives the server by name, so a body that names no tool is a broken reader.
+      expect(toolNames.length, `${skill} names no tool`).toBeGreaterThan(0);
+      for (const name of toolNames) {
+        expect(knownTools.has(name), `${skill} names ${name}, which the server does not offer and is not coming`).toBe(true);
+      }
+    }
   });
 
   it('gives the README the setup page’s install commands', () => {

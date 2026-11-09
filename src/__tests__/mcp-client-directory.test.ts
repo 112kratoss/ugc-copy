@@ -60,8 +60,12 @@ describe('the MCP client directory', () => {
   it('registers the redirect URIs each client sends, ports and paths exact', () => {
     expect(MCP_CLIENT_REDIRECT_URIS.claude).toEqual(['https://claude.ai/api/mcp/auth_callback']);
     expect(MCP_CLIENT_REDIRECT_URIS.claudeCode).toEqual([`http://localhost:${CLAUDE_CODE_CALLBACK_PORT}/callback`]);
-    // GoTrue sends no `iss`, so Codex appends the callback ID, and the pinned port is inserted.
-    expect(MCP_CLIENT_REDIRECT_URIS.codex).toEqual([`http://127.0.0.1:${CODEX_CALLBACK_PORT}/callback/${codexCallbackId(MCP_SERVER_URL)}`]);
+    // GoTrue sends no `iss`, so Codex appends the callback ID, and the pinned port is inserted; the
+    // `localhost` form is production's spare.
+    expect(MCP_CLIENT_REDIRECT_URIS.codex).toEqual([
+      `http://127.0.0.1:${CODEX_CALLBACK_PORT}/callback/${codexCallbackId(MCP_SERVER_URL)}`,
+      `http://localhost:${CODEX_CALLBACK_PORT}/callback/${codexCallbackId(MCP_SERVER_URL)}`,
+    ]);
     expect(MCP_CLIENT_REDIRECT_URIS.cursor).toEqual([
       'http://localhost:8787/callback',
       'https://www.cursor.com/agents/mcp/oauth/callback',
@@ -72,7 +76,7 @@ describe('the MCP client directory', () => {
 
   it('builds each client’s setup from the same URL, name and ports', () => {
     expect(claudeCodeAddCommand('cc-id')).toBe(
-      'claude mcp add --transport http --client-id cc-id --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp',
+      'claude mcp add --transport http --scope user --client-id cc-id --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp',
     );
     expect(claudeCodeServerEntry('cc-id')).toEqual({
       type: 'http',

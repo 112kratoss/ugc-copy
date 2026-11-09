@@ -17,7 +17,7 @@ If the Magic Booklet tools are missing, the server is not signed in: tell the pe
 
 ## 1. The brief
 
-Ask only for what is missing: the product, who the ad is for, the hook (the first one or two seconds), the format (a vertical 9:16 video unless they say otherwise, or a still), the length, and any product photo to start from. A starting image must be one of their own: a creation (find it with `list_creations`) or a file they upload with `upload_input` where the server offers it. Other web addresses are refused.
+Ask only for what is missing: the product, who the ad is for, the hook (the first one or two seconds), the format (a vertical 9:16 video unless they say otherwise, or a still), the length, and any product photo to start from. A starting image must be one of their own. For one of their creations, find it with `list_creations`, then call `get_generation` on it and pass the output URL that answer gives: not the preview or the page link `list_creations` shows. For a file of theirs, `upload_input` (where the server offers it) gives an `asset_id`. Other web addresses are refused.
 
 ## 2. The model
 

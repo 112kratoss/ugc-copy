@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import McpDeveloperGuide from '@/app/developers/mcp/McpDeveloperGuide';
+import { connectSentence, mcpPageMetadata } from '@/app/developers/mcp/mcp-page-copy';
 import McpDevelopersPage, { metadata } from '@/app/developers/mcp/page';
 import {
   MCP_CLIENT_IDS,
@@ -30,6 +31,22 @@ const MIXED_IDS: McpClientIds = {
   cursor: `${PENDING_CLIENT_ID_PREFIX}CURSOR`,
 };
 
+const ALL_REGISTERED: McpClientIds = {
+  claude: 'claude-web-client-id',
+  claudeCode: 'claude-code-client-id',
+  chatgpt: 'chatgpt-client-id',
+  codex: 'codex-client-id',
+  cursor: 'cursor-client-id',
+};
+
+const ALL_PENDING = Object.fromEntries(
+  SURFACES.map(({ surface }) => [surface, `${PENDING_CLIENT_ID_PREFIX}${surface.toUpperCase()}`]),
+) as unknown as McpClientIds;
+
+const CLAUDE_CODE_COMMAND =
+  `claude mcp add --transport http --scope user --client-id claude-code-client-id --callback-port 8976 magicbooklet ${MCP_SERVER_URL}`;
+const COPY_BLOCKED = 'Copying is blocked here. Select the text and copy it yourself.';
+
 function block(name: string): HTMLElement {
   const heading = screen.getByRole('heading', { level: 3, name });
   const wrapper = heading.closest<HTMLElement>('[data-client]');
@@ -43,6 +60,7 @@ function stubClipboard(writeText: (text: string) => Promise<void>) {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   Reflect.deleteProperty(navigator, 'clipboard');
 });
 
@@ -64,6 +82,22 @@ describe('/developers/mcp', () => {
     expect(document.body.textContent).not.toContain(PENDING_CLIENT_ID_PREFIX);
   });
 
+  it('names a waiting app as coming in the header and the search snippet, never as connectable', () => {
+    expect(connectSentence(MIXED_IDS)).toBe('Connect Claude today, and ChatGPT, Codex and Cursor soon.');
+    expect(connectSentence(ALL_REGISTERED)).toBe('Connect Claude, ChatGPT, Codex or Cursor.');
+    expect(connectSentence(ALL_PENDING)).toBe('Claude, ChatGPT, Codex and Cursor can connect soon.');
+
+    const mixed = mcpPageMetadata({ ...ALL_REGISTERED, chatgpt: `${PENDING_CLIENT_ID_PREFIX}CHATGPT` });
+    expect(mixed.description).toMatch(/^Connect Claude, Codex or Cursor \(ChatGPT soon\) to Magic Booklet’s MCP server: /);
+    expect(mixed.keywords).not.toContain('ChatGPT MCP connector');
+    expect(mixed.keywords).toEqual(expect.arrayContaining(['Claude custom connector', 'Claude Code MCP', 'Codex MCP', 'Cursor MCP']));
+
+    // The live page says what the directory says.
+    render(<McpDevelopersPage />);
+    expect(screen.getByText(new RegExp(connectSentence(MCP_CLIENT_IDS).replace(/[.()]/g, '\\$&')))).toBeInTheDocument();
+    expect(metadata.description).toBe(mcpPageMetadata(MCP_CLIENT_IDS).description);
+  });
+
   it('gives a registered client its commands with its own id, and a waiting one no command at all', () => {
     render(<McpDeveloperGuide clientIds={MIXED_IDS} />);
 
@@ -76,12 +110,12 @@ describe('/developers/mcp', () => {
 
     const claudeCode = block('Claude Code');
     expect(claudeCode).toHaveAttribute('data-client-state', 'available');
-    expect(within(claudeCode).getByText(
-      `claude mcp add --transport http --client-id claude-code-client-id --callback-port 8976 magicbooklet ${MCP_SERVER_URL}`,
-    )).toBeInTheDocument();
-    // The plugin carries the same client, so it is offered with it.
+    // User scope: the server is there in every project, not only the folder the command ran in.
+    expect(within(claudeCode).getByText(CLAUDE_CODE_COMMAND)).toBeInTheDocument();
+    // The plugin carries the same client, so it is offered with it, as the other way in.
     expect(within(claudeCode).getByText(MCP_PLUGIN_MARKETPLACE_ADD_COMMAND)).toBeInTheDocument();
     expect(within(claudeCode).getByText(MCP_PLUGIN_INSTALL_COMMAND)).toBeInTheDocument();
+    expect(within(claudeCode).getByText(/Use the command or the plugin, not both/)).toBeInTheDocument();
 
     for (const name of ['ChatGPT', 'Codex', 'Cursor']) {
       const waiting = block(name);
@@ -96,10 +130,7 @@ describe('/developers/mcp', () => {
   });
 
   it('points a waiting client at no other while none can sign in', () => {
-    const allPending = Object.fromEntries(
-      SURFACES.map(({ surface }) => [surface, `${PENDING_CLIENT_ID_PREFIX}${surface.toUpperCase()}`]),
-    ) as unknown as McpClientIds;
-    render(<McpDeveloperGuide clientIds={allPending} />);
+    render(<McpDeveloperGuide clientIds={ALL_PENDING} />);
 
     for (const { name } of SURFACES) {
       expect(block(name), name).toHaveAttribute('data-client-state', 'pending');
@@ -109,7 +140,7 @@ describe('/developers/mcp', () => {
   });
 
   it('pins the Codex callback port and gives Cursor a static client id once those clients are registered', () => {
-    render(<McpDeveloperGuide clientIds={{ ...MIXED_IDS, codex: 'codex-client-id', cursor: 'cursor-client-id' }} />);
+    render(<McpDeveloperGuide clientIds={ALL_REGISTERED} />);
 
     const codex = block('Codex');
     expect(within(codex).getByText(`codex mcp add magicbooklet --url ${MCP_SERVER_URL} --oauth-client-id codex-client-id`))
@@ -121,29 +152,65 @@ describe('/developers/mcp', () => {
     expect(within(cursor).getByText(/"CLIENT_ID": "cursor-client-id"/)).toBeInTheDocument();
   });
 
-  it('copies a command and says so', async () => {
+  it('names every copy button and code scroller apart, and lets the keyboard reach each scroller', () => {
+    render(<McpDeveloperGuide clientIds={ALL_REGISTERED} />);
+
+    const buttons = screen.getAllByRole('button', { name: /^Copy / }).map((button) => button.getAttribute('aria-label'));
+    expect(buttons.length).toBeGreaterThan(8);
+    expect(new Set(buttons).size, 'two copy buttons read the same').toBe(buttons.length);
+    expect(buttons).toEqual(expect.arrayContaining(['Copy the server URL', 'Copy the Claude server URL', 'Copy the ChatGPT server URL']));
+
+    const scrollers = screen.getAllByRole('region');
+    expect(scrollers).toHaveLength(buttons.length);
+    for (const scroller of scrollers) {
+      expect(scroller.tagName).toBe('PRE');
+      expect(scroller).toHaveAttribute('tabindex', '0');
+      expect(scroller.getAttribute('aria-label')).toBeTruthy();
+    }
+  });
+
+  it('copies a command, says so, and returns to Copy after two seconds', async () => {
+    vi.useFakeTimers();
     const writeText = vi.fn(async () => {});
     stubClipboard(writeText);
     render(<McpDeveloperGuide clientIds={MIXED_IDS} />);
 
-    fireEvent.click(within(block('Claude Code')).getByRole('button', { name: 'Copy the Claude Code command' }));
+    await act(async () => {
+      fireEvent.click(within(block('Claude Code')).getByRole('button', { name: 'Copy the Claude Code command' }));
+    });
 
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith(
-      `claude mcp add --transport http --client-id claude-code-client-id --callback-port 8976 magicbooklet ${MCP_SERVER_URL}`,
-    ));
-    expect(await screen.findByRole('button', { name: 'Copied the Claude Code command' })).toBeInTheDocument();
+    expect(writeText).toHaveBeenCalledWith(CLAUDE_CODE_COMMAND);
+    expect(screen.getByRole('button', { name: 'Copied the Claude Code command' })).toBeInTheDocument();
     expect(screen.getByText('Copied the Claude Code command to your clipboard.')).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByRole('button', { name: 'Copy the Claude Code command' })).toBeInTheDocument();
   });
 
-  it('tells the person to copy by hand when the clipboard refuses', async () => {
+  it('keeps the copy-by-hand message until the focus leaves the block or the next press', async () => {
+    vi.useFakeTimers();
     stubClipboard(async () => {
       throw new Error('NotAllowedError');
     });
     render(<McpDeveloperGuide clientIds={MIXED_IDS} />);
+    const button = screen.getByRole('button', { name: 'Copy the server URL' });
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Copy the server URL' })[0]);
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(screen.getByText(COPY_BLOCKED)).toBeInTheDocument();
 
-    expect(await screen.findByText('Copying is blocked here. Select the text and copy it yourself.')).toBeInTheDocument();
+    // It does not time out, and selecting the text in the scroller keeps it.
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    fireEvent.blur(button, { relatedTarget: screen.getByRole('region', { name: 'the server URL' }) });
+    expect(screen.getByText(COPY_BLOCKED)).toBeInTheDocument();
+
+    // Moving on to anything outside the block clears it.
+    fireEvent.blur(button, { relatedTarget: document.body });
+    expect(screen.queryByText(COPY_BLOCKED)).toBeNull();
   });
 
   it('describes the FAQ it shows in its structured data', () => {

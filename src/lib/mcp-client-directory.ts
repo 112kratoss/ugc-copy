@@ -98,7 +98,11 @@ export const MCP_CLIENT_REDIRECT_URIS: Readonly<Record<McpClientSurface, readonl
   claude: ['https://claude.ai/api/mcp/auth_callback'],
   claudeCode: [`http://localhost:${CLAUDE_CODE_CALLBACK_PORT}/callback`],
   chatgpt: [],
-  codex: [`http://127.0.0.1:${CODEX_CALLBACK_PORT}/callback/${CODEX_CALLBACK_ID}`],
+  // The first is the one Codex sends; production also carries the `localhost` form as a spare.
+  codex: [
+    `http://127.0.0.1:${CODEX_CALLBACK_PORT}/callback/${CODEX_CALLBACK_ID}`,
+    `http://localhost:${CODEX_CALLBACK_PORT}/callback/${CODEX_CALLBACK_ID}`,
+  ],
   // Desktop, then the web and Cursor Agents; with a client id set, the desktop sends only its own.
   cursor: ['http://localhost:8787/callback', 'https://www.cursor.com/agents/mcp/oauth/callback'],
 };
@@ -109,9 +113,13 @@ export function isPendingClientId(clientId: string): boolean {
   return trimmed === '' || trimmed.startsWith(PENDING_CLIENT_ID_PREFIX);
 }
 
-/** Claude Code, in a terminal: adds the server under the fixed callback port. */
+/**
+ * Claude Code, in a terminal: adds the server under the fixed callback port, for the user. The
+ * default scope is `local`, the project folder the command ran in, so a server added from the home
+ * folder would be missing from every project the creator opens afterwards.
+ */
 export function claudeCodeAddCommand(clientId: string): string {
-  return `claude mcp add --transport http --client-id ${clientId} --callback-port ${CLAUDE_CODE_CALLBACK_PORT} ${MCP_SERVER_KEY} ${MCP_SERVER_URL}`;
+  return `claude mcp add --transport http --scope user --client-id ${clientId} --callback-port ${CLAUDE_CODE_CALLBACK_PORT} ${MCP_SERVER_KEY} ${MCP_SERVER_URL}`;
 }
 
 /**

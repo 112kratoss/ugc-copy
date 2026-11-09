@@ -104,7 +104,7 @@ Server → Apps page does the same by hand.
 | Client | Redirect URI(s) to register | How the creator connects |
 |---|---|---|
 | Claude.ai, Claude Desktop, Claude mobile | `https://claude.ai/api/mcp/auth_callback` (exactly this) | Settings → Connectors → Add custom connector → URL `https://magicbooklet.com/api/mcp`; under Advanced ("Use your own OAuth client") the client id, no secret |
-| Claude Code | `http://localhost:8976/callback` (our documented port; the URI must match exactly, so the port is fixed) | `claude mcp add --transport http --client-id <id> --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp`, then `/mcp` (or `claude mcp login magicbooklet`, which needs a terminal) |
+| Claude Code | `http://localhost:8976/callback` (our documented port; the URI must match exactly, so the port is fixed) | `claude mcp add --transport http --scope user --client-id <id> --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp` (user scope: the default, `local`, ties the server to the folder the command ran in), then `/mcp` (or `claude mcp login magicbooklet`, which needs a terminal) |
 | ChatGPT (connectors, Apps SDK) | the per-connector `https://chatgpt.com/connector/oauth/{callback_id}` shown on the connector's management page: create the connector first, then register its URI (GoTrue sends no RFC 9207 `iss`, so ChatGPT's shared redirect does not apply) | Settings → Connectors → Create (developer mode) with the URL and the client id |
 | Codex CLI | `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` (exactly this: Codex appends a callback ID derived from the server URL and inserts the pinned port; a `callback_url` without that ID is ignored, see "Distribution") | `codex mcp add magicbooklet --url https://magicbooklet.com/api/mcp --oauth-client-id <id>`, `callback_port = 8977` under `[mcp_servers.magicbooklet.oauth]` in `~/.codex/config.toml`, then `codex mcp login magicbooklet` |
 | Cursor | `http://localhost:8787/callback` (desktop) and `https://www.cursor.com/agents/mcp/oauth/callback` (web and Cursor Agents) | `auth: { CLIENT_ID: "<id>" }` on the server entry in `.cursor/mcp.json`, or the deeplink |
@@ -127,7 +127,7 @@ plugin read.
 | Claude (Claude.ai, Claude Desktop, Claude mobile) | `cf5743f9-c83c-4f6c-9afb-0803d5aee698` | `https://claude.ai/api/mcp/auth_callback` |
 | Claude Code | `0b968a27-4f37-4972-8d7a-f3c67b365a33` | `http://localhost:8976/callback` |
 | Cursor | `cd3b041d-a942-4917-b37f-735744ca4026` | `http://localhost:8787/callback`, `https://www.cursor.com/agents/mcp/oauth/callback` |
-| Codex | `6508034a-cdb9-4f23-9263-7bf332096acb` | `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` and `http://localhost:8977/callback/PPpoTd8EYBlz` (the URI Codex derives for the server name `magicbooklet`, below; registered 2026-11-10), plus the earlier `http://127.0.0.1:8977/callback/magicbooklet` and `http://localhost:8977/callback/magicbooklet` |
+| Codex | `6508034a-cdb9-4f23-9263-7bf332096acb` | `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` and `http://localhost:8977/callback/PPpoTd8EYBlz` (the URI Codex derives from the server URL, below, and its `localhost` spare; registered 2026-11-10), plus the earlier `http://127.0.0.1:8977/callback/magicbooklet` and `http://localhost:8977/callback/magicbooklet` |
 | ChatGPT | not yet: the owner creates the connector first | per connector, from its management page |
 
 Codex never sends the two `/callback/magicbooklet` URIs to this server. Production's metadata
@@ -136,7 +136,9 @@ for the server, `PPpoTd8EYBlz`, and for a pre-registered client it replaces a co
 `callback_url` that lacks the ID with the default callback (`use_legacy_fallback` in openai/codex,
 `codex-rs/rmcp-client/src/perform_oauth_login.rs`). With `callback_port = 8977` it sends
 `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` ("Distribution" → "Setup facts per client" →
-Codex). Until that URI is on the client, a Codex sign-in ends at GoTrue's `invalid redirect_uri`.
+Codex), which the client has carried since 2026-11-10. `MCP_CLIENT_REDIRECT_URIS.codex` lists it
+and the `localhost` spare; re-registering the client from the directory keeps both. The
+`/callback/magicbooklet` pair can go whenever the client is next edited.
 
 ## The kill switch
 
@@ -195,8 +197,8 @@ stack only, where the path-insertion forms answered 404 through local Kong:
    `apikey` header** through production Kong, since OAuth clients cannot send one (an authorize
    with a wrong `redirect_uri` answers 400 `invalid redirect_uri`, which proves the endpoint is
    open without starting a flow).
-3. The `WWW-Authenticate` challenge reaches Claude Code through Vercel: `claude mcp add` with
-   the Claude Code client and `--callback-port 8976`, then `/mcp` opens the browser on
+3. The `WWW-Authenticate` challenge reaches Claude Code through Vercel: the setup page's
+   `claude mcp add` (user scope, the Claude Code client, `--callback-port 8976`), then `/mcp` opens the browser on
    `/oauth/consent`, Allow lands on Claude Code's own callback page, and `claude mcp get
    magicbooklet` reports Connected. The route's 401 carries the challenge; the proxy's own 401
    does not, which is why `/api/mcp` owns its admission.
@@ -204,6 +206,11 @@ stack only, where the path-insertion forms answered 404 through local Kong:
    `get_generation` with `wait_seconds` 45 on a running creation answers rather than timing
    out: the wait, the admission round trips and the final read must all fit under the route's
    60 seconds and the client's own request timeout (the tools suggest 30 for that reason).
+5. One real Codex sign-in, since Codex's flags and keys here come from its documentation and
+   source, not a run: the setup page's `codex mcp add` with the Codex client, `callback_port =
+   8977` in `~/.codex/config.toml`, then `codex mcp login magicbooklet` opens `/oauth/consent`
+   with `redirect_uri=http://127.0.0.1:8977/callback/PPpoTd8EYBlz`, Allow completes the login,
+   and `list_models` answers in Codex.
 
 Verified on production on 2026-11-09, with the OAuth server on (issuer
 `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1`):
@@ -219,7 +226,7 @@ Verified on production on 2026-11-09, with the OAuth server on (issuer
   `authorization_response_iss_parameter_supported`, which is why Codex's redirect carries its
   callback ID ("Registered clients", above).
 
-Checks 3 and 4 need a real client connected end to end.
+Checks 3 to 5 need a real client connected end to end.
 
 ## Verifying a deployment
 
@@ -280,9 +287,11 @@ section 9) has the sources.
   URL, and the client id under Advanced settings (a two-step dialog calls it "Use your own OAuth
   client"), secret blank. A connector added on claude.ai also appears in Claude Desktop and the
   mobile apps. The redirect is `https://claude.ai/api/mcp/auth_callback`.
-- **Claude Code**: `claude mcp add --transport http --client-id <id> --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp`,
-  then `/mcp` → Authenticate (or the plugin, below). The redirect is
-  `http://localhost:8976/callback`; the port must be free while the person signs in.
+- **Claude Code**: `claude mcp add --transport http --scope user --client-id <id> --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp`,
+  then `/mcp` → Authenticate (or the plugin, below; one or the other, not both). `--scope user`
+  matters: the default scope, `local`, ties the server to the folder the command ran in, so it
+  would be missing from every other project. The redirect is `http://localhost:8976/callback`;
+  the port must be free while the person signs in.
 - **ChatGPT**: Plugins → + → Add custom MCP server, the URL under Connection, OAuth with the
   client id, then Create as a plugin; workspace policies decide whether custom servers are
   allowed. The redirect is per connector, `https://chatgpt.com/connector/oauth/{callback_id}`,
@@ -363,7 +372,11 @@ operator holds it, and whoever holds it can publish and change `com.magicbooklet
 after the first publish it goes into the owner's password manager.
 
 Publishing, once the route is live in production (the branch that added it merged and
-released):
+released) **and phase 2 is live too** (`publish_post`, `get_post`, `delete_post`, `upload_input`
+and Connected apps in production). The entry's description says agents post creations, and the
+registry refuses a second publish of the same version, so what it records at 1.0.0 must already
+be true; a correction later costs a version bump of `server.json` and `MCP_SERVER_VERSION`
+together.
 
 1. Install the publisher: `brew install mcp-publisher` (or the release binary from
    `github.com/modelcontextprotocol/registry/releases`), and check `mcp-publisher --help`.
@@ -375,7 +388,15 @@ released):
    ```
 
    It must answer the record and `200`. A Vercel firewall or bot rule that challenges
-   non-browser clients fails the login with `token exchange failed with status 401`.
+   non-browser clients fails the login with `token exchange failed with status 401`. Then check
+   that the static build kept the route's headers:
+
+   ```bash
+   curl -sSI https://magicbooklet.com/.well-known/mcp-registry-auth
+   ```
+
+   `content-type: text/plain; charset=utf-8` and `cache-control: public, max-age=300, s-maxage=300`
+   (the five-minute cache that lets a rotated key reach the next login quickly).
 3. From the repository root, log in with the key's 32-byte seed in hex. macOS's own `openssl`
    is LibreSSL, which has no Ed25519, so use OpenSSL 3 (`brew install openssl@3`). The seed
    goes into a variable and is never printed; it is in the publisher's argument list while the
