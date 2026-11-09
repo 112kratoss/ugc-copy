@@ -156,8 +156,9 @@ Notes:
   - Apply all pending Supabase migrations before using mutation commands.
   - --source agent lists the posts AI agents published through the MCP server (from the
     agent_tool_calls audit table, newest first, with each post's state) and narrows the open
-    post reports to those posts; subject reports are left out of that view. Take one down with
-    take-down-post on its report, as for any post.
+    post reports to those posts; subject reports are left out of that view. The view reads the
+    newest 200 agent-published posts: a report on an older one is in the plain list, not here.
+    Take one down with take-down-post on its report, as for any post.
   - reviewer-id must identify the staff member's real auth.users row.
   - Resolving a comment report atomically removes the comment and resolves duplicate reports.
   - Resolving a template report takes the template down (it leaves the catalog, its page answers
