@@ -44,36 +44,55 @@ not from this repository.
 1. Authentication → OAuth Server (beta): enable it.
 2. Set the authorization path to `/oauth/consent` (the consent page this app serves; the
    dashboard composes it with the project's Site URL, which is `https://magicbooklet.com`).
-3. Leave dynamic client registration off unless the phase 0 spike found a client that needs
-   it (Codex, Cursor). *[Placeholder: the spike's finding on dynamic registration.]*
-4. Confirm with the anon key that `GET https://<project-ref>.supabase.co/auth/v1/.well-known/oauth-authorization-server`
-   now answers metadata rather than `feature_disabled`, and that `GET /auth/v1/health` reports
-   an Auth version with the OAuth server API (the consent page's `getAuthorizationDetails`,
-   `approveAuthorization` and `denyAuthorization` calls need it).
+3. Leave dynamic client registration **off** (the spike's recommendation,
+   `docs/research/mcp-oauth-spike-2026-11-09.md`): registration works on this GoTrue, but every
+   zero-config `claude mcp add` or Codex install would add a client row and the consent screen
+   would name whatever the client registered. Off, the client list is ours: one public client per
+   surface, below. Phase 3 reconsiders.
+4. Verify discovery and the no-key endpoints (Production switch-on, below): the three discovery
+   URLs answer metadata rather than `feature_disabled`, and `/auth/v1/oauth/authorize` and
+   `/auth/v1/oauth/token` answer without an `apikey` header through production Kong (OAuth
+   clients cannot send one). `GET /auth/v1/health` names the Auth version; the spike ran on GoTrue
+   v2.186.0, which production also runs.
 
 The local stack enables the same block in `supabase/config.toml` (`[auth.oauth_server]`,
 `enabled = true`, `authorization_url_path = "/oauth/consent"`); the spike's worktree carries
-that change until it merges.
+that change until it merges. For ES256 tokens like production's, the local stack also needs a
+signing key (`supabase gen signing-key --algorithm ES256` and `signing_keys_path` in the config);
+without it the stack signs HS256 and `openid` cannot issue an ID token.
 
 ## Registering a client (an "OAuth App")
 
-Each agent product is one OAuth client: Authentication → OAuth Server → Apps → New. The client
-id is public; a confidential client's secret is shown once, so put it straight into the
-connector form it is for and keep no copy in this repository or in chat (the AGENTS.md rule on
-secrets applies).
+Each agent product is one **public** OAuth client (`token_endpoint_auth_method: none`, with a
+`client_uri` so the consent screen can name and link it), registered with the ops script under
+the service role:
 
-| Client | Type | Redirect URI(s) | Where the creator enters it |
-|---|---|---|---|
-| Claude.ai and Claude Desktop (custom connector) | confidential | `https://claude.ai/api/mcp/auth_callback` | Settings → Connectors → Add custom connector → URL `https://magicbooklet.com/api/mcp`, client id and secret under Advanced |
-| Claude Code | public | `http://localhost:<port>/callback` with the port we document *[placeholder: the spike's port]* | `claude mcp add --transport http --client-id <id> --callback-port <port> magicbooklet https://magicbooklet.com/api/mcp`, then `/mcp` |
-| ChatGPT (developer-mode connector) | confidential | *[placeholder: the redirect the spike confirms]* | Settings → Connectors → Create, with the URL, client id and secret |
-| Codex | *[placeholder: public client or dynamic registration, per the spike]* | *[placeholder]* | `codex mcp add magicbooklet --url https://magicbooklet.com/api/mcp`, then `codex mcp login magicbooklet` |
-| Cursor | *[placeholder: dynamic registration, per the spike]* | *[placeholder]* | deeplink or `.cursor/mcp.json` |
+```bash
+npm run ops:oauth-clients -- list
+```
 
-A redirect URI must match exactly, scheme, host, port and path. Supabase ignores the `resource`
-parameter clients send (it binds a token to no resource), which is why the route requires the
-`client_id` claim instead. The consent screen shows a fixed description of what an agent may do
-(there are no scopes).
+```bash
+npm run ops:oauth-clients -- create --name "Claude Code" --client-uri https://claude.com/claude-code --redirect-uri http://localhost:8976/callback --apply
+```
+
+Without `--apply` the script only shows what it would register; it prints client ids (public)
+and never a secret (a `--confidential` client's secret goes to the clipboard, for the connector
+form it is for, and nowhere else: the AGENTS.md rule on secrets). The dashboard's
+Authentication → OAuth Server → Apps page does the same by hand.
+
+| Client | Redirect URI(s) to register | How the creator connects |
+|---|---|---|
+| Claude.ai, Claude Desktop, Claude mobile | `https://claude.ai/api/mcp/auth_callback` (exactly this) | Settings → Connectors → Add custom connector → URL `https://magicbooklet.com/api/mcp`; under Advanced ("Use your own OAuth client") the client id, no secret |
+| Claude Code | `http://localhost:8976/callback` (our documented port; the URI must match exactly, so the port is fixed) | `claude mcp add --transport http --client-id <id> --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp`, then `/mcp` (or `claude mcp login magicbooklet`, which needs a terminal) |
+| ChatGPT (connectors, Apps SDK) | the per-connector `https://chatgpt.com/connector/oauth/{callback_id}` shown on the connector's management page: create the connector first, then register its URI (GoTrue sends no RFC 9207 `iss`, so ChatGPT's shared redirect does not apply) | Settings → Connectors → Create (developer mode) with the URL and the client id |
+| Codex CLI | `http://127.0.0.1:8977/callback/<callback_id>` exactly as `codex mcp add` prints it with `mcp_oauth_callback_port = 8977` pinned, or a pinned `mcp_servers.magicbooklet.oauth.callback_url` such as `http://127.0.0.1:8977/callback/magicbooklet` | `codex mcp add magicbooklet --url https://magicbooklet.com/api/mcp --oauth-client-id <id>`, then `codex mcp login magicbooklet` |
+| Cursor | `http://localhost:8787/callback` (desktop) and `https://www.cursor.com/agents/mcp/oauth/callback` (web and Cursor Agents) | `auth: { CLIENT_ID: "<id>" }` on the server entry in `.cursor/mcp.json`, or the deeplink |
+
+A redirect URI must match exactly: scheme, host, port and path (`127.0.0.1` is not `localhost`;
+no port-agnostic loopback). Supabase accepts and ignores the `resource` parameter clients send
+(it binds a token to no resource), which is why the route requires the `client_id` claim instead.
+The token's `scope` is only `openid profile email phone` class and is never shown as permissions;
+the consent screen shows the fixed description of what an agent may do.
 
 ## The kill switch
 
@@ -102,14 +121,42 @@ the library read's 400 (polls in `get_generation` count once per call), prompt e
 
 ## Revoking a client, or one creator's grant
 
-- One creator: phase 2 adds Connected apps to the profile editor (`listGrants`, `revokeGrant`).
-  Until then, the creator's grants are revoked in the dashboard under Authentication → Users →
-  the user → OAuth grants, or by signing the user out everywhere (which revokes every session,
-  the agent's included).
+- One creator: phase 2 adds Connected apps to the profile editor (`listGrants`,
+  `revokeGrant({ clientId })`). Until then, the creator's grants are revoked in the dashboard
+  under Authentication → Users → the user, or by signing the user out everywhere (which revokes
+  every session, the agent's included). A revoked grant deletes the client's sessions: the agent's
+  access token still verifies by signature until it expires, but the route's lifecycle round trip
+  answers `session_valid: false` and the next call is 401 with the challenge, and the refresh
+  fails. That is why the route never trusts the signature alone.
 - One client for everyone: Authentication → OAuth Server → Apps → the app → delete or disable
   it. Tokens already issued keep working until they expire (one hour); the refresh fails after
   that.
 - Everyone at once: the kill switch above.
+
+## Production switch-on checks
+
+Before the first client is announced, with the OAuth server enabled on the production project
+(`<ref>` is the project reference), each of these must hold; the spike proved them on a local
+stack only, where the path-insertion forms answered 404 through local Kong:
+
+1. Discovery, all three forms answer the authorization server's metadata with
+   `issuer: https://<ref>.supabase.co/auth/v1`:
+   `https://<ref>.supabase.co/.well-known/oauth-authorization-server/auth/v1` (RFC 8414
+   path insertion, which Claude Code tries first),
+   `https://<ref>.supabase.co/.well-known/openid-configuration/auth/v1`, and
+   `https://<ref>.supabase.co/auth/v1/.well-known/openid-configuration` (where Claude Code
+   succeeded on the local stack). `https://<ref>.supabase.co/auth/v1/.well-known/oauth-authorization-server`
+   is the fourth, Supabase's own.
+2. `GET /auth/v1/oauth/authorize?...` and `POST /auth/v1/oauth/token` answer **without an
+   `apikey` header** through production Kong, since OAuth clients cannot send one (an authorize
+   with a wrong `redirect_uri` answers 400 `invalid redirect_uri`, which proves the endpoint is
+   open without starting a flow).
+3. The `WWW-Authenticate` challenge reaches Claude Code through Vercel: `claude mcp add` with
+   the Claude Code client and `--callback-port 8976`, then `/mcp` opens the browser on
+   `/oauth/consent`, Allow lands on Claude Code's own callback page, and `claude mcp get
+   magicbooklet` reports Connected. The route's 401 carries the challenge; the proxy's own 401
+   does not, which is why `/api/mcp` owns its admission.
+4. `list_models` through Claude Code answers the production catalog's revision.
 
 ## Verifying a deployment
 

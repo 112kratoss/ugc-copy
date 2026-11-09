@@ -2,7 +2,9 @@
 
 Status: open, 2026-11-09. Decided after the competitor analysis in
 [`../research/agent-mcp-competitor-analysis-2026-11-09.md`](../research/agent-mcp-competitor-analysis-2026-11-09.md).
-Nothing here is built yet; the owner approves each phase before it starts.
+Phase 0 ran the same day and came back GO: every check and its result is in
+[`../research/mcp-oauth-spike-2026-11-09.md`](../research/mcp-oauth-spike-2026-11-09.md). Phase 1 is being
+built on `feat/mcp-server`; the owner approves each later phase before it starts.
 
 ## What we build
 
@@ -26,7 +28,7 @@ questions and plan the build", 2026-11-09). Each is a recommendation the owner c
 
 | # | Question | Decision | Why |
 |---|---|---|---|
-| 1 | Credit confirmation | **Quote, then create.** `create_media` requires `expected_cost_credits`; the start service already refuses to charge above the price shown (`unified-generation-start-service.ts`, "never charged more than that"), so a drifted price comes back as `COST_CHANGED` with the fresh quote and the agent confirms again. `create_media` also carries `destructiveHint: true` so clients that prompt on destructive tools (Claude.ai, Claude Code) ask the person first. `quote_generation` is free and returns `affordable`. | Krea's `preflight` and fal's "each submit bills" pattern, with no server state of our own. |
+| 1 | Credit confirmation | **Quote, then create.** `create_media` requires `expected_cost_credits`; the start service already refuses to charge above the price shown (`unified-generation-start-service.ts`, "never charged more than that"), so a drifted price comes back as `COST_CHANGED` with the fresh quote and the agent confirms again. `create_media` also carries `destructiveHint: true`, but the spike found that Claude Code's permission prompts ignore tool annotations, so the required `expected_cost_credits` is the guard and the hint is only a label. `quote_generation` is free and returns `affordable`. | Krea's `preflight` and fal's "each submit bills" pattern, with no server state of our own. |
 | 2 | Publish default | **Live by default**, `visibility` of `public` or `private` (the publish service's own values). Guards: the existing publish limit (20 per 10 min), a new agent cap of 10 public posts per account per day, the moderation queue as for any post, and an audit row per agent call so moderation can list and revert agent posts. Publishing the same generation twice returns its existing post (the service already treats a second publish as a republish). | Publishing is the differentiator nobody has; a draft-only default would make the second job a dead end. The caps and the audit trail are what make live acceptable. |
 | 3 | Gating | **Registered accounts, any plan.** The consent page refuses a guest session, and the route refuses an anonymous token even if one arrives. Credits are the only gate, as on the web. | Guests exist for checkout; an agent acting as a guest would create media nobody can find again. |
 | 4 | Templates | **Not in v1.** `run_template` is a phase-3 candidate once template usage is checked (owner's rule: check usage before offering parity). | Keep v1 to the two jobs the owner named. |
@@ -41,8 +43,11 @@ Decisions the plan adds:
 - **Pre-registered clients first, dynamic registration only if the spike needs it.** Claude Code
   takes a pre-registered client id and a fixed callback port
   (`claude mcp add --transport http --client-id … --callback-port …`), and Claude.ai, Claude
-  Desktop and ChatGPT take a client id and secret in their connector forms. Codex and Cursor may
-  need dynamic registration; phase 0 finds out.
+  Desktop and ChatGPT take a client id and secret in their connector forms. The spike confirmed both
+  paths on GoTrue 2.186: redirect URIs match exactly (no port-agnostic loopback), and dynamic
+  registration works for a zero-config Claude Code, Codex or Cursor at the cost of a client row per
+  install. Production starts with registration off and one public client per surface; phase 3
+  reconsiders.
 - **Agent tokens drive only the MCP route.** Supabase cannot bind a token to our resource (no
   RFC 8707 support), so the route requires the `client_id` claim an OAuth-issued token carries,
   and the proxy refuses a `client_id`-bearing token on every other `/api` route. A leaked agent
@@ -52,9 +57,10 @@ Decisions the plan adds:
 - **Stateless Streamable HTTP, JSON responses, no sessions, no Redis.** The MCP server SDK v2
   (`@modelcontextprotocol/server` 2.4.0, zod 4.3.6); the route exports `maxDuration = 60`. Long
   work never blocks: `create_media` returns a generation id, `get_generation` polls with an
-  optional bounded wait. Phase 1 note (2026-11-09): Vercel's `mcp-handler` 2.3.1 was tried and
-  dropped, because it gives the SDK no way to answer 2025-era clients (every client today) with
-  JSON bodies: its stateless legacy leg streams each answer over SSE. The adapter wires the SDK's
+  optional bounded wait. Phase 1 note (2026-11-09): Vercel's `mcp-handler` 2.3.1 worked in the
+  spike but was left out of the build, because it gives the SDK no way to answer 2025-era clients
+  (every client today) with JSON bodies: its stateless legacy leg streams each answer over SSE,
+  which the spike saw too (`text/event-stream` with one `data:` line). The adapter wires the SDK's
   web-standard transport directly (`sessionIdGenerator: undefined`, `enableJsonResponse: true`)
   and sends a 2026-07-28 envelope to the SDK's handler for that revision.
 - **No credit selling in tool output.** A short balance answers "insufficient credits" with the
@@ -204,10 +210,13 @@ Checks, each recorded with its result:
 - which exact redirect URIs Claude.ai, Claude Desktop, ChatGPT, Codex and Cursor present
   (read from their docs or the local Auth log on a failed exchange).
 
-Output: a dated note appended to this plan ("Spike results"), and the go or no-go for
-Supabase as the authorization server. Fallback if it fails: a minimal authorization server of
-our own in the app that signs in through the web session — a larger build, planned only if
-needed.
+Output: the research note named at the top, with the go or no-go for Supabase as the
+authorization server. Result, 2026-11-09: GO. The conditions it set — lifecycle admission rather
+than a signature check (revocation shows up as `session_valid: false`, not as an invalid
+signature), the `client_id` requirement, the guest refusal on the consent page (GoTrue lets a
+guest approve), exact redirect URIs, and production checks of the three discovery URLs and the
+no-`apikey` token endpoint — are folded into phase 1 below. The fallback (an authorization
+server of our own) is not needed.
 
 ### Phase 1 — the server and job 1 (create media)
 
