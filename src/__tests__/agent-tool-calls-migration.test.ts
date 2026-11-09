@@ -28,8 +28,12 @@ describe('agent_tool_calls migration', () => {
 
   it('is owner-read under RLS and append-only for the service role, per the migrations rule', () => {
     expect(sql).toContain('alter table public.agent_tool_calls enable row level security');
-    expect(sql).toMatch(/create policy agent_tool_calls_owner_read[\s\S]*for select[\s\S]*to authenticated[\s\S]*auth\.uid\(\)\) = user_id/u);
-    expect(sql).not.toMatch(/for (insert|update|delete|all)/u);
+    expect(sql).toMatch(/create policy agent_tool_calls_owner_read\s+on public\.agent_tool_calls\s+for select\s+to authenticated\s+using \(\(select auth\.uid\(\)\) = user_id\)/u);
+    // The one other policy is the identity-state restriction every authenticated grant carries
+    // (identity_state_deletion.test.sql): it widens nothing, and no policy lets the Data API write.
+    expect(sql).toMatch(/create policy authenticated_identity_active\s+on public\.agent_tool_calls\s+as restrictive\s+for all\s+to authenticated\s+using \(\(select public\.current_identity_is_active\(\)\)\)/u);
+    expect(sql.match(/create policy/gu)).toHaveLength(2);
+    expect(sql).not.toMatch(/for (insert|update|delete)\b/u);
     // A new table is born with the full service_role grant set; an audit ledger cuts it to select and insert.
     expect(sql).toContain('revoke all on public.agent_tool_calls from public, anon, authenticated, service_role');
     expect(sql).toContain('grant select on public.agent_tool_calls to authenticated');

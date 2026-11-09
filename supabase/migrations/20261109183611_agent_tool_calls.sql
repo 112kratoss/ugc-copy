@@ -41,6 +41,17 @@ create policy agent_tool_calls_owner_read
   to authenticated
   using ((select auth.uid()) = user_id);
 
+-- Every table the authenticated role may touch carries this (identity_state_deletion.test.sql
+-- holds the invariant): an account being deleted or merged away sees nothing through a token it
+-- still holds.
+create policy authenticated_identity_active
+  on public.agent_tool_calls
+  as restrictive
+  for all
+  to authenticated
+  using ((select public.current_identity_is_active()))
+  with check ((select public.current_identity_is_active()));
+
 revoke all on public.agent_tool_calls from public, anon, authenticated, service_role;
 grant select on public.agent_tool_calls to authenticated;
 grant select, insert on public.agent_tool_calls to service_role;

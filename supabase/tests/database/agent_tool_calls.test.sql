@@ -5,11 +5,20 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(22);
+select plan(23);
 
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.agent_tool_calls'::regclass),
   'agent_tool_calls has row-level security enabled'
+);
+select ok(
+  exists (
+    select 1 from pg_policy
+    where polrelid = 'public.agent_tool_calls'::regclass
+      and polname = 'authenticated_identity_active'
+      and not polpermissive
+  ),
+  'the identity-state restrictive policy every authenticated grant carries is on the ledger'
 );
 
 select has_index('public', 'agent_tool_calls', 'agent_tool_calls_user_created_idx', 'the owner read is indexed by user and time');
@@ -86,6 +95,19 @@ select throws_ok(
   null,
   'an account cannot delete audit rows'
 );
+reset role;
+
+-- An account being deleted sees nothing through a token it still holds.
+update public.profiles set identity_state = 'deleting' where id = 'ac100000-0000-4000-8000-000000000001';
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"ac100000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+select is(
+  (select count(*)::int from public.agent_tool_calls),
+  0,
+  'a deleting account reads none of its rows'
+);
+-- Not set back: a deleting identity cannot be reactivated (the trigger refuses), and the
+-- transaction rolls back at the end.
 reset role;
 
 -- The ledger goes with its account.
