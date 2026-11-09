@@ -640,6 +640,13 @@ export async function publishGenerationToShowcaseForRoute({
     return { ok: false, status: 404, body: { error: 'Generation not found' } };
   }
 
+  // An operator's removal is never republished (the MCP server's review, 2026-11-10): the
+  // owner's restore path refuses while it is set, and a publish by id must too. Plain
+  // "not found", as the removal itself is not the caller's to read.
+  if (generation.moderation_removed_at) {
+    return { ok: false, status: 404, body: { error: 'Generation not found' } };
+  }
+
   // A creation made as a guest keeps the guest's id after the guest registers
   // (the merge moves balances only), and Studio lists it through the linked
   // id. The account the guest was linked to publishes it as its own.
