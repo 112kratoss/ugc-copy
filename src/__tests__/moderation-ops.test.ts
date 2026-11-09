@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   getCanonicalOwnedModerationMediaPath,
+  listAgentPublishedPostsForModeration,
   listOpenModerationReports,
   normalizeShowcaseMediaPath,
   revokePostPublicMedia,
@@ -785,5 +786,101 @@ describe('moderation operations', () => {
       templateDisabled: false,
       templateModerationDisabledAt: '2026-10-15T05:00:00+00:00',
     });
+  });
+});
+
+// The MCP server's publish_post records each publication in agent_tool_calls; the queue's
+// agent view is built from that record, so an operator can review what agents put on the feed.
+describe('the agent view of the moderation queue', () => {
+  const AGENT_POST_ID = '70000000-0000-4000-8000-000000000007';
+  const AGENT_USER_ID = 'a1000000-0000-4000-8000-00000000000a';
+
+  function ledger(rows: unknown[], error: unknown = null) {
+    const result = Promise.resolve({ data: rows, error });
+    const query = {
+      select: vi.fn(() => query),
+      eq: vi.fn(() => query),
+      not: vi.fn(() => query),
+      in: vi.fn(() => query),
+      order: vi.fn(() => query),
+      limit: vi.fn(() => query),
+      then: result.then.bind(result),
+    };
+    return query;
+  }
+
+  const reportOf = (postId: string, id: string) => ({
+    id,
+    post_id: postId,
+    bundle_id: null,
+    reporter_user_id: '40000000-0000-4000-8000-000000000004',
+    reason: 'spam',
+    details: null,
+    status: 'open',
+    created_at: '2026-11-09T01:00:00.000Z',
+    updated_at: '2026-11-09T01:00:00.000Z',
+  });
+
+  it('narrows the open post reports to posts agents published, and leaves subject reports out of that view', async () => {
+    const calls = ledger([{ post_id: AGENT_POST_ID, user_id: AGENT_USER_ID, client_id: 'client-claude', created_at: '2026-11-09T00:00:00.000Z' }]);
+    const postReports = queryResult([reportOf(AGENT_POST_ID, REPORT_ID)]);
+    const subjectReports = queryResult([{ id: 'never-read' }]);
+    const posts = queryResult([{ id: AGENT_POST_ID, user_id: AGENT_USER_ID, title: 'By an agent', visibility: 'public', review_status: 'visible', report_count: 1, created_at: '2026-11-09T00:00:00.000Z' }]);
+    const from = vi.fn((table: string) => {
+      if (table === 'agent_tool_calls') return calls;
+      if (table === 'post_reports') return postReports;
+      if (table === 'moderation_reports') return subjectReports;
+      if (table === 'posts') return posts;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const snapshot = await listOpenModerationReports({ from } as unknown as SupabaseClient, { limit: 25, source: 'agent' });
+    expect(calls.eq).toHaveBeenCalledWith('tool', 'publish_post');
+    expect(calls.eq).toHaveBeenCalledWith('ok', true);
+    expect(postReports.eq).toHaveBeenCalledWith('status', 'open');
+    expect(postReports.in).toHaveBeenCalledWith('post_id', [AGENT_POST_ID]);
+    expect(from).not.toHaveBeenCalledWith('moderation_reports');
+    expect(snapshot.postReports).toEqual([expect.objectContaining({ id: REPORT_ID, postId: AGENT_POST_ID, post: expect.objectContaining({ title: 'By an agent' }) })]);
+    expect(snapshot.subjectReports).toEqual([]);
+  });
+
+  it('answers an empty agent view without reading a report when agents published nothing, and passes the ledger\'s error on', async () => {
+    const from = vi.fn((table: string) => {
+      if (table === 'agent_tool_calls') return ledger([]);
+      throw new Error(`Unexpected table ${table}`);
+    });
+    expect(await listOpenModerationReports({ from } as unknown as SupabaseClient, { source: 'agent' })).toEqual({ postReports: [], subjectReports: [] });
+    expect(from).toHaveBeenCalledTimes(1);
+
+    const broken = vi.fn(() => ledger(null as never, { message: 'relation does not exist' }));
+    await expect(listOpenModerationReports({ from: broken } as unknown as SupabaseClient, { source: 'agent' }))
+      .rejects.toThrow('Failed to list agent-published posts: relation does not exist');
+  });
+
+  it('lists the posts agents published with each post as it stands, a deleted one with no post', async () => {
+    const deletedPostId = '70000000-0000-4000-8000-000000000008';
+    const calls = ledger([
+      { post_id: AGENT_POST_ID, user_id: AGENT_USER_ID, client_id: 'client-claude', created_at: '2026-11-09T02:00:00.000Z' },
+      { post_id: deletedPostId, user_id: AGENT_USER_ID, client_id: 'client-codex', created_at: '2026-11-09T01:00:00.000Z' },
+    ]);
+    const posts = queryResult([{ id: AGENT_POST_ID, user_id: AGENT_USER_ID, title: 'By an agent', visibility: 'private', review_status: 'visible', report_count: 0, created_at: '2026-11-09T02:00:00.000Z' }]);
+    const from = vi.fn((table: string) => {
+      if (table === 'agent_tool_calls') return calls;
+      if (table === 'posts') return posts;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const items = await listAgentPublishedPostsForModeration({ from } as unknown as SupabaseClient, { limit: 10 });
+    expect(posts.in).toHaveBeenCalledWith('id', [AGENT_POST_ID, deletedPostId]);
+    expect(items).toEqual([
+      {
+        postId: AGENT_POST_ID,
+        userId: AGENT_USER_ID,
+        clientId: 'client-claude',
+        publishedAt: '2026-11-09T02:00:00.000Z',
+        post: { id: AGENT_POST_ID, userId: AGENT_USER_ID, title: 'By an agent', visibility: 'private', reviewStatus: 'visible', reportCount: 0, createdAt: '2026-11-09T02:00:00.000Z' },
+      },
+      { postId: deletedPostId, userId: AGENT_USER_ID, clientId: 'client-codex', publishedAt: '2026-11-09T01:00:00.000Z', post: null },
+    ]);
   });
 });

@@ -1127,26 +1127,29 @@ function publishRefusal(result: { status: number; body: { error: string; field?:
 
 async function refusePublishOverLimit(context: McpToolContext, makesPublic: boolean): Promise<CallToolResult | null> {
   const admin = context.createAdminSupabase();
+  // The publish route's own limit first, as every publish passes through it on the web.
   try {
-    // The publish route's own limit first, as every publish passes through it on the web.
     await context.services.enforceBackendRateLimit(admin, { ...SHOWCASE_PUBLISH_RATE_LIMIT, key: context.userId });
-    // Then the agent's daily cap on public posts, counted only where this call makes one.
-    if (makesPublic) {
-      await context.services.enforceBackendRateLimit(admin, { ...AGENT_PUBLISH_RATE_LIMIT, key: context.userId });
-    }
+  } catch (error) {
+    if (!(error instanceof BackendRateLimitError)) throw error;
+    return toolFailure(
+      MCP_ERROR_CODES.RATE_LIMITED,
+      `The creator's publish limit is spent for now. Wait ${error.retryAfterSeconds} seconds, then try again.`,
+      { retry_after_seconds: error.retryAfterSeconds, reset_at: error.state.resetAt, limit: error.state.limit },
+    );
+  }
+  // Then the agent's daily cap on public posts, counted only where this call makes one.
+  if (!makesPublic) return null;
+  try {
+    await context.services.enforceBackendRateLimit(admin, { ...AGENT_PUBLISH_RATE_LIMIT, key: context.userId });
     return null;
   } catch (error) {
-    if (error instanceof BackendRateLimitError) {
-      const daily = error.state.limit === AGENT_PUBLISH_RATE_LIMIT.limit && makesPublic;
-      return toolFailure(
-        MCP_ERROR_CODES.RATE_LIMITED,
-        daily
-          ? `An agent may publish ${AGENT_PUBLISH_RATE_LIMIT.limit} public posts a day for this creator, and that many are published. The next is allowed at ${error.state.resetAt}; a private post (visibility private) is not counted.`
-          : `The creator's publish limit is spent for now. Wait ${error.retryAfterSeconds} seconds, then try again.`,
-        { retry_after_seconds: error.retryAfterSeconds, reset_at: error.state.resetAt, limit: error.state.limit },
-      );
-    }
-    throw error;
+    if (!(error instanceof BackendRateLimitError)) throw error;
+    return toolFailure(
+      MCP_ERROR_CODES.RATE_LIMITED,
+      `An agent may publish ${AGENT_PUBLISH_RATE_LIMIT.limit} public posts a day for this creator, and that many are published. The next is allowed at ${error.state.resetAt}; a private post (visibility private) is not counted.`,
+      { retry_after_seconds: error.retryAfterSeconds, reset_at: error.state.resetAt, limit: error.state.limit },
+    );
   }
 }
 

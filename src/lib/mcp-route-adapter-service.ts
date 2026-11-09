@@ -202,6 +202,7 @@ function logToolCall(
  * recorded as a failure with its INTERNAL_ERROR code.
  */
 function recordToolCall(
+  log: typeof logBackendEvent,
   admin: () => ReturnType<typeof createServiceClient>,
   runAfterResponse: RunAfterResponse,
   identity: { clientId: string; userId: string },
@@ -217,16 +218,17 @@ function recordToolCall(
     postId: record.postId,
     costCredits: record.costCredits,
   });
+  const failed = (error: unknown) => {
+    log('warn', 'mcp_tool_call_record_failed', { tool: record.tool, clientId: identity.clientId, userId: identity.userId, error });
+  };
   const write = async () => {
     const written = await recordAgentToolCall(admin(), row);
-    if (!written.ok) {
-      logBackendWarning('mcp_tool_call_record_failed', { tool: record.tool, clientId: identity.clientId, error: written.error });
-    }
+    if (!written.ok) failed(written.error);
   };
   try {
     runAfterResponse(write);
   } catch (error) {
-    logBackendWarning('mcp_tool_call_record_failed', { tool: record.tool, clientId: identity.clientId, error });
+    failed(error);
   }
 }
 
@@ -287,7 +289,7 @@ async function handleMcpPost(request: NextRequest, dependencies: McpRouteDepende
     services: { ...defaultMcpToolServices(), ...dependencies.services },
     onToolCall: (record) => {
       logToolCall(log, identity, record);
-      recordToolCall(createAdminSupabase, runAfterResponse, identity, record);
+      recordToolCall(log, createAdminSupabase, runAfterResponse, identity, record);
     },
     runAfterResponse,
   };

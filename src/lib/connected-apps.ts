@@ -74,8 +74,16 @@ export function toConnectedApps(grants: unknown): ConnectedApp[] {
       grantedAt: grantedAt && !Number.isNaN(Date.parse(grantedAt)) ? grantedAt : null,
     };
     const earlier = byClient.get(clientId);
-    // A client approved twice is one app; it keeps its earliest approval.
-    if (!earlier || (app.grantedAt && earlier.grantedAt && app.grantedAt < earlier.grantedAt)) byClient.set(clientId, app);
+    if (!earlier) {
+      byClient.set(clientId, app);
+      continue;
+    }
+    // A client approved twice is one app: the first grant's name and site, the earliest approval.
+    byClient.set(clientId, {
+      ...earlier,
+      uri: earlier.uri ?? app.uri,
+      grantedAt: app.grantedAt && (!earlier.grantedAt || app.grantedAt < earlier.grantedAt) ? app.grantedAt : earlier.grantedAt,
+    });
   }
   return [...byClient.values()].sort((a, b) => (b.grantedAt ?? '').localeCompare(a.grantedAt ?? ''));
 }
