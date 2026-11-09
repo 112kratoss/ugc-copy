@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderToString } from 'react-dom/server';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
@@ -11,6 +12,7 @@ vi.mock('@/components/AuthProvider', () => ({
 
 import CreatorNameStep from '@/app/onboarding/CreatorNameStep';
 import { startCreatorNameStep } from '@/lib/creator-name-step';
+import { TYPED_BEFORE_HYDRATION_CAPTURE } from '@/lib/typed-before-hydration';
 
 const KIRAN = { email: 'kiran@example.com', user_metadata: { full_name: 'Kiran Das' } };
 const PLACEHOLDER_PROFILE = { id: 'user-1', username: 'creator-a1b2c3d4', displayName: null };
@@ -223,5 +225,73 @@ describe('the creator-name step (/onboarding)', () => {
     expect(screen.getByRole('button', { name: 'Save creator name' })).toBeDisabled();
     fireEvent.submit(nameField().closest('form')!);
     expect(await screen.findByRole('alert')).toHaveTextContent('Add the name you want people to see.');
+  });
+});
+
+// The server draws both fields filled, so a name or handle can be typed before
+// the page's script runs; no React hears it, and the next render would write
+// the suggestion back (src/lib/use-typed-before-hydration.ts).
+describe('the creator-name step typed in before its script ran', () => {
+  const recoverableErrors: unknown[] = [];
+
+  beforeAll(() => {
+    // The root layout's capture, as the server's HTML runs it ahead of every field.
+    new Function(TYPED_BEFORE_HYDRATION_CAPTURE)();
+  });
+
+  beforeEach(() => {
+    installServer();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+    expect(recoverableErrors.splice(0)).toEqual([]);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function step() {
+    return (
+      <CreatorNameStep
+        nextPath="/create"
+        userId="user-1"
+        savedUsername="creator-a1b2c3d4"
+        start={startCreatorNameStep({ username: 'creator-a1b2c3d4', displayName: null }, KIRAN)}
+      />
+    );
+  }
+
+  function hydrateAfter(fill: (name: HTMLInputElement, handle: HTMLInputElement) => void) {
+    const container = document.createElement('div');
+    container.innerHTML = renderToString(step());
+    document.body.appendChild(container);
+    const name = container.querySelector<HTMLInputElement>('#creator-name-display-name')!;
+    const handle = container.querySelector<HTMLInputElement>('#creator-name-handle')!;
+    fill(name, handle);
+    render(step(), { container, hydrate: true, onRecoverableError: (error) => recoverableErrors.push(error) });
+    return { name, handle };
+  }
+
+  function typeIn(field: HTMLInputElement, value: string) {
+    field.value = value;
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  it('keeps a name typed early, and the suggested handle follows it', async () => {
+    const { name, handle } = hydrateAfter((nameField) => typeIn(nameField, 'Early Name'));
+    await act(async () => {});
+    expect(name.value).toBe('Early Name');
+    expect(handle.value).toBe('early-name');
+  });
+
+  it('keeps a handle typed early as the creator’s own', async () => {
+    const { name, handle } = hydrateAfter((nameField, handleField) => {
+      typeIn(handleField, 'Early-Handle');
+      typeIn(nameField, 'Someone Else');
+    });
+    await act(async () => {});
+    expect(handle.value).toBe('early-handle');
+    expect(name.value).toBe('Someone Else');
   });
 });
