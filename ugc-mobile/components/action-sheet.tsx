@@ -6,7 +6,6 @@ import { Overlay } from '@/components/overlay-host';
 import {
   SheetGrabber,
   SheetPanel,
-  sheetPanelStyle,
   useSheetDismissDrag,
   useSheetPresentation,
 } from '@/components/sheet-chrome';
@@ -17,7 +16,7 @@ import {
   type ActionSheetRequest,
 } from '@/lib/action-sheet';
 import { haptic } from '@/lib/haptics';
-import { useReducedMotion } from '@/lib/motion';
+import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -123,87 +122,135 @@ function ActionSheetSurface({
           style={{ flex: 1 }}
         />
       </Animated.View>
+      {/* A floating card rather than an edge-to-edge sheet: inset from the
+          screen's sides and bottom, rounded on all four corners, its choices
+          drawn as separate filled rows. The transparent outer view is what
+          slides and what gets measured, so the travel covers the gap under the
+          card as well and nothing of it shows before the entrance starts. */}
       <SheetPanel
         {...drag.contentPanHandlers}
         accessibilityViewIsModal
         onLayout={presentation.onPanelLayout}
-        style={[
-          sheetPanelStyle(theme.colors),
-          {
-            paddingBottom: Math.max(bottomInset, appTheme.spacing.panel),
-            transform: [{ translateY }],
-          },
-        ]}
+        style={{
+          paddingHorizontal: CARD_SCREEN_INSET,
+          // Floats above the home indicator rather than under it, the way the
+          // system's inset sheets sit; a phone without one gets the same gap
+          // the sides have.
+          paddingBottom: Math.max(bottomInset, CARD_SCREEN_INSET),
+          transform: [{ translateY }],
+        }}
       >
-        <SheetGrabber drag={drag} />
-        <View style={{ gap: 4, paddingHorizontal: appTheme.spacing.panel, paddingBottom: appTheme.spacing.gap }}>
-          <Text
-            accessibilityRole="header"
-            numberOfLines={1}
-            style={{ color: theme.colors.text, ...appTheme.type.cardTitle }}
-          >
-            {request.title}
-          </Text>
-          {request.message ? (
-            <Text numberOfLines={2} style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
-              {request.message}
+        <View
+          style={{
+            borderRadius: CARD_RADIUS,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderColor: theme.colors.borderStrong,
+            backgroundColor: theme.colors.panel,
+            boxShadow: theme.shadow.floating.boxShadow,
+            paddingHorizontal: CARD_PADDING,
+            paddingBottom: CARD_PADDING,
+          }}
+        >
+          <SheetGrabber drag={drag} />
+          <View style={{ gap: 4, paddingHorizontal: ROW_PADDING, paddingTop: 2, paddingBottom: appTheme.spacing.gap + 2 }}>
+            <Text
+              accessibilityRole="header"
+              numberOfLines={1}
+              style={{ color: theme.colors.text, ...appTheme.type.cardTitle }}
+            >
+              {request.title}
             </Text>
-          ) : null}
+            {request.message ? (
+              <Text numberOfLines={2} style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
+                {request.message}
+              </Text>
+            ) : null}
+          </View>
+          <View style={{ gap: ROW_GAP }}>
+            {orderActionSheetActions(request.actions).map((action) => (
+              <ActionRow key={action.label} action={action} onPress={() => choose(action)} />
+            ))}
+          </View>
+          <View style={{ marginTop: appTheme.spacing.gap }}>
+            <ActionRow action={{ label: cancelLabel }} cancel onPress={cancel} />
+          </View>
         </View>
-        {orderActionSheetActions(request.actions).map((action) => (
-          <ActionRow key={action.label} action={action} onPress={() => choose(action)} />
-        ))}
-        <View style={{ height: 1, marginTop: appTheme.spacing.compact, backgroundColor: theme.colors.border }} />
-        <ActionRow action={{ label: cancelLabel }} muted onPress={cancel} />
       </SheetPanel>
     </View>
   );
 }
 
+// The card's own geometry. Not spacing tokens: this is the shape of one
+// surface. The radius is large and continuous so the card reads as a lifted
+// object rather than a page edge; the rows inside step down from it so the
+// corners nest (outer radius minus the padding between them).
+const CARD_SCREEN_INSET = 8;
+const CARD_RADIUS = 32;
+const CARD_PADDING = 10;
+const ROW_RADIUS = CARD_RADIUS - CARD_PADDING;
+const ROW_PADDING = 16;
+const ROW_GAP = 6;
+
 function ActionRow({
   action,
-  muted = false,
+  cancel = false,
   onPress,
 }: {
   action: ActionSheetAction;
-  muted?: boolean;
+  cancel?: boolean;
   onPress: () => void;
 }) {
   const theme = useAppTheme();
+  const tone = action.destructive ? theme.semantic.danger : null;
+  // The row springs down under the finger and rebounds on release, the same
+  // press the app's other surfaces have — a snapped scale reads as a flicker.
+  const motion = usePressMotion(Boolean(action.disabled), { scale: appTheme.motion.scale.pressedCard });
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={action.label}
-      accessibilityHint={action.detail}
-      accessibilityState={{ disabled: Boolean(action.disabled) }}
-      disabled={action.disabled}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: 56,
-        justifyContent: 'center',
-        gap: 3,
-        paddingHorizontal: appTheme.spacing.panel,
-        paddingVertical: appTheme.spacing.gap,
-        backgroundColor: pressed ? theme.colors.surface : 'transparent',
-        opacity: action.disabled ? appTheme.opacity.disabled : 1,
-      })}
-    >
-      <Text
-        style={{
-          color: action.destructive
-            ? theme.colors.danger
-            : muted
-              ? theme.colors.muted
-              : theme.colors.text,
-          ...appTheme.type.body,
-          fontWeight: '800',
-        }}
+    <MotionView style={motion.animatedStyle}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={action.label}
+        accessibilityHint={action.detail}
+        accessibilityState={{ disabled: Boolean(action.disabled) }}
+        disabled={action.disabled}
+        onPress={onPress}
+        onPressIn={motion.onPressIn}
+        onPressOut={motion.onPressOut}
+        style={({ pressed }) => ({
+          minHeight: 54,
+          justifyContent: 'center',
+          alignItems: cancel ? 'center' : 'stretch',
+          gap: 2,
+          paddingHorizontal: ROW_PADDING,
+          paddingVertical: appTheme.spacing.gap - 1,
+          borderRadius: ROW_RADIUS,
+          borderCurve: 'continuous',
+          backgroundColor: tone
+            ? tone.background
+            : pressed
+              ? theme.colors.surfaceStrong
+              : theme.colors.surface,
+          // A pressed danger row deepens through its own border tint rather than
+          // fading: a choice that is about to happen should not look less sure.
+          borderWidth: 1,
+          borderColor: tone && pressed ? tone.border : 'transparent',
+          opacity: action.disabled ? appTheme.opacity.disabled : 1,
+        })}
       >
-        {action.label}
-      </Text>
-      {action.detail ? (
-        <Text style={{ color: theme.colors.faint, ...appTheme.type.caption }}>{action.detail}</Text>
-      ) : null}
-    </Pressable>
+        <Text
+          style={{
+            color: tone ? tone.foreground : cancel ? theme.colors.muted : theme.colors.text,
+            ...appTheme.type.body,
+            fontWeight: '700',
+          }}
+        >
+          {action.label}
+        </Text>
+        {action.detail ? (
+          <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{action.detail}</Text>
+        ) : null}
+      </Pressable>
+    </MotionView>
   );
 }

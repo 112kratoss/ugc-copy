@@ -36,7 +36,11 @@ vi.mock('@/components/sheet-chrome', () => ({
   useSheetPresentation: () => ({ entryTranslateY: 0, backdropProgress: 1, onPanelLayout: () => undefined }),
 }));
 vi.mock('@/lib/use-hardware-back', () => ({ useHardwareBack: () => undefined }));
-vi.mock('@/lib/motion', () => ({ useReducedMotion: () => false }));
+vi.mock('@/lib/motion', () => ({
+  MotionView: ({ children, ...props }: MockProps) => React.createElement('motion-view', props, children),
+  usePressMotion: () => ({ animatedStyle: undefined, onPressIn: () => undefined, onPressOut: () => undefined }),
+  useReducedMotion: () => false,
+}));
 vi.mock('@/lib/haptics', () => ({ haptic: { light: () => undefined } }));
 
 import { ActionSheetHost } from '../components/action-sheet';
