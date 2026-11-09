@@ -56,8 +56,8 @@ export function loadWelcomePromise(): Promise<void> {
 
 /**
  * An account has signed in on this phone: the welcome credits are not promised
- * to a guest here again. Called for the account signed in now
- * (`useWelcomeCreditsQuery`); the first sign-in's record is kept.
+ * to a guest here again. Called by the auth provider for every registered
+ * account it holds (`lib/auth.tsx`); the first sign-in's record is kept.
  */
 export function endWelcomePromise(now = new Date().toISOString()) {
   publish(false);

@@ -97,6 +97,7 @@ import {
 import { probeSupabaseSession } from './supabase-session-probe';
 import type { ProfileResponse } from './types';
 import { clearVideoStills } from './video-still-cache';
+import { endWelcomePromise } from './welcome-promise';
 
 export type AuthMode = 'login' | 'signup';
 export type {
@@ -722,6 +723,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.remove();
   }, [api, getAccessToken, session?.user?.id]);
   const registeredUser = useMemo(() => getRegisteredUser(session), [session]);
+  // An account signed in on this phone, at launch or by any sign-in: a guest
+  // here is not promised the welcome credits again, whatever this account was
+  // told (owner, 2026-11-09: "Any sign-in ends it"; `lib/welcome-promise.ts`).
+  // A guest's session is no sign-in.
+  const registeredUserId = registeredUser?.id ?? null;
+  useEffect(() => {
+    if (registeredUserId) endWelcomePromise();
+  }, [registeredUserId]);
   // The Supabase session a registered account is signed in on: a refreshed
   // token keeps it, a new sign-in does not (`lib/supabase-session-id.ts`).
   const registeredSessionId = useMemo(

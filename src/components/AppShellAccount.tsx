@@ -226,6 +226,9 @@ export default function AppShellAccount({
           setProfile(null);
         }
         publishAppShellAuthentication(true);
+        // The account the header keeps here signed in on this browser, as a verified one did
+        // (below): one signing out from this page is not promised the credits (review of #746).
+        if (nextSession.user.is_anonymous !== true) endWelcomePromise();
         setSession(nextSession);
         if (!isRecheck) {
           const timeoutId = window.setTimeout(() => {
@@ -252,8 +255,8 @@ export default function AppShellAccount({
       publishAppShellAuthentication(true);
       // An account signed in on this browser: its signed-out pages stop promising the welcome
       // credits, whatever this account was told about its own (owner, 2026-11-09: "Any sign-in
-      // ends it"; `welcome-promise.ts`). Only once Supabase Auth vouches for it, and never for a
-      // guest's session.
+      // ends it"; `welcome-promise.ts`). Never for a guest's session, nor one Supabase Auth
+      // refuses (a forged or ended one, above).
       if (verifiedUser.is_anonymous !== true) endWelcomePromise();
       if (mounted) {
         setSession(verifiedSession);

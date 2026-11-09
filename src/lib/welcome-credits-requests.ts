@@ -1,6 +1,5 @@
 import type { WelcomeCreditStatus } from '@/lib/onboarding';
 import { supabase } from '@/lib/supabase';
-import { endWelcomePromise } from '@/lib/welcome-promise';
 
 /** `/api/credits/welcome` and its claim, as the popup reads them. */
 export type WelcomeCreditAnswer = {
@@ -61,11 +60,8 @@ async function welcomeRequest(path: string, init?: RequestInit, account?: Welcom
     credits: typeof body.credits === 'number' ? body.credits : 0,
     identityComplete: body.identityComplete === true,
   };
-  // An answer for an account is an account signed in on this browser, so its signed-out top bar,
-  // sign-in page and Home shelf stop promising the welcome credits, whatever the answer says
-  // (owner, 2026-11-09: "Any sign-in ends it"; `welcome-promise.ts`). The header ends it on every
-  // page with the top bar; this is for the name step, which has none. A guest's is no sign-in.
-  if (answer.status !== 'requires_account') endWelcomePromise();
+  // The signed-out promise is not this answer's to end: where an account is seen signed in does
+  // that (`welcome-promise.ts`; owner, 2026-11-09: "Any sign-in ends it").
   return answer;
 }
 

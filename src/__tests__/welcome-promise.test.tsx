@@ -13,7 +13,7 @@ import {
   useWelcomePromise,
   WELCOME_PROMISE_STORAGE_KEY,
 } from '@/lib/welcome-promise';
-import { WELCOME_PROMISE_RESTORE } from '@/lib/welcome-promise-restore';
+import { LEGACY_WELCOME_PROMISE_STORAGE_KEY, WELCOME_PROMISE_RESTORE } from '@/lib/welcome-promise-restore';
 
 // The owner, 2026-11-09: "i signed up and claim the free credits and then i logged out. then it
 // should not be saying the 25 free creds right !" The web's half of the app's rule (#738). Then,
@@ -39,8 +39,34 @@ afterEach(() => {
 });
 
 describe('the record', () => {
-  it('is kept under the app’s key', () => {
-    expect(WELCOME_PROMISE_STORAGE_KEY).toBe('magicbooklet.welcome-promise.spent.v1');
+  // Review of #746: a tab still running #744's code after the deploy removes #744's key for an
+  // account still owed its credits, so this rule keeps a key of its own, which no older code knows.
+  it('is kept under a key of its own, and #744’s record counts as a sign-in here too', () => {
+    expect(WELCOME_PROMISE_STORAGE_KEY).toBe('magicbooklet.welcome-promise.signed-in.v2');
+    expect(LEGACY_WELCOME_PROMISE_STORAGE_KEY).toBe('magicbooklet.welcome-promise.spent.v1');
+
+    window.localStorage.setItem(LEGACY_WELCOME_PROMISE_STORAGE_KEY, '2026-11-09T09:00:00.000Z');
+    expect(renderHook(() => useWelcomePromise()).result.current).toBe(false);
+  });
+
+  it('is written under its own key only', () => {
+    endWelcomePromise('2026-11-09T10:00:00.000Z');
+    expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).toBe('2026-11-09T10:00:00.000Z');
+    expect(window.localStorage.getItem(LEGACY_WELCOME_PROMISE_STORAGE_KEY)).toBeNull();
+  });
+
+  it('outlives a tab still running #744’s code, which removes only its own key', () => {
+    window.localStorage.setItem(LEGACY_WELCOME_PROMISE_STORAGE_KEY, '2026-11-09T09:00:00.000Z');
+    const { result } = renderHook(() => useWelcomePromise());
+    act(() => endWelcomePromise());
+
+    // The old tab reads an account still owed its credits and takes its record back.
+    act(() => {
+      window.localStorage.removeItem(LEGACY_WELCOME_PROMISE_STORAGE_KEY);
+      window.dispatchEvent(new StorageEvent('storage', { key: LEGACY_WELCOME_PROMISE_STORAGE_KEY }));
+    });
+    expect(result.current).toBe(false);
+    expect(rootMark()).toBe('spent');
   });
 
   it('is only ever ended: no welcome answer brings the promise back any more', () => {
@@ -107,6 +133,21 @@ describe('the promise in this browser', () => {
     expect(result.current).toBe(false);
   });
 
+  // Review of #746: what this page saw stays, whatever another tab's storage does.
+  it('keeps an end this page saw where storage refused it, even when another tab clears storage', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+    const { result } = renderHook(() => useWelcomePromise());
+    act(() => endWelcomePromise());
+
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: null }));
+    });
+    expect(result.current).toBe(false);
+    expect(rootMark()).toBe('spent');
+  });
+
   it('follows another tab: a sign-in there ends it here, and a record cleared there brings it back', () => {
     const { result } = renderHook(() => useWelcomePromise());
     expect(result.current).toBe(true);
@@ -152,6 +193,12 @@ describe('the first paint', () => {
     expect(rootMark()).toBeUndefined();
 
     window.localStorage.setItem(WELCOME_PROMISE_STORAGE_KEY, '2026-11-09T10:00:00.000Z');
+    restore();
+    expect(rootMark()).toBe('spent');
+  });
+
+  it('marks #744’s record too', () => {
+    window.localStorage.setItem(LEGACY_WELCOME_PROMISE_STORAGE_KEY, '2026-11-09T09:00:00.000Z');
     restore();
     expect(rootMark()).toBe('spent');
   });

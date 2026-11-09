@@ -16,6 +16,7 @@ import { unsignedJwt } from '@/__tests__/fixtures/unsigned-jwt';
 /** A fresh browser for the welcome promise: no record, no mark on the root (`welcome-promise.ts`). */
 function forgetWelcomePromise() {
   window.localStorage.removeItem(WELCOME_PROMISE_STORAGE_KEY);
+  window.localStorage.removeItem('magicbooklet.welcome-promise.spent.v1');
   delete document.documentElement.dataset.welcomePromise;
   resetWelcomePromiseForTests();
 }
@@ -285,23 +286,31 @@ describe('AppShellAccount', () => {
       expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).toBeNull();
     });
 
-    it('waits until Supabase Auth can vouch for the account', async () => {
+    // Review of #746: through an outage the header keeps the account, and one signing out from
+    // that page would otherwise still be promised the credits it had.
+    it('ends for an account the header keeps while Supabase Auth cannot answer', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout'] });
-      mocks.getUser
-        .mockResolvedValueOnce({ data: { user: null }, error: unreachable })
-        .mockResolvedValueOnce({ data: { user: authenticatedSession.user }, error: null });
+      mocks.getUser.mockResolvedValue({ data: { user: null }, error: unreachable });
+
+      render(<AppShellAccount />);
+
+      expect(await screen.findByRole('button', { name: 'Open account menu for creator' })).toBeInTheDocument();
+      expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).not.toBeNull();
+    });
+
+    it('stands for a guest’s session the header keeps while Supabase Auth cannot answer', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout'] });
+      const guest = { ...authenticatedSession, user: { ...authenticatedSession.user, is_anonymous: true } };
+      mocks.onAuthStateChange.mockImplementation((callback) => {
+        queueMicrotask(() => callback('INITIAL_SESSION', guest));
+        return { data: { subscription: { unsubscribe: vi.fn() } } };
+      });
+      mocks.getUser.mockResolvedValue({ data: { user: null }, error: unreachable });
 
       render(<AppShellAccount />);
 
       expect(await screen.findByRole('button', { name: 'Open account menu for creator' })).toBeInTheDocument();
       expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).toBeNull();
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(2_000);
-      });
-
-      expect(await screen.findByText('1295 credits')).toBeInTheDocument();
-      expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).not.toBeNull();
     });
   });
 
@@ -345,7 +354,9 @@ describe('AppShellAccount', () => {
         await vi.advanceTimersByTimeAsync(2_000);
       });
 
-      expect(await screen.findByRole('link', { name: 'Sign in for 25 free credits' })).toBeInTheDocument();
+      // Signed out, and promised nothing: the account the header kept signed in here before its
+      // session ended (owner, 2026-11-09: "Any sign-in ends it"; review of #746).
+      expect(await screen.findByRole('link', { name: 'Sign in' })).toBeInTheDocument();
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });

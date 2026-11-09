@@ -29,6 +29,7 @@ import {
 import { TYPED_INPUT_PROPS } from '@/lib/typed-before-hydration';
 import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 import { readWelcomeCredits } from '@/lib/welcome-credits-requests';
+import { endWelcomePromise } from '@/lib/welcome-promise';
 
 /** The server's caps: `validateProfileUpdate` in src/lib/profile.ts. */
 const DISPLAY_NAME_MAX_LENGTH = 60;
@@ -156,8 +157,14 @@ export default function CreatorNameStep({
     document.cookie = creatorNameStepShownCookie(userId, window.location.protocol === 'https:');
   }, [userId]);
 
+  // An account is signed in here (the page sends guests and signed-out visitors to sign in), and
+  // this page has no header to say so: the signed-out promise ends in this browser (owner,
+  // 2026-11-09: "Any sign-in ends it"; `welcome-promise.ts`).
+  useEffect(() => {
+    endWelcomePromise();
+  }, []);
+
   // The welcome credits wait on the name: said under the button, as the app does.
-  // Through the shared reader, which also ends the signed-out promise (welcome-promise.ts).
   useEffect(() => {
     if (!accessToken) return undefined;
     let active = true;

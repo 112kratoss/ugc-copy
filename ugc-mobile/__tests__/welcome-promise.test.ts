@@ -1,4 +1,3 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,18 +35,6 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
-const auth = vi.hoisted(() => ({
-  user: null as { id: string } | null,
-  getWelcomeCredits: (() => Promise.resolve({})) as () => Promise<unknown>,
-}));
-
-vi.mock('../lib/auth', () => ({
-  useAuth: () => ({ user: auth.user, api: { getWelcomeCredits: () => auth.getWelcomeCredits() } }),
-}));
-vi.mock('../lib/onboarding', () => ({ useOnboarding: () => ({}) }));
-
-import type { WelcomeCreditResponse } from '../lib/types';
-import { useWelcomeCreditsQuery } from '../lib/use-onboarding-destination';
 import * as welcomePromise from '../lib/welcome-promise';
 import {
   endWelcomePromise,
@@ -58,7 +45,6 @@ import {
 } from '../lib/welcome-promise';
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-const answer = (status: WelcomeCreditResponse['status']) => ({ status, identityComplete: true }) as WelcomeCreditResponse;
 
 /** A screen that reads the promise, as Home's top bar does. */
 function Reader() {
@@ -82,7 +68,6 @@ beforeEach(() => {
   storage.failWrites = false;
   storage.throwWrites = false;
   storage.writes = 0;
-  auth.user = null;
   resetWelcomePromiseForTests();
 });
 afterEach(() => {
@@ -93,6 +78,7 @@ afterEach(() => {
 // not be saying the 25 free creds". Then, shown that an account made before the program kept the
 // promise ("Still says 25"), they chose "Any sign-in ends it": once an account has signed in on
 // this phone, a guest here is not promised the welcome credits, whatever that account was told.
+// Where the phone learns of a sign-in is the auth provider (`__tests__/auth-guest-lifecycle.test.tsx`).
 describe('the rule', () => {
   it('is only ever ended: no welcome answer brings the promise back any more', () => {
     expect(Object.keys(welcomePromise).sort()).toEqual([
@@ -186,80 +172,5 @@ describe('the phone remembers it across sign-outs and launches', () => {
       await settle();
     });
     expect(promise()).toBe(false);
-  });
-});
-
-describe('where the phone learns it: an account signed in, whatever its welcome credits', () => {
-  let client: QueryClient;
-  beforeEach(() => {
-    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  });
-  afterEach(() => client.clear());
-
-  /** A screen that reads the welcome answer, as the popup mounted over every screen does. */
-  function Probe() {
-    useWelcomeCreditsQuery();
-    return null;
-  }
-  async function mountProbe() {
-    let tree!: renderer.ReactTestRenderer;
-    await act(async () => {
-      tree = renderer.create(React.createElement(QueryClientProvider, { client }, React.createElement(Probe)));
-      await settle();
-    });
-    trees.push(tree);
-    return {
-      async rerender() {
-        await act(async () => {
-          tree.update(React.createElement(QueryClientProvider, { client }, React.createElement(Probe)));
-          await settle();
-        });
-      },
-    };
-  }
-
-  // "Still says 25": the server answers an account made before the program `legacy_ineligible`.
-  it.each(['legacy_ineligible', 'eligible', 'not_eligible', 'already_claimed'] as const)(
-    'ends it for an account answered %s, and the next launch remembers it',
-    async (status) => {
-      auth.user = { id: 'creator-1' };
-      auth.getWelcomeCredits = () => Promise.resolve(answer(status));
-      const promise = await mountReader();
-      await mountProbe();
-      expect(promise()).toBe(false);
-      expect(storage.values.has(WELCOME_PROMISE_STORAGE_KEY)).toBe(true);
-    },
-  );
-
-  it('ends it before the account’s welcome answer lands, or where it never does', async () => {
-    auth.user = { id: 'creator-1' };
-    auth.getWelcomeCredits = () => new Promise(() => undefined);
-    const promise = await mountReader();
-    await mountProbe();
-    expect(promise()).toBe(false);
-  });
-
-  it('leaves it ended for a second account, even one still owed its credits', async () => {
-    auth.user = { id: 'account-a' };
-    auth.getWelcomeCredits = () => Promise.resolve(answer('already_claimed'));
-    const promise = await mountReader();
-    const probe = await mountProbe();
-    expect(promise()).toBe(false);
-
-    auth.user = { id: 'account-b' };
-    auth.getWelcomeCredits = () => Promise.resolve(answer('not_eligible'));
-    await probe.rerender();
-    expect(promise()).toBe(false);
-    expect(storage.values.has(WELCOME_PROMISE_STORAGE_KEY)).toBe(true);
-  });
-
-  it('learns nothing while no one is signed in, guests included', async () => {
-    const promise = await mountReader();
-    const fetches = vi.fn(() => Promise.resolve(answer('claimed')));
-    auth.getWelcomeCredits = fetches;
-    await mountProbe();
-    expect(fetches).not.toHaveBeenCalled();
-    expect(promise()).toBe(true);
-    expect(storage.values.has(WELCOME_PROMISE_STORAGE_KEY)).toBe(false);
   });
 });

@@ -82,7 +82,7 @@ export default function WelcomeCreditsGate({ offeredHere, returned, page = '' }:
     return () => window.removeEventListener(WELCOME_OFFER_CHANGED_EVENT, askAgain);
   }, []);
 
-  // The signed-out promise is not this gate's: the header ends it for any account it verifies
+  // The signed-out promise is not this gate's: the header ends it for any account it keeps
   // (`welcome-promise.ts`), so an account never asked here needs nothing from it.
   const quietHere = userId !== null && (wasWelcomePopupClosedThisSession(userId) || isWelcomeSettledHere(userId));
   const answerHere = answer && answer.userId === userId ? answer : null;

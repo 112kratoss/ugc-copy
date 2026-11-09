@@ -1,5 +1,4 @@
 import { useQuery, type QueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
 
 import { useAuth } from './auth';
 import { useOnboarding } from './onboarding';
@@ -9,7 +8,6 @@ import {
   type OnboardingDestination,
 } from './onboarding-destination';
 import type { WelcomeCreditResponse } from './types';
-import { endWelcomePromise } from './welcome-promise';
 
 const WELCOME_CREDITS_QUERY_SCOPE = 'welcome-credits';
 
@@ -71,14 +69,6 @@ export function useWelcomeCreditsQuery() {
     // launch, and again only when Edit Profile or a claimed name invalidates it.
     staleTime: (query) => (isWelcomeCreditAnswerSettled(query.state.data) ? Infinity : WELCOME_CREDITS_STALE_MS),
   });
-  // An account signed in on this phone: a guest here is not promised the
-  // welcome credits again, whatever this account was told (owner, 2026-11-09:
-  // "Any sign-in ends it"; `lib/welcome-promise.ts`). The popup mounted over
-  // every screen reads this query, so every sign-in passes here.
-  const userId = user?.id;
-  useEffect(() => {
-    if (userId) endWelcomePromise();
-  }, [userId]);
   return query;
 }
 

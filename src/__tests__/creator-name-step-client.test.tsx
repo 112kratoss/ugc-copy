@@ -23,6 +23,7 @@ vi.mock('@/components/AuthProvider', () => ({
 import CreatorNameStep from '@/app/onboarding/CreatorNameStep';
 import { startCreatorNameStep } from '@/lib/creator-name-step';
 import { TYPED_BEFORE_HYDRATION_CAPTURE } from '@/lib/typed-before-hydration';
+import { resetWelcomePromiseForTests, WELCOME_PROMISE_STORAGE_KEY } from '@/lib/welcome-promise';
 
 const KIRAN = { email: 'kiran@example.com', user_metadata: { full_name: 'Kiran Das' } };
 const PLACEHOLDER_PROFILE = { id: 'user-1', username: 'creator-a1b2c3d4', displayName: null };
@@ -112,6 +113,20 @@ describe('the creator-name step (/onboarding)', () => {
     renderStep();
 
     expect(document.cookie).toContain('mb_name_step_shown=user-1');
+  });
+
+  // Owner, 2026-11-09: "Any sign-in ends it". The one signed-in page with no header ends the
+  // signed-out promise itself, as it opens, before any answer about the account's credits
+  // (`/onboarding` sends guests and signed-out visitors to sign in; review of #746).
+  it('ends the signed-out welcome promise in this browser as it opens', () => {
+    window.localStorage.removeItem(WELCOME_PROMISE_STORAGE_KEY);
+    resetWelcomePromiseForTests();
+    installServer();
+    renderStep();
+
+    expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).not.toBeNull();
+    window.localStorage.removeItem(WELCOME_PROMISE_STORAGE_KEY);
+    delete document.documentElement.dataset.welcomePromise;
   });
 
   it('swaps a suggestion the check finds taken for <handle>-NNN and checks that one', async () => {
