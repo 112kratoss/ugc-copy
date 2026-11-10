@@ -3,7 +3,7 @@
   "name": "com.magicbooklet/mcp",
   "title": "Magic Booklet",
   "description": "Create AI images and videos with your Magic Booklet credits, each run quoted first, and post them.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "websiteUrl": "https://magicbooklet.com/developers/mcp",
   "repository": {
     "url": "https://github.com/112kratoss/ugc-copy",

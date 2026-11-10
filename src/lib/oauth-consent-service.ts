@@ -30,7 +30,7 @@ export const AGENT_ACCESS = [
   },
   {
     title: 'Publish posts as you',
-    detail: 'On your profile and in Explore, under your name, with the rules every post follows.',
+    detail: 'Your creations, pictures and videos the agent brings from elsewhere, and text posts, with prompts or guides attached free or at a price you approve, on your profile, in Explore and in the Marketplace, under your name, with the rules every post follows.',
   },
   {
     title: 'Read your creations',

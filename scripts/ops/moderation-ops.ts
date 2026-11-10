@@ -158,6 +158,10 @@ Notes:
     agent_tool_calls audit table, newest first, with each post's state) and narrows the open
     post reports to those posts; subject reports are left out of that view. The view reads the
     newest 200 agent-published posts: a report on an older one is in the plain list, not here.
+    Its source column says what each post was made from: creation (one of the creator's
+    creations here), upload (media the agent brought from elsewhere) or text (a text post);
+    a deleted post with no creation behind it reads "upload or text". Its resource column says
+    what the post carries beside itself: none, free or paid (a prompt, guide or recipe on sale).
     Take one down with take-down-post on its report, as for any post.
   - reviewer-id must identify the staff member's real auth.users row.
   - Resolving a comment report atomically removes the comment and resolves duplicate reports.
@@ -240,6 +244,11 @@ function printAgentPosts(posts: Awaited<ReturnType<typeof listAgentPublishedPost
   if (posts.length > 0) {
     console.table(posts.map((item) => ({
       post_id: item.postId,
+      // What the post was made from: one of the creator's creations here, media the agent brought,
+      // or text alone. The audit row cannot tell the last two apart once the post is gone.
+      source: item.source ?? 'upload or text',
+      // What it carries beside itself: nothing, a free resource, or one on sale.
+      resource: item.resource ?? '',
       client_id: item.clientId,
       user_id: item.userId,
       published_at: item.publishedAt,

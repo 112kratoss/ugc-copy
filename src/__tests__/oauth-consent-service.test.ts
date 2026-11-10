@@ -71,6 +71,16 @@ describe('consent gate', () => {
       'Read your creations',
     ]);
     expect(JSON.stringify(AGENT_ACCESS)).not.toMatch(/openid|scope/i);
+    // Publishing covers every source of a post, the creator's creations, media the agent brings
+    // from elsewhere and text posts (the MCP server's publish_post), and what a post may carry: a
+    // prompt or a guide, free or on sale. All of it is said before the person allows it, in the
+    // owner's wording (2026-11-10).
+    expect(`${AGENT_ACCESS[1].title}: ${AGENT_ACCESS[1].detail}`).toBe(
+      'Publish posts as you: Your creations, pictures and videos the agent brings from elsewhere, and text posts, with prompts or guides attached free or at a price you approve, on your profile, in Explore and in the Marketplace, under your name, with the rules every post follows.',
+    );
+    // A price is the person's to approve, and a sale reaches the Marketplace: neither is left out.
+    expect(AGENT_ACCESS[1].detail).toContain('free or at a price you approve');
+    expect(AGENT_ACCESS[1].detail).toContain('in the Marketplace');
     // Prompt enhancement charges with no price step; the consent screen says so with the service's own cost.
     expect(AGENT_ACCESS[0].detail).toContain(`except prompt enhancement, a fixed ${getPromptEnhancementCost()} credit`);
   });

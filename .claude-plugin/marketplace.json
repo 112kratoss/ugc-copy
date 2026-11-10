@@ -10,7 +10,7 @@
     {
       "name": "magicbooklet",
       "source": "./plugins/magicbooklet",
-      "description": "The Magic Booklet MCP server and two skills: a UGC ad from brief to finished video or image, and publishing a creation as a post.",
+      "description": "The Magic Booklet MCP server and four skills: a UGC ad from brief to finished video or image, publishing a creation as a post, posting media made elsewhere, and sharing a skill, a prompt or a guide.",
       "category": "media",
       "tags": ["mcp", "ai-video", "ai-image", "ugc", "ads"]
     }

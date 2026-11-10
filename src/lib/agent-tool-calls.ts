@@ -25,7 +25,11 @@ export const AGENT_PUBLISH_RECORD_CODES = {
   PUBLISHED_PRIVATE: 'PUBLISHED_PRIVATE',
   /** An existing public post made private. */
   MADE_PRIVATE: 'MADE_PRIVATE',
-  /** The existing post returned as it was; the row names no post (the agent made none). */
+  /**
+   * The existing post returned as it was. For a creation's post the row names no post (the agent
+   * made none: the creator may have published it by hand). For a post made from uploads the row
+   * names it, since only an agent's publish makes such a post, whichever call's row was written.
+   */
   ALREADY_PUBLISHED: 'ALREADY_PUBLISHED',
 } as const;
 
@@ -126,6 +130,12 @@ export type AgentPublishedPostRecord = {
   userId: string;
   clientId: string;
   publishedAt: string;
+  /**
+   * The creation the post was published from, as its row names it; null for a post with no
+   * creation behind it (`publish_post` with `uploads`, or a text post). Which of those two it is
+   * the row does not say: the post itself does (`moderation-ops.ts` reads its format).
+   */
+  generationId: string | null;
 };
 
 /**
@@ -137,25 +147,44 @@ export async function listAgentPublishedPosts(
   admin: SupabaseClient,
   { limit, postIds }: { limit: number; postIds?: readonly string[] },
 ): Promise<AgentPublishedPostRecord[]> {
-  let query = admin
-    .from(AGENT_TOOL_CALLS_TABLE)
-    .select('post_id, user_id, client_id, created_at')
-    .eq('tool', 'publish_post')
-    .eq('ok', true)
-    .not('post_id', 'is', null)
-    .order('created_at', { ascending: false });
-  if (postIds) {
-    if (postIds.length === 0) return [];
-    query = query.in('post_id', [...postIds]);
-  }
-  // Several calls may name one post; the page is of posts, so more rows are read than posts kept.
-  const { data, error } = await query.limit(Math.max(limit * 4, limit));
-  if (error) throw error;
+  if (postIds && postIds.length === 0) return [];
+  type Row = { post_id: string; user_id: string; client_id: string; created_at: string; generation_id?: string | null };
+  const rows = (repeats: boolean, rowLimit: number) => {
+    let query = admin
+      .from(AGENT_TOOL_CALLS_TABLE)
+      .select('post_id, user_id, client_id, created_at, generation_id')
+      .eq('tool', 'publish_post')
+      .eq('ok', true)
+      .not('post_id', 'is', null);
+    query = repeats
+      ? query.eq('code', AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED)
+      : query.or(`code.is.null,code.neq.${AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED}`);
+    if (postIds) query = query.in('post_id', [...postIds]);
+    return query.order('created_at', { ascending: false }).limit(rowLimit);
+  };
+  // Two reads, so the rows of one kind cannot push the other out. Publications and visibility
+  // changes pass the publish limit, so their number is bounded; several may name one post, and
+  // the page is of posts, so more rows are read than posts kept. An unchanged repeat of a text or
+  // upload post names its post too (for the publish whose own row was lost) and spends no limit:
+  // read with the publications, a loop of them would fill the page and hide every other agent's
+  // posts from moderation (PR #751's review). They get a page of their own.
+  const [publications, repeated] = await Promise.all([rows(false, Math.max(limit * 4, limit)), rows(true, limit)]);
+  if (publications.error) throw publications.error;
+  if (repeated.error) throw repeated.error;
+  const data = [...((publications.data ?? []) as Row[]), ...((repeated.data ?? []) as Row[])]
+    .sort((left, right) => (left.created_at < right.created_at ? 1 : left.created_at > right.created_at ? -1 : 0));
   const seen = new Map<string, AgentPublishedPostRecord>();
-  for (const row of (data ?? []) as Array<{ post_id: string; user_id: string; client_id: string; created_at: string }>) {
+  for (const row of data) {
     // Newest first in the read: a post keeps its place from its newest call and, each older call
-    // overwriting the date, ends with the date of its first publication.
-    seen.set(row.post_id, { postId: row.post_id, userId: row.user_id, clientId: row.client_id, publishedAt: row.created_at });
+    // overwriting the date, ends with the date of its first publication. Every call about one post
+    // names the same creation or none, so it is the same whichever row is kept.
+    seen.set(row.post_id, {
+      postId: row.post_id,
+      userId: row.user_id,
+      clientId: row.client_id,
+      publishedAt: row.created_at,
+      generationId: row.generation_id ?? null,
+    });
   }
   return [...seen.values()].slice(0, limit);
 }

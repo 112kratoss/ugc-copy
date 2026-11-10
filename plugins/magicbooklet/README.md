@@ -1,14 +1,16 @@
 # Magic Booklet for Claude Code
 
-Create AI images and videos with your [Magic Booklet](https://magicbooklet.com) credits from Claude Code, every run priced before it starts, and publish them as posts.
+Create AI images and videos with your [Magic Booklet](https://magicbooklet.com) credits from Claude Code, every run priced before it starts, publish them as posts, post media you made elsewhere, and share prompts, guides and skills.
 
 The plugin adds:
 
 - **The Magic Booklet MCP server**, `https://magicbooklet.com/api/mcp`, signed in through Magic Booklet's own Claude Code client.
 - **`/magicbooklet:create-ugc-ad`**: a UGC ad from brief to finished video or image. It picks a model, prices the run, asks you, creates, waits for the result and offers to publish it.
 - **`/magicbooklet:publish-creation`**: publishes one of your creations as a post, under a real title, once you have agreed to it.
+- **`/magicbooklet:post-outside-media`**: posts a picture or video you made with another tool, from a link or from a file on your computer, saying what made it, once you have agreed to it.
+- **`/magicbooklet:share-a-skill`**: shares a skill, a prompt or a guide as a text post that carries it for people to unlock. It is free unless you ask to sell it, and then at a price you name and confirm.
 
-Claude also uses the skills by itself when you ask for a UGC ad or to post a creation.
+Claude also uses the skills by itself when you ask for a UGC ad, to post a creation, to post media made elsewhere or to share a skill, a prompt or a guide.
 
 ## Install
 

@@ -103,35 +103,89 @@ describe('the daily cap\'s count', () => {
 });
 
 describe('the posts agents published', () => {
-  function admin(rows: unknown, error: unknown = null) {
-    const query = {
-      select: vi.fn(() => query),
-      eq: vi.fn(() => query),
-      not: vi.fn(() => query),
-      in: vi.fn(() => query),
-      order: vi.fn(() => query),
-      limit: vi.fn(async () => ({ data: rows, error })),
+  /**
+   * A ledger that answers the list's two reads: the publications (every row but an unchanged
+   * repeat's) and the unchanged repeats, told apart by the filter on `code`. `query` is the
+   * publications' read, `repeats` the other.
+   */
+  function admin(rows: unknown, error: unknown = null, repeatRows: unknown = []) {
+    const build = () => {
+      const state = { repeats: false };
+      const query = {
+        select: vi.fn(() => query),
+        eq: vi.fn((column: string, value: unknown) => {
+          if (column === 'code' && value === AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED) state.repeats = true;
+          return query;
+        }),
+        or: vi.fn(() => query),
+        not: vi.fn(() => query),
+        in: vi.fn(() => query),
+        order: vi.fn(() => query),
+        limit: vi.fn(async () => ({ data: state.repeats ? repeatRows : rows, error })),
+      };
+      return query;
     };
-    return { client: { from: vi.fn(() => query) } as unknown as SupabaseClient, query };
+    const queries: Array<ReturnType<typeof build>> = [];
+    const from = vi.fn(() => {
+      const query = build();
+      queries.push(query);
+      return query;
+    });
+    return {
+      client: { from } as unknown as SupabaseClient,
+      from,
+      get query() { return queries[0]; },
+      get repeats() { return queries[1]; },
+    };
   }
 
   it('lists each post once, newest first, dated by its first publication, from the successful publish calls', async () => {
-    const { client, query } = admin([
-      { post_id: POST_ID, user_id: USER_ID, client_id: 'client-claude', created_at: '2026-11-09T12:00:00Z' },
-      { post_id: OTHER_POST_ID, user_id: USER_ID, client_id: 'client-codex', created_at: '2026-11-09T11:00:00Z' },
-      { post_id: POST_ID, user_id: USER_ID, client_id: 'client-claude', created_at: '2026-11-09T10:00:00Z' },
+    const ledger = admin([
+      { post_id: POST_ID, user_id: USER_ID, client_id: 'client-claude', created_at: '2026-11-09T12:00:00Z', generation_id: GENERATION_ID },
+      { post_id: OTHER_POST_ID, user_id: USER_ID, client_id: 'client-codex', created_at: '2026-11-09T11:00:00Z', generation_id: null },
+      { post_id: POST_ID, user_id: USER_ID, client_id: 'client-claude', created_at: '2026-11-09T10:00:00Z', generation_id: GENERATION_ID },
     ]);
-    const posts = await listAgentPublishedPosts(client, { limit: 10 });
+    const posts = await listAgentPublishedPosts(ledger.client, { limit: 10 });
+    const { query } = ledger;
+    // A row names the creation a post was published from, or none: a post of uploads or a text
+    // post, which the row cannot tell apart (the moderation list reads the post's format).
     expect(posts).toEqual([
-      { postId: POST_ID, userId: USER_ID, clientId: 'client-claude', publishedAt: '2026-11-09T10:00:00Z' },
-      { postId: OTHER_POST_ID, userId: USER_ID, clientId: 'client-codex', publishedAt: '2026-11-09T11:00:00Z' },
+      { postId: POST_ID, userId: USER_ID, clientId: 'client-claude', publishedAt: '2026-11-09T10:00:00Z', generationId: GENERATION_ID },
+      { postId: OTHER_POST_ID, userId: USER_ID, clientId: 'client-codex', publishedAt: '2026-11-09T11:00:00Z', generationId: null },
     ]);
+    expect(query.select).toHaveBeenCalledWith('post_id, user_id, client_id, created_at, generation_id');
     expect(query.eq).toHaveBeenCalledWith('tool', 'publish_post');
     expect(query.eq).toHaveBeenCalledWith('ok', true);
     expect(query.not).toHaveBeenCalledWith('post_id', 'is', null);
     expect(query.order).toHaveBeenCalledWith('created_at', { ascending: false });
     expect(query.limit).toHaveBeenCalledWith(40);
     expect(query.in).not.toHaveBeenCalled();
+    // The publications are read apart from the unchanged repeats.
+    expect(query.or).toHaveBeenCalledWith('code.is.null,code.neq.ALREADY_PUBLISHED');
+  });
+
+  // PR #751's review, finding 7: an unchanged repeat of a text or upload post names its post and
+  // spends no limit. Read with the publications, a loop of them filled the page, and every other
+  // agent's posts dropped out of the moderation view.
+  it('keeps every publication on the list whatever number of unchanged repeats name one post', async () => {
+    const publications = [
+      { post_id: POST_ID, user_id: USER_ID, client_id: 'client-claude', created_at: '2026-11-10T09:00:00Z', generation_id: GENERATION_ID },
+      { post_id: OTHER_POST_ID, user_id: USER_ID, client_id: 'client-codex', created_at: '2026-11-10T08:00:00Z', generation_id: null },
+    ];
+    const noisyPostId = '77777777-7777-4777-8777-777777777777';
+    const repeatRows = Array.from({ length: 10 }, (_, index) => (
+      { post_id: noisyPostId, user_id: USER_ID, client_id: 'client-loop', created_at: `2026-11-10T10:00:${String(59 - index).padStart(2, '0')}Z`, generation_id: null }
+    ));
+    const ledger = admin(publications, null, repeatRows);
+    const posts = await listAgentPublishedPosts(ledger.client, { limit: 10 });
+    // Newest first: the repeated post is on the list once, and both publications are still there.
+    expect(posts.map((post) => post.postId)).toEqual([noisyPostId, POST_ID, OTHER_POST_ID]);
+    expect(posts[0]).toMatchObject({ clientId: 'client-loop', publishedAt: '2026-11-10T10:00:50Z', generationId: null });
+    expect(ledger.from).toHaveBeenCalledTimes(2);
+    // The repeats get one page of their own, no larger than the list.
+    expect(ledger.repeats.eq).toHaveBeenCalledWith('code', 'ALREADY_PUBLISHED');
+    expect(ledger.repeats.limit).toHaveBeenCalledWith(10);
+    expect(ledger.query.limit).toHaveBeenCalledWith(40);
   });
 
   it('narrows to given posts, answers no posts without a read, and throws the database\'s error', async () => {
@@ -139,9 +193,11 @@ describe('the posts agents published', () => {
     await listAgentPublishedPosts(narrowed.client, { limit: 5, postIds: [POST_ID, OTHER_POST_ID] });
     expect(narrowed.query.in).toHaveBeenCalledWith('post_id', [POST_ID, OTHER_POST_ID]);
 
+    expect(narrowed.repeats.in).toHaveBeenCalledWith('post_id', [POST_ID, OTHER_POST_ID]);
+
     const none = admin([]);
     expect(await listAgentPublishedPosts(none.client, { limit: 5, postIds: [] })).toEqual([]);
-    expect(none.query.limit).not.toHaveBeenCalled();
+    expect(none.from).not.toHaveBeenCalled();
 
     await expect(listAgentPublishedPosts(admin(null, { message: 'down' }).client, { limit: 5 })).rejects.toEqual({ message: 'down' });
   });

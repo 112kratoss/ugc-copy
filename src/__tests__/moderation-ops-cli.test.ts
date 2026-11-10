@@ -66,25 +66,37 @@ describe('moderation CLI: the agent view of the queue', () => {
   });
 
   it('lists the posts agents published and the open reports of them with --source agent, as tables and as JSON', async () => {
-    const agentPost = { postId: 'post-7', userId: 'user-1', clientId: 'client-claude', publishedAt: '2026-11-09T00:00:00.000Z', post: { id: 'post-7', userId: 'user-1', title: 'By an agent', visibility: 'public', reviewStatus: 'visible', reportCount: 1, createdAt: '2026-11-09T00:00:00.000Z' } };
+    const agentPost = { postId: 'post-7', userId: 'user-1', clientId: 'client-claude', publishedAt: '2026-11-09T00:00:00.000Z', source: 'upload', resource: 'none', post: { id: 'post-7', userId: 'user-1', title: 'By an agent', visibility: 'public', reviewStatus: 'visible', reportCount: 1, createdAt: '2026-11-09T00:00:00.000Z' } };
+    const creationPost = { ...agentPost, postId: 'post-8', source: 'creation', resource: 'free', post: { ...agentPost.post, id: 'post-8', title: 'A creation' } };
+    const textPost = { ...agentPost, postId: 'post-9', source: 'text', resource: 'paid', post: { ...agentPost.post, id: 'post-9', title: 'A skill' } };
+    // Deleted, with no creation in its audit row: what it was made from went with the post.
+    const gonePost = { ...agentPost, postId: 'post-10', source: null, resource: null, post: null };
     const snapshot = { postReports: [{ id: REPORT_ID, postId: 'post-7', reason: 'spam', details: null, post: agentPost.post, createdAt: 'x' }], subjectReports: [] };
     moderation.listOpenModerationReports.mockResolvedValue(snapshot);
-    moderation.listAgentPublishedPostsForModeration.mockResolvedValue([agentPost]);
+    moderation.listAgentPublishedPostsForModeration.mockResolvedValue([agentPost, creationPost, textPost, gonePost]);
     const { runModerationOps } = await import('../../scripts/ops/moderation-ops');
 
     await runModerationOps(['list', '--source', 'agent', '--limit', '5'], ENVIRONMENT);
     expect(moderation.listOpenModerationReports).toHaveBeenCalledWith(expect.anything(), { limit: 5, source: 'agent' });
     expect(moderation.listAgentPublishedPostsForModeration).toHaveBeenCalledWith(expect.anything(), { limit: 5 });
     const logged = vi.mocked(console.log).mock.calls.map(([line]) => String(line));
-    expect(logged).toContain('Posts published by agents: 1');
+    expect(logged).toContain('Posts published by agents: 4');
     expect(logged).toContain('Open post reports: 1');
     const tables = vi.mocked(console.table).mock.calls.map(([rows]) => rows as Array<Record<string, unknown>>);
-    expect(tables[0]).toEqual([expect.objectContaining({ post_id: 'post-7', client_id: 'client-claude', post_status: 'visible', visibility: 'public', post_title: 'By an agent' })]);
+    // The source column says what each post was made from, media the agent brought, a creation
+    // here or text alone; the resource column what it carries beside itself.
+    expect(tables[0]).toEqual([
+      expect.objectContaining({ post_id: 'post-7', source: 'upload', resource: 'none', client_id: 'client-claude', post_status: 'visible', visibility: 'public', post_title: 'By an agent' }),
+      expect.objectContaining({ post_id: 'post-8', source: 'creation', resource: 'free', post_title: 'A creation' }),
+      expect.objectContaining({ post_id: 'post-9', source: 'text', resource: 'paid', post_title: 'A skill' }),
+      expect.objectContaining({ post_id: 'post-10', source: 'upload or text', resource: '', post_status: 'deleted' }),
+    ]);
+    expect(Object.keys(tables[0][0]).slice(0, 3)).toEqual(['post_id', 'source', 'resource']);
 
     vi.mocked(console.log).mockClear();
     await runModerationOps(['list', '--source', 'agent', '--json'], ENVIRONMENT);
     const [json] = vi.mocked(console.log).mock.calls.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>);
-    expect(json).toEqual({ agentPosts: [agentPost], ...snapshot });
+    expect(json).toEqual({ agentPosts: [agentPost, creationPost, textPost, gonePost], ...snapshot });
     // Without the flag the queue is the whole queue, and the agent list is not read.
     expect(moderation.listOpenModerationReports).toHaveBeenLastCalledWith(expect.anything(), { limit: undefined, source: 'agent' });
     moderation.listAgentPublishedPostsForModeration.mockClear();

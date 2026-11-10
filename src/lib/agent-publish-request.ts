@@ -15,6 +15,12 @@ import type { ShowcasePublishRequestBody } from '@/lib/showcase-publish-service'
  * the "Allow remixes" switch is left out, since the server reads a composer that sends it as one
  * that offers no post without a recipe (`CREATION_RECIPE_REQUIRED`). A creation with no prompt
  * has nothing a free recipe could hold, so it goes alone either way.
+ *
+ * The recipe is free unless the person set a price (owner, 2026-11-10): then it is the same
+ * recipe, paid, as the web's Publish sends one (`buildAutoResourceBundle`: `accessMode: 'paid'`
+ * and the price in `priceUsdCents`, which holds the token count). Nothing is computed here: the
+ * publish service's validator holds the price to its minimum and steps, keeps a paid recipe's
+ * prompt out of the post's title and text, and holds a remix to the terms of what it remixed.
  */
 
 export type AgentPublishArgs = {
@@ -28,19 +34,32 @@ export type AgentPublishArgs = {
   allowRemixes: boolean;
   /** The creation's own prompt, as stored; null for a run that had none. */
   creationPrompt: string | null;
+  /** The recipe's price in tokens, where the person set one; absent or 0, the recipe is free. */
+  recipePriceTokens?: number;
+  /** The recipe's listing line and preview in the person's words; absent, the web's own. */
+  recipeSummary?: string;
+  recipePreview?: string;
 };
 
 /** The listing lines the web writes for the recipe of a prompt and a remix (`buildAutoUnlockSummary`, `buildAutoUnlockPreview`). */
 export const AGENT_RECIPE_SUMMARY = 'Prompt and remix from this creation';
 export const AGENT_RECIPE_PREVIEW = 'Unlock the saved prompt and remix used to create this result.';
 
-/** The free recipe a remixable agent post carries: the prompt now, the server's additions at publish. */
-export function agentFreeRecipeBundle(promptText: string): PostResourceBundleInput {
+/**
+ * The recipe a remixable agent post carries: the prompt now, the server's additions at publish.
+ * Free, or paid at the price given, with the web's listing lines unless the person wrote their own.
+ */
+export function agentRecipeBundle(
+  promptText: string,
+  { priceTokens = 0, summary, preview }: { priceTokens?: number; summary?: string; preview?: string } = {},
+): PostResourceBundleInput {
+  const paid = priceTokens > 0;
   return {
-    accessMode: 'free',
-    summary: AGENT_RECIPE_SUMMARY,
-    previewText: AGENT_RECIPE_PREVIEW,
-    priceUsdCents: 0,
+    accessMode: paid ? 'paid' : 'free',
+    // A summary left out is the preview where one was given, as the composer's serializer has it.
+    summary: summary?.trim() || preview?.trim() || AGENT_RECIPE_SUMMARY,
+    previewText: preview?.trim() || AGENT_RECIPE_PREVIEW,
+    priceUsdCents: paid ? priceTokens : 0,
     resources: {
       promptText,
       workflowShareUrl: null,
@@ -51,9 +70,19 @@ export function agentFreeRecipeBundle(promptText: string): PostResourceBundleInp
   };
 }
 
+/** The free recipe a remixable agent post carries. */
+export function agentFreeRecipeBundle(promptText: string): PostResourceBundleInput {
+  return agentRecipeBundle(promptText);
+}
+
+/** Whether a publish of this creation carries a recipe: remixes allowed, and a prompt for it to hold. */
+export function agentPublishSendsRecipe(args: Pick<AgentPublishArgs, 'allowRemixes' | 'creationPrompt'>): boolean {
+  return args.allowRemixes && (args.creationPrompt?.trim() ?? '').length > 0;
+}
+
 export function buildAgentPublishRequest(args: AgentPublishArgs): ShowcasePublishRequestBody {
   const prompt = args.creationPrompt?.trim() ?? '';
-  const sendsRecipe = args.allowRemixes && prompt.length > 0;
+  const sendsRecipe = agentPublishSendsRecipe(args);
   const request: ShowcasePublishRequestBody = {
     generationId: args.generationId,
     visibility: args.visibility,
@@ -66,7 +95,11 @@ export function buildAgentPublishRequest(args: AgentPublishArgs): ShowcasePublis
   };
   if (sendsRecipe) {
     request.allowRemixes = true;
-    request.resourceBundle = agentFreeRecipeBundle(prompt);
+    request.resourceBundle = agentRecipeBundle(prompt, {
+      priceTokens: args.recipePriceTokens,
+      summary: args.recipeSummary,
+      preview: args.recipePreview,
+    });
     request.includeGenerationReferences = true;
   } else {
     request.resourceBundle = { accessMode: 'none' };
