@@ -111,9 +111,19 @@ describe('made_with', () => {
       expect(namesMagicbooklet(name), name).toBe(true);
       expect(refuseAgentMadeWith([{ tool: 'Midjourney' }, { tool: name, model: 'Seedance' }]), name).toBe(AGENT_MADE_WITH_APP_REFUSAL);
     }
-    for (const name of ['Midjourney', 'Magic Leap', 'Booklet Maker', 'Photoshop', 'Magic']) {
+    for (const name of ['Midjourney', 'Magic Leap', 'Booklet Maker', 'Photoshop', 'Magic', 'Magic Hour', 'Bookleteer', 'V7', 'FLUX.1 Pro']) {
       expect(namesMagicbooklet(name), name).toBe(false);
+      expect(refuseAgentMadeWith([{ tool: name }]), name).toBeNull();
     }
+    // PR #751's review, finding 15: the check read the tool's name alone, as the catalog spells
+    // it. The app's name is refused wherever it stands, in the tool or in the model, with what is
+    // hung on it (a domain, a suffix) and in letters of another script that read the same.
+    for (const name of ['magicbooklet.com', 'www.magicbooklet.com', 'Magic Booklet AI', 'Magic-Booklet v2', 'MagicBooklet Studio', 'M\u0430gic Booklet', 'Magic B\u043e\u043eklet', '\uff2dagic Booklet', 'Mágic Booklet', 'emptybooklet.app']) {
+      expect(namesMagicbooklet(name), name).toBe(true);
+      expect(refuseAgentMadeWith([{ tool: name }]), name).toBe(AGENT_MADE_WITH_APP_REFUSAL);
+    }
+    expect(refuseAgentMadeWith([{ tool: 'Photoshop', model: 'Magic Booklet' }])).toBe(AGENT_MADE_WITH_APP_REFUSAL);
+    expect(refuseAgentMadeWith([{ tool: 'Midjourney', model: 'v7' }, { tool: 'Blender', model: 'magicbooklet.com' }])).toBe(AGENT_MADE_WITH_APP_REFUSAL);
     // The refusal says where media made here goes instead.
     expect(AGENT_MADE_WITH_APP_REFUSAL).toContain('Magic Booklet is not a name for made_with');
     expect(AGENT_MADE_WITH_APP_REFUSAL).toContain('generation_id');

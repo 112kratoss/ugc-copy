@@ -50,7 +50,7 @@ export type AgentUploadPublishMedia = { storagePath: string; contentType: string
 export type AgentResourceCard = {
   type: 'prompt' | 'guide' | 'external_link';
   title: string;
-  /** The card's public line, shown before the resource is unlocked. */
+  /** A line under the card's title, shown once the resource is unlocked (the locked preview carries titles only). */
   description?: string;
   /** The text of a `prompt` or a `guide`, shown once unlocked. */
   text?: string;
@@ -114,10 +114,32 @@ export function agentTextPostId(userId: string, title: string, body: string): st
   ]);
 }
 
-/** Whether a name is Magicbooklet's own, in any spelling the catalog reads as the app's tool. */
-export function namesMagicbooklet(tool: string): boolean {
-  const slug = slugifySourceTool(tool);
-  return isAppSourceToolLabel(tool) || isAppSourceToolLabel(slug) || slug === 'emptybooklet';
+/** Letters of other scripts that read as the Latin ones in the app's name, folded before it is looked for. */
+const LOOKALIKE_LETTERS: Record<string, string> = {
+  'а': 'a', 'с': 'c', 'е': 'e', 'і': 'i', 'к': 'k', 'м': 'm', 'о': 'o', 'т': 't', 'ɡ': 'g', 'ӏ': 'l', 'Ь': 'b', 'ь': 'b',
+  'α': 'a', 'ε': 'e', 'ι': 'i', 'κ': 'k', 'ο': 'o', 'τ': 't',
+};
+
+/** A name as its letters and digits alone, lower case, lookalike letters as the Latin ones they pass for. */
+function compactName(name: string): string {
+  return [...name.normalize('NFKC').toLowerCase()]
+    .map((letter) => LOOKALIKE_LETTERS[letter] ?? letter)
+    .join('')
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]/gu, '');
+}
+
+/**
+ * Whether a name is Magicbooklet's own: any spelling the catalog reads as the app's tool, and any
+ * name that holds the app's name once spaces, punctuation, case and lookalike letters are set
+ * aside ("magicbooklet.com", "Magic Booklet AI", a Cyrillic а). A post of media made elsewhere
+ * must not say the app made it, in the tool's name or in the model's.
+ */
+export function namesMagicbooklet(name: string): boolean {
+  const slug = slugifySourceTool(name);
+  if (isAppSourceToolLabel(name) || isAppSourceToolLabel(slug) || slug === 'emptybooklet') return true;
+  const compact = compactName(name);
+  return compact.includes('magicbooklet') || compact.includes('emptybooklet');
 }
 
 /**
@@ -143,7 +165,7 @@ export const AGENT_MADE_WITH_APP_REFUSAL = `${APP_SOURCE_TOOL_DISPLAY_LABEL} is 
 
 /** Why a `made_with` is refused, in the composer's own words where the composer's validator refuses it; null when it stands. */
 export function refuseAgentMadeWith(madeWith: readonly AgentMadeWithEntry[]): string | null {
-  if (madeWith.some((entry) => namesMagicbooklet(entry.tool))) return AGENT_MADE_WITH_APP_REFUSAL;
+  if (madeWith.some((entry) => namesMagicbooklet(entry.tool) || (entry.model ? namesMagicbooklet(entry.model) : false))) return AGENT_MADE_WITH_APP_REFUSAL;
   return validateSourceToolSelections(agentMadeWithSelections(madeWith));
 }
 

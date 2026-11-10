@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -22,6 +25,7 @@ import {
 import { getCreationPostTitleSuggestion } from '@/lib/creation-post-title';
 import {
   MCP_GENERATION_POLL_INTERVAL_MS,
+  MCP_ROUTE_MAX_DURATION_SECONDS,
   MCP_SERVER_INSTRUCTIONS,
   MCP_SERVER_VERSION,
   MCP_TOOLS,
@@ -139,6 +143,7 @@ function post(overrides: Partial<AgentPostView> = {}): AgentPostView {
     postId: POST_ID,
     ownerUserId: USER_ID,
     generationId: GENERATION_ID,
+    source: 'creation',
     format: 'media',
     title: 'Red bicycle',
     description: null,
@@ -268,6 +273,8 @@ function harness(overrides: Partial<McpToolServices> = {}) {
     })) as unknown as McpToolServices['updateOwnerPostForRoute'],
     deleteOwnerPostForRoute: vi.fn(async () => ({ ok: true as const, body: { success: true as const, deleted: true as const } })) as unknown as McpToolServices['deleteOwnerPostForRoute'],
     readPostForAgent: vi.fn(async () => ({ ok: true as const, post: post() })) as unknown as McpToolServices['readPostForAgent'],
+    // A post holds every file it was published with unless a test says otherwise.
+    countPostMediaForAgent: vi.fn(async () => MAX_POST_MEDIA_ITEMS) as unknown as McpToolServices['countPostMediaForAgent'],
     stageAgentInput: vi.fn(async () => ({
       ok: true as const,
       input: { url: 'https://project.supabase.test/storage/v1/object/sign/uploads/x?token=read', storagePath: `uploads/${USER_ID}/staged-agent-image.jpg` },
@@ -414,7 +421,14 @@ describe('MCP tool registry', () => {
     expect(publishDescription).toContain('Text and links only: no files.');
     expect(publishDescription).toContain('a title (at most 80) and an optional description (120)');
     expect(publishDescription).toContain('resource_summary and resource_preview (180 characters each)');
-    expect(publishDescription).toMatch(/Everyone sees each card's title and description .* before they unlock it or pay; a card's text and link only after\./u);
+    // A card's title is public; its description is not (the locked preview carries titles only),
+    // so the description is no selling line (PR #751's review, finding 13).
+    expect(publishDescription).toMatch(/Everyone sees each card's title and the resource's resource_summary and resource_preview .* before they unlock it or pay; a card's description, text and link only after, so what sells the resource goes in the preview\./u);
+    expect(publishDescription).not.toMatch(/title and description/u);
+    const cardShape = (tool('publish_post').inputSchema.shape as unknown as { resources: { unwrap: () => { element: { shape: Record<string, { description?: string }> } } } }).resources.unwrap().element.shape;
+    expect(cardShape.title.description).toContain('Shown to everyone.');
+    expect(cardShape.description.description).toContain('Shown once unlocked');
+    expect(cardShape.description.description).not.toContain('Shown to everyone');
     expect(publishDescription).toMatch(/Refused with generation_id, whose resource is the creation's own recipe\./u);
     // A price: the rate, the rule, whom buyers pay, when it is on sale, and the person's yes.
     expect(publishDescription).toContain('a whole number of tokens, 10 or more in steps of 10, where 100 tokens = $1.00');
@@ -444,6 +458,12 @@ describe('MCP tool registry', () => {
     expect(publish.safeParse({ uploads: [upload], made_with: [{ tool: 'x'.repeat(81) }] }).success).toBe(false);
     expect(tool('upload_input').inputSchema.safeParse({ upload_id: 'not-a-uuid' }).success).toBe(false);
     expect(tool('upload_input').inputSchema.safeParse({ upload_id: UPLOAD_ID }).success).toBe(true);
+
+    // The route may run as long as the composer's own, and the tool's sense of "still being saved" is that limit.
+    expect(MCP_ROUTE_MAX_DURATION_SECONDS).toBe(300);
+    // Next reads the route's limit as a literal: it is held to the constant here, and to the composer route's own.
+    expect(readFileSync(path.join(process.cwd(), 'src/app/api/mcp/route.ts'), 'utf8')).toContain(`export const maxDuration = ${MCP_ROUTE_MAX_DURATION_SECONDS};`);
+    expect(readFileSync(path.join(process.cwd(), 'src/app/api/posts/route.ts'), 'utf8')).toContain(`export const maxDuration = ${MCP_ROUTE_MAX_DURATION_SECONDS};`);
 
     // A text post is a title and a body, at the composer's lengths.
     const textPost = { title: 'A prompt for product shots', body: 'Three lines that work.' };
@@ -1145,7 +1165,12 @@ describe('request_upload', () => {
     // The text is the exact command on a line of its own, then the call that follows it.
     const lines = text(result).split('\n');
     expect(lines).toHaveLength(3);
-    expect(lines[0]).toContain('FILE replaced by its path (in double quotes if the path holds a space)');
+    // Single quotes: inside double ones the shell expands $ and backticks, and a file's name can
+    // hold either (PR #751's review, finding 14).
+    expect(lines[0]).toContain("FILE replaced by its path in single quotes, as in @'/path/to/the file.png'");
+    expect(lines[0]).toContain("a single quote in the path is written '\\''");
+    expect(lines[0]).toContain('never double quotes');
+    expect(lines[0]).not.toMatch(/in double quotes if/u);
     expect(lines[1]).toBe(CURL);
     // What a stored file looks like in the command's output, so the agent knows before it calls on.
     expect(lines[2]).toBe(`then call upload_input with this upload_id (${UPLOAD_ID}). The command prints {"Key": ...} once the file is stored; any other answer is a refusal, and nothing was stored. The URL lasts 120 minutes and takes the file once.`);
@@ -1685,7 +1710,7 @@ describe('publish_post with uploads', () => {
 
   /** A read that finds the post an earlier publish of these uploads made. */
   function found(overrides: Partial<AgentPostView> = {}) {
-    return vi.fn(async () => ({ ok: true, post: post({ postId: UPLOAD_POST_ID, generationId: null, title: args.title, ...overrides }) })) as never;
+    return vi.fn(async () => ({ ok: true, post: post({ postId: UPLOAD_POST_ID, generationId: null, source: 'upload', title: args.title, ...overrides }) })) as never;
   }
 
   function stagedAs(entry: AgentStagedUpload) {
@@ -1909,6 +1934,50 @@ describe('publish_post with uploads', () => {
     // A post moderation hid is not described as live.
     const hidden = harness({ readPostForAgent: found({ state: 'hidden' }) });
     expect(text(await tool('publish_post').handle(args, hidden.context))).toContain('public, but hidden');
+  });
+
+  // PR #751's review, finding 10, and the window it sits beside: the composer makes the post's
+  // row before it files the media under it. A repeat in that window, or after a publish that
+  // failed there, found a post and answered it as published; a visibility change then made a
+  // media post public without its media.
+  it('answers a post that holds fewer files than the repeat names as still being saved, or as left unfinished, and changes nothing of it', async () => {
+    const two = { ...args, uploads: [{ storage_path: STAGED_PICTURE }, { storage_path: STAGED_CLIP }] };
+    const twoPostId = agentUploadPostId(USER_ID, [STAGED_PICTURE, STAGED_CLIP]);
+    // The harness's clock stands at 1,000 seconds into 1970: a post made 10 seconds before it is
+    // inside the route's own time limit, so the call that made it may still be running.
+    const young = harness({
+      readPostForAgent: found({ postId: twoPostId, visibility: 'private', state: 'private', createdAt: new Date(990_000).toISOString() }),
+      countPostMediaForAgent: vi.fn(async () => 1) as never,
+    });
+    const saving = await tool('publish_post').handle({ ...two, visibility: 'public' }, young.context);
+    expect(toolFailureCode(saving)).toBe('NOT_READY');
+    expect(text(saving)).toContain('is still being saved by the call that made it (1 of 2 files so far)');
+    expect(text(saving)).toContain('Call publish_post again with the same uploads');
+    expect(young.services.countPostMediaForAgent).toHaveBeenCalledWith(young.admin, twoPostId);
+
+    // Older than the route can run: no call is still saving it.
+    const old = harness({
+      readPostForAgent: found({ postId: twoPostId, visibility: 'private', state: 'private', createdAt: new Date(1_000_000 - (MCP_ROUTE_MAX_DURATION_SECONDS + 1) * 1000).toISOString() }),
+      countPostMediaForAgent: vi.fn(async () => 0) as never,
+    });
+    const unfinished = await tool('publish_post').handle({ ...two, visibility: 'public' }, old.context);
+    expect(toolFailureCode(unfinished)).toBe('CONFLICT');
+    expect(text(unfinished)).toContain('was left unfinished by a publish that failed midway: it holds 0 of 2 files');
+    expect(text(unfinished)).toContain('Delete it with delete_post');
+    // The same answer without a visibility change: an unfinished post is never called published.
+    expect(toolFailureCode(await tool('publish_post').handle(two, old.context))).toBe('CONFLICT');
+
+    const unread = harness({ readPostForAgent: found({ postId: twoPostId }), countPostMediaForAgent: vi.fn(async () => null) as never });
+    expect(toolFailureCode(await tool('publish_post').handle(two, unread.context))).toBe('UNAVAILABLE');
+
+    for (const made of [young, old, unread]) {
+      for (const service of [made.services.updateOwnerPostForRoute, made.services.createOwnerPostForRoute, made.services.enforceBackendRateLimit]) {
+        expect(service).not.toHaveBeenCalled();
+      }
+    }
+    // A post that holds every file is answered as before.
+    const whole = harness({ readPostForAgent: found({ postId: twoPostId }), countPostMediaForAgent: vi.fn(async () => 2) as never });
+    expect(structured(await tool('publish_post').handle(two, whole.context))).toMatchObject({ post_id: twoPostId, already_published: true });
   });
 
   it('changes an existing upload post\'s visibility through the composer\'s own save, under the limits a publish passes', async () => {
@@ -2197,6 +2266,36 @@ describe('publish_post with uploads', () => {
     expect(structured(published)).toMatchObject({ post_id: UPLOAD_POST_ID, visibility: 'public' });
   });
 
+  it('refuses a category that is not the first file\'s kind by name, before any limit is spent', async () => {
+    const { context, services } = fresh();
+    const result = await tool('publish_post').handle({ ...args, category: 'video' }, context);
+    expect(toolFailureCode(result)).toBe('INVALID_REQUEST');
+    expect((structured(result).error as { field_errors: Record<string, string> }).field_errors.category)
+      .toBe('category files the post by its first upload, which is a picture: give image, or leave category out.');
+    expect(services.createOwnerPostForRoute).not.toHaveBeenCalled();
+    expect(services.enforceBackendRateLimit).not.toHaveBeenCalled();
+    // The first file's own kind stands, and so does a clip filed as video.
+    expect((await tool('publish_post').handle({ ...args, category: 'image' }, fresh().context)).isError).toBeUndefined();
+    const clip = fresh();
+    expect((await tool('publish_post').handle({ ...args, uploads: [{ storage_path: STAGED_CLIP }, { storage_path: STAGED_PICTURE }], category: 'video' }, clip.context)).isError).toBeUndefined();
+  });
+
+  it('names a refusal\'s field only where it is one of the tool\'s arguments, and answers a thin preview with the argument that fixes it', async () => {
+    const refusing = (body: Record<string, unknown>) => fresh({ createOwnerPostForRoute: vi.fn(async () => ({ ok: false, status: 400, body })) as never });
+    const call = (made: ReturnType<typeof fresh>) => tool('publish_post').handle({ ...args, resources: [{ type: 'prompt', title: 'Tip', text: 'Use heavier paper.' }] }, made.context);
+    // The safety check names the part of the resource it refused in the service's own terms: not passed on.
+    const unsafe = await call(refusing({ error: 'This post cannot be published publicly.', field: 'resourcePrompt' }));
+    expect(toolFailureCode(unsafe)).toBe('INVALID_REQUEST');
+    expect(structured(unsafe).error).not.toHaveProperty('field_errors');
+    expect(JSON.stringify(unsafe)).not.toContain('resourcePrompt');
+    // An argument of the tool is named as it is.
+    expect(structured(await call(refusing({ error: 'Descriptions are limited to 1000 characters.', field: 'description' }))).error)
+      .toMatchObject({ field_errors: { description: expect.any(String) } });
+    // The listing rule names no field for a preview that says too little: its words do.
+    const thin = await call(refusing({ error: 'Improve this recipe before publishing: Add a useful preview or summary that tells buyers what the recipe includes.' }));
+    expect(structured(thin).error).toMatchObject({ field_errors: { resource_preview: expect.stringContaining('Add a useful preview or summary') } });
+  });
+
   it('maps the composer service\'s refusals to stable codes with its own message, and never a link', async () => {
     const cases: Array<[Record<string, unknown>, string, RegExp, string?]> = [
       [{ status: 400, body: { error: 'Add a title for your post.', field: 'title' } }, 'INVALID_REQUEST', /Add a title for your post/u, 'title'],
@@ -2251,7 +2350,7 @@ describe('publish_post as a text post', () => {
 
   /** A read that finds the post an earlier publish of this text made. */
   function found(overrides: Partial<AgentPostView> = {}) {
-    return vi.fn(async () => ({ ok: true, post: post({ postId: TEXT_POST_ID, generationId: null, format: 'text', category: 'text', title: args.title, body: args.body, ...overrides }) })) as never;
+    return vi.fn(async () => ({ ok: true, post: post({ postId: TEXT_POST_ID, generationId: null, source: 'text', format: 'text', category: 'text', title: args.title, body: args.body, ...overrides }) })) as never;
   }
 
   /** The composer's create, answering the status its stored bundle would have. */
@@ -2572,6 +2671,7 @@ describe('get_post', () => {
       post_id: POST_ID,
       post_url: `${SITE}/showcase/${POST_ID}`,
       generation_id: GENERATION_ID,
+      source: 'creation',
       format: 'media',
       title: 'Red bicycle',
       description: null,
@@ -2595,7 +2695,7 @@ describe('get_post', () => {
   });
 
   it('reads a post made from uploads, which has no creation behind it, by the post_id its publish gave', async () => {
-    const { context, services, admin } = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, title: 'Paper-cut fox' }) })) as never });
+    const { context, services, admin } = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, source: 'upload', title: 'Paper-cut fox' }) })) as never });
     const result = await tool('get_post').handle({ post_id: POST_ID }, context);
     expect(result.isError).toBeUndefined();
     expect(structured(result)).toMatchObject({ post_id: POST_ID, post_url: `${SITE}/showcase/${POST_ID}`, generation_id: null, title: 'Paper-cut fox', state: 'live', is_own: true });
@@ -2604,22 +2704,28 @@ describe('get_post', () => {
     // A creation's post says nothing of the kind.
     expect(text(await tool('get_post').handle({ post_id: POST_ID }, harness().context))).not.toContain('uploaded media');
     // A text post says what it is.
-    const written = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, format: 'text', category: 'text', body: 'Three lines that work.' }) })) as never });
+    const written = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, source: 'text', format: 'text', category: 'text', body: 'Three lines that work.' }) })) as never });
     const read = await tool('get_post').handle({ post_id: POST_ID }, written.context);
-    expect(structured(read)).toMatchObject({ generation_id: null, format: 'text', category: 'text', body: 'Three lines that work.' });
+    expect(structured(read)).toMatchObject({ generation_id: null, source: 'text', format: 'text', category: 'text', body: 'Three lines that work.' });
     expect(text(read)).toContain('It is a text post.');
     expect(text(read)).not.toContain('uploaded media');
+    // A creation's post whose creation was deleted since is still a creation's post, not uploaded media.
+    const orphaned = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, source: 'creation' }) })) as never });
+    const kept = await tool('get_post').handle({ post_id: POST_ID }, orphaned.context);
+    expect(structured(kept)).toMatchObject({ generation_id: null, source: 'creation' });
+    expect(text(kept)).toContain('It was made from a creation here that has been deleted since.');
+    expect(text(kept)).not.toContain('uploaded media');
   });
 
   it('says three things of a post\'s resource, its access, its price and whether it is on offer, and never what it holds', async () => {
-    const paid = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, format: 'text', isOwn: false, resource: { access: 'paid', priceTokens: 250, status: 'published' } }) })) as never });
+    const paid = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, source: 'text', format: 'text', isOwn: false, resource: { access: 'paid', priceTokens: 250, status: 'published' } }) })) as never });
     const result = await tool('get_post').handle({ post_id: POST_ID }, paid.context);
     expect(structured(result)).toMatchObject({ is_own: false, resource_access: 'paid', resource_price_tokens: 250, resource_status: 'published' });
     expect(text(result)).toContain('It carries a paid resource at 250 tokens, on offer.');
     // The whole answer is the post's own fields and those three: no card, no text, no link, no listing line.
     expect(Object.keys(structured(result)).sort()).toEqual([
       'allow_remixes', 'body', 'category', 'counts', 'created_at', 'description', 'format', 'generation_id', 'is_nsfw', 'is_own',
-      'post_id', 'post_url', 'resource_access', 'resource_price_tokens', 'resource_status', 'state', 'title', 'visibility',
+      'post_id', 'post_url', 'resource_access', 'resource_price_tokens', 'resource_status', 'source', 'state', 'title', 'visibility',
     ]);
     expect(JSON.stringify(structured(result))).not.toMatch(RESOURCE_CONTENT_KEYS);
     // The read the tool makes is the agent read alone: the bundle read behind the paywall is not among its services.
@@ -2667,7 +2773,7 @@ describe('delete_post', () => {
   });
 
   it('deletes a post made from uploads through the same service, and says its media goes with it', async () => {
-    const { context, services, admin } = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null }) })) as never });
+    const { context, services, admin } = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, source: 'upload' }) })) as never });
     const result = await tool('delete_post').handle({ post_id: POST_ID }, context);
     expect(result.isError).toBeUndefined();
     expect(structured(result)).toEqual({ post_id: POST_ID, deleted: true, tombstoned: false });
@@ -2675,12 +2781,17 @@ describe('delete_post', () => {
     // No creation holds a copy: the agent must not tell the person otherwise.
     expect(text(result)).toBe(`Post ${POST_ID} is deleted. It was made from uploaded media, which is removed with it.`);
     expect(tool('delete_post').description).toContain('A post made from uploads has no creation behind it, so its media goes with it, and a text post goes whole.');
+    // A delete uses nothing of the post's resource, so it does not read it: that read cannot fail a delete.
+    expect(services.readPostForAgent).toHaveBeenCalledWith(admin, { postId: POST_ID, viewerUserId: USER_ID, withResource: false });
+    // A post whose creation was deleted since has no creation left to stay and no upload to go.
+    const orphaned = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, source: 'creation' }) })) as never });
+    expect(text(await tool('delete_post').handle({ post_id: POST_ID }, orphaned.context))).toBe(`Post ${POST_ID} is deleted.`);
 
     // A text post had nothing beside itself; where people hold its resource they keep it.
-    const written = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, format: 'text' }) })) as never });
+    const written = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, source: 'text', format: 'text' }) })) as never });
     expect(text(await tool('delete_post').handle({ post_id: POST_ID }, written.context))).toBe(`Post ${POST_ID} is deleted.`);
     const held = harness({
-      readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, format: 'text' }) })) as never,
+      readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, source: 'text', format: 'text' }) })) as never,
       deleteOwnerPostForRoute: vi.fn(async () => ({ ok: true, body: { success: true, deleted: true, tombstoned: true } })) as never,
     });
     expect(text(await tool('delete_post').handle({ post_id: POST_ID, force: true }, held.context)))
@@ -2761,7 +2872,7 @@ describe('running a tool', () => {
     const publish = { uploads: [{ storage_path: STAGED_PICTURE }], title: 'Paper-cut fox in a snowy forest', made_with: [{ tool: 'Midjourney' }] };
     const postId = agentUploadPostId(USER_ID, [STAGED_PICTURE]);
     const none = () => vi.fn(async () => ({ ok: false, code: 'NOT_FOUND' })) as never;
-    const existing = (overrides: Partial<AgentPostView> = {}) => vi.fn(async () => ({ ok: true, post: post({ postId, generationId: null, ...overrides }) })) as never;
+    const existing = (overrides: Partial<AgentPostView> = {}) => vi.fn(async () => ({ ok: true, post: post({ postId, generationId: null, source: 'upload', ...overrides }) })) as never;
 
     // A new public post: what the daily cap counts and the moderation list reads.
     const live = harness({ readPostForAgent: none() });
@@ -2801,7 +2912,7 @@ describe('running a tool', () => {
     const privateText = harness({ readPostForAgent: none() });
     await runMcpTool(tool('publish_post'), { ...written, visibility: 'private' }, privateText.context);
     expect(privateText.records[0]).toEqual(expect.objectContaining({ code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PRIVATE, postId: textPostId, generationId: null }));
-    const existingText = (overrides: Partial<AgentPostView> = {}) => vi.fn(async () => ({ ok: true, post: post({ postId: textPostId, generationId: null, format: 'text', ...overrides }) })) as never;
+    const existingText = (overrides: Partial<AgentPostView> = {}) => vi.fn(async () => ({ ok: true, post: post({ postId: textPostId, generationId: null, source: 'text', format: 'text', ...overrides }) })) as never;
     const repeatedText = harness({ readPostForAgent: existingText() });
     await runMcpTool(tool('publish_post'), written, repeatedText.context);
     expect(repeatedText.records[0]).toEqual(expect.objectContaining({ outcome: 'ok', code: AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED, postId: textPostId, generationId: null }));

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
-import { AGENT_POST_NO_RESOURCE, agentPostState, readPostForAgent, toAgentPostResource, toAgentPostView } from '@/lib/agent-post-read';
+import { AGENT_POST_NO_RESOURCE, agentPostSource, agentPostState, countPostMediaForAgent, readPostForAgent, toAgentPostResource, toAgentPostView } from '@/lib/agent-post-read';
 
 const OWNER = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
@@ -74,6 +74,7 @@ describe('a post as an agent reads it', () => {
       postId: POST_ID,
       ownerUserId: OWNER,
       generationId: '44444444-4444-4444-8444-444444444444',
+      source: 'creation',
       format: 'media',
       title: 'Red bicycle',
       description: null,
@@ -89,7 +90,7 @@ describe('a post as an agent reads it', () => {
       resource: { access: 'none', priceTokens: 0, status: null },
     });
     // A text post has no creation behind it and says what it is.
-    expect(toAgentPostView(row({ generation_id: null, post_format: 'text', category: 'text' }), OWNER)).toMatchObject({ generationId: null, format: 'text', category: 'text' });
+    expect(toAgentPostView(row({ generation_id: null, post_format: 'text', category: 'text' }), OWNER)).toMatchObject({ generationId: null, source: 'text', format: 'text', category: 'text' });
     expect(toAgentPostView(row({ post_format: undefined }), OWNER).format).toBeNull();
     expect(toAgentPostView(row({ remixes_allowed: null, is_nsfw: true, visibility: 'unlisted' }), OTHER)).toMatchObject({
       remixesAllowed: true, isNsfw: true, visibility: 'private', state: 'private', isOwn: false,
@@ -110,6 +111,36 @@ describe('a post as an agent reads it', () => {
     }
     expect(await readPostForAgent(admin(null).client, { postId: POST_ID, viewerUserId: OWNER })).toEqual({ ok: false, code: 'NOT_FOUND' });
     expect(await readPostForAgent(admin(null, { message: 'down' }).client, { postId: POST_ID, viewerUserId: OWNER })).toEqual({ ok: false, code: 'UNAVAILABLE' });
+  });
+
+  it('says what a post was made from: a creation, one deleted since included, files from elsewhere, or text', () => {
+    expect(agentPostSource(row())).toBe('creation');
+    expect(agentPostSource(row({ generation_id: null, source_kind: 'external', post_format: 'media' }))).toBe('upload');
+    expect(agentPostSource(row({ generation_id: null, source_kind: 'external', post_format: 'mixed' }))).toBe('upload');
+    expect(agentPostSource(row({ generation_id: null, source_kind: 'manual', post_format: 'text' }))).toBe('text');
+    // The creation was deleted: the database keeps its id on the post, and the post is still a
+    // creation's, not "uploaded media" (PR #751's review).
+    expect(agentPostSource(row({ generation_id: null, deleted_generation_id: '55555555-5555-4555-8555-555555555555', post_format: 'media' }))).toBe('creation');
+    expect(agentPostSource(row({ generation_id: null, source_kind: 'magicbooklet', post_format: 'media' }))).toBe('creation');
+    expect(toAgentPostView(row({ generation_id: null, deleted_generation_id: '55555555-5555-4555-8555-555555555555' }), OWNER)).toMatchObject({ generationId: null, source: 'creation' });
+  });
+
+  it('counts the media a post holds, and says when it could not', async () => {
+    const counting = (answer: { count: number | null; error: unknown }) => {
+      const eq = vi.fn(async () => answer);
+      const select = vi.fn(() => ({ eq }));
+      const from = vi.fn(() => ({ select }));
+      return { client: { from } as unknown as SupabaseClient, from, select, eq };
+    };
+    const two = counting({ count: 2, error: null });
+    expect(await countPostMediaForAgent(two.client, POST_ID)).toBe(2);
+    expect(two.from).toHaveBeenCalledWith('post_media');
+    // A count alone: no row of the post's media is read.
+    expect(two.select).toHaveBeenCalledWith('id', { count: 'exact', head: true });
+    expect(two.eq).toHaveBeenCalledWith('post_id', POST_ID);
+    expect(await countPostMediaForAgent(counting({ count: 0, error: null }).client, POST_ID)).toBe(0);
+    expect(await countPostMediaForAgent(counting({ count: null, error: { message: 'down' } }).client, POST_ID)).toBeNull();
+    expect(await countPostMediaForAgent(counting({ count: null, error: null }).client, POST_ID)).toBeNull();
   });
 
   it('says three things of a post\'s resource: its access, its price in tokens and whether it is on offer', () => {
@@ -160,5 +191,11 @@ describe('a post as an agent reads it', () => {
 
     const down = admin(row(), null, { error: { message: 'down' } });
     expect(await readPostForAgent(down.client, { postId: POST_ID, viewerUserId: OWNER })).toEqual({ ok: false, code: 'UNAVAILABLE' });
+
+    // A caller that uses nothing of the resource (a delete) does not read it, so that read cannot fail it.
+    const alone = admin(row(), null, { error: { message: 'down' } });
+    expect(await readPostForAgent(alone.client, { postId: POST_ID, viewerUserId: OWNER, withResource: false }))
+      .toMatchObject({ ok: true, post: { postId: POST_ID, isOwn: true, resource: AGENT_POST_NO_RESOURCE } });
+    expect(alone.from.mock.calls.map(([table]) => table)).toEqual(['posts']);
   });
 });

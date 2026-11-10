@@ -151,6 +151,13 @@ describe('the agent publish request', () => {
       previewText: 'The exact prompt and the film-grain settings behind this shot.',
     });
     expect(agentRecipeBundle('a prompt', { summary: '   ', preview: '' })).toMatchObject({ summary: AGENT_RECIPE_SUMMARY, previewText: AGENT_RECIPE_PREVIEW });
+    // A summary left out is the preview where one was given, as the composer's serializer has it
+    // and as the tool's description says; a summary given stands beside its preview.
+    expect(agentRecipeBundle('a prompt', { preview: 'The exact prompt behind this shot.' })).toMatchObject({
+      summary: 'The exact prompt behind this shot.',
+      previewText: 'The exact prompt behind this shot.',
+    });
+    expect(agentRecipeBundle('a prompt', { summary: 'The dawn bicycle prompt' })).toMatchObject({ summary: 'The dawn bicycle prompt', previewText: AGENT_RECIPE_PREVIEW });
     // Lines over the listing's limits are the service's to refuse, in its words.
     expect(getPostResourceBundleLengthError(agentRecipeBundle('a prompt', { summary: 's'.repeat(181) }))).toMatchObject({ field: 'resourceSummary' });
     expect(getPostResourceBundleLengthError(agentRecipeBundle('a prompt', { preview: 'p'.repeat(181) }))).toMatchObject({ field: 'resourcePreview' });

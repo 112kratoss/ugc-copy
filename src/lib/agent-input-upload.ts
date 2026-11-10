@@ -174,15 +174,19 @@ export type AgentUploadIntent = {
   declaredType: string | null;
 };
 
+/** What `readAgentUploadIntent` answers when the read itself failed: not "no such upload". */
+export const AGENT_UPLOAD_INTENT_UNREADABLE = 'unreadable' as const;
+
 /**
  * The caller's upload by its id, read before finalize is asked to judge it. Null for none (an
- * unknown id, and another account's: the read is by id and owner) and for a failed read, which
- * leaves the answer to finalize, as before this read existed.
+ * unknown id, and another account's: the read is by id and owner). A read that failed is said
+ * apart, so the caller can stop: an upload finalized without being looked at would be a file the
+ * signature rule never saw, and finalized is the state `publish_post` takes a file in.
  */
 export async function readAgentUploadIntent(
   admin: SupabaseClient,
   { uploadId, userId }: { uploadId: string; userId: string },
-): Promise<AgentUploadIntent | null> {
+): Promise<AgentUploadIntent | null | typeof AGENT_UPLOAD_INTENT_UNREADABLE> {
   try {
     const { data, error } = await admin
       .from(UPLOAD_RESERVATIONS_TABLE)
@@ -190,11 +194,12 @@ export async function readAgentUploadIntent(
       .eq('id', uploadId)
       .eq('user_id', userId)
       .maybeSingle();
+    if (error) return AGENT_UPLOAD_INTENT_UNREADABLE;
     const row = data as Pick<UploadReservationRow, 'bucket_id' | 'storage_path' | 'finalization_status' | 'expected_content_type'> | null;
-    if (error || !row) return null;
+    if (!row) return null;
     return { bucket: row.bucket_id, path: row.storage_path, status: row.finalization_status, declaredType: row.expected_content_type };
   } catch {
-    return null;
+    return AGENT_UPLOAD_INTENT_UNREADABLE;
   }
 }
 
@@ -348,11 +353,13 @@ function signRefusal(intent: Extract<Awaited<ReturnType<typeof createTemporaryMe
     return { ok: false, code: 'ACCOUNT_DELETION_IN_PROGRESS', message: intent.error };
   }
   if (intent.code === 'UPLOAD_BYTES_LIMIT') {
-    // Not a failure that passes in a moment: the creator's open uploads hold the account's space.
+    // Not a failure that passes in a moment. The admission step answers one code for the
+    // account's own space and for the site's shared pool; the account's is the one an agent
+    // meets and can do something about, so it is named first and the other is not ruled out.
     return {
       ok: false,
       code: 'UPLOAD_BYTES_LIMIT',
-      message: `Too many of this creator's uploads are open: ${AGENT_OPEN_UPLOADS_MAX} at most at once. An upload holds its place until upload_input has staged it; one that was refused or never finished keeps it until it is collected, which can take a day. Stage the files already sent, one file at a time, or try again later.`,
+      message: `No staging space is free for another upload. Most often too many of this creator's uploads are open: ${AGENT_OPEN_UPLOADS_MAX} at most at once. An upload holds its place until upload_input has staged it; one that was refused or never finished keeps it until it is collected, which can take a day. Stage the files already sent, one file at a time, or try again later. More rarely the site's shared staging space is full, which passes on its own.`,
       details: { open_uploads_max: AGENT_OPEN_UPLOADS_MAX },
     };
   }
@@ -469,8 +476,9 @@ async function refuseStoredSignature({
   if (removed) {
     await dependencies.finalizeUploadById(admin, { uploadId, userId });
   } else {
-    // The file stays where it is and the upload as it was, for the reclaim sweep. An upload this
-    // rule met before finalize is still unfinalized, so no post can be made from it.
+    // The file stays where it is and the upload as it was, for the reclaim sweep. The rule runs
+    // before finalize on every path, so the upload is still unfinalized and no post can be made
+    // from it.
     logBackendError('agent_upload_signature_mismatch_not_removed', { uploadId });
   }
   return {
@@ -507,11 +515,29 @@ async function stageUploadedFile({
   dependencies: AgentInputUploadDependencies;
 }): Promise<AgentInputUploadResult> {
   const intent = await dependencies.readAgentUploadIntent(admin, { uploadId, userId });
+  if (intent === AGENT_UPLOAD_INTENT_UNREADABLE) {
+    // Fail closed (PR #751's review): finalize would go through on an upload this could not look
+    // at, and a file the rule then could not read, or could not remove, would stay finalized.
+    return {
+      ok: false,
+      code: 'UPLOAD_FAILED',
+      message: `Upload ${uploadId} could not be read right now. Nothing was changed; call upload_input again in a moment.`,
+      details: { upload_id: uploadId },
+    };
+  }
+  if (!intent || intent.bucket !== STAGING_BUCKET) {
+    // No upload of the caller's under this id, or a reservation of theirs in another bucket (a
+    // recipe file the composer signed), which is no staged input and is not finalized from here.
+    return {
+      ok: false,
+      code: 'NOT_FOUND',
+      message: `No upload ${uploadId} exists for this creator. request_upload gives an upload_id.`,
+      details: { upload_id: uploadId },
+    };
+  }
   // Only an upload that can still be finalized is looked at here; finalize answers for the rest
-  // (none, used, closed), and for a read that failed.
-  const open = intent && intent.bucket === STAGING_BUCKET && (intent.status === 'issued' || intent.status === 'finalized')
-    ? intent
-    : null;
+  // (used, closed).
+  const open = intent.status === 'issued' || intent.status === 'finalized' ? intent : null;
   if (open?.status === 'issued' && await dependencies.isStoredObjectMissing(admin, open)) {
     return {
       ok: false,
@@ -522,7 +548,17 @@ async function stageUploadedFile({
   }
   const declaredType = open?.declaredType ? canonicalStorageMediaMimeType(open.declaredType) : null;
   const declaredKind = declaredType ? mediaKindOfMimeType(declaredType) : null;
-  if (open && declaredType && declaredKind) {
+  if (open) {
+    if (!declaredType || !declaredKind) {
+      // Signed for a type that is no picture, clip or track: the rule has nothing to hold it to,
+      // so it is not finalized. The sign step refuses such a type, so this is not reached by it.
+      return {
+        ok: false,
+        code: 'UNSUPPORTED_MEDIA',
+        message: `Upload ${uploadId} was not signed for a picture, a clip or a track. Call request_upload again with the file's own type.`,
+        details: { upload_id: uploadId },
+      };
+    }
     const refusal = await refuseStoredSignature({ admin, userId, uploadId, location: open, contentType: declaredType, kind: declaredKind, dependencies });
     if (refusal) return refusal;
   }
@@ -540,14 +576,6 @@ async function stageUploadedFile({
       details: { upload_id: uploadId },
     };
   }
-  if (!declaredKind) {
-    // The upload was not read before finalize (the read failed): the rule is applied now.
-    const refusal = await refuseStoredSignature({
-      admin, userId, uploadId, location: { bucket: descriptor.bucket, path: descriptor.path }, contentType: descriptor.contentType, kind, dependencies,
-    });
-    if (refusal) return refusal;
-  }
-
   return answerStagedInput({ admin, userId, descriptor, kind, sourceUrl: null, dependencies });
 }
 
@@ -591,6 +619,9 @@ export async function stageAgentInput({
     .from(intent.response.bucket)
     .upload(intent.response.path, new Blob([view], { type: intent.response.contentType }), {
       contentType: intent.response.contentType,
+      // The lifetime the web's own upload sends and `request_upload` prints (max-age=86400): a
+      // staged file can become a post, whose copies keep it. The client's default is an hour.
+      cacheControl: String(SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS),
       upsert: false,
     });
   if (uploaded.error) {

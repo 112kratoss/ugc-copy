@@ -6,6 +6,7 @@ import {
   AGENT_BASE64_MAX_CHARACTERS,
   AGENT_OPEN_UPLOADS_MAX,
   AGENT_SIGNATURE_HEAD_BYTES,
+  AGENT_UPLOAD_INTENT_UNREADABLE,
   AGENT_URL_FETCH_MAX_BYTES_BY_KIND,
   VERCEL_REQUEST_BODY_LIMIT_BYTES,
   agentUploadCurlCommand,
@@ -175,7 +176,9 @@ describe('stageAgentInput', () => {
     expect(blob).toBeInstanceOf(Blob);
     expect(blob.type).toBe('image/jpeg');
     expect(Buffer.from(await blob.arrayBuffer()).equals(JPEG)).toBe(true);
-    expect(options).toEqual({ contentType: 'image/jpeg', upsert: false });
+    // The cache lifetime the web's own upload sends: a staged file can become a post, whose copies keep it.
+    expect(options).toEqual({ contentType: 'image/jpeg', cacheControl: String(SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS), upsert: false });
+    expect(SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS).toBe(86_400);
     expect(dependencies.finalizeUploadById).toHaveBeenCalledWith(admin, { uploadId: UPLOAD_ID, userId: USER_ID });
     expect(dependencies.createTemporaryMediaReadUrl).toHaveBeenCalledWith(expect.objectContaining({
       body: { storagePath: `uploads/${USER_ID}/${UPLOAD_ID}-agent-image.jpg` },
@@ -229,6 +232,8 @@ describe('stageAgentInput', () => {
     const refused = await stageAgentInput({ admin: full.admin, userId: USER_ID, source: { url: 'https://x/a.jpg' }, dependencies: full.dependencies });
     expect(refused).toMatchObject({ ok: false, code: 'UPLOAD_BYTES_LIMIT', details: { open_uploads_max: 4 } });
     expect(!refused.ok && refused.message).toMatch(/4 at most at once.*until upload_input has staged it.*can take a day/u);
+    // The admission step answers one code for the account's space and the site's shared pool, so the other is not ruled out.
+    expect(!refused.ok && refused.message).toMatch(/More rarely the site's shared staging space is full/u);
     expect(full.upload).not.toHaveBeenCalled();
     // One gibibyte an account, the bucket's 250 MB worst case reserved per signed upload: four.
     expect(AGENT_OPEN_UPLOADS_MAX).toBe(4);
@@ -311,15 +316,21 @@ describe('the upload_id source', () => {
   });
 
   it('answers an unknown id, another account\'s, a closed upload and one already used with a clear code, touching nothing', async () => {
-    const cases: Array<[AgentUploadIntent | null, { status: number; code: string; error: string }, string, RegExp]> = [
-      // No upload under this id for the caller: an unknown id, and another account's, answer alike.
-      [null, { status: 404, code: 'UPLOAD_NOT_FOUND', error: 'Upload intent not found.' }, 'NOT_FOUND', /No upload .* exists for this creator\. request_upload gives an upload_id/u],
+    // No upload under this id for the caller: an unknown id, and another account's, answer alike,
+    // and finalize is not asked.
+    const unknown = fakes({ readAgentUploadIntent: vi.fn(async () => null) });
+    const none = await stage(unknown);
+    expect(none).toMatchObject({ ok: false, code: 'NOT_FOUND', details: { upload_id: UPLOAD_ID } });
+    expect(!none.ok && none.message).toMatch(/No upload .* exists for this creator\. request_upload gives an upload_id/u);
+    expect(unknown.dependencies.finalizeUploadById).not.toHaveBeenCalled();
+
+    const cases: Array<[AgentUploadIntent, { status: number; code: string; error: string }, string, RegExp]> = [
       // Closed earlier (refused, or removed): the agent starts again.
       [intentFor('image/png', 'cat.png', { status: 'deleted' }), { status: 400, code: 'UPLOAD_NOT_FOUND', error: 'That upload is no longer available.' }, 'NOT_FOUND', /holds no file and is closed.*Call request_upload again/u],
       // Used by a post or a run.
       [intentFor('image/png', 'cat.png', { status: 'consumed' }), { status: 409, code: 'UPLOAD_NOT_READY', error: 'That upload was already consumed with a non-reusable disposition.' }, 'CONFLICT', /already used or being collected: That upload was already consumed/u],
-      // The read of the upload failed: finalize answers, here that it could not load it either.
-      [null, { status: 500, code: 'UPLOAD_FINALIZATION_UNAVAILABLE', error: 'Failed to load the upload intent.' }, 'UPLOAD_FAILED', /Failed to load the upload intent/u],
+      // Finalize's own failure is passed on.
+      [intentFor('image/png', 'cat.png', { status: 'finalizing' }), { status: 500, code: 'UPLOAD_FINALIZATION_UNAVAILABLE', error: 'Failed to load the upload intent.' }, 'UPLOAD_FAILED', /Failed to load the upload intent/u],
     ];
     for (const [intent, answer, code, words] of cases) {
       const made = fakes({
@@ -411,30 +422,40 @@ describe('the upload_id source', () => {
     logged.mockRestore();
   });
 
-  it('applies the rule after finalize where the upload could not be read first', async () => {
-    // The read of the upload failed, finalize went through: the file is checked before it is answered.
-    const late = fakes({
+  // PR #751's review, finding 9: where the read of the upload failed, finalize ran first and the
+  // rule after it, so a file the rule then could not read, or could not remove, stayed finalized,
+  // which is the state publish_post takes a file in.
+  it('finalizes nothing where the upload could not be read first: the rule is never skipped', async () => {
+    const blind = fakes({
+      readAgentUploadIntent: vi.fn(async () => AGENT_UPLOAD_INTENT_UNREADABLE),
       finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'cat.png')) as never,
       readStoredObjectHead: vi.fn(async () => WAV),
     });
-    expect(await stage(late)).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { mime_type: 'image/png', sniffed_kind: 'audio' } });
-    expect(late.dependencies.deleteReservedObjectAndConfirm).toHaveBeenCalledWith(late.admin, 'uploads', `${USER_ID}/${UPLOAD_ID}-cat.png`);
-    // Finalized, then closed by a second finalize once the file is gone.
-    expect(late.dependencies.finalizeUploadById).toHaveBeenCalledTimes(2);
-    expect(late.dependencies.createTemporaryMediaReadUrl).not.toHaveBeenCalled();
+    const result = await stage(blind);
+    expect(result).toMatchObject({ ok: false, code: 'UPLOAD_FAILED', details: { upload_id: UPLOAD_ID } });
+    expect(!result.ok && result.message).toMatch(/could not be read right now\. Nothing was changed; call upload_input again/u);
+    for (const dependency of [
+      blind.dependencies.finalizeUploadById, blind.dependencies.readStoredObjectHead, blind.dependencies.isStoredObjectMissing,
+      blind.dependencies.deleteReservedObjectAndConfirm, blind.dependencies.createTemporaryMediaReadUrl,
+    ]) {
+      expect(dependency).not.toHaveBeenCalled();
+    }
 
-    const fine = fakes({ finalizeUploadById: vi.fn(async () => finalizedAs('image/jpeg', 'cat.jpg')) as never });
-    expect(await stage(fine)).toMatchObject({ ok: true, kind: 'image' });
-    expect(fine.dependencies.readStoredObjectHead).toHaveBeenCalledTimes(1);
+    // An upload signed for something that is no picture, clip or track has no rule to pass, so it is not finalized either.
+    const untyped = fakes({ ...sent('application/zip', 'kit.zip') });
+    expect(await stage(untyped)).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { upload_id: UPLOAD_ID } });
+    expect(untyped.dependencies.finalizeUploadById).not.toHaveBeenCalled();
   });
 
-  it('takes only an upload staged in the uploads bucket', async () => {
-    // A reservation of the creator's in another bucket (a recipe file) is no staged input.
+  it('takes only an upload staged in the uploads bucket, and finalizes no other', async () => {
+    // A reservation of the creator's in another bucket (a recipe file the composer signed) is no
+    // staged input, and asking about it here must not finalize it under the composer's feet.
     const elsewhere = fakes({
       readAgentUploadIntent: vi.fn(async () => intentFor('image/png', 'cat.png', { bucket: 'post_resource_files' })),
       finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'cat.png', { bucket: 'post_resource_files' })) as never,
     });
     expect(await stage(elsewhere)).toMatchObject({ ok: false, code: 'NOT_FOUND', details: { upload_id: UPLOAD_ID } });
+    expect(elsewhere.dependencies.finalizeUploadById).not.toHaveBeenCalled();
     expect(elsewhere.dependencies.readStoredObjectHead).not.toHaveBeenCalled();
     expect(elsewhere.dependencies.isStoredObjectMissing).not.toHaveBeenCalled();
   });
@@ -466,10 +487,11 @@ describe('reading an upload before finalize', () => {
     expect(found.query.eq.mock.calls).toEqual([['id', UPLOAD_ID], ['user_id', USER_ID]]);
 
     expect(await readAgentUploadIntent(client(null).admin, { uploadId: UPLOAD_ID, userId: OTHER_USER_ID })).toBeNull();
-    expect(await readAgentUploadIntent(client(null, { message: 'down' }).admin, { uploadId: UPLOAD_ID, userId: USER_ID })).toBeNull();
+    // A read that failed is not "no such upload": the caller stops instead of finalizing unseen.
+    expect(await readAgentUploadIntent(client(null, { message: 'down' }).admin, { uploadId: UPLOAD_ID, userId: USER_ID })).toBe(AGENT_UPLOAD_INTENT_UNREADABLE);
     const thrown = client(row);
     thrown.query.maybeSingle.mockRejectedValueOnce(new Error('socket hang up'));
-    expect(await readAgentUploadIntent(thrown.admin, { uploadId: UPLOAD_ID, userId: USER_ID })).toBeNull();
+    expect(await readAgentUploadIntent(thrown.admin, { uploadId: UPLOAD_ID, userId: USER_ID })).toBe(AGENT_UPLOAD_INTENT_UNREADABLE);
   });
 
   it('calls a path empty only on Storage\'s own not-found, never on a failed read', async () => {

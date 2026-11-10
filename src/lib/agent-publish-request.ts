@@ -56,7 +56,8 @@ export function agentRecipeBundle(
   const paid = priceTokens > 0;
   return {
     accessMode: paid ? 'paid' : 'free',
-    summary: summary?.trim() || AGENT_RECIPE_SUMMARY,
+    // A summary left out is the preview where one was given, as the composer's serializer has it.
+    summary: summary?.trim() || preview?.trim() || AGENT_RECIPE_SUMMARY,
     previewText: preview?.trim() || AGENT_RECIPE_PREVIEW,
     priceUsdCents: paid ? priceTokens : 0,
     resources: {

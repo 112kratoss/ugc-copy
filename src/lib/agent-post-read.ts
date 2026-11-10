@@ -25,10 +25,14 @@ export type AgentPostResource = {
 
 export const AGENT_POST_NO_RESOURCE: AgentPostResource = { access: 'none', priceTokens: 0, status: null };
 
+/** What a post was made from: a creation here (still there or deleted since), files brought from elsewhere, or text alone. */
+export type AgentPostSource = 'creation' | 'upload' | 'text';
+
 export type AgentPostView = {
   postId: string;
   ownerUserId: string;
   generationId: string | null;
+  source: AgentPostSource;
   /** How the post was composed: `text` for a text post, `media` or `mixed` for one with media. */
   format: string | null;
   title: string | null;
@@ -53,6 +57,9 @@ type PostRow = {
   id: string;
   user_id: string;
   generation_id: string | null;
+  /** The creation whose delete unlinked the post; the database writes it. */
+  deleted_generation_id?: string | null;
+  source_kind?: string | null;
   post_format?: string | null;
   title: string | null;
   description: string | null;
@@ -71,7 +78,7 @@ type PostRow = {
   created_at: string | null;
 };
 
-const POST_SELECT = 'id, user_id, generation_id, post_format, title, description, body, category, visibility, review_status, archived_at, tombstoned_at, is_nsfw, remixes_allowed, save_count, comment_count, remix_count, share_count, created_at';
+const POST_SELECT = 'id, user_id, generation_id, deleted_generation_id, source_kind, post_format, title, description, body, category, visibility, review_status, archived_at, tombstoned_at, is_nsfw, remixes_allowed, save_count, comment_count, remix_count, share_count, created_at';
 
 /** The resource's row, by these four columns alone: none of them is anything it holds. */
 const RESOURCE_SELECT = 'access_mode, price_usd_cents, status, retired_at';
@@ -104,6 +111,16 @@ export function agentPostState(row: Pick<PostRow, 'visibility' | 'review_status'
   return row.visibility === 'public' ? 'live' : 'private';
 }
 
+/**
+ * A creation's post is one with a creation behind it, or one whose creation was deleted since
+ * (the database keeps its id, and the post keeps the app as its source). Any other is text, or
+ * media brought from elsewhere.
+ */
+export function agentPostSource(row: Pick<PostRow, 'generation_id' | 'deleted_generation_id' | 'source_kind' | 'post_format'>): AgentPostSource {
+  if (row.generation_id || row.deleted_generation_id || row.source_kind === 'magicbooklet') return 'creation';
+  return row.post_format === 'text' ? 'text' : 'upload';
+}
+
 function count(value: number | null): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
 }
@@ -113,6 +130,7 @@ export function toAgentPostView(row: PostRow, viewerUserId: string, resource: Re
     postId: row.id,
     ownerUserId: row.user_id,
     generationId: row.generation_id,
+    source: agentPostSource(row),
     format: row.post_format ?? null,
     title: row.title,
     description: row.description,
@@ -135,13 +153,22 @@ export function toAgentPostView(row: PostRow, viewerUserId: string, resource: Re
 }
 
 /**
+ * How many media items a post holds, for a repeat of an upload publish to hold against the files
+ * it names; null where the count could not be read.
+ */
+export async function countPostMediaForAgent(admin: SupabaseClient, postId: string): Promise<number | null> {
+  const { count, error } = await admin.from('post_media').select('id', { count: 'exact', head: true }).eq('post_id', postId);
+  return error || typeof count !== 'number' ? null : count;
+}
+
+/**
  * Reads one post for an agent. The service client reads it (the authenticated Data API shows a
  * viewer only live posts), and this decides what the agent may see of it. The post's resource is
  * read as its access, price and status only.
  */
 export async function readPostForAgent(
   admin: SupabaseClient,
-  { postId, viewerUserId }: { postId: string; viewerUserId: string },
+  { postId, viewerUserId, withResource = true }: { postId: string; viewerUserId: string; withResource?: boolean },
 ): Promise<AgentPostReadResult> {
   const { data, error } = await admin.from('posts').select(POST_SELECT).eq('id', postId).maybeSingle();
   if (error) return { ok: false, code: 'UNAVAILABLE' };
@@ -149,6 +176,8 @@ export async function readPostForAgent(
   const row = data as PostRow;
   // Decided on the post alone, before anything of its resource is read.
   if (row.user_id !== viewerUserId && agentPostState(row) !== 'live') return { ok: false, code: 'NOT_FOUND' };
+  // A caller that uses nothing of the resource (a delete) does not read it, so that read cannot fail it.
+  if (!withResource) return { ok: true, post: toAgentPostView(row, viewerUserId, null) };
   const resource = await admin.from('post_resource_bundles').select(RESOURCE_SELECT).eq('post_id', postId).maybeSingle();
   if (resource.error) return { ok: false, code: 'UNAVAILABLE' };
   return { ok: true, post: toAgentPostView(row, viewerUserId, resource.data as ResourceRow | null) };

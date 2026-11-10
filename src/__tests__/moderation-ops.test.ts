@@ -800,6 +800,7 @@ describe('the agent view of the moderation queue', () => {
     const query = {
       select: vi.fn(() => query),
       eq: vi.fn(() => query),
+      or: vi.fn(() => query),
       not: vi.fn(() => query),
       in: vi.fn(() => query),
       order: vi.fn(() => query),
@@ -850,7 +851,8 @@ describe('the agent view of the moderation queue', () => {
       throw new Error(`Unexpected table ${table}`);
     });
     expect(await listOpenModerationReports({ from } as unknown as SupabaseClient, { source: 'agent' })).toEqual({ postReports: [], subjectReports: [] });
-    expect(from).toHaveBeenCalledTimes(1);
+    // The ledger's two reads (publications, and unchanged repeats apart), and no report read.
+    expect(from.mock.calls.map(([table]) => table)).toEqual(['agent_tool_calls', 'agent_tool_calls']);
 
     const broken = vi.fn(() => ledger(null as never, { message: 'relation does not exist' }));
     await expect(listOpenModerationReports({ from: broken } as unknown as SupabaseClient, { source: 'agent' }))
