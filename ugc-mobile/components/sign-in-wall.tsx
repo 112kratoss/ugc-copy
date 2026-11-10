@@ -27,6 +27,7 @@ import { providerSignInNext } from '@/lib/join-navigation';
 import { useReducedMotion } from '@/lib/motion';
 import { trackOnboardingEvent } from '@/lib/onboarding';
 import { CloseGlyph } from '@/lib/platform-glyphs';
+import { useSignInPageNotice } from '@/lib/sign-in-page-notice';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { appTheme, mediaColors, SIGN_IN_WALL_SHADE } from '@/lib/theme';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
@@ -92,7 +93,7 @@ function SignInWallBody({
   // keeps what was typed.
   const [formBuilt, setFormBuilt] = useState(initialMode === 'email');
   const [turn] = useState(() => new Animated.Value(initialMode === 'email' ? 1 : 0, { useNativeDriver: true }));
-  const [notice, setNotice] = useState<AuthNotice | null>(redirectNotice);
+  const [notice, setNotice] = useSignInPageNotice(redirectNotice);
   // One sign-in at a time, from either half: each way in prepares the guest's credits for the
   // account before it replaces the session, so while one runs nothing else may start, and the
   // page may not be left or turned (that left a new account with no name step and no welcome
