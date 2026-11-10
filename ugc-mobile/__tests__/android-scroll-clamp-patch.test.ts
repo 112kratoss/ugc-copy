@@ -54,7 +54,11 @@ describe('Android scroll views pull back inside their content', () => {
     const added = addedTo(`${scrollDir}/ReactHorizontalScrollView.java`);
     expect(added).toContain('public void onVisibilityAggregated(boolean isVisible) {');
     expect(added).toContain('getLayoutDirection() == LAYOUT_DIRECTION_RTL');
-    expect(added).toContain('Math.max(0, computeHorizontalScrollRange() - getWidth())');
+    // From the content's width: computeHorizontalScrollRange() adds the overscroll while the
+    // offset is past the end, so a limit read from it equals the offset and never clamps a row
+    // that shrank but is still wider than the screen (review of #763).
+    expect(added).toContain('int maxScrollX = Math.max(0, getContentView().getWidth() - viewportWidth);');
+    expect(added).not.toMatch(/maxScrollX = [^;]*computeHorizontalScrollRange/);
     expect(added).toMatch(/if \(isShown\(\)\) \{\s+clampScrollXToContent\(\);/);
   });
 

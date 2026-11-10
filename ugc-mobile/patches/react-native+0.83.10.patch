@@ -141,10 +141,10 @@ index 1e773ba..9b55ff4 100644
    }
 
 diff --git a/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/scroll/ReactHorizontalScrollView.java b/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/scroll/ReactHorizontalScrollView.java
-index f4896af..d792fdb 100644
+index f4896af..261757d 100644
 --- a/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/scroll/ReactHorizontalScrollView.java
 +++ b/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/scroll/ReactHorizontalScrollView.java
-@@ -1622,12 +1622,42 @@ public class ReactHorizontalScrollView extends HorizontalScrollView
+@@ -1622,12 +1622,45 @@ public class ReactHorizontalScrollView extends HorizontalScrollView
      // does not work in RTL.
      if (v.getLayoutDirection() == LAYOUT_DIRECTION_RTL) {
        adjustPositionForContentChangeRTL(left, right, oldLeft, oldRight);
@@ -171,7 +171,10 @@ index f4896af..d792fdb 100644
 +    if (!isContentReady() || getLayoutDirection() == LAYOUT_DIRECTION_RTL) {
 +      return;
 +    }
-+    int maxScrollX = Math.max(0, computeHorizontalScrollRange() - getWidth());
++    // From the content's own width, as getMaxScrollY does: computeHorizontalScrollRange() grows
++    // by the overscroll while the offset is past the end, which would hide exactly this case.
++    int viewportWidth = getWidth() - getPaddingLeft() - getPaddingRight();
++    int maxScrollX = Math.max(0, getContentView().getWidth() - viewportWidth);
 +    if (getScrollX() > maxScrollX) {
 +      scrollTo(maxScrollX, getScrollY());
 +    }
