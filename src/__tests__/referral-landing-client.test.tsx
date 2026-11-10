@@ -23,12 +23,7 @@ function visitAnswer(program: unknown) {
 
 function renderLanding() {
   return render(
-    <ReferralLandingClient
-      appStoreUrl={null}
-      code="creator123"
-      destination="/create"
-      playStoreUrl={null}
-    />
+    <ReferralLandingClient code="creator123" destination="/create" />
   );
 }
 
@@ -81,6 +76,26 @@ describe('ReferralLandingClient', () => {
       'You opened another invite in this browser first, and that one is kept. Create your new account to keep the first top-up bonus.'
     )).toBeInTheDocument();
     expect(screen.queryByText(/Invite saved/)).toBeNull();
+  });
+
+  // The way to the app that keeps the invite (the cross-device plan, 2026-11-10): offered
+  // only once the invite is saved, and for the invite this browser holds.
+  it('offers to carry the saved invite on to the app, on a laptop as a QR code', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(visitAnswer(null)));
+    renderLanding();
+
+    expect(screen.queryByRole('button', { name: 'Get the app' })).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: 'Get the app' }));
+    expect(await screen.findByRole('dialog', { name: 'Scan to open this on your phone' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+  });
+
+  it('offers nothing while the invite is not saved', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: false, error: 'Invalid referral code.' }, 400));
+    renderLanding();
+
+    expect(await screen.findByText('Invalid referral code.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Get the app' })).toBeNull();
   });
 
   it('leaves the numbers out when the visit carries no terms', async () => {
@@ -143,7 +158,7 @@ describe('ReferralLandingClient', () => {
     })));
     const inActivity = (mode: 'visible' | 'hidden') => (
       <Activity mode={mode}>
-        <ReferralLandingClient appStoreUrl={null} code="creator123" destination="/create" playStoreUrl={null} />
+        <ReferralLandingClient code="creator123" destination="/create" />
       </Activity>
     );
 

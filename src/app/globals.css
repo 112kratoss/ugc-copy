@@ -63,7 +63,9 @@
 @source "../components/HoverVideo.tsx";
 @source "../components/InlineMediaAudio.tsx";
 @source "../components/InlineMediaVideo.tsx";
+@source "../components/InviteHandoffBar.tsx";
 @source "../components/JsonLd.tsx";
+@source "../components/ModalSheet.tsx";
 @source "../components/NavigationProgress.tsx";
 @source "../components/NewPostsPill.tsx";
 @source "../components/NsfwPostReveal.tsx";

@@ -242,9 +242,3 @@ export function getReferralRiskContext(headers: Headers) {
   };
 }
 
-export function getReferralStoreUrls() {
-  return {
-    appStore: process.env.NEXT_PUBLIC_APP_STORE_URL?.trim() || null,
-    playStore: process.env.NEXT_PUBLIC_PLAY_STORE_URL?.trim() || null,
-  };
-}

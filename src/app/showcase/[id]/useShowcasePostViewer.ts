@@ -10,6 +10,7 @@ import {
 } from '@/components/useSupabaseAuthCookieHint';
 import type { PostRemixCapability, PostRemixTarget } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
+import type { StoredInviteHandoff } from '@/lib/invite-handoff';
 import { useInviteVisitFromSharedLink } from '@/lib/invite-share-landing';
 import { useOwnerPostVisibility } from '@/lib/owner-page-edits';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
@@ -87,6 +88,8 @@ export interface ShowcasePostViewer {
   deliveryId: string | null;
   /** For `ShowcaseSearchParamsReporter`. */
   reportSearch: (search: string) => void;
+  /** The invite a visitor with no account holds, for the page's offer to carry it on (`InviteHandoffBar`). */
+  inviteHandoff: StoredInviteHandoff | null;
   /** The panel unlocked or re-read the recipe for this viewer. */
   applyBundleAccess: (access: ShowcasePostBundleAccess) => void;
   /** The viewer blocked the creator from this page. */
@@ -284,7 +287,7 @@ export function useShowcasePostViewer({
   // viewer is known, as the invite landing would record it; the visitor sees
   // the post, not a landing. Whatever the post's visibility: the invite is the
   // sharer's, not the post's.
-  useInviteVisitFromSharedLink({
+  const inviteHandoff = useInviteVisitFromSharedLink({
     search,
     path: `/showcase/${postId}`,
     viewerKnown: viewerKey !== null,
@@ -331,6 +334,7 @@ export function useShowcasePostViewer({
     reportSearch: setSearch,
     applyBundleAccess,
     markCreatorBlocked,
+    inviteHandoff,
   };
 }
 
