@@ -85,9 +85,17 @@ describe('the rule', () => {
       'WELCOME_PROMISE_STORAGE_KEY',
       'endWelcomePromise',
       'loadWelcomePromise',
+      // A reader only (the invite handed over at install waits on it): it sets nothing.
+      'readWelcomePromise',
       'resetWelcomePromiseForTests',
       'useWelcomePromise',
     ]);
+  });
+
+  it('can be read once known, for what must not act on a guess', async () => {
+    await expect(welcomePromise.readWelcomePromise()).resolves.toBe(true);
+    welcomePromise.endWelcomePromise();
+    await expect(welcomePromise.readWelcomePromise()).resolves.toBe(false);
   });
 });
 

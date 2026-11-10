@@ -63,6 +63,7 @@ export default function PrivacyPolicy() {
                             <li>Whether an attributed account completed a qualifying purchase</li>
                             <li>Promotional credits granted, reversed, or restored</li>
                             <li>Privacy-protective hashes derived from network, browser, or app-installation signals for fraud prevention</li>
+                            <li>An invite carried into a new install of the app: on Android, the invite code and page that Google Play passes to the app as its install referrer; on iPhone, an invite link you choose to paste with Apple&apos;s Paste button. The app does not read your clipboard otherwise.</li>
                         </ul>
                     </section>
 
