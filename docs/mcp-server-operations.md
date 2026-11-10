@@ -148,9 +148,11 @@ and the `localhost` spare; re-registering the client from the directory keeps bo
 
 ## Publishing by agents
 
-`publish_post` makes a post of one of the creator's own succeeded creations through the same
-publish service the web's Publish uses (`showcase-publish-service.ts`), so the post is the one the
-web would have made: live by default (`visibility: public`), or `private` to keep it on the
+`publish_post` makes a post from one of three sources. This section is the first, one of the
+creator's own succeeded creations; media made elsewhere and text posts are the two sections after
+it, and the limits, the cap, the repeat rule and the moderation list below hold for all three. A
+creation is published through the same publish service the web's Publish uses
+(`showcase-publish-service.ts`), so the post is the one the web would have made: live by default (`visibility: public`), or `private` to keep it on the
 creator's profile. With `allow_remixes` (the default) it carries the creation's recipe, the
 exact prompt and the saved inputs the creation may share, as the creator page's one-click Publish
 does, free unless `resource_price_tokens` prices it ("Text posts, resources and prices"); without
@@ -165,18 +167,33 @@ it the media goes alone. The rules the owner set (2026-11-09):
   and a private post is not counted. The row is written behind the answer, so two publishes a
   moment apart may both pass: the cap is a guard against a loop, not an exact quota. The tool
   answers `RATE_LIMITED` with `retry_after_seconds` and `reset_at` (the next midnight UTC).
-- **What an agent may publish.** The creator's own succeeded creation. One an operator removed
+- **Which creation an agent may publish.** The creator's own succeeded creation. One an operator removed
   (`generations.moderation_removed_at`) is answered `NOT_FOUND`, and the publish service itself
   now refuses it on every route, so a removal is never republished; one the creator archived is
   answered `NOT_READY`; another creator's answers `NOT_FOUND` too, disclosing nothing. Without a
   `title` the tool sends the title the web's Publish starts from (the creation's own, else one
   suggested from its prompt), so an agent's post is the web's post.
-- **A republish changes nothing.** Publishing a creation that already has a post returns that post
-  with `already_published: true` and its real `state` (live, private, archived, hidden, removed);
-  only an explicit `visibility` that differs changes the post's visibility (through the service's
-  own visibility-only path, which keeps the post's text and recipe). The post's text is never
-  rewritten by a second publish, and the audit row of an unchanged republish names no post, so
-  the moderation list never counts a post the creator published by hand as an agent's.
+- **A republish changes nothing but the visibility.** Publishing a creation that already has a
+  post returns that post with `already_published: true` and its real `state` (live, private,
+  archived, hidden, removed); only an explicit `visibility` that differs changes the post's
+  visibility (through the service's own visibility-only path, which keeps the post's text and
+  recipe). The post's text is never rewritten by a second publish, and the audit row of an
+  unchanged republish names no post, so the moderation list never counts a post the creator
+  published by hand as an agent's. The same holds for a text post and a post made from uploads,
+  and for all three (since the review of PR #751):
+  - A repeat that asks for a visibility change while naming another price, mature mark or remix
+    switch than the post has, or a resource for a post that has none, is refused with
+    `INVALID_REQUEST` before any limit is spent, and nothing changes. It used to change the
+    visibility and drop the rest without a word, so "make it public at 250" put a free resource
+    on offer. The agent publishes again without those arguments to change the visibility alone;
+    a price, a resource and the mature mark are changed on the website.
+  - The cards and listing lines a repeat sends cannot be held against the post (no tool reads
+    what a resource holds). They are not applied, and the answer says so.
+  - The visibility of a post that is archived, hidden or removed is not changed (`CONFLICT`).
+  - A resource the listing rule keeps off offer on a post that went public is reported as
+    `resource_status: draft` with the words "not on offer" and what a public listing needs. A
+    save that changes the visibility alone does not refuse for it, as a direct public publish
+    does.
 - **The moderation queue is the same.** An agent's post is a post: reports, the console and the
   CLI treat it as any other. `npm run ops:moderation -- list --source agent` lists the posts agents
   published (newest first, each with its state, from the audit table) and narrows the open post
@@ -223,8 +240,9 @@ the same files: `source_kind` `external`, no creation behind it, no recipe.
   curl -sS -X PUT -H 'content-type: image/png' -H 'x-upsert: false' -H 'cache-control: max-age=86400' --data-binary @FILE '<upload_url>'
   ```
 
-  `FILE` is the file's path, which the agent fills in (in double quotes if it holds a space); the
-  file's name is never echoed into the command. The three headers are the ones the web's own
+  `FILE` is the file's path, which the agent fills in, in single quotes
+  (`--data-binary @'/path/to/the file.png'`): inside double quotes the shell would expand `$` and
+  backticks, and a file's name can hold either. The file's name is never echoed into the command. The three headers are the ones the web's own
   upload sends (`signed-url-upload.ts`): the type finalize holds the stored object to, no
   overwrite, and the cache lifetime a published copy keeps. Storage prints `{"Key": …}` once the
   file is stored. The agent then calls `upload_input` with the `upload_id`, which reads the stored
@@ -302,7 +320,10 @@ items `{ storage_path }`, each the path `upload_input` answered), or neither, wh
   refusals reach the agent under stable codes with the composer's message and never its
   follow-up link.
 - **A repeat never makes a second post.** The post's id is derived from the creator and the
-  ordered staged paths (`agentUploadPostId`: a UUID from a SHA-256, version 8). A publish repeated
+  ordered staged paths (`agentUploadPostId`: a UUID from a SHA-256, marked version 4 as every
+  other post id is. It was version 8 until the review of PR #751: account deletion reads each
+  post's storage paths with a pattern that takes versions 1 to 5, after the account is marked as
+  deleting, so a creator with one such post could never have been erased). A publish repeated
   after a lost answer reads that id first and answers the post with `already_published: true`;
   only an explicit `visibility` that differs changes it, through the composer's save
   (`updateOwnerPostForRoute` with the visibility alone, since the creation path's republish needs
@@ -334,6 +355,8 @@ order by c.created_at desc;
 **Proven before release (2026-11-10), on a throwaway local stack** (a scratchpad copy of
 `supabase/` with its own `project_id` on ports 563xx; never production):
 
+- (The ids in these runs were version 8 and are version 4 since the review; both runs were
+  repeated after the review's fixes: "After the review", below.)
 - The upload protocol against real Storage: for a signed upload URL in `uploads`, the command
   above stored a 307,678-byte PNG, a 349,449-byte MP4 and a 12.6 MB PNG (one PUT, above the 6 MB
   at which the web switches to resumable chunks; its path held a space) with the declared size,
@@ -398,11 +421,12 @@ safety check decide it as they decide any. Text and links only: no file is attac
   (`AGENT_RESOURCE_CARDS_MAX`, `AGENT_RESOURCE_CARD_TEXT_MAX_LENGTH`). A card that gives both
   `text` and `url`, or the wrong one for its type, is refused rather than having half of it
   dropped, and a link that is not https is refused (the composer takes http too).
-- What everyone sees before unlocking: each card's title and description, `resource_summary` and
+- What everyone sees before unlocking: each card's title, `resource_summary` and
   `resource_preview`. Left out, the summary is the preview where one was given, else made from
   the card titles ("3 reusable resources"), and the preview is "Includes A, B, and C.". What only
-  an unlock shows: a card's text and its link. The tool's description says so, so an agent keeps
-  what is sold out of the titles.
+  an unlock shows: a card's description, its text and its link (the locked preview carries card
+  titles alone, `sanitizePostResourceBundleLockedPreview`). The tool's description says so, so an
+  agent keeps what is sold out of the titles and puts what sells the resource in the preview.
 - `resources` with `generation_id` is refused: a creation's resource is its own recipe, which the
   server builds from the run.
 
@@ -433,6 +457,27 @@ a price yourself." What an operator should know:
   the same creation, uploads or text answers the existing post unchanged, its resource and price
   included, whatever the repeat names, and says where they are changed.
 
+**Arguments are strict.** `publish_post`'s schema refuses a key it does not know, at every level.
+With both source keys optional, a misspelled one (`generationId`) would otherwise be dropped and
+leave a title and a body to publish as a public text post.
+
+**While a publish is running.** A post of several clips can take longer than an MCP client waits
+(about 60 seconds), so the route's own limit is the composer route's 300 seconds
+(`MCP_ROUTE_MAX_DURATION_SECONDS`, `src/app/api/mcp/route.ts`): the publish finishes, and the
+agent's repeat finds it. What a repeat is told meanwhile:
+
+| The repeat finds | It is answered |
+|---|---|
+| No post yet, and a file the first call has claimed (`consuming`) | `NOT_READY`: being published by another call; call again. Never "stage the file again", which would make a second post under new paths. |
+| The post's row, holding fewer files than the repeat names, made less than 300 seconds ago | `NOT_READY`: still being saved; call again. |
+| The same, older | `CONFLICT`: left unfinished by a publish that failed midway. Delete it with `delete_post` and publish again, or finish it on the website. Its visibility is not changed. |
+| The whole post | `already_published`. |
+
+Two identical text publishes sent at the same moment are not told apart (a text post has no file
+to claim): both read no post, the create is an upsert under the one derived id, so one post
+results, the later call's arguments stand, and both are recorded. An agent has no reason to send
+both; the cap counts two.
+
 **What an answer says of a resource.** Three fields, on every `publish_post` answer and on
 `get_post`: `resource_access` (`none`, `free`, `paid`), `resource_price_tokens` and
 `resource_status` (`draft`, `published`, or null for none). `get_post` reads them from four
@@ -458,7 +503,14 @@ The ones an operator will see asked about:
 `PUBLISHED_PRIVATE` with `post_id` set and `generation_id` null, and an unchanged repeat names the
 post. A row holds no price and nothing of a resource. The moderation list tells a text post from
 an upload post by the post's own format, so a deleted post with no creation behind it reads
-"upload or text", and reads each post's `resource` in one query for the page.
+"upload or text", and reads each post's `resource` in one query for the page. The list reads the
+unchanged repeats apart from the publications (two reads of `agent_tool_calls`): a repeat spends
+no limit, and a loop of them would otherwise fill the page and hide every other agent's posts.
+
+**Creators who connected before this release** approved the consent screen's earlier line, which
+named neither media from elsewhere nor a price. Re-authorizing takes the already-approved
+redirect, so they do not see the new one. Whether to revoke those grants so each is asked again
+(Revoking a client, or one creator's grant) is the owner's decision; nothing here does it.
 
 ```sql
 -- Posts agents published that carry a resource on sale, newest first.

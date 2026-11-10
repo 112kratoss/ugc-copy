@@ -27,7 +27,7 @@ Each card is one thing a person gets, and a resource holds 1 to 10 of them:
 - A prompt card for a prompt, ready to paste.
 - An external link card for an https address, such as a repository or its documentation.
 
-Give each card a title of at most 80 characters that says what it is, such as "Studio product-shot skill", and where it helps a one-line description of at most 120. Everyone sees the titles and descriptions before they unlock the resource; the text and the links only after. So nothing meant to be unlocked goes in a title or a description.
+Give each card a title of at most 80 characters that says what it is, such as "Studio product-shot skill", and where it helps a one-line description of at most 120. Everyone sees the titles before they unlock the resource; a card's description, its text and its link only after. So nothing meant to be unlocked goes in a title, and what should persuade someone to unlock it goes in the preview line, below.
 
 ## 3. The post
 

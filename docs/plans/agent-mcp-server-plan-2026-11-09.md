@@ -470,7 +470,34 @@ As built, where the code decided more than the decisions said:
   The `resource` column is one read of the bundles' access mode for the page.
 - A refusal the web answers with a link (a profile with no handle and display name) is answered
   in words, and names no argument, since none of the tool's fixes it.
-- The setup page has six capability cards (two were added), not a sentence added to one.
+- The setup page has six capability cards (three were added over this phase: media made
+  elsewhere, a text post, and prompts, guides and skills), not a sentence added to one.
+
+The fresh-context review of PR #751 (`/code-review max`, 2026-11-10) found fifteen gaps, two of
+them blocking, and each was fixed or answered before the merge:
+
+- The derived ids were version 8, which account deletion's storage manifest refuses, so a creator
+  with an agent upload post could never be erased. They are version 4, as every post id is.
+- A repeat that changed the visibility dropped a new price, mature mark or resource without a
+  word. It is refused now: a repeat changes the visibility and nothing else. So decision 18 has a
+  second half: what a repeat names beyond the visibility must be what the post has.
+- `publish_post`'s schema is strict, so a misspelled source key is not dropped into a text post.
+- A retry during a running publish is told to call again, never to stage again; a post that
+  holds fewer files than the repeat names is not answered as published; the route's limit is
+  the composer route's 300 seconds.
+- Staging fails closed when an upload cannot be read; another bucket's upload is not finalized.
+- The moderation list reads unchanged repeats apart from publications.
+- Made with refuses the app's name in the model too, with what is hung on it, and in lookalike
+  letters.
+- Decision 16's "a card's description is its public line" was wrong against the paywall, which
+  shows card titles alone before an unlock. The description is said to be shown once unlocked.
+- The remix-terms refusals name a step that works; an archived post's visibility is not changed;
+  a resource left off offer on a public post is said to be unlisted.
+- Left to the owner: creators who connected before this release approved the earlier consent
+  line and are not asked again unless their grants are revoked.
+- Answered, not changed: two identical text publishes at the same moment make one post, the
+  later arguments standing; the cleanup items (bounds stated in the schema and the handler,
+  hand-copied answers) are style.
 
 Not in phase 4: audio posts (the composer has none), files in a resource, changing a price or a
 resource after publishing, editing a post's text or media through an agent, any read of what a
