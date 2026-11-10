@@ -24,11 +24,27 @@ describe('iOS light video host', () => {
     .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
     .join('\n');
 
-  it('ships as the last expo-video patch, applied after the three it was written on', () => {
+  it('ships after the three it was written on, and no later patch touches iOS', () => {
     // patch-package applies a package's numbered patches in order, and this one
-    // was cut from a tree that already carried 001-003.
+    // was cut from a tree that already carried 001-003. The Android patches that
+    // graduated for 0.1.9 (005-007) come after it and change Kotlin only, so the
+    // iOS files stay as this patch leaves them.
     const shipped = readdirSync(join(projectRoot, 'patches')).filter((name) => name.startsWith('expo-video+')).sort();
-    expect(shipped.at(-1)).toBe('expo-video+55.0.21+004+ios-light-video-view.patch');
+    const own = shipped.indexOf('expo-video+55.0.21+004+ios-light-video-view.patch');
+    expect(shipped.slice(0, own)).toEqual([
+      'expo-video+55.0.21+001+ios-range-cache.patch',
+      'expo-video+55.0.21+002+android-light-player-view.patch',
+      'expo-video+55.0.21+003+ios-cache-ownership.patch',
+    ]);
+    for (const later of shipped.slice(own + 1)) {
+      const changed = readFileSync(join(projectRoot, 'patches', later), 'utf8')
+        .split('\n')
+        .filter((line) => line.startsWith('+++ b/'));
+      expect(changed.length, later).toBeGreaterThan(0);
+      for (const file of changed) {
+        expect(file, later).toContain('/expo-video/android/');
+      }
+    }
     expect(shipped.filter((name) => readFileSync(join(projectRoot, 'patches', name), 'utf8').includes('LightVideoView'))).toEqual([
       'expo-video+55.0.21+004+ios-light-video-view.patch',
     ]);

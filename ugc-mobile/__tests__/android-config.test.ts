@@ -298,7 +298,7 @@ end
     const productionPodfile = setIosBuildProfileAutolinking(podfile);
 
     expect(packageJson.dependencies['expo-dev-client']).toBeUndefined();
-    expect(packageJson.devDependencies['expo-dev-client']).toBe('~55.0.40');
+    expect(packageJson.devDependencies['expo-dev-client']).toBe('~55.0.41');
     expect(packageJson.scripts.postinstall).toBe('patch-package');
     expect(packageJson.dependencies.expo).toMatch(/^[~^]55\./);
     expect(appJson.expo.plugins).toContain('./plugins/withBuildProfileAutolinking');
