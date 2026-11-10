@@ -3,9 +3,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import type { AgentStagedUpload } from '@/lib/agent-input-upload';
-import type { AgentPostView } from '@/lib/agent-post-read';
+import { AGENT_POST_NO_RESOURCE, type AgentPostResource, type AgentPostView } from '@/lib/agent-post-read';
+import { AGENT_RECIPE_PREVIEW, AGENT_RECIPE_SUMMARY, agentRecipeBundle } from '@/lib/agent-publish-request';
 import { AGENT_PUBLISH_RECORD_CODES } from '@/lib/agent-tool-calls';
-import { AGENT_MADE_WITH_APP_REFUSAL, agentUploadPostId } from '@/lib/agent-upload-publish-request';
+import {
+  AGENT_MADE_WITH_APP_REFUSAL,
+  AGENT_RESOURCE_CARDS_MAX,
+  agentTextPostId,
+  agentUploadPostId,
+  buildAgentResourceBundle,
+} from '@/lib/agent-upload-publish-request';
 import {
   AGENT_PUBLISH_RATE_LIMIT,
   AGENT_UPLOAD_INPUT_RATE_LIMIT,
@@ -132,6 +139,7 @@ function post(overrides: Partial<AgentPostView> = {}): AgentPostView {
     postId: POST_ID,
     ownerUserId: USER_ID,
     generationId: GENERATION_ID,
+    format: 'media',
     title: 'Red bicycle',
     description: null,
     body: null,
@@ -143,9 +151,16 @@ function post(overrides: Partial<AgentPostView> = {}): AgentPostView {
     counts: { saves: 3, comments: 1, remixes: 0, shares: 2 },
     createdAt: '2026-11-09T10:00:00Z',
     isOwn: true,
+    resource: AGENT_POST_NO_RESOURCE,
     ...overrides,
   };
 }
+
+/** The three fields every post answer carries for a post with no resource. */
+const NO_RESOURCE_FIELDS = { resource_access: 'none', resource_price_tokens: 0, resource_status: null };
+const FREE_RECIPE: AgentPostResource = { access: 'free', priceTokens: 0, status: 'published' };
+/** Nothing an answer says may be what a resource holds, or a way to the website's own pages for it. */
+const RESOURCE_CONTENT_KEYS = /"(?:items|sections|cards|resources|text|textContent|text_content|promptText|prompt_text|externalUrl|external_url|url|summary|previewText|preview_text|resource_summary|resource_preview)"\s*:/u;
 
 function published(overrides: Record<string, unknown> = {}) {
   return {
@@ -384,14 +399,37 @@ describe('MCP tool registry', () => {
     expect(tool('upload_input').description).toContain('publish_post.uploads[]');
     expect(tool('upload_input').description).toContain('upload_id');
     expect(tool('create_media').description).toContain('publish_post.uploads[]');
-    // A post has two sources, and one made from uploads says what made its media.
-    expect(tool('publish_post').description).toMatch(/generation_id: one of the creator's finished creations made here/u);
-    expect(tool('publish_post').description).toMatch(/uploads: media made elsewhere/u);
-    expect(tool('publish_post').description).toMatch(/made_with, which names what made the media/u);
-    expect(tool('publish_post').description).toMatch(/never Magic Booklet/u);
-    expect(tool('get_post').description).toContain('null for a post made from uploads');
+    // A post has three sources, and one made from uploads says what made its media.
+    const publishDescription = tool('publish_post').description;
+    expect(publishDescription).toMatch(/from one of three sources/u);
+    expect(publishDescription).toMatch(/generation_id: one of the creator's finished creations made here/u);
+    expect(publishDescription).toMatch(/uploads: media made elsewhere/u);
+    expect(publishDescription).toMatch(/Neither of them: a text post, of a title and a body/u);
+    expect(publishDescription).toMatch(/made_with, which names what made the media/u);
+    expect(publishDescription).toMatch(/never Magic Booklet/u);
+    // A text post's limits are the composer's, said where the agent reads them.
+    expect(publishDescription).toContain('A text post needs title (at most 100 characters) and body (at most 2000); description takes 1000');
+    // A resource: what it is, its bounds, what people see before they unlock it, and no files.
+    expect(publishDescription).toContain(`resources, on a text post or an upload post, is how a prompt, a guide or a skill is shared: 1 to ${AGENT_RESOURCE_CARDS_MAX} cards`);
+    expect(publishDescription).toContain('Text and links only: no files.');
+    expect(publishDescription).toContain('a title (at most 80) and an optional description (120)');
+    expect(publishDescription).toContain('resource_summary and resource_preview (180 characters each)');
+    expect(publishDescription).toMatch(/Everyone sees each card's title and description .* before they unlock it or pay; a card's text and link only after\./u);
+    expect(publishDescription).toMatch(/Refused with generation_id, whose resource is the creation's own recipe\./u);
+    // A price: the rate, the rule, whom buyers pay, when it is on sale, and the person's yes.
+    expect(publishDescription).toContain('a whole number of tokens, 10 or more in steps of 10, where 100 tokens = $1.00');
+    expect(publishDescription).toContain('It prices the cards, or with generation_id the creation\'s recipe.');
+    expect(publishDescription).toContain('Buyers pay the creator as they do on the site, and a resource is on sale only once its post is public: on a private post it is a draft.');
+    expect(publishDescription).toContain('State the price to the person and get their yes before publishing a paid resource; never choose a price yourself.');
+    expect(publishDescription).toContain('A price or a resource is changed on the website after publishing, not by this tool.');
+    expect(publishDescription).toContain('its resource and price included');
+    expect(publishDescription).toContain('resource_access (none, free or paid), resource_price_tokens and resource_status');
+    expect(tool('get_post').description).toContain('null for a post made from uploads and for a text post');
+    expect(tool('get_post').description).toContain('What a resource holds is never returned');
     expect(MCP_SERVER_INSTRUCTIONS).toContain('request_upload');
     expect(MCP_SERVER_INSTRUCTIONS).toContain('made_with');
+    expect(MCP_SERVER_INSTRUCTIONS).toContain('Flow for a text post, or for sharing a prompt, a guide or a skill');
+    expect(MCP_SERVER_INSTRUCTIONS).toContain('get their yes before publishing, and never choose a price yourself');
 
     // The schema says the composer's own limits up front: one to five files, one to five tools.
     const publish = tool('publish_post').inputSchema;
@@ -406,6 +444,37 @@ describe('MCP tool registry', () => {
     expect(publish.safeParse({ uploads: [upload], made_with: [{ tool: 'x'.repeat(81) }] }).success).toBe(false);
     expect(tool('upload_input').inputSchema.safeParse({ upload_id: 'not-a-uuid' }).success).toBe(false);
     expect(tool('upload_input').inputSchema.safeParse({ upload_id: UPLOAD_ID }).success).toBe(true);
+
+    // A text post is a title and a body, at the composer's lengths.
+    const textPost = { title: 'A prompt for product shots', body: 'Three lines that work.' };
+    expect(publish.safeParse(textPost).success).toBe(true);
+    expect(publish.safeParse({ ...textPost, body: 'x'.repeat(2000) }).success).toBe(true);
+    expect(publish.safeParse({ ...textPost, body: 'x'.repeat(2001) }).success).toBe(false);
+    expect(publish.safeParse({ ...textPost, title: 't'.repeat(101) }).success).toBe(false);
+    expect(publish.safeParse({ ...textPost, description: 'd'.repeat(1001) }).success).toBe(false);
+
+    // A resource is 1 to 10 cards of a type the tool knows, inside the bounds the description names.
+    const card = { type: 'guide', title: 'Studio-shot skill', text: '# Studio shots' };
+    expect(publish.safeParse({ ...textPost, resources: [card] }).success).toBe(true);
+    expect(publish.safeParse({ ...textPost, resources: [{ type: 'external_link', title: 'Docs', url: 'https://example.com/docs', description: 'The reference.' }] }).success).toBe(true);
+    expect(publish.safeParse({ ...textPost, resources: [] }).success).toBe(false);
+    expect(publish.safeParse({ ...textPost, resources: Array.from({ length: AGENT_RESOURCE_CARDS_MAX }, () => card) }).success).toBe(true);
+    expect(publish.safeParse({ ...textPost, resources: Array.from({ length: AGENT_RESOURCE_CARDS_MAX + 1 }, () => card) }).success).toBe(false);
+    expect(publish.safeParse({ ...textPost, resources: [{ ...card, type: 'workflow' }] }).success).toBe(false);
+    expect(publish.safeParse({ ...textPost, resources: [{ ...card, title: 't'.repeat(81) }] }).success).toBe(false);
+    expect(publish.safeParse({ ...textPost, resources: [{ ...card, description: 'd'.repeat(121) }] }).success).toBe(false);
+    expect(publish.safeParse({ ...textPost, resources: [{ ...card, text: 'x'.repeat(50_001) }] }).success).toBe(false);
+    expect(publish.safeParse({ ...textPost, resources: [card], resource_summary: 's'.repeat(181) }).success).toBe(false);
+    expect(publish.safeParse({ ...textPost, resources: [card], resource_preview: 'p'.repeat(181) }).success).toBe(false);
+
+    // A price is a whole number of tokens, 10 or more, in steps of 10; 0 and nothing are free.
+    for (const price of [0, 10, 20, 250, 99_990]) {
+      expect(publish.safeParse({ ...textPost, resources: [card], resource_price_tokens: price }).success, String(price)).toBe(true);
+    }
+    for (const price of [1, 5, 9, 15, 255, 10.5, -10, -250, '250', null, Number.NaN, 2_147_483_650]) {
+      expect(publish.safeParse({ ...textPost, resources: [card], resource_price_tokens: price }).success, String(price)).toBe(false);
+    }
+    expect(publish.safeParse({ generation_id: GENERATION_ID, resource_price_tokens: 250 }).success).toBe(true);
   });
 
   it('registers each tool on the server with its title, description, schema and annotations', () => {
@@ -1152,8 +1221,13 @@ describe('publish_post', () => {
       visibility_changed: false,
       recipe_included: true,
       recipe_status: 'published',
+      // Free by default: no price was given.
+      resource_access: 'free',
+      resource_price_tokens: 0,
+      resource_status: 'published',
     });
     expect(text(result)).toMatch(/public now/u);
+    expect(text(result)).toContain('Its free recipe (the exact prompt) is on the post');
     expect(text(result)).toContain(`${SITE}/showcase/${POST_ID}`);
 
     expect(services.readCreationForPublish).toHaveBeenCalledWith(admin, { generationId: GENERATION_ID, userId: USER_ID });
@@ -1199,8 +1273,9 @@ describe('publish_post', () => {
       publishGenerationToShowcaseForRoute: vi.fn(async () => published({ visibility: 'private', isPublic: false, resourceBundleStatus: null, message: 'Saved as a private post' })) as never,
     });
     const result = await tool('publish_post').handle({ ...args, visibility: 'private', allow_remixes: false, is_nsfw: true }, context);
-    expect(structured(result)).toMatchObject({ visibility: 'private', state: 'private', already_published: false, recipe_included: false });
+    expect(structured(result)).toMatchObject({ visibility: 'private', state: 'private', already_published: false, recipe_included: false, ...NO_RESOURCE_FIELDS });
     expect(text(result)).toMatch(/Only the creator sees it/u);
+    expect(text(result)).toContain('It carries no recipe.');
     expect(vi.mocked(services.enforceBackendRateLimit).mock.calls.map(([, options]) => options.scope)).toEqual([SHOWCASE_PUBLISH_RATE_LIMIT.scope]);
     expect(services.countAgentPublicPublishesSince).not.toHaveBeenCalled();
     expect(await publishBody(services)).toEqual({
@@ -1288,11 +1363,31 @@ describe('publish_post', () => {
 
   it('returns the existing post for a creation published before, with its real state, changing nothing, and changes only an explicit visibility', async () => {
     const existing = creation({ post: { id: POST_ID, visibility: 'public', state: 'live' } });
-    const same = harness({ readCreationForPublish: vi.fn(async () => existing) });
+    const withRecipe = () => vi.fn(async () => ({ ok: true, post: post({ resource: FREE_RECIPE }) })) as never;
+    const same = harness({ readCreationForPublish: vi.fn(async () => existing), readPostForAgent: withRecipe() });
     const again = await tool('publish_post').handle(args, same.context);
     expect(again.isError).toBeUndefined();
-    expect(structured(again)).toEqual({ post_id: POST_ID, post_url: `${SITE}/showcase/${POST_ID}`, visibility: 'public', state: 'live', already_published: true, visibility_changed: false });
+    expect(structured(again)).toEqual({
+      post_id: POST_ID,
+      post_url: `${SITE}/showcase/${POST_ID}`,
+      visibility: 'public',
+      state: 'live',
+      already_published: true,
+      visibility_changed: false,
+      // What the post carries, read as its three facts.
+      resource_access: 'free',
+      resource_price_tokens: 0,
+      resource_status: 'published',
+    });
     expect(text(again)).toContain('already published');
+    expect(same.services.readPostForAgent).toHaveBeenCalledWith(same.admin, { postId: POST_ID, viewerUserId: USER_ID });
+    // A price sent with a repeat changes nothing, and the answer says where a price is changed.
+    const repriced = await tool('publish_post').handle({ ...args, resource_price_tokens: 250 }, same.context);
+    expect(structured(repriced)).toMatchObject({ already_published: true, visibility_changed: false, resource_access: 'free', resource_price_tokens: 0 });
+    expect(text(repriced)).toContain('A recipe\'s price is changed on the website, not by publishing again.');
+    // The post still answers where its resource could not be read: the three fields are left out.
+    const unread = harness({ readCreationForPublish: vi.fn(async () => existing), readPostForAgent: vi.fn(async () => ({ ok: false, code: 'UNAVAILABLE' })) as never });
+    expect(structured(await tool('publish_post').handle(args, unread.context))).toEqual({ post_id: POST_ID, post_url: `${SITE}/showcase/${POST_ID}`, visibility: 'public', state: 'live', already_published: true, visibility_changed: false });
     expect(same.services.publishGenerationToShowcaseForRoute).not.toHaveBeenCalled();
     expect(same.services.enforceBackendRateLimit).not.toHaveBeenCalled();
     expect(same.services.countAgentPublicPublishesSince).not.toHaveBeenCalled();
@@ -1307,10 +1402,22 @@ describe('publish_post', () => {
 
     const flip = harness({
       readCreationForPublish: vi.fn(async () => existing),
-      publishGenerationToShowcaseForRoute: vi.fn(async () => published({ visibility: 'private', isPublic: false })) as never,
+      readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ resource: { access: 'paid', priceTokens: 250, status: 'published' } }) })) as never,
+      publishGenerationToShowcaseForRoute: vi.fn(async () => published({ visibility: 'private', isPublic: false, resourceBundleStatus: 'draft' })) as never,
     });
     const madePrivate = await tool('publish_post').handle({ ...args, visibility: 'private' }, flip.context);
-    expect(structured(madePrivate)).toEqual({ post_id: POST_ID, post_url: `${SITE}/showcase/${POST_ID}`, visibility: 'private', state: 'private', already_published: true, visibility_changed: true });
+    expect(structured(madePrivate)).toEqual({
+      post_id: POST_ID,
+      post_url: `${SITE}/showcase/${POST_ID}`,
+      visibility: 'private',
+      state: 'private',
+      already_published: true,
+      visibility_changed: true,
+      // The recipe and its price are what they were; off sale while the post is private.
+      resource_access: 'paid',
+      resource_price_tokens: 250,
+      resource_status: 'draft',
+    });
     // A visibility change alone: no text, no recipe, so the stored post is carried forward as it is.
     expect(await publishBody(flip.services)).toEqual({ generationId: GENERATION_ID, visibility: 'private' });
     // Going private counts no public post.
@@ -1337,15 +1444,138 @@ describe('publish_post', () => {
       [{ status: 400, body: { error: 'Share the recipe or post without one.', code: 'CREATION_RECIPE_REQUIRED', field: 'resourceBundle' } }, 'INVALID_REQUEST', /allow_remixes false/u],
       [{ status: 409, body: { error: 'People have already unlocked this recipe.', code: 'RESOURCE_BUNDLE_LOCKED' } }, 'CONFLICT'],
       [{ status: 500, body: { error: 'Failed to sync showcase post' } }, 'UNAVAILABLE'],
+      // A remix keeps the terms of the recipe it remixed: the service's rule, answered with the argument that meets it.
+      [{ status: 400, body: { error: 'This creation remixes a paid recipe, so its recipe has to be paid. You set the price.', code: 'REMIX_RECIPE_MUST_BE_PAID', field: 'resourceBundle' } }, 'INVALID_REQUEST', /Ask the person what to charge, then publish with resource_price_tokens/u],
+      [{ status: 400, body: { error: 'This creation remixes a free recipe, so its recipe stays free.', code: 'REMIX_RECIPE_STAYS_FREE', field: 'resourceBundle' } }, 'INVALID_REQUEST', /Publish without resource_price_tokens/u],
+      // The listing lines' limits, in the service's words, under the tool's argument names.
+      [{ status: 400, body: { error: 'Package previews are limited to 180 characters.', field: 'resourcePreview' } }, 'INVALID_REQUEST', /Package previews are limited to 180 characters/u],
+      [{ status: 400, body: { error: 'Public summaries are limited to 180 characters.', field: 'resourceSummary' } }, 'INVALID_REQUEST', /Public summaries are limited to 180 characters/u],
+      [{ status: 400, body: { error: 'Paid recipes must cost at least 10 credits and use 10-credit increments.' } }, 'INVALID_REQUEST', /Paid recipes must cost at least 10 credits/u],
+      // The web answers a creator with no public profile with a link to it; the agent gets words.
+      [{ status: 400, body: { error: 'Complete your profile before publishing: Choose a custom handle and add your display name before publishing a recipe.', field: 'profile', actionHref: '/profile', actionLabel: 'Complete profile and return' } }, 'INVALID_REQUEST', /The person sets their handle and display name on the website, then you publish again\./u],
     ];
+    const fieldFor: Record<string, string> = { title: 'title', resourceBundle: 'resource_price_tokens', resourcePreview: 'resource_preview', resourceSummary: 'resource_summary' };
     for (const [answer, code, words] of cases) {
       const { context } = harness({ publishGenerationToShowcaseForRoute: vi.fn(async () => ({ ok: false, ...answer })) as never });
-      const result = await tool('publish_post').handle(args, context);
-      expect(toolFailureCode(result), JSON.stringify(answer)).toBe(code);
-      if (words) expect(text(result)).toMatch(words);
-      if (code === 'INVALID_REQUEST' && (answer.body as { field?: string }).field === 'title') {
-        expect(structured(result).error).toMatchObject({ field_errors: { title: expect.any(String) } });
+      const result = await tool('publish_post').handle({ ...args, resource_price_tokens: 250 }, context);
+      const label = JSON.stringify(answer);
+      expect(toolFailureCode(result), label).toBe(code);
+      if (words) expect(text(result), label).toMatch(words);
+      // The service's own message is the answer's.
+      if (code === 'INVALID_REQUEST') expect(text(result), label).toContain((answer.body as { error: string }).error);
+      const field = (answer.body as { field?: string; code?: string }).field;
+      if (code === 'INVALID_REQUEST' && field && fieldFor[field] && (answer.body as { code?: string }).code !== 'CREATION_RECIPE_REQUIRED') {
+        expect(structured(result).error, label).toMatchObject({ field_errors: { [fieldFor[field]]: expect.any(String) } });
       }
+      // Never a link, and never the service's own field name where the tool has its own.
+      expect(JSON.stringify(result), label).not.toMatch(/actionHref|actionLabel|\/profile|Complete profile and return|resourceBundle|resourcePreview|resourceSummary/u);
+    }
+  });
+
+  it('prices the creation\'s recipe at the person\'s number, as the web sends a paid recipe, and reports it', async () => {
+    const { context, services } = harness();
+    const result = await tool('publish_post').handle({ ...args, resource_price_tokens: 250 }, context);
+    expect(result.isError).toBeUndefined();
+    // The web's paid request: the same recipe with the access mode and the price, nothing computed.
+    const body = await publishBody(services);
+    expect(body.resourceBundle).toEqual(agentRecipeBundle('a red bicycle at dawn, film grain', { priceTokens: 250 }));
+    expect(body.resourceBundle).toEqual({
+      accessMode: 'paid',
+      summary: AGENT_RECIPE_SUMMARY,
+      previewText: AGENT_RECIPE_PREVIEW,
+      priceUsdCents: 250,
+      resources: { promptText: 'a red bicycle at dawn, film grain', workflowShareUrl: null, attachments: [], allowRemix: false },
+    });
+    expect(body).toMatchObject({ allowRemixes: true, includeGenerationReferences: true, shareInputMediaForRemix: false });
+    expect(structured(result)).toMatchObject({
+      recipe_included: true,
+      recipe_status: 'published',
+      resource_access: 'paid',
+      resource_price_tokens: 250,
+      resource_status: 'published',
+    });
+    expect(text(result)).toContain('Its recipe (the exact prompt) is on sale at 250 tokens');
+    // A paid recipe's prompt is what is sold: the answer names the post, never the prompt.
+    expect(text(result)).not.toContain('a red bicycle at dawn, film grain');
+
+    // The person's own listing lines ride with it.
+    const lined = harness();
+    await tool('publish_post').handle({ ...args, resource_price_tokens: 100, resource_summary: 'The dawn bicycle prompt', resource_preview: 'The exact prompt and the settings behind this shot.' }, lined.context);
+    expect((await publishBody(lined.services)).resourceBundle).toMatchObject({ accessMode: 'paid', priceUsdCents: 100, summary: 'The dawn bicycle prompt', previewText: 'The exact prompt and the settings behind this shot.' });
+
+    // On a private post the service holds the recipe as a draft, and the answer says so.
+    const privately = harness({
+      publishGenerationToShowcaseForRoute: vi.fn(async () => published({ visibility: 'private', isPublic: false, resourceBundleStatus: 'draft' })) as never,
+    });
+    const saved = await tool('publish_post').handle({ ...args, visibility: 'private', resource_price_tokens: 250 }, privately.context);
+    expect(structured(saved)).toMatchObject({ visibility: 'private', resource_access: 'paid', resource_price_tokens: 250, resource_status: 'draft' });
+    expect(text(saved)).toContain('priced at 250 tokens and held as a draft: it goes on sale when the post is public');
+
+    // A price of 0 is free, as no price is.
+    const zero = harness();
+    const free = await tool('publish_post').handle({ ...args, resource_price_tokens: 0 }, zero.context);
+    expect(structured(free)).toMatchObject({ resource_access: 'free', resource_price_tokens: 0 });
+    expect((await publishBody(zero.services)).resourceBundle).toMatchObject({ accessMode: 'free', priceUsdCents: 0 });
+  });
+
+  it('suggests no title from the prompt of a recipe that is sold: a paid recipe keeps its prompt private', async () => {
+    const { title: _omitted, ...withoutTitle } = args;
+    void _omitted;
+    const source = { prompt: 'a red bicycle at dawn, film grain', model: 'img-1', category: 'image', creationMode: null };
+    const fromPrompt = getCreationPostTitleSuggestion(null, source, false)?.title;
+    const keptPrivate = getCreationPostTitleSuggestion(null, source, true)?.title;
+    expect(keptPrivate).not.toBe(fromPrompt);
+
+    const paid = harness();
+    await tool('publish_post').handle({ ...withoutTitle, resource_price_tokens: 250 }, paid.context);
+    const sentTitle = (await publishBody(paid.services)).title;
+    expect(sentTitle).toBe(keptPrivate ?? undefined);
+    expect(String(sentTitle ?? '')).not.toContain('red bicycle');
+    // The creation's own title is the creator's words and stands either way.
+    const own = harness({ readCreationForPublish: vi.fn(async () => creation({ title: 'The creation\'s own title' })) });
+    await tool('publish_post').handle({ ...withoutTitle, resource_price_tokens: 250 }, own.context);
+    expect((await publishBody(own.services)).title).toBe('The creation\'s own title');
+  });
+
+  it('refuses a price that is not one before the creation is read, and a price or listing lines with no recipe to carry them before any limit is spent', async () => {
+    // The handler's own check, for a call that reached it past the schema.
+    for (const price of [1, 5, 9, 15, 255, 10.5, -10]) {
+      const { context, services } = harness();
+      const result = await tool('publish_post').handle({ ...args, resource_price_tokens: price }, context);
+      expect(toolFailureCode(result), String(price)).toBe('INVALID_REQUEST');
+      expect((structured(result).error as { field_errors: Record<string, string> }).field_errors.resource_price_tokens, String(price))
+        .toContain('a whole number of tokens, 10 or more, in steps of 10 (100 tokens = $1.00)');
+      for (const service of [services.readCreationForPublish, services.enforceBackendRateLimit, services.countAgentPublicPublishesSince, services.publishGenerationToShowcaseForRoute]) {
+        expect(service, String(price)).not.toHaveBeenCalled();
+      }
+    }
+
+    const cases: Array<[Record<string, unknown>, Partial<CreationForPublish>, string, RegExp]> = [
+      // Remixes off posts the media alone: nothing is left to price.
+      [{ ...args, allow_remixes: false, resource_price_tokens: 250 }, {}, 'resource_price_tokens', /allow_remixes false publishes no recipe\. Leave the price out\./u],
+      [{ ...args, resource_price_tokens: 250 }, { prompt: null }, 'resource_price_tokens', /this creation has no prompt, so it has no recipe\. Leave the price out\./u],
+      [{ ...args, allow_remixes: false, resource_summary: 'The dawn bicycle prompt' }, {}, 'resource_summary', /describe the creation's recipe, and allow_remixes false publishes no recipe/u],
+      [{ ...args, allow_remixes: false, resource_preview: 'The exact prompt behind this shot.' }, {}, 'resource_preview', /describe the creation's recipe/u],
+    ];
+    for (const [input, overrides, field, words] of cases) {
+      const { context, services } = harness({ readCreationForPublish: vi.fn(async () => creation(overrides)) });
+      const result = await tool('publish_post').handle(input as never, context);
+      expect(toolFailureCode(result), String(words)).toBe('INVALID_REQUEST');
+      expect((structured(result).error as { field_errors: Record<string, string> }).field_errors[field], String(words)).toMatch(words);
+      for (const service of [services.enforceBackendRateLimit, services.countAgentPublicPublishesSince, services.publishGenerationToShowcaseForRoute]) {
+        expect(service, String(words)).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it('refuses resources with a creation, whose resource is its own recipe, before anything is read', async () => {
+    const { context, services } = harness();
+    const result = await tool('publish_post').handle({ ...args, resources: [{ type: 'prompt', title: 'Hook prompt', text: 'Cinematic hook, 35mm' }] }, context);
+    expect(toolFailureCode(result)).toBe('INVALID_REQUEST');
+    expect((structured(result).error as { field_errors: Record<string, string> }).field_errors.resources)
+      .toContain('A creation\'s resource is its own recipe, which the server builds from the run: allow_remixes carries it, and resource_price_tokens prices it.');
+    for (const service of [services.readCreationForPublish, services.readPostForAgent, services.enforceBackendRateLimit, services.publishGenerationToShowcaseForRoute, services.createOwnerPostForRoute]) {
+      expect(service).not.toHaveBeenCalled();
     }
   });
 });
@@ -1389,19 +1619,23 @@ describe('publish_post with uploads', () => {
     return { input, fields };
   }
 
-  it('takes exactly one source, a creation or uploads, and made_with only with uploads', async () => {
+  it('takes one source of three: a creation, uploads, or with neither a title and a body; never a creation and uploads, and made_with never with a creation', async () => {
     const { context, services } = fresh();
+    // Neither a creation nor uploads is a text post, which needs its text: a title alone names no source.
     const neither = await tool('publish_post').handle({ title: 'A paper fox' }, context);
     expect(toolFailureCode(neither)).toBe('INVALID_REQUEST');
-    expect(text(neither)).toContain('exactly one of generation_id (a creation made here) or uploads (files staged with upload_input)');
+    expect(text(neither)).toContain('A post needs a source: generation_id (a creation made here), uploads (files staged with upload_input), or, for a text post, title and body.');
+    expect(structured(neither).error).toMatchObject({ field_errors: { body: expect.any(String) } });
+    expect(toolFailureCode(await tool('publish_post').handle({}, context))).toBe('INVALID_REQUEST');
     const both = await tool('publish_post').handle({ ...args, generation_id: GENERATION_ID }, context);
     expect(toolFailureCode(both)).toBe('INVALID_REQUEST');
+    expect(text(both)).toContain('Give one source, not two');
     expect(structured(both).error).toMatchObject({ field_errors: { generation_id: expect.any(String) } });
 
     // A creation's Made with is fixed by its run: the argument is refused, not ignored.
     const fixed = await tool('publish_post').handle({ generation_id: GENERATION_ID, made_with: [{ tool: 'Midjourney' }] }, context);
     expect(toolFailureCode(fixed)).toBe('INVALID_REQUEST');
-    expect(structured(fixed).error).toMatchObject({ field_errors: { made_with: expect.stringContaining('made_with goes with uploads') } });
+    expect(structured(fixed).error).toMatchObject({ field_errors: { made_with: expect.stringContaining('made_with goes with uploads or a text post') } });
 
     for (const service of [
       services.readCreationForPublish, services.readPostForAgent, services.readAgentStagedUploads, services.enforceBackendRateLimit,
@@ -1431,6 +1665,12 @@ describe('publish_post with uploads', () => {
       [{ ...args, made_with: Array.from({ length: 6 }, (_, index) => ({ tool: `Tool ${index}` })) }, 'made_with', /A post can include at most 5 source tools\./u],
       [{ ...args, uploads: [{ storage_path: STAGED_PICTURE }, { storage_path: ` ${STAGED_PICTURE} ` }] }, 'uploads', /same staged file twice/u],
       [{ ...args, uploads: Array.from({ length: 6 }, (_, index) => ({ storage_path: `uploads/${USER_ID}/file-${index}.png` })) }, 'uploads', /1 to 5 uploads/u],
+      // A price, or listing lines, need a resource to belong to.
+      [{ ...args, resource_price_tokens: 250 }, 'resource_price_tokens', /prices a resource, and this post carries none/u],
+      [{ ...args, resource_summary: 'Three hooks' }, 'resource_summary', /describe a resource, and this post carries none/u],
+      [{ ...args, resource_preview: 'The exact prompt, ready to paste.' }, 'resource_preview', /describe a resource, and this post carries none/u],
+      [{ ...args, resources: [{ type: 'prompt', title: 'Hook prompt' }] }, 'resources', /resources\[0\] is a prompt: give its text\./u],
+      [{ ...args, resources: [{ type: 'prompt', title: 'Hook prompt', text: 'x' }], resource_price_tokens: 15 }, 'resource_price_tokens', /a whole number of tokens, 10 or more, in steps of 10/u],
     ];
     for (const [input, field, words] of cases) {
       const result = await tool('publish_post').handle(input as never, context);
@@ -1467,6 +1707,8 @@ describe('publish_post with uploads', () => {
       source: 'upload',
       media_count: 2,
       recipe_included: false,
+      resources_included: 0,
+      ...NO_RESOURCE_FIELDS,
     });
     expect(text(result)).toMatch(/Published 2 uploads as post .* It is public now/u);
     expect(text(result)).toContain(`${SITE}/showcase/${postId}`);
@@ -1546,8 +1788,19 @@ describe('publish_post with uploads', () => {
       already_published: true,
       visibility_changed: false,
       source: 'upload',
+      ...NO_RESOURCE_FIELDS,
     });
     expect(text(again)).toContain(`These uploads are already published as post ${UPLOAD_POST_ID} (live, public)`);
+    // The post keeps the resource and the price it was published with: a repeat that names
+    // others changes neither, and says where they are changed.
+    const priced = harness({ readPostForAgent: found({ resource: { access: 'paid', priceTokens: 250, status: 'published' } }) });
+    const repriced = await tool('publish_post').handle({ ...args, resources: [{ type: 'prompt', title: 'Hook prompt', text: 'Cinematic hook, 35mm' }], resource_price_tokens: 500 }, priced.context);
+    expect(structured(repriced)).toMatchObject({ already_published: true, visibility_changed: false, resource_access: 'paid', resource_price_tokens: 250, resource_status: 'published' });
+    expect(text(repriced)).toContain('It carries a paid resource at 250 tokens, on offer.');
+    expect(text(repriced)).toContain('A resource and its price are changed on the website, not by publishing again.');
+    for (const service of [priced.services.createOwnerPostForRoute, priced.services.updateOwnerPostForRoute, priced.services.enforceBackendRateLimit]) {
+      expect(service).not.toHaveBeenCalled();
+    }
     expect(same.services.readPostForAgent).toHaveBeenCalledWith(same.admin, { postId: UPLOAD_POST_ID, viewerUserId: USER_ID });
     // The staged files were spent by the first publish, so their state is not read: it would turn
     // the repeat into a refusal. Nothing is created, changed or counted.
@@ -1581,6 +1834,7 @@ describe('publish_post with uploads', () => {
       already_published: true,
       visibility_changed: true,
       source: 'upload',
+      ...NO_RESOURCE_FIELDS,
     });
     // The post has no creation behind it, so the creation path's republish cannot carry the
     // change: the composer's save takes the visibility alone and keeps everything else.
@@ -1603,6 +1857,20 @@ describe('publish_post with uploads', () => {
     expect(structured(madePublic)).toMatchObject({ visibility: 'public', state: 'live', already_published: true, visibility_changed: true });
     expect(text(madePublic)).toContain('Anyone can see it.');
     expect(open.services.countAgentPublicPublishesSince).toHaveBeenCalledTimes(1);
+
+    // A priced resource held as a draft goes on offer with the post, at the price it had: the
+    // save answers its status, and the tool adds nothing of its own.
+    const onOffer = harness({
+      readPostForAgent: found({ visibility: 'private', state: 'private', resource: { access: 'paid', priceTokens: 250, status: 'draft' } }),
+      updateOwnerPostForRoute: vi.fn(async ({ postId }: { postId: string }) => ({
+        ok: true as const,
+        body: { success: true as const, postId, visibility: 'public' as const, showcasePath: `/showcase/${postId}`, ownerPath: `/post/${postId}/edit`, resourceBundlePath: `/showcase/${postId}#recipe`, resourceBundleStatus: 'published' as const },
+      })) as never,
+    });
+    const listed = await tool('publish_post').handle({ ...args, visibility: 'public', resources: [{ type: 'prompt', title: 'The fox prompt', text: 'paper-cut fox' }], resource_price_tokens: 990 }, onOffer.context);
+    expect(structured(listed)).toMatchObject({ visibility_changed: true, resource_access: 'paid', resource_price_tokens: 250, resource_status: 'published' });
+    expect(text(listed)).toContain('It carries a paid resource at 250 tokens, on offer.');
+    expect(onOffer.services.updateOwnerPostForRoute).toHaveBeenCalledWith(expect.objectContaining({ body: { visibility: 'public' } }));
     const capped = harness({ readPostForAgent: found({ visibility: 'private', state: 'private' }), countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
     expect(toolFailureCode(await tool('publish_post').handle({ ...args, visibility: 'public' }, capped.context))).toBe('RATE_LIMITED');
     expect(capped.services.updateOwnerPostForRoute).not.toHaveBeenCalled();
@@ -1613,14 +1881,56 @@ describe('publish_post with uploads', () => {
       [{ status: 404, body: { error: 'Post not found.' } }, 'NOT_FOUND', /Post not found/u],
       [{ status: 429, rateLimitError: rateLimit(30), body: { error: 'Too many', code: 'RATE_LIMITED', retryAfterSeconds: 30, limit: 60, resetAt: 'x' } }, 'RATE_LIMITED', /30 seconds/u],
       [{ status: 400, body: { error: 'Add your name and handle to publish publicly.', actionHref: '/profile/edit', actionLabel: 'Edit profile' } }, 'INVALID_REQUEST', /name and handle/u],
+      // The listing rule a stored resource is held to when its post goes public.
+      [{ status: 400, body: { error: 'Complete your profile before publishing: Choose a custom handle and add your display name before publishing a recipe.', field: 'profile', actionHref: '/profile', actionLabel: 'Complete profile and return' } }, 'INVALID_REQUEST', /The person sets their handle and display name on the website/u],
     ];
     for (const [answer, code, words] of refusals) {
       const refused = harness({ readPostForAgent: found(), updateOwnerPostForRoute: vi.fn(async () => ({ ok: false, ...answer })) as never });
       const result = await tool('publish_post').handle({ ...args, visibility: 'private' }, refused.context);
       expect(toolFailureCode(result), code).toBe(code);
       expect(text(result), code).toMatch(words);
-      expect(JSON.stringify(result), code).not.toMatch(/actionHref|\/profile\/edit|Edit profile/u);
+      expect(JSON.stringify(result), code).not.toMatch(/actionHref|actionLabel|\/profile|Edit profile|Complete profile and return/u);
     }
+  });
+
+  it('carries a resource with the uploads as the composer\'s serializer makes it, free or at the person\'s price', async () => {
+    const cards = [
+      { type: 'prompt' as const, title: 'The fox prompt', description: 'The exact prompt.', text: 'paper-cut fox, snowy forest, soft light' },
+      { type: 'external_link' as const, title: 'Paper stock', url: 'https://example.com/paper' },
+    ];
+    // The composer's create answers the status the stored bundle has: on offer on a public post.
+    const answering = (status: 'draft' | 'published') => vi.fn(async ({ readFormData, createPostId }: { readFormData: () => Promise<FormData>; createPostId: () => string }) => {
+      const form = await readFormData();
+      const postId = createPostId();
+      const visibility = form.get('visibility') === 'private' ? 'private' as const : 'public' as const;
+      return { ok: true as const, body: { success: true as const, postId, visibility, showcasePath: `/showcase/${postId}`, ownerPath: `/post/${postId}/edit`, resourceBundlePath: `/showcase/${postId}#recipe`, resourceBundleStatus: status } };
+    }) as never;
+
+    const free = fresh({ createOwnerPostForRoute: answering('published') });
+    const shared = await tool('publish_post').handle({ ...args, resources: cards }, free.context);
+    expect(shared.isError).toBeUndefined();
+    expect(structured(shared)).toMatchObject({ source: 'upload', media_count: 1, recipe_included: false, resources_included: 2, resource_access: 'free', resource_price_tokens: 0, resource_status: 'published' });
+    expect(text(shared)).toContain('It carries a free resource, on offer.');
+    expect((await sent(free.services)).fields.resourceBundle).toEqual(buildAgentResourceBundle({ cards }));
+    expect((await sent(free.services)).fields.resourceBundle).toMatchObject({ accessMode: 'free', priceUsdCents: 0 });
+
+    const paid = fresh({ createOwnerPostForRoute: answering('published') });
+    const sold = await tool('publish_post').handle({ ...args, resources: cards, resource_price_tokens: 250, resource_summary: 'The fox prompt and its paper', resource_preview: 'The exact prompt and the paper it was cut from.' }, paid.context);
+    expect(structured(sold)).toMatchObject({ resources_included: 2, resource_access: 'paid', resource_price_tokens: 250, resource_status: 'published' });
+    expect(text(sold)).toContain('It carries a paid resource at 250 tokens, on offer.');
+    const bundle = (await sent(paid.services)).fields.resourceBundle;
+    expect(bundle).toEqual(buildAgentResourceBundle({ cards, priceTokens: 250, summary: 'The fox prompt and its paper', preview: 'The exact prompt and the paper it was cut from.' }));
+    expect(bundle).toMatchObject({ accessMode: 'paid', priceUsdCents: 250, summary: 'The fox prompt and its paper', previewText: 'The exact prompt and the paper it was cut from.' });
+    // An answer names what a resource is, never what it holds.
+    expect(JSON.stringify(sold)).not.toContain('paper-cut fox, snowy forest');
+    expect(JSON.stringify(sold)).not.toContain('example.com/paper');
+    expect(JSON.stringify(structured(sold))).not.toMatch(RESOURCE_CONTENT_KEYS);
+
+    // Private: the composer holds the resource as a draft, and the answer says it is not on sale.
+    const privately = fresh({ createOwnerPostForRoute: answering('draft') });
+    const held = await tool('publish_post').handle({ ...args, visibility: 'private', resources: cards, resource_price_tokens: 250 }, privately.context);
+    expect(structured(held)).toMatchObject({ visibility: 'private', resource_access: 'paid', resource_price_tokens: 250, resource_status: 'draft' });
+    expect(text(held)).toContain('held as a draft: a resource is on offer only while its post is public.');
   });
 
   it('publishes nothing when it cannot tell whether the uploads are already published, or cannot read them', async () => {
@@ -1736,15 +2046,355 @@ describe('publish_post with uploads', () => {
       [{ status: 500, body: { error: 'Failed to prepare uploaded media.' } }, 'UNAVAILABLE', /Call publish_post again with the same uploads/u],
       // The post may exist privately after this one: the repeat finds it by its derived id.
       [{ status: 500, body: { error: 'Your post was saved as a private draft, but publishing failed. Open it from your posts to publish again.' } }, 'UNAVAILABLE', /it answers the post if one was saved/u],
+      // A resource the service refuses: its validator's own words, its field under the tool's name.
+      [{ status: 400, body: { error: 'Paid recipes must cost at least 10 credits and use 10-credit increments.' } }, 'INVALID_REQUEST', /Paid recipes must cost at least 10 credits and use 10-credit increments\./u],
+      [{ status: 400, body: { error: 'Package previews are limited to 180 characters.', field: 'resourcePreview' } }, 'INVALID_REQUEST', /Package previews are limited to 180 characters\./u, 'resource_preview'],
+      [{ status: 400, body: { error: 'Public summaries are limited to 180 characters.', field: 'resourceSummary' } }, 'INVALID_REQUEST', /Public summaries are limited to 180 characters\./u, 'resource_summary'],
+      [{ status: 400, body: { error: 'Unlocked descriptions are limited to 120 characters.', field: 'resourceCards' } }, 'INVALID_REQUEST', /Unlocked descriptions are limited to 120 characters\./u, 'resources'],
+      [{ status: 400, body: { error: 'Improve this recipe before publishing: Add a useful preview or summary that tells buyers what the recipe includes.' } }, 'INVALID_REQUEST', /Add a useful preview or summary/u],
+      [{ status: 400, body: { error: 'A recipe needs a title of at least 3 characters.', field: 'title', code: 'RECIPE_TITLE_TOO_SHORT' } }, 'INVALID_REQUEST', /A recipe needs a title of at least 3 characters\./u, 'title'],
+      // The seller's profile: the web's answer is a link to it, the agent's is words.
+      [{ status: 400, body: { error: 'Complete your profile before publishing: Choose a custom handle and add your display name before publishing a recipe.', field: 'profile', actionHref: '/profile', actionLabel: 'Complete profile and return' } }, 'INVALID_REQUEST', /Choose a custom handle and add your display name before publishing a recipe\. The person sets their handle and display name on the website, then you publish again\./u],
     ];
     for (const [answer, code, words, field] of cases) {
       const { context } = fresh({ createOwnerPostForRoute: vi.fn(async () => ({ ok: false, ...answer })) as never });
-      const result = await tool('publish_post').handle(args, context);
+      const result = await tool('publish_post').handle({ ...args, resources: [{ type: 'prompt', title: 'Hook prompt', text: 'Cinematic hook, 35mm' }], resource_price_tokens: 250 }, context);
       const label = JSON.stringify(answer);
       expect(toolFailureCode(result), label).toBe(code);
       expect(text(result), label).toMatch(words);
-      expect(JSON.stringify(result), label).not.toMatch(/actionHref|actionLabel|\/profile\/edit|Edit profile/u);
+      expect(JSON.stringify(result), label).not.toMatch(/actionHref|actionLabel|\/profile|Edit profile|Complete profile and return/u);
       if (field) expect(structured(result).error, label).toMatchObject({ field_errors: { [field]: expect.any(String) } });
+      // A refusal over the profile names no argument: none of the tool's fixes it.
+      if ((answer.body as { field?: string }).field === 'profile') expect(structured(result).error, label).not.toHaveProperty('field_errors');
+    }
+  });
+});
+
+describe('publish_post as a text post', () => {
+  const args = {
+    title: 'A prompt for product shots',
+    body: 'Three lines that work.\nTry them on a white sweep.',
+  };
+  const GUIDE = { type: 'guide' as const, title: 'Studio-shot skill', description: 'A skill for clean product shots.', text: '# Studio shots\n1. Light from the left.\n2. Shoot on a white sweep.' };
+  /** The id a text post of that title and body gets, whichever call asks. */
+  const TEXT_POST_ID = agentTextPostId(USER_ID, args.title, args.body);
+  const TEXT_POST_URL = `${SITE}/showcase/${TEXT_POST_ID}`;
+
+  /** A harness in which no post exists yet under the id this text derives. */
+  function fresh(overrides: Partial<McpToolServices> = {}) {
+    return harness({ readPostForAgent: vi.fn(async () => ({ ok: false, code: 'NOT_FOUND' })) as never, ...overrides });
+  }
+
+  /** A read that finds the post an earlier publish of this text made. */
+  function found(overrides: Partial<AgentPostView> = {}) {
+    return vi.fn(async () => ({ ok: true, post: post({ postId: TEXT_POST_ID, generationId: null, format: 'text', category: 'text', title: args.title, body: args.body, ...overrides }) })) as never;
+  }
+
+  /** The composer's create, answering the status its stored bundle would have. */
+  function composing(status: 'draft' | 'published' | null) {
+    return vi.fn(async ({ readFormData, createPostId }: { readFormData: () => Promise<FormData>; createPostId: () => string }) => {
+      const form = await readFormData();
+      const postId = createPostId();
+      const visibility = form.get('visibility') === 'private' ? 'private' as const : 'public' as const;
+      return { ok: true as const, body: { success: true as const, postId, visibility, showcasePath: visibility === 'private' ? null : `/showcase/${postId}`, ownerPath: `/post/${postId}/edit`, resourceBundlePath: `/post/${postId}/edit#recipe`, resourceBundleStatus: status } };
+    }) as never;
+  }
+
+  async function sent(services: McpToolServices, call = 0) {
+    const [input] = vi.mocked(services.createOwnerPostForRoute).mock.calls[call] as unknown as [
+      { adminSupabase: unknown; ownerUserId: string; readFormData: () => Promise<FormData>; createPostId: () => string },
+    ];
+    const json = new Set(['sourceTools', 'resourceBundle', 'mediaItems']);
+    const fields = Object.fromEntries(
+      [...(await input.readFormData()).entries()].map(([key, value]) => [key, json.has(key) ? JSON.parse(String(value)) : value]),
+    ) as Record<string, unknown>;
+    return { input, fields };
+  }
+
+  it('publishes a title and a body live through the composer\'s own create, as the composer\'s text post, under the post\'s derived id and both limits', async () => {
+    const { context, services, admin } = fresh();
+    const result = await tool('publish_post').handle({ ...args, description: 'For studio work.' }, context);
+    expect(result.isError).toBeUndefined();
+    expect(structured(result)).toEqual({
+      post_id: TEXT_POST_ID,
+      post_url: TEXT_POST_URL,
+      visibility: 'public',
+      state: 'live',
+      already_published: false,
+      visibility_changed: false,
+      source: 'text',
+      media_count: 0,
+      recipe_included: false,
+      resources_included: 0,
+      ...NO_RESOURCE_FIELDS,
+    });
+    expect(text(result)).toMatch(/Published the text post as post .* It is public now; anyone can see it, and it goes through moderation as any post does\./u);
+    expect(text(result)).toContain(TEXT_POST_URL);
+    expect(text(result)).toContain('Keep this post_id: list_creations lists creations, not text posts.');
+
+    const { input, fields } = await sent(services);
+    expect(input.adminSupabase).toBe(admin);
+    expect(input.ownerUserId).toBe(USER_ID);
+    // Derived from the creator, the title and the text: a repeat finds this post.
+    expect(input.createPostId()).toBe(TEXT_POST_ID);
+    expect(fields).toEqual({
+      title: 'A prompt for product shots',
+      body: 'Three lines that work.\nTry them on a white sweep.',
+      description: 'For studio work.',
+      visibility: 'public',
+      isNsfw: 'false',
+      resourceBundle: { accessMode: 'none' },
+      postFormat: 'text',
+      category: 'text',
+    });
+    expect(services.readPostForAgent).toHaveBeenCalledWith(admin, { postId: TEXT_POST_ID, viewerUserId: USER_ID });
+    // The web's publish limit, then the agent's daily cap read from the ledger, as for any post.
+    expect(vi.mocked(services.enforceBackendRateLimit).mock.calls.map(([, options]) => options)).toEqual([{ ...SHOWCASE_PUBLISH_RATE_LIMIT, key: USER_ID }]);
+    expect(services.countAgentPublicPublishesSince).toHaveBeenCalledWith(admin, { userId: USER_ID, since: new Date('1970-01-01T00:00:00.000Z') });
+    // No file is read, and nothing of the creation path runs.
+    for (const service of [services.readAgentStagedUploads, services.readCreationForPublish, services.publishGenerationToShowcaseForRoute, services.updateOwnerPostForRoute]) {
+      expect(service).not.toHaveBeenCalled();
+    }
+  });
+
+  it('is a form the composer service takes: a text post filed as text, written here', async () => {
+    const composer = vi.fn(async ({ readFormData, ownerUserId, createPostId }: { readFormData: () => Promise<FormData>; ownerUserId: string; createPostId: () => string }) => {
+      const prepared = await preparePostCreationSubmission({ formData: await readFormData(), userId: ownerUserId, sourceToolCatalog: [] });
+      if (!prepared.ok) return prepared;
+      expect(prepared.submission).toMatchObject({ postFormat: 'text', category: 'text', sourceKind: 'manual', hasSubmittedMedia: false, resourceBundle: { accessMode: 'paid', priceUsdCents: 250 } });
+      const postId = createPostId();
+      return { ok: true as const, body: { success: true as const, postId, visibility: prepared.submission.visibility, showcasePath: `/showcase/${postId}`, ownerPath: `/post/${postId}/edit`, resourceBundlePath: `/showcase/${postId}#recipe`, resourceBundleStatus: 'published' as const } };
+    });
+    const { context } = fresh({ createOwnerPostForRoute: composer as never });
+    const result = await tool('publish_post').handle({ ...args, resources: [GUIDE], resource_price_tokens: 250 }, context);
+    expect(result.isError).toBeUndefined();
+    expect(composer).toHaveBeenCalledTimes(1);
+    expect(structured(result)).toMatchObject({ post_id: TEXT_POST_ID, source: 'text', resource_access: 'paid', resource_price_tokens: 250, resource_status: 'published' });
+  });
+
+  it('needs its title and its body, and refuses a category, allow_remixes and Magicbooklet\'s own name, before anything is read or spent', async () => {
+    const { context, services } = fresh();
+    const cases: Array<[Record<string, unknown>, string, RegExp]> = [
+      [{ body: args.body }, 'title', /title is required for a text post/u],
+      [{ ...args, title: '' }, 'title', /title is required for a text post/u],
+      [{ title: args.title }, 'body', /for a text post, title and body/u],
+      [{ ...args, body: '' }, 'body', /A post needs a source/u],
+      // A text post is filed as text, and has no recipe to remix.
+      [{ ...args, category: 'image' }, 'category', /a text post is filed as text/u],
+      [{ ...args, allow_remixes: true }, 'allow_remixes', /a text post or a post made from uploads has no recipe to remix/u],
+      [{ ...args, allow_remixes: false }, 'allow_remixes', /no recipe to remix/u],
+      // made_with is optional here, and held to the same rules where given.
+      [{ ...args, made_with: [{ tool: 'Magic Booklet' }] }, 'made_with', /Magic Booklet is not a name for made_with/u],
+      [{ ...args, made_with: [{ tool: 'Custom' }] }, 'made_with', /The source tool name "Custom" is reserved\./u],
+    ];
+    for (const [input, field, words] of cases) {
+      const result = await tool('publish_post').handle(input as never, context);
+      expect(toolFailureCode(result), String(words)).toBe('INVALID_REQUEST');
+      expect((structured(result).error as { field_errors: Record<string, string> }).field_errors[field], String(words)).toMatch(words);
+    }
+    for (const service of [
+      services.readPostForAgent, services.readAgentStagedUploads, services.enforceBackendRateLimit,
+      services.countAgentPublicPublishesSince, services.createOwnerPostForRoute, services.updateOwnerPostForRoute,
+    ]) {
+      expect(service).not.toHaveBeenCalled();
+    }
+
+    // Without made_with nothing is filed under Made with; with one, the composer's fields carry it.
+    const named = fresh();
+    expect((await tool('publish_post').handle({ ...args, made_with: [{ tool: 'Midjourney', model: 'v7' }] }, named.context)).isError).toBeUndefined();
+    expect((await sent(named.services)).fields).toMatchObject({
+      sourceTool: 'Midjourney',
+      sourceTools: [{ toolLabel: 'Midjourney', toolSlug: 'midjourney', modelLabel: 'v7', modelSlug: 'v7' }],
+      postFormat: 'text',
+    });
+  });
+
+  it('shares a skill: a guide card rides as the bundle the composer\'s serializer makes, free unless a price is given', async () => {
+    const { context, services } = fresh({ createOwnerPostForRoute: composing('published') });
+    const result = await tool('publish_post').handle({ ...args, resources: [GUIDE] }, context);
+    expect(result.isError).toBeUndefined();
+    const { fields } = await sent(services);
+    // What the composer service receives for a text post with a guide card.
+    expect(fields.postFormat).toBe('text');
+    expect(fields.category).toBe('text');
+    expect(fields.resourceBundle).toEqual(buildAgentResourceBundle({ cards: [GUIDE] }));
+    expect(fields.resourceBundle).toEqual({
+      accessMode: 'free',
+      summary: 'Studio-shot skill',
+      previewText: 'Includes Studio-shot skill.',
+      priceUsdCents: 0,
+      resources: {
+        promptText: null,
+        notesMarkdown: null,
+        workflowShareUrl: null,
+        attachments: [],
+        allowRemix: false,
+        sections: [expect.objectContaining({ id: 'agent-resource-1', publicTitle: 'Studio-shot skill', resourceType: 'note', description: 'A skill for clean product shots.' })],
+        items: [expect.objectContaining({ id: 'agent-resource-1-item-1', type: 'note', title: 'Studio-shot skill', textContent: GUIDE.text, sectionId: 'agent-resource-1' })],
+      },
+    });
+    expect(fields).not.toHaveProperty('mediaItems');
+    expect(structured(result)).toMatchObject({ source: 'text', resources_included: 1, resource_access: 'free', resource_price_tokens: 0, resource_status: 'published', recipe_included: false });
+    expect(text(result)).toContain('It carries a free resource, on offer.');
+    // The skill's text is on the post for whoever unlocks it, never in the answer.
+    expect(JSON.stringify(result)).not.toContain('Light from the left');
+    expect(JSON.stringify(structured(result))).not.toMatch(RESOURCE_CONTENT_KEYS);
+  });
+
+  it('sells a resource at the person\'s price, as the composer sends a paid one, and holds it as a draft on a private post', async () => {
+    const paid = fresh({ createOwnerPostForRoute: composing('published') });
+    const sold = await tool('publish_post').handle({ ...args, resources: [GUIDE], resource_price_tokens: 250 }, paid.context);
+    expect(sold.isError).toBeUndefined();
+    const bundle = (await sent(paid.services)).fields.resourceBundle as Record<string, unknown>;
+    // The serializer's paid bundle for these cards: the access mode and the token count, nothing computed.
+    expect(bundle).toEqual(buildAgentResourceBundle({ cards: [GUIDE], priceTokens: 250 }));
+    expect(bundle).toMatchObject({ accessMode: 'paid', priceUsdCents: 250 });
+    expect({ ...bundle, accessMode: 'free', priceUsdCents: 0 }).toEqual(buildAgentResourceBundle({ cards: [GUIDE] }));
+    expect(structured(sold)).toMatchObject({ visibility: 'public', resources_included: 1, resource_access: 'paid', resource_price_tokens: 250, resource_status: 'published' });
+    expect(text(sold)).toContain('It carries a paid resource at 250 tokens, on offer.');
+
+    const privately = fresh({ createOwnerPostForRoute: composing('draft') });
+    const held = await tool('publish_post').handle({ ...args, visibility: 'private', resources: [GUIDE], resource_price_tokens: 250 }, privately.context);
+    expect(structured(held)).toMatchObject({ visibility: 'private', state: 'private', resource_access: 'paid', resource_price_tokens: 250, resource_status: 'draft' });
+    expect(text(held)).toContain('It carries a paid resource at 250 tokens, held as a draft: a resource is on offer only while its post is public.');
+    expect(privately.services.countAgentPublicPublishesSince).not.toHaveBeenCalled();
+
+    // Free by default, and at a price of 0.
+    for (const price of [undefined, 0]) {
+      const free = fresh({ createOwnerPostForRoute: composing('published') });
+      const shared = await tool('publish_post').handle({ ...args, resources: [GUIDE], ...(price === undefined ? {} : { resource_price_tokens: price }) }, free.context);
+      expect(structured(shared), String(price)).toMatchObject({ resource_access: 'free', resource_price_tokens: 0 });
+      expect((await sent(free.services)).fields.resourceBundle, String(price)).toMatchObject({ accessMode: 'free', priceUsdCents: 0 });
+    }
+  });
+
+  it('refuses a price below 10, off the step, a fraction, a negative one and one with no resource, and a card without what it carries, before anything is read or spent', async () => {
+    const { context, services } = fresh();
+    for (const price of [1, 5, 9, 15, 255, 10.5, 9.99, -10, -250]) {
+      const result = await tool('publish_post').handle({ ...args, resources: [GUIDE], resource_price_tokens: price }, context);
+      expect(toolFailureCode(result), String(price)).toBe('INVALID_REQUEST');
+      expect((structured(result).error as { field_errors: Record<string, string> }).field_errors.resource_price_tokens, String(price))
+        .toContain('resource_price_tokens is a whole number of tokens, 10 or more, in steps of 10 (100 tokens = $1.00). Leave it out, or give 0, for a free resource.');
+    }
+    const cases: Array<[Record<string, unknown>, string, RegExp]> = [
+      // A text post with no resources has nothing to price.
+      [{ ...args, resource_price_tokens: 250 }, 'resource_price_tokens', /prices a resource, and this post carries none: give resources/u],
+      [{ ...args, resource_summary: 'A skill' }, 'resource_summary', /describe a resource, and this post carries none/u],
+      // Each card type's one required thing.
+      [{ ...args, resources: [{ type: 'prompt', title: 'Hook prompt' }] }, 'resources', /resources\[0\] is a prompt: give its text\./u],
+      [{ ...args, resources: [GUIDE, { type: 'guide', title: 'How to reuse', text: '  ' }] }, 'resources', /resources\[1\] is a guide: give its text\./u],
+      [{ ...args, resources: [{ type: 'external_link', title: 'Docs' }] }, 'resources', /resources\[0\] is an external_link: give url, an https address\./u],
+      [{ ...args, resources: [{ type: 'external_link', title: 'Docs', url: 'http://example.com/docs' }] }, 'resources', /give url, an https address/u],
+      [{ ...args, resources: [{ type: 'external_link', title: 'Docs', url: 'https://example.com', text: 'Read me' }] }, 'resources', /it carries a url, not text/u],
+      [{ ...args, resources: [{ ...GUIDE, url: 'https://example.com' }] }, 'resources', /it carries text, not a url/u],
+      [{ ...args, resources: [{ ...GUIDE, title: ' ' }] }, 'resources', /resources\[0\] needs a title/u],
+      [{ ...args, resources: [] }, 'resources', /at least one card/u],
+      [{ ...args, resources: Array.from({ length: AGENT_RESOURCE_CARDS_MAX + 1 }, () => GUIDE) }, 'resources', /at most 10 cards/u],
+    ];
+    for (const [input, field, words] of cases) {
+      const result = await tool('publish_post').handle(input as never, context);
+      expect(toolFailureCode(result), String(words)).toBe('INVALID_REQUEST');
+      expect((structured(result).error as { field_errors: Record<string, string> }).field_errors[field], String(words)).toMatch(words);
+    }
+    for (const service of [
+      services.readPostForAgent, services.enforceBackendRateLimit, services.countAgentPublicPublishesSince,
+      services.createOwnerPostForRoute, services.updateOwnerPostForRoute,
+    ]) {
+      expect(service).not.toHaveBeenCalled();
+    }
+  });
+
+  it('counts a public text post against the daily cap and a private one not at all', async () => {
+    const capped = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
+    const result = await tool('publish_post').handle(args, capped.context);
+    expect(toolFailureCode(result)).toBe('RATE_LIMITED');
+    expect(structured(result).error).toMatchObject({ limit: 10, published_today: 10, reset_at: '1970-01-02T00:00:00.000Z' });
+    expect(capped.services.createOwnerPostForRoute).not.toHaveBeenCalled();
+    const room = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 9) as never });
+    expect((await tool('publish_post').handle(args, room.context)).isError).toBeUndefined();
+
+    // A private post is no public publication: a full day does not stop it.
+    const privately = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
+    const saved = await tool('publish_post').handle({ ...args, visibility: 'private', is_nsfw: true }, privately.context);
+    expect(structured(saved)).toMatchObject({ post_id: TEXT_POST_ID, visibility: 'private', state: 'private', source: 'text' });
+    expect(text(saved)).toMatch(/Saved the text post as private post .* publish again with the same title and body and visibility public/u);
+    expect(privately.services.countAgentPublicPublishesSince).not.toHaveBeenCalled();
+    expect((await sent(privately.services)).fields).toMatchObject({ visibility: 'private', isNsfw: 'true', postFormat: 'text', category: 'text' });
+
+    const busy = fresh({ enforceBackendRateLimit: vi.fn(async () => { throw rateLimit(90); }) as never });
+    const limited = await tool('publish_post').handle(args, busy.context);
+    expect(toolFailureCode(limited)).toBe('RATE_LIMITED');
+    expect(busy.services.createOwnerPostForRoute).not.toHaveBeenCalled();
+  });
+
+  it('answers the post an earlier publish of the same title and body made, changing nothing, its resource and price included', async () => {
+    const same = harness({ readPostForAgent: found({ resource: { access: 'paid', priceTokens: 250, status: 'published' } }) });
+    const again = await tool('publish_post').handle({ ...args, resources: [GUIDE], resource_price_tokens: 990 }, same.context);
+    expect(again.isError).toBeUndefined();
+    expect(structured(again)).toEqual({
+      post_id: TEXT_POST_ID,
+      post_url: TEXT_POST_URL,
+      visibility: 'public',
+      state: 'live',
+      already_published: true,
+      visibility_changed: false,
+      source: 'text',
+      resource_access: 'paid',
+      resource_price_tokens: 250,
+      resource_status: 'published',
+    });
+    expect(text(again)).toContain(`This text post is already published as post ${TEXT_POST_ID} (live, public)`);
+    expect(text(again)).toContain('Nothing was changed.');
+    expect(text(again)).toContain('A resource and its price are changed on the website, not by publishing again.');
+    for (const service of [
+      same.services.createOwnerPostForRoute, same.services.updateOwnerPostForRoute, same.services.readAgentStagedUploads,
+      same.services.enforceBackendRateLimit, same.services.countAgentPublicPublishesSince,
+    ]) {
+      expect(service).not.toHaveBeenCalled();
+    }
+    // The text is read as the composer reads it: outer space and line ends do not make another post.
+    const typed = harness({ readPostForAgent: found() });
+    await tool('publish_post').handle({ title: `  ${args.title} `, body: `${args.body.replace('\n', '\r\n')}\n` }, typed.context);
+    expect(typed.services.readPostForAgent).toHaveBeenCalledWith(typed.admin, { postId: TEXT_POST_ID, viewerUserId: USER_ID });
+    // Another body is another post.
+    const other = fresh();
+    await tool('publish_post').handle({ ...args, body: 'Four lines that work.' }, other.context);
+    expect(other.services.readPostForAgent).not.toHaveBeenCalledWith(other.admin, { postId: TEXT_POST_ID, viewerUserId: USER_ID });
+
+    // Private since its first publish: the repeat says how to open it, and an explicit visibility
+    // does, through the composer's own save.
+    const kept = harness({ readPostForAgent: found({ visibility: 'private', state: 'private' }) });
+    expect(text(await tool('publish_post').handle(args, kept.context))).toContain('Publish again with the same title and body and visibility public to make it public.');
+    const madePublic = await tool('publish_post').handle({ ...args, visibility: 'public' }, kept.context);
+    expect(structured(madePublic)).toMatchObject({ visibility: 'public', state: 'live', already_published: true, visibility_changed: true, source: 'text' });
+    expect(kept.services.updateOwnerPostForRoute).toHaveBeenCalledWith({
+      adminSupabase: kept.admin,
+      ownerUserId: USER_ID,
+      postId: TEXT_POST_ID,
+      body: { visibility: 'public' },
+      runAfterResponse: kept.context.runAfterResponse,
+    });
+    expect(kept.services.countAgentPublicPublishesSince).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes nothing when it cannot tell whether the text is already published, and maps the composer\'s refusals with its own words', async () => {
+    const blind = harness({ readPostForAgent: vi.fn(async () => ({ ok: false, code: 'UNAVAILABLE' })) as never });
+    const result = await tool('publish_post').handle(args, blind.context);
+    expect(toolFailureCode(result)).toBe('UNAVAILABLE');
+    expect(text(result)).toContain('Whether this text post is already published could not be read right now. Nothing was published');
+    expect(blind.services.createOwnerPostForRoute).not.toHaveBeenCalled();
+    expect(blind.services.enforceBackendRateLimit).not.toHaveBeenCalled();
+
+    const cases: Array<[Record<string, unknown>, string, RegExp]> = [
+      [{ status: 400, body: { error: 'Text posts are limited to 2000 characters.' } }, 'INVALID_REQUEST', /Text posts are limited to 2000 characters\./u],
+      [{ status: 400, body: { error: 'This post cannot be published publicly because it appears to contain abusive, sexual, or dangerous content.', field: 'body' } }, 'INVALID_REQUEST', /cannot be published publicly/u],
+      [{ status: 500, body: { error: 'Failed to create post.' } }, 'UNAVAILABLE', /Call publish_post again with the same title and body: it answers the post if one was saved\./u],
+    ];
+    for (const [answer, code, words] of cases) {
+      const { context } = fresh({ createOwnerPostForRoute: vi.fn(async () => ({ ok: false, ...answer })) as never });
+      const refused = await tool('publish_post').handle(args, context);
+      expect(toolFailureCode(refused), JSON.stringify(answer)).toBe(code);
+      expect(text(refused), JSON.stringify(answer)).toMatch(words);
     }
   });
 });
@@ -1758,6 +2408,7 @@ describe('get_post', () => {
       post_id: POST_ID,
       post_url: `${SITE}/showcase/${POST_ID}`,
       generation_id: GENERATION_ID,
+      format: 'media',
       title: 'Red bicycle',
       description: null,
       body: null,
@@ -1769,8 +2420,10 @@ describe('get_post', () => {
       counts: { saves: 3, comments: 1, remixes: 0, shares: 2 },
       created_at: '2026-11-09T10:00:00Z',
       is_own: true,
+      ...NO_RESOURCE_FIELDS,
     });
     expect(text(result)).toContain('3 saves, 1 comment, 0 remixes, 2 shares');
+    expect(text(result)).not.toContain('It carries');
     expect(services.readPostForAgent).toHaveBeenCalledWith(admin, { postId: POST_ID, viewerUserId: USER_ID });
 
     const hidden = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ state: 'hidden', visibility: 'public' }) })) as never });
@@ -1786,6 +2439,32 @@ describe('get_post', () => {
     expect(services.readPostForAgent).toHaveBeenCalledWith(admin, { postId: POST_ID, viewerUserId: USER_ID });
     // A creation's post says nothing of the kind.
     expect(text(await tool('get_post').handle({ post_id: POST_ID }, harness().context))).not.toContain('uploaded media');
+    // A text post says what it is.
+    const written = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, format: 'text', category: 'text', body: 'Three lines that work.' }) })) as never });
+    const read = await tool('get_post').handle({ post_id: POST_ID }, written.context);
+    expect(structured(read)).toMatchObject({ generation_id: null, format: 'text', category: 'text', body: 'Three lines that work.' });
+    expect(text(read)).toContain('It is a text post.');
+    expect(text(read)).not.toContain('uploaded media');
+  });
+
+  it('says three things of a post\'s resource, its access, its price and whether it is on offer, and never what it holds', async () => {
+    const paid = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, format: 'text', isOwn: false, resource: { access: 'paid', priceTokens: 250, status: 'published' } }) })) as never });
+    const result = await tool('get_post').handle({ post_id: POST_ID }, paid.context);
+    expect(structured(result)).toMatchObject({ is_own: false, resource_access: 'paid', resource_price_tokens: 250, resource_status: 'published' });
+    expect(text(result)).toContain('It carries a paid resource at 250 tokens, on offer.');
+    // The whole answer is the post's own fields and those three: no card, no text, no link, no listing line.
+    expect(Object.keys(structured(result)).sort()).toEqual([
+      'allow_remixes', 'body', 'category', 'counts', 'created_at', 'description', 'format', 'generation_id', 'is_nsfw', 'is_own',
+      'post_id', 'post_url', 'resource_access', 'resource_price_tokens', 'resource_status', 'state', 'title', 'visibility',
+    ]);
+    expect(JSON.stringify(structured(result))).not.toMatch(RESOURCE_CONTENT_KEYS);
+    // The read the tool makes is the agent read alone: the bundle read behind the paywall is not among its services.
+    expect(Object.keys(paid.services).filter((name) => /bundle|resource|recipe/iu.test(name))).toEqual([]);
+
+    const own = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ visibility: 'private', state: 'private', resource: { access: 'free', priceTokens: 0, status: 'draft' } }) })) as never });
+    const draft = await tool('get_post').handle({ post_id: POST_ID }, own.context);
+    expect(structured(draft)).toMatchObject({ resource_access: 'free', resource_price_tokens: 0, resource_status: 'draft' });
+    expect(text(draft)).toContain('It carries a free resource, held as a draft: a resource is on offer only while its post is public.');
   });
 
   it('answers NOT_FOUND for a post the agent may not see, and UNAVAILABLE for a failed read', async () => {
@@ -1831,7 +2510,18 @@ describe('delete_post', () => {
     expect(services.deleteOwnerPostForRoute).toHaveBeenCalledWith({ adminSupabase: admin, ownerUserId: USER_ID, postId: POST_ID, forceDelete: false });
     // No creation holds a copy: the agent must not tell the person otherwise.
     expect(text(result)).toBe(`Post ${POST_ID} is deleted. It was made from uploaded media, which is removed with it.`);
-    expect(tool('delete_post').description).toContain('A post made from uploads has no creation behind it, so its media goes with it.');
+    expect(tool('delete_post').description).toContain('A post made from uploads has no creation behind it, so its media goes with it, and a text post goes whole.');
+
+    // A text post had nothing beside itself; where people hold its resource they keep it.
+    const written = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, format: 'text' }) })) as never });
+    expect(text(await tool('delete_post').handle({ post_id: POST_ID }, written.context))).toBe(`Post ${POST_ID} is deleted.`);
+    const held = harness({
+      readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, format: 'text' }) })) as never,
+      deleteOwnerPostForRoute: vi.fn(async () => ({ ok: true, body: { success: true, deleted: true, tombstoned: true } })) as never,
+    });
+    expect(text(await tool('delete_post').handle({ post_id: POST_ID, force: true }, held.context)))
+      .toBe(`Post ${POST_ID} is off every public surface; the people who unlocked its resource keep their copy.`);
+    expect(tool('delete_post').description).toContain('When people have unlocked the post\'s recipe or resource, free or paid');
   });
 
   it('refuses another creator\'s post (NOT_OWNER), one the agent may not see (NOT_FOUND), and asks before taking a post with buyers down', async () => {
@@ -1936,6 +2626,29 @@ describe('running a tool', () => {
     const refused = harness({ readPostForAgent: none() });
     await runMcpTool(tool('publish_post'), { ...publish, made_with: [{ tool: 'Magic Booklet' }] }, refused.context);
     expect(refused.records[0]).toEqual(expect.objectContaining({ outcome: 'error', code: 'INVALID_REQUEST', postId: null, generationId: null }));
+
+    // A text post is recorded the same way: a public one is what the cap counts, and an
+    // unchanged repeat still names the post only this tool makes.
+    const written = { title: 'A prompt for product shots', body: 'Three lines that work.' };
+    const textPostId = agentTextPostId(USER_ID, written.title, written.body);
+    const liveText = harness({ readPostForAgent: none() });
+    await runMcpTool(tool('publish_post'), { ...written, resources: [{ type: 'guide', title: 'Studio-shot skill', text: '# Studio shots' }], resource_price_tokens: 250 }, liveText.context);
+    expect(liveText.records).toEqual([expect.objectContaining({ tool: 'publish_post', outcome: 'ok', code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PUBLIC, postId: textPostId, generationId: null, costCredits: null })]);
+    const privateText = harness({ readPostForAgent: none() });
+    await runMcpTool(tool('publish_post'), { ...written, visibility: 'private' }, privateText.context);
+    expect(privateText.records[0]).toEqual(expect.objectContaining({ code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PRIVATE, postId: textPostId, generationId: null }));
+    const existingText = (overrides: Partial<AgentPostView> = {}) => vi.fn(async () => ({ ok: true, post: post({ postId: textPostId, generationId: null, format: 'text', ...overrides }) })) as never;
+    const repeatedText = harness({ readPostForAgent: existingText() });
+    await runMcpTool(tool('publish_post'), written, repeatedText.context);
+    expect(repeatedText.records[0]).toEqual(expect.objectContaining({ outcome: 'ok', code: AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED, postId: textPostId, generationId: null }));
+    const openedText = harness({ readPostForAgent: existingText({ visibility: 'private', state: 'private' }) });
+    await runMcpTool(tool('publish_post'), { ...written, visibility: 'public' }, openedText.context);
+    expect(openedText.records[0]).toEqual(expect.objectContaining({ code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PUBLIC, postId: textPostId }));
+    // A refused price records its code and no post, and spends no limit.
+    const mispriced = harness({ readPostForAgent: none() });
+    await runMcpTool(tool('publish_post'), { ...written, resources: [{ type: 'guide', title: 'Studio-shot skill', text: '# Studio shots' }], resource_price_tokens: 5 }, mispriced.context);
+    expect(mispriced.records[0]).toEqual(expect.objectContaining({ outcome: 'error', code: 'INVALID_REQUEST', postId: null, generationId: null }));
+    expect(mispriced.services.enforceBackendRateLimit).not.toHaveBeenCalled();
 
     // request_upload and upload_input record no post and no charge.
     const staging = harness();

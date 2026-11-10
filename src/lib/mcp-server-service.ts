@@ -16,12 +16,27 @@ import {
   stageAgentInput,
   type AgentStagedUpload,
 } from '@/lib/agent-input-upload';
-import { agentPostState, readPostForAgent, type AgentPostState, type AgentPostView } from '@/lib/agent-post-read';
-import { buildAgentPublishRequest } from '@/lib/agent-publish-request';
 import {
+  AGENT_POST_NO_RESOURCE,
+  agentPostState,
+  readPostForAgent,
+  type AgentPostResource,
+  type AgentPostState,
+  type AgentPostView,
+} from '@/lib/agent-post-read';
+import { agentPublishSendsRecipe, buildAgentPublishRequest } from '@/lib/agent-publish-request';
+import {
+  AGENT_RESOURCE_CARDS_MAX,
+  AGENT_RESOURCE_CARD_TEXT_MAX_LENGTH,
+  AGENT_RESOURCE_CARD_TITLE_MAX_LENGTH,
+  agentResourceAccess,
+  agentTextPostId,
   agentUploadPostId,
-  buildAgentUploadPublishFormData,
+  buildAgentComposedPostFormData,
+  buildAgentResourceBundle,
   refuseAgentMadeWith,
+  refuseAgentResourcePrice,
+  refuseAgentResources,
 } from '@/lib/agent-upload-publish-request';
 import {
   AGENT_PUBLISH_RECORD_CODES,
@@ -62,6 +77,13 @@ import { deleteOwnerPostForRoute } from '@/lib/post-delete-service';
 import { DESCRIPTION_MAX_LENGTH } from '@/lib/post-description-limit';
 import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
 import { MAX_POST_MEDIA_ITEMS } from '@/lib/post-media';
+import {
+  POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH,
+  POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
+  POST_RESOURCE_PREVIEW_MAX_LENGTH,
+  POST_RESOURCE_PRICE_INCREMENT_USD_CENTS,
+  POST_RESOURCE_SUMMARY_MAX_LENGTH,
+} from '@/lib/post-resource-bundles';
 import { updateOwnerPostForRoute } from '@/lib/post-update-service';
 import { BODY_MAX_LENGTH } from '@/lib/posts-server';
 import { enhancePromptForUser } from '@/lib/prompt-enhancement-service';
@@ -72,6 +94,12 @@ import {
   buildUnifiedGenerationQuoteInput,
   parseUnifiedGenerationRequest,
 } from '@/lib/unified-generation-start-service';
+
+import {
+  REMIX_RECIPE_MUST_BE_PAID_CODE,
+  REMIX_RECIPE_STAYS_FREE_CODE,
+} from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
+import { RECIPE_TITLE_MIN_LENGTH } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 
 /**
  * The MCP server's tool registry: what an agent acting as a signed-in creator can do, and the
@@ -1239,11 +1267,26 @@ const requestUploadTool = defineTool({
 
 const PUBLISH_VISIBILITY = z.enum(['public', 'private']);
 
+/** A post's resource as every answer names it: its access, its price in tokens and whether it is on offer. Never what it holds. */
+function resourceFields(resource: AgentPostResource): { resource_access: AgentPostResource['access']; resource_price_tokens: number; resource_status: AgentPostResource['status'] } {
+  return { resource_access: resource.access, resource_price_tokens: resource.priceTokens, resource_status: resource.status };
+}
+
+/** The same three facts in a sentence, for the text beside the data. */
+function describeResource(resource: AgentPostResource): string {
+  if (resource.access === 'none') return 'It carries no resource.';
+  const what = resource.access === 'paid' ? `a paid resource at ${resource.priceTokens} tokens` : 'a free resource';
+  return resource.status === 'published'
+    ? `It carries ${what}, on offer.`
+    : `It carries ${what}, held as a draft: a resource is on offer only while its post is public.`;
+}
+
 function postView(post: AgentPostView, context: McpToolContext): Record<string, unknown> {
   return {
     post_id: post.postId,
     post_url: postUrl(context.siteOrigin, post.postId),
     generation_id: post.generationId,
+    format: post.format,
     title: post.title,
     description: post.description,
     body: post.body,
@@ -1255,6 +1298,7 @@ function postView(post: AgentPostView, context: McpToolContext): Record<string, 
     counts: post.counts,
     created_at: post.createdAt,
     is_own: post.isOwn,
+    ...resourceFields(post.resource),
   };
 }
 
@@ -1266,6 +1310,30 @@ function describeState(post: AgentPostView): string {
     case 'hidden': return 'hidden by moderation';
     case 'removed': return 'removed, kept only for the people who unlocked its recipe';
   }
+}
+
+/**
+ * The web's answer to a creator with no public profile yet is a link to it (`actionHref`); an
+ * agent's is these words, and never the link.
+ */
+const PROFILE_REFUSAL_NEXT_STEP = 'The person sets their handle and display name on the website, then you publish again.';
+
+/** The publish services' names for what they refuse, as the tool's arguments name them. */
+const CREATION_PUBLISH_FIELD: Record<string, string> = {
+  isNsfw: 'is_nsfw',
+  resourceBundle: 'resource_price_tokens',
+  resourceSummary: 'resource_summary',
+  resourcePreview: 'resource_preview',
+};
+
+/** A 400 of either publish service as INVALID_REQUEST: the service's own words, its field under the tool's name, no link. */
+function invalidPublishRequest(body: { error: string; field?: string }, fields: Record<string, string>): CallToolResult {
+  // The creator's profile is no argument of the tool: nothing the agent sends again fixes it.
+  if (body.field === 'profile') {
+    return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, `${body.error} ${PROFILE_REFUSAL_NEXT_STEP}`);
+  }
+  const field = body.field ? fields[body.field] ?? body.field : null;
+  return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, body.error, field ? { field_errors: { [field]: body.error } } : {});
 }
 
 /** The publish service's refusals, as stable codes with the next step. */
@@ -1284,12 +1352,26 @@ function publishRefusal(result: { status: number; body: { error: string; field?:
       field_errors: { allow_remixes: body.error },
     });
   }
+  // A remix keeps the terms of the recipe it remixed (owner, 2026-11-05): the service's rule, and
+  // the price is still the person's to name.
+  if (body.code === REMIX_RECIPE_MUST_BE_PAID_CODE) {
+    return toolFailure(
+      MCP_ERROR_CODES.INVALID_REQUEST,
+      `${body.error} Ask the person what to charge, then publish with resource_price_tokens and allow_remixes left on.`,
+      { field_errors: { resource_price_tokens: body.error }, publish_code: body.code },
+    );
+  }
+  if (body.code === REMIX_RECIPE_STAYS_FREE_CODE) {
+    return toolFailure(
+      MCP_ERROR_CODES.INVALID_REQUEST,
+      `${body.error} Publish without resource_price_tokens.`,
+      { field_errors: { resource_price_tokens: body.error }, publish_code: body.code },
+    );
+  }
   if (status === 409) {
     return toolFailure('CONFLICT', `${body.error} Edit the post on the website instead.`, { publish_code: body.code ?? null });
   }
-  if (status === 400) {
-    return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, body.error, body.field ? { field_errors: { [body.field]: body.error } } : {});
-  }
+  if (status === 400) return invalidPublishRequest(body, CREATION_PUBLISH_FIELD);
   return toolFailure(MCP_ERROR_CODES.UNAVAILABLE, `${body.error} Try again in a moment.`);
 }
 
@@ -1330,24 +1412,39 @@ async function refusePublishOverLimit(context: McpToolContext, makesPublic: bool
 const MADE_WITH_MAX_ENTRIES = 5;
 const MADE_WITH_NAME_MAX_LENGTH = 80;
 
+/** A price is an integer column: the largest one that is still a whole step. */
+const RESOURCE_PRICE_TOKENS_MAX = 2_147_483_640;
+
 const PUBLISH_POST_SCHEMA = z.object({
-  generation_id: GENERATION_ID.optional().describe('A creation made here, to publish as a post: the generation_id create_media or list_creations gave. Give generation_id or uploads, not both.'),
+  generation_id: GENERATION_ID.optional().describe('A creation made here, to publish as a post: the generation_id create_media or list_creations gave. Never with uploads.'),
   uploads: z.array(z.object({
     storage_path: z.string().trim().min(1).max(512).describe('The input.storage_path upload_input answered for the file.'),
   })).min(1).max(MAX_POST_MEDIA_ITEMS).optional()
-    .describe(`Media made elsewhere, to publish as a post: 1 to ${MAX_POST_MEDIA_ITEMS} pictures or clips you staged with upload_input, in the order the post shows them. Needs title and made_with.`),
+    .describe(`Media made elsewhere, to publish as a post: 1 to ${MAX_POST_MEDIA_ITEMS} pictures or clips you staged with upload_input, in the order the post shows them. Needs title and made_with. Never with generation_id.`),
   made_with: z.array(z.object({
     tool: z.string().trim().min(1).max(MADE_WITH_NAME_MAX_LENGTH).describe('The tool or app that made the media, as its makers name it (Midjourney, Photoshop, Blender, a camera). Never Magic Booklet: media made here is published with generation_id.'),
     model: z.string().trim().min(1).max(MADE_WITH_NAME_MAX_LENGTH).optional().describe('The model or version, where the tool has one (v7, FLUX.1 Pro).'),
   })).min(1).max(MADE_WITH_MAX_ENTRIES).optional()
-    .describe(`Required with uploads, refused with generation_id: what made the media, 1 to ${MADE_WITH_MAX_ENTRIES} tools, shown on the post as Made with. Ask the person when you do not know.`),
-  title: z.string().trim().min(1).max(TITLE_MAX_LENGTH).optional().describe(`The post's title, at most ${TITLE_MAX_LENGTH} characters; 6 or more for a post with a recipe. Required with uploads. Left out with generation_id, the creation's own title is used, else the title the web's Publish suggests from its prompt.`),
-  description: z.string().trim().max(DESCRIPTION_MAX_LENGTH).optional().describe('A short description under the title.'),
-  body: z.string().trim().max(BODY_MAX_LENGTH).optional().describe('The post\'s text, shown with the media.'),
-  category: z.enum(['image', 'video']).optional().describe('How the post is filed; left out, the creation or the first upload decides.'),
+    .describe(`What made the media, 1 to ${MADE_WITH_MAX_ENTRIES} tools, shown on the post as Made with: required with uploads, optional on a text post, refused with generation_id. Ask the person when you do not know.`),
+  title: z.string().trim().min(1).max(TITLE_MAX_LENGTH).optional().describe(`The post's title, at most ${TITLE_MAX_LENGTH} characters; ${RECIPE_TITLE_MIN_LENGTH} or more for a post with a resource. Required with uploads and for a text post. Left out with generation_id, the creation's own title is used, else the title the web's Publish suggests.`),
+  description: z.string().trim().max(DESCRIPTION_MAX_LENGTH).optional().describe(`A short description under the title, at most ${DESCRIPTION_MAX_LENGTH} characters.`),
+  body: z.string().trim().max(BODY_MAX_LENGTH).optional().describe(`The post's text, at most ${BODY_MAX_LENGTH} characters: shown with the media, or, with neither generation_id nor uploads, the text post itself (then required). Longer text goes in a resource card.`),
+  category: z.enum(['image', 'video']).optional().describe('How a post with media is filed; left out, the creation or the first upload decides. A text post is filed as text.'),
   visibility: PUBLISH_VISIBILITY.optional().describe('public (the default for a new post) or private. On a post that already exists, given, it changes the visibility; left out, the post stays as it is.'),
   is_nsfw: z.boolean().optional().describe('Mark the post mature: it stays covered until a viewer who allows mature content reveals it.'),
-  allow_remixes: z.boolean().optional().describe('With generation_id only. Default true: the post carries the creation\'s free recipe (its exact prompt and the saved inputs it may share), so others can remix it. False posts the media alone. Refused with uploads, which have no recipe.'),
+  allow_remixes: z.boolean().optional().describe('With generation_id only. Default true: the post carries the creation\'s recipe (its exact prompt and the saved inputs it may share), so others can remix it. False posts the media alone. Refused with uploads and on a text post, which have no recipe.'),
+  resources: z.array(z.object({
+    type: z.enum(['prompt', 'guide', 'external_link']).describe('prompt: reusable prompt text. guide: instructions or notes, such as a skill. external_link: an https address.'),
+    title: z.string().trim().min(1).max(AGENT_RESOURCE_CARD_TITLE_MAX_LENGTH).describe(`What the person gets, at most ${AGENT_RESOURCE_CARD_TITLE_MAX_LENGTH} characters. Shown to everyone.`),
+    description: z.string().trim().max(POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH).optional().describe(`The card's public line, at most ${POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH} characters. Shown to everyone.`),
+    text: z.string().max(AGENT_RESOURCE_CARD_TEXT_MAX_LENGTH).optional().describe(`The text of a prompt or a guide, at most ${AGENT_RESOURCE_CARD_TEXT_MAX_LENGTH} characters. Shown once unlocked.`),
+    url: z.string().trim().max(2048).optional().describe('The https address of an external_link. Shown once unlocked.'),
+  })).min(1).max(AGENT_RESOURCE_CARDS_MAX).optional()
+    .describe(`A resource for a text post or an upload post, 1 to ${AGENT_RESOURCE_CARDS_MAX} cards of text and links (no files): how a prompt, a guide or a skill is shared. Free unless resource_price_tokens is given. Refused with generation_id, whose resource is the creation's own recipe.`),
+  resource_price_tokens: z.int().min(0).max(RESOURCE_PRICE_TOKENS_MAX).multipleOf(POST_RESOURCE_PRICE_INCREMENT_USD_CENTS).optional()
+    .describe(`The resource's price in tokens (100 tokens = $1.00): ${POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} or more, in steps of ${POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}. Left out or 0, the resource is free. Only ever a number the person gave you and said yes to.`),
+  resource_summary: z.string().trim().max(POST_RESOURCE_SUMMARY_MAX_LENGTH).optional().describe(`The resource's one-line listing, at most ${POST_RESOURCE_SUMMARY_MAX_LENGTH} characters. Shown to everyone. Left out, it is derived from the cards.`),
+  resource_preview: z.string().trim().max(POST_RESOURCE_PREVIEW_MAX_LENGTH).optional().describe(`What the resource includes, at most ${POST_RESOURCE_PREVIEW_MAX_LENGTH} characters and at least 18 for a public post. Shown to everyone. Left out, it is derived from the cards' titles.`),
 });
 
 type PublishPostArgs = z.output<typeof PUBLISH_POST_SCHEMA>;
@@ -1360,31 +1457,35 @@ function describeExistingState(existing: { visibility: 'public' | 'private'; sta
 }
 
 /** The composer's field names, as the tool's arguments name them. */
-const UPLOAD_PUBLISH_FIELD: Record<string, string> = { sourceTools: 'made_with', isNsfw: 'is_nsfw', mediaItems: 'uploads' };
+const COMPOSED_PUBLISH_FIELD: Record<string, string> = {
+  sourceTools: 'made_with',
+  isNsfw: 'is_nsfw',
+  mediaItems: 'uploads',
+  resourceBundle: 'resources',
+  resourceCards: 'resources',
+  resourceSummary: 'resource_summary',
+  resourcePreview: 'resource_preview',
+};
 
 /**
- * The composer service's refusals for a post made from uploads (`createOwnerPostForRoute`, and
- * `updateOwnerPostForRoute` for a visibility change), as stable codes with the service's own
- * message. The web's follow-up links (`actionHref`, `actionLabel`: a profile to complete, credits
- * to buy) are never passed on. A failure that is not the caller's says to publish again with the
- * same uploads, which is safe by the post's derived id: it answers the post where one was saved,
- * and says so where the files were spent and must be staged again.
+ * The composer service's refusals for a post with no creation behind it (`createOwnerPostForRoute`,
+ * and `updateOwnerPostForRoute` for a visibility change), as stable codes with the service's own
+ * message: its title and text rules, its resource rules (the price, the listing lines, the public
+ * profile) and its limits. The web's follow-up links (`actionHref`, `actionLabel`: a profile to
+ * complete) are never passed on: the words say what is wrong. A failure that is not the caller's
+ * says to publish again with the same source, which is safe by the post's derived id: it answers
+ * the post where one was saved.
  */
-function uploadPublishRefusal(
+function composedPublishRefusal(
   result: { status: number; body: { error: string; field?: string; code?: string; retryAfterSeconds?: number } },
+  again: string,
 ): CallToolResult {
   const { status, body } = result;
   if (status === 429) return rateLimited(body.retryAfterSeconds);
   if (status === 404) return toolFailure(MCP_ERROR_CODES.NOT_FOUND, body.error);
   if (status === 409) return toolFailure('CONFLICT', body.error, { publish_code: body.code ?? null });
-  if (status === 400) {
-    const field = body.field ? UPLOAD_PUBLISH_FIELD[body.field] ?? body.field : null;
-    return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, body.error, field ? { field_errors: { [field]: body.error } } : {});
-  }
-  return toolFailure(
-    MCP_ERROR_CODES.UNAVAILABLE,
-    `${body.error} Call publish_post again with the same uploads: it answers the post if one was saved, and says so if the files must be staged again.`,
-  );
+  if (status === 400) return invalidPublishRequest(body, COMPOSED_PUBLISH_FIELD);
+  return toolFailure(MCP_ERROR_CODES.UNAVAILABLE, `${body.error} ${again}`);
 }
 
 /** Why a staged path cannot become a post, where the tool can tell; null when it can, or when the composer service is the one to say. */
@@ -1412,65 +1513,121 @@ function refuseStagedUpload(upload: AgentStagedUpload | undefined, index: number
 }
 
 /**
- * `publish_post` with `uploads`: a post of media made elsewhere, from files the agent staged. It
- * goes through the composer's own create with the form the composer page sends, so the title and
- * text rules, the post limit, the ownership of every staged path, the consumption of each staged
- * file and the media processing are the web's. What this adds: Made with is required and never
- * Magicbooklet's own name, the agent's daily cap on public posts applies as it does to a
- * creation, and the post's id is derived from the creator and the staged paths, so a publish
+ * `publish_post` with no creation: a post of media made elsewhere (`uploads`, files the agent
+ * staged) or, with no uploads either, a text post. It goes through the composer's own create
+ * with the form the composer page sends, so the title and text rules, the post limit, the
+ * ownership of every staged path, the consumption of each staged file, the media processing and
+ * every rule of a resource (its price, its listing lines, the public profile it is sold under)
+ * are the web's. What this adds: Made with is required for media and never Magicbooklet's own
+ * name, the agent's daily cap on public posts applies as it does to a creation, and the post's id
+ * is derived (from the creator and the staged paths, or the title and text), so a publish
  * repeated after a lost answer finds its post instead of making a second.
+ *
+ * A resource rides as cards of text and links through the composer's own serializer, free or at
+ * the price the person gave: nothing here computes a price, and nothing an answer says is what a
+ * resource holds.
  */
-async function publishUploads(
-  args: PublishPostArgs & { uploads: NonNullable<PublishPostArgs['uploads']> },
-  context: McpToolContext,
-): Promise<CallToolResult> {
+async function publishComposedPost(args: PublishPostArgs, context: McpToolContext): Promise<CallToolResult> {
   const { services } = context;
   const admin = context.createAdminSupabase();
   const invalid = (field: string, message: string) => (
     toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, message, { field_errors: { [field]: message } })
   );
+  const isText = args.uploads === undefined;
 
   if (args.allow_remixes !== undefined) {
-    return invalid('allow_remixes', 'allow_remixes goes with generation_id: a post made from uploads has no recipe to remix. Leave it out.');
+    return invalid('allow_remixes', 'allow_remixes goes with generation_id: a text post or a post made from uploads has no recipe to remix. Leave it out.');
+  }
+  if (isText && !args.body) {
+    return invalid('body', 'A post needs a source: generation_id (a creation made here), uploads (files staged with upload_input), or, for a text post, title and body.');
   }
   if (!args.title) {
-    return invalid('title', 'title is required with uploads: name the post, in the person\'s own words where they gave any.');
+    return invalid('title', isText
+      ? 'title is required for a text post: name it, in the person\'s own words where they gave any.'
+      : 'title is required with uploads: name the post, in the person\'s own words where they gave any.');
   }
-  if (!args.made_with || args.made_with.length === 0) {
+  if (isText && args.category !== undefined) {
+    return invalid('category', 'category files a post with media; a text post is filed as text. Leave it out.');
+  }
+  const madeWith = args.made_with && args.made_with.length > 0 ? args.made_with : null;
+  if (!isText && !madeWith) {
     return invalid('made_with', 'made_with is required with uploads: name the tool that made the media, and its model where it has one. Ask the person if you do not know.');
   }
-  const madeWithRefusal = refuseAgentMadeWith(args.made_with);
-  if (madeWithRefusal) return invalid('made_with', madeWithRefusal);
-  const storagePaths = args.uploads.map((upload) => upload.storage_path.trim());
-  if (storagePaths.length === 0 || storagePaths.length > MAX_POST_MEDIA_ITEMS) {
-    return invalid('uploads', `A post takes 1 to ${MAX_POST_MEDIA_ITEMS} uploads.`);
-  }
-  if (new Set(storagePaths).size !== storagePaths.length) {
-    return invalid('uploads', 'uploads names the same staged file twice; each file goes in once.');
+  if (madeWith) {
+    const madeWithRefusal = refuseAgentMadeWith(madeWith);
+    if (madeWithRefusal) return invalid('made_with', madeWithRefusal);
   }
 
-  const postId = agentUploadPostId(context.userId, storagePaths);
+  // The resource: its cards, then its price and listing lines, which need cards to belong to.
+  if (args.resources !== undefined) {
+    const resourcesRefusal = refuseAgentResources(args.resources);
+    if (resourcesRefusal) return invalid('resources', resourcesRefusal);
+  }
+  const priceRefusal = refuseAgentResourcePrice(args.resource_price_tokens, args.resources !== undefined);
+  if (priceRefusal) return invalid('resource_price_tokens', priceRefusal);
+  if (args.resources === undefined && (args.resource_summary !== undefined || args.resource_preview !== undefined)) {
+    return invalid(
+      args.resource_summary !== undefined ? 'resource_summary' : 'resource_preview',
+      'resource_summary and resource_preview describe a resource, and this post carries none: give resources, or leave them out.',
+    );
+  }
+  const priceTokens = args.resource_price_tokens ?? 0;
+  const resourceBundle = args.resources
+    ? buildAgentResourceBundle({ cards: args.resources, priceTokens, summary: args.resource_summary, preview: args.resource_preview })
+    : null;
+  if (args.resources && !resourceBundle) {
+    return invalid('resources', 'No card of resources holds anything to share: a prompt or a guide needs its text, an external_link its https url.');
+  }
+
+  const storagePaths = (args.uploads ?? []).map((upload) => upload.storage_path.trim());
+  if (!isText) {
+    if (storagePaths.length === 0 || storagePaths.length > MAX_POST_MEDIA_ITEMS) {
+      return invalid('uploads', `A post takes 1 to ${MAX_POST_MEDIA_ITEMS} uploads.`);
+    }
+    if (new Set(storagePaths).size !== storagePaths.length) {
+      return invalid('uploads', 'uploads names the same staged file twice; each file goes in once.');
+    }
+  }
+
+  const source = isText ? 'text' as const : 'upload' as const;
+  // How this publish is named again: the same arguments name the same post.
+  const same = isText ? 'the same title and body' : 'the same uploads';
+  const postId = isText
+    ? agentTextPostId(context.userId, args.title, args.body as string)
+    : agentUploadPostId(context.userId, storagePaths);
   const url = postUrl(context.siteOrigin, postId);
   const read = await services.readPostForAgent(admin, { postId, viewerUserId: context.userId });
   if (!read.ok && read.code === 'UNAVAILABLE') {
     return toolFailure(
       MCP_ERROR_CODES.UNAVAILABLE,
-      'Whether these uploads are already published could not be read right now. Nothing was published; try again in a moment.',
+      `Whether ${isText ? 'this text post is' : 'these uploads are'} already published could not be read right now. Nothing was published; try again in a moment.`,
     );
   }
 
   if (read.ok && read.post.isOwn) {
-    // A publish of these uploads was made before: the post stands, and only an explicit, different
-    // visibility changes it, through the composer's own save (the creation path's republish needs a
-    // creation behind the post).
+    // This publish was made before: the post stands as it is, its resource and price included,
+    // and only an explicit, different visibility changes it, through the composer's own save (the
+    // creation path's republish needs a creation behind the post).
     const existing = read.post;
+    const asksToChangeResource = args.resources !== undefined || args.resource_price_tokens !== undefined;
     if (!args.visibility || args.visibility === existing.visibility) {
       return toolSuccess(
         [
-          `These uploads are already published as post ${postId} (${describeExistingState(existing)}): ${url}. Nothing was changed.`,
-          existing.state === 'private' ? 'Publish again with the same uploads and visibility public to make it public.' : '',
+          `${isText ? 'This text post is' : 'These uploads are'} already published as post ${postId} (${describeExistingState(existing)}): ${url}. Nothing was changed.`,
+          describeResource(existing.resource),
+          asksToChangeResource ? 'A resource and its price are changed on the website, not by publishing again.' : '',
+          existing.state === 'private' ? `Publish again with ${same} and visibility public to make it public.` : '',
         ].filter(Boolean).join(' '),
-        { post_id: postId, post_url: url, visibility: existing.visibility, state: existing.state, already_published: true, visibility_changed: false, source: 'upload' },
+        {
+          post_id: postId,
+          post_url: url,
+          visibility: existing.visibility,
+          state: existing.state,
+          already_published: true,
+          visibility_changed: false,
+          source,
+          ...resourceFields(existing.resource),
+        },
       );
     }
     const limited = await refusePublishOverLimit(context, args.visibility === 'public');
@@ -1482,10 +1639,17 @@ async function publishUploads(
       body: { visibility: args.visibility },
       runAfterResponse: context.runAfterResponse,
     });
-    if (!result.ok) return uploadPublishRefusal(result);
+    if (!result.ok) return composedPublishRefusal(result, 'Try again in a moment.');
     const nowPublic = result.body.visibility === 'public';
+    // The resource is what it was; whether it is on offer follows the post's visibility.
+    const resource: AgentPostResource = existing.resource.access === 'none'
+      ? existing.resource
+      : { ...existing.resource, status: result.body.resourceBundleStatus ?? existing.resource.status };
     return toolSuccess(
-      `Post ${postId} is now ${result.body.visibility}: ${url}.${nowPublic ? ' Anyone can see it.' : ' Only the creator sees it.'}`,
+      [
+        `Post ${postId} is now ${result.body.visibility}: ${url}.${nowPublic ? ' Anyone can see it.' : ' Only the creator sees it.'}`,
+        resource.access === 'none' ? '' : describeResource(resource),
+      ].filter(Boolean).join(' '),
       {
         post_id: postId,
         post_url: url,
@@ -1493,39 +1657,45 @@ async function publishUploads(
         state: nowPublic ? 'live' : 'private',
         already_published: true,
         visibility_changed: true,
-        source: 'upload',
+        source,
+        ...resourceFields(resource),
       },
     );
   }
 
-  const staged = await services.readAgentStagedUploads(admin, { userId: context.userId, storagePaths });
-  if (!staged.ok) {
+  const staged = isText ? null : await services.readAgentStagedUploads(admin, { userId: context.userId, storagePaths });
+  if (staged && !staged.ok) {
     return toolFailure(
       MCP_ERROR_CODES.UNAVAILABLE,
       'The staged uploads could not be read right now. Nothing was published; try again in a moment.',
     );
   }
-  for (const [index, storagePath] of storagePaths.entries()) {
-    const refusal = refuseStagedUpload(staged.uploads.get(storagePath), index, storagePath);
-    if (refusal) return refusal;
+  if (staged?.ok) {
+    for (const [index, storagePath] of storagePaths.entries()) {
+      const refusal = refuseStagedUpload(staged.uploads.get(storagePath), index, storagePath);
+      if (refusal) return refusal;
+    }
   }
 
   const visibility = args.visibility ?? 'public';
   const limited = await refusePublishOverLimit(context, visibility === 'public');
   if (limited) return limited;
-  const formData = buildAgentUploadPublishFormData({
+  const formData = buildAgentComposedPostFormData({
     title: args.title,
     description: args.description,
     body: args.body,
     category: args.category,
     visibility,
     isNsfw: args.is_nsfw,
-    madeWith: args.made_with,
-    uploads: storagePaths.map((storagePath) => {
-      const upload = staged.uploads.get(storagePath);
-      // The type the server recorded for the staged file, never the agent's word for it.
-      return { storagePath, contentType: upload?.kind === 'staged' ? upload.contentType : null };
-    }),
+    madeWith: madeWith ?? undefined,
+    uploads: staged?.ok
+      ? storagePaths.map((storagePath) => {
+          const upload = staged.uploads.get(storagePath);
+          // The type the server recorded for the staged file, never the agent's word for it.
+          return { storagePath, contentType: upload?.kind === 'staged' ? upload.contentType : null };
+        })
+      : undefined,
+    resourceBundle,
   });
   const result = await services.createOwnerPostForRoute({
     adminSupabase: admin,
@@ -1533,17 +1703,29 @@ async function publishUploads(
     readFormData: async () => formData,
     createPostId: () => postId,
   });
-  if (!result.ok) return uploadPublishRefusal(result);
+  if (!result.ok) {
+    return composedPublishRefusal(
+      result,
+      isText
+        ? 'Call publish_post again with the same title and body: it answers the post if one was saved.'
+        : 'Call publish_post again with the same uploads: it answers the post if one was saved, and says so if the files must be staged again.',
+    );
+  }
   const isPublic = result.body.visibility === 'public';
-  const files = `${storagePaths.length} upload${storagePaths.length === 1 ? '' : 's'}`;
+  const access = agentResourceAccess(resourceBundle);
+  const resource: AgentPostResource = access === 'none'
+    ? AGENT_POST_NO_RESOURCE
+    : { access, priceTokens: access === 'paid' ? priceTokens : 0, status: result.body.resourceBundleStatus };
+  const what = isText ? 'the text post' : `${storagePaths.length} upload${storagePaths.length === 1 ? '' : 's'}`;
   return toolSuccess(
     [
       isPublic
-        ? `Published ${files} as post ${postId}: ${url}. It is public now; anyone can see it, and it goes through moderation as any post does.`
-        : `Saved ${files} as private post ${postId}: ${url}. Only the creator sees it; publish again with the same uploads and visibility public to make it public.`,
-      'Keep this post_id: list_creations lists creations, not posts made from uploads. get_post reads it and delete_post removes it.',
+        ? `Published ${what} as post ${postId}: ${url}. It is public now; anyone can see it, and it goes through moderation as any post does.`
+        : `Saved ${what} as private post ${postId}: ${url}. Only the creator sees it; publish again with ${same} and visibility public to make it public.`,
+      resource.access === 'none' ? '' : describeResource(resource),
+      `Keep this post_id: list_creations lists creations, not ${isText ? 'text posts' : 'posts made from uploads'}. get_post reads it and delete_post removes it.`,
       'Give the person the link.',
-    ].join(' '),
+    ].filter(Boolean).join(' '),
     {
       post_id: postId,
       post_url: url,
@@ -1551,9 +1733,11 @@ async function publishUploads(
       state: isPublic ? 'live' : 'private',
       already_published: false,
       visibility_changed: false,
-      source: 'upload',
+      source,
       media_count: storagePaths.length,
       recipe_included: false,
+      resources_included: args.resources?.length ?? 0,
+      ...resourceFields(resource),
     },
   );
 }
@@ -1562,27 +1746,40 @@ const publishPostTool = defineTool({
   name: 'publish_post',
   title: 'Publish a post',
   description: [
-    'Publish a post on the creator\'s profile and in the Magicbooklet showcase, from one of two sources. generation_id: one of the creator\'s finished creations made here. uploads: media made elsewhere (another tool, the person\'s own files), as 1 to 5 pictures or clips you staged with upload_input. Give exactly one.',
+    'Publish a post on the creator\'s profile and in the Magicbooklet showcase, from one of three sources. generation_id: one of the creator\'s finished creations made here. uploads: media made elsewhere (another tool, the person\'s own files), as 1 to 5 pictures or clips you staged with upload_input. Neither of them: a text post, of a title and a body. Never generation_id and uploads together.',
     'The post is public at once (visibility public, the default): anyone can see it, and it enters the feed and the moderation queue as any post does. Pass visibility private instead to keep it on the creator\'s profile, visible to them alone, which they can make public later. Tell the person before you publish, and give them post_url after.',
-    `With generation_id, only the creator's own succeeded creation publishes (NOT_FOUND for any other creation, NOT_READY for a run still going or a creation its creator archived); get_generation says when a run has succeeded. Give a title of at least 6 characters, or leave it out for the title the web suggests from the creation; description, body (the post's text) and category are optional.`,
-    'allow_remixes (default true) publishes the creation\'s recipe with the post, free, so others can remix it: its exact prompt and the saved inputs it may share. False posts the media alone, with no recipe.',
+    `With generation_id, only the creator's own succeeded creation publishes (NOT_FOUND for any other creation, NOT_READY for a run still going or a creation its creator archived); get_generation says when a run has succeeded. Give a title, or leave it out for the title the web suggests from the creation; description, body (the post's text) and category are optional.`,
+    'allow_remixes (default true) publishes the creation\'s recipe with the post, so others can remix it: its exact prompt and the saved inputs it may share, free unless resource_price_tokens prices it. False posts the media alone, with no recipe.',
     'With uploads, title is required and so is made_with, which names what made the media (the tool, and its model where it has one) and is shown on the post as Made with: never Magic Booklet, whose own media is published with generation_id. Each upload is the storage_path upload_input answered, and is spent by the post. The answer\'s post_id is the only handle on such a post (list_creations lists creations), so keep it.',
-    `Publishing the same creation, or the same uploads, again returns the existing post with already_published true and changes nothing, unless visibility is given and differs, which changes the post's visibility. Public posts by an agent are capped at ${AGENT_PUBLISH_RATE_LIMIT.limit} per creator per UTC day, counting publications, not refused attempts (RATE_LIMITED says when the next is allowed).`,
+    `A text post needs title (at most ${TITLE_MAX_LENGTH} characters) and body (at most ${BODY_MAX_LENGTH}); description takes ${DESCRIPTION_MAX_LENGTH}, and made_with is optional. Keep its post_id too.`,
+    `resources, on a text post or an upload post, is how a prompt, a guide or a skill is shared: 1 to ${AGENT_RESOURCE_CARDS_MAX} cards, each a prompt or a guide (its text, at most ${AGENT_RESOURCE_CARD_TEXT_MAX_LENGTH} characters) or an external_link (an https url), with a title (at most ${AGENT_RESOURCE_CARD_TITLE_MAX_LENGTH}) and an optional description (${POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH}). Text and links only: no files. Everyone sees each card's title and description and the resource's resource_summary and resource_preview (${POST_RESOURCE_SUMMARY_MAX_LENGTH} characters each) before they unlock it or pay; a card's text and link only after. The body is short, so a whole skill or a long prompt goes in a card. Refused with generation_id, whose resource is the creation's own recipe.`,
+    `A resource is free unless resource_price_tokens is given: a whole number of tokens, ${POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} or more in steps of ${POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}, where 100 tokens = $1.00. It prices the cards, or with generation_id the creation's recipe. Buyers pay the creator as they do on the site, and a resource is on sale only once its post is public: on a private post it is a draft. State the price to the person and get their yes before publishing a paid resource; never choose a price yourself. A price or a resource is changed on the website after publishing, not by this tool.`,
+    `Publishing the same creation, the same uploads or the same title and body again returns the existing post with already_published true and changes nothing, its resource and price included, unless visibility is given and differs, which changes the post's visibility. Public posts by an agent are capped at ${AGENT_PUBLISH_RATE_LIMIT.limit} per creator per UTC day, counting publications, not refused attempts (RATE_LIMITED says when the next is allowed).`,
+    'The answer reports resource_access (none, free or paid), resource_price_tokens and resource_status (draft, or published once on offer).',
   ].join(' '),
   // Open world: the post is seen by everyone, outside the agent's conversation.
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   inputSchema: PUBLISH_POST_SCHEMA,
   async handle(args, context) {
-    if ((args.generation_id === undefined) === (args.uploads === undefined)) {
-      const message = 'Give exactly one of generation_id (a creation made here) or uploads (files staged with upload_input).';
-      return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, message, { field_errors: { generation_id: message } });
+    const invalid = (field: string, message: string) => (
+      toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, message, { field_errors: { [field]: message } })
+    );
+    if (args.generation_id !== undefined && args.uploads !== undefined) {
+      return invalid('generation_id', 'Give one source, not two: generation_id (a creation made here) or uploads (files staged with upload_input). With neither, title and body make a text post.');
     }
-    if (args.uploads !== undefined) return publishUploads({ ...args, uploads: args.uploads }, context);
+    if (args.generation_id === undefined) return publishComposedPost(args, context);
+
     if (args.made_with !== undefined) {
-      const message = 'made_with goes with uploads. A creation\'s Made with is fixed by the run that made it; leave made_with out.';
-      return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, message, { field_errors: { made_with: message } });
+      return invalid('made_with', 'made_with goes with uploads or a text post. A creation\'s Made with is fixed by the run that made it; leave made_with out.');
     }
-    const generationId = args.generation_id as string;
+    if (args.resources !== undefined) {
+      return invalid('resources', 'resources goes with uploads or a text post. A creation\'s resource is its own recipe, which the server builds from the run: allow_remixes carries it, and resource_price_tokens prices it.');
+    }
+    // The price as a number, before anything is read or spent; what carries it, once the creation is known.
+    const priceShapeRefusal = refuseAgentResourcePrice(args.resource_price_tokens, true);
+    if (priceShapeRefusal) return invalid('resource_price_tokens', priceShapeRefusal);
+
+    const generationId = args.generation_id;
     const { services } = context;
     const admin = context.createAdminSupabase();
     const notFound = () => toolFailure(
@@ -1622,10 +1819,24 @@ const publishPostTool = defineTool({
     if (creation.post) {
       const existing = creation.post;
       const url = postUrl(context.siteOrigin, existing.id);
+      // The recipe the post carries, as its three facts; left out where it could not be read.
+      const stored = await services.readPostForAgent(admin, { postId: existing.id, viewerUserId: context.userId });
+      const storedResource = stored.ok ? stored.post.resource : null;
       if (!args.visibility || args.visibility === existing.visibility) {
         return toolSuccess(
-          `Creation ${generationId} is already published as post ${existing.id} (${describeExistingState(existing)}): ${url}. Nothing was changed; its text and recipe stay as the creator left them.`,
-          { post_id: existing.id, post_url: url, visibility: existing.visibility, state: existing.state, already_published: true, visibility_changed: false },
+          [
+            `Creation ${generationId} is already published as post ${existing.id} (${describeExistingState(existing)}): ${url}. Nothing was changed; its text and recipe stay as the creator left them.`,
+            args.resource_price_tokens !== undefined ? 'A recipe\'s price is changed on the website, not by publishing again.' : '',
+          ].filter(Boolean).join(' '),
+          {
+            post_id: existing.id,
+            post_url: url,
+            visibility: existing.visibility,
+            state: existing.state,
+            already_published: true,
+            visibility_changed: false,
+            ...(storedResource ? resourceFields(storedResource) : {}),
+          },
         );
       }
       // A visibility change alone: the service republishes the stored post as it is.
@@ -1633,6 +1844,9 @@ const publishPostTool = defineTool({
       if (limited) return limited;
       const result = await makePost({ generationId, visibility: args.visibility });
       if (!result.ok) return publishRefusal(result);
+      const resource = storedResource && storedResource.access !== 'none'
+        ? { ...storedResource, status: result.body.resourceBundleStatus ?? storedResource.status }
+        : storedResource;
       return toolSuccess(
         `Post ${existing.id} is now ${result.body.visibility}: ${url}.${result.body.visibility === 'public' ? ' Anyone can see it.' : ' Only the creator sees it.'}`,
         {
@@ -1642,20 +1856,39 @@ const publishPostTool = defineTool({
           state: result.body.visibility === 'public' ? 'live' : 'private',
           already_published: true,
           visibility_changed: true,
+          ...(resource ? resourceFields(resource) : {}),
         },
       );
     }
 
     const visibility = args.visibility ?? 'public';
     const allowRemixes = args.allow_remixes ?? true;
+    const priceTokens = args.resource_price_tokens ?? 0;
+    const paid = priceTokens > 0;
+    // A price, or listing lines, with no recipe to carry them would be dropped without a word.
+    if (!agentPublishSendsRecipe({ allowRemixes, creationPrompt: creation.prompt })) {
+      const nothingToCarry = allowRemixes
+        ? 'This creation has no prompt, so it has no recipe'
+        : 'allow_remixes false publishes no recipe';
+      if (paid) {
+        return invalid('resource_price_tokens', `resource_price_tokens prices the creation's recipe, and ${nothingToCarry.charAt(0).toLowerCase()}${nothingToCarry.slice(1)}. Leave the price out.`);
+      }
+      if (args.resource_summary !== undefined || args.resource_preview !== undefined) {
+        return invalid(
+          args.resource_summary !== undefined ? 'resource_summary' : 'resource_preview',
+          `resource_summary and resource_preview describe the creation's recipe, and ${nothingToCarry.charAt(0).toLowerCase()}${nothingToCarry.slice(1)}. Leave them out.`,
+        );
+      }
+    }
     // No title given: the web's Publish never sends an empty one; it starts from the creation's
-    // own title, else a title suggested from the prompt (the prompt is public in a free recipe, so
-    // nothing is kept private here), and a compose request without one is refused by the service.
+    // own title, else a suggested one, which is cut from the prompt only where the recipe is free
+    // (a paid recipe keeps its prompt private, and the service holds the title to that as well).
+    // A compose request without a title is refused by the service.
     const title = args.title
       ?? getCreationPostTitleSuggestion(
         creation.title,
         { prompt: creation.prompt, model: creation.model, category: creation.category, creationMode: creation.creationMode },
-        false,
+        paid,
       )?.title
       ?? undefined;
     const limited = await refusePublishOverLimit(context, visibility === 'public');
@@ -1670,28 +1903,42 @@ const publishPostTool = defineTool({
       isNsfw: args.is_nsfw,
       allowRemixes,
       creationPrompt: creation.prompt,
+      ...(paid ? { recipePriceTokens: priceTokens } : {}),
+      ...(args.resource_summary !== undefined ? { recipeSummary: args.resource_summary } : {}),
+      ...(args.resource_preview !== undefined ? { recipePreview: args.resource_preview } : {}),
     }));
     if (!result.ok) return publishRefusal(result);
     const postId = result.body.postId;
     const url = postId ? postUrl(context.siteOrigin, postId) : null;
+    const isPublic = result.body.visibility === 'public';
     const recipeIncluded = result.body.resourceBundleStatus !== null;
+    const resource: AgentPostResource = recipeIncluded
+      ? { access: paid ? 'paid' : 'free', priceTokens: paid ? priceTokens : 0, status: result.body.resourceBundleStatus }
+      : AGENT_POST_NO_RESOURCE;
     return toolSuccess(
       [
-        result.body.visibility === 'public'
+        isPublic
           ? `Published creation ${generationId} as post ${postId}: ${url}. It is public now; anyone can see it, and it goes through moderation as any post does.`
           : `Saved creation ${generationId} as private post ${postId}: ${url}. Only the creator sees it; publish again with visibility public to make it public.`,
-        recipeIncluded ? 'Its free recipe (the exact prompt) is on the post, so others can remix it.' : 'It carries no recipe.',
+        !recipeIncluded
+          ? 'It carries no recipe.'
+          : !paid
+            ? 'Its free recipe (the exact prompt) is on the post, so others can remix it.'
+            : isPublic
+              ? `Its recipe (the exact prompt) is on sale at ${priceTokens} tokens; people unlock it to see the prompt and remix.`
+              : `Its recipe (the exact prompt) is priced at ${priceTokens} tokens and held as a draft: it goes on sale when the post is public.`,
         'Give the person the link.',
       ].join(' '),
       {
         post_id: postId,
         post_url: url,
         visibility: result.body.visibility,
-        state: result.body.visibility === 'public' ? 'live' : 'private',
+        state: isPublic ? 'live' : 'private',
         already_published: false,
         visibility_changed: false,
         recipe_included: recipeIncluded,
         recipe_status: result.body.resourceBundleStatus,
+        ...resourceFields(resource),
         ...(typeof result.body.referencesNotCopied === 'number' && result.body.referencesNotCopied > 0
           ? { references_not_copied: result.body.referencesNotCopied }
           : {}),
@@ -1701,15 +1948,15 @@ const publishPostTool = defineTool({
   // The audit row: which answer this was, and the post only where the agent made or changed one,
   // so the daily cap counts public publications and moderation lists no post a creator published
   // by hand (`agent-tool-calls.ts`). A creation's existing post may be the creator's own doing,
-  // so an unchanged republish of it names no post. A post made from uploads has an id only this
-  // tool derives, so it is an agent's whichever call finds it: an unchanged repeat still names
-  // it, which keeps it on moderation's list when the call that made it never wrote its row (an
-  // answer lost to a timeout is exactly when a publish is repeated).
+  // so an unchanged republish of it names no post. A post made from uploads or a text post has an
+  // id only this tool derives, so it is an agent's whichever call finds it: an unchanged repeat
+  // still names it, which keeps it on moderation's list when the call that made it never wrote
+  // its row (an answer lost to a timeout is exactly when a publish is repeated).
   audit(structured) {
     const alreadyPublished = structured.already_published === true;
     const changed = structured.visibility_changed === true;
     if (alreadyPublished && !changed) {
-      return structured.source === 'upload'
+      return structured.source === 'upload' || structured.source === 'text'
         ? { code: AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED }
         : { code: AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED, postId: null };
     }
@@ -1725,7 +1972,8 @@ const getPostTool = defineTool({
     'Read one post by post_id: the creator\'s own in any state, or anyone\'s while it is live.',
     'Returns its state (live, private, archived, hidden by moderation, or removed), post_url, title, visibility, whether remixes are allowed, and the counts the post page shows (saves, comments, remixes, shares).',
     'Call it after publish_post to confirm a post or before delete_post. A post that is not the creator\'s and not live answers NOT_FOUND.',
-    'generation_id names the creation behind the post; it is null for a post made from uploads, which list_creations does not list.',
+    'generation_id names the creation behind the post; it is null for a post made from uploads and for a text post (format text), which list_creations does not list.',
+    'resource_access (none, free or paid), resource_price_tokens and resource_status (draft, or published while on offer) say whether the post carries a resource, a creation\'s recipe or the cards of a text or upload post, and at what price. What a resource holds is never returned: people read it on the post once they have unlocked it.',
   ].join(' '),
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   inputSchema: z.object({ post_id: POST_ID }),
@@ -1735,7 +1983,7 @@ const getPostTool = defineTool({
     const read = await context.services.readPostForAgent(context.createAdminSupabase(), { postId, viewerUserId: context.userId });
     if (!read.ok) {
       return read.code === 'NOT_FOUND'
-        ? toolFailure(MCP_ERROR_CODES.NOT_FOUND, `No post ${postId} is live or the creator's. list_creations names the posts of the creator's creations; a post made from uploads is known by the post_id publish_post gave.`, { post_id: postId })
+        ? toolFailure(MCP_ERROR_CODES.NOT_FOUND, `No post ${postId} is live or the creator's. list_creations names the posts of the creator's creations; a text post or a post made from uploads is known by the post_id publish_post gave.`, { post_id: postId })
         : toolFailure(MCP_ERROR_CODES.UNAVAILABLE, 'The post could not be read right now. Try again in a moment.');
     }
     const { post } = read;
@@ -1745,7 +1993,8 @@ const getPostTool = defineTool({
         `Post ${post.postId}${post.title ? ` "${post.title}"` : ''} is ${describeState(post)}: ${postUrl(context.siteOrigin, post.postId)}.`,
         `${counts.saves} save${counts.saves === 1 ? '' : 's'}, ${counts.comments} comment${counts.comments === 1 ? '' : 's'}, ${counts.remixes} remix${counts.remixes === 1 ? '' : 'es'}, ${counts.shares} share${counts.shares === 1 ? '' : 's'}.`,
         post.isOwn ? 'It is the creator\'s own.' : 'It is another creator\'s.',
-        post.generationId ? '' : 'It was made from uploaded media, not from a creation here.',
+        post.generationId ? '' : post.format === 'text' ? 'It is a text post.' : 'It was made from uploaded media, not from a creation here.',
+        post.resource.access === 'none' ? '' : describeResource(post.resource),
       ].filter(Boolean).join(' '),
       postView(post, context),
     );
@@ -1756,9 +2005,9 @@ const deletePostTool = defineTool({
   name: 'delete_post',
   title: 'Delete a post',
   description: [
-    'Delete one of the creator\'s own posts for good: it leaves their profile, the showcase and the feed, and its public media is removed; the creation itself stays in their library. A post made from uploads has no creation behind it, so its media goes with it.',
+    'Delete one of the creator\'s own posts for good: it leaves their profile, the showcase and the feed, and its public media is removed; the creation itself stays in their library. A post made from uploads has no creation behind it, so its media goes with it, and a text post goes whole.',
     'Confirm with the person first; it cannot be undone. Another creator\'s post is refused (NOT_OWNER).',
-    'When people have unlocked the post\'s recipe, the post is not deleted but taken off every public surface, and the buyers keep what they unlocked: the answer is POST_HAS_BUYERS until you call again with force true, after telling the person.',
+    'When people have unlocked the post\'s recipe or resource, free or paid, the post is not deleted but taken off every public surface, and they keep what they unlocked: the answer is POST_HAS_BUYERS until you call again with force true, after telling the person.',
   ].join(' '),
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   inputSchema: z.object({
@@ -1771,7 +2020,7 @@ const deletePostTool = defineTool({
     const read = await services.readPostForAgent(admin, { postId, viewerUserId: context.userId });
     if (!read.ok) {
       return read.code === 'NOT_FOUND'
-        ? toolFailure(MCP_ERROR_CODES.NOT_FOUND, `No post ${postId} is the creator's. list_creations names the posts of their creations; a post made from uploads is known by the post_id publish_post gave.`, { post_id: postId })
+        ? toolFailure(MCP_ERROR_CODES.NOT_FOUND, `No post ${postId} is the creator's. list_creations names the posts of their creations; a text post or a post made from uploads is known by the post_id publish_post gave.`, { post_id: postId })
         : toolFailure(MCP_ERROR_CODES.UNAVAILABLE, 'The post could not be read right now. Try again in a moment.');
     }
     if (!read.post.isOwn) {
@@ -1791,14 +2040,21 @@ const deletePostTool = defineTool({
       return toolFailure(MCP_ERROR_CODES.UNAVAILABLE, `${result.body.error} Try again in a moment.`);
     }
     const tombstoned = result.body.tombstoned === true;
-    // A post made from uploads has no creation behind it: its media was the post's alone.
+    // A post made from uploads has no creation behind it: its media was the post's alone. A text
+    // post had nothing beside itself.
     const whatStays = read.post.generationId
       ? 'The creation stays in the creator\'s library.'
-      : 'It was made from uploaded media, which is removed with it.';
+      : read.post.format === 'text'
+        ? ''
+        : 'It was made from uploaded media, which is removed with it.';
+    const unlocked = read.post.generationId ? 'recipe' : 'resource';
     return toolSuccess(
-      tombstoned
-        ? `Post ${postId} is off every public surface; the people who unlocked its recipe keep their copy. ${whatStays}`
-        : `Post ${postId} is deleted. ${whatStays}`,
+      [
+        tombstoned
+          ? `Post ${postId} is off every public surface; the people who unlocked its ${unlocked} keep their copy.`
+          : `Post ${postId} is deleted.`,
+        whatStays,
+      ].filter(Boolean).join(' '),
       { post_id: postId, deleted: true, tombstoned },
     );
   },
@@ -1823,10 +2079,11 @@ export const MCP_TOOLS: ReadonlyArray<McpToolDefinition> = [
 ];
 
 export const MCP_SERVER_INSTRUCTIONS = [
-  'Magicbooklet makes AI images, videos and motion clips with the signed-in creator\'s credits, and publishes them, or media the creator made elsewhere, to the creator\'s profile.',
+  'Magicbooklet makes AI images, videos and motion clips with the signed-in creator\'s credits, and publishes them, media the creator made elsewhere, and text posts with prompts, guides or skills attached, to the creator\'s profile.',
   'Flow for a creation: list_models → get_model → (upload_input for the person\'s own files) → quote_generation → tell the person the price → create_media with expected_cost_credits → get_generation with wait_seconds until settled.',
   'Flow for a post: once get_generation says succeeded, publish_post with the generation_id and a title. The post is public at once unless visibility is private; tell the person before publishing and give them post_url after. get_post reads a post, delete_post removes one of the creator\'s own.',
   'Flow for media made elsewhere (another tool, the person\'s own files): stage each picture or clip with upload_input, by url, or for a file on your machine request_upload → run the curl command it gives → upload_input with the upload_id; then publish_post with uploads, a title and made_with naming what made the media. Ask the person before posting it publicly, and keep the post_id.',
+  'Flow for a text post, or for sharing a prompt, a guide or a skill: publish_post with a title and a body and neither generation_id nor uploads; resources attaches cards of text and links, where the whole prompt or skill goes. A resource is free unless the person names a price: state resource_price_tokens to them (100 tokens = $1.00) and get their yes before publishing, and never choose a price yourself.',
   'Every run spends the creator\'s credits; a failed run refunds them. Never promise a result before get_generation says succeeded.',
 ].join(' ');
 

@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto';
 
 import {
+  buildResourceCardBundleInput,
+  createPostComposerResourceCard,
+} from '@/lib/post-composer-resource-cards';
+import {
+  POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH,
+  POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
+  POST_RESOURCE_PRICE_INCREMENT_USD_CENTS,
+  type PostResourceBundleInput,
+} from '@/lib/post-resource-bundles';
+import {
   APP_SOURCE_TOOL_DISPLAY_LABEL,
   isAppSourceToolLabel,
   slugifySourceTool,
@@ -9,19 +19,26 @@ import {
 } from '@/lib/source-tools';
 
 /**
- * The post an agent's `publish_post` makes from files it staged (`uploads`): media made outside
- * Magicbooklet, by another tool or on the person's own machine. It is built as the composer page
- * builds its own request (`NewPostClient.tsx`: the same form fields, a media post or a media post
- * with a note, no recipe), so the composer service's rules decide it and the post is the one the
- * web would have made from the same files.
+ * The posts an agent's `publish_post` makes through the composer's own create, where no creation
+ * is behind them: a post of files the agent staged (`uploads`: media made outside Magicbooklet, by
+ * another tool or on the person's own machine), and a text post. Either may carry a resource: a
+ * prompt, a guide or a link, free or at a price the person set, which is how an agent shares a
+ * skill or a prompt pack. The request is built as the composer page builds its own
+ * (`NewPostClient.tsx`: the same form fields; the resource through the composer's own serializer,
+ * `buildResourceCardBundleInput`), so the composer service's rules decide it and the post is one
+ * the web could have made.
  *
- * Three things here are the agent's own. The post's id is derived from the creator and the staged
- * paths, so a publish repeated after a lost answer finds the post it made instead of making a
- * second. Made with is what the agent says made the media, as free text: a name the catalog knows
- * is filed under it, any other is kept on the post alone, and the shared catalog is never added
- * to (the composer's `createTool` and `createModel` are never sent). And Magicbooklet's own name
+ * What is the agent's own here. The post's id is derived, from the creator and the staged paths
+ * or the text, so a publish repeated after a lost answer finds the post it made instead of making
+ * a second. Made with is what the agent says made the media, as free text: a name the catalog
+ * knows is filed under it, any other is kept on the post alone, and the shared catalog is never
+ * added to (the composer's `createTool` and `createModel` are never sent). Magicbooklet's own name
  * is not one of those names: media made here is published from its creation, which names its
- * model itself.
+ * model itself. And a resource holds text and links only, no file, on cards whose ids this module
+ * gives (the composer's factory mints random ones), so the same cards serialize the same bundle.
+ *
+ * Nothing here prices anything: a price is the person's number, passed to the serializer as the
+ * composer passes it, and the composer service's validator is the authority on it.
  */
 
 export type AgentMadeWithEntry = { tool: string; model?: string };
@@ -29,34 +46,66 @@ export type AgentMadeWithEntry = { tool: string; model?: string };
 /** One staged file of a post, with the type the server recorded for it (never the agent's word). */
 export type AgentUploadPublishMedia = { storagePath: string; contentType: string | null };
 
-export type AgentUploadPublishArgs = {
+/** One thing a person gets from a post's resource: a prompt or a guide (its text), or a link. */
+export type AgentResourceCard = {
+  type: 'prompt' | 'guide' | 'external_link';
+  title: string;
+  /** The card's public line, shown before the resource is unlocked. */
+  description?: string;
+  /** The text of a `prompt` or a `guide`, shown once unlocked. */
+  text?: string;
+  /** The address of an `external_link`, shown once unlocked. */
+  url?: string;
+};
+
+export type AgentComposedPostArgs = {
   title: string;
   description?: string;
   body?: string;
   category?: string;
   visibility: 'public' | 'private';
   isNsfw?: boolean;
-  madeWith: readonly AgentMadeWithEntry[];
-  uploads: readonly AgentUploadPublishMedia[];
+  /** Required for uploads by the tool; a text post may name what its words are about, or nothing. */
+  madeWith?: readonly AgentMadeWithEntry[];
+  /** The staged files, in the post's order; none for a text post. */
+  uploads?: readonly AgentUploadPublishMedia[];
+  /** The post's resource as `buildAgentResourceBundle` made it; null or absent for none. */
+  resourceBundle?: PostResourceBundleInput | null;
 };
 
-const POST_ID_NAMESPACE = 'magicbooklet:agent-upload-post:v1';
+const UPLOAD_POST_ID_NAMESPACE = 'magicbooklet:agent-upload-post:v1';
+const TEXT_POST_ID_NAMESPACE = 'magicbooklet:agent-text-post:v1';
 
-/**
- * The id of the post this creator makes from these staged files, in this order: a UUID whose
- * bits are a SHA-256 of the three, marked version 8 (RFC 9562's form for an id of one's own
- * making) with RFC 4122's variant bits, so it is a UUID wherever one is checked. A staged path is
- * spent by the publish that uses it, so the same paths name the same post and nothing else.
- */
-export function agentUploadPostId(userId: string, storagePaths: readonly string[]): string {
-  const digest = createHash('sha256')
-    .update(JSON.stringify([POST_ID_NAMESPACE, userId.trim().toLowerCase(), storagePaths]))
-    .digest();
+/** A UUID whose bits are a SHA-256 of the parts, marked version 8 (RFC 9562's form for an id of one's own making) with RFC 4122's variant bits, so it is a UUID wherever one is checked. */
+function derivedPostId(parts: readonly unknown[]): string {
+  const digest = createHash('sha256').update(JSON.stringify(parts)).digest();
   const bytes = Buffer.from(digest.subarray(0, 16));
   bytes[6] = (bytes[6] & 0x0f) | 0x80;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = bytes.toString('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * The id of the post this creator makes from these staged files, in this order. A staged path is
+ * spent by the publish that uses it, so the same paths name the same post and nothing else.
+ */
+export function agentUploadPostId(userId: string, storagePaths: readonly string[]): string {
+  return derivedPostId([UPLOAD_POST_ID_NAMESPACE, userId.trim().toLowerCase(), storagePaths]);
+}
+
+/**
+ * The id of the text post this creator makes with this title and these words, read as the
+ * composer service reads them (trimmed, line ends as `\n`). The same title and text publish once:
+ * a repeat answers the post, and a post deleted since is made again.
+ */
+export function agentTextPostId(userId: string, title: string, body: string): string {
+  return derivedPostId([
+    TEXT_POST_ID_NAMESPACE,
+    userId.trim().toLowerCase(),
+    title.trim(),
+    body.replace(/\r\n/gu, '\n').trim(),
+  ]);
 }
 
 /** Whether a name is Magicbooklet's own, in any spelling the catalog reads as the app's tool. */
@@ -92,6 +141,124 @@ export function refuseAgentMadeWith(madeWith: readonly AgentMadeWithEntry[]): st
   return validateSourceToolSelections(agentMadeWithSelections(madeWith));
 }
 
+// ---------------------------------------------------------------------------------------------
+// A post's resource: cards of text and links
+
+/** The validator's bound on a card's public title (`validatePostResourceBundleInput`). */
+export const AGENT_RESOURCE_CARD_TITLE_MAX_LENGTH = 80;
+/**
+ * The tool's own bounds, where the composer and its validator set none: how many cards one
+ * resource holds and how long a card's text may be, so one publish stays far inside the body the
+ * route can take.
+ */
+export const AGENT_RESOURCE_CARDS_MAX = 10;
+export const AGENT_RESOURCE_CARD_TEXT_MAX_LENGTH = 50_000;
+
+function isHttpsUrl(value: string | undefined): boolean {
+  try {
+    return new URL((value ?? '').trim()).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Why a set of cards is refused before anything is built; null when each can be a card. A card
+ * is one thing: a prompt or a guide is its text, an external link its https address, and one that
+ * gives both, or the wrong one, is refused instead of having half of it dropped.
+ */
+export function refuseAgentResources(cards: readonly AgentResourceCard[]): string | null {
+  if (cards.length === 0) return 'resources needs at least one card; leave it out for a post with no resource.';
+  if (cards.length > AGENT_RESOURCE_CARDS_MAX) return `A resource holds at most ${AGENT_RESOURCE_CARDS_MAX} cards.`;
+  for (const [index, card] of cards.entries()) {
+    const named = `resources[${index}]`;
+    const title = card.title?.trim() ?? '';
+    if (!title) return `${named} needs a title: what the person gets, in a few words.`;
+    if (title.length > AGENT_RESOURCE_CARD_TITLE_MAX_LENGTH) {
+      return `${named}: a card's title is at most ${AGENT_RESOURCE_CARD_TITLE_MAX_LENGTH} characters.`;
+    }
+    if ((card.description?.trim().length ?? 0) > POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH) {
+      return `${named}: a card's description is at most ${POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH} characters.`;
+    }
+    if (card.type === 'external_link') {
+      if (!isHttpsUrl(card.url)) return `${named} is an external_link: give url, an https address.`;
+      if (card.text?.trim()) return `${named} is an external_link: it carries a url, not text. Put text in a prompt or guide card.`;
+    } else if (card.type === 'prompt' || card.type === 'guide') {
+      if (!card.text?.trim()) return `${named} is a ${card.type}: give its text.`;
+      if (card.text.length > AGENT_RESOURCE_CARD_TEXT_MAX_LENGTH) {
+        return `${named}: a card's text is at most ${AGENT_RESOURCE_CARD_TEXT_MAX_LENGTH} characters.`;
+      }
+      if (card.url?.trim()) return `${named} is a ${card.type}: it carries text, not a url. Put a link in an external_link card.`;
+    } else {
+      return `${named}: type is prompt, guide or external_link.`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Why a price is refused; null for none, zero (free) or a price a paid resource may have. The
+ * two numbers are the composer validator's own, compared and never computed with: a paid
+ * resource starts at the minimum and moves in whole steps. A price with nothing to carry it is
+ * refused too: it would be dropped without a word.
+ */
+export function refuseAgentResourcePrice(priceTokens: number | undefined, carriesResource: boolean): string | null {
+  if (priceTokens === undefined || priceTokens === 0) return null;
+  if (
+    !Number.isSafeInteger(priceTokens)
+    || priceTokens < POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS
+    || priceTokens % POST_RESOURCE_PRICE_INCREMENT_USD_CENTS !== 0
+  ) {
+    return `resource_price_tokens is a whole number of tokens, ${POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} or more, in steps of ${POST_RESOURCE_PRICE_INCREMENT_USD_CENTS} (100 tokens = $1.00). Leave it out, or give 0, for a free resource.`;
+  }
+  if (!carriesResource) {
+    return 'resource_price_tokens prices a resource, and this post carries none: give resources (a text post or uploads), or publish a creation with its recipe (allow_remixes on).';
+  }
+  return null;
+}
+
+/**
+ * The resource of a text post or an upload post, as the composer's serializer makes it from the
+ * same cards: free, or paid at the price given. The summary and the preview are the person's
+ * words where given, else what the serializer derives from the cards' titles. Null when no card
+ * has content (the serializer drops an empty card), which `refuseAgentResources` rules out.
+ */
+export function buildAgentResourceBundle({
+  cards,
+  priceTokens = 0,
+  summary,
+  preview,
+}: {
+  cards: readonly AgentResourceCard[];
+  priceTokens?: number;
+  summary?: string;
+  preview?: string;
+}): PostResourceBundleInput | null {
+  return buildResourceCardBundleInput({
+    accessMode: priceTokens > 0 ? 'paid' : 'free',
+    cards: cards.map((card, index) => createPostComposerResourceCard(card.type, {
+      id: `agent-resource-${index + 1}`,
+      title: card.title.trim(),
+      preview: card.description?.trim() ?? '',
+      textContent: card.type === 'external_link' ? '' : card.text ?? '',
+      externalUrl: card.type === 'external_link' ? card.url?.trim() ?? '' : '',
+    })),
+    // No live input is handed to a remix: these cards are text and links, and nothing to remix.
+    allowRemix: false,
+    summary: summary ?? '',
+    previewText: preview ?? '',
+    priceTokens,
+  });
+}
+
+/** What a post's resource is, in the three words every answer uses. */
+export function agentResourceAccess(bundle: PostResourceBundleInput | null | undefined): 'none' | 'free' | 'paid' {
+  return bundle?.accessMode === 'paid' ? 'paid' : bundle?.accessMode === 'free' ? 'free' : 'none';
+}
+
+// ---------------------------------------------------------------------------------------------
+// The form the composer service reads
+
 /** A staged object's name without the upload id the sign step prefixes: the name the post's media is filed under. */
 function originalNameOf(storagePath: string): string {
   const base = storagePath.split('/').pop() ?? '';
@@ -100,14 +267,15 @@ function originalNameOf(storagePath: string): string {
 
 /**
  * The form the composer service reads (`preparePostCreationSubmission`), field for field as the
- * composer page fills it for uploaded media: `postFormat` is `mixed` for media with a note and
- * `media` without one, the category is the one given or the first file's kind, and the recipe is
- * none (an upload has no prompt or inputs to share).
+ * composer page fills it. With staged files: `postFormat` is `mixed` for media with a note and
+ * `media` without one, and the category is the one given or the first file's kind. With none it
+ * is the composer's text post: `postFormat` and `category` both `text`. The resource is the
+ * bundle given, else none.
  */
-export function buildAgentUploadPublishFormData(args: AgentUploadPublishArgs): FormData {
-  const sourceTools = agentMadeWithSelections(args.madeWith);
+export function buildAgentComposedPostFormData(args: AgentComposedPostArgs): FormData {
+  const sourceTools = agentMadeWithSelections(args.madeWith ?? []);
+  const uploads = args.uploads ?? [];
   const body = args.body?.trim() ?? '';
-  const firstType = args.uploads[0]?.contentType ?? '';
   const formData = new FormData();
   formData.set('title', args.title);
   formData.set('body', body);
@@ -119,9 +287,15 @@ export function buildAgentUploadPublishFormData(args: AgentUploadPublishArgs): F
   }
   formData.set('visibility', args.visibility);
   formData.set('isNsfw', String(args.isNsfw === true));
+  formData.set('resourceBundle', JSON.stringify(args.resourceBundle ?? { accessMode: 'none' }));
+  if (uploads.length === 0) {
+    formData.set('postFormat', 'text');
+    formData.set('category', 'text');
+    return formData;
+  }
+  const firstType = uploads[0]?.contentType ?? '';
   formData.set('postFormat', body ? 'mixed' : 'media');
-  formData.set('resourceBundle', JSON.stringify({ accessMode: 'none' }));
-  formData.set('mediaItems', JSON.stringify(args.uploads.map((upload) => ({
+  formData.set('mediaItems', JSON.stringify(uploads.map((upload) => ({
     storagePath: upload.storagePath,
     originalName: originalNameOf(upload.storagePath),
     contentType: upload.contentType ?? '',
