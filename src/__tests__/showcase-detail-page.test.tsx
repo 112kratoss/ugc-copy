@@ -311,7 +311,7 @@ describe('Showcase detail page', () => {
       rerender(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
 
       await waitFor(() => expect(inviteVisitsSent()).toEqual([{
-        body: { code: CODE, source: 'web', next: `/showcase/${POST_ID}` },
+        body: { code: CODE, source: 'web', kind: 'shared_link', next: `/showcase/${POST_ID}` },
         authorization: null,
       }]));
       expect(shareVisitsSent()).toHaveLength(1);

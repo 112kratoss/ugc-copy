@@ -62,7 +62,7 @@ import { clearGenerationAttemptForUser } from './generation-attempts';
 import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
 import { primeInviteShareCode } from './invite-share-code';
 import { forgetInviteShareCode } from './invite-share-code-state';
-import { claimPendingReferral } from './referral-attribution';
+import { claimPendingReferral, retryPendingReferralVisit } from './referral-attribution';
 import {
   clearLocalMobilePushRegistration,
   forgetLastPushRegistration,
@@ -1038,13 +1038,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // The account's invite code, for the links it shares from the app
   // (`lib/invite-share-code.ts`): asked for as the account is known, so a share
   // opens its sheet at the tap with the invite already on the link, and let go
-  // when the account signs out. A guest has no invite to carry.
+  // when the account signs out. A guest has no invite to carry. Asked again
+  // when the app comes back, which is a no-op once the code is held and waits
+  // out the backoff after a failure: a first request that failed left every
+  // share bare until the next cold start (review of 2026-11-10).
+  //
+  // Nobody signed in: an invite this phone saved from a link but could not
+  // record yet is recorded when the app comes back, before an account is made.
   useEffect(() => {
     if (!registeredUserId) {
       forgetInviteShareCode();
-      return;
+      void retryPendingReferralVisit(api);
+      const subscription = AppState.addEventListener('change', (state) => {
+        if (state === 'active') void retryPendingReferralVisit(api);
+      });
+      return () => subscription.remove();
     }
     void primeInviteShareCode(api, registeredUserId);
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void primeInviteShareCode(api, registeredUserId);
+    });
+    return () => subscription.remove();
   }, [api, registeredUserId]);
 
   /**

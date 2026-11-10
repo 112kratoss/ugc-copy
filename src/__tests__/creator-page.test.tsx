@@ -303,7 +303,7 @@ describe('creator page', () => {
         rerender(await openPage());
 
         await waitFor(() => expect(inviteVisitsSent()).toEqual([{
-          body: { code: CODE, source: 'web', next: '/creators/creator-name' },
+          body: { code: CODE, source: 'web', kind: 'shared_link', next: '/creators/creator-name' },
           authorization: null,
         }]));
         expect(shareVisitsSent()).toHaveLength(1);

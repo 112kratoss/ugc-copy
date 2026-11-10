@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   getSupabaseAuthCookiePrefix,
   hasSupabaseAuthCookie,
+  readSupabaseAuthCookieUserId,
   removeSupabaseAuthCookies,
 } from '@/lib/supabase-auth-cookie';
 
@@ -64,5 +65,37 @@ describe('removeSupabaseAuthCookies', () => {
     removeSupabaseAuthCookies('');
 
     expect(document.cookie).toBe('sb-project-ref-auth-token=base64-session');
+  });
+});
+
+describe('readSupabaseAuthCookieUserId', () => {
+  const url = 'https://ildfmhozpibwiopeavfg.supabase.co';
+  const encode = (session: unknown) => `base64-${Buffer.from(JSON.stringify(session)).toString('base64url')}`;
+
+  // The share links compare it with the account whose invite they hold (review
+  // of 2026-11-10): a hint, never authentication.
+  it('reads the account id from a whole or a chunked session cookie', () => {
+    const value = encode({ access_token: 'x'.repeat(40), user: { id: 'user-1', email: 'a@b.test' } });
+    expect(readSupabaseAuthCookieUserId(`theme=dark; sb-ildfmhozpibwiopeavfg-auth-token=${value}`, url)).toBe('user-1');
+
+    const middle = Math.floor(value.length / 2);
+    expect(readSupabaseAuthCookieUserId(
+      `sb-ildfmhozpibwiopeavfg-auth-token.1=${value.slice(middle)}; sb-ildfmhozpibwiopeavfg-auth-token.0=${value.slice(0, middle)}`,
+      url,
+    )).toBe('user-1');
+
+    // The older plain-JSON form, URL-encoded.
+    expect(readSupabaseAuthCookieUserId(
+      `sb-ildfmhozpibwiopeavfg-auth-token=${encodeURIComponent(JSON.stringify({ user: { id: 'user-2' } }))}`,
+      url,
+    )).toBe('user-2');
+  });
+
+  it('reads nothing from no cookie, another project’s, or one it cannot decode', () => {
+    expect(readSupabaseAuthCookieUserId('', url)).toBeNull();
+    expect(readSupabaseAuthCookieUserId(`sb-otherproject-auth-token=${encode({ user: { id: 'user-1' } })}`, url)).toBeNull();
+    expect(readSupabaseAuthCookieUserId('sb-ildfmhozpibwiopeavfg-auth-token=base64-%%%', url)).toBeNull();
+    expect(readSupabaseAuthCookieUserId(`sb-ildfmhozpibwiopeavfg-auth-token=${encode({ user: {} })}`, url)).toBeNull();
+    expect(readSupabaseAuthCookieUserId(`sb-ildfmhozpibwiopeavfg-auth-token=${encode({ user: { id: 1 } })}`, url)).toBeNull();
   });
 });

@@ -12,12 +12,25 @@ const USER = 'user-1';
 const CODE = '30b5f916c7aa';
 const ORIGIN = window.location.origin;
 
+const SESSION_COOKIE = 'sb-example-auth-token';
+
+/** The browser's Supabase session cookie, as @supabase/ssr writes it, for `userId`. */
+function signInCookie(userId: string) {
+  const session = JSON.stringify({ access_token: 'token', user: { id: userId } });
+  document.cookie = `${SESSION_COOKIE}=base64-${Buffer.from(session).toString('base64url')}; path=/`;
+}
+
+function signOutCookie() {
+  document.cookie = `${SESSION_COOKIE}=; Max-Age=0; path=/`;
+}
+
 /** The account signed in to this browser has its invite code at hand. */
 function signedInWithCode() {
   window.localStorage.setItem(
     INVITE_SHARE_CODE_STORAGE_KEY,
-    JSON.stringify({ userId: USER, code: CODE, readAt: Date.now() }),
+    JSON.stringify({ [USER]: { code: CODE, readAt: Date.now() } }),
   );
+  signInCookie(USER);
   holdStoredInviteShareCode(USER);
 }
 
@@ -29,8 +42,10 @@ describe('links shared from the web', () => {
   const writeText = vi.fn(async (_text: string) => undefined);
 
   beforeEach(() => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://example.supabase.co');
     resetInviteShareCodeForTests();
     window.localStorage.clear();
+    signOutCookie();
     share.mockClear();
     writeText.mockClear();
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 })));
@@ -39,6 +54,8 @@ describe('links shared from the web', () => {
   });
 
   afterEach(() => {
+    signOutCookie();
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     Reflect.deleteProperty(navigator, 'share');
     Reflect.deleteProperty(navigator, 'clipboard');
@@ -52,6 +69,24 @@ describe('links shared from the web', () => {
     })).resolves.toBe('native-share');
 
     expect(share.mock.calls[0][0].url).toBe(`${ORIGIN}/showcase/post-1?s=showcase-reel&r=${CODE}`);
+  });
+
+  // A sign-out on a page with no auth provider, or another account signing in
+  // there, never reached the holder, and the next share in that tab carried the
+  // last account's code (review of 2026-11-10). The share reads the cookie.
+  it('carries no code once the browser signed out or someone else signed in, wherever it happened', async () => {
+    signedInWithCode();
+    signOutCookie();
+    expect(withSharersInvite(`${ORIGIN}/showcase/post-1?s=feed`)).toBe(`${ORIGIN}/showcase/post-1?s=feed`);
+
+    signedInWithCode();
+    signInCookie('someone-else');
+    expect(withSharersInvite(`${ORIGIN}/showcase/post-1?s=feed`)).toBe(`${ORIGIN}/showcase/post-1?s=feed`);
+
+    // The same account's cookie, refreshed: still its code.
+    signedInWithCode();
+    signInCookie(USER);
+    expect(withSharersInvite(`${ORIGIN}/showcase/post-1?s=feed`)).toBe(`${ORIGIN}/showcase/post-1?s=feed&r=${CODE}`);
   });
 
   it('copies a post link with the invite where the browser cannot share', async () => {

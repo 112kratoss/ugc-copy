@@ -10,7 +10,7 @@ import {
 } from '@/components/useSupabaseAuthCookieHint';
 import type { PostRemixCapability, PostRemixTarget } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
-import { recordInviteVisitFromSharedLink } from '@/lib/invite-share-landing';
+import { useInviteVisitFromSharedLink } from '@/lib/invite-share-landing';
 import { useOwnerPostVisibility } from '@/lib/owner-page-edits';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import {
@@ -176,7 +176,6 @@ export function useShowcasePostViewer({
   // The people the credit names that a block stands between, for the viewer it was asked for.
   const [blockedCreditPeople, setBlockedCreditPeople] = useState<{ viewer: string; ids: string[] } | null>(null);
   const shareVisitSent = useRef(false);
-  const inviteVisitSent = useRef(false);
 
   const ownBundle = viewerBundle && viewerBundle.viewerKey === viewerKey ? viewerBundle : null;
   const bundle = ownBundle ? ownBundle.bundle : pageBundle;
@@ -285,12 +284,12 @@ export function useShowcasePostViewer({
   // viewer is known, as the invite landing would record it; the visitor sees
   // the post, not a landing. Whatever the post's visibility: the invite is the
   // sharer's, not the post's.
-  const viewerHasAccount = Boolean(viewerUserId) && user?.is_anonymous !== true;
-  useEffect(() => {
-    if (inviteVisitSent.current || search === null || viewerKey === null) return;
-    inviteVisitSent.current = true;
-    recordInviteVisitFromSharedLink({ search, path: `/showcase/${postId}`, viewerHasAccount });
-  }, [postId, search, viewerHasAccount, viewerKey]);
+  useInviteVisitFromSharedLink({
+    search,
+    path: `/showcase/${postId}`,
+    viewerKnown: viewerKey !== null,
+    viewerHasAccount: Boolean(viewerUserId) && user?.is_anonymous !== true,
+  });
 
   const applyBundleAccess = useCallback((access: ShowcasePostBundleAccess) => {
     if (viewerKey === null) return;

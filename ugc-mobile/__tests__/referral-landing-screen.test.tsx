@@ -145,6 +145,25 @@ describe('the invite terms on the landing (03-7)', () => {
     renderer.act(() => tree.unmount());
   });
 
+  // A referral the abuse guard holds is the friend's invite, but its bonus is
+  // not on its way: "Invite applied" promised one (review of 2026-11-10).
+  it('says an invite the guard holds was received and its bonus is on hold', async () => {
+    attribution.getRecentReferralClaimRecord.mockResolvedValue({
+      code: 'creator1',
+      claimedAt: '2026-10-15T07:00:00.000Z',
+      response: { success: true, claimed: true, held: true },
+      program,
+    });
+    const tree = await renderWith({ code: 'creator1' });
+
+    const values = texts(tree);
+    expect(values).toContain('Invite received');
+    expect(values).toContain('Its bonus is on hold while we check it. Contact support if you think this is a mistake.');
+    expect(values).not.toContain('Invite applied');
+    expect(values.some((value) => /will be added to your first/.test(value))).toBe(false);
+    renderer.act(() => tree.unmount());
+  });
+
   // Fast Refresh, or an <Activity> shown again, runs every effect once more over kept state.
   it('keeps the terms after every effect runs again', async () => {
     attribution.getRecentReferralClaimRecord.mockResolvedValue(null);

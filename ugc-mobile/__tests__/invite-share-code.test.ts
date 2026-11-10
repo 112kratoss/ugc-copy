@@ -7,8 +7,8 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
   },
 }));
 
+import { ApiError } from '../lib/api-client';
 import {
-  INVITE_SHARE_CODE_MAX_AGE_MS,
   INVITE_SHARE_CODE_STORAGE_KEY,
   primeInviteShareCode,
   resetInviteShareCodePrimingForTests,
@@ -18,6 +18,10 @@ import {
   forgetInviteShareCode,
   holdInviteShareCode,
 } from '../lib/invite-share-code-state';
+import {
+  INVITE_SHARE_CODE_RETRY_DELAYS_MS,
+  INVITE_SHARE_NO_LINK_RECHECK_MS,
+} from '../lib/invite-share-link/invite-share-code-policy';
 
 const USER = 'user-1';
 const OTHER_USER = 'user-2';
@@ -36,8 +40,8 @@ function memoryStorage(initial: Record<string, string> = {}) {
   };
 }
 
-function stored(userId: string, code: unknown, readAt: number) {
-  return { [INVITE_SHARE_CODE_STORAGE_KEY]: JSON.stringify({ userId, code, readAt }) };
+function stored(entries: Record<string, { code: unknown; readAt: number }>) {
+  return { [INVITE_SHARE_CODE_STORAGE_KEY]: JSON.stringify(entries) };
 }
 
 function linkApi(answer: () => Promise<unknown> = async () => ({ success: true, code: CODE, shareUrl: `https://magicbooklet.com/r/${CODE}` })) {
@@ -46,19 +50,16 @@ function linkApi(answer: () => Promise<unknown> = async () => ({ success: true, 
   };
 }
 
-function switchedOff() {
-  return Object.assign(new Error('Invite links are unavailable.'), { status: 503 });
-}
+const switchedOff = () => new ApiError('Your invite link is switched off.', 409, undefined, undefined, 'REFERRAL_LINK_DISABLED');
+const outage = () => new ApiError('Your referral link is unavailable.', 503);
 
-/** Lets the storage read and the request that follows it run. */
 async function settle() {
   for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
 }
 
 // A share opens its sheet at the tap, so the sharer's invite code is asked for
-// ahead of time and read synchronously (`buildShareUrl`). These hold what that
-// rests on: the code is there after one request, it is never another account's,
-// and a phone asks for it once a week.
+// ahead of time and read synchronously (`buildShareUrl`). The rules for keeping
+// it are the web's too (`invite-share-code-policy.ts`).
 describe("the signed-in account's invite code, for the links the app shares", () => {
   beforeEach(() => {
     forgetInviteShareCode();
@@ -69,7 +70,7 @@ describe("the signed-in account's invite code, for the links the app shares", ()
     expect(currentInviteShareCode()).toBeNull();
   });
 
-  it('asks for the account\'s link once, and holds and stores the answer', async () => {
+  it("asks for the account's link once, and holds and stores the answer under the account", async () => {
     const storage = memoryStorage();
     const api = linkApi();
 
@@ -77,11 +78,13 @@ describe("the signed-in account's invite code, for the links the app shares", ()
 
     expect(api.createReferralLink).toHaveBeenCalledTimes(1);
     expect(currentInviteShareCode()).toBe(CODE);
-    expect(JSON.parse(storage.items.get(INVITE_SHARE_CODE_STORAGE_KEY)!)).toEqual({ userId: USER, code: CODE, readAt: NOW });
+    expect(JSON.parse(storage.items.get(INVITE_SHARE_CODE_STORAGE_KEY)!)).toEqual({ [USER]: { code: CODE, readAt: NOW } });
   });
 
-  it('holds what the phone stored, with no request, for a week', async () => {
-    const storage = memoryStorage(stored(USER, CODE, NOW - INVITE_SHARE_CODE_MAX_AGE_MS + 1));
+  // A code never changes (a trigger keeps it), so asking again weekly cost a
+  // request per account per phone for nothing (review of 2026-11-10).
+  it('keeps a stored code for good, with no request', async () => {
+    const storage = memoryStorage(stored({ [USER]: { code: CODE, readAt: NOW - 365 * 24 * 60 * 60 * 1000 } }));
     const api = linkApi(async () => ({ code: OTHER_CODE }));
 
     await expect(primeInviteShareCode(api, USER, { storage, now: NOW })).resolves.toBe(CODE);
@@ -90,46 +93,30 @@ describe("the signed-in account's invite code, for the links the app shares", ()
     expect(currentInviteShareCode()).toBe(CODE);
   });
 
-  it('asks again once the stored answer is a week old, sharing the old code meanwhile', async () => {
-    const storage = memoryStorage(stored(USER, CODE, NOW - INVITE_SHARE_CODE_MAX_AGE_MS));
-    let answer: (link: unknown) => void = () => undefined;
-    const api = linkApi(() => new Promise((resolve) => { answer = resolve; }));
-
-    const priming = primeInviteShareCode(api, USER, { storage, now: NOW });
-    await settle();
-    expect(api.createReferralLink).toHaveBeenCalledTimes(1);
-    expect(currentInviteShareCode()).toBe(CODE);
-
-    answer({ code: OTHER_CODE });
-    await expect(priming).resolves.toBe(OTHER_CODE);
-    expect(currentInviteShareCode()).toBe(OTHER_CODE);
-  });
-
-  it('does not trust a stored time from the future', async () => {
-    const storage = memoryStorage(stored(USER, CODE, NOW + 60_000));
+  it('keeps the codes of the accounts that take turns on one phone', async () => {
+    const storage = memoryStorage(stored({ [OTHER_USER]: { code: OTHER_CODE, readAt: NOW - 1000 } }));
     const api = linkApi();
 
-    await primeInviteShareCode(api, USER, { storage, now: NOW });
+    await expect(primeInviteShareCode(api, USER, { storage, now: NOW })).resolves.toBe(CODE);
+    expect(JSON.parse(storage.items.get(INVITE_SHARE_CODE_STORAGE_KEY)!)).toEqual({
+      [OTHER_USER]: { code: OTHER_CODE, readAt: NOW - 1000 },
+      [USER]: { code: CODE, readAt: NOW },
+    });
 
+    forgetInviteShareCode();
+    await expect(primeInviteShareCode(api, OTHER_USER, { storage, now: NOW })).resolves.toBe(OTHER_CODE);
     expect(api.createReferralLink).toHaveBeenCalledTimes(1);
   });
 
-  it('asks again when what is stored is not a code, never reading it as "no link"', async () => {
-    for (const broken of ['NOT A CODE', 42, '']) {
+  it('asks again when what is stored is not a code, or dated in the future', async () => {
+    for (const entry of [{ code: 'NOT A CODE', readAt: NOW - 1000 }, { code: 42, readAt: NOW - 1000 }, { code: CODE, readAt: NOW + 60_000 }]) {
       forgetInviteShareCode();
       resetInviteShareCodePrimingForTests();
-      const storage = memoryStorage(stored(USER, broken, NOW - 1000));
+      const storage = memoryStorage(stored({ [USER]: entry }));
       const api = linkApi();
-
       await expect(primeInviteShareCode(api, USER, { storage, now: NOW })).resolves.toBe(CODE);
       expect(api.createReferralLink).toHaveBeenCalledTimes(1);
     }
-
-    forgetInviteShareCode();
-    resetInviteShareCodePrimingForTests();
-    const storage = memoryStorage({ [INVITE_SHARE_CODE_STORAGE_KEY]: '{not json' });
-    const api = linkApi();
-    await expect(primeInviteShareCode(api, USER, { storage, now: NOW })).resolves.toBe(CODE);
   });
 
   it('never asks twice at once for one account', async () => {
@@ -146,15 +133,10 @@ describe("the signed-in account's invite code, for the links the app shares", ()
   });
 
   it("never hands one account another's code", async () => {
-    const storage = memoryStorage(stored(OTHER_USER, OTHER_CODE, NOW - 1000));
-    const api = linkApi();
-
-    const priming = primeInviteShareCode(api, USER, { storage, now: NOW });
-    // Before the phone's storage has answered, and after: never the other's.
+    const storage = memoryStorage(stored({ [OTHER_USER]: { code: OTHER_CODE, readAt: NOW - 1000 } }));
+    const priming = primeInviteShareCode(linkApi(), USER, { storage, now: NOW });
     expect(currentInviteShareCode()).toBeNull();
     await expect(priming).resolves.toBe(CODE);
-
-    expect(api.createReferralLink).toHaveBeenCalledTimes(1);
     expect(currentInviteShareCode()).toBe(CODE);
   });
 
@@ -165,7 +147,6 @@ describe("the signed-in account's invite code, for the links the app shares", ()
     const firstPriming = primeInviteShareCode(first, USER, { storage, now: NOW });
     await settle();
 
-    // Account B signs in on the phone while A's request is still out.
     forgetInviteShareCode();
     await expect(primeInviteShareCode(linkApi(async () => ({ code: OTHER_CODE })), OTHER_USER, { storage, now: NOW }))
       .resolves.toBe(OTHER_CODE);
@@ -177,10 +158,11 @@ describe("the signed-in account's invite code, for the links the app shares", ()
   });
 
   it('holds nothing for an account that signed out while its request was out', async () => {
-    const storage = memoryStorage();
     let answer: (link: unknown) => void = () => undefined;
-    const api = linkApi(() => new Promise((resolve) => { answer = resolve; }));
-    const priming = primeInviteShareCode(api, USER, { storage, now: NOW });
+    const priming = primeInviteShareCode(linkApi(() => new Promise((resolve) => { answer = resolve; })), USER, {
+      storage: memoryStorage(),
+      now: NOW,
+    });
     await settle();
 
     forgetInviteShareCode();
@@ -190,53 +172,47 @@ describe("the signed-in account's invite code, for the links the app shares", ()
     expect(currentInviteShareCode()).toBeNull();
   });
 
-  it('holds nothing when the account left while the phone was still reading its storage', async () => {
-    let finishRead: (value: string | null) => void = () => undefined;
-    const storage = {
-      getItem: vi.fn(() => new Promise<string | null>((resolve) => { finishRead = resolve; })),
-      setItem: vi.fn(async () => undefined),
-    };
-    const api = linkApi();
-    const priming = primeInviteShareCode(api, USER, { storage, now: NOW });
-
-    forgetInviteShareCode();
-    finishRead(JSON.stringify({ userId: USER, code: CODE, readAt: NOW - 1000 }));
-
-    await expect(priming).resolves.toBeNull();
-    expect(currentInviteShareCode()).toBeNull();
-    expect(api.createReferralLink).not.toHaveBeenCalled();
-  });
-
-  it("remembers, for the week, that the account's link is switched off", async () => {
-    const storage = memoryStorage(stored(USER, CODE, NOW - INVITE_SHARE_CODE_MAX_AGE_MS));
+  // Only the server's own "switched off" answer means there is no link. An
+  // outage was stored as "no link" for a week (review of 2026-11-10).
+  it('remembers a switched-off link for a day, and asks again after it', async () => {
+    const storage = memoryStorage();
     const api = linkApi(async () => { throw switchedOff(); });
 
     await expect(primeInviteShareCode(api, USER, { storage, now: NOW })).resolves.toBeNull();
-    expect(currentInviteShareCode()).toBeNull();
-    expect(JSON.parse(storage.items.get(INVITE_SHARE_CODE_STORAGE_KEY)!)).toEqual({ userId: USER, code: null, readAt: NOW });
+    expect(JSON.parse(storage.items.get(INVITE_SHARE_CODE_STORAGE_KEY)!)).toEqual({ [USER]: { code: null, readAt: NOW } });
 
-    // The next start reads that answer and does not ask.
     forgetInviteShareCode();
-    await expect(primeInviteShareCode(api, USER, { storage, now: NOW + 60_000 })).resolves.toBeNull();
+    await primeInviteShareCode(api, USER, { storage, now: NOW + INVITE_SHARE_NO_LINK_RECHECK_MS - 1 });
     expect(api.createReferralLink).toHaveBeenCalledTimes(1);
+
+    forgetInviteShareCode();
+    api.createReferralLink.mockImplementation(async () => ({ code: CODE }));
+    await expect(primeInviteShareCode(api, USER, { storage, now: NOW + INVITE_SHARE_NO_LINK_RECHECK_MS }))
+      .resolves.toBe(CODE);
+    expect(api.createReferralLink).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps the code it held when the request fails any other way', async () => {
-    const storage = memoryStorage(stored(USER, CODE, NOW - INVITE_SHARE_CODE_MAX_AGE_MS));
-    const failures = [
-      async () => { throw new Error('Network request failed'); },
-      async () => { throw Object.assign(new Error('Too many requests'), { status: 429 }); },
-      async () => ({ success: true, code: 'not a code' }),
-      async () => null,
-    ];
-    for (const failure of failures) {
-      forgetInviteShareCode();
-      resetInviteShareCodePrimingForTests();
-      await expect(primeInviteShareCode(linkApi(failure), USER, { storage, now: NOW })).resolves.toBe(CODE);
-      expect(currentInviteShareCode()).toBe(CODE);
-    }
-    // Nothing was written over the stored answer, so the next start asks again.
-    expect(JSON.parse(storage.items.get(INVITE_SHARE_CODE_STORAGE_KEY)!).readAt).toBe(NOW - INVITE_SHARE_CODE_MAX_AGE_MS);
+  it('stores nothing for an outage, keeps what it held, and waits longer after each failure', async () => {
+    const storage = memoryStorage();
+    const api = linkApi(async () => { throw outage(); });
+
+    await expect(primeInviteShareCode(api, USER, { storage, now: NOW })).resolves.toBeNull();
+    expect(storage.items.has(INVITE_SHARE_CODE_STORAGE_KEY)).toBe(false);
+
+    // Within the first wait: no request.
+    await primeInviteShareCode(api, USER, { storage, now: NOW + INVITE_SHARE_CODE_RETRY_DELAYS_MS[0] - 1 });
+    expect(api.createReferralLink).toHaveBeenCalledTimes(1);
+
+    // After it: asked again, and the next wait is longer.
+    await primeInviteShareCode(api, USER, { storage, now: NOW + INVITE_SHARE_CODE_RETRY_DELAYS_MS[0] });
+    expect(api.createReferralLink).toHaveBeenCalledTimes(2);
+    await primeInviteShareCode(api, USER, { storage, now: NOW + INVITE_SHARE_CODE_RETRY_DELAYS_MS[0] * 2 });
+    expect(api.createReferralLink).toHaveBeenCalledTimes(2);
+
+    // A success ends the waiting.
+    api.createReferralLink.mockImplementation(async () => ({ code: CODE }));
+    const later = NOW + INVITE_SHARE_CODE_RETRY_DELAYS_MS[0] + INVITE_SHARE_CODE_RETRY_DELAYS_MS[1];
+    await expect(primeInviteShareCode(api, USER, { storage, now: later })).resolves.toBe(CODE);
   });
 
   it('holds the code for this run on a phone whose storage fails', async () => {
@@ -250,12 +226,12 @@ describe("the signed-in account's invite code, for the links the app shares", ()
     await settle();
     expect(currentInviteShareCode()).toBe(CODE);
 
-    // Held, so a second call in the same run does not ask again.
+    forgetInviteShareCode();
     await expect(primeInviteShareCode(api, USER, { storage, now: NOW + 1000 })).resolves.toBe(CODE);
     expect(api.createReferralLink).toHaveBeenCalledTimes(1);
   });
 
-  it('lets go of the code when told to, and of nothing else', () => {
+  it('lets go of the code when told to', () => {
     holdInviteShareCode(USER, CODE, NOW);
     expect(currentInviteShareCode()).toBe(CODE);
 

@@ -18,8 +18,11 @@ vi.mock('../lib/auth', () => ({ useAuth: () => state.auth }));
 vi.mock('../lib/referral-attribution', () => ({ capturePendingReferral: state.capturePendingReferral }));
 
 import {
+  INVITE_SHARE_CAPTURE_RETRY_DELAYS_MS,
+  captureInviteFromSharedLink,
   inviteShareCaptureDecision,
   inviteShareParam,
+  resetInviteShareCapturesForTests,
   useInviteShareCapture,
 } from '../lib/use-invite-share-capture';
 
@@ -48,6 +51,8 @@ function mount(code: string | string[] | undefined, next: string | null = '/show
 }
 
 beforeEach(() => {
+  vi.useRealTimers();
+  resetInviteShareCapturesForTests();
   state.auth.user = null;
   state.auth.isLoading = false;
   state.capturePendingReferral.mockReset().mockResolvedValue({ pending: { code: CODE }, keptEarlierInvite: false });
@@ -80,7 +85,8 @@ describe('a page opened by a shared link', () => {
     const screen = mount(CODE);
 
     expect(state.capturePendingReferral).toHaveBeenCalledTimes(1);
-    expect(state.capturePendingReferral).toHaveBeenCalledWith(state.auth.api, CODE, { next: '/showcase/post-1' });
+    // As a shared link's: an invite link opened later replaces it.
+    expect(state.capturePendingReferral).toHaveBeenCalledWith(state.auth.api, CODE, { next: '/showcase/post-1', kind: 'shared_link' });
 
     screen.redraw();
     screen.redraw();
@@ -133,22 +139,51 @@ describe('a page opened by a shared link', () => {
     expect(state.capturePendingReferral).not.toHaveBeenCalled();
 
     screen.update(CODE, '/creators/luna');
-    expect(state.capturePendingReferral).toHaveBeenCalledWith(state.auth.api, CODE, { next: '/creators/luna' });
+    expect(state.capturePendingReferral).toHaveBeenCalledWith(state.auth.api, CODE, { next: '/creators/luna', kind: 'shared_link' });
   });
 
-  it('never lets a capture that fails reach the page', async () => {
-    state.capturePendingReferral.mockRejectedValue(new Error('Network request failed'));
+  // A visit that failed was never tried again, and the saved code without a
+  // visit made the sign-up's claim throw (review of 2026-11-10).
+  it('tries a failed capture again, quietly, while the screen is open', async () => {
+    vi.useFakeTimers();
+    state.capturePendingReferral
+      .mockRejectedValueOnce(new Error('Network request failed'))
+      .mockRejectedValueOnce(new Error('Too many requests'))
+      .mockResolvedValue({ pending: { code: CODE, visitToken: 'visit-1' }, keptEarlierInvite: false });
     const unhandled = vi.fn();
     process.on('unhandledRejection', unhandled);
 
     mount(CODE);
-    await act(async () => {
-      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await act(async () => { await vi.advanceTimersByTimeAsync(INVITE_SHARE_CAPTURE_RETRY_DELAYS_MS[0]); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(INVITE_SHARE_CAPTURE_RETRY_DELAYS_MS[1]); });
     process.off('unhandledRejection', unhandled);
 
-    expect(state.capturePendingReferral).toHaveBeenCalledTimes(1);
+    expect(state.capturePendingReferral).toHaveBeenCalledTimes(3);
     expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it('stops trying once the screen is gone', async () => {
+    const sleeps: number[] = [];
+    let current = true;
+    state.capturePendingReferral.mockRejectedValue(new Error('Network request failed'));
+
+    const captured = captureInviteFromSharedLink(state.auth.api as never, CODE, '/showcase/post-1', () => current, async (ms) => {
+      sleeps.push(ms);
+      current = false;
+    });
+
+    await expect(captured).resolves.toBe(false);
+    expect(state.capturePendingReferral).toHaveBeenCalledTimes(1);
+    expect(sleeps).toEqual([INVITE_SHARE_CAPTURE_RETRY_DELAYS_MS[0]]);
+  });
+
+  // The legacy-id resolver re-opens the post page with the same link: one
+  // capture per code per run (review of 2026-11-10).
+  it('captures one code once however many screens ask', async () => {
+    mount(CODE);
+    mount(CODE, '/creators/luna');
+    await act(async () => { await Promise.resolve(); });
+
+    expect(state.capturePendingReferral).toHaveBeenCalledTimes(1);
   });
 });

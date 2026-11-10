@@ -102,6 +102,19 @@ describe('AuthProvider and the signed-in account’s invite code', () => {
     expect(inviteCode.prime).not.toHaveBeenCalled();
   });
 
+  // An optional-auth page mounts the provider with no session while it asks
+  // who is signed in; letting go then left a share in that second bare
+  // (review of 2026-11-10). A share checks the session cookie itself.
+  it('keeps the code while the session is still being read', async () => {
+    supabaseAuth.getSession.mockReturnValue(new Promise(() => undefined));
+    supabaseAuth.getUser.mockReturnValue(new Promise(() => undefined));
+    render(<AuthProvider initialSession={null}><span /></AuthProvider>);
+    await runIdle();
+
+    expect(inviteCode.forget).not.toHaveBeenCalled();
+    expect(inviteCode.prime).not.toHaveBeenCalled();
+  });
+
   it('lets the code go when the account signs out', async () => {
     let authChanged: (event: string, session: Session | null) => void = () => undefined;
     supabaseAuth.onAuthStateChange.mockImplementation((callback) => {

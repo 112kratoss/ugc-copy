@@ -16,6 +16,7 @@ import {
   getRecentReferralClaimRecord,
   normalizeReferralCode,
   readReferralProgram,
+  retryPendingReferralVisit,
 } from '../lib/referral-attribution';
 
 function memoryStorage() {
@@ -116,6 +117,46 @@ describe('native referral attribution', () => {
       pending: { code: 'first-code', visitToken: 'visit-token-1' },
     });
     expect(api.recordReferralVisit).toHaveBeenCalledTimes(1);
+  });
+
+  // A shared post's invite is captured silently; an invite link the person
+  // opens after it is a choice they made, so it replaces the shared link's.
+  // Nothing replaces an invite link (review of 2026-11-10).
+  it('lets an invite link replace a shared link\'s invite, and never the other way round', async () => {
+    const storage = memoryStorage();
+    const api = referralApi();
+    const now = Date.parse('2026-07-12T00:00:00.000Z');
+
+    await capturePendingReferral(api as never, 'sharer-code', { storage, now, kind: 'shared_link' });
+    expect(api.recordReferralVisit).toHaveBeenLastCalledWith({ code: 'sharer-code', source: 'mobile', kind: 'shared_link' });
+
+    const invited = await capturePendingReferral(api as never, 'friend-code', { storage, now: now + 1_000 });
+    expect(invited).toMatchObject({ keptEarlierInvite: false, pending: { code: 'friend-code', kind: 'invite' } });
+    expect(api.recordReferralVisit).toHaveBeenLastCalledWith({ code: 'friend-code', source: 'mobile', kind: 'invite' });
+
+    const sharedAgain = await capturePendingReferral(api as never, 'sharer-code', { storage, now: now + 2_000, kind: 'shared_link' });
+    const secondInvite = await capturePendingReferral(api as never, 'other-code', { storage, now: now + 3_000 });
+    expect([sharedAgain.pending.code, secondInvite.pending.code]).toEqual(['friend-code', 'friend-code']);
+    expect(api.recordReferralVisit).toHaveBeenCalledTimes(2);
+  });
+
+  it('records an invite saved offline when asked again, and leaves a recorded one alone', async () => {
+    const storage = memoryStorage();
+    const api = referralApi();
+    const now = Date.parse('2026-07-12T00:00:00.000Z');
+    api.recordReferralVisit.mockRejectedValueOnce(new Error('Network request failed'));
+    await expect(capturePendingReferral(api as never, 'sharer-code', { storage, now, kind: 'shared_link' })).rejects.toThrow();
+
+    await retryPendingReferralVisit(api as never, { storage, now: now + 1_000 });
+    expect(api.recordReferralVisit).toHaveBeenCalledTimes(2);
+    expect(api.recordReferralVisit).toHaveBeenLastCalledWith({ code: 'sharer-code', source: 'mobile', kind: 'shared_link' });
+
+    await retryPendingReferralVisit(api as never, { storage, now: now + 2_000 });
+    expect(api.recordReferralVisit).toHaveBeenCalledTimes(2);
+
+    // Never throws, offline or not.
+    api.recordReferralVisit.mockRejectedValue(new Error('Network request failed'));
+    await expect(retryPendingReferralVisit(api as never, { storage: memoryStorage(), now })).resolves.toBeUndefined();
   });
 
   it('claims with both token and code, clears pending state, and records a short-lived result', async () => {

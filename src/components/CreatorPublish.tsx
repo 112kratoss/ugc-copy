@@ -709,7 +709,9 @@ function CreatorPosted({
       </Link>
       {isPublic ? (
         <PublicShareButton
-          generationId={generationId}
+          // The post's own id: a creation's id reaches the post through a cached redirect that
+          // drops the link's query, invite and surface with it (review of 2026-11-10).
+          generationId={published.postId ?? generationId}
           title={published.title}
           sourceSurface={sourceSurface}
           accessToken={accessToken}

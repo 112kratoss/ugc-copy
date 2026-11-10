@@ -21,7 +21,7 @@ import type { ReferralProgramSummary } from '@/lib/types';
 type InviteState =
   | { status: 'loading' }
   | { status: 'ready'; code: string; keptEarlierInvite: boolean }
-  | { status: 'claimed'; code: string }
+  | { status: 'claimed'; code: string; held: boolean }
   | { status: 'ineligible'; code: string; reason?: string }
   | { status: 'error'; code: string | null; message: string; savedLocally: boolean; visitRecorded: boolean };
 
@@ -55,7 +55,7 @@ export default function ReferralLandingScreen() {
         if (recentClaim) {
           setProgram(recentClaim.program ?? null);
           setState(recentClaim.response.claimed
-            ? { status: 'claimed', code }
+            ? { status: 'claimed', code, held: recentClaim.response.held === true }
             : { status: 'ineligible', code, reason: recentClaim.response.reason });
           return;
         }
@@ -73,7 +73,7 @@ export default function ReferralLandingScreen() {
         const claim = await claimPendingReferral(api);
         if (cancelled) return;
         if (claim?.claimed) {
-          setState({ status: 'claimed', code: captured.pending.code });
+          setState({ status: 'claimed', code: captured.pending.code, held: claim.held === true });
         } else {
           setState({ status: 'ineligible', code: captured.pending.code, reason: claim?.reason });
         }
@@ -155,7 +155,17 @@ export default function ReferralLandingScreen() {
 
       {state.status === 'claimed' ? (
         <>
-          <StatusBlock tone="success" title="Invite applied" body={`Your ${firstTopUpBonus} will be added to your first verified credit-pack purchase.`} />
+          {/* A referral the abuse guard holds is the friend's invite all the same, but no bonus is
+              on its way until it is checked: saying "applied" promised one (review of 2026-11-10). */}
+          {state.held ? (
+            <StatusBlock
+              tone="warning"
+              title="Invite received"
+              body="Its bonus is on hold while we check it. Contact support if you think this is a mistake."
+            />
+          ) : (
+            <StatusBlock tone="success" title="Invite applied" body={`Your ${firstTopUpBonus} will be added to your first verified credit-pack purchase.`} />
+          )}
           <PrimaryButton label="Continue to Magicbooklet" onPress={() => router.replace(destination as never)} />
           <SecondaryButton label="View Invite & Earn" onPress={() => router.replace('/invite' as never)} />
         </>

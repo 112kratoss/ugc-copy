@@ -568,14 +568,17 @@ export function AuthProvider({
     const inviteAccessToken = inviteUserId ? session?.access_token ?? null : null;
     useEffect(() => {
         if (!inviteUserId || !inviteAccessToken) {
-            forgetInviteShareCode();
+            // Only once the session is known: an optional-auth page mounts this provider with no
+            // session while it asks, and letting go then left a share made in that second bare
+            // (review of 2026-11-10). A share checks the session cookie itself in the meantime.
+            if (!isLoading) forgetInviteShareCode();
             return undefined;
         }
         holdStoredInviteShareCode(inviteUserId);
         return scheduleIdle(() => {
             void primeInviteShareCode({ userId: inviteUserId, accessToken: inviteAccessToken });
         }, 4000);
-    }, [inviteAccessToken, inviteUserId]);
+    }, [inviteAccessToken, inviteUserId, isLoading]);
 
     const resolvedIsLoading = !hasResolvedInitialState
         && !clientE2EAuth

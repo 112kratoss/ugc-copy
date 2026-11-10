@@ -149,7 +149,10 @@ vi.mock('../lib/apple-auth', () => ({
   signInWithNativeApple: vi.fn(),
 }));
 vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: state.signInWithGoogleOAuth }));
-vi.mock('../lib/referral-attribution', () => ({ claimPendingReferral: vi.fn(async () => undefined) }));
+vi.mock('../lib/referral-attribution', () => ({
+  claimPendingReferral: vi.fn(async () => undefined),
+  retryPendingReferralVisit: vi.fn(async () => undefined),
+}));
 vi.mock('../lib/invite-share-code', () => ({ primeInviteShareCode: state.primeInviteShareCode }));
 vi.mock('../lib/notifications', () => ({
   clearLocalMobilePushRegistration: vi.fn(async () => undefined),
@@ -1518,6 +1521,34 @@ describe('the invite the links it shares carry', () => {
     expect(state.primeInviteShareCode).not.toHaveBeenCalled();
     expect(currentInviteShareCode()).toBeNull();
     guest.unmount();
+  });
+
+  // A first request that failed left every share bare until the next cold
+  // start (review of 2026-11-10): coming back asks again, which costs nothing
+  // once the code is held and waits out the backoff after a failure.
+  it('asks again when the app comes back', async () => {
+    const { latest, unmount } = await mount(accountA());
+    expect(state.primeInviteShareCode).toHaveBeenCalledTimes(1);
+
+    await foreground();
+
+    expect(state.primeInviteShareCode).toHaveBeenCalledTimes(2);
+    expect(state.primeInviteShareCode).toHaveBeenLastCalledWith(latest.current?.api, 'account-a');
+    unmount();
+  });
+
+  it('records, for a guest, an invite saved from a link but not yet recorded, when the app comes back', async () => {
+    const { retryPendingReferralVisit } = await import('../lib/referral-attribution');
+    vi.mocked(retryPendingReferralVisit).mockClear();
+    const { unmount } = await mount(guestSession());
+    expect(retryPendingReferralVisit).toHaveBeenCalled();
+    const before = vi.mocked(retryPendingReferralVisit).mock.calls.length;
+
+    await foreground();
+
+    expect(vi.mocked(retryPendingReferralVisit).mock.calls.length).toBeGreaterThan(before);
+    expect(state.primeInviteShareCode).not.toHaveBeenCalled();
+    unmount();
   });
 
   it('lets go of it at a sign-out, so a link shared after carries no invite', async () => {
