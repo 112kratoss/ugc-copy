@@ -2,7 +2,7 @@ import { postMediaStorageBucket, removePostMediaObjects } from '@/lib/post-media
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { runPagedQuery } from '@/lib/admin-paged-query';
-import { listAgentPublishedPosts, type AgentPublishedPostSource } from '@/lib/agent-tool-calls';
+import { listAgentPublishedPosts } from '@/lib/agent-tool-calls';
 import {
   getCanonicalStoredMediaLocation,
   getUserOwnedStoredMediaLocation,
@@ -93,6 +93,15 @@ export type ModerationQueueSnapshot = {
  */
 export type ModerationQueueSource = 'agent';
 
+/**
+ * What an agent's post was made from: one of the creator's creations here, files the agent
+ * brought from elsewhere, or text alone.
+ */
+export type AgentPublishedPostSource = 'creation' | 'upload' | 'text';
+
+/** What an agent's post carries beside itself: no resource, a free one, or one on sale. */
+export type AgentPublishedPostResource = 'none' | 'free' | 'paid';
+
 /** A post an agent published, with the post as the queue describes one; `post` is null once it is deleted. */
 export type AgentPublishedPostItem = {
   postId: string;
@@ -100,8 +109,13 @@ export type AgentPublishedPostItem = {
   /** The OAuth client the agent connected through (Claude Code, ChatGPT, …). */
   clientId: string;
   publishedAt: string;
-  /** `creation`: one of the creator's creations here. `upload`: media the agent brought from elsewhere. */
-  source: AgentPublishedPostSource;
+  /**
+   * `creation`, `upload` or `text`. Null for a deleted post that had no creation behind it: the
+   * audit row names a creation or none, and only the post said whether it held media.
+   */
+  source: AgentPublishedPostSource | null;
+  /** `none`, `free` or `paid`, as the post's resource stands; null once the post is deleted. */
+  resource: AgentPublishedPostResource | null;
   post: PostModerationQueueItem['post'];
 };
 
@@ -208,6 +222,8 @@ type PostRow = {
   review_status: string;
   report_count: number;
   created_at: string;
+  /** `text` for a text post, `media` or `mixed` for one with media. */
+  post_format?: string | null;
 };
 
 type PostModerationMediaRow = {
@@ -529,12 +545,36 @@ async function hydrateReportedPosts(
 
   const result = await supabase
     .from('posts')
-    .select('id, user_id, title, visibility, review_status, report_count, created_at')
+    .select('id, user_id, title, visibility, review_status, report_count, created_at, post_format')
     .in('id', postIds);
   if (result.error) {
     throw databaseError('Failed to hydrate reported posts', result.error);
   }
   return new Map(((result.data ?? []) as PostRow[]).map((row) => [row.id, row]));
+}
+
+/**
+ * Whether each post carries a resource and on what terms, in one read for the page: the access
+ * mode of its bundle's row and nothing the bundle holds. A resource its creator removed while
+ * people held it stays as a retired row and is no longer the post's; a post with no row has none.
+ */
+async function readPostResourceAccess(
+  supabase: SupabaseClient,
+  postIds: string[],
+): Promise<Map<string, AgentPublishedPostResource>> {
+  if (postIds.length === 0) return new Map();
+  const result = await supabase
+    .from('post_resource_bundles')
+    .select('post_id, access_mode, retired_at')
+    .in('post_id', postIds);
+  if (result.error) {
+    throw databaseError('Failed to read the resources of agent-published posts', result.error);
+  }
+  const access = new Map<string, AgentPublishedPostResource>();
+  for (const row of (result.data ?? []) as Array<{ post_id: string; access_mode: string | null; retired_at: string | null }>) {
+    if (!row.retired_at && (row.access_mode === 'free' || row.access_mode === 'paid')) access.set(row.post_id, row.access_mode);
+  }
+  return access;
 }
 
 async function hydrateReportedComments(
@@ -676,14 +716,27 @@ export async function listAgentPublishedPostsForModeration(
     throw databaseError('Failed to list agent-published posts', error);
   }
   const postsById = await hydrateReportedPosts(supabase, published.map((item) => ({ post_id: item.postId })));
-  return published.map((item) => ({
-    postId: item.postId,
-    userId: item.userId,
-    clientId: item.clientId,
-    publishedAt: item.publishedAt,
-    source: item.source,
-    post: toQueuePost(postsById.get(item.postId)),
-  }));
+  // Only posts that still exist are asked about: a deleted post's resource went with it.
+  const resourceByPostId = await readPostResourceAccess(supabase, [...postsById.keys()]);
+  return published.map((item) => {
+    const post = postsById.get(item.postId);
+    // A creation's post is named by its audit row. Any other is uploads or text, which the post's
+    // own format says, so it is unknown once the post is gone.
+    const source: AgentPublishedPostSource | null = item.generationId
+      ? 'creation'
+      : post
+        ? (post.post_format === 'text' ? 'text' : 'upload')
+        : null;
+    return {
+      postId: item.postId,
+      userId: item.userId,
+      clientId: item.clientId,
+      publishedAt: item.publishedAt,
+      source,
+      resource: post ? resourceByPostId.get(item.postId) ?? 'none' : null,
+      post: toQueuePost(post),
+    };
+  });
 }
 
 export async function listOpenModerationReports(

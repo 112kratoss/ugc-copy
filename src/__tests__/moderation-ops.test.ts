@@ -864,10 +864,12 @@ describe('the agent view of the moderation queue', () => {
       { post_id: AGENT_POST_ID, user_id: AGENT_USER_ID, client_id: 'client-claude', created_at: '2026-11-09T02:00:00.000Z', generation_id: null },
       { post_id: deletedPostId, user_id: AGENT_USER_ID, client_id: 'client-codex', created_at: '2026-11-09T01:00:00.000Z', generation_id: '80000000-0000-4000-8000-000000000009' },
     ]);
-    const posts = queryResult([{ id: AGENT_POST_ID, user_id: AGENT_USER_ID, title: 'By an agent', visibility: 'private', review_status: 'visible', report_count: 0, created_at: '2026-11-09T02:00:00.000Z' }]);
+    const posts = queryResult([{ id: AGENT_POST_ID, user_id: AGENT_USER_ID, title: 'By an agent', visibility: 'private', review_status: 'visible', report_count: 0, created_at: '2026-11-09T02:00:00.000Z', post_format: 'media' }]);
+    const bundles = queryResult([]);
     const from = vi.fn((table: string) => {
       if (table === 'agent_tool_calls') return calls;
       if (table === 'posts') return posts;
+      if (table === 'post_resource_bundles') return bundles;
       throw new Error(`Unexpected table ${table}`);
     });
 
@@ -880,9 +882,74 @@ describe('the agent view of the moderation queue', () => {
         clientId: 'client-claude',
         publishedAt: '2026-11-09T02:00:00.000Z',
         source: 'upload',
+        resource: 'none',
         post: { id: AGENT_POST_ID, userId: AGENT_USER_ID, title: 'By an agent', visibility: 'private', reviewStatus: 'visible', reportCount: 0, createdAt: '2026-11-09T02:00:00.000Z' },
       },
-      { postId: deletedPostId, userId: AGENT_USER_ID, clientId: 'client-codex', publishedAt: '2026-11-09T01:00:00.000Z', source: 'creation', post: null },
+      // A deleted creation post is still a creation's: its audit row names it. Its resource went with it.
+      { postId: deletedPostId, userId: AGENT_USER_ID, clientId: 'client-codex', publishedAt: '2026-11-09T01:00:00.000Z', source: 'creation', resource: null, post: null },
     ]);
+  });
+
+  it('says what each post was made from, a creation, uploads or text, and whether it carries a resource, free or paid, in one read for the page', async () => {
+    const textPostId = '70000000-0000-4000-8000-00000000000a';
+    const uploadPostId = '70000000-0000-4000-8000-00000000000b';
+    const creationPostId = '70000000-0000-4000-8000-00000000000c';
+    const retiredPostId = '70000000-0000-4000-8000-00000000000d';
+    const gonePostId = '70000000-0000-4000-8000-00000000000e';
+    const call = (postId: string, generationId: string | null, at: string) => ({ post_id: postId, user_id: AGENT_USER_ID, client_id: 'client-claude', created_at: at, generation_id: generationId });
+    const calls = ledger([
+      call(textPostId, null, '2026-11-10T05:00:00.000Z'),
+      call(uploadPostId, null, '2026-11-10T04:00:00.000Z'),
+      call(creationPostId, '80000000-0000-4000-8000-000000000009', '2026-11-10T03:00:00.000Z'),
+      call(retiredPostId, null, '2026-11-10T02:00:00.000Z'),
+      call(gonePostId, null, '2026-11-10T01:00:00.000Z'),
+    ]);
+    const postRow = (id: string, format: string) => ({ id, user_id: AGENT_USER_ID, title: 'By an agent', visibility: 'public', review_status: 'visible', report_count: 0, created_at: '2026-11-10T00:00:00.000Z', post_format: format });
+    const posts = queryResult([postRow(textPostId, 'text'), postRow(uploadPostId, 'mixed'), postRow(creationPostId, 'media'), postRow(retiredPostId, 'text')]);
+    const bundles = queryResult([
+      { post_id: textPostId, access_mode: 'paid', retired_at: null },
+      { post_id: creationPostId, access_mode: 'free', retired_at: null },
+      // Removed by its creator while people held it: the row stays, the post no longer carries it.
+      { post_id: retiredPostId, access_mode: 'paid', retired_at: '2026-11-10T06:00:00.000Z' },
+    ]);
+    const from = vi.fn((table: string) => {
+      if (table === 'agent_tool_calls') return calls;
+      if (table === 'posts') return posts;
+      if (table === 'post_resource_bundles') return bundles;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const items = await listAgentPublishedPostsForModeration({ from } as unknown as SupabaseClient, { limit: 10 });
+    expect(items.map((item) => [item.postId, item.source, item.resource])).toEqual([
+      [textPostId, 'text', 'paid'],
+      [uploadPostId, 'upload', 'none'],
+      [creationPostId, 'creation', 'free'],
+      [retiredPostId, 'text', 'none'],
+      // Deleted, and its audit row names no creation: uploads or text, which only the post said.
+      [gonePostId, null, null],
+    ]);
+    expect(posts.select).toHaveBeenCalledWith('id, user_id, title, visibility, review_status, report_count, created_at, post_format');
+    // One read of the bundles for the whole page, of the posts that still exist, and of the
+    // access mode alone: nothing a resource holds.
+    expect(from.mock.calls.filter(([table]) => table === 'post_resource_bundles')).toHaveLength(1);
+    expect(bundles.select).toHaveBeenCalledWith('post_id, access_mode, retired_at');
+    expect(bundles.in).toHaveBeenCalledWith('post_id', [textPostId, uploadPostId, creationPostId, retiredPostId]);
+
+    // No post left to ask about: the bundles are not read at all.
+    const emptyFrom = vi.fn((table: string) => {
+      if (table === 'agent_tool_calls') return ledger([call(gonePostId, null, '2026-11-10T01:00:00.000Z')]);
+      if (table === 'posts') return queryResult([]);
+      throw new Error(`Unexpected table ${table}`);
+    });
+    expect(await listAgentPublishedPostsForModeration({ from: emptyFrom } as unknown as SupabaseClient, { limit: 10 }))
+      .toEqual([expect.objectContaining({ postId: gonePostId, source: null, resource: null, post: null })]);
+
+    const brokenFrom = vi.fn((table: string) => {
+      if (table === 'agent_tool_calls') return ledger([call(textPostId, null, '2026-11-10T05:00:00.000Z')]);
+      if (table === 'posts') return queryResult([postRow(textPostId, 'text')]);
+      return queryResult(null, { message: 'permission denied' });
+    });
+    await expect(listAgentPublishedPostsForModeration({ from: brokenFrom } as unknown as SupabaseClient, { limit: 10 }))
+      .rejects.toThrow('Failed to read the resources of agent-published posts: permission denied');
   });
 });

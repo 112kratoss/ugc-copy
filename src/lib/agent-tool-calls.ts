@@ -125,18 +125,17 @@ export async function recordAgentToolCall(
   }
 }
 
-/**
- * What an agent's post was made from: one of the creator's creations here, or files the agent
- * brought from elsewhere (`publish_post` with `uploads`, whose row names no creation).
- */
-export type AgentPublishedPostSource = 'creation' | 'upload';
-
 export type AgentPublishedPostRecord = {
   postId: string;
   userId: string;
   clientId: string;
   publishedAt: string;
-  source: AgentPublishedPostSource;
+  /**
+   * The creation the post was published from, as its row names it; null for a post with no
+   * creation behind it (`publish_post` with `uploads`, or a text post). Which of those two it is
+   * the row does not say: the post itself does (`moderation-ops.ts` reads its format).
+   */
+  generationId: string | null;
 };
 
 /**
@@ -166,13 +165,13 @@ export async function listAgentPublishedPosts(
   for (const row of (data ?? []) as Array<{ post_id: string; user_id: string; client_id: string; created_at: string; generation_id?: string | null }>) {
     // Newest first in the read: a post keeps its place from its newest call and, each older call
     // overwriting the date, ends with the date of its first publication. Every call about one post
-    // names the same creation or none, so the source is the same whichever row is kept.
+    // names the same creation or none, so it is the same whichever row is kept.
     seen.set(row.post_id, {
       postId: row.post_id,
       userId: row.user_id,
       clientId: row.client_id,
       publishedAt: row.created_at,
-      source: row.generation_id ? 'creation' : 'upload',
+      generationId: row.generation_id ?? null,
     });
   }
   return [...seen.values()].slice(0, limit);

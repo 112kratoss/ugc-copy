@@ -122,10 +122,11 @@ describe('the posts agents published', () => {
       { post_id: POST_ID, user_id: USER_ID, client_id: 'client-claude', created_at: '2026-11-09T10:00:00Z', generation_id: GENERATION_ID },
     ]);
     const posts = await listAgentPublishedPosts(client, { limit: 10 });
-    // A row that names a creation is a creation's post; one that names none was made from uploads.
+    // A row names the creation a post was published from, or none: a post of uploads or a text
+    // post, which the row cannot tell apart (the moderation list reads the post's format).
     expect(posts).toEqual([
-      { postId: POST_ID, userId: USER_ID, clientId: 'client-claude', publishedAt: '2026-11-09T10:00:00Z', source: 'creation' },
-      { postId: OTHER_POST_ID, userId: USER_ID, clientId: 'client-codex', publishedAt: '2026-11-09T11:00:00Z', source: 'upload' },
+      { postId: POST_ID, userId: USER_ID, clientId: 'client-claude', publishedAt: '2026-11-09T10:00:00Z', generationId: GENERATION_ID },
+      { postId: OTHER_POST_ID, userId: USER_ID, clientId: 'client-codex', publishedAt: '2026-11-09T11:00:00Z', generationId: null },
     ]);
     expect(query.select).toHaveBeenCalledWith('post_id, user_id, client_id, created_at, generation_id');
     expect(query.eq).toHaveBeenCalledWith('tool', 'publish_post');
