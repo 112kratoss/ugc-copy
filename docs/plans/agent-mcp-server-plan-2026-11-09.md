@@ -1,14 +1,16 @@
 # Magicbooklet MCP server — build plan
 
-Status, 2026-11-10: phases 0 to 3 are shipped and live. Phase 1 is PR #747, phase 2 PR #749 and
-phase 3 PR #748; the last release reached production on 2026-11-09 at 20:24 UTC, the tools, the
+Status, 2026-11-10: phases 0 to 4 are shipped and live. Phase 1 is PR #747, phase 2 PR #749 and
+phase 3 PR #748; their last release reached production on 2026-11-09 at 20:24 UTC, the tools, the
 setup page and Connected apps were checked there the same hour (runbook, "Production switch-on
 checks"), and the registry entry `com.magicbooklet/mcp` 1.1.0 was published at 20:28 UTC. Phase 4
 (an agent posts media made elsewhere, and text posts with prompts, guides or skills attached,
-free or at a price the person set; the owner asked for each on 2026-11-10) is built and in
-review on `feat/mcp-outside-media`: server 1.2.0, twelve tools, proven on a local stack; it is
-not live until its PR is merged and released, and the registry keeps 1.1.0 until then. The plan
-stays in `plans/` for what is still open: phase 4's merge, production check and registry publish,
+free or at a price the person set; the owner asked for each on 2026-11-10) is PR #751: server
+1.2.0, twelve tools, released on 2026-11-10 at about 16:10 UTC, checked on production the same
+hour with a private post from an upload and a private text post with a guide card, and
+published to the registry as 1.2.0 at 16:57 UTC. The plan
+stays in `plans/` for what is still open: whether to revoke the grants approved before phase 4
+so each creator sees the new consent line (the owner's decision),
 ChatGPT's client (after the owner creates its connector), a first run and a first new post made
 through an agent (the owner's to start; that post is then reviewed in the moderation queue), the
 owner's two submissions (the Anthropic directory exception and the ChatGPT directory; runbook,
@@ -348,12 +350,12 @@ submission. The registry publish is done.
 
 ### Phase 4 — media made elsewhere, text posts, resources and prices
 
-Status, 2026-11-10: built and in review on `feat/mcp-outside-media` (server 1.2.0, plugin
-1.1.0); not merged. Proven before the PR by the unit suites and on a throwaway local stack, both
-the upload protocol against real Storage and the tools end to end (runbook, "Media made
-elsewhere" and "Text posts, resources and prices"). Left after the merge: the two production
-checks the runbook names (a private post from uploads and a private text post with a guide card,
-each repeated, read, deleted) and the registry publish of 1.2.0.
+Status, 2026-11-10: shipped as PR #751 (server 1.2.0, plugin 1.1.0), live since about 16:10 UTC.
+Proven before the PR by the unit suites and on a throwaway local stack, both the upload protocol
+against real Storage and the tools end to end (runbook, "Media made elsewhere" and "Text posts,
+resources and prices"). After the release the two production checks the runbook names passed (a
+private post from uploads and a private text post with a guide card, each repeated, read,
+deleted; nothing was put on sale), and 1.2.0 was published to the registry at 16:57 UTC.
 
 The owner asked on 2026-11-10 whether an agent can post media made elsewhere, and then to plan
 and add it. Until then `publish_post` took a creation only and `upload_input` staged run inputs
