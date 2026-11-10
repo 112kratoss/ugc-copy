@@ -4,7 +4,8 @@ Status, 2026-11-10: phases 0 to 3 are shipped and live. Phase 1 is PR #747, phas
 phase 3 PR #748; the last release reached production on 2026-11-09 at 20:24 UTC, the tools, the
 setup page and Connected apps were checked there the same hour (runbook, "Production switch-on
 checks"), and the registry entry `com.magicbooklet/mcp` 1.1.0 was published at 20:28 UTC. Phase 4
-(an agent posts media made elsewhere; the owner asked for it on 2026-11-10) is built and in
+(an agent posts media made elsewhere, and text posts with prompts, guides or skills attached,
+free or at a price the person set; the owner asked for each on 2026-11-10) is built and in
 review on `feat/mcp-outside-media`: server 1.2.0, twelve tools, proven on a local stack; it is
 not live until its PR is merged and released, and the registry keeps 1.1.0 until then. The plan
 stays in `plans/` for what is still open: phase 4's merge, production check and registry publish,
@@ -29,8 +30,9 @@ Magicbooklet creator:
    credits, wait for the result.
 2. **Publish** — turn a finished creation into a post on the creator's profile and the showcase,
    with the recipe and remix rules the app applies. Since phase 4 the post can also be made of
-   media the person made elsewhere, staged by the agent and published through the composer's own
-   path.
+   media the person made elsewhere, staged by the agent, or of text alone, both published through
+   the composer's own path, and may carry a resource (prompts, guides, links) that is free or
+   sold at a price the person set.
 
 Authorization is OAuth 2.1 through Supabase Auth's OAuth server, so the agent holds an ordinary
 Supabase user token: every existing service, RLS policy and rate limit applies unchanged. No
@@ -167,7 +169,7 @@ A kill switch, `MCP_SERVER_DISABLED=1`, answers 503 with `Retry-After` before ad
 | `create_media` | create | `destructiveHint` | `postUnifiedGenerationForRoute` with `expected_cost_credits` required and `idempotency_key` passed through | existing 30 per 10 min |
 | `get_generation` | create | read-only | `listOwnerGenerationsForRoute` by id; `wait_seconds` 0–45 polls every 3 s | ≤ 45 s |
 | `list_creations` | both | read-only | `listOwnerGenerationsForRoute` summaries, `posted` flag, cursor | page ≤ 50 |
-| `publish_post` | publish | `openWorldHint` | one of two sources: `generation_id` → `publishGenerationToShowcaseForRoute`, own completed generation only; `uploads` (phase 4) → the composer's `createOwnerPostForRoute`, 1 to 5 staged files with a title and `made_with` | existing 20 per 10 min + agent 10 public posts per UTC day (+ the post-mutation limit for uploads) |
+| `publish_post` | publish | `openWorldHint` | one of three sources: `generation_id` → `publishGenerationToShowcaseForRoute`, own completed generation only; `uploads` (phase 4) → the composer's `createOwnerPostForRoute`, 1 to 5 staged files with a title and `made_with`; neither (phase 4) → the same create, a text post of a title and a body. `resources` (cards of text and links) on the last two, and `resource_price_tokens` on any resource, a creation's recipe included | existing 20 per 10 min + agent 10 public posts per UTC day (+ the post-mutation limit for a text or upload post) |
 | `get_post` | publish | read-only | the post page's loader: state, URL, counts | — |
 | `delete_post` | publish | `destructiveHint` | `post-delete-service.ts`, own posts only | existing post-mutation limit |
 | `enhance_prompt` | create | read-only | prompt enhancement service | existing 60 per 10 min |
@@ -198,6 +200,11 @@ a title, a description, annotations and a schema.
   signature rule has seen every file; the composer's own rules, limits and ownership check decide
   the post; Made with is required, never Magicbooklet's own name and never a new catalog row; the
   consent screen says an agent may bring pictures and videos from elsewhere.
+- Resources and prices (phase 4): a price is the person's number, refused or passed as given and
+  never computed; the tool tells the agent to state it and get a yes; the services' validators,
+  listing rule and safety check decide every bundle; no agent tool reads what a resource holds,
+  and the paywall's read is untouched; the consent screen says prompts or guides may be attached
+  free or at a price the person approves.
 - Logging: one `logBackendEvent` per tool call with `client_id`, tool, outcome and cost; the
   audit table is the queryable record.
 
@@ -339,13 +346,14 @@ Owner's steps: the written-exception request to mcp-review@anthropic.com for the
 connectors directory (it excludes AI media generation otherwise) and the ChatGPT directory
 submission. The registry publish is done.
 
-### Phase 4 — media made elsewhere
+### Phase 4 — media made elsewhere, text posts, resources and prices
 
 Status, 2026-11-10: built and in review on `feat/mcp-outside-media` (server 1.2.0, plugin
 1.1.0); not merged. Proven before the PR by the unit suites and on a throwaway local stack, both
 the upload protocol against real Storage and the tools end to end (runbook, "Media made
-elsewhere"). Left after the merge: the production check the runbook names (a private post from
-Claude Code, repeated, read, deleted) and the registry publish of 1.2.0.
+elsewhere" and "Text posts, resources and prices"). Left after the merge: the two production
+checks the runbook names (a private post from uploads and a private text post with a guide card,
+each repeated, read, deleted) and the registry publish of 1.2.0.
 
 The owner asked on 2026-11-10 whether an agent can post media made elsewhere, and then to plan
 and add it. Until then `publish_post` took a creation only and `upload_input` staged run inputs
@@ -373,17 +381,49 @@ Decisions:
 5. **`request_upload`** for a file an agent with a shell can send (Claude Code, Codex, Cursor): it
    counts against `AGENT_UPLOAD_INPUT_RATE_LIMIT`, applies the URL caps, calls the web's sign
    step, and answers the signed URL, the method, the web's three headers and the exact curl line.
-6. **`upload_input` takes `upload_id`** as a third source: it finalizes the upload for the caller
-   and applies the signature rule to the stored object's first bytes, removing a file that fails.
+6. **`upload_input` takes `upload_id`** as a third source: it applies the signature rule to the
+   stored object's first bytes, removing a file that fails, and finalizes the upload for the
+   caller.
 7. **Words.** The tools say a staged file feeds a run or becomes a post; `publish_post` explains
    both sources; the answer says to keep the `post_id`, since `list_creations` does not list such
    a post. `get_post` and `delete_post` work for a post with no creation.
-8. **Consent** names it: "Your creations, or pictures and videos the agent brings from elsewhere".
+8. **Consent** names it (the wording was replaced by decision 19).
 9. **Setup page and plugin**: the capability, without overclaiming for a client with no shell; a
    third skill, `post-outside-media`.
 10. **Version**: `MCP_SERVER_VERSION` and `server.json` at 1.2.0 together.
 11. **Moderation**: `list --source agent` gains a `source` column, `creation` or `upload`.
 12. **Docs**: the runbook, this section, and AGENTS.md's "Agent access (MCP)".
+
+The same day the owner added text posts ("we also have text like posts too right so we should be
+able to post those too like skills and all") and then paid resources ("add this too"), into the
+same PR:
+
+13. **A third source.** With neither `generation_id` nor `uploads`, `title` and `body` publish as
+    the composer's text post (`postFormat` and `category` `text`) through the same
+    `createOwnerPostForRoute`. `made_with` is optional; `allow_remixes` is refused. A public text
+    post counts against the agent's cap and is recorded as an upload post is. Its id is derived
+    from the creator, the title and the body, so a repeat answers the same post.
+14. **Resources.** `resources` on a text or upload post: cards `{ type: prompt | guide |
+    external_link, title, description?, text?, url? }`, serialized by the composer's own
+    `buildResourceCardBundleInput` and sent as the form's `resourceBundle`. Text and links only.
+    Refused with `generation_id`, whose resource is the creation's recipe.
+15. **A price.** `resource_price_tokens`: a whole number, 10 or more in steps of 10 (100 tokens =
+    $1.00); left out or 0 is free. It prices the cards, and a creation's recipe. Refused before
+    any limit is spent when it is not such a number or has no resource to carry it. The tool's
+    description says to state the price to the person and get their yes, and never to choose one.
+16. **`resource_summary` and `resource_preview`**, optional, the person's own listing lines.
+17. **The answer** reports `resource_access` (`none`, `free`, `paid`), `resource_price_tokens`
+    and the bundle's status; `get_post` reports the same three for the caller's post and for a
+    public one, and never a bundle's contents. The paywall's read is not touched.
+18. **After publishing**, a price or a resource is changed on the website. A repeat answers the
+    existing post unchanged, price included.
+19. **Consent**, final wording: "Publish posts as you: your creations, pictures and videos the
+    agent brings from elsewhere, and text posts, with prompts or guides attached free or at a
+    price you approve, on your profile, in Explore and in the Marketplace, under your name, with
+    the rules every post follows". The setup page says the same in a sentence, and the plugin
+    gains a fourth skill, `share-a-skill`, which names a price only where the person asks to sell.
+20. **Moderation**: `source` reads `creation`, `upload` or `text`, and a `resource` column reads
+    `none`, `free` or `paid`.
 
 As built, where the code decided more than the decisions said:
 
@@ -409,10 +449,33 @@ As built, where the code decided more than the decisions said:
   changed: the reservation size and the reclaim's schedule, which are the web's.
 - `MCP_TOOLS` lives in `mcp-server-service.ts`, not the client directory; the manifests test
   reads it there.
+- The signature rule of (6) runs before finalize, not after: a file that fails it is never
+  finalized, which is the state `publish_post` takes a file in.
+- A creation's recipe at a price (15) needed nothing but the request mapping: the web's paid
+  request is the same recipe with `accessMode: 'paid'` and the token count in `priceUsdCents`,
+  and the publish service already keeps a paid prompt out of the post, holds a remix to the terms
+  of what it remixed and validates the price. So the creation path is priced too, and the title
+  the tool suggests when none is given is not cut from the prompt of a recipe that is sold.
+- The composer and its validator bound a card's title, its description and the listing lines,
+  but not the number of cards or the length of a card's text. The tool sets those two itself (10
+  cards, 50,000 characters) so one publish stays far inside what the route takes.
+- A link card is https only (the composer takes http too), and a card that gives both `text` and
+  `url`, or the wrong one for its type, is refused rather than having half of it dropped.
+- The validator rounds a fractional price to a whole one, so the tool is the one that refuses a
+  fraction: the person's number is published as given or not at all.
+- `get_post` reads a resource as four columns of its row (`access_mode`, `price_usd_cents`,
+  `status`, `retired_at`). Another creator's agent is told of one only while it is on offer.
+- The moderation list tells a text post from an upload post by the post's format, since the
+  audit row names a creation or none. A deleted post with no creation reads "upload or text".
+  The `resource` column is one read of the bundles' access mode for the page.
+- A refusal the web answers with a link (a profile with no handle and display name) is answered
+  in words, and names no argument, since none of the tool's fixes it.
+- The setup page has six capability cards (two were added), not a sentence added to one.
 
-Not in phase 4: audio posts (the composer has none), a recipe on an upload post, editing an
-upload post's text or media through an agent, listing upload posts (`list_creations` lists
-creations; a `list_posts` tool would be its own change).
+Not in phase 4: audio posts (the composer has none), files in a resource, changing a price or a
+resource after publishing, editing a post's text or media through an agent, any read of what a
+resource holds, listing posts that have no creation (`list_creations` lists creations; a
+`list_posts` tool would be its own change).
 
 ## Client setup (what the docs page will say)
 

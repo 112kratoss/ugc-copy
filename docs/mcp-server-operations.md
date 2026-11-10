@@ -7,7 +7,9 @@ publishes it as that creator (phase 1: `list_models`, `get_model`, `quote_genera
 `create_media`, `get_generation`, `list_creations`, `enhance_prompt`; phase 2: `upload_input`,
 `publish_post`, `get_post`, `delete_post`, and the `agent_tool_calls` audit table every call
 writes; phase 4: `request_upload`, and `publish_post` from files the agent staged, so an agent
-can post media made elsewhere: "Media made elsewhere", below). The plan, the decisions behind it
+can post media made elsewhere, and `publish_post` with neither a creation nor files, a text post,
+with prompts, guides or links attached as a resource, free or at a price the person set: "Media
+made elsewhere" and "Text posts, resources and prices", below). The plan, the decisions behind it
 and the later phases are `docs/plans/agent-mcp-server-plan-2026-11-09.md`; this runbook is what
 an operator does.
 
@@ -149,9 +151,10 @@ and the `localhost` spare; re-registering the client from the directory keeps bo
 `publish_post` makes a post of one of the creator's own succeeded creations through the same
 publish service the web's Publish uses (`showcase-publish-service.ts`), so the post is the one the
 web would have made: live by default (`visibility: public`), or `private` to keep it on the
-creator's profile. With `allow_remixes` (the default) it carries the creation's free recipe, the
+creator's profile. With `allow_remixes` (the default) it carries the creation's recipe, the
 exact prompt and the saved inputs the creation may share, as the creator page's one-click Publish
-does; without it the media goes alone. The rules the owner set (2026-11-09):
+does, free unless `resource_price_tokens` prices it ("Text posts, resources and prices"); without
+it the media goes alone. The rules the owner set (2026-11-09):
 
 - **Two limits.** Every agent publish passes the web's publish limit (`SHOWCASE_PUBLISH_RATE_LIMIT`,
   20 per 10 minutes per account, which counts attempts as the route does) and, where it makes a
@@ -179,8 +182,9 @@ does; without it the media goes alone. The rules the owner set (2026-11-09):
   published (newest first, each with its state, from the audit table) and narrows the open post
   reports to them, so an operator can review what agents put on the feed whether or not anyone
   reported it; a take-down is `take-down-post` on its report, as for any post. Its `source` column
-  says what each post was made from: `creation` (one of the creator's creations here) or `upload`
-  (media the agent brought from elsewhere, below).
+  says what each post was made from: `creation` (one of the creator's creations here), `upload`
+  (media the agent brought from elsewhere, below) or `text` (a text post). Its `resource` column
+  says what the post carries beside itself: `none`, `free` or `paid`.
 - **Uploads.** `upload_input` stages a file the person supplies through the web's own staging path
   (sign, upload as a Blob, finalize, a signed read URL), so the byte reservations and the reclaim
   sweep apply as to any upload. It is counted before any byte is fetched
@@ -223,10 +227,12 @@ the same files: `source_kind` `external`, no creation behind it, no recipe.
   file's name is never echoed into the command. The three headers are the ones the web's own
   upload sends (`signed-url-upload.ts`): the type finalize holds the stored object to, no
   overwrite, and the cache lifetime a published copy keeps. Storage prints `{"Key": …}` once the
-  file is stored. The agent then calls `upload_input` with the `upload_id`, which finalizes the
+  file is stored. The agent then calls `upload_input` with the `upload_id`, which reads the stored
+  object's first 64 bytes through a one-minute signed URL with a `Range` header, applies the
+  signature rule the other two sources apply to bytes they hold, and only then finalizes the
   upload for the caller (the stored size must equal `size_bytes` and the stored type the declared
-  one) and reads the object's first 64 bytes through a one-minute signed URL with a `Range`
-  header, to apply the signature rule the other two sources apply to bytes they hold.
+  one). The rule runs first so a file that fails it is never finalized: finalized is the state
+  `publish_post` takes a file in, and a failing file whose removal failed must not reach it.
 
   Only a client with a shell can do this (Claude Code, Codex, Cursor). Claude.ai, Claude Desktop
   and ChatGPT stage by `url`; the tool's description and the setup page say so.
@@ -271,8 +277,9 @@ order by created_at desc;
 | `CONFLICT` | The upload was already used by a post or a run. |
 | `UPLOAD_BYTES_LIMIT` | The creator's open uploads hold all the staging space an account has. |
 
-**Publishing.** `publish_post` takes exactly one of `generation_id` or `uploads` (1 to 5 items
-`{ storage_path }`, each the path `upload_input` answered). With `uploads`:
+**Publishing.** `publish_post` takes one source of three: `generation_id`, `uploads` (1 to 5
+items `{ storage_path }`, each the path `upload_input` answered), or neither, which is a text post
+(below). Never `generation_id` and `uploads` together. With `uploads`:
 
 - `title` is required, and so is `made_with`: 1 to 5 `{ tool, model? }`, what made the media,
   shown on the post as Made with. It is free text, sent as the composer sends a typed name but
@@ -311,7 +318,8 @@ the partial index apply unchanged: `PUBLISHED_PUBLIC` or `PUBLISHED_PRIVATE` wit
 and `generation_id` null. An unchanged repeat records `ALREADY_PUBLISHED` and, unlike a
 creation's, still names the post: only an agent's publish makes a post under a derived id, and the
 call that made it may have lost its row to the same timeout that made the agent repeat it. The
-moderation list's `source` column reads `upload` for these posts.
+moderation list's `source` column reads `upload` for these posts (`text` for a text post, which is
+recorded the same way).
 
 ```sql
 -- Posts agents made from uploads this week, with what each says made it.
@@ -348,6 +356,153 @@ Claude Code: stage a small picture with `request_upload` and the command, `uploa
 `publish_post` with `uploads`, `visibility: private`, a real title and `made_with`; repeat the
 same publish (`already_published`); `get_post`; then `delete_post`.
 
+### Text posts, resources and prices
+
+Since 2026-11-10 (the owner's decisions of that day, in the same server 1.2.0) `publish_post` has
+a third source, and a post may carry something to unlock. It is how an agent shares a prompt, a
+guide or a skill. The product's own facts are `docs/post-resource-bundle-v1.md` (tokens, the
+price steps, one bundle per post, creators keep 85%, a sold post cannot be hard-deleted); nothing
+here changes them.
+
+**A text post.** With neither `generation_id` nor `uploads`, `title` and `body` publish as the
+composer's own text post, through the same `createOwnerPostForRoute` an upload post takes:
+`postFormat` and `category` both `text`, `source_kind` `manual`, no creation behind it. The
+limits are the composer's and are in the tool's description: a title of 100 characters, a body of
+2,000, a description of 1,000. `made_with` is optional and held to the upload rules where given
+(the composer sends it for a text post too); `allow_remixes` and `category` are refused. A public
+text post counts against the agent's daily cap like any other.
+
+The post's id is derived from the creator, the title and the body, read as the composer reads
+them (trimmed, line ends as `\n`): `agentTextPostId`. So a repeat answers the same post with
+`already_published: true`, and a text post deleted since is made again by the same call.
+
+**Resources.** `resources` is 1 to 10 cards `{ type, title, description?, text?, url? }` on a
+text post or an upload post:
+
+| `type` | Carries | Stored as |
+|---|---|---|
+| `prompt` | `text`, a prompt ready to paste | a `prompt` item |
+| `guide` | `text`, instructions or notes, such as a skill | a `note` item |
+| `external_link` | `url`, https only | an `external_link` item |
+
+The cards are serialized by the composer's own `buildResourceCardBundleInput`
+(`post-composer-resource-cards.ts`), from cards the composer's factory makes under ids the tool
+gives (`agent-resource-1`, …, so the same cards make the same bundle), with `allowRemix: false`,
+and ride as the form's `resourceBundle`. So the bundle is the one the web or the app composer
+would send for the same cards, and `validatePostResourceBundleInput`, the listing rule and the
+safety check decide it as they decide any. Text and links only: no file is attached.
+
+- The bounds. The validator's: a card title of 80 characters, a card description of 120, a
+  summary and a preview of 180 each. The tool's own, where the composer and its validator set
+  none: 10 cards, and 50,000 characters of text a card
+  (`AGENT_RESOURCE_CARDS_MAX`, `AGENT_RESOURCE_CARD_TEXT_MAX_LENGTH`). A card that gives both
+  `text` and `url`, or the wrong one for its type, is refused rather than having half of it
+  dropped, and a link that is not https is refused (the composer takes http too).
+- What everyone sees before unlocking: each card's title and description, `resource_summary` and
+  `resource_preview`. Left out, the summary is the preview where one was given, else made from
+  the card titles ("3 reusable resources"), and the preview is "Includes A, B, and C.". What only
+  an unlock shows: a card's text and its link. The tool's description says so, so an agent keeps
+  what is sold out of the titles.
+- `resources` with `generation_id` is refused: a creation's resource is its own recipe, which the
+  server builds from the run.
+
+**A price.** `resource_price_tokens` is a whole number of tokens, 10 or more in steps of 10,
+where 100 tokens are $1.00; left out or 0, the resource is free. The description tells the agent:
+"State the price to the person and get their yes before publishing a paid resource; never choose
+a price yourself." What an operator should know:
+
+- It prices the cards of a text or upload post, or with `generation_id` the creation's recipe.
+  The paid recipe is the request the web's Publish sends for one (`buildAutoResourceBundle`:
+  `accessMode: 'paid'`, the token count in `priceUsdCents`), so the publish service's own rules
+  hold it: its validator, the listing rule, the remix terms (a remix of a paid recipe must be
+  paid, of a free one free; `REMIX_RECIPE_MUST_BE_PAID` and `REMIX_RECIPE_STAYS_FREE` reach the
+  agent with the argument that meets them), and the rule that keeps a paid prompt out of the
+  post's title and text. With no title given, the title the tool suggests is not cut from the
+  prompt of a recipe that is sold.
+- The tool computes nothing. The number is refused or passed as given: the schema and the handler
+  both refuse one below 10, off the step, a fraction or a negative before anything is read or any
+  limit is spent, and the services' validators stay the authority (the validator rounds a
+  fraction, so the tool is the one that refuses it).
+- A price with nothing to carry it is refused, not dropped: a text or upload post without
+  `resources`, a creation published with `allow_remixes: false`, a creation with no prompt. So
+  are `resource_summary` and `resource_preview` in the same cases.
+- A resource is on sale only while its post is public: on a private post the service holds it as
+  a `draft`, and the database's exposure trigger puts it on offer when the post goes public,
+  through this tool or on the site. Buyers pay the creator as on the site.
+- After publishing, a price or a resource is changed on the website, not by an agent. A repeat of
+  the same creation, uploads or text answers the existing post unchanged, its resource and price
+  included, whatever the repeat names, and says where they are changed.
+
+**What an answer says of a resource.** Three fields, on every `publish_post` answer and on
+`get_post`: `resource_access` (`none`, `free`, `paid`), `resource_price_tokens` and
+`resource_status` (`draft`, `published`, or null for none). `get_post` reads them from four
+columns of the post's row in `post_resource_bundles` (`access_mode`, `price_usd_cents`, `status`,
+`retired_at`; `agent-post-read.ts`). No agent tool reads what a resource holds, and the bundle
+read behind the paywall (`hydrateBundleRows` in `post-resource-bundles-server.ts`) is not called
+or changed. Another creator's agent is told of a resource only while it is on offer; a draft is
+its owner's to know, and a resource its creator removed while people held it (a retired row) is
+none.
+
+**Refusals** carry the service's own message under `INVALID_REQUEST`, with its field under the
+tool's argument name (`resourcePreview` → `resource_preview`, `resourceCards` → `resources`).
+The ones an operator will see asked about:
+
+| The service says | Why |
+|---|---|
+| "Paid recipes must cost at least 10 credits and use 10-credit increments." | A price the tool should already have refused; the validator's own rule. |
+| "Improve this recipe before publishing: Add a useful preview or summary …" | A public post's resource needs a preview or summary of 18 characters or more that is no placeholder. A one-card resource titled "Tip" derives "Includes Tip.", which is too short: the agent gives `resource_preview`. |
+| "A recipe needs a title of at least 3 characters." | The post's title, for a post with a resource. |
+| "Complete your profile before publishing publicly: choose a custom handle and add your display name." | The creator has no handle and display name yet. The web answers with a link to the profile; the tool answers in words ("The person sets their handle and display name on the website, then you publish again."), never the link. |
+
+**How it is recorded.** As an upload post is: under `tool = 'publish_post'`, `PUBLISHED_PUBLIC` or
+`PUBLISHED_PRIVATE` with `post_id` set and `generation_id` null, and an unchanged repeat names the
+post. A row holds no price and nothing of a resource. The moderation list tells a text post from
+an upload post by the post's own format, so a deleted post with no creation behind it reads
+"upload or text", and reads each post's `resource` in one query for the page.
+
+```sql
+-- Posts agents published that carry a resource on sale, newest first.
+select c.created_at, c.client_id, c.user_id, c.post_id, p.post_format, p.visibility, p.title,
+       b.access_mode, b.price_usd_cents as price_tokens, b.status, b.sales_count
+from public.agent_tool_calls c
+join public.posts p on p.id = c.post_id
+join public.post_resource_bundles b on b.post_id = p.id and b.retired_at is null
+where c.tool = 'publish_post' and c.ok and c.code in ('PUBLISHED_PUBLIC', 'PUBLISHED_PRIVATE')
+  and b.access_mode = 'paid'
+order by c.created_at desc;
+```
+
+**Proven before release (2026-11-10), on a throwaway local stack** (the same scratchpad copy on
+ports 563xx; never production), the tools with the real services behind them:
+
+- A private text post with a free guide card: `post_format` and `category` `text`, `source_kind`
+  `manual`, the bundle `free` and `draft` with one `note` item under the tool's card id. A repeat
+  that named a price answered `already_published` and changed nothing; another creator's
+  `get_post` answered `NOT_FOUND`; `visibility: public` made the one post public and the bundle
+  `published`.
+- A text post public at once with a prompt and a link at 250 tokens, with Made with: the bundle
+  `paid`, 250, `published`, the person's summary and preview stored. `get_post` by its owner and
+  by another creator answered `paid`, 250, `published`, and no answer held the cards' text or the
+  link.
+- A text post at 100 tokens saved private: `draft`; made public with a repeat that named 990: on
+  offer at 100.
+- The refusals: a price of 5, 255, 10.5 and -10, a price with no resource, a prompt card with no
+  text, an http link, a title with no body, a thin preview on a public post, and a creator with no
+  handle (in words, no link). None made a post.
+- An upload post with a prompt card at 50 tokens: one media row, the bundle `paid` and
+  `published`.
+- A creation's recipe at 250 tokens, on a seeded creation: `draft` on the private post, on offer
+  at 250 once public, and the prompt in no answer and not in the post's public row.
+- The audit rows written to the real table, the cap counting five public publications, and the
+  moderation list reading `text` / `free`, `text` / `paid`, `upload` / `paid` and `creation` /
+  `paid`. A deleted text post was made again by the same title and body.
+
+After a release that carries a change here, check it on production from Claude Code without
+putting anything on sale: `publish_post` with a title, a body, one `guide` card, a preview and
+`visibility: private` (answer: `source: text`, `resource_access: free`, `resource_status: draft`);
+repeat it (`already_published`); `get_post`; then `delete_post`. A price is checked the same way
+on a private post, where the resource stays a draft, and only with a number the owner gave.
+
 ### The audit table
 
 Every tool call writes one row of `public.agent_tool_calls` behind its answer
@@ -355,8 +510,9 @@ Every tool call writes one row of `public.agent_tool_calls` behind its answer
 `client_id` (the OAuth client), `tool`, `ok`, `code` (the tool's error code when it failed; for a
 successful `publish_post`, which answer it was: `PUBLISHED_PUBLIC`, `PUBLISHED_PRIVATE`,
 `MADE_PRIVATE` or `ALREADY_PUBLISHED`), `generation_id` and `post_id` where the call was about
-one (an unchanged republish of a creation names no post; a publish of uploads names no creation,
-and names its post on a repeat too: "Media made elsewhere"), `cost_credits` where the answer
+one (an unchanged republish of a creation names no post; a publish of uploads or of a text post
+names no creation, and names its post on a repeat too: "Media made elsewhere"), `cost_credits`
+where the answer
 charged the creator, `created_at`. Prompts and results are never written. The owner may read their own rows; the
 service role appends; nothing updates or deletes a row (an account's rows go with the account).
 The write never holds or fails an answer: a failed write logs `mcp_tool_call_record_failed`.
@@ -428,8 +584,9 @@ agents → The audit table), which outlives the log retention.
 Rate limits are the creator's own: the generation start's 30 per 10 minutes, the quote's 240,
 the library read's 400 (polls in `get_generation` and `get_post` count once per call), prompt
 enhancement's 60, the publish's 20 plus the agent cap of 10 public posts per UTC day, the post
-mutation's 60 for `delete_post` and for a post made from uploads (its create, and a change of its
-visibility), and `upload_input`'s own 30 per 10 minutes, which `request_upload` shares, before
+mutation's 60 for `delete_post` and for a text post or a post made from uploads (its create, and
+a change of its visibility), and `upload_input`'s own 30 per 10 minutes, which `request_upload`
+shares, before
 the upload sign, finalize and read-url limits. An agent that hits them is answered `RATE_LIMITED`
 with `retry_after_seconds`. The staging quota is not one of them: it answers `UPLOAD_BYTES_LIMIT`
 ("Media made elsewhere").
@@ -623,13 +780,16 @@ draws both states of every block.
 
 This public repository is a Claude Code plugin marketplace: `.claude-plugin/marketplace.json`
 (name `magicbooklet`) lists one plugin, `plugins/magicbooklet/`, which declares the server with
-the Claude Code client and port 8976, and three skills: `create-ugc-ad` (models, quote, the
+the Claude Code client and port 8976, and four skills: `create-ugc-ad` (models, quote, the
 person's yes, `create_media` with `expected_cost_credits` and one `idempotency_key`, the wait,
 an offer to publish), `publish-creation` (a finished creation, a title that is no placeholder,
 `publish_post`) and, since plugin 1.1.0, `post-outside-media` (stage each file, by link through
 `upload_input` or from the machine through `request_upload` and its command, one file at a time;
-then `publish_post` with `uploads`, a real title and `made_with`, after asking who can see it). A
-creator installs it with:
+then `publish_post` with `uploads`, a real title and `made_with`, after asking who can see it)
+and `share-a-skill` (a text post whose `guide` card holds a skill's instructions and whose body
+introduces it: the skill is read for anything private before it is shared, it goes free unless
+the person asks to sell it, and then only at a price they named and said yes to). A creator
+installs it with:
 
 ```bash
 claude plugin marketplace add 112kratoss/ugc-copy
@@ -711,9 +871,10 @@ already has. `server.json`'s version and the server's own `MCP_SERVER_VERSION` m
 `mcp-registry.test.ts` holds them equal.
 
 Phase 4 moved both to 1.2.0 (twelve tools: `request_upload` added, `publish_post` taking
-`uploads`); the description is unchanged, and still true. The registry keeps 1.1.0 until 1.2.0 is
-published by the steps above, after the release that carries it is live and the production check
-under "Media made elsewhere" has passed.
+`uploads`, text posts, `resources` and `resource_price_tokens`); the description is unchanged,
+and still true. The registry keeps 1.1.0 until 1.2.0 is published by the steps above, after the
+release that carries it is live and the production checks under "Media made elsewhere" and "Text
+posts, resources and prices" have passed.
 
 The DNS alternative needs no deploy: a TXT record on the apex, `magicbooklet.com`, never under
 a selector such as `_mcp-auth.magicbooklet.com`:
