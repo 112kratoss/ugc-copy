@@ -13,7 +13,8 @@ export const DEFAULT_REFERRAL_DESTINATION = '/login?mode=signup&next=%2Fcreate';
 
 const REFERRAL_CODE_PATTERN = /^[a-z0-9]{8,24}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const SAFE_TOP_LEVEL_PATHS = new Set([
+/** Also the invite hand-off's list (`INVITE_DESTINATION_TOP_LEVELS`, held equal by a test). */
+export const SAFE_TOP_LEVEL_PATHS = new Set([
   '',
   'ai-image-generator',
   'ai-motion-transfer',
@@ -242,9 +243,3 @@ export function getReferralRiskContext(headers: Headers) {
   };
 }
 
-export function getReferralStoreUrls() {
-  return {
-    appStore: process.env.NEXT_PUBLIC_APP_STORE_URL?.trim() || null,
-    playStore: process.env.NEXT_PUBLIC_PLAY_STORE_URL?.trim() || null,
-  };
-}

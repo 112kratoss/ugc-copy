@@ -78,7 +78,7 @@ and applies a 15-second timeout to the signed Vercel forward.
 - Release identity: `RELEASE_GIT_SHA` is injected by the production release
   workflow. Do not configure it manually in Vercel.
 
-`NEXT_PUBLIC_APP_STORE_URL` and `NEXT_PUBLIC_PLAY_STORE_URL` are optional until their store listings are live. When present, they are the install fallbacks on public invite links.
+`NEXT_PUBLIC_APP_STORE_URL` and `NEXT_PUBLIC_PLAY_STORE_URL` are optional: both listings are live and `src/lib/app-store-links.ts` carries their links, which the variables override when set. They are where the invite pages send a visitor for the app (`src/components/InviteHandoffBar.tsx`); the Play link gains the invite as its install `referrer`.
 
 Optional alert delivery can be enabled with `BACKEND_ALERT_DELIVERY_URL`, plus optional `BACKEND_ALERT_DELIVERY_AUTH_HEADER`. The protected backend dashboard is the no-extra-vendor monitoring baseline, so the external alert hook is not a required production capability.
 

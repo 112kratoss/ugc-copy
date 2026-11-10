@@ -90,6 +90,17 @@ const nativeAlertState = vi.hoisted(() => ({
 
 const keyboardState = vi.hoisted(() => ({
   dismiss: vi.fn(),
+  // The prompt's @ menu follows the keyboard's frame from these events.
+  listeners: new Map<string, Set<(event: { endCoordinates: { screenY: number } }) => void>>(),
+  addListener(name: string, listener: (event: { endCoordinates: { screenY: number } }) => void) {
+    const forName = keyboardState.listeners.get(name) ?? new Set();
+    forName.add(listener);
+    keyboardState.listeners.set(name, forName);
+    return { remove: () => forName.delete(listener) };
+  },
+  emit(name: string, screenY: number) {
+    keyboardState.listeners.get(name)?.forEach((listener) => listener({ endCoordinates: { screenY } }));
+  },
 }));
 
 // The phone's text size (Settings → Display → Text Size); 1 unless a case sets it.
@@ -3559,6 +3570,109 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     promptInput = tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' });
     expect(promptInput.props.value).toBe('Use @flowers for color');
     expect(tree!.root.findAllByProps({ testID: 'reference-mention-suggestions' })).toHaveLength(0);
+  });
+
+  // The menu is placed from layout the test renderer never reports: these drive it by hand, so a
+  // menu left unplaced (and so unseen and untouchable on a phone) fails here (PR #759's review).
+  describe('the @ menu over the prompt', () => {
+    async function openMention(createNodeMock?: (element: React.ReactElement) => unknown) {
+      vi.mocked(pickMediaList).mockResolvedValue([
+        { uri: 'file:///flowers.png', fileName: 'flowers.png', mimeType: 'image/png', fileSize: 2048 } as never,
+      ]);
+      vi.mocked(uploadPickedMedia).mockResolvedValue({
+        signedUrl: 'https://cdn.example.com/flowers.png',
+        storagePath: 'uploads/user/flowers.png',
+        mimeType: 'image/png',
+        fileName: 'flowers.png',
+        kind: 'image',
+        durationSeconds: null,
+        sizeBytes: 2048,
+      });
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<MediaCreationScreen initialTool="image" />, createNodeMock ? { createNodeMock } : undefined);
+      });
+      await renderer.act(async () => {
+        await findPressableByLabelPrefix(tree!.root, 'Add reference images').props.onPress();
+      });
+      let promptInput = tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+      renderer.act(() => promptInput.props.onFocus());
+      renderer.act(() => promptInput.props.onChangeText('A bouquet on a table, lit from the left by @flo'));
+      promptInput = tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+      renderer.act(() => promptInput.props.onSelectionChange({ nativeEvent: { selection: { start: 47, end: 47 } } }));
+      return tree!;
+    }
+
+    // The card 260 points tall, its field 190 points from 37 down and 360 wide; the prompt on two
+    // lines, the mention on the second; a 34-point header over one 52-point row.
+    function layOut(tree: renderer.ReactTestRenderer) {
+      const fire = (testID: string, handler: string, ...args: unknown[]) => renderer.act(() => {
+        tree.root.findByProps({ testID }).props[handler](...args);
+      });
+      fire('image-prompt-card', 'onLayout', { nativeEvent: { layout: { x: 0, y: 0, width: 362, height: 260 } } });
+      fire('prompt-scroll-viewport', 'onLayout', { nativeEvent: { layout: { x: 1, y: 37, width: 360, height: 190 } } });
+      fire('prompt-mention-measure', 'onTextLayout', {
+        nativeEvent: {
+          lines: [
+            { text: 'A bouquet on a table, lit from the left by ', y: 0, height: 20 },
+            { text: '@flo', y: 20, height: 20 },
+          ],
+        },
+      });
+      fire('reference-mention-header', 'onLayout', { nativeEvent: { layout: { x: 0, y: 0, width: 340, height: 34 } } });
+      fire('reference-mention-list', 'onContentSizeChange', 340, 52);
+    }
+
+    const menuStyle = (tree: renderer.ReactTestRenderer) => {
+      const menu = tree.root.findByProps({ testID: 'reference-mention-suggestions' });
+      return { style: menu.props.style as Record<string, unknown>, pointerEvents: menu.props.pointerEvents };
+    };
+
+    it('stays unseen and untouchable until it is placed, then hangs under the mention’s line', async () => {
+      const tree = await openMention();
+      expect(menuStyle(tree)).toMatchObject({ pointerEvents: 'none', style: { opacity: 0 } });
+
+      // The measuring copy is the field's text box: its width, size and line height.
+      layOut(tree);
+      const measure = tree.root.findByProps({ testID: 'prompt-mention-measure' });
+      const field = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+      expect(measure.props.style).toMatchObject({ width: 360 - 2 * field.props.style.paddingHorizontal, fontSize: field.props.style.fontSize, lineHeight: field.props.style.lineHeight });
+
+      // Under the second line: 37 + 12 + 20 + 20 + 4, inside the card's 1-point border.
+      expect(menuStyle(tree)).toMatchObject({ pointerEvents: 'auto', style: { opacity: 1, top: 37 + 12 + 40 + 4 - 1, maxHeight: undefined } });
+      expect(menuStyle(tree).style.bottom).toBeUndefined();
+    });
+
+    it('follows the field’s scroll', async () => {
+      const tree = await openMention();
+      layOut(tree);
+      const field = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+      renderer.act(() => field.props.onScroll({ nativeEvent: { contentOffset: { x: 0, y: 20 } } }));
+      expect(menuStyle(tree).style.top).toBe(37 + 12 + 20 + 4 - 1);
+    });
+
+    it('stands on the mention’s line when the keyboard covers the card under it', async () => {
+      // The card's top 400 points down the window: its field 37 points further down.
+      const tree = await openMention((element) => (element.props as { accessibilityLabel?: string }).accessibilityLabel === 'Generation prompt'
+        ? {
+          focus: () => undefined,
+          blur: () => undefined,
+          setSelection: () => undefined,
+          measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 437, 360, 190),
+        }
+        : null);
+      layOut(tree);
+      // The keyboard's top 10 points under the mention's line: 400 + 37 + 12 + 40 + 10.
+      renderer.act(() => keyboardState.emit('keyboardDidShow', 499));
+      const { style } = menuStyle(tree);
+      expect(style.top).toBeUndefined();
+      // Its foot 4 points over the line, which starts 37 + 12 + 20 down the card.
+      expect(style.bottom).toBe(260 - 1 - (37 + 12 + 20 - 4));
+      expect(style.opacity).toBe(1);
+
+      renderer.act(() => keyboardState.emit('keyboardDidHide', 0));
+      expect(menuStyle(tree).style.top).toBe(37 + 12 + 40 + 4 - 1);
+    });
   });
 
   it('inserts a reference-details handle at the last prompt cursor instead of the end', async () => {

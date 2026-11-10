@@ -189,6 +189,8 @@ import { useFocusRequest } from '@/lib/use-focus-request';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useRailReveal, type RailRevealRequest } from '@/lib/use-rail-reveal';
 import { useReferenceMentionInput } from '@/lib/use-reference-mention-input';
+import { usePromptMentionAnchor, usePromptMentionGeometry, type PromptMentionAnchor } from '@/lib/prompt-mention-anchor';
+import { lineIndexAtOffset, placePromptMentionMenu, promptParagraphEnd } from '@/lib/prompt-mention-placement';
 import { showActionSheet } from '@/lib/action-sheet';
 
 // The space each reference rail keeps after its last item: its scroller's end padding, and where
@@ -4271,6 +4273,7 @@ function ImagePromptComposer({
     insertHandleAtMention,
     insertHandleAtCaret,
   } = useReferenceMentionInput({ prompt: draft.prompt, onPromptChange, onFocus, onBlur, onMentionStateChange });
+  const mentionAnchor = usePromptMentionAnchor();
   const selectedReference = draft.references.find((media) => media.id === referenceId) ?? null;
   const referenceLimitReached = maxReferences === null || maxReferences === 0 || draft.references.length >= maxReferences;
   // The rest wait in the draft for a model that takes them.
@@ -4298,6 +4301,8 @@ function ImagePromptComposer({
     <>
       <View style={{ gap: 12 }}>
       <View
+        testID="image-prompt-card"
+        onLayout={mentionAnchor.onCardLayout}
         style={{
           borderRadius: appTheme.radii.xl,
           borderCurve: 'continuous',
@@ -4313,13 +4318,14 @@ function ImagePromptComposer({
         >
           <Text style={{ color: theme.colors.image, fontSize: 11, fontWeight: '800', letterSpacing: 1, textTransform: 'uppercase' }}>Prompt</Text>
         </View>
-        <View testID="prompt-scroll-viewport" style={{ height: 190, overflow: 'hidden' }}>
+        <View testID="prompt-scroll-viewport" onLayout={mentionAnchor.onFieldLayout} style={{ height: 190, overflow: 'hidden' }}>
           <TextInput
             maxLength={GENERATION_PROMPT_MAX_LENGTH}
             ref={promptInputRef}
             accessibilityLabel="Generation prompt"
             value={draft.prompt}
             {...promptInputProps}
+            onScroll={mentionAnchor.onFieldScroll}
             multiline
             scrollEnabled
             textAlignVertical="top"
@@ -4329,10 +4335,7 @@ function ImagePromptComposer({
               height: 190,
               overflow: 'hidden',
               color: theme.colors.text,
-              fontSize: 14,
-              lineHeight: 20,
-              paddingHorizontal: 16,
-              paddingTop: 12,
+              ...PROMPT_FIELD_TEXT,
               paddingBottom: 28,
             }}
           />
@@ -4349,16 +4352,17 @@ function ImagePromptComposer({
           </Text>
         ) : null}
         <PromptQualityNotes warnings={promptNotes} />
-      </View>
-
         {activeMention ? (
-          <ReferenceMentionSuggestions
+          <PromptMentionMenu
+            anchor={mentionAnchor}
+            fieldRef={promptInputRef}
             references={mentionReferences}
             prompt={draft.prompt}
             mention={activeMention}
             onSelect={insertHandleAtMention}
           />
         ) : null}
+      </View>
 
         <View testID="composer-action-grid" style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
           <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} />
@@ -4854,6 +4858,8 @@ function VideoCreatorComposer({
     onBlur,
     onMentionStateChange,
   });
+  // The single prompt's field is drawn anew each time a story gives way to it.
+  const mentionAnchor = usePromptMentionAnchor(draft.isMultiShot);
   const supportsStartFrame = catalogInputSupported(
     model,
     draft,
@@ -5105,7 +5111,7 @@ function VideoCreatorComposer({
           onBlur={onBlur}
         />
       ) : (
-        <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.2), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
+        <View testID="video-prompt-card" onLayout={mentionAnchor.onCardLayout} style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.2), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
           <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 }}>
             <Text style={{ color: theme.colors.video, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Prompt</Text>
           </View>
@@ -5116,22 +5122,23 @@ function VideoCreatorComposer({
             accessibilityLabel="Generation prompt"
             value={draft.prompt}
             {...promptInputProps}
+            onLayout={mentionAnchor.onFieldLayout}
+            onScroll={mentionAnchor.onFieldScroll}
             multiline
             scrollEnabled
             textAlignVertical="top"
             placeholder="Describe action, camera movement, lighting, pace, and sound…"
             placeholderTextColor={theme.colors.faint}
-            style={{ height: 188, color: theme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 28 }}
+            style={{ height: 188, color: theme.colors.text, ...PROMPT_FIELD_TEXT, paddingBottom: 28 }}
           />
           <PromptLengthCounter meter={catalogPromptMeters(draft, model).prompt} />
           {promptMessage ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 12, fontWeight: '700', paddingHorizontal: 16, paddingBottom: 11 }}>{promptMessage}</Text> : null}
           <PromptQualityNotes warnings={promptNotes} />
+          {activeMention ? (
+            <PromptMentionMenu anchor={mentionAnchor} fieldRef={promptInputRef} references={mentionReferences} prompt={draft.prompt} mention={activeMention} onSelect={insertHandleAtMention} />
+          ) : null}
         </View>
       )}
-
-      {activeMention ? (
-        <ReferenceMentionSuggestions references={mentionReferences} prompt={draft.prompt} mention={activeMention} onSelect={insertHandleAtMention} />
-      ) : null}
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
         <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} />
@@ -5740,86 +5747,207 @@ function MotionCreatorComposer({
   );
 }
 
-function ReferenceMentionSuggestions({
+/**
+ * The prompt fields' text box: both composers' fields are drawn with it, and the @ menu's measuring
+ * copy of the prompt is laid out in it, so the two cannot break their lines apart.
+ */
+const PROMPT_FIELD_TEXT = { fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 12 } as const;
+/** The prompt cards' border: an absolute child is placed inside it, where `onLayout` measures from outside it. */
+const PROMPT_CARD_BORDER = 1;
+
+/** The keyboard's top in the window while it is up, else null. */
+function readKeyboardTop() {
+  if (!Keyboard.isVisible?.()) return null;
+  return Keyboard.metrics?.()?.screenY ?? null;
+}
+
+/**
+ * The prompt's @ menu, drawn over the prompt's card under the line the mention is typed on, or
+ * over that line where the card has more room there, as the web's menu is (`CreatorMentionMenu`).
+ * It replaced a list drawn under the card (2026-11-10, owner: "in the mobile its really difficult
+ * to swipe the list … with the keyboards"), which sat behind the keys.
+ *
+ * The page scrolls only the caret's line above the keyboard, not the whole card, so the room under
+ * the line ends at the keyboard's top: the card is measured in the window (`measureInWindow`)
+ * against the keyboard's last frame each time the prompt, the caret, the field's scroll or the
+ * keyboard changes (`placePromptMentionMenu`'s `visibleBottom`), through the field's own ref.
+ *
+ * React Native says nothing of where a field draws its caret, so the menu lays out a hidden copy of
+ * the prompt, to the end of the caret's paragraph, in the field's own width, size and line height,
+ * finds the line that holds the caret from the lines' lengths (`onTextLayout`), and takes away the
+ * field's scroll (`PromptMentionAnchor`). It stays unseen and untouchable until that line and its
+ * own height are known, one frame after it opens.
+ */
+function PromptMentionMenu({
+  anchor,
+  fieldRef,
   references,
   prompt,
   mention,
   onSelect,
 }: {
+  anchor: PromptMentionAnchor;
+  /** The prompt's field, measured in the window to find the card's place against the keyboard. */
+  fieldRef: React.RefObject<TextInput | null>;
   references: MediaDraft[];
   prompt: string;
   mention: ActiveReferenceMention;
   onSelect: (handle: string) => void;
 }) {
   const theme = useAppTheme();
+  const geometry = usePromptMentionGeometry(anchor);
+  const [textLines, setTextLines] = useState<readonly { text: string; y: number; height: number }[] | null>(null);
+  const [headerHeight, setHeaderHeight] = useState<number | null>(null);
+  const [bodyHeight, setBodyHeight] = useState<number | null>(null);
+  const [keyboardTop, setKeyboardTop] = useState<number | null>(readKeyboardTop);
+  const [cardWindowTop, setCardWindowTop] = useState<number | null>(null);
   const { query } = mention;
   // The prompt without the mention being typed: a handle typed out in full is that mention,
   // not one the prompt already holds.
   const promptBesideMention = prompt.slice(0, mention.start) + prompt.slice(mention.end);
   const matchLabel = references.length === 1 ? '1 reference' : `${references.length} references`;
+  const { field, cardHeight, scrollY } = geometry;
+  const textWidth = field ? field.width - PROMPT_FIELD_TEXT.paddingHorizontal * 2 : 0;
+  // The last character of the mention, which is on the caret's line.
+  const caretLine = textLines && textLines.length > 0 ? textLines[lineIndexAtOffset(textLines, mention.end - 1)] : null;
+  const visibleBottom = keyboardTop !== null && cardWindowTop !== null ? keyboardTop - cardWindowTop : null;
+  const placement = field && cardHeight !== null && caretLine && headerHeight !== null && bodyHeight !== null
+    ? placePromptMentionMenu({
+      line: { top: PROMPT_FIELD_TEXT.paddingTop + caretLine.y - scrollY, height: caretLine.height },
+      field,
+      cardHeight,
+      visibleBottom,
+      menuHeight: headerHeight + bodyHeight + 2,
+    })
+    : null;
+
+  useEffect(() => {
+    const show = (event: { endCoordinates: { screenY: number } }) => setKeyboardTop(event.endCoordinates.screenY);
+    const subscriptions = [
+      Keyboard.addListener?.('keyboardDidShow', show),
+      Keyboard.addListener?.('keyboardDidChangeFrame', () => setKeyboardTop(readKeyboardTop())),
+      Keyboard.addListener?.('keyboardDidHide', () => setKeyboardTop(null)),
+    ];
+    return () => subscriptions.forEach((subscription) => subscription?.remove());
+  }, []);
+
+  // The page moves the card as the keyboard comes and as typing scrolls the caret into view. The
+  // field's box starts `field.top` down the card, and the field fills it from its top.
+  useEffect(() => {
+    const fieldTop = geometry.field?.top;
+    const input = fieldRef.current;
+    if (fieldTop === undefined || !input?.measureInWindow) return;
+    input.measureInWindow((_x, y) => setCardWindowTop(y - fieldTop));
+  }, [fieldRef, prompt, mention.end, geometry, keyboardTop]);
+
+  const placedStyle = placement === null
+    ? { top: 0 }
+    : placement.side === 'below'
+      ? { top: placement.top - PROMPT_CARD_BORDER }
+      : { bottom: (cardHeight ?? 0) - PROMPT_CARD_BORDER - placement.foot };
   return (
-    <View
-      testID="reference-mention-suggestions"
-      accessibilityRole="list"
-      accessibilityLabel={`Reference suggestions, ${matchLabel}`}
-      style={{
-        maxHeight: 210,
-        borderRadius: appTheme.radii.lg,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: hexWithAlpha(theme.colors.image, 0.26),
-        backgroundColor: theme.colors.surfaceStrong,
-        overflow: 'hidden',
-      }}
-    >
-      <View style={{ minHeight: 40, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
-        <Text style={{ color: theme.colors.textSecondary, fontSize: 12, fontWeight: '800' }}>References</Text>
-        <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{matchLabel}</Text>
-      </View>
-      {references.length > 0 ? (
-        <ScrollView keyboardShouldPersistTaps="always" nestedScrollEnabled style={{ maxHeight: 168 }}>
-          {references.map((media) => {
-            const handle = media.handle;
-            if (!handle) return null;
-            // A prompt can name a reference more than once ("@ali walks in, then @ali waves"), so a
-            // name it already holds stays a button and inserts again; "In prompt" only says so.
-            const used = promptContainsHandle(promptBesideMention, handle);
-            return (
-              <Pressable
-                key={media.id}
-                accessibilityRole="button"
-                accessibilityLabel={`Insert ${handle}, ${media.displayName}${used ? ', already in the prompt' : ''}`}
-                onPress={() => onSelect(handle)}
-                style={({ pressed }) => ({
-                  minHeight: 56,
-                  paddingHorizontal: 12,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 10,
-                  borderBottomWidth: 1,
-                  borderBottomColor: theme.colors.border,
-                  backgroundColor: pressed ? theme.colors.pressed : 'transparent',
-                  opacity: pressed ? appTheme.opacity.pressed : 1,
-                })}
-              >
-                <ReferenceMediaPreview media={media} size={38} />
-                <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                  <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>{media.displayName}</Text>
-                  <Text numberOfLines={1} style={{ color: theme.colors.image, fontSize: 11, fontWeight: '700' }}>{handle}</Text>
-                </View>
-                {used ? (
-                  <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800' }}>In prompt</Text>
-                ) : null}
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-      ) : (
-        <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 17, paddingHorizontal: 14, paddingVertical: 16 }}>
-          {query ? `No named references match “@${query}”.` : 'Add and name a reference to mention it here.'}
+    <>
+      {textWidth > 0 ? (
+        <Text
+          testID="prompt-mention-measure"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          pointerEvents="none"
+          onTextLayout={(event) => {
+            const lines = event.nativeEvent.lines.map(({ text, y, height }) => ({ text, y, height }));
+            setTextLines(lines);
+          }}
+          style={{ position: 'absolute', left: 0, top: 0, width: textWidth, opacity: 0, fontSize: PROMPT_FIELD_TEXT.fontSize, lineHeight: PROMPT_FIELD_TEXT.lineHeight }}
+        >
+          {prompt.slice(0, promptParagraphEnd(prompt, mention.end))}
         </Text>
-      )}
-    </View>
+      ) : null}
+      <View
+        testID="reference-mention-suggestions"
+        accessibilityRole="list"
+        accessibilityLabel={`Reference suggestions, ${matchLabel}`}
+        pointerEvents={placement ? 'auto' : 'none'}
+        style={{
+          position: 'absolute',
+          left: 10,
+          right: 10,
+          ...placedStyle,
+          maxHeight: placement?.maxHeight ?? undefined,
+          opacity: placement ? 1 : 0,
+          zIndex: 2,
+          borderRadius: appTheme.radii.lg,
+          borderCurve: 'continuous',
+          borderWidth: 1,
+          borderColor: theme.colors.borderStrong,
+          backgroundColor: theme.colors.panelSoft,
+          boxShadow: theme.shadow.floating.boxShadow,
+          overflow: 'hidden',
+        }}
+      >
+        <View
+          testID="reference-mention-header"
+          onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
+          style={{ minHeight: 34, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}
+        >
+          <Text style={{ color: theme.colors.textSecondary, fontSize: 12, fontWeight: '800' }}>References</Text>
+          <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.faint, fontSize: 11, fontWeight: '700' }}>{matchLabel}</Text>
+        </View>
+        {references.length > 0 ? (
+          <ScrollView
+            testID="reference-mention-list"
+            keyboardShouldPersistTaps="always"
+            nestedScrollEnabled
+            onContentSizeChange={(_width, height) => setBodyHeight(height)}
+            style={{ flexGrow: 0, flexShrink: 1 }}
+            contentContainerStyle={{ padding: 4 }}
+          >
+            {references.map((media) => {
+              const handle = media.handle;
+              if (!handle) return null;
+              // A prompt can name a reference more than once ("@ali walks in, then @ali waves"), so a
+              // name it already holds stays a button and inserts again; "In prompt" only says so.
+              const used = promptContainsHandle(promptBesideMention, handle);
+              return (
+                <Pressable
+                  key={media.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Insert ${handle}, ${media.displayName}${used ? ', already in the prompt' : ''}`}
+                  onPress={() => onSelect(handle)}
+                  style={({ pressed }) => ({
+                    minHeight: 48,
+                    paddingHorizontal: 8,
+                    paddingVertical: 6,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 10,
+                    borderRadius: appTheme.radii.md,
+                    borderCurve: 'continuous',
+                    backgroundColor: pressed ? theme.colors.pressed : 'transparent',
+                  })}
+                >
+                  <ReferenceMediaPreview media={media} size={34} />
+                  <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+                    <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>{media.displayName}</Text>
+                    <Text numberOfLines={1} style={{ color: theme.colors.image, fontSize: 12, fontWeight: '700' }}>{handle}</Text>
+                  </View>
+                  {used ? (
+                    <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800' }}>In prompt</Text>
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        ) : (
+          <Text
+            accessibilityLiveRegion="polite"
+            onLayout={(event) => setBodyHeight(event.nativeEvent.layout.height)}
+            style={{ color: theme.colors.muted, fontSize: 12, lineHeight: 17, paddingHorizontal: 12, paddingVertical: 12 }}
+          >
+            {query ? `No named references match “@${query}”.` : 'Add and name a reference to mention it here.'}
+          </Text>
+        )}
+      </View>
+    </>
   );
 }
 

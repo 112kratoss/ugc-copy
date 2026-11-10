@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Suspense } from 'react';
 import { BookText, ShoppingBag } from 'lucide-react';
 
+import { InviteHandoffBar } from '@/components/InviteHandoffBar';
 import PostCommentAvatar from '@/components/PostCommentAvatar';
 import {
   getPostFeedTitle,
@@ -273,6 +274,11 @@ export default function ShowcaseDetailBody({
         <div className="absolute left-[8%] top-[-18%] h-[34rem] w-[34rem] rounded-full bg-blue-600/10 blur-[150px] mix-blend-screen" />
         <div className="absolute bottom-[-18%] right-[-8%] h-[34rem] w-[34rem] rounded-full bg-emerald-500/10 blur-[150px] mix-blend-screen" />
         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+      </div>
+
+      {/* A visitor a shared link's invite came with: the way to keep it, here or in the app. */}
+      <div className="relative z-10">
+        <InviteHandoffBar handoff={viewer.inviteHandoff} />
       </div>
 
       <div className="canonical-post-shell studio-shell-wide relative z-10 pt-4 sm:pt-6">

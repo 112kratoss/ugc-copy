@@ -15,6 +15,7 @@ import {
 import { useSearchParams } from 'next/navigation';
 
 import { useAuth } from '@/components/AuthProvider';
+import { InviteHandoffBar } from '@/components/InviteHandoffBar';
 import {
   useHasHydratedSupabaseAuthCookieHint,
   useSupabaseAuthCookieHint,
@@ -151,8 +152,9 @@ export function CreatorPageViewer({
 
   // A shared profile link also carries its sharer's invite, `?r=<code>`,
   // recorded for a visitor with no account as the post page records it
-  // (`useShowcasePostViewer`).
-  useInviteVisitFromSharedLink({
+  // (`useShowcasePostViewer`). What it answers is the invite to offer to carry
+  // on to the app, drawn above the page (`InviteHandoffBar`).
+  const inviteHandoff = useInviteVisitFromSharedLink({
     search,
     path: `/creators/${encodeURIComponent(username)}`,
     viewerKnown: viewerKey !== null,
@@ -182,6 +184,7 @@ export function CreatorPageViewer({
       <Suspense fallback={null}>
         <CreatorSearchParamsReporter onSearch={setSearch} />
       </Suspense>
+      <InviteHandoffBar handoff={inviteHandoff} />
       {children}
     </CreatorPageViewerContext.Provider>
   );

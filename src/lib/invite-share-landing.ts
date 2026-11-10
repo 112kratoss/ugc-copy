@@ -1,11 +1,22 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { pushToast } from '@/components/feedback-state';
+import {
+  clearStoredInviteHandoff,
+  inviteHandoffDismissed,
+  isInAppBrowser,
+  readInviteHandoffPreview,
+  readStoredInviteHandoff,
+  storeInviteHandoff,
+  withoutInviteHandoffPreview,
+  type StoredInviteHandoff,
+} from '@/lib/invite-handoff';
 
 import {
   INVITE_SHARE_DISCLOSURE,
+  normalizeInviteShareCode,
   readInviteShareCode,
   withoutInviteShareCode,
 } from '../../ugc-mobile/lib/invite-share-link/invite-share-link';
@@ -36,6 +47,9 @@ function wait(ms: number) {
   });
 }
 
+/** What recording a shared link's invite came to (`recordInviteVisitFromSharedLink`). */
+export type SharedLinkInviteVisit = { recorded: boolean; keptCode: string | null };
+
 /**
  * Records the invite a shared link carried (`?r=<code>`), for the page that
  * link opened: the post page and the creator page.
@@ -54,7 +68,12 @@ function wait(ms: number) {
  *
  * A request that fails (offline, an outage, a rate limit) is tried twice more;
  * a code the server does not know (404) or refuses (400, 403) is not.
- * Resolves true when the server kept a visit.
+ *
+ * `recorded` is true when the server kept this link's visit. `keptCode` is the
+ * invite this browser now holds, for handing on to the app
+ * (`src/lib/invite-handoff.ts`): this link's, an earlier one the server kept
+ * in its place, or this link's again when the request never got through (the
+ * app records a visit of its own). Null when there is none to hand on.
  */
 export async function recordInviteVisitFromSharedLink({
   search,
@@ -70,9 +89,9 @@ export async function recordInviteVisitFromSharedLink({
   viewerHasAccount: boolean;
   fetchImpl?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
-}): Promise<boolean> {
+}): Promise<SharedLinkInviteVisit> {
   const code = readInviteShareCode(search);
-  if (!code || viewerHasAccount) return false;
+  if (!code || viewerHasAccount) return { recorded: false, keptCode: null };
 
   for (let attempt = 0; attempt <= INVITE_VISIT_RETRY_DELAYS_MS.length; attempt += 1) {
     if (attempt > 0) await sleep(INVITE_VISIT_RETRY_DELAYS_MS[attempt - 1]!);
@@ -88,9 +107,12 @@ export async function recordInviteVisitFromSharedLink({
         const body = await response.json().catch(() => null) as { code?: unknown; preserved?: unknown } | null;
         // Only this link's invite, newly kept: an earlier invite the browser
         // keeps is someone else's to disclose (re-review of 2026-11-10).
-        return body?.preserved !== true && body?.code === code;
+        return {
+          recorded: body?.preserved !== true && body?.code === code,
+          keptCode: normalizeInviteShareCode(body?.code) ?? code,
+        };
       }
-      if (response.status !== 429 && response.status < 500) return false;
+      if (response.status !== 429 && response.status < 500) return { recorded: false, keptCode: null };
     } catch {
       // Offline or cut off: try again.
     }
@@ -100,7 +122,7 @@ export async function recordInviteVisitFromSharedLink({
   } catch {
     // Nothing to keep it in.
   }
-  return false;
+  return { recorded: false, keptCode: code };
 }
 
 /**
@@ -145,9 +167,18 @@ export async function settlePendingSharedInviteVisit({
 /**
  * The post page's and the creator page's capture of a shared link's invite,
  * once the viewer is known (`viewerKnown`): records it for a visitor with no
- * account, tells them the sharer may earn from it, and takes the code off the
- * address bar either way, so a link copied from there is not the sharer's
- * (review of 2026-11-10). Once per page.
+ * account and takes the code off the address bar either way, so a link copied
+ * from there is not the sharer's (review of 2026-11-10). Once per page.
+ *
+ * It answers the invite this tab holds for a visitor with no account, for the
+ * page's offer to carry it on (`InviteHandoffBar`, which also tells them the
+ * sharer may earn from it): the one this link brought, or the one an earlier
+ * page of the tab kept, so a reload still offers it. A visitor who closed the
+ * offer is told by a toast instead.
+ *
+ * Inside another app's browser (Instagram, Facebook and the like) the code
+ * stays on the address bar: nobody can join there, and "Open in browser" is the
+ * way out, which opens the address as it stands.
  */
 export function useInviteVisitFromSharedLink({
   search,
@@ -159,22 +190,49 @@ export function useInviteVisitFromSharedLink({
   path: string;
   viewerKnown: boolean;
   viewerHasAccount: boolean;
-}) {
+}): StoredInviteHandoff | null {
   const handled = useRef(false);
+  const hasAccount = useRef(viewerHasAccount);
+  const [handoff, setHandoff] = useState<StoredInviteHandoff | null>(null);
+
+  // An account holds no invite to carry on, whenever the page learns of it: a
+  // session can arrive after the visit below was sent (review of 2026-11-10).
+  useEffect(() => {
+    hasAccount.current = viewerHasAccount;
+    if (viewerKnown && viewerHasAccount) clearStoredInviteHandoff();
+  }, [viewerHasAccount, viewerKnown]);
 
   useEffect(() => {
     if (handled.current || search === null || !viewerKnown) return;
-    if (!readInviteShareCode(search)) return;
     handled.current = true;
 
-    const { pathname, search: currentSearch, hash } = window.location;
-    const withoutCode = withoutInviteShareCode(`${pathname}${currentSearch}${hash}`);
-    if (withoutCode !== `${pathname}${currentSearch}${hash}`) {
-      window.history.replaceState(window.history.state, '', withoutCode);
+    if (!readInviteShareCode(search)) {
+      // No invite on this link: the one an earlier page of the tab kept, if any.
+      const stored = viewerHasAccount ? null : readStoredInviteHandoff();
+      if (stored) queueMicrotask(() => setHandoff(stored));
+      return;
     }
 
-    void recordInviteVisitFromSharedLink({ search, path, viewerHasAccount }).then((recorded) => {
-      if (recorded) pushToast({ tone: 'info', message: INVITE_SHARE_DISCLOSURE, durationMs: 8_000 });
+    // The preview switch goes off the address everywhere; the code stays on it
+    // only inside another app's browser.
+    const { pathname, search: currentSearch, hash } = window.location;
+    const address = `${pathname}${currentSearch}${hash}`;
+    const withoutPreview = withoutInviteHandoffPreview(address);
+    const cleaned = isInAppBrowser(window.navigator.userAgent) ? withoutPreview : withoutInviteShareCode(withoutPreview);
+    if (cleaned !== address) window.history.replaceState(window.history.state, '', cleaned);
+
+    const preview = readInviteHandoffPreview(search);
+    void recordInviteVisitFromSharedLink({ search, path, viewerHasAccount }).then(({ recorded, keptCode }) => {
+      if (keptCode && !hasAccount.current) {
+        const kept: StoredInviteHandoff = { code: keptCode, kind: 'shared_link', path, preview };
+        storeInviteHandoff(kept);
+        setHandoff(kept);
+      }
+      if (recorded && inviteHandoffDismissed()) {
+        pushToast({ tone: 'info', message: INVITE_SHARE_DISCLOSURE, durationMs: 8_000 });
+      }
     });
   }, [path, search, viewerHasAccount, viewerKnown]);
+
+  return viewerHasAccount ? null : handoff;
 }
