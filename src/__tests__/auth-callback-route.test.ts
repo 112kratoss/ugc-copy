@@ -155,6 +155,7 @@ describe('/auth/callback', () => {
       expect.any(Request),
       'user-1',
       device,
+      { withNetwork: false },
     );
     expect(mocks.claimReferralForUser).toHaveBeenCalledWith(expect.objectContaining({
       claimDeviceHash: device.deviceHash,
@@ -174,7 +175,22 @@ describe('/auth/callback', () => {
       expect.any(Request),
       'user-1',
       { deviceHash: hashReferralDevice(feedId), cookieValueToSet: null },
+      { withNetwork: false },
     );
+  });
+
+  // A same-origin sign-in in a browser that never loaded the feed has no
+  // cookie, and the redirect sets none: minting one recorded a device no
+  // browser holds, at every sign-in (re-review of 2026-11-10).
+  it('records no device for a browser with no feed cookie, and claims with none', async () => {
+    const { GET } = await import('@/app/auth/continue/route');
+    await GET(new Request('https://magicbooklet.com/auth/continue?next=%2Fcreate', {
+      headers: { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate', cookie: `mb_referral_visit=${VISIT_TOKEN}` },
+    }));
+
+    const recorded = mocks.recordReferralAccountDevice.mock.calls.at(-1);
+    expect(recorded?.[3]).toEqual({ deviceHash: null, cookieValueToSet: null });
+    expect(mocks.claimReferralForUser).toHaveBeenCalledWith(expect.objectContaining({ claimDeviceHash: null }));
   });
 
   it('tells a new account its invite was applied on the page its creator-name step opens', async () => {

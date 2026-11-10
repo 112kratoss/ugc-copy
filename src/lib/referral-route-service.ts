@@ -29,6 +29,7 @@ import {
   resolveReferralDevice,
   type ReferralDevice,
 } from '@/lib/referral-device';
+import { REFERRAL_LINK_DISABLED_CODE } from '@/lib/referral-link-status';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 type JsonRecord = Record<string, unknown>;
@@ -140,7 +141,7 @@ function referralErrorResponse(request: Request, message: string, status: number
  * not an outage: 409 with this code, which the share links read as "this
  * account has no invite to carry", and no error log.
  */
-export const REFERRAL_LINK_DISABLED_CODE = 'REFERRAL_LINK_DISABLED';
+export { REFERRAL_LINK_DISABLED_CODE };
 
 function referralJsonResponse(request: Request, body: unknown, status = 200) {
   return applyPrivateNoStoreApiResponseHeaders(
@@ -218,13 +219,17 @@ export async function recordReferralAccountDevice(
   request: Request,
   userId: string,
   device: ReferralDevice,
+  options: { withNetwork?: boolean } = {},
 ): Promise<void> {
   if (!device.deviceHash) return;
   try {
     const { error } = await adminSupabase.rpc('record_referral_account_device', {
       p_user_id: userId,
       p_device_hash: device.deviceHash,
-      p_ip_hash: getReferralRiskContext(request.headers).ipHash,
+      // The network is a hint for Invite & Earn's own requests; a sign-in
+      // records the browser only (re-review of 2026-11-10: every sign-in kept
+      // a network digest the Privacy Policy did not describe).
+      p_ip_hash: options.withNetwork === false ? null : getReferralRiskContext(request.headers).ipHash,
     });
     if (error) throw error;
   } catch (error) {

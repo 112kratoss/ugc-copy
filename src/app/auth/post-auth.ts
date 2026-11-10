@@ -40,8 +40,10 @@ export async function claimPendingReferralForAuth(
   userId: string,
 ): Promise<PendingReferralClaim> {
   const adminSupabase = createServiceClient();
-  const device = resolveReferralDevice(request);
-  const recording = recordReferralAccountDevice(adminSupabase, request, userId, device);
+  // The browser's feed cookie only: the redirect sets no cookie, so a minted id
+  // would be a device no browser holds. And no network digest.
+  const device = resolveReferralDevice(request, { mint: false });
+  const recording = recordReferralAccountDevice(adminSupabase, request, userId, device, { withNetwork: false });
 
   const visitToken = readReferralVisitCookie(request.headers.get('cookie'));
   if (!visitToken) {

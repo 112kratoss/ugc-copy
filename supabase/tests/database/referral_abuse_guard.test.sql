@@ -4,7 +4,7 @@
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path = public, extensions;
-SELECT plan(131);
+SELECT plan(134);
 
 -- ─── Who may reach it ───────────────────────────────────────────────────────
 
@@ -164,6 +164,10 @@ SELECT is(
 SELECT is(
   public.claim_referral_visit('c0000000-0000-4000-8000-0000000000f8', (SELECT token FROM guard_visits WHERE name = 'garbage'), ARRAY['not-a-digest', NULL]) ->> 'status',
   'claimed', 'anything not shaped like a digest is ignored'
+);
+SELECT is(
+  (SELECT reward_state || ':' || reward_state_reason FROM public.referral_attributions WHERE invitee_user_id = 'c0000000-0000-4000-8000-0000000000f8'),
+  'blocked:identity_unchecked', 'and an identity read that named nothing to check is held, not let through'
 );
 SELECT ok(EXISTS(
   SELECT 1 FROM public.referral_review_events AS events
@@ -396,6 +400,16 @@ SELECT is(public.set_referral_code_enabled((SELECT id FROM guard_link), true, 'R
 SELECT is((SELECT count(*)::int FROM public.referral_review_events WHERE referral_code_id = (SELECT id FROM guard_link) AND source = 'operator'), 2, 'both switches are on the trail');
 SELECT ok(EXISTS(SELECT 1 FROM public.list_unsettled_referral_purchase_transactions(100) WHERE transaction_id = 'c0000000-0000-4000-8000-0000000001a3'), 'switched on, the held top-up is work again');
 SELECT is(public.settle_referral_purchase_rewards('c0000000-0000-4000-8000-0000000001a3') ->> 'status', 'settled', 'and settles');
+
+-- A friend who fills their own device list could sign in anywhere unseen:
+-- their next top-up is held.
+SELECT public.record_referral_account_device('c0000000-0000-4000-8000-0000000000b3', md5('b3-' || n::text) || md5('b3-' || n::text), NULL)
+FROM generate_series(1, 60) AS n;
+INSERT INTO public.transactions (id, user_id, razorpay_order_id, amount, credits, status)
+VALUES ('c0000000-0000-4000-8000-0000000002a3', 'c0000000-0000-4000-8000-0000000000b3', 'guard_order_b3_second', 41500, 500, 'created');
+UPDATE public.transactions SET status = 'success', credit_effect_applied = true WHERE razorpay_order_id = 'guard_order_b3_second';
+SELECT is(public.settle_referral_purchase_rewards('c0000000-0000-4000-8000-0000000002a3') ->> 'status', 'attribution_blocked', 'a friend at the device cap is held at settlement');
+SELECT is((SELECT reward_state_reason FROM public.referral_attributions WHERE invitee_user_id = 'c0000000-0000-4000-8000-0000000000b3'), 'invitee_device_cap', 'as invitee_device_cap');
 
 -- ─── What retention clears ──────────────────────────────────────────────────
 

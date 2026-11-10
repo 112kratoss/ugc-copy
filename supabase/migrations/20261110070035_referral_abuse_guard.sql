@@ -671,6 +671,18 @@ BEGIN
     WHERE devices.user_id = v_visit.inviter_user_id
   ) >= 50 THEN
     v_block_reason := 'inviter_device_cap';
+  ELSIF (
+    SELECT count(*)
+    FROM public.referral_account_devices AS devices
+    WHERE devices.user_id = p_invitee_user_id
+  ) >= 50 THEN
+    -- A friend who filled their own list could sign in anywhere unseen.
+    v_block_reason := 'invitee_device_cap';
+  ELSIF p_identity_fingerprints IS NOT NULL AND cardinality(v_fingerprints) = 0 THEN
+    -- The server read the account and it named no sign-in identity to check:
+    -- held, not let through unchecked (re-review of 2026-11-10). NULL is the
+    -- server from before this migration, which passes none.
+    v_block_reason := 'identity_unchecked';
   END IF;
 
   IF EXISTS (
@@ -802,24 +814,36 @@ $anchor$;
      AND v_attribution.invitee_user_id IS NOT NULL THEN
     DECLARE
       v_guard_reason text;
+      -- Each view is read once (re-review of 2026-11-10: the sets were
+      -- rebuilt per probe inside the purchase transaction).
+      v_friend_devices text[] := ARRAY(
+        SELECT device_hash FROM public.referral_account_device_hashes(v_attribution.invitee_user_id)
+      );
     BEGIN
       IF EXISTS (
         SELECT 1
-        FROM public.referral_account_device_hashes(v_attribution.invitee_user_id) AS friend
-        JOIN public.referral_account_device_hashes(v_attribution.inviter_user_id) AS inviter
-          ON inviter.device_hash = friend.device_hash
+        FROM public.referral_account_device_hashes(v_attribution.inviter_user_id) AS inviter
+        WHERE inviter.device_hash = ANY (v_friend_devices)
       ) THEN
         v_guard_reason := 'same_device_as_inviter';
       ELSIF EXISTS (
         SELECT 1
-        FROM public.referral_account_device_hashes(v_attribution.invitee_user_id) AS friend
-        JOIN public.referral_inviter_friend_device_hashes(
+        FROM public.referral_inviter_friend_device_hashes(
           v_attribution.inviter_user_id,
           v_attribution.id,
           v_attribution.attributed_at
-        ) AS others ON others.device_hash = friend.device_hash
+        ) AS others
+        WHERE others.device_hash = ANY (v_friend_devices)
       ) THEN
         v_guard_reason := 'device_reused_by_invitees';
+      ELSIF (
+        SELECT count(*)
+        FROM public.referral_account_devices AS devices
+        WHERE devices.user_id = v_attribution.invitee_user_id
+      ) >= 50 THEN
+        -- Past the cap nothing new is recorded, so a friend who filled their
+        -- list could sign in on the inviter's browser unseen.
+        v_guard_reason := 'invitee_device_cap';
       END IF;
 
       IF v_guard_reason IS NOT NULL THEN

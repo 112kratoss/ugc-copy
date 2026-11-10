@@ -62,14 +62,23 @@ export function hashReferralDevice(installationId: string): string {
  */
 export function resolveReferralDevice(
   request: Request,
-  options: { bodyInstallationId?: unknown; allowBodyInstallationId?: boolean } = {},
+  options: {
+    bodyInstallationId?: unknown;
+    allowBodyInstallationId?: boolean;
+    /**
+     * False where the response cannot carry a new cookie (a sign-in's
+     * redirect): a minted id would be a device no browser holds, recorded
+     * anew at every sign-in (re-review of 2026-11-10).
+     */
+    mint?: boolean;
+  } = {},
 ): ReferralDevice {
   const cookieId = readRequestCookie(request, FEED_ANONYMOUS_COOKIE_NAME);
   if (request.headers.has('sec-fetch-site')) {
     if (isValidFeedInstallationId(cookieId)) {
       return { deviceHash: hashReferralDevice(cookieId), cookieValueToSet: null };
     }
-    if (!isSameSiteBrowserFetch(request)) {
+    if (options.mint === false || !isSameSiteBrowserFetch(request)) {
       return { deviceHash: null, cookieValueToSet: null };
     }
     const generatedId = createFeedInstallationId();

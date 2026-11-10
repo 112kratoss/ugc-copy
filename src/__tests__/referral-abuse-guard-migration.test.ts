@@ -102,6 +102,11 @@ describe('referral abuse guard migration', () => {
     expect(recorder).not.toContain('OFFSET');
     expect(sql).toContain("v_block_reason := 'no_device'");
     expect(sql).toContain("v_block_reason := 'inviter_device_cap'");
+    // A friend who filled their own list is held too, at the claim and at
+    // settlement; so is an identity read that named nothing to check.
+    expect(sql).toContain("v_block_reason := 'invitee_device_cap'");
+    expect(sql).toContain("v_guard_reason := 'invitee_device_cap'");
+    expect(sql).toContain("v_block_reason := 'identity_unchecked'");
   });
 
   it('serialises one inviter\'s claims and copies no network digest into a device row', () => {
