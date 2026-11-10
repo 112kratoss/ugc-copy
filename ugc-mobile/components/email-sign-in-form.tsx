@@ -23,6 +23,7 @@ import {
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
 import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
 import { CloseGlyph } from '@/lib/platform-glyphs';
+import { useSignInPageNotice } from '@/lib/sign-in-page-notice';
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
@@ -54,7 +55,7 @@ export function EmailSignInForm({ initialNotice = null, inFlight, runSignIn, onB
   // Seeded from the route so a redirect can say why it sent the person here.
   // Only a known key maps to copy; an unrecognised one shows nothing rather
   // than letting a deep link put arbitrary text on the sign-in screen.
-  const [notice, setNotice] = useState<AuthNotice | null>(initialNotice);
+  const [notice, setNotice] = useSignInPageNotice(initialNotice);
   const isSubmitting = inFlight === 'email';
   const isSignInInFlight = inFlight !== null;
   const passwordRef = useRef<TextInput | null>(null);

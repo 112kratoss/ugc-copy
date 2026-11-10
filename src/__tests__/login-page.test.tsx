@@ -401,6 +401,33 @@ describe('the email form, in place', () => {
     expect(mocks.refresh).toHaveBeenCalled();
   });
 
+  // A shared link's invite the tab could not record is recorded before the
+  // account signs in: a visit made after the account exists is refused
+  // (re-review of 2026-11-10).
+  it('records a kept shared-link invite before the password sign-in', async () => {
+    const order: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      order.push(String(url));
+      return new Response(JSON.stringify({ success: true, code: '30b5f916c7aa', preserved: false }), { status: 200 });
+    }));
+    mocks.signInWithPassword.mockImplementation(async () => {
+      order.push('signInWithPassword');
+      return { error: null };
+    });
+    window.sessionStorage.setItem('mb.shared-invite-pending.v1', JSON.stringify({ code: '30b5f916c7aa', path: '/showcase/post-1' }));
+    try {
+      renderLogin({ initialHalf: 'email', redirectTo: '/create' });
+      fillSignInForm();
+      fireEvent.click(submitButton());
+
+      await waitFor(() => expect(order).toEqual(['/api/referrals/visit', 'signInWithPassword']));
+      expect(window.sessionStorage.getItem('mb.shared-invite-pending.v1')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      window.sessionStorage.clear();
+    }
+  });
+
   it('labels its fields for a password manager and holds the support line in place of a reset', () => {
     renderLogin({ initialHalf: 'email' });
     const form = within(emailHalf());

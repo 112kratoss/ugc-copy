@@ -41,6 +41,7 @@ vi.mock('react-native-safe-area-context', () => ({
 import {
   MediaZoomSourceView,
   MediaZoomSurface,
+  ZOOM_RETURN_VEIL_FADE_MS,
   setZoomPostPreparer,
   useMediaZoomSource,
   useMediaZoomStage,
@@ -247,6 +248,106 @@ describe('the view a tile hands to the reel', () => {
     expect(shaped('zoom|surface|post')).toEqual({ seen: true, radius: 16, overflow: 'hidden' });
     // Where the zoom does not run the tile keeps its own corners and outline.
     expect(shaped(null)).toEqual({ seen: false, radius: undefined, overflow: undefined });
+  });
+
+  // iOS 18: while a reel showing the tile's still picture is up, the view its
+  // close shrinks into draws that picture, and UIKit takes that view out of the
+  // page to fly it. Left showing, the tile's own picture stood in its place
+  // beside the one coming home.
+  it('hides what the tile draws while the picture a close lands on stands in for it', () => {
+    const contentOpacity = (covers: boolean) => wrapperStyles(
+      <MediaZoomSourceView source={{ ...source, appleZoomId: 'zoom|surface|post', radius: 16, returnPicture: { picture: null, covers, onDisplay: () => {} } }}>
+        <TileContent />
+      </MediaZoomSourceView>
+    ).inner.opacity;
+
+    expect(contentOpacity(true)).toBe(0);
+    expect(contentOpacity(false)).toBeUndefined();
+  });
+
+  // The picture UIKit flew goes in one frame when the reel lets it go, and the
+  // tile's badges and shade came back all at once a moment after the picture
+  // had stopped. The tile draws the picture once more, over itself, and fades
+  // that (`ZoomReturnVeil`).
+  describe('the landed picture, fading off the tile', () => {
+    const picture = { url: 'https://cdn.example/picture.jpg', cacheKey: 'picture-1' };
+    const tileOf = (appleZoomId: string | null, returnPicture: MediaZoomSource['returnPicture']) => (
+      <MediaZoomSourceView source={{ ...source, appleZoomId, radius: 16, returnPicture }}>
+        <TileContent />
+      </MediaZoomSourceView>
+    );
+    const held = { picture, covers: true, onDisplay: () => {} };
+    const letGo = { picture: null, covers: false, onDisplay: () => {} };
+    /** The pictures drawn inside the tile's own view (the first inside the wrapper), over what the tile draws. */
+    const veils = (tree: renderer.ReactTestRenderer) => tree.root
+      .findAllByType('view' as never)[0]!
+      .findAll((node) => node.type === ('expo-image' as never));
+
+    it('is drawn from the moment the picture is held, and stays on through the fade after it is let go', () => {
+      vi.useFakeTimers();
+      try {
+        let tree!: renderer.ReactTestRenderer;
+        renderer.act(() => {
+          tree = renderer.create(tileOf('zoom|surface|post', held));
+        });
+        expect(veils(tree)).toHaveLength(1);
+        expect(veils(tree)[0]!.props.source).toEqual({ uri: picture.url, cacheKey: 'picture-1' });
+        expect(veils(tree)[0]!.props.transition).toBe(0);
+        // Touches go through it to the tile.
+        const layers = tree.root.findAllByType('view' as never)[0]!.findAll((node) => node.type === ('animated-view' as never));
+        expect(layers.map((layer) => layer.props.pointerEvents)).toEqual(['none']);
+
+        renderer.act(() => tree.update(tileOf('zoom|surface|post', letGo)));
+        expect(veils(tree)).toHaveLength(1);
+        renderer.act(() => { vi.advanceTimersByTime(ZOOM_RETURN_VEIL_FADE_MS - 1); });
+        expect(veils(tree)).toHaveLength(1);
+        // Faded out: gone from the tile.
+        renderer.act(() => { vi.advanceTimersByTime(100); });
+        expect(veils(tree)).toHaveLength(0);
+        renderer.act(() => tree.unmount());
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('stays when the picture is held again before it has gone', () => {
+      vi.useFakeTimers();
+      try {
+        let tree!: renderer.ReactTestRenderer;
+        renderer.act(() => {
+          tree = renderer.create(tileOf('zoom|surface|post', held));
+        });
+        renderer.act(() => tree.update(tileOf('zoom|surface|post', letGo)));
+        renderer.act(() => { vi.advanceTimersByTime(ZOOM_RETURN_VEIL_FADE_MS / 2); });
+        renderer.act(() => tree.update(tileOf('zoom|surface|post', held)));
+        renderer.act(() => { vi.advanceTimersByTime(ZOOM_RETURN_VEIL_FADE_MS * 4); });
+        expect(veils(tree)).toHaveLength(1);
+        renderer.act(() => tree.unmount());
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('is not carried over to another post by a list cell that is handed one', () => {
+      let tree!: renderer.ReactTestRenderer;
+      renderer.act(() => {
+        tree = renderer.create(tileOf('zoom|surface|post', held));
+      });
+      renderer.act(() => tree.update(tileOf('zoom|surface|another-post', letGo)));
+      expect(veils(tree)).toHaveLength(0);
+      renderer.act(() => tree.unmount());
+    });
+
+    it('is not drawn by a tile no reel holds, nor where UIKit\'s zoom does not run', () => {
+      let tree!: renderer.ReactTestRenderer;
+      renderer.act(() => {
+        tree = renderer.create(tileOf('zoom|surface|post', letGo));
+      });
+      expect(veils(tree)).toHaveLength(0);
+      renderer.act(() => tree.update(tileOf(null, held)));
+      expect(veils(tree)).toHaveLength(0);
+      renderer.act(() => tree.unmount());
+    });
   });
 
   it('hands its post to the app shell as the finger lands, to ask ahead for what the post draws', () => {

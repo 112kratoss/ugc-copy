@@ -62,6 +62,20 @@ describe('collectAdminOverview', () => {
     expect(client.from).not.toHaveBeenCalledWith('profiles');
   });
 
+  // A real friend on a shared device waits in the blocked list until someone
+  // looks; the Overview says how many wait (review of 2026-11-10).
+  it('counts the referrals the abuse guard blocked that no operator has decided', async () => {
+    const client = makeClient({ counts: { referral_attributions: 3 } });
+    const overview = await collectAdminOverview(client);
+
+    expect(overview.counters.referralsAwaitingReview).toBe(3);
+    const read = client.from.mock.results
+      .map((result) => result.value as Record<string, ReturnType<typeof vi.fn>>)
+      .find((_builder, index) => client.from.mock.calls[index][0] === 'referral_attributions');
+    expect(read?.eq).toHaveBeenCalledWith('reward_state', 'blocked');
+    expect(read?.eq).toHaveBeenCalledWith('reward_state_source', 'system');
+  });
+
   it('surfaces guest sessions instead of discarding them', async () => {
     // Guests are real load and real storage. Dropping them would replace one
     // misleading number with another.

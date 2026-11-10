@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server';
 import {
   ACCOUNT_IDENTITY_FINGERPRINT_TABLE,
   deriveAccountIdentityFingerprints,
+  loadAccountIdentityFingerprints,
 } from '@/lib/account-identity-fingerprint';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
@@ -136,18 +137,15 @@ function serializeState(row: OnboardingStateRow | null) {
 /**
  * Digests of the account's durable sign-in identifiers, derived from an
  * admin-fetched user: the request-scoped `User` can arrive via the
- * identity-admission assertion path, which strips `identities` entirely.
+ * identity-admission assertion path, which strips `identities` entirely. The
+ * referral claim reads them through the same loader.
  */
-async function loadAccountIdentityFingerprints(
+function loadWelcomeIdentityFingerprints(
   admin: SupabaseClient,
   userId: string,
   resolved: ReturnType<typeof resolveDependencies>,
 ): Promise<string[]> {
-  const { data, error } = await admin.auth.admin.getUserById(userId);
-  if (error || !data?.user) {
-    throw error ?? new Error('Could not load the account identity for fingerprinting.');
-  }
-  return resolved.deriveAccountIdentityFingerprints(data.user);
+  return loadAccountIdentityFingerprints(admin, userId, resolved.deriveAccountIdentityFingerprints);
 }
 
 async function hasClaimedIdentityFingerprint(
@@ -231,7 +229,7 @@ async function loadWelcomeCreditStatus(
     // the claim RPC is the enforcement that fails closed.
     try {
       const fingerprints = precomputedFingerprints
-        ?? await loadAccountIdentityFingerprints(admin, user.id, resolved);
+        ?? await loadWelcomeIdentityFingerprints(admin, user.id, resolved);
       if (await hasClaimedIdentityFingerprint(admin, fingerprints)) {
         status = 'identity_already_claimed';
       }
@@ -435,7 +433,7 @@ export async function postWelcomeCreditsClaimRouteResponse({
     // scripted attempt stays cheap. Fail closed: a claim that cannot be checked
     // against the ledger must not pay out, so a failed lookup or an account
     // with no derivable identity signals surfaces as the generic 500 below.
-    const fingerprints = await loadAccountIdentityFingerprints(admin, user.id, resolved);
+    const fingerprints = await loadWelcomeIdentityFingerprints(admin, user.id, resolved);
     if (fingerprints.length === 0) {
       throw new Error('Account produced no identity fingerprints for the welcome claim.');
     }

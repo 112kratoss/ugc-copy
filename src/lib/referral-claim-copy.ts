@@ -17,6 +17,12 @@ export function describeReferralClaim(status: string | null) {
       return null;
     case 'applied':
       return 'Invite applied: your first verified credit-pack purchase gets the invite bonus.';
+    // The abuse guard recorded the referral and holds its bonus (most often:
+    // signed up on the inviter's own device). Said plainly, without the reason,
+    // so a real friend on a shared laptop knows to ask and nobody is promised a
+    // bonus that is not on its way.
+    case 'held':
+      return 'Invite received: its bonus is on hold while we check it. Contact support if you think this is a mistake.';
     case 'existing_account':
       return 'Invite not applied: invite bonuses are for new accounts only.';
     case 'self_referral':

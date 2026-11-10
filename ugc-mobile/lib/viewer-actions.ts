@@ -2,6 +2,8 @@ import { hexWithAlpha } from './eased-fade';
 import { canHideFeedCreator, isOwnFeedPost } from './feed-feedback-menu';
 import { hideCreatorLabelFromCardLabel } from './hide-creator-label';
 import type { ImmersivePreviewItem, PreviewViewerSource } from './immersive-preview-view-model';
+import { currentInviteShareCode } from './invite-share-code-state';
+import { withInviteShareCode } from './invite-share-link/invite-share-link';
 import { postName } from './placeholder-title';
 import { getShowcaseMediaPreviewUrl } from './showcase-media';
 import { appTheme, type ThemeColors } from './theme';
@@ -195,13 +197,22 @@ export function getViewerShareIntent(
  * a search result, and attributes it back to the surface that produced it. The
  * trailing-slash normalisation lives here too — call sites used to disagree
  * about whether `siteUrl` needed trimming.
+ *
+ * `&r=<code>` is the sharer's invite (`lib/invite-share-link/`, shared with the
+ * web): the signed-in account's by default, so every link the app sends out
+ * carries it without each call site asking, and none for a guest. A visitor it
+ * brings who then signs up counts as that account's referral.
  */
 export function buildShareUrl(
   siteUrl: string,
   path: string,
-  sourceSurface: GenerationShareSourceSurface
+  sourceSurface: GenerationShareSourceSurface,
+  inviteCode: string | null = currentInviteShareCode()
 ): string {
-  return `${siteUrl.replace(/\/$/, '')}${path}?s=${encodeURIComponent(sourceSurface)}`;
+  return withInviteShareCode(
+    `${siteUrl.replace(/\/$/, '')}${path}?s=${encodeURIComponent(sourceSurface)}`,
+    inviteCode
+  );
 }
 
 /**

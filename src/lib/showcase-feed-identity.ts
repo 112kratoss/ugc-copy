@@ -2,6 +2,8 @@ import 'server-only';
 
 import { createHash, randomBytes } from 'node:crypto';
 
+import type { NextResponse } from 'next/server';
+
 export const FEED_ANONYMOUS_COOKIE_NAME = '__Host-magicbooklet-feed-id';
 export const FEED_INSTALLATION_ID_HEADER = 'x-magicbooklet-installation-id';
 export const FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS = 180 * 24 * 60 * 60;
@@ -31,7 +33,7 @@ function hashFeedIdentity(namespace: string, value: string) {
     .digest('hex');
 }
 
-function readCookie(request: Request, name: string) {
+export function readRequestCookie(request: Request, name: string) {
   for (const pair of (request.headers.get('cookie') ?? '').split(';')) {
     const separatorIndex = pair.indexOf('=');
     if (separatorIndex < 0) continue;
@@ -83,7 +85,7 @@ export function resolveFeedAnonymousIdentity(request: Request): FeedAnonymousIde
     };
   }
 
-  const cookieId = readCookie(request, FEED_ANONYMOUS_COOKIE_NAME);
+  const cookieId = readRequestCookie(request, FEED_ANONYMOUS_COOKIE_NAME);
   if (isValidFeedInstallationId(cookieId)) {
     return {
       anonymousKeyHash: hashFeedIdentity('cookie', cookieId),
@@ -117,4 +119,21 @@ export function getFeedAnonymousKeyHash(request: Request) {
 export function isSameSiteBrowserFetch(request: Request) {
   const site = request.headers.get('sec-fetch-site');
   return site === 'same-origin' || site === 'same-site';
+}
+
+/**
+ * Sets the browser's first-party feed id. The feed, its events and Invite &
+ * Earn's device signal all mint it, and all three must set it identically: a
+ * browser holding two variants of a `__Host-` cookie keeps one at random.
+ */
+export function setFeedAnonymousCookie(response: NextResponse, value: string) {
+  response.cookies.set({
+    name: FEED_ANONYMOUS_COOKIE_NAME,
+    value,
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
+  });
 }

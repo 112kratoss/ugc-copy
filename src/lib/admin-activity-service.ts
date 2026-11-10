@@ -26,7 +26,8 @@ export type AdminActivityKind =
   | 'subject-moderation'
   | 'generation-moderation'
   | 'contact-triage'
-  | 'payout';
+  | 'payout'
+  | 'referral-review';
 
 export type AdminActivityEntry = {
   id: string;
@@ -61,6 +62,13 @@ function rows(result: { data: unknown; error: unknown }): Array<Record<string, u
   return (result.data ?? []) as Array<Record<string, unknown>>;
 }
 
+const REFERRAL_REVIEW_ACTIONS: Record<string, string> = {
+  block: 'blocked a referral',
+  unblock: 'unblocked a referral',
+  disable_code: 'switched an invite link off',
+  enable_code: 'switched an invite link on',
+};
+
 function creditSummary(row: Record<string, unknown>): string {
   const credits = Number(row.credits_delta ?? 0);
   const promotional = Number(row.promotional_credits_delta ?? 0);
@@ -86,6 +94,7 @@ export async function collectAdminActivity(
     payouts,
     generations,
     contact,
+    referralReviews,
   ] = await Promise.all([
     client
       .from('admin_credit_adjustments')
@@ -133,6 +142,14 @@ export async function collectAdminActivity(
       .not('handled_at', 'is', null)
       .order('handled_at', { ascending: false })
       .limit(PER_SOURCE_LIMIT),
+    // The abuse guard writes to the same trail (source 'system'); only what an
+    // operator decided belongs in a feed of operator actions.
+    client
+      .from('referral_review_events')
+      .select('id, attribution_id, referral_code_id, action, reviewer_id, reason, created_at')
+      .eq('source', 'operator')
+      .order('created_at', { ascending: false })
+      .limit(PER_SOURCE_LIMIT),
   ]);
 
   const creditRows = rows(credits);
@@ -143,6 +160,7 @@ export async function collectAdminActivity(
   const payoutRows = rows(payouts);
   const generationRows = rows(generations);
   const contactRows = rows(contact);
+  const referralReviewRows = rows(referralReviews);
 
   const entries: AdminActivityEntry[] = [
     ...creditRows.map((row) => ({
@@ -237,6 +255,19 @@ export async function collectAdminActivity(
       summaryUntil: null,
       rationale: (row.handled_note as string | null) ?? null,
     })),
+    ...referralReviewRows.map((row) => ({
+      id: `referral-review-${row.id}`,
+      kind: 'referral-review' as const,
+      at: String(row.created_at ?? ''),
+      reviewerId: (row.reviewer_id as string | null) ?? null,
+      action: REFERRAL_REVIEW_ACTIONS[String(row.action)] ?? 'reviewed a referral',
+      subjectUserId: null,
+      summary: row.attribution_id
+        ? `Referral ${String(row.attribution_id).slice(0, 8)}…`
+        : `Invite link ${String(row.referral_code_id ?? '').slice(0, 8)}…`,
+      summaryUntil: null,
+      rationale: (row.reason as string | null) ?? null,
+    })),
   ].sort((left, right) => right.at.localeCompare(left.at));
 
   // Matches runPagedQuery's contract: an offset past the end shows the first
@@ -257,6 +288,7 @@ export async function collectAdminActivity(
       payoutRows,
       generationRows,
       contactRows,
+      referralReviewRows,
     ]
       .some((source) => source.length >= PER_SOURCE_LIMIT),
   };

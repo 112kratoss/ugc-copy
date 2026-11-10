@@ -22,7 +22,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { requestConfirmation } from '@/components/feedback-state';
 import TemplateRunMedia from './TemplateRunMedia';
 import { buildCreationComposerPath } from '@/lib/creation-workspace';
-import { buildShowcaseDetailPath } from '@/lib/share';
+import { SHARE_SOURCE_QUERY_PARAM, buildShowcaseDetailPath } from '@/lib/share';
+import { withSharersInvite } from '@/lib/share-client';
 import { isSignedMediaUrlExpiring, preserveStableTemplateRunMedia } from '@/lib/template-run-stable-media';
 import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
 import {
@@ -577,7 +578,11 @@ export default function TemplateRunClient({ runId }: { runId: string }) {
   // no landing page; the app dropped that in August.
   const handleShare = async () => {
     if (!run?.result?.url || !postedResult || postedResult.visibility === 'private') return;
-    const shareUrl = new URL(postedResult.path, window.location.origin).toString();
+    // A post link as it leaves the product: its surface for the share-visit count, and the
+    // sharer's invite (review of 2026-11-10: this share carried neither).
+    const shareTarget = new URL(postedResult.path, window.location.origin);
+    if (!shareTarget.searchParams.has(SHARE_SOURCE_QUERY_PARAM)) shareTarget.searchParams.set(SHARE_SOURCE_QUERY_PARAM, 'my-creations');
+    const shareUrl = withSharersInvite(shareTarget.toString());
     try {
       if (navigator.share) {
         await navigator.share({ title: template?.name || run.templateTitle, url: shareUrl });

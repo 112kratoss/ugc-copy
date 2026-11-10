@@ -164,7 +164,9 @@ describe('template run publish actions', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Share Explore post' }));
     await waitFor(() => expect(share).toHaveBeenCalledWith(expect.objectContaining({
-      url: new URL('/showcase/post-linked-1', window.location.origin).toString(),
+      // With its surface, as every shared post link carries one (and the sharer's invite once
+      // the browser holds a code: share-client-invite.test.ts).
+      url: new URL('/showcase/post-linked-1?s=my-creations', window.location.origin).toString(),
     })));
   });
 

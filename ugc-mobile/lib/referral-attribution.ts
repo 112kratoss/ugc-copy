@@ -16,6 +16,12 @@ const REFERRAL_CODE_PATTERN = /^[A-Za-z0-9_-]{3,64}$/;
 export interface PendingReferral {
   code: string;
   capturedAt: string;
+  /**
+   * How it was captured: an invite link (absent on one saved before this was
+   * recorded), or a shared post or profile link. An invite link opened later
+   * replaces a shared link's invite; nothing else replaces anything.
+   */
+  kind?: 'invite' | 'shared_link';
   visitToken?: string;
   expiresAt?: string;
   /**
@@ -112,6 +118,7 @@ function isPendingReferral(value: unknown): value is PendingReferral {
     && typeof pending.capturedAt === 'string'
     && (!pending.visitToken || typeof pending.visitToken === 'string')
     && (!pending.expiresAt || typeof pending.expiresAt === 'string')
+    && (!pending.kind || pending.kind === 'invite' || pending.kind === 'shared_link')
   );
 }
 
@@ -192,22 +199,32 @@ export async function getRecentReferralClaim(
 export async function capturePendingReferral(
   api: ReferralApi,
   rawCode: string,
-  options: { storage?: ReferralStorage; now?: number; next?: string } = {}
+  options: { storage?: ReferralStorage; now?: number; next?: string; kind?: 'invite' | 'shared_link' } = {}
 ) {
   const storage = options.storage ?? defaultStorage;
   const now = options.now ?? Date.now();
+  const kind = options.kind ?? 'invite';
   const requestedCode = normalizeReferralCode(rawCode);
   if (!requestedCode) {
     throw new Error('Enter a valid Magicbooklet invite code.');
   }
 
   const existing = await getPendingReferral(storage, now);
-  const pending: PendingReferral = existing ?? {
-    code: requestedCode,
-    capturedAt: new Date(now).toISOString(),
-  };
+  // Someone who followed a shared post and then opens a friend's invite link
+  // chose that friend: the invite replaces the shared link's, as the server
+  // does for a browser (create_referral_visit). A shared link replaces
+  // nothing, and an invite never replaces an invite (review of 2026-11-10).
+  const replaces = Boolean(
+    existing
+    && kind === 'invite'
+    && existing.kind === 'shared_link'
+    && existing.code !== requestedCode
+  );
+  const pending: PendingReferral = existing && !replaces
+    ? existing
+    : { code: requestedCode, capturedAt: new Date(now).toISOString(), kind };
 
-  if (!existing) {
+  if (!existing || replaces) {
     // Save the code before making a network request so attribution survives an
     // offline launch, app restart, or an authentication hand-off.
     await storage.setItem(PENDING_REFERRAL_STORAGE_KEY, JSON.stringify(pending));
@@ -222,6 +239,7 @@ export async function capturePendingReferral(
     visit = await api.recordReferralVisit({
       code: pending.code,
       source: 'mobile',
+      kind: pending.kind ?? 'invite',
       ...(options.next ? { next: options.next } : {}),
     });
   } catch (error) {
@@ -240,6 +258,23 @@ export async function capturePendingReferral(
   await storage.setItem(PENDING_REFERRAL_STORAGE_KEY, JSON.stringify(recorded));
 
   return { pending: recorded, keptEarlierInvite: recorded.code !== requestedCode };
+}
+
+/**
+ * Records the visit of an invite this phone saved but could not record (it was
+ * captured offline, or the server was busy). A visit must exist before the
+ * account is made, or the claim refuses the account as not new, so this runs
+ * whenever the app comes back while nobody is signed in. Never throws.
+ */
+export async function retryPendingReferralVisit(
+  api: ReferralApi,
+  options: { storage?: ReferralStorage; now?: number } = {},
+): Promise<void> {
+  const storage = options.storage ?? defaultStorage;
+  const pending = await getPendingReferral(storage, options.now ?? Date.now()).catch(() => null);
+  if (!pending || pending.visitToken) return;
+  await capturePendingReferral(api, pending.code, { storage, now: options.now, kind: pending.kind ?? 'invite' })
+    .catch(() => undefined);
 }
 
 function isTerminalVisitError(error: unknown) {

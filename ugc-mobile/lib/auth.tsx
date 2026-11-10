@@ -60,7 +60,9 @@ import {
 } from './feed-event-queue';
 import { clearGenerationAttemptForUser } from './generation-attempts';
 import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
-import { claimPendingReferral } from './referral-attribution';
+import { primeInviteShareCode } from './invite-share-code';
+import { forgetInviteShareCode } from './invite-share-code-state';
+import { claimPendingReferral, retryPendingReferralVisit } from './referral-attribution';
 import {
   clearLocalMobilePushRegistration,
   forgetLastPushRegistration,
@@ -1033,6 +1035,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
   }, [api, registeredUser]);
 
+  // The account's invite code, for the links it shares from the app
+  // (`lib/invite-share-code.ts`): asked for as the account is known, so a share
+  // opens its sheet at the tap with the invite already on the link, and let go
+  // when the account signs out. A guest has no invite to carry. Asked again
+  // when the app comes back, which is a no-op once the code is held and waits
+  // out the backoff after a failure: a first request that failed left every
+  // share bare until the next cold start (review of 2026-11-10).
+  //
+  // Nobody signed in: an invite this phone saved from a link but could not
+  // record yet is recorded when the app comes back, before an account is made.
+  useEffect(() => {
+    if (!registeredUserId) {
+      forgetInviteShareCode();
+      // Only once the session is known: at a cold start nobody is signed in
+      // until it is read, and a visit then would be an account's (re-review
+      // of 2026-11-10).
+      if (isLoading) return;
+      void retryPendingReferralVisit(api);
+      const subscription = AppState.addEventListener('change', (state) => {
+        if (state === 'active') void retryPendingReferralVisit(api);
+      });
+      return () => subscription.remove();
+    }
+    void primeInviteShareCode(api, registeredUserId);
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void primeInviteShareCode(api, registeredUserId);
+    });
+    return () => subscription.remove();
+  }, [api, isLoading, registeredUserId]);
+
   /**
    * Keeps a merge ticket for the guest on this device (audit 02-7), minting one
    * when none is kept for it, or when the one kept is near its expiry.
@@ -1471,6 +1503,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signInsInFlightRef.current += 1;
     try {
       await Promise.all([guestBootstrapRef.current, ...guestTicketMintsRef.current.values()]);
+      // An invite this phone saved from a link but could not record yet must
+      // be recorded before an account is made: a visit made after the account
+      // exists is refused (re-review of 2026-11-10). One try, bounded.
+      await Promise.race([
+        retryPendingReferralVisit(api),
+        new Promise<void>((resolve) => { setTimeout(resolve, 2_500); }),
+      ]);
       await signIn();
     } finally {
       signInsInFlightRef.current -= 1;

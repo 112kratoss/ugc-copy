@@ -70,6 +70,19 @@ describe('ReferralLandingClient', () => {
     }));
   });
 
+  // A browser keeps the first invite link it opened. Saying "saved" credited
+  // the earlier invite without anyone knowing (review of 2026-11-10).
+  it('says when an invite opened earlier in this browser is the one kept', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ...visitAnswer(null), code: 'earlier12', preserved: true }));
+
+    renderLanding();
+
+    expect(await screen.findByText(
+      'You opened another invite in this browser first, and that one is kept. Create your new account to keep the first top-up bonus.'
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/Invite saved/)).toBeNull();
+  });
+
   it('leaves the numbers out when the visit carries no terms', async () => {
     fetchMock.mockResolvedValue(jsonResponse(visitAnswer(null)));
 

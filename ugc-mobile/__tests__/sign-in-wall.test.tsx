@@ -172,6 +172,25 @@ vi.mock('@/lib/google-auth', () => ({
 
 vi.mock('@/lib/onboarding', () => analytics);
 
+/**
+ * The invite a shared link left on the phone: read from its store just after the page is
+ * drawn, so its notice reaches the page a moment after the first frame.
+ */
+const sharedInvite = vi.hoisted(() => ({
+  notice: null as null | { title: string; body: string; tone: 'info' },
+}));
+vi.mock('@/lib/shared-invite-notice', () => ({
+  readSharedInviteNotice: async () => sharedInvite.notice,
+}));
+const SHARED_INVITE = {
+  title: 'Joining through a shared link',
+  body: 'This link carries an invite: the person who shared it may earn bonus credits if you join.',
+  tone: 'info' as const,
+};
+afterEach(() => {
+  sharedInvite.notice = null;
+});
+
 vi.mock('@/components/media-wall', async () => {
   const actual = await vi.importActual<typeof import('../components/media-wall')>('../components/media-wall');
   return { ...actual, MediaWall: (props: MockProps) => React.createElement('media-wall', props) };
@@ -349,6 +368,37 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     const tree = render(<AuthRoute />);
     expect(tree.root.findAllByType('media-wall' as never)).toHaveLength(1);
     expect(JSON.stringify(tree.toJSON())).toContain('signed out');
+  });
+
+  // Seen on the simulator, 2026-11-10: the page kept only the notice it was drawn with, and the
+  // invite's arrives a moment later from the phone's store, so it never showed.
+  it('says a shared link carried an invite once the phone has read it, before anyone joins', async () => {
+    sharedInvite.notice = SHARED_INVITE;
+    paramsState.params = { returnTo: '/creators/invitecheck' };
+    const tree = render(<AuthRoute />);
+    await renderer.act(async () => {});
+    const text = JSON.stringify(tree.toJSON());
+    expect(text).toContain('Joining through a shared link');
+    expect(text).toContain('may earn bonus credits if you join');
+  });
+
+  it('says it on the email half too, which has Apple and Google under the form', async () => {
+    sharedInvite.notice = SHARED_INVITE;
+    paramsState.params = { email: '1', returnTo: '/creators/invitecheck' };
+    const tree = render(<AuthRoute />);
+    await renderer.act(async () => {});
+    expect(formIsInFront(tree)).toBe(true);
+    expect(form(tree).findAll((node) => node.props.title === SHARED_INVITE.title).length).toBeGreaterThan(0);
+  });
+
+  it("keeps a redirect's own notice over the invite's", async () => {
+    sharedInvite.notice = SHARED_INVITE;
+    paramsState.params = { notice: 'signed-out', returnTo: '/profile' };
+    const tree = render(<AuthRoute />);
+    await renderer.act(async () => {});
+    const text = JSON.stringify(tree.toJSON());
+    expect(text).toContain('signed out');
+    expect(text).not.toContain('Joining through a shared link');
   });
 
   it('starts Apple as a sign-up and, once it lands, goes on through the name and credits, then back', async () => {

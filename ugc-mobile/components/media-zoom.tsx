@@ -103,8 +103,14 @@ import { useReducedMotion } from '@/lib/motion';
 import { appleZoomOpenSourceId, appleZoomSourceId, type AppleZoomOpen } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { mediaColors } from '@/lib/theme';
-import { AppleZoomSource, withholdAppleZoomSource } from '@/components/apple-zoom';
-import { forgetAppleZoomSurface, registerAppleZoomSurface } from '@/lib/apple-zoom-surface';
+import {
+  AppleZoomReturnPictureView,
+  AppleZoomSource,
+  useAppleZoomReturnPicture,
+  withholdAppleZoomSource,
+  type AppleZoomReturnPicture,
+} from '@/components/apple-zoom';
+import { forgetAppleZoomSurface, noteAppleZoomPopBegan, noteAppleZoomPopEnded, registerAppleZoomSurface } from '@/lib/apple-zoom-surface';
 import { LetterboxBands } from '@/components/letterbox-bands';
 import { TopScrim } from '@/components/top-scrim';
 import { resolvedTopInset } from '@/lib/safe-area';
@@ -392,7 +398,21 @@ function revealZoomCloseSource() {
  * is closing into does when the reel's pop begins.
  */
 export function noteRootScreenTransitionStart(event: { data?: { closing?: boolean } }) {
-  if (event.data?.closing === false) revealZoomCloseSource();
+  if (event.data?.closing !== false) return;
+  revealZoomCloseSource();
+  // iOS: a reel the app popped is landing its picture in a tile of this
+  // screen (lib/apple-zoom-surface.ts).
+  noteAppleZoomPopBegan();
+}
+
+/**
+ * For the root navigator's `screenListeners`: a screen of it has finished
+ * coming back into view (react-native-screens' `onAppear`), as the one a reel
+ * closed into does when the reel's pop ends. A tile still holding its picture
+ * for that pop lets it go (lib/apple-zoom-surface.ts).
+ */
+export function noteRootScreenTransitionEnd(event: { data?: { closing?: boolean } }) {
+  if (event.data?.closing === false) noteAppleZoomPopEnded();
 }
 const flightClosing = makeMutable(false);
 const flightId = makeMutable(0);
@@ -911,6 +931,11 @@ export interface MediaZoomSource {
   radius?: number;
   /** width / height of the media as the reel draws it, as the tile was given it. */
   aspectRatio: number | null;
+  /**
+   * iOS 18: the tile's picture, drawn in the view a close shrinks the reel
+   * into while a reel showing that picture is up (`useAppleZoomReturnPicture`).
+   */
+  returnPicture?: AppleZoomReturnPicture;
 }
 
 /**
@@ -1115,8 +1140,10 @@ export function useMediaZoomSource({
   }, [active, appleZoomId, aspectRatio, itemId, measure, post, preview, radius, surfaceId]);
 
   const tileKey = active && surfaceId ? zoomTileKey(surfaceId, itemId) : null;
+  // iOS 18: the picture a reel closing into this tile lands on (lib/apple-zoom-surface.ts).
+  const returnPicture = useAppleZoomReturnPicture(appleZoomId ? surfaceId : null, itemId, preview);
 
-  return { ref, hiddenStyle, prepare, capture, offerVideo, tileKey, appleZoomId, aspectRatio, radius };
+  return { ref, hiddenStyle, prepare, capture, offerVideo, tileKey, appleZoomId, aspectRatio, radius, returnPicture };
 }
 
 /**
@@ -1165,8 +1192,13 @@ export function MediaZoomSourceView({
         collapsable={false}
         onLayout={isAppleZoomAvailable() ? measureAppleZoomTile : undefined}
         // Clipped to the tile's corners under the zoom, as the views beside it
-        // are drawn with.
-        style={[ZOOM_SOURCE_FILL, zoomed ? { borderRadius: radius, borderCurve: 'continuous', overflow: 'hidden' } : null]}
+        // are drawn with. Hidden while the picture a close lands on stands in
+        // for it (`AppleZoomReturnPicture.covers`).
+        style={[
+          ZOOM_SOURCE_FILL,
+          zoomed ? { borderRadius: radius, borderCurve: 'continuous', overflow: 'hidden' } : null,
+          source.returnPicture?.covers ? ZOOM_SOURCE_COVERED : null,
+        ]}
       >
         <MediaZoomVideoOfferContext.Provider value={source.offerVideo}>
           <MediaZoomTileKeyContext.Provider value={source.tileKey}>
@@ -1175,24 +1207,33 @@ export function MediaZoomSourceView({
             </MediaZoomTileShapedContext.Provider>
           </MediaZoomTileKeyContext.Provider>
         </MediaZoomVideoOfferContext.Provider>
+        {zoomed && source.returnPicture ? (
+          // Keyed on the tile's post: a list cell handed another post starts
+          // with no picture of the last one to fade.
+          <ZoomReturnVeil key={source.appleZoomId} returnPicture={source.returnPicture} />
+        ) : null}
       </View>
       {/*
-        iOS 18: UIKit's zoom (lib/apple-zoom.ts) is given two empty views
-        beside the tile, never the tile itself. It resizes the view it grows or
-        shrinks the reel with to the window, and React Native content keeps the
-        size and place Yoga gave it: given the tile, its picture dropped inside
-        its own frame as an open began, and a see-through copy of the card rode
-        over the growing reel (owner's iPhone, 2026-11-07). Empty, the views
-        draw nothing UIKit could move; the tile stays where it is under the
-        window, playing on, and UIKit's crossfade is from it to the reel and
-        back.
+        iOS 18: UIKit's zoom (lib/apple-zoom.ts) is given two views beside the
+        tile, never the tile itself. It resizes the view it grows or shrinks
+        the reel with to the window, and React Native content keeps the size
+        and place Yoga gave it: given the tile, its picture dropped inside its
+        own frame as an open began, and a see-through copy of the card rode
+        over the growing reel (owner's iPhone, 2026-11-07). The view an open
+        grows out of is empty, so there is nothing in it UIKit could move, and
+        the tile stays where it is under the window, playing on. The one a
+        close shrinks into is empty too until a reel showing the tile's still
+        picture is up, and then draws that picture in an image view, which
+        fills its bounds as UIKit changes them: the reel's page crossfades into
+        it on the way down, so the picture is there all the way into the tile
+        (lib/apple-zoom-surface.ts).
       */}
       {zoomed ? (
         // The view a close shrinks the reel into: the tile's own rectangle and
         // corners, lined up with the part of the picture the tile shows, so the
         // page comes down into the tile's shape and lands on the tile itself.
         <AppleZoomSource identifier={source.appleZoomId} aspectRatio={source.aspectRatio} tile={appleZoomTile}>
-          <View pointerEvents="none" collapsable={false} style={[StyleSheet.absoluteFill, { borderRadius: radius, borderCurve: 'continuous' }]} />
+          <AppleZoomReturnPictureView returnPicture={source.returnPicture} radius={radius} />
         </AppleZoomSource>
       ) : null}
       {zoomed && source.appleZoomId ? (
@@ -1212,6 +1253,59 @@ export function MediaZoomSourceView({
 }
 
 const ZOOM_SOURCE_FILL = { flexGrow: 1, flexBasis: 'auto' } as const;
+const ZOOM_SOURCE_COVERED = { opacity: 0 } as const;
+
+/** How long a tile's own marks take to come back over the picture a close landed. */
+export const ZOOM_RETURN_VEIL_FADE_MS = 160;
+
+/**
+ * The picture a close landed (lib/apple-zoom-surface.ts) once more, over the
+ * tile it landed in, fading: the tile's badges, shade and names come back
+ * through it instead of all at once a moment after the picture has stopped.
+ *
+ * The picture UIKit flew cannot do this itself. It is drawn over the tile
+ * until the reel lets it go, and a copy UIKit flies takes no opacity from its
+ * view (components/apple-zoom.ios.tsx), so it goes in one frame, with the tile
+ * shown under it in the same commit. This one is the tile's own child, in the
+ * tile's own place and at its scale, so the two never part by a pixel while it
+ * fades; it is there from the moment the picture is held, under the same cover
+ * as the rest of the tile.
+ */
+function ZoomReturnVeil({ returnPicture }: { returnPicture: AppleZoomReturnPicture }) {
+  const { picture } = returnPicture;
+  // The picture last held, kept on while it fades.
+  const [veil, setVeil] = useState<ZoomPreview | null>(picture);
+  if (picture && picture !== veil) setVeil(picture);
+  const fading = picture === null && veil !== null;
+  useEffect(() => {
+    if (!fading) return undefined;
+    // A little past the fade, which runs off this thread.
+    const done = setTimeout(() => setVeil(null), ZOOM_RETURN_VEIL_FADE_MS + 40);
+    return () => clearTimeout(done);
+  }, [fading]);
+  return veil ? <ZoomReturnVeilPicture picture={veil} fading={fading} /> : null;
+}
+
+/** Apart from `ZoomReturnVeil` so that only a tile with a picture to fade makes a shared value. */
+function ZoomReturnVeilPicture({ picture, fading }: { picture: ZoomPreview; fading: boolean }) {
+  const opacity = useSharedValue(1);
+  useEffect(() => {
+    opacity.set(fading ? withTiming(0, { duration: ZOOM_RETURN_VEIL_FADE_MS }) : 1);
+  }, [fading, opacity]);
+  const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  return (
+    <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, style]}>
+      <Image
+        accessible={false}
+        source={{ uri: picture.url, cacheKey: picture.cacheKey ?? undefined }}
+        contentFit="cover"
+        transition={0}
+        cachePolicy="memory-disk"
+        style={StyleSheet.absoluteFill}
+      />
+    </Animated.View>
+  );
+}
 
 export interface MediaZoomStageValue {
   /** True while the reel is growing out of, or shrinking back into, a tile. */

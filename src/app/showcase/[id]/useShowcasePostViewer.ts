@@ -10,6 +10,7 @@ import {
 } from '@/components/useSupabaseAuthCookieHint';
 import type { PostRemixCapability, PostRemixTarget } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
+import { useInviteVisitFromSharedLink } from '@/lib/invite-share-landing';
 import { useOwnerPostVisibility } from '@/lib/owner-page-edits';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import {
@@ -277,6 +278,18 @@ export function useShowcasePostViewer({
       body: JSON.stringify({ postId, eventType: 'share_visit', sourceSurface }),
     }).catch(() => undefined);
   }, [accessToken, effectiveVisibility, postId, search, viewerKey]);
+
+  // A link shared by a signed-in account also carries that account's invite,
+  // `?r=<code>`. For a visitor with no account it is recorded here, once the
+  // viewer is known, as the invite landing would record it; the visitor sees
+  // the post, not a landing. Whatever the post's visibility: the invite is the
+  // sharer's, not the post's.
+  useInviteVisitFromSharedLink({
+    search,
+    path: `/showcase/${postId}`,
+    viewerKnown: viewerKey !== null,
+    viewerHasAccount: Boolean(viewerUserId) && user?.is_anonymous !== true,
+  });
 
   const applyBundleAccess = useCallback((access: ShowcasePostBundleAccess) => {
     if (viewerKey === null) return;

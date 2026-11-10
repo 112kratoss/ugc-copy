@@ -44,6 +44,9 @@ export default function ReferralLandingClient({
   const [state, setState] = useState<VisitState>('saving');
   const [error, setError] = useState<string | null>(null);
   const [program, setProgram] = useState<ReferralProgram | null>(null);
+  // True when this browser had opened another invite first and that one is kept (the server
+  // keeps the first invite link; a shared post's invite gives way to this one).
+  const [keptEarlierInvite, setKeptEarlierInvite] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
@@ -56,9 +59,10 @@ export default function ReferralLandingClient({
       body: JSON.stringify({ code, source: 'web', next: destination }),
       signal: controller.signal,
     }).then(async (response) => {
-      const payload = await response.json().catch(() => null) as { error?: string; program?: unknown } | null;
+      const payload = await response.json().catch(() => null) as { error?: string; program?: unknown; code?: unknown } | null;
       if (!response.ok) throw new Error(payload?.error || 'Could not save this invite.');
       setProgram(readProgram(payload?.program));
+      setKeptEarlierInvite(typeof payload?.code === 'string' && payload.code !== code.toLowerCase());
       setState('ready');
     }).catch((nextError: unknown) => {
       if (nextError instanceof DOMException && nextError.name === 'AbortError') return;
@@ -74,7 +78,10 @@ export default function ReferralLandingClient({
     ? 'Securely saving this invite.'
     : state === 'error'
       ? error ?? 'Could not save this invite.'
-      : program
+      : keptEarlierInvite
+        // Saying "saved" here credited the earlier invite without telling anyone (review of 2026-11-10).
+        ? 'You opened another invite in this browser first, and that one is kept. Create your new account to keep the first top-up bonus.'
+        : program
         ? `Invite saved for ${numberFormatter.format(program.attributionWindowDays)} days. Create your new account to keep the first top-up bonus.`
         : 'Invite saved. Create your new account to keep the first top-up bonus.';
 

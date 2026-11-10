@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   BadgeIndianRupee,
   FileImage,
+  Gift,
   ShieldAlert,
   Sparkles,
   Users,
@@ -68,6 +69,18 @@ export default async function AdminOverviewPage() {
           hint="Razorpay credit purchases"
           icon={BadgeIndianRupee}
         />
+        <Link
+          href="/admin/referrals?state=blocked"
+          className="ui-focus-ring block rounded-2xl"
+        >
+          <StatCard
+            label="Referrals to review"
+            value={counters.referralsAwaitingReview}
+            hint="Blocked by the abuse guard"
+            icon={Gift}
+            tone={counters.referralsAwaitingReview > 0 ? 'warning' : 'neutral'}
+          />
+        </Link>
       </section>
 
       <section className="mt-8">

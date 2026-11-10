@@ -47,7 +47,7 @@ const routerMock = vi.hoisted(() => ({
 const clientAuth = vi.hoisted(() => ({
   current: { session: null, user: null } as {
     session: { access_token: string } | null;
-    user: { id: string } | null;
+    user: { id: string; is_anonymous?: boolean } | null;
   },
 }));
 // The address the page was opened at, as the browser's router reads it: the
@@ -293,6 +293,70 @@ describe('Showcase detail page', () => {
       body: { postId: POST_ID, eventType: 'share_visit', sourceSurface: 'showcase-reel' },
       authorization: 'Bearer live-token',
     }]));
+  });
+
+  // A link a signed-in account shares carries its invite, `?r=<code>`. The
+  // page records it for a visitor with no account, as the invite landing would,
+  // and shows the post: there is no landing in between.
+  describe('the invite a shared link carries', () => {
+    const CODE = '30b5f916c7aa';
+    const inviteVisitsSent = () => requestsTo('/api/referrals/visit').map(([, init]) => ({
+      body: JSON.parse(String(init?.body)),
+      authorization: (init?.headers as Record<string, string> | undefined)?.Authorization ?? null,
+    }));
+
+    it('is recorded once for a visitor, beside the share visit, with the post as where it led', async () => {
+      openedAt(`?s=showcase-reel&r=${CODE}`);
+      const { rerender } = render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+      rerender(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+      await waitFor(() => expect(inviteVisitsSent()).toEqual([{
+        body: { code: CODE, source: 'web', kind: 'shared_link', next: `/showcase/${POST_ID}` },
+        authorization: null,
+      }]));
+      expect(shareVisitsSent()).toHaveLength(1);
+      // The visitor is looking at the post, not at an invite page.
+      expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
+      expect(requestTimeRead).not.toHaveBeenCalled();
+    });
+
+    it('is recorded for a guest, who has no account yet', async () => {
+      openedAt(`?s=feed&r=${CODE}`);
+      clientAuth.current = { session: { access_token: 'guest-token' }, user: { id: 'guest-1', is_anonymous: true } };
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+      await waitFor(() => expect(inviteVisitsSent()).toHaveLength(1));
+    });
+
+    it('is not recorded for an account that exists, the sharer opening their own link included', async () => {
+      openedAt(`?s=showcase-reel&r=${CODE}`);
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+      await waitFor(() => expect(shareVisitsSent()).toHaveLength(1));
+      expect(inviteVisitsSent()).toEqual([]);
+    });
+
+    it('is recorded whatever the post’s visibility: the invite is the sharer’s, not the post’s', async () => {
+      const detail = await getPublicPostDetailMock(POST_ID);
+      getPublicPostDetailMock.mockResolvedValueOnce({ ...detail, visibility: 'unlisted' });
+      openedAt(`?s=showcase-reel&r=${CODE}`);
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+      await waitFor(() => expect(inviteVisitsSent()).toHaveLength(1));
+      expect(shareVisitsSent()).toEqual([]);
+    });
+
+    it.each(['?s=showcase-reel', '?s=showcase-reel&r=nope', '?s=showcase-reel&ref=30b5f916c7aa'])(
+      'sends nothing for a link with no invite on it (%s)',
+      async (search) => {
+        openedAt(search);
+        render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+        await waitFor(() => expect(shareVisitsSent()).toHaveLength(1));
+        expect(inviteVisitsSent()).toEqual([]);
+      },
+    );
   });
 
   it('does not count an in-app open as a share visit', async () => {

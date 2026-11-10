@@ -51,4 +51,50 @@ describe('mobile referral API client', () => {
     expect(JSON.parse(String(calls[3][1].body))).toEqual({ code: 'abc-123', visitToken: 'visit-1' });
     expect((calls[3][1].headers as Headers).get('Authorization')).toBe('Bearer access-token');
   });
+
+  // The referral abuse guard compares the device an invite is made, opened and
+  // claimed on. The visit has always named it in its body; the other three
+  // routes name it in the header the feed already carries.
+  it('names the installation on every Invite & Earn request, and on no other account request', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'access-token',
+      getInstallationId: async () => 'fid_device-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.getReferralOverview();
+    await api.createReferralLink();
+    await api.recordReferralVisit({ code: 'abc-123', source: 'mobile' });
+    await api.claimReferral({ code: 'abc-123', visitToken: 'visit-1' });
+    await api.getProfile();
+
+    const calls = fetcher.mock.calls as unknown as Array<[string, RequestInit]>;
+    const header = (index: number) => (calls[index][1].headers as Headers).get('x-magicbooklet-installation-id');
+    expect(calls.map(([url]) => new URL(url).pathname)).toEqual([
+      '/api/referrals/me',
+      '/api/referrals/link',
+      '/api/referrals/visit',
+      '/api/referrals/claim',
+      '/api/profile',
+    ]);
+    expect([header(0), header(1), header(2), header(3)]).toEqual(['fid_device-1', 'fid_device-1', 'fid_device-1', 'fid_device-1']);
+    expect(header(4)).toBeNull();
+  });
+
+  it('sends the request without the header when the phone has no installation id to give', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true, code: 'abc-123', shareUrl: 'https://magicbooklet.com/r/abc-123' }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'access-token',
+      getInstallationId: async () => { throw new Error('storage unavailable'); },
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await expect(api.createReferralLink()).resolves.toMatchObject({ code: 'abc-123' });
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Headers).has('x-magicbooklet-installation-id')).toBe(false);
+  });
 });

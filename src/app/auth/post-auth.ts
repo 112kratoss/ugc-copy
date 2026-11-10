@@ -8,7 +8,8 @@ import { after } from 'next/server';
 import { logBackendError } from '@/lib/backend-logger';
 import { postOnboardingEventRouteResponse } from '@/lib/onboarding-route-adapter-service';
 import { readReferralVisitCookie, referralClaimStatus } from '@/lib/referral';
-import { claimReferralForUser } from '@/lib/referral-route-service';
+import { resolveReferralDevice } from '@/lib/referral-device';
+import { claimReferralForUser, recordReferralAccountDevice } from '@/lib/referral-route-service';
 import { createServiceClient } from '@/lib/server-helpers';
 
 // What /auth/continue and /auth/callback share after a sign-in has been
@@ -26,26 +27,43 @@ const AUTH_EVENT_STEP_MAX_LENGTH = 64;
 /**
  * Claims the invite this browser opened before signing up and says how it
  * went, so the redirect can tell the new account. A claim that cannot run
- * (attribution down) keeps the cookie for the next sign-in: authentication must
- * not depend on it.
+ * (attribution down, or the account's identity unreadable) keeps the cookie
+ * for the next sign-in: authentication must not depend on it.
+ *
+ * Every sign-in also records this browser for the referral abuse guard (from
+ * the feed cookie it already holds; a sign-in never mints one): a friend who
+ * signed up elsewhere and then signs in on the inviter's browser shows it at
+ * their next purchase. Best-effort, like the claim.
  */
 export async function claimPendingReferralForAuth(
   request: Request,
   userId: string,
 ): Promise<PendingReferralClaim> {
+  const adminSupabase = createServiceClient();
+  // The browser's feed cookie only: the redirect sets no cookie, so a minted id
+  // would be a device no browser holds. And no network digest.
+  const device = resolveReferralDevice(request, { mint: false });
+  const recording = recordReferralAccountDevice(adminSupabase, request, userId, device, { withNetwork: false });
+
   const visitToken = readReferralVisitCookie(request.headers.get('cookie'));
-  if (!visitToken) return { clearCookie: false, status: null };
+  if (!visitToken) {
+    await recording;
+    return { clearCookie: false, status: null };
+  }
 
   try {
     const outcome = await claimReferralForUser({
-      adminSupabase: createServiceClient(),
+      adminSupabase,
       userId,
       visitToken,
+      claimDeviceHash: device.deviceHash,
     });
     return { clearCookie: outcome.clearCookie, status: referralClaimStatus(outcome) };
   } catch (error) {
     logBackendError('post_auth_referral_finalization_deferred', { error });
     return { clearCookie: false, status: null };
+  } finally {
+    await recording;
   }
 }
 

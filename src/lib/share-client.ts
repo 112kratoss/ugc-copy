@@ -8,6 +8,19 @@ import {
 } from '@/lib/share';
 import { buildCreatorProfileUrl } from '@/lib/profile';
 import { logBackendError } from '@/lib/backend-logger';
+import { currentInviteShareCode } from '@/lib/invite-share-code';
+import { withInviteShareCode } from '../../ugc-mobile/lib/invite-share-link/invite-share-link';
+
+/**
+ * A link as it leaves the product: with the sharer's invite on it when the
+ * account signed in here has one (`?r=<code>`, `invite-share-code.ts`), so a
+ * visitor it brings who then signs up counts as that account's referral. Read
+ * at the moment of the share, never awaited: a share must go out in the click
+ * that asked for it.
+ */
+export function withSharersInvite(url: string): string {
+  return withInviteShareCode(url, currentInviteShareCode());
+}
 
 async function postShareClick({
   generationId,
@@ -95,7 +108,7 @@ export async function sharePublicGeneration({
     return null;
   }
 
-  const url = buildShowcaseDetailUrl(generationId, window.location.origin, sourceSurface);
+  const url = withSharersInvite(buildShowcaseDetailUrl(generationId, window.location.origin, sourceSurface));
   const normalizedTitle = title.trim();
   const normalizedDescription = description?.trim() || null;
   const shareText =
@@ -164,7 +177,7 @@ export async function shareCreatorProfile({
   // `profile` from your own profile, `creator-profile` from a creator's page.
   const shareUrl = new URL(buildCreatorProfileUrl(username, window.location.origin));
   shareUrl.searchParams.set(SHARE_SOURCE_QUERY_PARAM, sourceSurface);
-  const url = shareUrl.toString();
+  const url = withSharersInvite(shareUrl.toString());
   const normalizedDisplayName = displayName.trim() || username.trim();
   const normalizedUsername = username.trim().replace(/^@+/, '').toLowerCase();
   const title = `${normalizedDisplayName} on Magic Booklet`;

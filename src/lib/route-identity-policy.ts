@@ -270,6 +270,7 @@ const SERVICE_ROUTES = [
   '/api/admin/session',
   '/api/admin/users/credits',
   '/api/admin/payouts',
+  '/api/admin/referrals',
   '/api/admin/moderation/post-reports',
   '/api/admin/moderation/posts',
   '/api/admin/moderation/subject-reports',

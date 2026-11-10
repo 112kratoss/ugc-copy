@@ -290,6 +290,12 @@ export interface ReferralVisitRequest {
   source: 'mobile';
   next?: string;
   installationId?: string;
+  /**
+   * How the invite came: an invite link (the default), or a post or profile
+   * link that carried its sharer's invite. An invite link replaces an unclaimed
+   * visit a shared link left; a shared link replaces nothing.
+   */
+  kind?: 'invite' | 'shared_link';
 }
 
 export interface ReferralVisitResponse {
@@ -299,6 +305,8 @@ export interface ReferralVisitResponse {
   expiresAt: string;
   /** The program's terms for the landing page; null while no program is active, absent from an older server. */
   program?: ReferralProgramSummary | null;
+  /** True when an earlier invite is the one kept (a browser's cookie; the app keeps its own). */
+  preserved?: boolean;
 }
 
 export interface ReferralClaimRequest {
@@ -309,6 +317,12 @@ export interface ReferralClaimRequest {
 export interface ReferralClaimResponse {
   success: true;
   claimed: boolean;
+  /**
+   * Claimed, but the abuse guard holds its bonus until an operator looks
+   * (most often: signed up on the inviter's own device). Absent from a server
+   * without the guard.
+   */
+  held?: boolean;
   reason?: string;
 }
 

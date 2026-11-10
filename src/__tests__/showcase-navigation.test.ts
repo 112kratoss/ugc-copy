@@ -22,6 +22,16 @@ describe('showcase navigation', () => {
       .toBe('/showcase?category=video#top');
   });
 
+  // A shared link carries its sharer's invite (`?r=<code>`), for the visit that
+  // opened it. A way back made from that address is neither the sharer's link
+  // nor a visit: it must not carry the invite into the product.
+  it('drops the invite a shared link carried from a return path', () => {
+    expect(stripShowcaseViewerState('/showcase/post-1?s=feed&r=30b5f916c7aa&category=video#recipe'))
+      .toBe('/showcase/post-1?category=video#recipe');
+    expect(buildShowcaseDetailPath('post-2', { returnTo: '/creators/athul?s=profile&r=30b5f916c7aa' }))
+      .toBe('/showcase/post-2?returnTo=%2Fcreators%2Fathul');
+  });
+
   it('returns profile details to the owner media hub without reopening the reel', () => {
     expect(getShowcaseReturnContext({
       from: 'profile',

@@ -1,5 +1,6 @@
 'use client';
 
+import { REFERRAL_LINK_DISABLED_CODE } from '@/lib/referral-link-status';
 import {
   ArrowRight,
   Check,
@@ -196,6 +197,8 @@ export default function InviteClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [linkLoading, setLinkLoading] = useState(false);
+  // An operator switched this account's link off (`/admin/referrals`): a state, not a failure.
+  const [linkSwitchedOff, setLinkSwitchedOff] = useState(false);
   const [action, setAction] = useState<ActionFeedback>(idleAction);
   const actionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -270,6 +273,11 @@ export default function InviteClient() {
         body: JSON.stringify({}),
       });
       const payload = await readJson(response);
+      if (response.status === 409 && payload && typeof payload === 'object'
+        && (payload as { code?: unknown }).code === REFERRAL_LINK_DISABLED_CODE) {
+        setLinkSwitchedOff(true);
+        return;
+      }
       if (!response.ok) {
         throw new Error(getErrorMessage(payload, 'Could not create your invite link.'));
       }
@@ -516,6 +524,10 @@ export default function InviteClient() {
                         </button>
                       </div>
                     </div>
+                  ) : linkSwitchedOff ? (
+                    <p role="status" className="mt-6 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] p-4 text-sm leading-6 text-[var(--ui-text-secondary)]">
+                      Your invite link is switched off, so it takes no new friends for now. Contact support if you think this is a mistake.
+                    </p>
                   ) : (
                     <button
                       type="button"
@@ -541,7 +553,7 @@ export default function InviteClient() {
                 <Kicker>How it works</Kicker>
                 <ol className="mt-5 space-y-5">
                   {[
-                    { icon: Share2, title: 'Share your link', body: 'Send your personal invite anywhere you talk with creators.' },
+                    { icon: Share2, title: 'Share your link', body: 'Send your personal invite anywhere you talk with creators. Posts and profiles you share carry it too.' },
                     { icon: UserPlus, title: 'A new friend joins', body: `They create an account through your link within ${numberFormatter.format(summary.program.attributionWindowDays)} days.` },
                     { icon: Sparkles, title: 'Both accounts earn', body: 'Verified top-ups add bonus creation credits automatically.' },
                   ].map((step, index) => (

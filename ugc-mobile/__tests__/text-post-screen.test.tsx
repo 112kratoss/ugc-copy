@@ -48,6 +48,8 @@ const mocks = vi.hoisted(() => ({
   queryOptions: [] as Array<{ queryKey: readonly unknown[]; enabled?: boolean; queryFn?: () => unknown }>,
   saveOptions: { current: null as { sourceSurface?: string; authReturnTo?: string } | null },
   callbacksFor: { current: null as ((item: ImmersivePreviewItem) => ViewerActionCallbacks) | null },
+  // The shared link's invite (`lib/use-invite-share-capture.ts`): what the page hands it.
+  inviteShareCapture: vi.fn(),
 }));
 
 vi.mock('react-native', () => {
@@ -140,6 +142,9 @@ vi.mock('@/lib/immersive-preview-source-data', () => ({
   readCachedProfile: () => undefined,
 }));
 vi.mock('@/lib/use-hardware-back', () => ({ useHardwareBack: () => undefined }));
+// The hook reads the session and SecureStore; its own rules are tested in
+// use-invite-share-capture.test.ts. Here: what the post page asks of it.
+vi.mock('@/lib/use-invite-share-capture', () => ({ useInviteShareCapture: mocks.inviteShareCapture }));
 vi.mock('@/lib/use-showcase-save-mutation', () => ({
   useShowcaseSaveMutation: (options: { sourceSurface?: string; authReturnTo?: string }) => {
     mocks.saveOptions.current = options;
@@ -564,6 +569,43 @@ describe('a shared link', () => {
     mocks.params = { id: 'post-1', s: 'feed', page: 'other', section: 'resources' };
     renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
     expect(byType(tree, 'redirect')[0]!.props.href).toBe('/post/post-1?s=feed');
+  });
+
+  it('keeps the sharer\'s invite on the way to the post page, and drops one that is not a code', () => {
+    mocks.params = { id: 'post-1', s: 'feed', r: '30b5f916c7aa' };
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
+    expect(byType(tree, 'redirect')[0]!.props.href).toBe('/post/post-1?s=feed&r=30b5f916c7aa');
+
+    // A link written by hand in capitals is the same invite.
+    mocks.params = { id: 'post-1', r: '30B5F916C7AA' };
+    renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
+    expect(byType(tree, 'redirect')[0]!.props.href).toBe('/post/post-1?r=30b5f916c7aa');
+
+    // With a Details request it stays ahead of the page and section.
+    mocks.params = { id: 'post-1', s: 'feed', r: '30b5f916c7aa', page: 'details', section: 'resources' };
+    renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
+    expect(byType(tree, 'redirect')[0]!.props.href)
+      .toBe('/post/post-1?s=feed&r=30b5f916c7aa&page=details&section=resources');
+
+    // Anything that could not be an invite code never reaches the post page.
+    for (const r of ['short', '../admin', 'a b c d e f g h', '30b5f916c7aa&next=x']) {
+      mocks.params = { id: 'post-1', s: 'feed', r };
+      renderer.act(() => { tree = renderer.create(React.createElement(ShowcaseDetailScreen)); });
+      expect(byType(tree, 'redirect')[0]!.props.href).toBe('/post/post-1?s=feed');
+    }
+  });
+
+  it('hands the link\'s invite to the capture with the post\'s own web path', () => {
+    mocks.params = { id: 'post-1', s: 'feed', r: '30b5f916c7aa' };
+    renderScreen();
+    expect(mocks.inviteShareCapture).toHaveBeenLastCalledWith('30b5f916c7aa', '/showcase/post-1');
+
+    // An in-app open carries no invite; the hook is told so, not skipped.
+    mocks.inviteShareCapture.mockClear();
+    mocks.params = { id: 'post-1' };
+    renderScreen();
+    expect(mocks.inviteShareCapture).toHaveBeenLastCalledWith(undefined, '/showcase/post-1');
   });
 });
 

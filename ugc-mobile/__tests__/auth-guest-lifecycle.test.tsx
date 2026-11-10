@@ -32,6 +32,8 @@ const state = vi.hoisted(() => {
     // What Platform.OS reads: Google is offered on both phones (D1).
     platform: 'web' as 'web' | 'ios' | 'android',
     prepareGuestAccountMerge: vi.fn(),
+    // The account's invite code, for the links it shares (lib/invite-share-code.ts).
+    primeInviteShareCode: vi.fn(),
     queryClient: {
       clear: vi.fn(),
       fetchQuery: vi.fn(),
@@ -147,7 +149,11 @@ vi.mock('../lib/apple-auth', () => ({
   signInWithNativeApple: vi.fn(),
 }));
 vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: state.signInWithGoogleOAuth }));
-vi.mock('../lib/referral-attribution', () => ({ claimPendingReferral: vi.fn(async () => undefined) }));
+vi.mock('../lib/referral-attribution', () => ({
+  claimPendingReferral: vi.fn(async () => undefined),
+  retryPendingReferralVisit: vi.fn(async () => undefined),
+}));
+vi.mock('../lib/invite-share-code', () => ({ primeInviteShareCode: state.primeInviteShareCode }));
 vi.mock('../lib/notifications', () => ({
   clearLocalMobilePushRegistration: vi.fn(async () => undefined),
   forgetLastPushRegistration: vi.fn(),
@@ -210,11 +216,14 @@ import {
   storeGuestMergeOutcome,
   storeGuestMergeTicket,
 } from '../lib/guest-merge-ticket-storage';
+import { currentInviteShareCode, forgetInviteShareCode, holdInviteShareCode } from '../lib/invite-share-code-state';
 import { forgetLastPushRegistration, setPushRegistrationSession } from '../lib/notifications';
 import { supabase } from '../lib/supabase';
 import { cachedVideoStill, cacheVideoStill } from '../lib/video-still-cache';
 
 const OLD_GUEST_TICKET = 'a'.repeat(64);
+// The invite code each account's link answers with.
+const INVITE_CODES: Record<string, string> = { 'account-a': 'aaaaaaaa1111', 'account-b': 'bbbbbbbb2222' };
 const GUEST_TICKET = 'b'.repeat(64);
 
 function sessionFor(user: Record<string, unknown>, accessToken = 'access-token', expiresInSeconds = 3600) {
@@ -350,6 +359,11 @@ beforeEach(() => {
   state.queryClient.removeQueries.mockReset();
   state.mergeGuestAccount.mockReset();
   state.prepareGuestAccountMerge.mockReset().mockResolvedValue({ ticket: GUEST_TICKET, expiresAt: inDays(30) });
+  forgetInviteShareCode();
+  state.primeInviteShareCode.mockReset().mockImplementation(async (_api: unknown, userId: string) => {
+    holdInviteShareCode(userId, INVITE_CODES[userId] ?? null, Date.now());
+    return INVITE_CODES[userId] ?? null;
+  });
   state.replace.mockReset();
   state.signInAnonymously.mockReset().mockResolvedValue({ data: { session: guestSession() }, error: null });
   state.signInWithPassword.mockReset();
@@ -1488,6 +1502,139 @@ describe('the welcome promise to guests on this phone', () => {
     const { latest, unmount } = await mount(guestSession());
     expect(latest.current?.isGuest).toBe(true);
     expect(state.endWelcomePromise).not.toHaveBeenCalled();
+    unmount();
+  });
+});
+
+describe('the invite the links it shares carry', () => {
+  it("asks for an account's code as the account is known, and holds it", async () => {
+    const { latest, unmount } = await mount(accountA());
+
+    expect(state.primeInviteShareCode).toHaveBeenCalledWith(latest.current?.api, 'account-a');
+    expect(currentInviteShareCode()).toBe(INVITE_CODES['account-a']);
+    unmount();
+  });
+
+  it('asks for none for a guest or for nobody, and holds none', async () => {
+    const guest = await mount(guestSession());
+    expect(guest.latest.current?.isGuest).toBe(true);
+    expect(state.primeInviteShareCode).not.toHaveBeenCalled();
+    expect(currentInviteShareCode()).toBeNull();
+    guest.unmount();
+  });
+
+  // A first request that failed left every share bare until the next cold
+  // start (review of 2026-11-10): coming back asks again, which costs nothing
+  // once the code is held and waits out the backoff after a failure.
+  it('asks again when the app comes back', async () => {
+    const { latest, unmount } = await mount(accountA());
+    expect(state.primeInviteShareCode).toHaveBeenCalledTimes(1);
+
+    await foreground();
+
+    expect(state.primeInviteShareCode).toHaveBeenCalledTimes(2);
+    expect(state.primeInviteShareCode).toHaveBeenLastCalledWith(latest.current?.api, 'account-a');
+    unmount();
+  });
+
+  it('records, for a guest, an invite saved from a link but not yet recorded, when the app comes back', async () => {
+    const { retryPendingReferralVisit } = await import('../lib/referral-attribution');
+    vi.mocked(retryPendingReferralVisit).mockClear();
+    const { unmount } = await mount(guestSession());
+    expect(retryPendingReferralVisit).toHaveBeenCalled();
+    const before = vi.mocked(retryPendingReferralVisit).mock.calls.length;
+
+    await foreground();
+
+    expect(vi.mocked(retryPendingReferralVisit).mock.calls.length).toBeGreaterThan(before);
+    expect(state.primeInviteShareCode).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  // At a cold start nobody is signed in until the session is read; a visit
+  // recorded then would be an account's (re-review of 2026-11-10).
+  it('records no pending invite before the session is read', async () => {
+    const { retryPendingReferralVisit } = await import('../lib/referral-attribution');
+    vi.mocked(retryPendingReferralVisit).mockClear();
+    let answer: (value: unknown) => void = () => undefined;
+    state.getSession.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    const { unmount } = await mount();
+    expect(retryPendingReferralVisit).not.toHaveBeenCalled();
+
+    await renderer.act(async () => { answer({ data: { session: accountA() }, error: null }); });
+    await flush();
+    expect(retryPendingReferralVisit).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  // A visit made after the account exists is refused as not new: an invite the
+  // phone could not record yet is recorded before the sign-in starts.
+  it('records a pending invite before a sign-in starts', async () => {
+    const { retryPendingReferralVisit } = await import('../lib/referral-attribution');
+    const order: string[] = [];
+    vi.mocked(retryPendingReferralVisit).mockImplementation(async () => { order.push('visit'); });
+    signInLandsOn(accountA());
+    state.signInWithPassword.mockImplementation(async () => {
+      order.push('sign-in');
+      state.authCallback?.('SIGNED_IN', accountA());
+      return { data: { session: accountA(), user: accountA().user }, error: null };
+    });
+    state.mergeGuestAccount.mockResolvedValue({ status: 'merged', creditsMoved: 0, promotionalCreditsMoved: 0, credits: 0 });
+    const { latest, unmount } = await mount(guestSession());
+    order.length = 0;
+
+    await renderer.act(async () => {
+      await latest.current?.signInWithPassword('a@example.com', 'correct-Horse-1');
+    });
+
+    expect(order.slice(0, 2)).toEqual(['visit', 'sign-in']);
+    vi.mocked(retryPendingReferralVisit).mockImplementation(async () => undefined);
+    unmount();
+  });
+
+  it('lets go of it at a sign-out, so a link shared after carries no invite', async () => {
+    const { latest, unmount } = await mount(accountA());
+    expect(currentInviteShareCode()).toBe(INVITE_CODES['account-a']);
+
+    state.getSession.mockResolvedValue({ data: { session: null }, error: null });
+    await renderer.act(async () => {
+      await latest.current?.signOut();
+    });
+    await flush();
+
+    expect(latest.current?.user).toBeNull();
+    expect(currentInviteShareCode()).toBeNull();
+    unmount();
+  });
+
+  it('asks as a guest becomes an account, with that account', async () => {
+    signInLandsOn(accountA());
+    state.mergeGuestAccount.mockResolvedValue({ status: 'merged', creditsMoved: 0, promotionalCreditsMoved: 0, credits: 0 });
+    const { latest, unmount } = await mount(guestSession());
+    expect(state.primeInviteShareCode).not.toHaveBeenCalled();
+
+    await renderer.act(async () => {
+      await latest.current?.signInWithPassword('a@example.com', 'correct-Horse-1');
+    });
+    await flush();
+
+    expect(state.primeInviteShareCode).toHaveBeenCalledWith(latest.current?.api, 'account-a');
+    expect(currentInviteShareCode()).toBe(INVITE_CODES['account-a']);
+    unmount();
+  });
+
+  it("holds account B's code, never account A's, once B is the one signed in", async () => {
+    const { latest, unmount } = await mount(accountA());
+    expect(currentInviteShareCode()).toBe(INVITE_CODES['account-a']);
+
+    await renderer.act(async () => {
+      state.authCallback?.('SIGNED_IN', accountB());
+    });
+    await flush();
+
+    expect(latest.current?.user?.id).toBe('account-b');
+    expect(state.primeInviteShareCode).toHaveBeenLastCalledWith(latest.current?.api, 'account-b');
+    expect(currentInviteShareCode()).toBe(INVITE_CODES['account-b']);
     unmount();
   });
 });

@@ -22,11 +22,10 @@ import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { IDENTITY_PROXY_TIMING_HEADER } from '@/lib/identity-admission-assertion';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 import {
-  FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
-  FEED_ANONYMOUS_COOKIE_NAME,
   getFeedNetworkKeyHash,
   isSameSiteBrowserFetch,
   resolveFeedAnonymousIdentity,
+  setFeedAnonymousCookie,
 } from '@/lib/showcase-feed-identity';
 import {
   SHOWCASE_PAGE_SIZE,
@@ -275,15 +274,7 @@ async function handleShowcaseFeedGET(
     recordPhase('serialization', performance.now() - serializationStartedAt);
     withPhaseTimings(response);
     if (anonymousIdentity?.cookieValueToSet) {
-      response.cookies.set({
-        name: FEED_ANONYMOUS_COOKIE_NAME,
-        value: anonymousIdentity.cookieValueToSet,
-        httpOnly: true,
-        secure: true,
-        sameSite: 'lax',
-        path: '/',
-        maxAge: FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
-      });
+      setFeedAnonymousCookie(response, anonymousIdentity.cookieValueToSet);
     }
     return response;
   } catch (error) {
