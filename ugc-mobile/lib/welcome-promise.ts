@@ -96,6 +96,16 @@ export function useWelcomePromise(): boolean {
   return value;
 }
 
+/**
+ * The promise once the stored record has been read: false when an account has
+ * signed in on this phone. For what must not act before it knows (the invite
+ * handed over at install, `lib/invite-install-handoff.ts`).
+ */
+export async function readWelcomePromise(): Promise<boolean> {
+  await loadWelcomePromise();
+  return snapshot();
+}
+
 /** For tests: a fresh launch. Screens still drawn read the promise again. */
 export function resetWelcomePromiseForTests() {
   promise = null;
