@@ -125,12 +125,6 @@ export const MCP_SERVER_NAME = 'magicbooklet';
 export const MCP_SERVER_VERSION = '1.2.0';
 
 /**
- * The time get_generation may spend waiting for a run, within the route's 60-second budget. The
- * descriptions suggest the shorter wait: a cold start, the admission round trips, the wait and the
- * final read must all fit under the route's 60 seconds and the MCP client's own 60-second request
- * timeout, so 45 leaves little room on a slow day.
- */
-/**
  * The route's own limit (`maxDuration` in `src/app/api/mcp/route.ts`, which Next reads as a
  * literal): how long one call's work may run on. It is the composer route's (`/api/posts`):
  * publish_post from uploads runs the same create, which downloads and previews each staged file
@@ -141,6 +135,12 @@ export const MCP_SERVER_VERSION = '1.2.0';
  * finds the post by its derived id.
  */
 export const MCP_ROUTE_MAX_DURATION_SECONDS = 300;
+/**
+ * The time get_generation may spend waiting for a run. The descriptions suggest the shorter wait:
+ * a cold start, the admission round trips, the wait and the final read must all fit under the
+ * MCP client's own request timeout of about 60 seconds (the route itself allows more, above), so
+ * 45 leaves little room on a slow day.
+ */
 export const MCP_GENERATION_WAIT_MAX_SECONDS = 45;
 export const MCP_GENERATION_WAIT_SUGGESTED_SECONDS = 30;
 export const MCP_GENERATION_POLL_INTERVAL_MS = 3_000;
@@ -1514,6 +1514,10 @@ type RepeatTarget = {
   isNsfw: boolean | null;
   remixesAllowed: boolean | null;
   resource: AgentPostResource | null;
+  /** The post's own words, for a repeat's to be held against; undefined where they were not read. */
+  title?: string | null;
+  description?: string | null;
+  category?: string | null;
 };
 
 /**
@@ -1529,6 +1533,11 @@ type RepeatTarget = {
  *
  * Nor is the visibility of a post that is archived, hidden or removed changed: the save would
  * take an archived post's, and the answer would call it live.
+ *
+ * The remix switch is held against what the post offers, not against its column alone: a
+ * creation published with allow_remixes false carries no recipe and the publish service leaves
+ * `remixes_allowed` at its default of true, so the same call repeated must not be told the post
+ * "allows remixes" (the re-review of PR #751).
  */
 function refuseRepeatBeyondVisibility(args: PublishPostArgs, target: RepeatTarget): CallToolResult | null {
   const named = `Post ${target.postId}`;
@@ -1536,7 +1545,7 @@ function refuseRepeatBeyondVisibility(args: PublishPostArgs, target: RepeatTarge
   if (target.state !== 'live' && target.state !== 'private') {
     return toolFailure(
       'CONFLICT',
-      `${named} is ${target.state}, and its visibility is not changed while it is. ${target.state === 'archived' ? 'The creator restores it on the website first.' : 'It is under a moderation decision.'} ${unchanged}`,
+      `${named} is ${target.state}, and its visibility is not changed while it is. ${REPEAT_STATE_REASON[target.state] ?? ''} ${unchanged}`,
       { post_id: target.postId, state: target.state },
     );
   }
@@ -1569,17 +1578,53 @@ function refuseRepeatBeyondVisibility(args: PublishPostArgs, target: RepeatTarge
   if (args.is_nsfw !== undefined && target.isNsfw !== null && args.is_nsfw !== target.isNsfw) {
     return invalid('is_nsfw', `${named} ${target.isNsfw ? 'is marked mature' : 'is not marked mature'}. ${rule}: the mark is changed on the website. ${unchanged} To change the visibility alone, publish again without is_nsfw.`);
   }
-  if (args.allow_remixes !== undefined && target.remixesAllowed !== null && args.allow_remixes !== target.remixesAllowed) {
-    return invalid('allow_remixes', `${named} ${target.remixesAllowed ? 'allows remixes' : 'does not allow remixes'}. ${rule}: the switch is changed on the website. ${unchanged} To change the visibility alone, publish again without allow_remixes.`);
+  if (args.allow_remixes !== undefined && stored && target.remixesAllowed !== null) {
+    const switchRule = `${rule}: the switch is changed on the website. ${unchanged} To change the visibility alone, publish again without allow_remixes.`;
+    if (!args.allow_remixes && target.remixesAllowed && stored.access !== 'none') {
+      return invalid('allow_remixes', `${named} carries a recipe people remix from. ${switchRule}`);
+    }
+    if (args.allow_remixes && !target.remixesAllowed) {
+      return invalid('allow_remixes', `${named} does not allow remixes. ${switchRule}`);
+    }
   }
   return null;
 }
 
-/** What a repeat sent that could not be held against the post and was not applied; empty where it sent none. */
-function repeatListingNote(args: PublishPostArgs): string {
-  return args.resources !== undefined || args.resource_summary !== undefined || args.resource_preview !== undefined
-    ? 'Its resource is the one it was published with: the cards and listing lines sent with a repeat are not applied, and are changed on the website.'
-    : '';
+/** Why the visibility of a post in one of these states is not changed. */
+const REPEAT_STATE_REASON: Partial<Record<AgentPostState, string>> = {
+  archived: 'The creator restores it on the website first.',
+  hidden: 'It is under a moderation decision.',
+  removed: 'It was taken down, and is kept only for the people who unlocked what it carries.',
+};
+
+function sameWords(sent: string, held: string | null | undefined): boolean {
+  return sent.trim() === (held ?? '').trim();
+}
+
+/**
+ * What a repeat sent that publishing again does not apply, said in the answer of a visibility
+ * change so nothing is dropped without a word: the cards and listing lines (no tool reads what a
+ * resource holds, so they cannot be held against it), a remix switch on a post with no recipe,
+ * and a title, description or category other than the post's. Made with is not compared (the
+ * post's is read by no agent tool); the last sentence names it with the rest.
+ */
+function repeatNotes(args: PublishPostArgs, target: RepeatTarget): string {
+  const notes: string[] = [];
+  if (args.resources !== undefined || args.resource_summary !== undefined || args.resource_preview !== undefined) {
+    notes.push('Its resource is the one it was published with: the cards and listing lines sent with a repeat are not applied, and are changed on the website.');
+  }
+  if (args.allow_remixes && target.resource?.access === 'none') {
+    notes.push('It carries no recipe to remix from; one is added on the website.');
+  }
+  const differs = [
+    args.title !== undefined && target.title !== undefined && !sameWords(args.title, target.title) ? 'title' : '',
+    args.description !== undefined && target.description !== undefined && !sameWords(args.description, target.description) ? 'description' : '',
+    args.category !== undefined && target.category !== undefined && args.category !== target.category ? 'category' : '',
+  ].filter(Boolean);
+  if (differs.length > 0) {
+    notes.push(`The ${differs.join(' and ')} sent with this call ${differs.length > 1 ? 'were' : 'was'} not applied: the post keeps its own, and its title, description, category and Made with are edited on the website.`);
+  }
+  return notes.join(' ');
 }
 
 /** How an existing post's state reads in a sentence: its visibility, and what else holds it back. */
@@ -1751,27 +1796,29 @@ async function publishComposedPost(args: PublishPostArgs, context: McpToolContex
     // creation path's republish needs a creation behind the post).
     const existing = read.post;
     if (!isText) {
-      // The composer makes the post's row before it files the media under it, and a publish that
-      // failed in between leaves the row. A repeat names the files the post was to hold, so a
-      // post that holds fewer is not answered as published: it is still being saved by the call
-      // that made it (a client gives up on a request long before the route does), or it was left
-      // unfinished, and making that public would publish a media post without its media.
+      // The composer makes the post's row before it files the media under it, in one insert, and
+      // a publish that failed in between leaves the row. So a media post that holds no file at
+      // all is not answered as published: it is still being saved by the call that made it (a
+      // client gives up on a request long before the route does), or it was left unfinished, and
+      // making that public would publish a media post without its media. A post that holds
+      // fewer files than the repeat names is whole: its creator removed some on the website
+      // (the re-review of PR #751: counting "fewer than named" told an agent to delete it).
       const held = await services.countPostMediaForAgent(admin, postId);
       if (held === null) {
         return toolFailure(MCP_ERROR_CODES.UNAVAILABLE, `Post ${postId} could not be read in full right now. Nothing was changed; try again in a moment.`);
       }
-      if (held < storagePaths.length) {
+      if (held === 0 && existing.format !== 'text') {
         const createdAt = existing.createdAt ? Date.parse(existing.createdAt) : Number.NaN;
         const stillSaving = Number.isFinite(createdAt) && services.now() - createdAt < MCP_ROUTE_MAX_DURATION_SECONDS * 1000;
         return stillSaving
           ? toolFailure(
               MCP_ERROR_CODES.NOT_READY,
-              `Post ${postId} is still being saved by the call that made it (${held} of ${storagePaths.length} files so far). Call publish_post again with the same uploads in a few seconds: it answers the post once it is whole.`,
+              `Post ${postId} is still being saved by the call that made it: it holds none of its files yet. Call publish_post again with the same uploads in a few seconds: it answers the post once it is whole.`,
               { post_id: postId },
             )
           : toolFailure(
               'CONFLICT',
-              `Post ${postId} was left unfinished by a publish that failed midway: it holds ${held} of ${storagePaths.length} files. Nothing was changed. Delete it with delete_post, stage the files again and publish; or the person finishes it on the website.`,
+              `Post ${postId} was left unfinished by a publish that failed midway: it holds none of its files. Nothing was changed. Delete it with delete_post, stage the files again and publish; or the person finishes it on the website.`,
               { post_id: postId },
             );
       }
@@ -1797,13 +1844,17 @@ async function publishComposedPost(args: PublishPostArgs, context: McpToolContex
         },
       );
     }
-    const beyond = refuseRepeatBeyondVisibility(args, {
+    const target: RepeatTarget = {
       postId,
       state: existing.state,
       isNsfw: existing.isNsfw,
       remixesAllowed: existing.remixesAllowed,
       resource: existing.resource,
-    });
+      title: existing.title,
+      description: existing.description,
+      category: existing.category,
+    };
+    const beyond = refuseRepeatBeyondVisibility(args, target);
     if (beyond) return beyond;
     const limited = await refusePublishOverLimit(context, args.visibility === 'public');
     if (limited) return limited;
@@ -1824,7 +1875,7 @@ async function publishComposedPost(args: PublishPostArgs, context: McpToolContex
       [
         `Post ${postId} is now ${result.body.visibility}: ${url}.${nowPublic ? ' Anyone can see it.' : ' Only the creator sees it.'}`,
         resource.access === 'none' ? '' : describeResource(resource, nowPublic),
-        repeatListingNote(args),
+        repeatNotes(args, target),
       ].filter(Boolean).join(' '),
       {
         post_id: postId,
@@ -2025,13 +2076,15 @@ const publishPostTool = defineTool({
       }
       // A visibility change alone: the service republishes the stored post as it is. Whatever
       // else the call names is held against the post first.
-      const beyond = refuseRepeatBeyondVisibility(args, {
+      const target: RepeatTarget = {
         postId: existing.id,
         state: existing.state,
         isNsfw: stored.ok ? stored.post.isNsfw : null,
         remixesAllowed: stored.ok ? stored.post.remixesAllowed : null,
         resource: storedResource,
-      });
+        ...(stored.ok ? { title: stored.post.title, description: stored.post.description, category: stored.post.category } : {}),
+      };
+      const beyond = refuseRepeatBeyondVisibility(args, target);
       if (beyond) return beyond;
       const limited = await refusePublishOverLimit(context, args.visibility === 'public');
       if (limited) return limited;
@@ -2044,7 +2097,7 @@ const publishPostTool = defineTool({
         [
           `Post ${existing.id} is now ${result.body.visibility}: ${url}.${result.body.visibility === 'public' ? ' Anyone can see it.' : ' Only the creator sees it.'}`,
           resource && resource.access !== 'none' ? describeResource(resource, result.body.visibility === 'public') : '',
-          repeatListingNote(args),
+          repeatNotes(args, target),
         ].filter(Boolean).join(' '),
         {
           post_id: existing.id,

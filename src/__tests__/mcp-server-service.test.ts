@@ -1613,7 +1613,8 @@ describe('publish_post', () => {
       ['another price', { resource: { access: 'paid', priceTokens: 250, status: 'draft' } }, { resource_price_tokens: 990 }, 'resource_price_tokens', /already exists with a paid resource at 250 tokens/u],
       ['a price on a post with no recipe', {}, { resource_price_tokens: 250 }, 'resource_price_tokens', /already exists with no resource/u],
       ['a mature mark the post does not have', {}, { is_nsfw: true }, 'is_nsfw', /is not marked mature/u],
-      ['remixes switched off', { remixesAllowed: true }, { allow_remixes: false }, 'allow_remixes', /allows remixes.*changed on the website/u],
+      ['remixes switched off on a post that carries a recipe', { remixesAllowed: true, resource: { access: 'free', priceTokens: 0, status: 'draft' } }, { allow_remixes: false }, 'allow_remixes', /carries a recipe people remix from.*changed on the website/u],
+      ['remixes switched on for a post that does not allow them', { remixesAllowed: false }, { allow_remixes: true }, 'allow_remixes', /does not allow remixes.*changed on the website/u],
     ];
     for (const [label, stored, extra, field, words] of cases) {
       const repeat = harness({
@@ -1641,14 +1642,48 @@ describe('publish_post', () => {
     expect(structured(opened)).toMatchObject({ visibility_changed: true, visibility: 'public', resource_access: 'paid', resource_price_tokens: 250 });
     expect(await publishBody(same.services)).toEqual({ generationId: GENERATION_ID, visibility: 'public' });
 
-    // Finding 12, on this path: an archived or hidden post's visibility is not changed.
+    // Finding 12, on this path: an archived or hidden post's visibility is not changed. Each is
+    // told why in its own words: a removed post is one its creator deleted while people held
+    // what it carries, not one under a moderation decision (the re-review).
+    const reasons = { archived: /restores it on the website first/u, hidden: /under a moderation decision/u, removed: /taken down, and is kept only for the people who unlocked/u };
     for (const state of ['archived', 'hidden', 'removed'] as const) {
       const shelved = harness({ readCreationForPublish: vi.fn(async () => creation({ post: { id: POST_ID, visibility: 'private', state } })) });
       const result = await tool('publish_post').handle({ ...args, visibility: 'public' }, shelved.context);
       expect(toolFailureCode(result), state).toBe('CONFLICT');
+      expect(text(result), state).toMatch(reasons[state]);
+      if (state === 'removed') expect(text(result)).not.toContain('moderation');
       expect(shelved.services.publishGenerationToShowcaseForRoute, state).not.toHaveBeenCalled();
       expect(shelved.services.enforceBackendRateLimit, state).not.toHaveBeenCalled();
     }
+  });
+
+  // The re-review of PR #751: a creation published with allow_remixes false carries no recipe,
+  // and the publish service leaves the post's remix column at its default of true. The same
+  // call repeated with visibility public was refused with "allows remixes", which was untrue.
+  it('lets the same call repeat for a creation published with remixes off, and says what a repeat does not apply', async () => {
+    const saved = creation({ post: { id: POST_ID, visibility: 'private', state: 'private' } });
+    const stored = (overrides: Partial<AgentPostView> = {}) => (
+      vi.fn(async () => ({ ok: true, post: post({ visibility: 'private', state: 'private', title: args.title, remixesAllowed: true, ...overrides }) })) as never
+    );
+    const off = harness({ readCreationForPublish: vi.fn(async () => saved), readPostForAgent: stored() });
+    const opened = await tool('publish_post').handle({ ...args, allow_remixes: false, visibility: 'public' }, off.context);
+    expect(structured(opened)).toMatchObject({ post_id: POST_ID, visibility: 'public', visibility_changed: true, resource_access: 'none' });
+    expect(await publishBody(off.services)).toEqual({ generationId: GENERATION_ID, visibility: 'public' });
+    expect(text(opened)).not.toContain('not applied');
+    expect(text(opened)).not.toContain('no recipe to remix from');
+
+    // Remixes asked for on a post with no recipe: the visibility changes, and the answer says no recipe was added.
+    const on = harness({ readCreationForPublish: vi.fn(async () => saved), readPostForAgent: stored() });
+    const asked = await tool('publish_post').handle({ ...args, allow_remixes: true, visibility: 'public' }, on.context);
+    expect(structured(asked)).toMatchObject({ visibility_changed: true });
+    expect(text(asked)).toContain('It carries no recipe to remix from; one is added on the website.');
+
+    // Another title, description or category than the post's is not applied, and the answer says so.
+    const renamed = harness({ readCreationForPublish: vi.fn(async () => saved), readPostForAgent: stored({ title: 'Red bicycle', description: 'Before', category: 'image' }) });
+    const answer = await tool('publish_post').handle({ ...args, description: 'After', visibility: 'public' }, renamed.context);
+    expect(structured(answer)).toMatchObject({ visibility_changed: true });
+    expect(text(answer)).toContain('The title and description sent with this call were not applied: the post keeps its own, and its title, description, category and Made with are edited on the website.');
+    expect(await publishBody(renamed.services)).toEqual({ generationId: GENERATION_ID, visibility: 'public' });
   });
 
   // Finding 3: a remix of a paid recipe must be public with a paid recipe. The refusal told the
@@ -1940,18 +1975,18 @@ describe('publish_post with uploads', () => {
   // row before it files the media under it. A repeat in that window, or after a publish that
   // failed there, found a post and answered it as published; a visibility change then made a
   // media post public without its media.
-  it('answers a post that holds fewer files than the repeat names as still being saved, or as left unfinished, and changes nothing of it', async () => {
+  it('answers a media post that holds none of its files as still being saved, or as left unfinished, and changes nothing of it', async () => {
     const two = { ...args, uploads: [{ storage_path: STAGED_PICTURE }, { storage_path: STAGED_CLIP }] };
     const twoPostId = agentUploadPostId(USER_ID, [STAGED_PICTURE, STAGED_CLIP]);
     // The harness's clock stands at 1,000 seconds into 1970: a post made 10 seconds before it is
     // inside the route's own time limit, so the call that made it may still be running.
     const young = harness({
       readPostForAgent: found({ postId: twoPostId, visibility: 'private', state: 'private', createdAt: new Date(990_000).toISOString() }),
-      countPostMediaForAgent: vi.fn(async () => 1) as never,
+      countPostMediaForAgent: vi.fn(async () => 0) as never,
     });
     const saving = await tool('publish_post').handle({ ...two, visibility: 'public' }, young.context);
     expect(toolFailureCode(saving)).toBe('NOT_READY');
-    expect(text(saving)).toContain('is still being saved by the call that made it (1 of 2 files so far)');
+    expect(text(saving)).toContain('is still being saved by the call that made it: it holds none of its files yet');
     expect(text(saving)).toContain('Call publish_post again with the same uploads');
     expect(young.services.countPostMediaForAgent).toHaveBeenCalledWith(young.admin, twoPostId);
 
@@ -1962,7 +1997,7 @@ describe('publish_post with uploads', () => {
     });
     const unfinished = await tool('publish_post').handle({ ...two, visibility: 'public' }, old.context);
     expect(toolFailureCode(unfinished)).toBe('CONFLICT');
-    expect(text(unfinished)).toContain('was left unfinished by a publish that failed midway: it holds 0 of 2 files');
+    expect(text(unfinished)).toContain('was left unfinished by a publish that failed midway: it holds none of its files');
     expect(text(unfinished)).toContain('Delete it with delete_post');
     // The same answer without a visibility change: an unfinished post is never called published.
     expect(toolFailureCode(await tool('publish_post').handle(two, old.context))).toBe('CONFLICT');
@@ -1978,6 +2013,22 @@ describe('publish_post with uploads', () => {
     // A post that holds every file is answered as before.
     const whole = harness({ readPostForAgent: found({ postId: twoPostId }), countPostMediaForAgent: vi.fn(async () => 2) as never });
     expect(structured(await tool('publish_post').handle(two, whole.context))).toMatchObject({ post_id: twoPostId, already_published: true });
+  });
+
+  // The re-review of PR #751: the media rows go in as one insert, so a post that holds some of
+  // the files a repeat names is whole. Its creator removed a picture on the website; counting
+  // "fewer than named" told the agent the post was broken and to delete it, for good.
+  it('answers a post whose creator removed a file on the website as published, at any age, and changes its visibility', async () => {
+    const two = { ...args, uploads: [{ storage_path: STAGED_PICTURE }, { storage_path: STAGED_CLIP }] };
+    const twoPostId = agentUploadPostId(USER_ID, [STAGED_PICTURE, STAGED_CLIP]);
+    for (const createdAt of [new Date(990_000).toISOString(), new Date(1_000_000 - (MCP_ROUTE_MAX_DURATION_SECONDS + 1) * 1000).toISOString()]) {
+      const edited = harness({ readPostForAgent: found({ postId: twoPostId, createdAt }), countPostMediaForAgent: vi.fn(async () => 1) as never });
+      const repeated = await tool('publish_post').handle(two, edited.context);
+      expect(structured(repeated), createdAt).toMatchObject({ post_id: twoPostId, already_published: true, visibility_changed: false });
+      const madePrivate = await tool('publish_post').handle({ ...two, visibility: 'private' }, edited.context);
+      expect(structured(madePrivate), createdAt).toMatchObject({ post_id: twoPostId, visibility: 'private', visibility_changed: true });
+      expect(edited.services.updateOwnerPostForRoute, createdAt).toHaveBeenCalledTimes(1);
+    }
   });
 
   it('changes an existing upload post\'s visibility through the composer\'s own save, under the limits a publish passes', async () => {

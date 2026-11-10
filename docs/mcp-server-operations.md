@@ -187,9 +187,17 @@ it the media goes alone. The rules the owner set (2026-11-09):
     visibility and drop the rest without a word, so "make it public at 250" put a free resource
     on offer. The agent publishes again without those arguments to change the visibility alone;
     a price, a resource and the mature mark are changed on the website.
-  - The cards and listing lines a repeat sends cannot be held against the post (no tool reads
-    what a resource holds). They are not applied, and the answer says so.
-  - The visibility of a post that is archived, hidden or removed is not changed (`CONFLICT`).
+  - The remix switch is held against what the post offers, not its column alone: a creation
+    published with `allow_remixes: false` carries no recipe and its `remixes_allowed` stays at
+    the default of true, so that same call repeated is not refused. `allow_remixes: false` is
+    refused for a post that carries a recipe, and `true` for a post whose switch is off.
+  - What a repeat sends that cannot be held against the post, or is simply not applied, is said
+    in the answer of a visibility change: the cards and listing lines (no tool reads what a
+    resource holds), a remix switch on a post with no recipe, and a title, description or
+    category other than the post's. Made with is not compared.
+  - The visibility of a post that is archived, hidden or removed is not changed (`CONFLICT`),
+    each told why: restored on the website first, under a moderation decision, or taken down
+    by its creator and kept for the people who unlocked what it carries.
   - A resource the listing rule keeps off offer on a post that went public is reported as
     `resource_status: draft` with the words "not on offer" and what a public listing needs. A
     save that changes the visibility alone does not refuse for it, as a direct public publish
@@ -469,9 +477,14 @@ agent's repeat finds it. What a repeat is told meanwhile:
 | The repeat finds | It is answered |
 |---|---|
 | No post yet, and a file the first call has claimed (`consuming`) | `NOT_READY`: being published by another call; call again. Never "stage the file again", which would make a second post under new paths. |
-| The post's row, holding fewer files than the repeat names, made less than 300 seconds ago | `NOT_READY`: still being saved; call again. |
+| The post's row, holding none of its files, made less than 300 seconds ago | `NOT_READY`: still being saved; call again. |
 | The same, older | `CONFLICT`: left unfinished by a publish that failed midway. Delete it with `delete_post` and publish again, or finish it on the website. Its visibility is not changed. |
 | The whole post | `already_published`. |
+
+The media rows go in as one insert, so a post holds all of its files or none. A post that holds
+some of the files a repeat names is whole: its creator removed the others on the website, and
+it is answered as published at any age (the re-review of PR #751; the first guard counted
+"fewer than named" and told the agent to delete such a post).
 
 Two identical text publishes sent at the same moment are not told apart (a text post has no file
 to claim): both read no post, the create is an upsert under the one derived id, so one post
@@ -691,8 +704,9 @@ stack only, where the path-insertion forms answered 404 through local Kong:
    does not, which is why `/api/mcp` owns its admission.
 4. `list_models` through Claude Code answers the production catalog's revision, and a
    `get_generation` with `wait_seconds` 45 on a running creation answers rather than timing
-   out: the wait, the admission round trips and the final read must all fit under the route's
-   60 seconds and the client's own request timeout (the tools suggest 30 for that reason).
+   out: the wait, the admission round trips and the final read must all fit under the
+   client's own request timeout of about 60 seconds (the route itself allows 300; the tools
+   suggest 30 for that reason).
 5. One real Codex sign-in, since Codex's flags and keys here come from its documentation and
    source, not a run: the setup page's `codex mcp add` with the Codex client, `callback_port =
    8977` in `~/.codex/config.toml`, then `codex mcp login magicbooklet` opens `/oauth/consent`

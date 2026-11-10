@@ -482,9 +482,9 @@ them blocking, and each was fixed or answered before the merge:
   word. It is refused now: a repeat changes the visibility and nothing else. So decision 18 has a
   second half: what a repeat names beyond the visibility must be what the post has.
 - `publish_post`'s schema is strict, so a misspelled source key is not dropped into a text post.
-- A retry during a running publish is told to call again, never to stage again; a post that
-  holds fewer files than the repeat names is not answered as published; the route's limit is
-  the composer route's 300 seconds.
+- A retry during a running publish is told to call again, never to stage again; a media post
+  that holds none of its files is not answered as published; the route's limit is the composer
+  route's 300 seconds.
 - Staging fails closed when an upload cannot be read; another bucket's upload is not finalized.
 - The moderation list reads unchanged repeats apart from publications.
 - Made with refuses the app's name in the model too, with what is hung on it, and in lookalike
@@ -495,6 +495,12 @@ them blocking, and each was fixed or answered before the merge:
   a resource left off offer on a public post is said to be unlisted.
 - Left to the owner: creators who connected before this release approved the earlier consent
   line and are not asked again unless their grants are revoked.
+- The single-pass re-review of those fixes found two regressions, both fixed: the media
+  guard counted "fewer files than named" and so called a post its creator had edited on the
+  website unfinished (it now refuses only a media post with no file at all), and the repeat
+  guard refused the same call repeated for a creation published with remixes off (the switch
+  is now held against what the post offers). A removed post is no longer said to be under
+  moderation, and a title, description or category a repeat does not apply is said so.
 - Answered, not changed: two identical text publishes at the same moment make one post, the
   later arguments standing; the cleanup items (bounds stated in the schema and the handler,
   hand-copied answers) are style.
