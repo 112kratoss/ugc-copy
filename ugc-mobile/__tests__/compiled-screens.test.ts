@@ -27,6 +27,9 @@ const SCREENS = [
   // The prompt field and @ list both composers run on (2026-11-02): skipped, it would hand them
   // new handlers on every keystroke.
   ['lib/use-reference-mention-input.ts', 'useReferenceMentionInput'],
+  // The @ menu over the prompt, drawn again at every keystroke of a mention and every scroll of
+  // the prompt while it is open (2026-11-10).
+  ['components/media-creation-screen.tsx', 'PromptMentionMenu'],
   // Home's "Make this" shelf, drawn again at every rest of its row, its cards,
   // and the tile they and every feed card play in (2026-10-27).
   ['components/home-shelf.tsx', 'HomeShelf'],
