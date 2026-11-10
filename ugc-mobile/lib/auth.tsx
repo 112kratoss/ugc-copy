@@ -60,6 +60,8 @@ import {
 } from './feed-event-queue';
 import { clearGenerationAttemptForUser } from './generation-attempts';
 import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
+import { primeInviteShareCode } from './invite-share-code';
+import { forgetInviteShareCode } from './invite-share-code-state';
 import { claimPendingReferral } from './referral-attribution';
 import {
   clearLocalMobilePushRegistration,
@@ -1032,6 +1034,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.warn('Failed to claim pending referral after authentication', error);
     });
   }, [api, registeredUser]);
+
+  // The account's invite code, for the links it shares from the app
+  // (`lib/invite-share-code.ts`): asked for as the account is known, so a share
+  // opens its sheet at the tap with the invite already on the link, and let go
+  // when the account signs out. A guest has no invite to carry.
+  useEffect(() => {
+    if (!registeredUserId) {
+      forgetInviteShareCode();
+      return;
+    }
+    void primeInviteShareCode(api, registeredUserId);
+  }, [api, registeredUserId]);
 
   /**
    * Keeps a merge ticket for the guest on this device (audit 02-7), minting one

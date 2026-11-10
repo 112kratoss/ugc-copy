@@ -16,6 +16,11 @@ import {
     getClientE2EAuthState,
 } from '@/lib/e2e-auth';
 import {
+    forgetInviteShareCode,
+    holdStoredInviteShareCode,
+    primeInviteShareCode,
+} from '@/lib/invite-share-code';
+import {
     useHasHydratedSupabaseAuthCookieHint,
     useSupabaseAuthCookieHint,
 } from '@/components/useSupabaseAuthCookieHint';
@@ -552,6 +557,25 @@ export function AuthProvider({
         setBalance((current) => balanceAfterTotal(current, nextCredits, options));
         announceCredits(nextCredits, options);
     };
+
+    // The account's invite code, for the links it shares (`invite-share-code.ts`). What this
+    // browser stored is held as soon as the account is known; the server is asked in idle time,
+    // at most once a week. A guest has no invite and a visitor has no account: their shares
+    // carry none, and the code is let go when the account signs out.
+    const inviteUserId = !clientE2EAuth && session?.user && !session.user.is_anonymous
+        ? session.user.id
+        : null;
+    const inviteAccessToken = inviteUserId ? session?.access_token ?? null : null;
+    useEffect(() => {
+        if (!inviteUserId || !inviteAccessToken) {
+            forgetInviteShareCode();
+            return undefined;
+        }
+        holdStoredInviteShareCode(inviteUserId);
+        return scheduleIdle(() => {
+            void primeInviteShareCode({ userId: inviteUserId, accessToken: inviteAccessToken });
+        }, 4000);
+    }, [inviteAccessToken, inviteUserId]);
 
     const resolvedIsLoading = !hasResolvedInitialState
         && !clientE2EAuth

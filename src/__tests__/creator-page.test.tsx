@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   clientAuth: {
     current: { session: null, user: null } as {
       session: { access_token: string } | null;
-      user: { id: string } | null;
+      user: { id: string; is_anonymous?: boolean } | null;
     },
   },
 }));
@@ -286,6 +286,50 @@ describe('creator page', () => {
 
       expect(screen.getByTestId('creator-content-tabs')).toBeInTheDocument();
       expect(shareVisitsSent()).toEqual([]);
+    });
+
+    // A shared profile link carries its sharer's invite, `?r=<code>`, recorded
+    // here for a visitor with no account, as the post page records it.
+    describe('the invite a shared profile link carries', () => {
+      const CODE = '30b5f916c7aa';
+      const inviteVisitsSent = () => requestsTo('/api/referrals/visit').map(([, init]) => ({
+        body: JSON.parse(String(init?.body)),
+        authorization: (init?.headers as Record<string, string> | undefined)?.Authorization ?? null,
+      }));
+
+      it('is recorded once for a visitor, with the creator page as where it led', async () => {
+        mocks.search.current = `?s=profile&r=${CODE}`;
+        const { rerender } = await renderPage();
+        rerender(await openPage());
+
+        await waitFor(() => expect(inviteVisitsSent()).toEqual([{
+          body: { code: CODE, source: 'web', next: '/creators/creator-name' },
+          authorization: null,
+        }]));
+        expect(shareVisitsSent()).toHaveLength(1);
+      });
+
+      it('is recorded for a guest and not for an account that exists', async () => {
+        mocks.search.current = `?s=creator-profile&r=${CODE}`;
+        mocks.clientAuth.current = { session: { access_token: 'guest-token' }, user: { id: 'guest-1', is_anonymous: true } };
+        const guest = await renderPage();
+        await waitFor(() => expect(inviteVisitsSent()).toHaveLength(1));
+        guest.unmount();
+
+        vi.mocked(fetch).mockClear();
+        signIn();
+        await renderPage();
+        await waitFor(() => expect(shareVisitsSent()).toHaveLength(1));
+        expect(inviteVisitsSent()).toEqual([]);
+      });
+
+      it('sends nothing for a link with no invite on it', async () => {
+        mocks.search.current = '?s=profile&r=nope';
+        await renderPage();
+
+        await waitFor(() => expect(shareVisitsSent()).toHaveLength(1));
+        expect(inviteVisitsSent()).toEqual([]);
+      });
     });
 
     it("sends a signed-in viewer's visit with their session, so none is recorded across a block", async () => {

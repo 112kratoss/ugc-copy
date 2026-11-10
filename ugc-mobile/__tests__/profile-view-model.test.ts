@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import { buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
+import { forgetInviteShareCode, holdInviteShareCode } from '../lib/invite-share-code-state';
 import { mediaItemAspectRatio } from '../lib/media-zoom-transition';
 import {
   FALLBACK_PROFILE_MEDIA,
@@ -693,5 +694,23 @@ describe('sharing your own profile', () => {
     expect(ownProfileShareUrl('https://magicbooklet.com/', 'luna-dreams'))
       .toBe('https://magicbooklet.com/creators/luna-dreams?s=profile');
     expect(ownProfileShareUrl('https://magicbooklet.com', 'a b')).toBe('https://magicbooklet.com/creators/a%20b?s=profile');
+  });
+
+  it("carries the owner's invite, read as the share is made", () => {
+    expect(ownProfileShareUrl('https://magicbooklet.com/', 'luna-dreams', '30b5f916c7aa'))
+      .toBe('https://magicbooklet.com/creators/luna-dreams?s=profile&r=30b5f916c7aa');
+    expect(ownProfileShareUrl('https://magicbooklet.com/', 'luna-dreams', 'not a code'))
+      .toBe('https://magicbooklet.com/creators/luna-dreams?s=profile');
+
+    try {
+      holdInviteShareCode('account-a', '30b5f916c7aa', 0);
+      expect(ownProfileShareUrl('https://magicbooklet.com', 'luna-dreams'))
+        .toBe('https://magicbooklet.com/creators/luna-dreams?s=profile&r=30b5f916c7aa');
+      forgetInviteShareCode();
+      expect(ownProfileShareUrl('https://magicbooklet.com', 'luna-dreams'))
+        .toBe('https://magicbooklet.com/creators/luna-dreams?s=profile');
+    } finally {
+      forgetInviteShareCode();
+    }
   });
 });

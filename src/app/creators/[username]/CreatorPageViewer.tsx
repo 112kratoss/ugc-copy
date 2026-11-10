@@ -20,6 +20,7 @@ import {
   useSupabaseAuthCookieHint,
 } from '@/components/useSupabaseAuthCookieHint';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
+import { recordInviteVisitFromSharedLink } from '@/lib/invite-share-landing';
 import { useOwnerCreatorProfile, type OwnerCreatorProfile } from '@/lib/owner-page-edits';
 import type { EditableCreatorProfile } from '@/lib/profile';
 import { SHARE_SOURCE_QUERY_PARAM } from '@/lib/share';
@@ -100,6 +101,7 @@ export function CreatorPageViewer({
   const [search, setSearch] = useState<string | null>(null);
   const [blockRead, setBlockRead] = useState<{ viewerUserId: string; block: CreatorBlock } | null>(null);
   const shareVisitSent = useRef(false);
+  const inviteVisitSent = useRef(false);
 
   // The page's own API answers a creator who blocked the viewer as missing,
   // and says so when the viewer blocked the creator. One post is enough: only
@@ -147,6 +149,20 @@ export function CreatorPageViewer({
       body: JSON.stringify({ username, eventType: 'share_visit', sourceSurface }),
     }).catch(() => undefined);
   }, [accessToken, search, username, viewerKey]);
+
+  // A shared profile link also carries its sharer's invite, `?r=<code>`,
+  // recorded for a visitor with no account as the post page records it
+  // (`useShowcasePostViewer`).
+  const viewerHasAccount = Boolean(viewerUserId) && user?.is_anonymous !== true;
+  useEffect(() => {
+    if (inviteVisitSent.current || search === null || viewerKey === null) return;
+    inviteVisitSent.current = true;
+    recordInviteVisitFromSharedLink({
+      search,
+      path: `/creators/${encodeURIComponent(username)}`,
+      viewerHasAccount,
+    });
+  }, [search, username, viewerHasAccount, viewerKey]);
 
   const markUnblocked = useCallback(() => {
     if (viewerUserId) setBlockRead({ viewerUserId, block: 'none' });

@@ -553,7 +553,7 @@ export default function InviteClient() {
                 <Kicker>How it works</Kicker>
                 <ol className="mt-5 space-y-5">
                   {[
-                    { icon: Share2, title: 'Share your link', body: 'Send your personal invite anywhere you talk with creators.' },
+                    { icon: Share2, title: 'Share your link', body: 'Send your personal invite anywhere you talk with creators. Posts and profiles you share carry it too.' },
                     { icon: UserPlus, title: 'A new friend joins', body: `They create an account through your link within ${numberFormatter.format(summary.program.attributionWindowDays)} days.` },
                     { icon: Sparkles, title: 'Both accounts earn', body: 'Verified top-ups add bonus creation credits automatically.' },
                   ].map((step, index) => (

@@ -1000,7 +1000,14 @@ export function createApiClient({
       if (!headers.has(REQUEST_ID_HEADER)) {
         headers.set(REQUEST_ID_HEADER, createMobileRequestId());
       }
-      if (path.startsWith('/api/showcase/feed') && getInstallationId && !headers.has(FEED_INSTALLATION_ID_HEADER)) {
+      // The feed keys an anonymous viewer by it; the Invite & Earn routes read
+      // it as the device an invite is made, opened and claimed on, which the
+      // referral abuse guard compares.
+      if (
+        (path.startsWith('/api/showcase/feed') || path.startsWith('/api/referrals/'))
+        && getInstallationId
+        && !headers.has(FEED_INSTALLATION_ID_HEADER)
+      ) {
         const installationId = await getInstallationId().catch(() => null);
         if (installationId) headers.set(FEED_INSTALLATION_ID_HEADER, installationId);
       }

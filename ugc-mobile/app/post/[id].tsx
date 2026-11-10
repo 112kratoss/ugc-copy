@@ -48,6 +48,7 @@ import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedItem, ShowcasePostResponse } from '@/lib/types';
 import { useHardwareBack } from '@/lib/use-hardware-back';
+import { useInviteShareCapture } from '@/lib/use-invite-share-capture';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 import { getThemedSaveHeartIconProps, getViewerActionSlots, getViewerShareIntent, getViewerStateChip } from '@/lib/viewer-actions';
 import { verticalHitSlop } from '@/lib/hit-target';
@@ -66,7 +67,7 @@ const CREATOR_ROW_HEIGHT = 32;
  */
 export default function PostScreen() {
   const theme = useAppTheme();
-  const params = useLocalSearchParams<{ id: string; source?: string; comments?: string; replyTo?: string; deliveryId?: string; s?: string; page?: string; section?: string }>();
+  const params = useLocalSearchParams<{ id: string; source?: string; comments?: string; replyTo?: string; deliveryId?: string; s?: string; r?: string; page?: string; section?: string }>();
   const postId = Array.isArray(params.id) ? params.id[0] : params.id;
   const source = Array.isArray(params.source) ? params.source[0] : params.source;
   const requestedCommentsPostId = Array.isArray(params.comments) ? params.comments[0] : params.comments;
@@ -78,6 +79,10 @@ export default function PostScreen() {
   // (`src/app/showcase/[id]/page.tsx`). Sent as it came: the server counts a
   // surface it does not know as the detail page.
   const shareVisitSurface = (Array.isArray(params.s) ? params.s[0] : params.s)?.trim() || null;
+  // A shared URL also carries its sharer's invite, `?r=<code>`: kept for
+  // someone with no account yet, as the web post page records it. Nothing on
+  // this page waits for it.
+  useInviteShareCapture(params.r, postId ? `/showcase/${postId}` : null);
   // A link that asks for the post's Details page, and the part of it to lead
   // with: a Home card's recipe chip opens the recipe (audit B-F6), as it does
   // over the reel.

@@ -32,6 +32,7 @@ import {
 } from '../lib/viewer-actions';
 import { contrastRatio } from '../lib/color-contrast';
 import { hexWithAlpha } from '../lib/eased-fade';
+import { forgetInviteShareCode, holdInviteShareCode } from '../lib/invite-share-code-state';
 import { buildImmersiveGenerationItems, type ImmersivePreviewItem, type PreviewViewerSource } from '../lib/immersive-preview-view-model';
 import { appTheme, themes } from '../lib/theme';
 import type { GenerationListItem } from '../lib/types';
@@ -486,6 +487,44 @@ describe('share url', () => {
   it('normalises a trailing slash, which call sites used to disagree about', () => {
     expect(buildShareUrl('https://magicbooklet.com/', '/creators/nova', 'creator-profile'))
       .toBe('https://magicbooklet.com/creators/nova?s=creator-profile');
+  });
+
+  it("carries the sharer's invite after the surface, and nothing that is not a code", () => {
+    expect(buildShareUrl('https://magicbooklet.com', '/showcase/post-1', 'showcase-reel', '30b5f916c7aa'))
+      .toBe('https://magicbooklet.com/showcase/post-1?s=showcase-reel&r=30b5f916c7aa');
+    for (const notACode of [null, '', 'short', '30b5f916c7aa&next=/admin', '../admin']) {
+      expect(buildShareUrl('https://magicbooklet.com', '/showcase/post-1', 'showcase-reel', notACode))
+        .toBe('https://magicbooklet.com/showcase/post-1?s=showcase-reel');
+    }
+  });
+
+  // No call site passes a code: every link the app sends out reads the one the
+  // app holds for the signed-in account (`lib/invite-share-code-state.ts`).
+  it('reads the code held for the signed-in account at the moment of the share', () => {
+    const post = railItem({ source: 'showcase-feed', sourceType: 'showcase', sharePath: '/showcase/post-1', title: 'Neon skyline' });
+    try {
+      holdInviteShareCode('account-a', '30b5f916c7aa', 0);
+      expect(buildShareUrl('https://magicbooklet.com', '/creators/nova', 'creator-profile'))
+        .toBe('https://magicbooklet.com/creators/nova?s=creator-profile&r=30b5f916c7aa');
+      expect(getViewerShareIntent(post, 'https://magicbooklet.com')).toEqual({
+        kind: 'share',
+        content: {
+          title: 'Neon skyline',
+          message: 'Neon skyline\nhttps://magicbooklet.com/showcase/post-1?s=showcase-reel&r=30b5f916c7aa',
+          url: 'https://magicbooklet.com/showcase/post-1?s=showcase-reel&r=30b5f916c7aa',
+        },
+      });
+
+      // Signed out, or a guest: the link is the one it always was.
+      forgetInviteShareCode();
+      expect(buildShareUrl('https://magicbooklet.com', '/creators/nova', 'creator-profile'))
+        .toBe('https://magicbooklet.com/creators/nova?s=creator-profile');
+      expect(getViewerShareIntent(post, 'https://magicbooklet.com')).toMatchObject({
+        content: { url: 'https://magicbooklet.com/showcase/post-1?s=showcase-reel' },
+      });
+    } finally {
+      forgetInviteShareCode();
+    }
   });
 });
 
