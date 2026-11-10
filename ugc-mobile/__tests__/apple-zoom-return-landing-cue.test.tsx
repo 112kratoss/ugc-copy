@@ -208,6 +208,64 @@ describe('when a close has landed the reel in its tile', () => {
     expect(transition.listeners.size).toBe(0);
   });
 
+  // The page reached its tile and the picture was let go, and then the close
+  // was let go of after all: the reel is back, showing the same picture, and
+  // its next close has to carry it.
+  it('holds the picture again when a close it had already landed is let go of', () => {
+    const touches = mountCue();
+    touches.handlers.onTouchStart(fingers(1));
+    navigation.emit('transitionStart', { closing: true });
+    transition.emit(1);
+    touches.handlers.onTouchEnd(fingers(0));
+    wait(LANDS_MS);
+    expect(held()).toBe(false);
+
+    navigation.emit('gestureCancel');
+    expect(held()).toBe(true);
+
+    // And the next close lands it as before.
+    navigation.emit('transitionStart', { closing: true });
+    transition.emit(1);
+    wait(LANDS_MS);
+    expect(held()).toBe(false);
+  });
+
+  it('holds nothing again for a reel whose picture was not held', () => {
+    mountCue();
+    resetAppleZoomReturnPictures();
+    navigation.emit('transitionStart', { closing: true });
+    transition.emit(1);
+    wait(LANDS_MS);
+    navigation.emit('gestureCancel');
+    expect(held()).toBe(false);
+  });
+
+  // React Native cancels a touch a gesture outside it takes over, and no lift
+  // follows for that finger, which may still be dragging the close.
+  it('leaves a close whose finger React Native lost by a cancel to land when the reel goes', () => {
+    const touches = mountCue();
+    touches.handlers.onTouchStart(fingers(1));
+    wait(100);
+    // Cancelled as the gesture recognized, just before the close is heard of.
+    touches.handlers.onTouchCancel(fingers(0));
+    wait(50);
+    navigation.emit('transitionStart', { closing: true });
+    transition.emit(1);
+    wait(LANDS_MS * 4);
+    expect(held()).toBe(true);
+  });
+
+  it('pays no mind to a cancel long before the close', () => {
+    const touches = mountCue();
+    touches.handlers.onTouchStart(fingers(1));
+    touches.handlers.onTouchCancel(fingers(0));
+    wait(5000);
+    navigation.emit('transitionStart', { closing: true });
+    transition.emit(1);
+    wait(LANDS_MS);
+    expect(held()).toBe(false);
+  });
+
   it('lands the close that follows one the reader let go of', () => {
     const touches = mountCue();
     touches.handlers.onTouchStart(fingers(1));

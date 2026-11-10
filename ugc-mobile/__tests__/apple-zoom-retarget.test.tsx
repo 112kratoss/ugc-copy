@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
  * whichever comes first.
  */
 
-type Listener = (event: { data?: { closing?: boolean } }) => void;
+type Listener = (event: { data?: { closing?: boolean; action?: { type: string } } }) => void;
 const listeners = new Map<string, Set<Listener>>();
 const setParams = vi.fn();
 let params: Record<string, string> = {};
@@ -28,6 +28,8 @@ const navigation = {
   },
 };
 const emit = (name: string, closing: boolean) => listeners.get(name)?.forEach((listener) => listener({ data: { closing } }));
+/** What React Navigation sends a screen about to be removed by `action`. */
+const emitRemove = (type: string) => listeners.get('beforeRemove')?.forEach((listener) => listener({ data: { action: { type } } }));
 
 vi.mock('react-native', () => ({
   View: ({ children }: { children?: React.ReactNode }) => children,
@@ -189,6 +191,8 @@ describe('the picture a reel\'s close lands on', () => {
   it('stays through a pop the app asks for, which begins after the reel has left React', () => {
     const tree = mountLanded(true);
     renderer.act(() => emit('transitionEnd', false));
+    // `router.back()`.
+    renderer.act(() => emitRemove('GO_BACK'));
     renderer.act(() => tree.unmount());
     // UIKit has yet to ask what to shrink the reel into.
     expect(held('post-1')).toBe(true);
@@ -202,9 +206,25 @@ describe('the picture a reel\'s close lands on', () => {
     // A drag begun and let go: the reel is back.
     renderer.act(() => emit('transitionStart', true));
     renderer.act(() => emit('gestureCancel', false));
+    renderer.act(() => emitRemove('POP'));
     renderer.act(() => tree.unmount());
     expect(held('post-1')).toBe(true);
     noteAppleZoomPopEnded();
+    expect(held('post-1')).toBe(false);
+  });
+
+  // A replace, a reset, or the reel's navigator going: no zoom carries the
+  // reel into the tile, and the tile stood hidden until the 1.5 s deadline.
+  it('is let go at once when the reel goes by anything but a pop', () => {
+    const replaced = mountLanded(true);
+    renderer.act(() => emit('transitionEnd', false));
+    renderer.act(() => emitRemove('REPLACE'));
+    renderer.act(() => replaced.unmount());
+    expect(held('post-1')).toBe(false);
+
+    const unmounted = mountLanded(true);
+    renderer.act(() => emit('transitionEnd', false));
+    renderer.act(() => unmounted.unmount());
     expect(held('post-1')).toBe(false);
   });
 

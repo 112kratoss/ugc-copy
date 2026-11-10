@@ -49,6 +49,6 @@ export function useAppleZoomReturnPicture(
   return NO_RETURN_PICTURE;
 }
 
-export function AppleZoomReturnPictureView({ radius }: { returnPicture: AppleZoomReturnPicture; radius: number }) {
+export function AppleZoomReturnPictureView({ radius }: { returnPicture?: AppleZoomReturnPicture; radius: number }) {
   return <View pointerEvents="none" collapsable={false} style={[StyleSheet.absoluteFill, { borderRadius: radius, borderCurve: 'continuous' }]} />;
 }

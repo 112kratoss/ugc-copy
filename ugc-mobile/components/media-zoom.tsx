@@ -1233,11 +1233,7 @@ export function MediaZoomSourceView({
         // corners, lined up with the part of the picture the tile shows, so the
         // page comes down into the tile's shape and lands on the tile itself.
         <AppleZoomSource identifier={source.appleZoomId} aspectRatio={source.aspectRatio} tile={appleZoomTile}>
-          {source.returnPicture ? (
-            <AppleZoomReturnPictureView returnPicture={source.returnPicture} radius={radius} />
-          ) : (
-            <View pointerEvents="none" collapsable={false} style={[StyleSheet.absoluteFill, { borderRadius: radius, borderCurve: 'continuous' }]} />
-          )}
+          <AppleZoomReturnPictureView returnPicture={source.returnPicture} radius={radius} />
         </AppleZoomSource>
       ) : null}
       {zoomed && source.appleZoomId ? (

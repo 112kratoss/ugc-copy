@@ -176,6 +176,9 @@ export function useAppleZoomSourceId(): string | null {
  */
 export const APPLE_ZOOM_LANDED_AFTER_MS = 450;
 
+/** Navigation actions that pop a screen, which UIKit's zoom animates into the tile. */
+const POP_ACTIONS = new Set(['GO_BACK', 'POP', 'POP_TO', 'POP_TO_TOP']);
+
 /**
  * Points the zoom at the tile of the post the reader is on, so a close shrinks
  * into that tile rather than the one they tapped. The tile has to be on the
@@ -201,6 +204,14 @@ export function useAppleZoomRetarget(
   const leavingRef = useRef(false);
   useEffect(() => listenForScreenLeaving(navigation, (leaving) => {
     leavingRef.current = leaving;
+  }), [navigation]);
+  // Whether the app has asked to pop the reel (`router.back()`, a dismiss), a
+  // removal UIKit's zoom carries into the tile. A replace, a reset or any other
+  // way out takes the reel away with no zoom, and the tile is given its picture
+  // back at once rather than standing hidden until a pop that never comes.
+  const poppedRef = useRef(false);
+  useEffect(() => navigation.addListener('beforeRemove', (event) => {
+    poppedRef.current = POP_ACTIONS.has(event.data.action.type);
   }), [navigation]);
   // Declared before the effect that holds the picture, so that it has run by
   // the time that one lets go. Reset on mount: React runs an effect, its
@@ -250,7 +261,7 @@ export function useAppleZoomRetarget(
     return () => {
       // Going with the reel still on screen: the app asked for the pop, which
       // has yet to begin, and the picture stays until it is over.
-      releaseAppleZoomReturnPicture(surfaceId, activeItemId, unmountingRef.current && !leavingRef.current);
+      releaseAppleZoomReturnPicture(surfaceId, activeItemId, unmountingRef.current && !leavingRef.current && poppedRef.current);
     };
   }, [activeItemId, landed, pictureReturns, surfaceId]);
 }
@@ -312,13 +323,13 @@ export function useAppleZoomReturnPicture(
 /**
  * The view a close shrinks the reel into (`AppleZoomSource`'s one child): the
  * tile's rectangle and corners, empty until a reel holds the tile's picture
- * (`useAppleZoomReturnPicture`). An image view rather than a plain one holding
+ * (`useAppleZoomReturnPicture`; a tile built without one is always empty). An image view rather than a plain one holding
  * a picture: UIKit resizes the view it zooms, and a React Native view keeps
  * what it holds at the size and place Yoga gave it, where expo-image's own
  * image view fills its bounds as they change.
  */
-export function AppleZoomReturnPictureView({ returnPicture, radius }: { returnPicture: AppleZoomReturnPicture; radius: number }) {
-  const { picture } = returnPicture;
+export function AppleZoomReturnPictureView({ returnPicture, radius }: { returnPicture?: AppleZoomReturnPicture; radius: number }) {
+  const picture = returnPicture?.picture ?? null;
   return (
     <Image
       pointerEvents="none"
@@ -330,7 +341,7 @@ export function AppleZoomReturnPictureView({ returnPicture, radius }: { returnPi
       contentFit="cover"
       transition={0}
       cachePolicy="memory-disk"
-      onDisplay={returnPicture.onDisplay}
+      onDisplay={returnPicture?.onDisplay}
       style={[StyleSheet.absoluteFill, { borderRadius: radius, borderCurve: 'continuous' } as ImageStyle]}
     />
   );

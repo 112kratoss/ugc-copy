@@ -50,4 +50,26 @@ describe('whether a finger is on the reel', () => {
     touches.handlers.onTouchEnd(fingers(0));
     expect(heard).toHaveBeenCalledTimes(1);
   });
+
+  // React Native cancels a touch a gesture outside it takes over, and that
+  // finger may still be on the glass: the landing cue asks.
+  it('says whether the last finger left by a cancel or a lift', () => {
+    const touches = createReelTouches(() => 0);
+    expect(touches.endedByCancel()).toBe(false);
+
+    touches.handlers.onTouchStart(fingers(1));
+    touches.handlers.onTouchCancel(fingers(0));
+    expect(touches.endedByCancel()).toBe(true);
+
+    // A new touch that lifts.
+    touches.handlers.onTouchStart(fingers(1));
+    touches.handlers.onTouchEnd(fingers(0));
+    expect(touches.endedByCancel()).toBe(false);
+
+    // Two fingers, one cancelled and the other lifted last: a lift.
+    touches.handlers.onTouchStart(fingers(2));
+    touches.handlers.onTouchCancel(fingers(1));
+    touches.handlers.onTouchEnd(fingers(0));
+    expect(touches.endedByCancel()).toBe(false);
+  });
 });
