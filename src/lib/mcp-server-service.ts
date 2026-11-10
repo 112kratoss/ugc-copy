@@ -1443,7 +1443,7 @@ const PUBLISH_POST_SCHEMA = z.object({
     .describe(`A resource for a text post or an upload post, 1 to ${AGENT_RESOURCE_CARDS_MAX} cards of text and links (no files): how a prompt, a guide or a skill is shared. Free unless resource_price_tokens is given. Refused with generation_id, whose resource is the creation's own recipe.`),
   resource_price_tokens: z.int().min(0).max(RESOURCE_PRICE_TOKENS_MAX).multipleOf(POST_RESOURCE_PRICE_INCREMENT_USD_CENTS).optional()
     .describe(`The resource's price in tokens (100 tokens = $1.00): ${POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} or more, in steps of ${POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}. Left out or 0, the resource is free. Only ever a number the person gave you and said yes to.`),
-  resource_summary: z.string().trim().max(POST_RESOURCE_SUMMARY_MAX_LENGTH).optional().describe(`The resource's one-line listing, at most ${POST_RESOURCE_SUMMARY_MAX_LENGTH} characters. Shown to everyone. Left out, it is derived from the cards.`),
+  resource_summary: z.string().trim().max(POST_RESOURCE_SUMMARY_MAX_LENGTH).optional().describe(`The resource's one-line listing, at most ${POST_RESOURCE_SUMMARY_MAX_LENGTH} characters. Shown to everyone. Left out, it is the preview where one is given, else derived from the cards' titles.`),
   resource_preview: z.string().trim().max(POST_RESOURCE_PREVIEW_MAX_LENGTH).optional().describe(`What the resource includes, at most ${POST_RESOURCE_PREVIEW_MAX_LENGTH} characters and at least 18 for a public post. Shown to everyone. Left out, it is derived from the cards' titles.`),
 });
 
@@ -1848,7 +1848,10 @@ const publishPostTool = defineTool({
         ? { ...storedResource, status: result.body.resourceBundleStatus ?? storedResource.status }
         : storedResource;
       return toolSuccess(
-        `Post ${existing.id} is now ${result.body.visibility}: ${url}.${result.body.visibility === 'public' ? ' Anyone can see it.' : ' Only the creator sees it.'}`,
+        [
+          `Post ${existing.id} is now ${result.body.visibility}: ${url}.${result.body.visibility === 'public' ? ' Anyone can see it.' : ' Only the creator sees it.'}`,
+          resource && resource.access !== 'none' ? describeResource(resource) : '',
+        ].filter(Boolean).join(' '),
         {
           post_id: existing.id,
           post_url: url,

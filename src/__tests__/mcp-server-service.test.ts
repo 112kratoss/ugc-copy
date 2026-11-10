@@ -1418,6 +1418,7 @@ describe('publish_post', () => {
       resource_price_tokens: 250,
       resource_status: 'draft',
     });
+    expect(text(madePrivate)).toContain('Only the creator sees it. It carries a paid resource at 250 tokens, held as a draft');
     // A visibility change alone: no text, no recipe, so the stored post is carried forward as it is.
     expect(await publishBody(flip.services)).toEqual({ generationId: GENERATION_ID, visibility: 'private' });
     // Going private counts no public post.
