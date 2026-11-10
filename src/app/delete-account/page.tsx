@@ -94,10 +94,10 @@ export default function DeleteAccountPage() {
                         remain for a limited recovery cycle before being overwritten.
                     </p>
                     <p className="mt-4 leading-7 text-zinc-300">
-                        To prevent repeat claims of one-time promotions, we also retain a one-way cryptographic digest of the
-                        sign-in identifiers the deleted account used. The digest cannot be reversed into an email address or
-                        identity, is not linked to the deleted account&apos;s content or activity, and is used only to detect
-                        re-registration abuse of one-time offers.
+                        To prevent repeat claims of one-time and new-account promotions, we also retain a one-way
+                        cryptographic digest of the sign-in identifiers the deleted account used. The digest cannot be
+                        reversed into an email address or identity, is not linked to the deleted account&apos;s content or
+                        activity, and is used only to detect re-registration abuse of those offers.
                     </p>
                 </section>
 

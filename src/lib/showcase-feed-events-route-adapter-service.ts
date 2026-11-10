@@ -22,11 +22,10 @@ import {
   type ShowcaseFeedEventRecordResult,
 } from '@/lib/showcase-feed-events-service';
 import {
-  FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
-  FEED_ANONYMOUS_COOKIE_NAME,
   getFeedNetworkKeyHash,
   resolveFeedAnonymousIdentity,
   type FeedAnonymousIdentity,
+  setFeedAnonymousCookie,
 } from '@/lib/showcase-feed-identity';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
@@ -67,15 +66,7 @@ function resolveDependencies(dependencies: ShowcaseFeedEventsRouteDependencies |
 
 function attachAnonymousFeedCookie(response: NextResponse, identity: FeedAnonymousIdentity | null) {
   if (!identity?.cookieValueToSet) return response;
-  response.cookies.set({
-    name: FEED_ANONYMOUS_COOKIE_NAME,
-    value: identity.cookieValueToSet,
-    httpOnly: true,
-    secure: true,
-    sameSite: 'lax',
-    path: '/',
-    maxAge: FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
-  });
+  setFeedAnonymousCookie(response, identity.cookieValueToSet);
   return response;
 }
 

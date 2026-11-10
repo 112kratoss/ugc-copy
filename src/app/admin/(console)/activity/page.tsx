@@ -32,6 +32,7 @@ const KIND_LABELS: Record<AdminActivityKind, { label: string; tone: AdminStatusT
   'generation-moderation': { label: 'generation', tone: 'neutral' },
   'contact-triage': { label: 'contact', tone: 'ok' },
   payout: { label: 'payout', tone: 'warning' },
+  'referral-review': { label: 'referral', tone: 'warning' },
 };
 
 export default async function AdminActivityPage({

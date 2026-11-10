@@ -127,7 +127,8 @@ const WELCOME_REWARD_PATH = '/welcome-reward';
 
 /**
  * What a post-auth redirect tells the new account about the invite it opened:
- * "applied", or the reason `claim_referral_visit` refused it
+ * "applied", "held" (claimed, but the abuse guard holds its rewards for an
+ * operator), or the reason `claim_referral_visit` refused it
  * (`existing_account`, `self_referral`, `already_attributed`,
  * `visit_unavailable`). Null while the claim has not concluded: a profile that
  * is not there yet keeps the cookie for the next sign-in, so there is nothing
@@ -136,9 +137,10 @@ const WELCOME_REWARD_PATH = '/welcome-reward';
 export function referralClaimStatus(outcome: {
   claimed: boolean;
   clearCookie: boolean;
+  held?: boolean;
   reason?: string;
 }): string | null {
-  if (outcome.claimed) return 'applied';
+  if (outcome.claimed) return outcome.held ? 'held' : 'applied';
   if (!outcome.clearCookie) return null;
   return outcome.reason && REFERRAL_CLAIM_REASON_PATTERN.test(outcome.reason)
     ? outcome.reason

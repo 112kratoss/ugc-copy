@@ -90,6 +90,8 @@ function deferredWork() {
 }
 
 type DeletionClientOptions = {
+  /** The account as the Auth admin API returns it; a registered one by default. */
+  authUser?: Record<string, unknown>;
   deleteUserError?: unknown;
   listError?: unknown;
   /** Whose files the prepared manifest lists (the account by default). */
@@ -110,6 +112,7 @@ function deletionServiceClient(options: DeletionClientOptions = {}) {
   const calls: string[] = [];
   const removed: Array<{ bucket: string; paths: string[] }> = [];
   const walletRecords: Array<{ rows: unknown; options: unknown }> = [];
+  const deletedIdentityRecords: Array<{ rows: unknown; options: unknown }> = [];
   const selectIn = (rows: unknown[]) => {
     const query = {
       select: vi.fn(),
@@ -131,10 +134,24 @@ function deletionServiceClient(options: DeletionClientOptions = {}) {
           }),
         };
       }
+      // Kept apart from `calls`: the tests that read the order of the flow
+      // name the steps they care about.
+      if (table === 'deleted_account_identity_fingerprints') {
+        return {
+          upsert: vi.fn(async (rows: unknown, upsertOptions: unknown) => {
+            deletedIdentityRecords.push({ rows, options: upsertOptions });
+            return { data: null, error: null };
+          }),
+        };
+      }
       throw new Error(`Unexpected table: ${table}`);
     }),
     auth: {
       admin: {
+        getUserById: vi.fn(async (userId: string) => ({
+          data: { user: options.authUser ?? { id: userId, email: 'account@example.com', identities: [] } },
+          error: null,
+        })),
         deleteUser: vi.fn(async (userId: string) => {
           calls.push(`delete:${userId}`);
           return { data: null, error: options.deleteUserError ?? null };
@@ -198,7 +215,7 @@ function deletionServiceClient(options: DeletionClientOptions = {}) {
   const stages = () => calls
     .filter((call) => call.startsWith('rpc:mark_account_deletion_stage:'))
     .map((call) => call.slice('rpc:mark_account_deletion_stage:'.length));
-  return { calls, client, removed, stages, walletRecords };
+  return { calls, client, deletedIdentityRecords, removed, stages, walletRecords };
 }
 
 describe('account deletion route', () => {
@@ -334,6 +351,39 @@ describe('account deletion route', () => {
     expect(deletion.calls.indexOf('insert:account_deletion_wallet_records')).toBeGreaterThan(-1);
     expect(deletion.calls.indexOf('insert:account_deletion_wallet_records')).toBeLessThan(
       deletion.calls.indexOf(`delete:${USER_ID}`),
+    );
+  });
+
+  // Invite & Earn is for new accounts: the sign-in that had this account is
+  // remembered, as a digest, so the same person back again is not counted new.
+  it('records the account’s identity digest behind the answer, before Auth is deleted', async () => {
+    const deferred = deferredWork();
+    const deletion = deletionServiceClient();
+    const response = await deleteAccountRouteResponse({
+      request: request({ confirmation: 'DELETE' }),
+      dependencies: {
+        requireIdentity: requireIdentityForRouteTest as never,
+        createUserClient: recentUserClient(),
+        createServiceClient: (() => deletion.client) as never,
+        enforceBackendRateLimit: allowRateLimit(),
+        invalidateShowcaseFeedCache: vi.fn(),
+        now: () => NOW,
+        runAfterResponse: deferred.runAfterResponse,
+      },
+    });
+
+    expect(response.status).toBe(202);
+    expect(deletion.deletedIdentityRecords).toEqual([]);
+
+    await deferred.runAll();
+
+    expect(deletion.client.auth.admin.getUserById).toHaveBeenCalledWith(USER_ID);
+    expect(deletion.deletedIdentityRecords).toEqual([{
+      rows: [{ fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) }],
+      options: { onConflict: 'fingerprint', ignoreDuplicates: true },
+    }]);
+    expect(deletion.client.auth.admin.getUserById.mock.invocationCallOrder[0]).toBeLessThan(
+      deletion.client.auth.admin.deleteUser.mock.invocationCallOrder[0],
     );
   });
 
@@ -1221,7 +1271,10 @@ describe('guest self-deletion', () => {
     const deferred = deferredWork();
     const invalidateShowcaseFeedCache = vi.fn();
     const authorizeAppleAccountDeletion = vi.fn();
-    const deletion = deletionServiceClient({ ownerUserIds: [GUEST_ID] });
+    const deletion = deletionServiceClient({
+      ownerUserIds: [GUEST_ID],
+      authUser: { id: GUEST_ID, is_anonymous: true, email: null, identities: [] },
+    });
     const response = await deleteAccountRouteResponse({
       // The body the app sends today.
       request: request({ confirmation: 'DELETE' }),
@@ -1271,6 +1324,8 @@ describe('guest self-deletion', () => {
     expect(deletion.calls).toContain(`list:generation_inputs:${GUEST_ID}`);
     expect(deletion.client.auth.admin.deleteUser).toHaveBeenCalledTimes(1);
     expect(deletion.client.auth.admin.deleteUser).toHaveBeenCalledWith(GUEST_ID);
+    // A guest has no sign-in to come back with: no identity digest is kept.
+    expect(deletion.deletedIdentityRecords).toEqual([]);
     // Once as the guest was locked, once after the sweep.
     expect(invalidateShowcaseFeedCache).toHaveBeenCalledTimes(2);
   });

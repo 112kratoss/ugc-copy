@@ -156,6 +156,23 @@ describe('InviteClient', () => {
     });
   });
 
+  // A link an operator switched off is a state, not a failure to retry
+  // (re-review of 2026-11-10).
+  it('says the link is switched off instead of offering it again', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ ...summary, code: null, shareUrl: null }))
+      .mockResolvedValueOnce(jsonResponse({
+        success: false, error: 'Your invite link is switched off.', code: 'REFERRAL_LINK_DISABLED',
+      }, 409));
+
+    render(<InviteClient />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create my invite link' }));
+
+    expect(await screen.findByText(/Your invite link is switched off, so it takes no new friends for now\./)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create my invite link' })).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('shows a recoverable API error and retries without reloading the page', async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ error: 'Referral service is warming up.' }, 503))

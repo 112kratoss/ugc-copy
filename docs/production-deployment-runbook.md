@@ -772,9 +772,28 @@ curl -fsS https://magicbooklet.com/.well-known/assetlinks.json
 
 ### Invite And Earn
 
-- Complete a new-account referral in the release environment, then make one verified test credit-pack purchase. Confirm the invitee receives the one-time 5% promotional bonus and the inviter receives 5% promotional credits.
+- Complete a new-account referral in the release environment, then make one verified test credit-pack purchase. Confirm the invitee receives the one-time 5% promotional bonus and the inviter receives 5% promotional credits. **Use two devices**: the abuse guard below blocks a friend who signs up on the inviter's own phone or browser, which is what a one-device test looks like.
 - Refund that test purchase through the provider, then restore/reverse the refund when the provider supports it. Confirm base and referral balances change atomically and notification entries use one idempotent provider event key.
 - Confirm promotional credits can fund creation but do not increase paid-credit marketplace spending power.
+
+#### The abuse guard and the operator's controls
+
+The program pays on a friend's paid top-up, so its abuse is one person on both sides. The guard (migration `20261110070035`, `src/lib/referral-device.ts`) records every referral and decides whether it may pay:
+
+- **Blocked, by the guard**: the friend signed up on a device the inviter uses (the same app installation, or the same browser), or on a device another friend of that inviter already used (read from the referrals themselves too, so deleting that friend's account does not free the device). The friend is known by two devices, the one that opened the link and the one that claimed it; if neither named a device the referral is held (`no_device`), and so are the friends of an inviter whose device list reached its cap of 50 (`inviter_device_cap`). It is checked when the invite is claimed and again at each top-up, with whatever the two accounts' devices show by then: every web sign-in records its browser, and the app records its installation on Invite & Earn requests. A blocked referral pays nothing and writes no purchase event; the friend is told the bonus is on hold, and the Overview counts the referrals waiting for an operator.
+- **Refused as not new** (`existing_account`): the account's sign-in had an account before. The digest of a deleted account's sign-in is kept in `deleted_account_identity_fingerprints` for this; the welcome-credit ledger is read too. Each refusal writes a `refuse_claim` event naming the inviter's link. When the account's identity cannot be read, the claim waits for the next sign-in rather than skipping the check.
+- **Flagged, not blocked**: the friend is on the inviter's network, or on a device another account uses. Friends share rooms, so these are hints for the operator.
+- A browser on another site cannot record a visit: `/api/referrals/visit` refuses a cross-site request.
+
+The guard cannot tell one person with two devices on two networks from two people. Those referrals look clean; block them by hand when the accounts show it.
+
+`/admin/referrals` lists every referral with its state, the guard's reason, the flags, and what it has paid. Each decision needs a reason and is written to `referral_review_events` (append-only; the operator's decisions also appear under Operator activity):
+
+- **Block rewards / Unblock rewards** on one referral. Unblocking pays nothing by itself: the top-ups it skipped are settled by the hourly `referral-reward-reconciliation` job. An operator's decision is never overwritten by the guard.
+- **Switch link off / on** for an inviter: off, the link takes no new visit or claim, the inviter is told their link is switched off, and every referral the link made is held (no purchase event, so nothing is lost). On again, the hourly job pays what was held.
+- Credits already paid are taken back with a credit adjustment (clawback) on the account, under Users & credits.
+
+Retention: the daily `operational-data-retention` job calls `prune_referral_risk_signals`, which clears the network, user-agent and device digests of visits older than 90 days once they can no longer be claimed (the rows stay, so visit counts do not move), a claim's device digest 90 days after the claim, and an account's device rows unseen for 90 days. The guard reads onboarding installations of the last 90 days only. That is the 90 days the Privacy Policy states.
 
 ### Mobile Compatibility
 

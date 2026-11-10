@@ -5,10 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ACCOUNT_IDENTITY_FINGERPRINT_TABLE,
+  DELETED_ACCOUNT_IDENTITY_FINGERPRINT_TABLE,
   deriveAccountIdentityFingerprints,
   deriveIdentityFingerprintSignals,
   hashIdentityFingerprintSignal,
+  loadAccountIdentityFingerprints,
   recordClaimedIdentityFingerprints,
+  recordDeletedAccountIdentityFingerprints,
   type FingerprintableUser,
 } from '@/lib/account-identity-fingerprint';
 
@@ -190,5 +193,87 @@ describe('recordClaimedIdentityFingerprints', () => {
     await expect(recordClaimedIdentityFingerprints(admin, ['u1'])).rejects.toMatchObject({
       message: 'ledger unavailable',
     });
+  });
+});
+
+// Invite & Earn is for new accounts. A sign-in that had an account before is
+// not one, whatever that account had claimed, so its digests are kept when the
+// account goes (20261110070035) and the referral claim is given the new
+// account's to compare.
+describe('the deleted-identity record', () => {
+  function adminStub({
+    user,
+    lookupError = null,
+    upsertError = null,
+  }: {
+    user?: unknown;
+    lookupError?: { status: number; message?: string } | null;
+    upsertError?: { message: string } | null;
+  }) {
+    const upsert = vi.fn(async () => ({ data: null, error: upsertError }));
+    const getUserById = vi.fn(async () => ({ data: { user: user ?? null }, error: lookupError }));
+    const admin = {
+      from: vi.fn((table: string) => {
+        if (table === DELETED_ACCOUNT_IDENTITY_FINGERPRINT_TABLE) return { upsert };
+        throw new Error(`Unexpected table: ${table}`);
+      }),
+      auth: { admin: { getUserById } },
+    } as unknown as SupabaseClient;
+    return { admin, upsert, getUserById };
+  }
+
+  it('records every digest of the account, once, whatever it had claimed', async () => {
+    vi.stubEnv('ACCOUNT_IDENTITY_FINGERPRINT_SECRET', 'pinned-test-secret');
+    const { admin, upsert, getUserById } = adminStub({ user: appleUser });
+
+    await expect(recordDeletedAccountIdentityFingerprints(admin, 'u1')).resolves.toEqual({ fingerprintRows: 3 });
+
+    expect(getUserById).toHaveBeenCalledWith('u1');
+    // A digest keeps the time it was first recorded: the claim compares that
+    // time with the claiming account's creation.
+    expect(upsert).toHaveBeenCalledWith(
+      deriveAccountIdentityFingerprints(appleUser).map((fingerprint) => ({ fingerprint })),
+      { onConflict: 'fingerprint', ignoreDuplicates: true },
+    );
+  });
+
+  it('records nothing for a guest, which has no sign-in to come back with', async () => {
+    // Even one holding an address it has not confirmed: until it registers, the
+    // address is nobody's sign-in, and recording it would refuse its real owner.
+    const { admin, upsert } = adminStub({ user: { is_anonymous: true, email: 'unconfirmed@example.com', identities: [] } });
+
+    await expect(recordDeletedAccountIdentityFingerprints(admin, 'guest')).resolves.toEqual({ fingerprintRows: 0 });
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('records nothing for an account already gone, so a retried deletion goes on', async () => {
+    const { admin, upsert } = adminStub({ lookupError: { status: 404, message: 'User not found' } });
+
+    await expect(recordDeletedAccountIdentityFingerprints(admin, 'gone')).resolves.toEqual({ fingerprintRows: 0 });
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('throws when the account cannot be read or the record cannot be written, leaving the job retryable', async () => {
+    vi.stubEnv('ACCOUNT_IDENTITY_FINGERPRINT_SECRET', 'pinned-test-secret');
+    await expect(recordDeletedAccountIdentityFingerprints(
+      adminStub({ lookupError: { status: 503, message: 'auth unavailable' } }).admin,
+      'u1',
+    )).rejects.toMatchObject({ message: 'auth unavailable' });
+
+    await expect(recordDeletedAccountIdentityFingerprints(
+      adminStub({ user: appleUser, upsertError: { message: 'ledger unavailable' } }).admin,
+      'u1',
+    )).rejects.toMatchObject({ message: 'ledger unavailable' });
+  });
+
+  it('loads an account’s digests for a claim, and throws when the account cannot be read', async () => {
+    vi.stubEnv('ACCOUNT_IDENTITY_FINGERPRINT_SECRET', 'pinned-test-secret');
+    await expect(loadAccountIdentityFingerprints(adminStub({ user: appleUser }).admin, 'u1'))
+      .resolves.toEqual(deriveAccountIdentityFingerprints(appleUser));
+
+    await expect(loadAccountIdentityFingerprints(
+      adminStub({ lookupError: { status: 404, message: 'User not found' } }).admin,
+      'gone',
+    )).rejects.toMatchObject({ message: 'User not found' });
   });
 });

@@ -453,6 +453,9 @@ jobs:
       - name: Test referral intake ownership and admission with real Auth and SQL
         run: npx vitest run --config vitest.referral-intake-postgrest.config.ts
 
+      - name: Test the referral abuse guard and operator decisions with real Auth and SQL
+        run: npx vitest run --config vitest.referral-abuse-guard-postgrest.config.ts
+
       - name: Test bounded referral settlement progress with real PostgREST and SQL
         run: npx vitest run --config vitest.referral-settlement-progress-postgrest.config.ts
 

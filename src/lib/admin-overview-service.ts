@@ -28,6 +28,12 @@ export type AdminOverviewCounters = {
   failedGenerations24h: number;
   openModerationReports: number;
   paidOrders30d: number;
+  /**
+   * Referrals the abuse guard blocked that no operator has looked at yet. A
+   * real friend on a shared device is held here until someone unblocks them,
+   * so the Overview says how many wait.
+   */
+  referralsAwaitingReview: number;
 };
 
 export type AdminOverview = {
@@ -70,6 +76,7 @@ export async function collectAdminOverview(
     openPostReports,
     openSubjectReports,
     paidOrders30d,
+    referralsAwaitingReview,
   ] = await Promise.all([
     // The dashboard aggregates several collectors; a failure in one should
     // degrade the panel, not blank out the counters beside it.
@@ -107,9 +114,21 @@ export async function collectAdminOverview(
       // counting them here would report eight paid orders against one real sale.
       .eq('is_test', false)
       .gte('created_at', monthAgo),
+    client
+      .from('referral_attributions')
+      .select('id', { count: 'exact', head: true })
+      .eq('reward_state', 'blocked')
+      .eq('reward_state_source', 'system'),
   ]);
 
-  for (const result of [population, failedGenerations24h, openPostReports, openSubjectReports, paidOrders30d]) {
+  for (const result of [
+    population,
+    failedGenerations24h,
+    openPostReports,
+    openSubjectReports,
+    paidOrders30d,
+    referralsAwaitingReview,
+  ]) {
     if (result.error) throw result.error;
   }
 
@@ -129,6 +148,7 @@ export async function collectAdminOverview(
       failedGenerations24h: failedGenerations24h.count ?? 0,
       openModerationReports: (openPostReports.count ?? 0) + (openSubjectReports.count ?? 0),
       paidOrders30d: paidOrders30d.count ?? 0,
+      referralsAwaitingReview: referralsAwaitingReview.count ?? 0,
     },
   };
 }

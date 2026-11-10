@@ -11,6 +11,7 @@ const supplementary = [
   'prune_profile_share_events',
   'prune_abandoned_free_unlock_orders',
   'prune_account_merge_tickets',
+  'prune_referral_risk_signals',
   'prune_upload_byte_reservations',
 ];
 // The guest steps (D5, then guests with content) run last; with no candidates

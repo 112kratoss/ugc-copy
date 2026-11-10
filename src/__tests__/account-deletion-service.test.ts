@@ -284,6 +284,10 @@ describe('account deletion cleanup service', () => {
         calls.push('record-claimed-fingerprints');
         return { usersWithGrants: 0, fingerprintRows: 0 };
       }),
+      recordDeletedIdentityFingerprints: vi.fn(async (_admin, userId: string) => {
+        calls.push(`record-deleted-identity:${userId}`);
+        return { fingerprintRows: 0 };
+      }),
       recordWalletBalances: vi.fn(async () => {
         calls.push('record-wallet-balances');
         return { walletsRecorded: 0 };
@@ -293,9 +297,10 @@ describe('account deletion cleanup service', () => {
       authUserAlreadyMissing: false,
       cleanupPending: true,
     });
-    // The claim and wallet ledgers are written while the auth rows still exist
-    // — after the storage sweep settles, strictly before the destructive Auth
-    // stage.
+    // The claim, deleted-identity and wallet ledgers are written while the auth
+    // rows still exist — after the storage sweep settles, strictly before the
+    // destructive Auth stage. The deleted-identity record is the account's own:
+    // Invite & Earn reads it to tell a re-registration from a new account.
     expect(calls).toEqual([
       'prepare_account_deletion:',
       'mark_account_deletion_stage:storage_deleting',
@@ -303,6 +308,7 @@ describe('account deletion cleanup service', () => {
       'retain-purchased-files',
       'mark_account_deletion_stage:storage_deleted',
       'record-claimed-fingerprints',
+      `record-deleted-identity:${USER_ID}`,
       'record-wallet-balances',
       'mark_account_deletion_stage:auth_deleting',
       `delete:${USER_ID}`,
@@ -345,6 +351,7 @@ describe('account deletion cleanup service', () => {
       userId: USER_ID,
       retainPurchasedFiles: vi.fn(async () => ({ revisionsRetained: 0, filesRetained: 0 })),
       recordClaimedFingerprints: vi.fn(async () => ({ usersWithGrants: 0, fingerprintRows: 0 })),
+      recordDeletedIdentityFingerprints: vi.fn(async () => ({ fingerprintRows: 0 })),
     });
 
     expect(wallets.recorded).toEqual([{
@@ -386,6 +393,7 @@ describe('account deletion cleanup service', () => {
       userId: USER_ID,
       retainPurchasedFiles: vi.fn(async () => ({ revisionsRetained: 0, filesRetained: 0 })),
       recordClaimedFingerprints: vi.fn(async () => ({ usersWithGrants: 0, fingerprintRows: 0 })),
+      recordDeletedIdentityFingerprints: vi.fn(async () => ({ fingerprintRows: 0 })),
     })).rejects.toThrow('wallet read outage');
 
     expect(stages).toEqual(['storage_deleting', 'storage_deleted']);
@@ -469,6 +477,7 @@ describe('account deletion cleanup service', () => {
 
     const fingerprintedOwners: string[][] = [];
     const recordWalletBalances = vi.fn(async () => ({ walletsRecorded: 0 }));
+    const recordDeletedIdentityFingerprints = vi.fn(async (_admin: unknown, _userId: string) => ({ fingerprintRows: 0 }));
     await executeInitialAccountDeletion({
       admin: admin as never,
       userId: USER_ID,
@@ -481,12 +490,16 @@ describe('account deletion cleanup service', () => {
         fingerprintedOwners.push(ownerUserIds);
         return { usersWithGrants: 0, fingerprintRows: 0 };
       }),
+      recordDeletedIdentityFingerprints,
       recordWalletBalances,
     });
 
     // Guests cannot claim, but the ledger pass receives every linked identity
     // and filters by actual grants itself.
     expect(fingerprintedOwners).toEqual([[USER_ID, GUEST_ID]]);
+    // The deleted-identity record is the account's alone: a linked guest has no
+    // sign-in to come back with.
+    expect(recordDeletedIdentityFingerprints.mock.calls.map(([, userId]) => userId)).toEqual([USER_ID]);
     // Every linked wallet is recorded under the target's deletion job.
     expect(recordWalletBalances).toHaveBeenCalledWith(admin, USER_ID, [USER_ID, GUEST_ID]);
 
@@ -691,6 +704,7 @@ describe('account deletion cleanup service', () => {
         return { revisionsRetained: 0, filesRetained: 0 };
       }),
       recordClaimedFingerprints: vi.fn(async () => ({ usersWithGrants: 0, fingerprintRows: 0 })),
+      recordDeletedIdentityFingerprints: vi.fn(async () => ({ fingerprintRows: 0 })),
       recordWalletBalances,
     })).resolves.toEqual({
       claimed: 1,
@@ -811,6 +825,7 @@ describe('account deletion cleanup service', () => {
       workerId: 'account-deletion-worker:test',
       limit: 1,
       recordClaimedFingerprints: vi.fn(async () => ({ usersWithGrants: 0, fingerprintRows: 0 })),
+      recordDeletedIdentityFingerprints: vi.fn(async () => ({ fingerprintRows: 0 })),
       recordWalletBalances,
     })).resolves.toMatchObject({
       claimed: 1,
