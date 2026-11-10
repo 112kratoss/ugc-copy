@@ -60,8 +60,15 @@ export const REEL_CLOSE_FLIGHT_LANDING_FADE_MS = 120;
  * How long a flight waits to hear that the reel is being popped. The lift it
  * took off on was over the bar's Back, and the button, which is UIKit's, may
  * still not have taken it for a press.
+ *
+ * The navigator's word reaches JS some 70 ms after the lift in development,
+ * sooner otherwise. It has to be given up on before the picture is on its
+ * tile, about 230 ms in: at 250 the landing always came first and stood for
+ * the word (review of #755). A flight given up on while the reel is in fact
+ * going puts the page back under UIKit's zoom, which closes it as it does
+ * for a swipe.
  */
-export const REEL_CLOSE_FLIGHT_UNCONFIRMED_MS = 250;
+export const REEL_CLOSE_FLIGHT_UNCONFIRMED_MS = 160;
 /** How far a finger may move on the bar's Back and still be pressing it. */
 export const REEL_BACK_PRESS_SLOP = 10;
 
@@ -467,6 +474,7 @@ export function confirmReelCloseFlight(reelId: number) {
 function callBackReelCloseFlight(serial: number) {
   if (!flight || flight.serial !== serial || flight.confirmed) return;
   const { surfaceId, itemId } = flight;
+  if (flight.unconfirmed) clearTimeout(flight.unconfirmed);
   flight = null;
   endFlightOnUI(serial, true);
   showZoomSourceAtLanding();
@@ -476,7 +484,13 @@ function callBackReelCloseFlight(serial: number) {
 
 function landReelCloseFlight(serial: number) {
   if (!flight || flight.serial !== serial) return;
-  if (flight.unconfirmed) clearTimeout(flight.unconfirmed);
+  // Only a reel that is going is left with its page hidden. Landed without the
+  // navigator's word, the reel would stay in front, unseen, and take every
+  // touch meant for the feed.
+  if (!flight.confirmed) {
+    callBackReelCloseFlight(serial);
+    return;
+  }
   flight = null;
   // The tile shows again under the picture, in the picture's own shape, and
   // the picture fades over it: the tile's marks come back through it.

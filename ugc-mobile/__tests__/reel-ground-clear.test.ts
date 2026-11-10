@@ -124,8 +124,11 @@ describe('iOS: a picture flies home itself when the bar\'s Back is pressed', () 
     expect(down).toMatch(/!isInReelBackRegion\(plan\.back, touch\.absoluteX, touch\.absoluteY\)\) \{\n\s+manager\.fail\(\);/);
   });
 
-  it('only under the bar\'s Back, on the picture its tile holds', () => {
-    expect(viewer).toContain('enabled: barBack && pictureReturns && !detailsOpenForActive,');
+  // A screen pushed over the reel (a creator's page) draws its own Back where
+  // the reel's is, and so can a sheet over it: armed under either, a press
+  // there flew the reel's picture over that screen (review of #755).
+  it('only under the bar\'s Back, on the picture its tile holds, while the reel is the screen in front with nothing over it', () => {
+    expect(viewer).toContain('enabled: barBack && pictureReturns && !detailsOpenForActive && isFocused && !overlayOpenItemId,');
     expect(viewer).toContain('back: reelBackButtonRegion(insets.top),');
     expect(viewer).toMatch(/\{onScreen \? <ReelCloseFlightArm postId=\{postId\} picture=\{image\} aspectRatio=\{mediaAspectRatio\} width=\{width\} height=\{height\} \/> : null\}/);
     expect(flightViews).toContain('() => wanted && isAppleZoomReturnPictureHeld(surfaceId, postId)');

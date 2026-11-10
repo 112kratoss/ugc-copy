@@ -324,6 +324,33 @@ describe('the reel\'s own Back, whose pop draws the page from a snapshot', () =>
     expect(timings).toEqual([]);
   });
 
+  // The tap on the reel's own Back is a finger that left the reel just before
+  // the close was heard of. Taken for one dragging the close, it had the page
+  // follow the close's progress up from nothing again (review of #755).
+  it('is left cut down by the close its tap began', () => {
+    const morph = makeMorph();
+    const touches = mountCue(morph);
+    touches.handlers.onTouchStart(fingers(1));
+    touches.handlers.onTouchEnd(fingers(0));
+    expect(startReelCloseMorph(morph, 'home', 'post-1')).toBe(true);
+    vi.advanceTimersByTime(50);
+    navigation.emit('transitionStart', { closing: true });
+    transition.emit(0.05);
+    transition.emit(0.15);
+    expect(morph.progress.value).toBe(1);
+    expect(timings).toEqual([]);
+  });
+
+  it('comes back whole if that close is called off', () => {
+    const morph = makeMorph();
+    mountCue(morph);
+    startReelCloseMorph(morph, 'home', 'post-1');
+    navigation.emit('transitionStart', { closing: true });
+    navigation.emit('transitionEnd', { closing: false });
+    expect(morph.progress.value).toBe(0);
+    expect(timings).toEqual([{ to: 0, duration: REEL_CLOSE_MORPH_BACK_MS }]);
+  });
+
   it('does nothing without a tile that holds the picture and is laid out', () => {
     const morph = makeMorph();
     expect(startReelCloseMorph(morph, 'home', 'post-2')).toBe(false);

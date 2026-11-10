@@ -458,6 +458,30 @@ describe('a press of the bar\'s Back', () => {
     expect(takeOffReelCloseFlight()).toBe(true);
   });
 
+  // The picture is on its tile some 230 ms after the press. Landing there with
+  // nobody having said the reel was going left the reel on top with its page
+  // hidden, taking every touch meant for the feed (review of #755).
+  it('is called back at its landing too, if the navigator still has not said the reel is going', () => {
+    arm();
+    takeOffReelCloseFlight();
+    runToLanding();
+    expect(reelCloseFlightFlying.value).toBeNull();
+    expect(reelCloseFlightHides.value).toBe(0);
+    expect(reelCloseFlightSource.value).toBeNull();
+    expect(tileHidden).toBe(false);
+    expect(isAppleZoomReturnPictureHeld('explore', 'post-1')).toBe(true);
+    // Nothing still pending hides it again.
+    vi.advanceTimersByTime(REEL_CLOSE_FLIGHT_UNCONFIRMED_MS + REEL_CLOSE_FLIGHT_LANDING_FADE_MS + 50);
+    expect(reelCloseFlightHides.value).toBe(0);
+    expect(takeOffReelCloseFlight()).toBe(true);
+  });
+
+  it('gives up on the navigator well before the picture could land', () => {
+    let landsAt = 0;
+    while (reelCloseFlightTravel(landsAt / REEL_CLOSE_FLIGHT_MS) < REEL_CLOSE_FLIGHT_LANDS_AT) landsAt += 1;
+    expect(REEL_CLOSE_FLIGHT_UNCONFIRMED_MS).toBeLessThanOrEqual(landsAt - 50);
+  });
+
   it('is not called back once the navigator has said the reel is going', () => {
     arm();
     takeOffReelCloseFlight();
@@ -485,6 +509,23 @@ describe('a press of the bar\'s Back', () => {
     expect(getReelCloseFlightPicture()).toEqual(spec);
     vi.advanceTimersByTime(REEL_CLOSE_FLIGHT_LANDING_FADE_MS + 50);
     expect(getReelCloseFlightPicture()).toBeNull();
+  });
+
+  it('leaves nothing hidden when its reel goes before it has landed', () => {
+    arm();
+    takeOffReelCloseFlight();
+    confirmReelCloseFlight(REEL);
+    runFrame(8);
+    runFrame(8);
+    // UIKit took the reel away mid-flight.
+    forgetReelCloseFlight(REEL);
+    expect(reelCloseFlightHides.value).toBe(0);
+    runToLanding();
+    vi.advanceTimersByTime(REEL_CLOSE_FLIGHT_LANDING_FADE_MS + 50);
+    expect(reelCloseFlightFlying.value).toBeNull();
+    expect(reelCloseFlightSource.value).toBeNull();
+    expect(reelCloseFlightHides.value).toBe(0);
+    expect(tileHidden).toBe(false);
   });
 
   it('flies on when its reel is disarmed in the frame after', () => {

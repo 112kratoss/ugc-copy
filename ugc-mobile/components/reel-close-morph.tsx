@@ -98,8 +98,17 @@ export function startReelCloseMorph(morph: ReelCloseMorph, surfaceId: string | n
   if (!shape) return false;
   morph.tile.value = shape;
   morph.progress.value = 1;
+  cutAtOnce.add(morph);
   return true;
 }
+
+/**
+ * The pages the reel's own Back has cut down at once. The close that follows
+ * leaves them as they are (`ReelCloseMorphCue`): the tap on that Back is a
+ * finger that left the reel just before the close was heard of, and taken for
+ * one dragging the close it had the page follow the progress up from nothing.
+ */
+const cutAtOnce = new WeakSet<ReelCloseMorph>();
 
 /**
  * How long a page cut down at once is given to be drawn before the pop that
@@ -109,6 +118,7 @@ export const REEL_CLOSE_MORPH_DRAWN_MS = 50;
 
 /** Brings the whole page back. */
 export function endReelCloseMorph(morph: ReelCloseMorph) {
+  cutAtOnce.delete(morph);
   morph.progress.value = withTiming(0, { duration: REEL_CLOSE_MORPH_BACK_MS, easing: Easing.out(Easing.cubic) });
 }
 
@@ -182,6 +192,8 @@ export function ReelCloseMorphCue({
         // The bar's Back, and the picture is flying home on its own over a
         // page already hidden: nothing of the page is left to cut down.
         if (confirmReelCloseFlight(reelId)) return;
+        // The reel's own Back, which cut the page down before asking for the pop.
+        if (cutAtOnce.has(morph)) return;
         const lifted = touches.endedAt();
         const fingerBegan = touches.active() || (lifted !== null && lifted >= performance.now() - FINGER_LEAD_MS);
         if (fingerBegan) {
@@ -191,7 +203,7 @@ export function ReelCloseMorphCue({
         }
       } else if (!leaving) {
         stop();
-        if (started) endReelCloseMorph(morph);
+        if (started || cutAtOnce.has(morph)) endReelCloseMorph(morph);
         started = false;
       }
     });

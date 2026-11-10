@@ -682,12 +682,15 @@ function ImmersivePreviewViewer() {
   const activeItemId = activeItem?.id ?? null;
   // What the slide on screen needs to get its picture ready to fly home
   // (components/reel-close-flight.ios.tsx): only under the bar's Back, the
-  // button that flight leaves on.
+  // button that flight leaves on, and only while that button is the one a
+  // press there reaches. A screen pushed over the reel (a creator's page)
+  // draws a Back of its own in the same place, and a sheet over the reel can
+  // put a control there.
   const closeFlight = {
     reelId: closeFlightId,
     surfaceId: zoomSurfaceId,
     activeItemId,
-    enabled: barBack && pictureReturns && !detailsOpenForActive,
+    enabled: barBack && pictureReturns && !detailsOpenForActive && isFocused && !overlayOpenItemId,
     back: reelBackButtonRegion(insets.top),
   };
   const beforeNativeClose = useCallback(() => (
