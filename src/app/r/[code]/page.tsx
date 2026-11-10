@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
 import {
-  getReferralStoreUrls,
   getSafeReferralDestination,
   normalizeReferralCode,
 } from '@/lib/referral';
@@ -28,14 +27,8 @@ export default async function ReferralLandingPage({
 
   const rawDestination = Array.isArray(query.next) ? query.next[0] : query.next;
   const destination = getSafeReferralDestination(rawDestination, '/create');
-  const stores = getReferralStoreUrls();
 
   return (
-    <ReferralLandingClient
-      appStoreUrl={stores.appStore}
-      code={code}
-      destination={destination}
-      playStoreUrl={stores.playStore}
-    />
+    <ReferralLandingClient code={code} destination={destination} />
   );
 }

@@ -1,8 +1,13 @@
 'use client';
 
-import { ArrowRight, CheckCircle2, Gift, Loader2, RefreshCw, ShieldCheck, Smartphone } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Gift, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+
+import { InviteHandoffLandingOffer } from '@/components/InviteHandoffBar';
+import { readInviteHandoffPreview, withoutInviteHandoffPreview, type StoredInviteHandoff } from '@/lib/invite-handoff';
+
+import { normalizeInviteShareCode } from '../../../../ugc-mobile/lib/invite-share-link/invite-share-link';
 
 type VisitState = 'saving' | 'ready' | 'error';
 
@@ -31,15 +36,11 @@ function readProgram(value: unknown): ReferralProgram | null {
 }
 
 export default function ReferralLandingClient({
-  appStoreUrl,
   code,
   destination,
-  playStoreUrl,
 }: {
-  appStoreUrl: string | null;
   code: string;
   destination: string;
-  playStoreUrl: string | null;
 }) {
   const [state, setState] = useState<VisitState>('saving');
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +48,10 @@ export default function ReferralLandingClient({
   // True when this browser had opened another invite first and that one is kept (the server
   // keeps the first invite link; a shared post's invite gives way to this one).
   const [keptEarlierInvite, setKeptEarlierInvite] = useState(false);
+  // The invite this browser now holds, for the offer to carry it on to the app: this link's, or
+  // the earlier invite link's the server kept in its place. Either way an invite link's: a
+  // shared post's invite gives way to this one, so only another invite link is ever kept.
+  const [handoff, setHandoff] = useState<StoredInviteHandoff | null>(null);
   const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
@@ -62,7 +67,17 @@ export default function ReferralLandingClient({
       const payload = await response.json().catch(() => null) as { error?: string; program?: unknown; code?: unknown } | null;
       if (!response.ok) throw new Error(payload?.error || 'Could not save this invite.');
       setProgram(readProgram(payload?.program));
-      setKeptEarlierInvite(typeof payload?.code === 'string' && payload.code !== code.toLowerCase());
+      const keptCode = normalizeInviteShareCode(payload?.code) ?? code.toLowerCase();
+      const keptEarlier = keptCode !== code.toLowerCase();
+      setKeptEarlierInvite(keptEarlier);
+      // Handed on as its own landing (`/r/<kept code>`), which is the page that records it
+      // on the phone: the destination alone records nothing (review of 2026-11-10).
+      const preview = readInviteHandoffPreview(window.location.search);
+      setHandoff({ code: keptCode, kind: 'invite', path: destination, preview });
+      if (preview) {
+        const { pathname, search, hash } = window.location;
+        window.history.replaceState(window.history.state, '', withoutInviteHandoffPreview(`${pathname}${search}${hash}`));
+      }
       setState('ready');
     }).catch((nextError: unknown) => {
       if (nextError instanceof DOMException && nextError.name === 'AbortError') return;
@@ -162,15 +177,8 @@ export default function ReferralLandingClient({
               </div>
             </div>
 
-            {appStoreUrl || playStoreUrl ? (
-              <div className="rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] p-4">
-                <p className="flex items-center gap-2 text-sm font-extrabold text-[var(--ui-text-primary)]"><Smartphone className="h-4 w-4" aria-hidden /> Prefer the mobile app?</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {appStoreUrl ? <a href={appStoreUrl} className="ui-focus-ring rounded-full border border-[var(--ui-border-default)] px-4 py-2 text-sm font-bold text-[var(--ui-text-secondary)]">Open App Store</a> : null}
-                  {playStoreUrl ? <a href={playStoreUrl} className="ui-focus-ring rounded-full border border-[var(--ui-border-default)] px-4 py-2 text-sm font-bold text-[var(--ui-text-secondary)]">Open Google Play</a> : null}
-                </div>
-              </div>
-            ) : null}
+            {/* The way to the app that keeps the invite, for this device (`InviteHandoffBar.tsx`). */}
+            {state === 'ready' && handoff ? <InviteHandoffLandingOffer handoff={handoff} /> : null}
 
             <p className="text-center text-xs leading-5 text-[var(--ui-text-faint)]">
               New accounts only. Offer applies to the first verified credit-pack purchase within the referral rules. Refunds, disputes, self-referrals, and abuse are ineligible. See the <Link href="/terms" className="underline underline-offset-2">Invite &amp; Earn terms</Link>.
