@@ -1871,15 +1871,15 @@ const publishPostTool = defineTool({
     // A price, or listing lines, with no recipe to carry them would be dropped without a word.
     if (!agentPublishSendsRecipe({ allowRemixes, creationPrompt: creation.prompt })) {
       const nothingToCarry = allowRemixes
-        ? 'This creation has no prompt, so it has no recipe'
+        ? 'this creation has no prompt, so it has no recipe'
         : 'allow_remixes false publishes no recipe';
       if (paid) {
-        return invalid('resource_price_tokens', `resource_price_tokens prices the creation's recipe, and ${nothingToCarry.charAt(0).toLowerCase()}${nothingToCarry.slice(1)}. Leave the price out.`);
+        return invalid('resource_price_tokens', `resource_price_tokens prices the creation's recipe, and ${nothingToCarry}. Leave the price out.`);
       }
       if (args.resource_summary !== undefined || args.resource_preview !== undefined) {
         return invalid(
           args.resource_summary !== undefined ? 'resource_summary' : 'resource_preview',
-          `resource_summary and resource_preview describe the creation's recipe, and ${nothingToCarry.charAt(0).toLowerCase()}${nothingToCarry.slice(1)}. Leave them out.`,
+          `resource_summary and resource_preview describe the creation's recipe, and ${nothingToCarry}. Leave them out.`,
         );
       }
     }
