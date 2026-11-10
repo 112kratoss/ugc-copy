@@ -2157,7 +2157,7 @@ export function createMcpServer(context: McpToolContext): McpServer {
       version: MCP_SERVER_VERSION,
       title: 'Magicbooklet',
       websiteUrl: context.siteOrigin,
-      description: 'Create AI media with your Magicbooklet credits, and publish it, or media you made elsewhere, to your profile.',
+      description: 'Create AI media with your Magicbooklet credits, and publish it, media you made elsewhere, or text posts that share a prompt, a guide or a skill, to your profile.',
     },
     { instructions: MCP_SERVER_INSTRUCTIONS },
   );

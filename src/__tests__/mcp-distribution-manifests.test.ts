@@ -5,6 +5,11 @@ import { describe, expect, it } from 'vitest';
 
 import { AGENT_OPEN_UPLOADS_MAX } from '@/lib/agent-input-upload';
 import {
+  AGENT_RESOURCE_CARDS_MAX,
+  AGENT_RESOURCE_CARD_TEXT_MAX_LENGTH,
+  AGENT_RESOURCE_CARD_TITLE_MAX_LENGTH,
+} from '@/lib/agent-upload-publish-request';
+import {
   CLAUDE_CODE_CALLBACK_PORT,
   MCP_CLIENT_IDS,
   MCP_DEVELOPERS_PAGE_URL,
@@ -19,6 +24,12 @@ import {
   isPendingClientId,
 } from '@/lib/mcp-client-directory';
 import { MCP_TOOLS } from '@/lib/mcp-server-service';
+import {
+  POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH,
+  POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
+  POST_RESOURCE_PREVIEW_MAX_LENGTH,
+  POST_RESOURCE_PRICE_INCREMENT_USD_CENTS,
+} from '@/lib/post-resource-bundles';
 
 /**
  * The Claude Code plugin marketplace this repository serves: `.claude-plugin/marketplace.json`
@@ -139,16 +150,16 @@ describe('the Claude Code plugin marketplace', () => {
     }
   });
 
-  it('carries the three skills, each pre-approving only the server’s free reads', () => {
+  it('carries the four skills, each pre-approving only the server’s free reads', () => {
     const skillsDir = path.join(PLUGIN_ROOT, 'skills');
     const skills = readdirSync(skillsDir).sort();
-    expect(skills).toEqual(['create-ugc-ad', 'post-outside-media', 'publish-creation']);
+    expect(skills).toEqual(['create-ugc-ad', 'post-outside-media', 'publish-creation', 'share-a-skill']);
     // Each is offered by its command in the README, and counted in the marketplace's line.
     const readme = readFileSync(path.join(PLUGIN_ROOT, 'README.md'), 'utf8');
     for (const skill of skills) {
       expect(readme, skill).toContain(`/${MCP_PLUGIN_NAME}:${skill}`);
     }
-    expect(marketplace.plugins[0].description).toContain('three skills');
+    expect(marketplace.plugins[0].description).toContain('four skills');
 
     const readOnlyTools = new Set<string>(MCP_TOOLS.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name));
     const offeredTools = new Set<string>(MCP_TOOLS.map((tool) => tool.name));
@@ -195,6 +206,41 @@ describe('the Claude Code plugin marketplace', () => {
     expect(body).toMatch(/Ask; do not assume public/);
     expect(body).toMatch(/never name Magic Booklet/);
     expect(body).toMatch(/Keep the post id/);
+  });
+
+  it('shares a skill as a text post with its instructions in a card, free unless the person asks to sell it, and then only at a price they named and confirmed', () => {
+    const { body } = readSkill(path.join(PLUGIN_ROOT, 'skills', 'share-a-skill', 'SKILL.md'));
+    // What is shared is checked before it is public, the cards before the post, the price before the publish.
+    const order = ['look through it first for anything that should not leave this machine', 'A guide card for a skill\'s instructions', 'A body that introduces it', 'Share it free unless the person asks to sell it.', '`publish_post`'].map((words) => body.indexOf(words));
+    expect(order.every((index) => index >= 0), 'the skill names each step').toBe(true);
+    expect([...order].sort((left, right) => left - right)).toEqual(order);
+    // A text post: no creation and no uploads, the skill in its card and never in the body.
+    expect(body).toMatch(/with no creation and no uploads/);
+    expect(body).toMatch(/The skill itself goes in its card, not here\./);
+    expect(body).toMatch(/A resource holds text and links, never a file\./);
+    expect(body).toMatch(/Ask; do not assume public/);
+    // A price comes up only where the person asks to sell, and is theirs: named by them, said
+    // back, agreed to, and never chosen or adjusted by the agent.
+    const priceSection = body.slice(body.indexOf('## 4. Free, unless they ask to sell it'), body.indexOf('## 5. Publish'));
+    expect(priceSection.length).toBeGreaterThan(200);
+    // The rate and the rule are said there and nowhere else; outside it a price is named only as
+    // something the person may have given.
+    expect(body.replace(priceSection, '')).not.toMatch(/100 tokens|\$1\.00|steps of 10/);
+    expect(body.replace(priceSection, '').match(/\bprice\b/g)).toHaveLength(2);
+    expect(priceSection).toMatch(/10 or more in steps of 10, where 100 tokens is \$1\.00/);
+    expect(priceSection).toMatch(/say the price back to them with what a buyer gets, and publish only after they say yes/);
+    expect(priceSection).toMatch(/Never choose a price yourself, and never adjust the one they gave/);
+    expect(POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS).toBe(10);
+    expect(POST_RESOURCE_PRICE_INCREMENT_USD_CENTS).toBe(10);
+    expect(body).toMatch(/Add the price only if they gave one and said yes\./);
+    // The card bounds the skill names are the tool's.
+    expect(body).toContain(`a resource holds 1 to ${AGENT_RESOURCE_CARDS_MAX} of them`);
+    expect(body).toContain(`up to ${AGENT_RESOURCE_CARD_TEXT_MAX_LENGTH.toLocaleString('en-US')} characters`);
+    expect(body).toContain(`a title of at most ${AGENT_RESOURCE_CARD_TITLE_MAX_LENGTH} characters`);
+    expect(body).toContain(`a one-line description of at most ${POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH}`);
+    expect(body).toContain(`A preview line for the resource, at most ${POST_RESOURCE_PREVIEW_MAX_LENGTH} characters`);
+    expect(body).toMatch(/Keep the post id/);
+    expect(body).toMatch(/never what it holds/);
   });
 
   it('names only tools the server offers, or phase 2’s coming ones, which leave the list once live', () => {

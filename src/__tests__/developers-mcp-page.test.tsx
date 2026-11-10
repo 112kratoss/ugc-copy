@@ -95,18 +95,32 @@ describe('/developers/mcp', () => {
     // A file on the computer is claimed only for the clients that have a shell there.
     expect(words).toMatch(/In Claude Code, Codex and Cursor, which can run commands on your computer, it can also send a file from there\./);
     expect(words).not.toMatch(/ChatGPT|Claude\.ai|Claude Desktop/);
-    expect(screen.getByText(/publish the ones you choose and post media you made\s+elsewhere\./)).toBeInTheDocument();
+    expect(screen.getByText(/publish the ones you choose, post media you made\s+elsewhere, and write text posts that share a prompt, a guide or a skill\./)).toBeInTheDocument();
 
-    // Four capability cards sit two by two; the three account cards keep their row.
+    // Six capability cards sit in two rows of three, as the three account cards sit in one.
     const capabilities = heading.closest('article')?.parentElement;
-    expect(capabilities?.querySelectorAll('article')).toHaveLength(4);
-    expect(capabilities).toHaveClass('md:grid-cols-2');
+    expect(capabilities?.querySelectorAll('article')).toHaveLength(6);
+    expect(capabilities).toHaveClass('md:grid-cols-3');
     const controls = screen.getByRole('heading', { level: 3, name: 'You approve each app' }).closest('article')?.parentElement;
     expect(controls?.querySelectorAll('article')).toHaveLength(3);
     expect(controls).toHaveClass('md:grid-cols-3');
 
     // The plugin carries a skill for it.
-    expect(within(block('Claude Code')).getByText(/adds the same server and three skills: .* and one that posts media made elsewhere\./)).toBeInTheDocument();
+    expect(within(block('Claude Code')).getByText(/adds the same server and four skills: .* one that posts media made elsewhere, and one that shares a skill, a prompt or a guide\./)).toBeInTheDocument();
+  });
+
+  it('says an agent can write a text post and share prompts, guides and skills, free or at a price the person approves', () => {
+    render(<McpDeveloperGuide clientIds={ALL_REGISTERED} />);
+
+    const written = screen.getByRole('heading', { level: 3, name: 'Write a text post' }).closest('article')?.textContent ?? '';
+    expect(written).toContain('A post can be words alone.');
+    expect(written).toContain('posts it under your name');
+
+    const shared = screen.getByRole('heading', { level: 3, name: 'Share prompts, guides and skills' }).closest('article')?.textContent ?? '';
+    // One sentence, in the consent screen's terms: what is attached, to what, on which terms, and where it shows.
+    expect(shared).toBe('Share prompts, guides and skillsIt can attach a prompt, a guide or a whole skill to a text post or to media made elsewhere, free or at a price you approve, on your profile, in Explore and in the Marketplace.');
+    // A price is never the agent's to set, and the page never says it is.
+    expect(document.body.textContent).not.toMatch(/sets? (?:a|the) price|prices it for you/u);
   });
 
   it('names a waiting app as coming in the header and the search snippet, never as connectable', () => {
