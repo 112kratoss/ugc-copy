@@ -47,3 +47,31 @@ test('the MCP server publishes its protected-resource metadata and challenges an
   expect(stream.status()).toBe(405);
   expect(stream.headers().allow).toBe('POST');
 });
+
+test('the posting-only server is a resource of its own: its document names its URL and its challenge names its document', async ({ request }) => {
+  const path = '/.well-known/oauth-protected-resource/api/mcp/posts';
+  const document = await request.get(path, { timeout: 0 });
+  expect(document.status()).toBe(200);
+  expect(document.headers()['access-control-allow-origin']).toBe('*');
+  expect(await document.json()).toEqual({
+    resource: `${BASE}/api/mcp/posts`,
+    authorization_servers: ['https://example.supabase.co/auth/v1'],
+    bearer_methods_supported: ['header'],
+    resource_name: 'Magicbooklet posting server',
+    resource_documentation: `${BASE}/developers/mcp/posting`,
+  });
+
+  const unauthenticated = await request.post('/api/mcp/posts', {
+    timeout: 0,
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    data: { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+  });
+  expect(unauthenticated.status()).toBe(401);
+  expect(unauthenticated.headers()['www-authenticate']).toBe(
+    `Bearer resource_metadata="${BASE}${path}", error="invalid_token", error_description="Sign in to Magicbooklet to use this server."`,
+  );
+  expect(await unauthenticated.json()).toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+
+  const stream = await request.get('/api/mcp/posts', { timeout: 0 });
+  expect(stream.status()).toBe(405);
+});

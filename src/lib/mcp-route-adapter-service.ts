@@ -13,6 +13,7 @@ import { buildAgentToolCallRow, recordAgentToolCall } from '@/lib/agent-tool-cal
 import { getApiRequestId } from '@/lib/api-cache';
 import { logBackendEvent, logBackendInfo, logBackendWarning } from '@/lib/backend-logger';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
+import { isPostingOnlyClientId } from '@/lib/mcp-client-directory';
 import {
   createMcpServer,
   defaultMcpToolServices,
@@ -20,6 +21,7 @@ import {
   type McpToolContext,
   type McpToolServices,
 } from '@/lib/mcp-server-service';
+import type { McpSurface } from '@/lib/mcp-surfaces';
 import {
   protectedResourceMetadataUrl,
   resolveMcpSiteOrigin,
@@ -33,8 +35,12 @@ import { rebuildAdmittedRequest } from '@/lib/route-owned-identity-admission';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 /**
- * HTTP for the MCP server at /api/mcp: the kill switch, the route's own identity admission, and
- * the MCP transport, in that order.
+ * HTTP for the MCP server at /api/mcp and its posting-only form at /api/mcp/posts
+ * (`mcp-surfaces.ts`): the kill switch, the route's own identity admission, and the MCP
+ * transport, in that order. The two paths share everything here but the tools the server
+ * registers, the resource their 401 names, and one refusal: a token issued to a posting-only
+ * OAuth client answers 403 AGENT_SURFACE_NOT_ALLOWED at /api/mcp, so the client the consent page
+ * showed the posting-only list cannot reach a tool that list left out.
  *
  * Transport. Stateless Streamable HTTP with a JSON body per answer: no sessions, no SSE streams,
  * no Redis, so a Vercel function serves each POST on its own. The MCP server SDK v2's
@@ -69,6 +75,8 @@ export const MCP_DISABLED_RETRY_AFTER_SECONDS = 300;
 type Environment = Record<string, string | undefined>;
 
 export type McpRouteDependencies = {
+  /** Which server the route is: the full one unless said (`mcp-surfaces.ts`). */
+  surface?: McpSurface;
   identity?: ProxyIdentityDependencies;
   services?: Partial<McpToolServices>;
   createUserClient?: typeof createUserClient;
@@ -115,16 +123,16 @@ function methodNotAllowedResponse(): NextResponse {
 }
 
 /** The challenge that sends an MCP client to the protected-resource metadata and on to sign in. */
-export function bearerChallenge(siteOrigin: string, description: string): string {
-  return `Bearer resource_metadata="${protectedResourceMetadataUrl(siteOrigin)}", error="invalid_token", error_description="${description.replace(/"/g, "'")}"`;
+export function bearerChallenge(siteOrigin: string, description: string, surface: McpSurface = 'full'): string {
+  return `Bearer resource_metadata="${protectedResourceMetadataUrl(siteOrigin, surface)}", error="invalid_token", error_description="${description.replace(/"/g, "'")}"`;
 }
 
-function unauthorizedResponse(siteOrigin: string, description: string): NextResponse {
+function unauthorizedResponse(siteOrigin: string, description: string, surface: McpSurface): NextResponse {
   return NextResponse.json(
     { error: 'Unauthorized', code: 'UNAUTHORIZED' },
     {
       status: 401,
-      headers: { 'WWW-Authenticate': bearerChallenge(siteOrigin, description), 'Cache-Control': NO_STORE },
+      headers: { 'WWW-Authenticate': bearerChallenge(siteOrigin, description, surface), 'Cache-Control': NO_STORE },
     },
   );
 }
@@ -178,13 +186,14 @@ async function serveMcp(admitted: NextRequest, context: McpToolContext, bearerTo
 
 function logToolCall(
   log: typeof logBackendEvent,
-  identity: { clientId: string; userId: string },
+  identity: { clientId: string; userId: string; surface: McpSurface },
   record: McpToolCallRecord,
 ): void {
   // Never the arguments or the result: a prompt is the creator's own.
   log(record.outcome === 'ok' ? 'info' : record.outcome === 'error' ? 'warn' : 'error', 'mcp_tool_call', {
     clientId: identity.clientId,
     userId: identity.userId,
+    surface: identity.surface,
     tool: record.tool,
     outcome: record.outcome,
     code: record.code,
@@ -237,34 +246,44 @@ async function handleMcpPost(request: NextRequest, dependencies: McpRouteDepende
   if (isMcpServerDisabled(env)) return disabledResponse();
 
   const log = dependencies.log ?? logBackendEvent;
+  const surface = dependencies.surface ?? 'full';
   const siteOrigin = siteOriginFor(request, dependencies);
   const authorization = request.headers.get('authorization')?.trim();
   if (!authorization) {
     // Every connection starts with this call: the challenge it answers is how a client finds the
     // authorization server. Information, not a warning.
-    logBackendInfo('mcp_request_refused', { code: 'UNAUTHORIZED', reason: 'no_token' });
-    return unauthorizedResponse(siteOrigin, 'Sign in to Magicbooklet to use this server.');
+    logBackendInfo('mcp_request_refused', { code: 'UNAUTHORIZED', reason: 'no_token', surface });
+    return unauthorizedResponse(siteOrigin, 'Sign in to Magicbooklet to use this server.', surface);
   }
 
   const admission = await evaluateUserFacingRouteIdentity(request, dependencies.identity);
   if (admission.rejection) {
     const code = typeof admission.claims?.sub === 'string' ? 'identity' : 'token';
-    logBackendWarning('mcp_request_refused', { status: admission.rejection.status, reason: code });
+    logBackendWarning('mcp_request_refused', { status: admission.rejection.status, reason: code, surface });
     return admission.rejection.status === 401
-      ? unauthorizedResponse(siteOrigin, 'The access token is invalid or has expired. Sign in again.')
+      ? unauthorizedResponse(siteOrigin, 'The access token is invalid or has expired. Sign in again.', surface)
       : admission.rejection;
   }
   const clientId = agentTokenClientId(admission.claims);
   const userId = typeof admission.claims?.sub === 'string' ? admission.claims.sub : null;
   if (!userId) {
-    logBackendWarning('mcp_request_refused', { code: 'UNAUTHORIZED', reason: 'no_claims' });
-    return unauthorizedResponse(siteOrigin, 'The access token could not be verified. Sign in again.');
+    logBackendWarning('mcp_request_refused', { code: 'UNAUTHORIZED', reason: 'no_claims', surface });
+    return unauthorizedResponse(siteOrigin, 'The access token could not be verified. Sign in again.', surface);
   }
   if (!clientId) {
-    logBackendWarning('mcp_request_refused', { code: 'AGENT_TOKEN_REQUIRED', userId });
+    logBackendWarning('mcp_request_refused', { code: 'AGENT_TOKEN_REQUIRED', userId, surface });
     return forbiddenResponse(
       'AGENT_TOKEN_REQUIRED',
       'Only a token issued to an agent through the Magicbooklet OAuth server can use the MCP server.',
+    );
+  }
+
+  if (surface === 'full' && isPostingOnlyClientId(clientId)) {
+    // The consent page showed this client the posting-only list (`oauth-consent-service.ts`).
+    logBackendWarning('mcp_request_refused', { code: 'AGENT_SURFACE_NOT_ALLOWED', userId, clientId, surface });
+    return forbiddenResponse(
+      'AGENT_SURFACE_NOT_ALLOWED',
+      'This app was connected for posting only. It can use the Magicbooklet posting server, not this one.',
     );
   }
 
@@ -277,11 +296,12 @@ async function handleMcpPost(request: NextRequest, dependencies: McpRouteDepende
     admin ??= makeServiceClient();
     return admin;
   };
-  const identity = { clientId, userId };
+  const identity = { clientId, userId, surface };
   const context: McpToolContext = {
     request: admitted,
     userId,
     clientId,
+    surface,
     siteOrigin,
     kieApiKey: dependencies.kieApiKey ?? env.KIE_AI_API_KEY,
     createUserSupabase: () => makeUserClient(admitted),

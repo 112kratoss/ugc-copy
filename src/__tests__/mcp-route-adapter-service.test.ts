@@ -1,4 +1,9 @@
 import type { SupabaseClient, User } from '@supabase/supabase-js';
+import {
+  CLIENT_CAPABILITIES_META_KEY,
+  CLIENT_INFO_META_KEY,
+  PROTOCOL_VERSION_META_KEY,
+} from '@modelcontextprotocol/server';
 import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,13 +17,16 @@ import {
   isMcpServerDisabled,
   type McpRouteDependencies,
 } from '@/lib/mcp-route-adapter-service';
-import { MCP_TOOLS, type McpToolServices } from '@/lib/mcp-server-service';
+import { MCP_POSTING_ONLY_CLIENT_IDS } from '@/lib/mcp-client-directory';
+import { MCP_TOOLS, mcpToolsFor, type McpToolServices } from '@/lib/mcp-server-service';
+import type { McpSurface } from '@/lib/mcp-surfaces';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 
 const SITE = 'https://magicbooklet.test';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const GENERATION_ID = '22222222-2222-4222-8222-222222222222';
 const METADATA_URL = `${SITE}/.well-known/oauth-protected-resource/api/mcp`;
+const POSTS_METADATA_URL = `${SITE}/.well-known/oauth-protected-resource/api/mcp/posts`;
 
 const ACTIVE = { state: 'active', session_valid: true, banned: false, created_at: '2026-11-09T00:00:00Z' };
 const AGENT_CLAIMS = { sub: USER_ID, aud: 'authenticated', role: 'authenticated', is_anonymous: false, client_id: 'client-claude' };
@@ -36,17 +44,44 @@ function identity(claims: Record<string, unknown> | null = AGENT_CLAIMS, admissi
   };
 }
 
-function rpc(method: string, params?: Record<string, unknown>, options: { token?: string | null; id?: number } = {}) {
+function rpc(method: string, params?: Record<string, unknown>, options: { token?: string | null; id?: number; path?: string } = {}) {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     accept: 'application/json, text/event-stream',
     [IDENTITY_ADMISSION_HEADER]: 'forged',
   };
   if (options.token !== null) headers.authorization = `Bearer ${options.token ?? 'agent-token'}`;
-  return new NextRequest(`${SITE}/api/mcp`, {
+  return new NextRequest(`${SITE}${options.path ?? '/api/mcp'}`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ jsonrpc: '2.0', id: options.id ?? 1, method, ...(params ? { params } : {}) }),
+  });
+}
+
+/** A request in the 2026-07-28 envelope: the version, the client and its capabilities ride in `_meta`, with no handshake. */
+function modernRpc(method: string, params: Record<string, unknown> = {}, options: { path?: string; id?: number } = {}) {
+  return new NextRequest(`${SITE}${options.path ?? '/api/mcp'}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      authorization: 'Bearer agent-token',
+      'mcp-protocol-version': '2026-07-28',
+      'mcp-method': method,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: options.id ?? 1,
+      method,
+      params: {
+        ...params,
+        _meta: {
+          [PROTOCOL_VERSION_META_KEY]: '2026-07-28',
+          [CLIENT_INFO_META_KEY]: { name: 'test-client', version: '1.0.0' },
+          [CLIENT_CAPABILITIES_META_KEY]: {},
+        },
+      },
+    }),
   });
 }
 
@@ -85,6 +120,8 @@ function harness(overrides: {
   services?: Partial<McpToolServices>;
   /** The audit insert's answer; an error here must never reach the agent. */
   auditInsert?: () => Promise<{ error: unknown }>;
+  /** Which server the route is; the full one unless said. */
+  surface?: McpSurface;
 } = {}) {
   const identityClient = identity(overrides.claims === undefined ? AGENT_CLAIMS : overrides.claims, overrides.admission);
   const userClients: Array<{ request: Request; client: ReturnType<typeof routeClient> }> = [];
@@ -106,6 +143,7 @@ function harness(overrides: {
   const runAfterResponse = vi.fn((task: () => Promise<unknown>) => { deferred.push(task()); });
   const listOwnerGenerationsForRoute = vi.fn(async () => summaryPayload());
   const dependencies: McpRouteDependencies = {
+    ...(overrides.surface ? { surface: overrides.surface } : {}),
     identity: { createUserClient: () => identityClient },
     createUserClient,
     createServiceClient: () => admin,
@@ -312,7 +350,7 @@ describe('MCP route adapter', () => {
     expect(toolCalls).toHaveLength(1);
     const [level, , fields] = toolCalls[0] as [string, string, Record<string, unknown>];
     expect(level).toBe('info');
-    expect(fields).toMatchObject({ clientId: 'client-claude', userId: USER_ID, tool: 'list_creations', outcome: 'ok', code: null, generationId: null, postId: null });
+    expect(fields).toMatchObject({ clientId: 'client-claude', userId: USER_ID, surface: 'full', tool: 'list_creations', outcome: 'ok', code: null, generationId: null, postId: null });
     expect(typeof fields.elapsedMs).toBe('number');
     expect(JSON.stringify(fields)).not.toContain('bicycle');
   });
@@ -388,5 +426,147 @@ describe('MCP route adapter', () => {
     const response = await handlers.POST(rpc('tools/call', { name: 'frobnicate_post', arguments: {} }));
     const body = await response.json();
     expect(body.error ?? body.result?.isError).toBeTruthy();
+  });
+});
+
+describe('the posting-only MCP route', () => {
+  const POSTS = '/api/mcp/posts';
+  const POSTING_CLIENT_CLAIMS = { ...AGENT_CLAIMS, client_id: MCP_POSTING_ONLY_CLIENT_IDS.claudeDirectory };
+
+  beforeEach(() => {
+    vi.stubEnv('IDENTITY_ADMISSION_SECRET', 'test-secret-with-at-least-32-characters');
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('challenges a missing or invalid token with its own protected-resource metadata', async () => {
+    // Claude takes a document only when its resource is the URL the person connected.
+    expect(bearerChallenge(SITE, 'x', 'posts')).toContain(`resource_metadata="${POSTS_METADATA_URL}"`);
+    expect(bearerChallenge(SITE, 'x', 'full')).toContain(`resource_metadata="${METADATA_URL}"`);
+
+    const missing = harness({ surface: 'posts' });
+    const noToken = await missing.handlers.POST(rpc('tools/list', undefined, { token: null, path: POSTS }));
+    expect(noToken.status).toBe(401);
+    expect(noToken.headers.get('www-authenticate')).toContain(`resource_metadata="${POSTS_METADATA_URL}"`);
+    expect(missing.identityClient.auth.getClaims).not.toHaveBeenCalled();
+
+    const invalid = harness({ surface: 'posts', claims: null });
+    const badToken = await invalid.handlers.POST(rpc('tools/list', undefined, { path: POSTS }));
+    expect(badToken.status).toBe(401);
+    expect(badToken.headers.get('www-authenticate')).toContain(`resource_metadata="${POSTS_METADATA_URL}"`);
+  });
+
+  it('keeps every refusal the full route has: the kill switch, a guest, an app session, a revoked grant', async () => {
+    const off = harness({ surface: 'posts', env: { MCP_SERVER_DISABLED: '1' } });
+    expect((await off.handlers.POST(rpc('tools/list', undefined, { path: POSTS }))).status).toBe(503);
+    expect((await off.handlers.GET()).status).toBe(503);
+
+    const guest = await harness({ surface: 'posts', claims: GUEST_AGENT_CLAIMS }).handlers.POST(rpc('tools/list', undefined, { path: POSTS }));
+    expect(guest.status).toBe(403);
+    expect((await guest.json()).code).toBe('REGISTRATION_REQUIRED');
+
+    const session = await harness({ surface: 'posts', claims: SESSION_CLAIMS }).handlers.POST(rpc('tools/list', undefined, { path: POSTS }));
+    expect(session.status).toBe(403);
+    expect((await session.json()).code).toBe('AGENT_TOKEN_REQUIRED');
+
+    const revoked = await harness({ surface: 'posts', admission: { ...ACTIVE, session_valid: false } }).handlers.POST(rpc('tools/list', undefined, { path: POSTS }));
+    expect(revoked.status).toBe(401);
+    expect(revoked.headers.get('www-authenticate')).toContain(`resource_metadata="${POSTS_METADATA_URL}"`);
+
+    const { handlers } = harness({ surface: 'posts' });
+    expect((await handlers.GET()).status).toBe(405);
+    expect((await handlers.DELETE()).status).toBe(405);
+  });
+
+  it('lists the six posting tools and says so in its instructions, through the real transport', async () => {
+    const { handlers } = harness({ surface: 'posts', claims: POSTING_CLIENT_CLAIMS });
+    const initialized = await handlers.POST(rpc('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'test-client', version: '1.0.0' },
+    }, { path: POSTS }));
+    expect(initialized.status).toBe(200);
+    const initBody = await initialized.json();
+    expect(initBody.result.serverInfo.name).toBe('magicbooklet');
+    expect(initBody.result.instructions).toContain('It starts no run and spends no credits.');
+    expect(initBody.result.instructions).not.toMatch(/create_media|quote_generation|enhance_prompt|list_models|get_model|get_generation/u);
+
+    const listed = await handlers.POST(rpc('tools/list', undefined, { id: 2, path: POSTS }));
+    expect(listed.status).toBe(200);
+    const tools = (await listed.json()).result.tools as Array<{ name: string; title?: string; description?: string; annotations?: Record<string, unknown> }>;
+    expect(tools.map((tool) => tool.name).sort()).toEqual(mcpToolsFor('posts').map((tool) => tool.name).sort());
+    expect(tools).toHaveLength(6);
+    for (const tool of tools) {
+      expect(tool.title, tool.name).toBeTruthy();
+      expect(tool.description, tool.name).not.toMatch(/create_media|quote_generation|enhance_prompt|list_models|get_model|get_generation/u);
+      expect(tool.annotations, tool.name).toBeDefined();
+    }
+  });
+
+  it('refuses a tool it does not have, and runs one it has under the same record', async () => {
+    const { handlers, log, insert, settled, listOwnerGenerationsForRoute } = harness({ surface: 'posts', claims: POSTING_CLIENT_CLAIMS });
+    // Every tool the full server has and this one has not is unknown here: refused by name, and nothing of it runs.
+    const absentNames = MCP_TOOLS.map((tool) => tool.name).filter((name) => !mcpToolsFor('posts').some((tool) => tool.name === name));
+    expect(absentNames).toHaveLength(6);
+    for (const name of absentNames) {
+      const absent = await handlers.POST(rpc('tools/call', { name, arguments: {} }, { path: POSTS }));
+      const absentBody = await absent.json();
+      const refusal = JSON.stringify(absentBody.error ?? absentBody.result);
+      expect(absentBody.error ?? absentBody.result?.isError, name).toBeTruthy();
+      expect(refusal, name).toMatch(/not found|unknown tool/iu);
+      expect(refusal, name).toContain(name);
+    }
+    expect(insert).not.toHaveBeenCalled();
+    expect(log.mock.calls.filter(([, event]) => event === 'mcp_tool_call')).toHaveLength(0);
+
+    const response = await handlers.POST(rpc('tools/call', { name: 'list_creations', arguments: { limit: 5 } }, { id: 3, path: POSTS }));
+    expect(response.status).toBe(200);
+    expect((await response.json()).result.isError).toBeFalsy();
+    expect(listOwnerGenerationsForRoute).toHaveBeenCalledTimes(1);
+    const [, , fields] = log.mock.calls.find(([, event]) => event === 'mcp_tool_call') as [string, string, Record<string, unknown>];
+    expect(fields).toMatchObject({ clientId: MCP_POSTING_ONLY_CLIENT_IDS.claudeDirectory, surface: 'posts', tool: 'list_creations', outcome: 'ok' });
+    await settled();
+    expect(insert).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a posting-only client at the full server, and takes every other client at either', async () => {
+    // The consent page showed this client the posting-only list, so its token reaches no tool that list left out.
+    const refused = harness({ claims: POSTING_CLIENT_CLAIMS });
+    const response = await refused.handlers.POST(rpc('tools/list'));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'AGENT_SURFACE_NOT_ALLOWED' });
+    expect(refused.createUserClient).not.toHaveBeenCalled();
+    const call = await refused.handlers.POST(rpc('tools/call', { name: 'create_media', arguments: {} }));
+    expect(call.status).toBe(403);
+    expect(refused.insert).not.toHaveBeenCalled();
+
+    // Any other client was granted the full list, of which the posting server is a part.
+    const full = await harness({ surface: 'posts' }).handlers.POST(rpc('tools/list', undefined, { path: POSTS }));
+    expect(full.status).toBe(200);
+    expect(((await full.json()).result.tools as unknown[]).length).toBe(6);
+    const fullOnFull = await harness().handlers.POST(rpc('tools/list'));
+    expect(((await fullOnFull.json()).result.tools as unknown[]).length).toBe(MCP_TOOLS.length);
+  });
+
+  it('holds the same line for a request in the 2026-07-28 envelope', async () => {
+    // The SDK serves that revision through its own handler, built per request from the admitted context.
+    const posting = await harness({ surface: 'posts', claims: POSTING_CLIENT_CLAIMS }).handlers.POST(modernRpc('tools/list', {}, { path: POSTS }));
+    expect(posting.status).toBe(200);
+    const tools = (await posting.json()).result.tools as Array<{ name: string }>;
+    expect(tools.map((tool) => tool.name).sort()).toEqual(mcpToolsFor('posts').map((tool) => tool.name).sort());
+
+    const full = await harness().handlers.POST(modernRpc('tools/list'));
+    expect(full.status).toBe(200);
+    expect(((await full.json()).result.tools as unknown[]).length).toBe(MCP_TOOLS.length);
+
+    // The posting-only client is refused at the full server before either protocol leg is reached.
+    const refused = await harness({ claims: POSTING_CLIENT_CLAIMS }).handlers.POST(modernRpc('tools/list'));
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: 'AGENT_SURFACE_NOT_ALLOWED' });
+
+    const absent = await harness({ surface: 'posts', claims: POSTING_CLIENT_CLAIMS }).handlers.POST(
+      modernRpc('tools/call', { name: 'create_media', arguments: {} }, { path: POSTS }),
+    );
+    const absentBody = await absent.json();
+    expect(absentBody.error ?? absentBody.result?.isError).toBeTruthy();
   });
 });

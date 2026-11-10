@@ -156,7 +156,7 @@ export const getServerAuthState = cache(async (): Promise<ServerAuthState> => {
 
   // An agent's token (an OAuth-issued token carrying its client's id, agent-token.ts) verifies
   // like any user token, so placed in the auth cookie it would render every page as the
-  // creator. It drives only /api/mcp; here it is no session.
+  // creator. It drives only the MCP routes (agent-token.ts); here it is no session.
   if (isAgentToken(claims)) {
     return unauthenticatedServerState();
   }

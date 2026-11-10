@@ -7,6 +7,8 @@ import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-
 import {
   CONNECTED_APPS_COPY,
   CONNECTED_APP_ACCESS,
+  POSTING_CONNECTED_APP_ACCESS,
+  connectedAppAccess,
   disconnectQuestion,
   formatConnectedDate,
   isOAuthServerDisabledError,
@@ -14,6 +16,7 @@ import {
   toConnectedApps,
   type ConnectedAppsClient,
 } from '@/lib/connected-apps';
+import { MCP_CLIENT_IDS, MCP_POSTING_ONLY_CLIENT_IDS } from '@/lib/mcp-client-directory';
 
 // The page's own client is the browser's; the component takes the grants API as a prop, so the
 // module that builds the browser client is never loaded here.
@@ -94,6 +97,24 @@ describe('the Connected apps section', () => {
     expect(within(rows[0]).getByRole('button', { name: 'Disconnect Claude Code' })).toBeInTheDocument();
     expect(rows[1]).toHaveTextContent('Codex');
     expect(screen.getByRole('heading', { name: CONNECTED_APPS_COPY.title })).toBeInTheDocument();
+  });
+
+  it('says of a posting-only app what it may do, not what every other app may', async () => {
+    // The line under the name is the access the consent page showed that client.
+    for (const id of Object.values(MCP_POSTING_ONLY_CLIENT_IDS)) expect(connectedAppAccess(id), id).toBe(POSTING_CONNECTED_APP_ACCESS);
+    for (const id of [...Object.values(MCP_CLIENT_IDS), 'client-claude', '', null, undefined]) {
+      expect(connectedAppAccess(id), String(id)).toBe(CONNECTED_APP_ACCESS);
+    }
+    expect(POSTING_CONNECTED_APP_ACCESS).toBe('Can publish, change and delete posts as you. Cannot create media or spend credits.');
+
+    const posting = { client: { id: MCP_POSTING_ONLY_CLIENT_IDS.claudeDirectory, name: 'Claude (posting)' }, scopes: ['openid'], granted_at: '2026-11-10T10:00:00.000Z' };
+    render(<ConnectedApps client={api({ listGrants: vi.fn(async () => ({ data: [CLAUDE, posting], error: null })) })} />);
+    const rows = within(await screen.findByRole('list', { name: CONNECTED_APPS_COPY.title })).getAllByRole('listitem');
+    expect(rows[0]).toHaveTextContent('Claude (posting)');
+    expect(rows[0]).toHaveTextContent(POSTING_CONNECTED_APP_ACCESS);
+    expect(rows[0]).not.toHaveTextContent(CONNECTED_APP_ACCESS);
+    expect(rows[1]).toHaveTextContent('Claude Code');
+    expect(rows[1]).toHaveTextContent(CONNECTED_APP_ACCESS);
   });
 
   it('disconnects an app only after the question, takes its row away at the answer, and says so', async () => {

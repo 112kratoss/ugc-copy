@@ -1,5 +1,5 @@
 /**
- * What makes a bearer token an agent's token, and the one route such a token may drive.
+ * What makes a bearer token an agent's token, and the routes such a token may drive.
  *
  * An agent (Claude.ai, Claude Desktop, Claude Code, ChatGPT, Codex, Cursor) signs a creator in
  * through Supabase Auth's OAuth 2.1 server, which issues an ordinary Supabase JWT carrying the
@@ -12,8 +12,8 @@
  * - every other API route refuses it (`route-identity-admission.ts`, 403
  *   `AGENT_TOKEN_NOT_ALLOWED`), the server-rendered pages refuse it as a session
  *   (`supabase-server.ts`) and so do the media routes' cookie branch (`media-route-shared.ts`),
- *   so an agent token drives no API route of this app but `/api/mcp`, and no page or cookie
- *   session.
+ *   so an agent token drives no API route of this app but the MCP routes (`/api/mcp` and its
+ *   posting-only form, `/api/mcp/posts`), and no page or cookie session.
  *
  * What the claim does not do: bind the token to this app. Supabase binds a token to no resource
  * (no RFC 8707 `resource` parameter), and against the project's own endpoints (PostgREST,
@@ -25,8 +25,19 @@
 
 export const AGENT_TOKEN_CLAIM = 'client_id';
 
-/** The one API path an agent token is admitted to. */
+/** The MCP server's path: every tool, media creation included. */
 export const MCP_ROUTE_PATH = '/api/mcp';
+
+/**
+ * The posting-only MCP server's path: the tools that stage a file, publish, read and delete a
+ * post and list the creator's creations, and nothing that starts a run or spends credits
+ * (`mcp-surfaces.ts`). It is the server listed in Claude's connectors directory, whose policy
+ * takes no connector that generates media.
+ */
+export const MCP_POSTS_ROUTE_PATH = '/api/mcp/posts';
+
+/** The API paths an agent token is admitted to: the MCP routes, and nothing else. */
+export const MCP_ROUTE_PATHS: readonly string[] = [MCP_ROUTE_PATH, MCP_POSTS_ROUTE_PATH];
 
 type Claims = Record<string, unknown> | null | undefined;
 
@@ -42,7 +53,7 @@ export function isAgentToken(claims: Claims): boolean {
   return agentTokenClientId(claims) !== null;
 }
 
-/** Whether a request path takes an agent token at all: only the MCP server does. */
+/** Whether a request path takes an agent token at all: only the MCP routes do. */
 export function routeAcceptsAgentToken(pathname: string): boolean {
-  return pathname === MCP_ROUTE_PATH;
+  return MCP_ROUTE_PATHS.includes(pathname);
 }

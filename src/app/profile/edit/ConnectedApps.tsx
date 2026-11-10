@@ -8,7 +8,7 @@ import { pushToast } from '@/components/feedback-state';
 import { useConfirmation } from '@/components/useConfirmation';
 import {
   CONNECTED_APPS_COPY,
-  CONNECTED_APP_ACCESS,
+  connectedAppAccess,
   disconnectApp,
   disconnectQuestion,
   formatConnectedDate,
@@ -117,7 +117,7 @@ export default function ConnectedApps({ client }: { client?: ConnectedAppsClient
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-bold text-[var(--ui-text-primary)]">{app.name}</span>
-                <span className="mt-0.5 block text-xs text-[var(--ui-text-muted)]">{CONNECTED_APP_ACCESS}</span>
+                <span className="mt-0.5 block text-xs text-[var(--ui-text-muted)]">{connectedAppAccess(app.clientId)}</span>
                 {connectedOn ? <span className="mt-0.5 block truncate text-xs text-[var(--ui-text-faint)]">{connectedOn}</span> : null}
               </span>
               <Button

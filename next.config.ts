@@ -258,6 +258,9 @@ const nextConfig: NextConfig = {
     "/api/generations": [...FFMPEG_TRACE, ...SHARP_TRACE],
     // The MCP server's create_media runs the same unified start.
     "/api/mcp": [...FFMPEG_TRACE, ...SHARP_TRACE],
+    // Its posting-only form: publish_post from uploads runs the composer's create (/api/posts'),
+    // which previews each staged file.
+    "/api/mcp/posts": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/posts": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/posts/*": [...FFMPEG_TRACE, ...SHARP_TRACE],
     // Seedance's Prepare converts an audio track Seedance would not take to WAV with ffmpeg.

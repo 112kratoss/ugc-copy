@@ -38,7 +38,8 @@ calls. The protected-resource metadata every client reads first is served at
    claim. Every service, RLS policy and rate limit then applies to the agent as it applies to
    the creator in the browser.
 
-On this app's own surfaces an agent token drives no API route but `/api/mcp`, and no page or
+On this app's own surfaces an agent token drives no API route but `/api/mcp` and its
+posting-only form `/api/mcp/posts` ("Anthropic's Connectors Directory"), and no page or
 cookie session: the proxy refuses a `client_id`-bearing token on every other `/api` route (403
 `AGENT_TOKEN_NOT_ALLOWED`), the server-rendered pages refuse it as a session
 (`getServerAuthState`), and the media routes, which take a browser's cookie session when no
@@ -100,7 +101,9 @@ npm run ops:oauth-clients -- create --name "Claude Code" --client-uri https://cl
 
 Without `--apply` the script only shows what it would register; it prints client ids (public)
 and never a secret (a `--confidential` client's secret goes to the clipboard, for the connector
-form it is for, and nowhere else: the AGENTS.md rule on secrets). It registers on whichever
+form it is for, and is printed nowhere: the AGENTS.md rule on secrets. Where the form is filled
+later, the clipboard is saved at once to an owner-only file outside the repository, as the
+posting client's was). It registers on whichever
 project `.env.local` points at and names that project's origin in every output: the file is
 hand-toggled between the local stack and production (`docs/local-development.md`), so check that
 the **production** block is the active one before `--apply`, or the client id you paste into a
@@ -124,9 +127,9 @@ the consent screen shows the fixed description of what an agent may do.
 ### Registered clients (production, 2026-11-09)
 
 Dynamic client registration is off on production (its metadata has no `registration_endpoint`),
-so these public clients are the only ones. Their ids are public values and live in
+so the clients below are the only ones. Their ids are public values: the full server's live in
 `MCP_CLIENT_IDS` (`src/lib/mcp-client-directory.ts`), which the setup page and the Claude Code
-plugin read.
+plugin read, and the posting-only ones in `MCP_POSTING_ONLY_CLIENT_IDS` beside it.
 
 | Client | Client id | Redirect URIs registered |
 |---|---|---|
@@ -135,6 +138,12 @@ plugin read.
 | Cursor | `cd3b041d-a942-4917-b37f-735744ca4026` | `http://localhost:8787/callback`, `https://www.cursor.com/agents/mcp/oauth/callback` |
 | Codex | `6508034a-cdb9-4f23-9263-7bf332096acb` | `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` and `http://localhost:8977/callback/PPpoTd8EYBlz` (the URI Codex derives from the server URL, below, and its `localhost` spare; registered 2026-11-10), plus the earlier `http://127.0.0.1:8977/callback/magicbooklet` and `http://localhost:8977/callback/magicbooklet` |
 | ChatGPT | not yet: the owner creates the connector first | per connector, from its management page |
+| Claude (posting), the directory listing's (confidential) | `1b4db392-2141-413b-be41-f833dfdcab42` | `https://claude.ai/api/mcp/auth_callback` |
+| Claude (posting), for a connector added by URL (public) | `1e2e3615-17a1-448f-9d4c-5cbcd2a572a7` | `https://claude.ai/api/mcp/auth_callback` |
+
+The last two rows are the posting-only clients (`MCP_POSTING_ONLY_CLIENT_IDS`, both registered
+2026-11-10); the first of them is the one confidential client (`client_secret_post`).
+"Anthropic's Connectors Directory", below, says what posting-only means and where the secret is.
 
 Codex never sends the two `/callback/magicbooklet` URIs to this server. Production's metadata
 advertises no `authorization_response_iss_parameter_supported`, so Codex appends its callback ID
@@ -659,7 +668,8 @@ and connecting again goes through the consent screen afresh.
 
 `MCP_SERVER_DISABLED=1` in the Vercel Production environment, followed by a configuration-only
 redeployment (`docs/production-deployment-runbook.md`, "Configuration-only redeployment"),
-answers every call to `/api/mcp` with 503 and `Retry-After: 300` before any token is read.
+answers every call to `/api/mcp` and to `/api/mcp/posts` with 503 and `Retry-After: 300` before
+any token is read.
 Nothing else changes: the web and the app keep working, tokens stay valid, and the consent
 page keeps approving. Remove the variable and redeploy to switch the server back on. Use it
 when an agent is spending at a rate the rate limits do not stop, or when the OAuth server
@@ -668,12 +678,15 @@ misbehaves; revoke the client (below) when the problem is one client.
 ## Reading the logs
 
 Every tool call writes one structured line, `mcp_tool_call`, with `clientId` (the OAuth
-client), `userId`, `tool`, `outcome` (`ok`, `error` or `threw`), `code` (the tool's error code
+client), `userId`, `surface` (`full` for `/api/mcp`, `posts` for `/api/mcp/posts`; the audit
+table has no such column), `tool`, `outcome` (`ok`, `error` or `threw`), `code` (the tool's error code
 when it failed: `COST_CHANGED`, `INSUFFICIENT_CREDITS`, `RATE_LIMITED`, `NOT_OWNER`,
 `NOT_READY`, …), `costCredits` when the answer carried a cost, `generationId` and `postId` where
 the call was about one, and `elapsedMs`. Prompts and results are never logged. A refused
-request logs `mcp_request_refused` with the status and the reason (`no_token`, `token`,
-`identity`, `AGENT_TOKEN_REQUIRED`). In the Vercel logs, filter on `msg:mcp_tool_call` and
+request logs `mcp_request_refused` with the status, the `surface` and the reason (`no_token`,
+`token`, `identity`, `AGENT_TOKEN_REQUIRED`, or `AGENT_SURFACE_NOT_ALLOWED` for a posting-only
+client at `/api/mcp`). A call to a tool a server does not have is refused by the SDK and leaves
+no line and no audit row. In the Vercel logs, filter on `msg:mcp_tool_call` and
 group by `clientId` to see which client spends what; `outcome:threw` is a bug to read with its
 `errorName` and `errorMessage`. The same facts are queryable in the audit table (Publishing by
 agents → The audit table), which outlives the log retention.
@@ -788,6 +801,10 @@ curl -sS -o /dev/null -D - -X POST -H 'content-type: application/json' -H 'accep
 ```
 
 answers 401 with the `WWW-Authenticate` challenge above (or 503 while the kill switch is set).
+The posting-only server answers the same two ways at its own paths:
+`/.well-known/oauth-protected-resource/api/mcp/posts` gives `resource`
+`https://magicbooklet.com/api/mcp/posts`, and a `tools/list` posted to that URL with no token
+answers 401 naming that document.
 Then connect once from Claude Code against production and call `list_models`.
 
 ## Distribution
@@ -991,10 +1008,89 @@ with the new private key. Remove a retired TXT record: a stale one is tried firs
 
 ### Anthropic's Connectors Directory
 
-The directory does not list AI media generation without a written exception from Anthropic, so
-listing needs the owner to ask for one. Until then the custom connector, the Claude Code
-command and this repository's plugin marketplace need no review. A draft the owner can send to
-mcp-review@anthropic.com:
+Checked against Anthropic's documentation on 2026-11-10 (`claude.com/docs/connectors/building/submission`,
+`.../review-criteria`, `.../authentication`, and the Software Directory Policy).
+
+**How a listing happens.** There is no form and no partner programme. Anyone on a paid Claude
+plan submits at `claude.ai/directory/manage` → Submit new → MCP connector. An automated policy
+scan lists the connector with the **Community** label by default; **Verified** (the checkmark) is
+Anthropic's own escalation, with no application.
+
+**What the directory refuses.** Section 4.B of the policy, and the review checklist's
+"unsupported use cases", take no connector that generates images, video or audio with AI, and
+step 9 of the portal has the submitter acknowledge it. The portal reads the tool list from the
+server, so the full server (`/api/mcp`, with `create_media`) cannot be submitted without a
+written exception from Anthropic.
+
+**What is submitted: the posting-only server.** `https://magicbooklet.com/api/mcp/posts`
+(`src/lib/mcp-surfaces.ts`) is the same server at a second path, registering six tools:
+`upload_input`, `request_upload`, `list_creations`, `publish_post`, `get_post`, `delete_post`.
+Nothing on it starts a run, prices one, reads the model catalog, enhances a prompt or spends a
+credit, and no description, instruction or answer on it names a tool it does not have
+(`mcp-server-service.test.ts`, "the posting-only server"). It is a protected resource of its own:
+its 401 names `/.well-known/oauth-protected-resource/api/mcp/posts`, whose `resource` is its own
+URL, because Claude takes a document only when its `resource` equals the URL the person
+connected. Its documentation is `/developers/mcp/posting`, which describes posting alone and
+links nowhere that creates media. The kill switch, the audit table, the rate limits and the
+daily cap are the full server's: one `MCP_SERVER_DISABLED` stops both, and a public post
+through either counts toward the same ten a day.
+
+The listing must stand on its own. A tool description that pointed a person at the full server
+would break the checklist's rule against promoting other software, and the policy's clause on
+redirecting users around its safeguards (4.E), so nothing on the posting server or its page does.
+
+**Its OAuth clients.** Two, both posting-only (`MCP_POSTING_ONLY_CLIENT_IDS` in
+`src/lib/mcp-client-directory.ts`), both with the redirect `https://claude.ai/api/mcp/auth_callback`:
+
+- `1b4db392-2141-413b-be41-f833dfdcab42`, confidential: the client of the listing. For the hosted
+  Claude apps the portal wants a client whose secret Anthropic holds ("Anthropic-held client
+  credentials"). Registered with `npm run ops:oauth-clients -- create --name "Claude (posting)"
+  --redirect-uri https://claude.ai/api/mcp/auth_callback --client-uri https://claude.ai
+  --confidential --apply`.
+- `1e2e3615-17a1-448f-9d4c-5cbcd2a572a7`, public: the client a person types into a custom
+  connector for the posting server's URL, as `/developers/mcp/posting` shows, and the one the
+  pre-submission test uses. (The full server's public `Claude` client would work at the posting
+  URL too, but its consent page lists creating media and its token reaches every tool.)
+
+Posting-only means three things, each read from that one list: the consent page shows the client
+a list of its own (publish, change and delete posts, read creations and posts, no tool that
+spends credits; `POSTING_AGENT_ACCESS`), Connected apps says the same of it
+(`connectedAppAccess`), and a token issued to it answers 403 `AGENT_SURFACE_NOT_ALLOWED` at
+`/api/mcp`. So what the person approved is what the token can do on this app's routes. Every
+other client may use either path. Against the Supabase project itself the token is the
+creator's session under RLS, as any agent token is.
+
+The list is a deny-list, so it fails open: a client that is not on it gets the full server.
+**An id leaves the list only after its client is deleted from the OAuth server.** To replace a
+client (a lost secret): delete the old one in the dashboard first (Authentication → OAuth Apps;
+deleting it ends its grants), then register the new one and add its id; or leave the old id on
+the list beside the new one.
+
+The confidential client's secret:
+
+- It was shown once and is kept on the dev Mac in
+  `~/.config/magicbooklet/claude-posting-client-secret` (owner-only, never in the repository).
+  To enter it in the portal: `pbcopy < ~/.config/magicbooklet/claude-posting-client-secret`, then
+  paste.
+- GoTrue holds a client to the method it was registered with: this one answers
+  `client_secret_post` only. `client_secret_basic` and no secret are refused with `invalid
+  authentication method: client is registered for 'client_secret_post' but '…' was used`
+  (checked 2026-11-10 with a bogus code: `invalid_grant` by post, that refusal otherwise). If
+  Claude's token exchange fails with that message in the Auth logs, register the client again
+  with the method Claude sent.
+
+**What a listing does not cover.** Claude Code signs in from a listing with a client ID metadata
+document or dynamic registration on any loopback port. Production has neither (registration is
+off; GoTrue's metadata advertises no `client_id_metadata_document_supported`), so in Claude Code
+the listing cannot sign in, and the plugin and the setup page's command stay the way in.
+
+**Before submitting.** Add `https://magicbooklet.com/api/mcp/posts` in Claude as a custom
+connector with the public posting-only client id and run each of the six tools; the portal asks
+for that. Reviewers need a test account with a few creations and posts. The portal's ten steps and
+the listing's words are in the work's record (`archive/mcp-posting-connector-2026-11-10/`).
+
+**The full server, by exception.** The policy allows what Anthropic permits in writing. A draft
+the owner can send to mcp-review@anthropic.com:
 
 > Subject: Written exception request: Magic Booklet MCP server (AI image and video generation)
 >
@@ -1003,21 +1099,23 @@ mcp-review@anthropic.com:
 > Magic Booklet (https://magicbooklet.com) is a platform where creators make AI images and
 > videos and share them with a community. We run a remote MCP server at
 > https://magicbooklet.com/api/mcp and would like it listed in the Connectors Directory. As we
-> understand the directory's policy, AI media generation needs a written exception, so we are
-> asking for one.
+> understand the Software Directory Policy (section 4.B), AI media generation needs a written
+> exception, so we are asking for one.
 >
 > A connected agent works as the signed-in creator: it lists our models, prices a run, creates
 > images and videos with the creator's own credits, follows a run to the end and, when asked,
-> publishes a creation to the creator's profile.
+> publishes to the creator's profile. It can also post media the creator made elsewhere and
+> text posts with a prompt or guide attached.
 >
 > - Sign-in is OAuth 2.1 with PKCE. The creator approves each app on our consent page; guest
 >   sessions cannot connect, and the creator can disconnect an app at any time.
 > - Every charge is quoted first: a run must carry the price the agent confirmed and is never
->   charged more, a failed run refunds itself, and agents cannot buy credits.
+>   charged more, a failed run refunds itself, and agents cannot buy credits or move money.
 > - Posts an agent publishes follow the same rules and moderation as posts made on our site and
 >   app, including our child-safety policy (https://magicbooklet.com/child-safety), with a daily
 >   limit on agent posts.
-> - Access tokens last an hour, and we can switch the whole server off at once.
+> - Access tokens last an hour, every tool call is logged, and we can switch the whole server
+>   off at once.
 >
 > Setup and documentation: https://magicbooklet.com/developers/mcp. Registry entry:
 > com.magicbooklet/mcp. We are glad to provide a reviewer account with credits.

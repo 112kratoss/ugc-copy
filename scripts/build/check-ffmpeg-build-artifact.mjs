@@ -46,6 +46,10 @@ export const FFMPEG_REQUIRED_ROUTE_MANIFESTS = [
   'app/api/generate/route.js.nft.json',
   'app/api/generate-video/route.js.nft.json',
   'app/api/generations/route.js.nft.json',
+  // The MCP server: create_media runs the unified start, and publish_post from uploads the
+  // composer's create, at both of its paths.
+  'app/api/mcp/route.js.nft.json',
+  'app/api/mcp/posts/route.js.nft.json',
   'app/api/posts/route.js.nft.json',
   'app/api/posts/[postId]/route.js.nft.json',
   'app/api/seedance-assets/route.js.nft.json',

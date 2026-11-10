@@ -92,7 +92,7 @@ Optional alert delivery can be enabled with `BACKEND_ALERT_DELIVERY_URL`, plus o
 "Recipe Copy Sweep" below before setting it to `true`.
 
 `MCP_SERVER_DISABLED` is the optional kill switch for the agents' MCP server
-(`/api/mcp`): `1` answers every call 503 with `Retry-After` before any token is
+(`/api/mcp` and its posting-only form, `/api/mcp/posts`): `1` answers every call 503 with `Retry-After` before any token is
 read. Leave it unset; see `docs/mcp-server-operations.md`.
 
 Vercel environment values are captured when a deployment is built. Adding,

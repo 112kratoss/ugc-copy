@@ -47,8 +47,8 @@ export default async function OAuthConsentPage({ searchParams }: ConsentPageProp
             <Kicker>Connect an app</Kicker>
             <Text as="h1" variant="sectionTitle">Sign in to connect an app</Text>
             <Text>
-              You are browsing as a guest. An app acts as an account, with that account&apos;s credits
-              and posts, so connecting one needs you to sign in or create an account first. You come
+              You are browsing as a guest. An app acts as an account, with what that account has made
+              and posted, so connecting one needs you to sign in or create an account first. You come
               straight back here afterwards.
             </Text>
             <Button href={gate.href} variant="primary" icon={LogIn}>Sign in or create an account</Button>
