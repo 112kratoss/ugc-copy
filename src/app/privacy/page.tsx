@@ -101,7 +101,7 @@ export default function PrivacyPolicy() {
                             Raw onboarding interaction events use a pseudonymous installation identifier and are retained for up to 90 days. They do not include your prompts, uploaded media, email address, or arbitrary profile content; longer-term reporting uses aggregated results.
                         </p>
                         <p className="mt-4">
-                            One-time promotional credits (such as the welcome bonus) are recorded against a one-way cryptographic digest of your sign-in identifiers so each promotion is granted once per person. The digest cannot be reversed into your email address or identity, contains no profile content, and is retained after account deletion solely to prevent repeat claims through re-registration.
+                            One-time and new-account promotions (such as the welcome bonus and Invite &amp; Earn) are checked against a one-way cryptographic digest of your sign-in identifiers so each is granted once per person. The digest cannot be reversed into your email address or identity, contains no profile content, and is retained after account deletion solely to prevent repeat claims through re-registration.
                         </p>
                     </section>
 
@@ -194,7 +194,7 @@ export default function PrivacyPolicy() {
                     <section>
                         <h2 className="text-2xl font-semibold text-white mb-4">8. Cookies</h2>
                         <p className="mb-4">
-                            We use essential cookies to maintain your session and preferences. When you open a referral link, we also use an opaque first-party referral cookie for up to 30 days so a new-account signup can be attributed to the correct inviter.
+                            We use essential cookies to maintain your session and preferences. When you open a referral link, we also use an opaque first-party referral cookie for up to 30 days so a new-account signup can be attributed to the correct inviter. An opaque first-party device identifier cookie keeps your feed consistent between visits and lets us tell when an invite is opened on the inviter&apos;s own device.
                         </p>
                         <p>
                             Referral visit and fraud-prevention signals are retained in identifiable or pseudonymous form only as long as needed to operate and protect the program. Short-lived visit signals are normally removed or aggregated after 90 days, while purchase and reward records may be retained for account, financial, dispute, and legal obligations. You can control cookies through your browser settings, although blocking the referral cookie prevents automatic attribution.

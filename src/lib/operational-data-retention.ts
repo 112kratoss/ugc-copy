@@ -151,6 +151,12 @@ export type OperationalRetentionSummary = IdleGuestRetentionSummary & ContentGue
   profileShareEventsDeleted: number;
   abandonedFreeUnlockOrdersDeleted: number;
   accountMergeTicketsDeleted: number;
+  /**
+   * Referral visits and account devices whose risk digests (network, user
+   * agent, device) were cleared at 90 days, as the Privacy Policy says. The
+   * rows stay.
+   */
+  referralRiskSignalsCleared: number;
   uploadByteReservationsDeleted: number;
   /** A supplementary prune's last batch was still full. */
   supplementaryBatchLimitReached: boolean;
@@ -578,6 +584,9 @@ export async function pruneOperationalBackendData(
   const accountMergeTicketsDeleted = await pruneSupplementary(
     'prune_account_merge_tickets', { p_limit: ticketBatch }, ticketBatch, OPERATIONAL_RETENTION_SUPPLEMENTARY_PHASE_END_MS,
   );
+  const referralRiskSignalsCleared = await pruneSupplementary(
+    'prune_referral_risk_signals', { p_limit: ticketBatch }, ticketBatch, OPERATIONAL_RETENTION_SUPPLEMENTARY_PHASE_END_MS,
+  );
 
   // Expiry is not proof of absence. Delete/prove each unfinalized object first;
   // only rows this worker releases are eligible for the bookkeeping prune. The
@@ -632,6 +641,7 @@ export async function pruneOperationalBackendData(
     profileShareEventsDeleted,
     abandonedFreeUnlockOrdersDeleted,
     accountMergeTicketsDeleted,
+    referralRiskSignalsCleared,
     uploadByteReservationsDeleted,
     supplementaryBatchLimitReached,
     expiredUploadReservationsScanned: uploadReclaim.scanned,

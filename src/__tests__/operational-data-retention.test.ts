@@ -37,6 +37,7 @@ function createClient(result: {
   shareEvents?: { data?: unknown; error?: unknown };
   profileShareEvents?: { data?: unknown; error?: unknown };
   freeUnlockOrders?: { data?: unknown; error?: unknown };
+  referralRiskSignals?: { data?: unknown; error?: unknown };
 }) {
   const calls: RpcCall[] = [];
   return {
@@ -68,6 +69,12 @@ function createClient(result: {
         if (fn === 'prune_account_merge_tickets') {
           return { data: 0, error: null };
         }
+        if (fn === 'prune_referral_risk_signals') {
+          return {
+            data: result.referralRiskSignals?.data ?? 0,
+            error: result.referralRiskSignals?.error ?? null,
+          };
+        }
         if (fn === 'list_idle_guest_identities' || fn === 'list_idle_guest_identities_with_content') {
           return { data: [], error: null };
         }
@@ -97,6 +104,7 @@ describe('operational data retention', () => {
       shareEvents: { data: 18 },
       profileShareEvents: { data: 6 },
       freeUnlockOrders: { data: 2 },
+      referralRiskSignals: { data: 5 },
     });
 
     const summary = await pruneOperationalBackendData(client);
@@ -123,6 +131,8 @@ describe('operational data retention', () => {
       profileShareEventsDeleted: 6,
       abandonedFreeUnlockOrdersDeleted: 2,
       accountMergeTicketsDeleted: 0,
+      // The Privacy Policy's 90 days for referral visit signals (20261109213008).
+      referralRiskSignalsCleared: 5,
       uploadByteReservationsDeleted: 0,
       supplementaryBatchLimitReached: false,
       expiredUploadReservationsScanned: 0,
@@ -165,6 +175,7 @@ describe('operational data retention', () => {
       'prune_profile_share_events',
       'prune_abandoned_free_unlock_orders',
       'prune_account_merge_tickets',
+      'prune_referral_risk_signals',
       'prune_upload_byte_reservations',
       'list_idle_guest_identities',
       'list_idle_guest_identities_with_content',

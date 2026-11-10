@@ -6,6 +6,7 @@ import { logBackendError } from '@/lib/backend-logger';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 
+import { loadAccountIdentityFingerprints } from '@/lib/account-identity-fingerprint';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
   BackendRateLimitError,
@@ -16,12 +17,18 @@ import {
   REFERRAL_VISIT_COOKIE_NAME,
   buildReferralShareUrl,
   getReferralRiskContext,
+  getReferralSiteOrigin,
   getSafeReferralDestination,
   hashReferralRiskSignal,
   normalizeReferralCode,
   normalizeReferralVisitToken,
   readReferralVisitCookie,
 } from '@/lib/referral';
+import {
+  applyReferralDeviceCookie,
+  resolveReferralDevice,
+  type ReferralDevice,
+} from '@/lib/referral-device';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 type JsonRecord = Record<string, unknown>;
@@ -163,6 +170,55 @@ async function enforceReferralRateLimit(
   }
 }
 
+/**
+ * Whether a browser sent this request from a page of another site.
+ *
+ * A visit sets a 30-day cookie that credits whoever signs up in that browser
+ * to an inviter, so another site must not be able to plant one: a form posted
+ * from elsewhere needs no CORS grant and reached this route until now. A
+ * browser names where a request came from (`Sec-Fetch-Site`, and `Origin` on
+ * the ones that predate it); the app sends neither and is let through.
+ */
+function isCrossSiteBrowserRequest(request: Request): boolean {
+  const site = request.headers.get('sec-fetch-site');
+  if (site) return site === 'cross-site';
+
+  const origin = request.headers.get('origin');
+  if (!origin) return false;
+  try {
+    const requestOrigin = new URL(origin).origin;
+    return requestOrigin !== new URL(request.url).origin
+      && requestOrigin !== getReferralSiteOrigin();
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Remembers the device an account used Invite & Earn from, for the abuse guard
+ * (`claim_referral_visit` compares a new friend's device with these). It never
+ * fails or delays the request it rides on: a device that was not recorded only
+ * leaves the guard with what it knew before.
+ */
+async function recordReferralAccountDevice(
+  adminSupabase: SupabaseClient,
+  request: Request,
+  userId: string,
+  device: ReferralDevice,
+): Promise<void> {
+  if (!device.deviceHash) return;
+  try {
+    const { error } = await adminSupabase.rpc('record_referral_account_device', {
+      p_user_id: userId,
+      p_device_hash: device.deviceHash,
+      p_ip_hash: getReferralRiskContext(request.headers).ipHash,
+    });
+    if (error) throw error;
+  } catch (error) {
+    logBackendError('referral_account_device_not_recorded', { error });
+  }
+}
+
 function rateLimitResponse(request: Request, error: BackendRateLimitError) {
   const response = referralErrorResponse(request, error.message, 429);
   response.headers.set('Retry-After', String(error.retryAfterSeconds));
@@ -222,16 +278,20 @@ export async function getReferralOverviewResponse(request: Request) {
   if (!userId) return referralErrorResponse(request, 'Unauthorized', 401);
 
   const adminSupabase = createServiceClient();
-  const { data, error } = await adminSupabase.rpc('get_referral_dashboard', {
-    p_user_id: userId,
-  });
+  const device = resolveReferralDevice(request);
+  const [{ data, error }] = await Promise.all([
+    adminSupabase.rpc('get_referral_dashboard', { p_user_id: userId }),
+    recordReferralAccountDevice(adminSupabase, request, userId, device),
+  ]);
   if (error) {
     logBackendError('referral_dashboard_failed', { error: error });
     return referralErrorResponse(request, 'Could not load Invite & Earn.', 503);
   }
 
   try {
-    return referralJsonResponse(request, normalizeDashboard(data));
+    const response = referralJsonResponse(request, normalizeDashboard(data));
+    applyReferralDeviceCookie(response, device);
+    return response;
   } catch (parseError) {
     logBackendError('referral_dashboard_response_invalid', { error: parseError });
     return referralErrorResponse(request, 'Could not load Invite & Earn.', 503);
@@ -254,23 +314,31 @@ export async function createReferralLinkResponse(request: Request) {
   });
   if (rateLimit) return rateLimitResponse(request, rateLimit);
 
-  const { data, error } = await adminSupabase.rpc('ensure_referral_code', {
-    p_user_id: userId,
-  });
+  const device = resolveReferralDevice(request);
+  const [{ data, error }] = await Promise.all([
+    adminSupabase.rpc('ensure_referral_code', { p_user_id: userId }),
+    recordReferralAccountDevice(adminSupabase, request, userId, device),
+  ]);
   const code = isRecord(data) ? normalizeReferralCode(data.code) : null;
   if (error || !code || data?.enabled !== true) {
     logBackendError('referral_code_creation_failed', { error: error });
     return referralErrorResponse(request, 'Your referral link is unavailable.', 503);
   }
 
-  return referralJsonResponse(request, {
+  const response = referralJsonResponse(request, {
     success: true,
     code,
     shareUrl: buildReferralShareUrl(code, body.next),
   });
+  applyReferralDeviceCookie(response, device);
+  return response;
 }
 
 export async function recordReferralVisitResponse(request: Request) {
+  if (isCrossSiteBrowserRequest(request)) {
+    return referralErrorResponse(request, 'Open this invite on Magicbooklet.', 403);
+  }
+
   const body = await readBody(request);
   if (!body) return referralErrorResponse(request, 'Invalid referral visit request.', 400);
 
@@ -295,6 +363,9 @@ export async function recordReferralVisitResponse(request: Request) {
   const userAgentHash = installationId
     ? hashReferralRiskSignal(`ua:${request.headers.get('user-agent') ?? ''}|install:${installationId}`)
     : risk.userAgentHash;
+  // The device that opened the link: what the abuse guard compares with its
+  // inviter's devices when the visit is claimed.
+  const device = resolveReferralDevice(request, { bodyInstallationId: body.installationId });
   const { data, error } = await adminSupabase.rpc('create_referral_visit', {
     p_code: code,
     p_channel: source,
@@ -302,6 +373,7 @@ export async function recordReferralVisitResponse(request: Request) {
     p_existing_visit_token: existingToken,
     p_ip_hash: risk.ipHash,
     p_user_agent_hash: userAgentHash,
+    p_device_hash: device.deviceHash,
   });
 
   if (error || !isRecord(data)) {
@@ -343,7 +415,27 @@ export async function recordReferralVisitResponse(request: Request) {
       maxAge: REFERRAL_VISIT_COOKIE_MAX_AGE_SECONDS,
     });
   }
+  applyReferralDeviceCookie(response, device);
   return response;
+}
+
+/**
+ * The claiming account's identity digests, for the re-registration guard in
+ * `claim_referral_visit`. Null when they cannot be read: the claim then runs
+ * without that one guard rather than not at all, because an invite that fails
+ * to apply costs a real friend their bonus and the guard only stops an account
+ * deleted and opened again.
+ */
+async function loadClaimIdentityFingerprints(
+  adminSupabase: SupabaseClient,
+  userId: string,
+): Promise<string[] | null> {
+  try {
+    return await loadAccountIdentityFingerprints(adminSupabase, userId);
+  } catch (error) {
+    logBackendError('referral_claim_identity_fingerprints_unavailable', { error });
+    return null;
+  }
 }
 
 export async function claimReferralForUser({
@@ -358,6 +450,7 @@ export async function claimReferralForUser({
   const { data, error } = await adminSupabase.rpc('claim_referral_visit', {
     p_invitee_user_id: userId,
     p_visit_token: visitToken,
+    p_identity_fingerprints: await loadClaimIdentityFingerprints(adminSupabase, userId),
   });
   if (error || !isRecord(data) || typeof data.status !== 'string') {
     throw error || new Error('Referral claim RPC returned an invalid response');

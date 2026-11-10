@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { PostReportActions, SubjectReportActions } from '@/app/admin/(console)/moderation/ModerationActions';
 import { PayoutActions } from '@/app/admin/(console)/payouts/PayoutActions';
+import { ReferralReviewActions } from '@/app/admin/(console)/referrals/ReferralReviewActions';
 import { ContactTriageControls } from '@/app/admin/(console)/system/ContactTriageControls';
 import { CreditAdjustmentForm } from '@/app/admin/(console)/users/[userId]/CreditAdjustmentForm';
 import { UserSanctionForm } from '@/app/admin/(console)/users/[userId]/UserSanctionForm';
@@ -110,6 +111,37 @@ describe('admin console fields filled in before the page’s script ran', () => 
 
     expect(sentBody()).toEqual({ requestId: 'p1', action: 'mark_paid', note: EARLY, externalReference: 'UTR-EARLY-123' });
     expect(field<HTMLInputElement>(container, 'input[aria-label="Payout reference"]').value).toBe('UTR-EARLY-123');
+  });
+
+  it('a referral is blocked with the reason filled in early', async () => {
+    const container = hydrateAfter(
+      <ReferralReviewActions attributionId="a1" rewardState="eligible" inviterCode={{ id: 'c1', enabled: true }} />,
+      (page) => {
+        fillIn(field(page, 'input[aria-label="Decision reason"]'), EARLY);
+      },
+    );
+
+    expect(screen.getByRole('button', { name: 'Block rewards' })).toBeEnabled();
+    await press('Block rewards');
+
+    expect(mocks.fetch.mock.calls[0][0]).toBe('/api/admin/referrals');
+    expect(sentBody()).toEqual({ action: 'block', attributionId: 'a1', reason: EARLY });
+    expect(field<HTMLInputElement>(container, 'input[aria-label="Decision reason"]').value).toBe(EARLY);
+  });
+
+  it('an invite link is switched off by its own id, with the reason filled in early', async () => {
+    hydrateAfter(
+      <ReferralReviewActions attributionId="a1" rewardState="blocked" inviterCode={{ id: 'c1', enabled: true }} />,
+      (page) => {
+        fillIn(field(page, 'input[aria-label="Decision reason"]'), EARLY);
+      },
+    );
+
+    // A blocked referral offers the way back, not a second block.
+    expect(screen.getByRole('button', { name: 'Unblock rewards' })).toBeEnabled();
+    await press('Switch link off');
+
+    expect(sentBody()).toEqual({ action: 'disable_link', referralCodeId: 'c1', reason: EARLY });
   });
 
   it('a contact message is marked handled with the note filled in early', async () => {

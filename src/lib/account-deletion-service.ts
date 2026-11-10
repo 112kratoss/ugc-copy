@@ -4,7 +4,10 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { retainPurchasedUnlockFiles } from '@/lib/account-deletion-resource-retention';
-import { recordClaimedIdentityFingerprints } from '@/lib/account-identity-fingerprint';
+import {
+  recordClaimedIdentityFingerprints,
+  recordDeletedAccountIdentityFingerprints,
+} from '@/lib/account-identity-fingerprint';
 import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 import { iterateStorageObjectsV2, StorageListV2Error } from '@/lib/storage-list-v2';
 
@@ -93,6 +96,7 @@ type FinishInitialAccountDeletionOptions = {
   onNonFatalError?: (message: string, error: unknown) => void;
   retainPurchasedFiles?: typeof retainPurchasedUnlockFiles;
   recordClaimedFingerprints?: typeof recordClaimedIdentityFingerprints;
+  recordDeletedIdentityFingerprints?: typeof recordDeletedAccountIdentityFingerprints;
   recordWalletBalances?: typeof recordAccountDeletionWalletBalances;
 };
 
@@ -113,6 +117,7 @@ type ProcessAccountDeletionResweepsOptions = {
 type ProcessAccountDeletionInitialRetriesOptions = ProcessAccountDeletionResweepsOptions & {
   retainPurchasedFiles?: typeof retainPurchasedUnlockFiles;
   recordClaimedFingerprints?: typeof recordClaimedIdentityFingerprints;
+  recordDeletedIdentityFingerprints?: typeof recordDeletedAccountIdentityFingerprints;
   recordWalletBalances?: typeof recordAccountDeletionWalletBalances;
 };
 
@@ -674,6 +679,7 @@ export async function finishInitialAccountDeletion({
   onNonFatalError,
   retainPurchasedFiles = retainPurchasedUnlockFiles,
   recordClaimedFingerprints = recordClaimedIdentityFingerprints,
+  recordDeletedIdentityFingerprints = recordDeletedAccountIdentityFingerprints,
   recordWalletBalances = recordAccountDeletionWalletBalances,
 }: FinishInitialAccountDeletionOptions): Promise<InitialAccountDeletionResult> {
   // Close reservation issuance/finalization before copying retained sources;
@@ -703,6 +709,9 @@ export async function finishInitialAccountDeletion({
   // rows. Idempotent, so the resweep retry path repeats it safely; a failure
   // throws and leaves the job retryable rather than deleting Auth unrecorded.
   await recordClaimedFingerprints(admin, manifest.ownerUserIds);
+  // So does the record that this sign-in had an account: Invite & Earn is for
+  // new accounts, and one deleted and opened again is not new (20261109213008).
+  await recordDeletedIdentityFingerprints(admin, userId);
   // The wallet ledger follows the same rule, as late as it can be written.
   await recordWalletBalances(admin, userId, manifest.ownerUserIds);
 
@@ -1008,6 +1017,7 @@ export async function processAccountDeletionInitialRetries({
   leaseSeconds = ACCOUNT_DELETION_RESWEEP_LEASE_SECONDS,
   retainPurchasedFiles = retainPurchasedUnlockFiles,
   recordClaimedFingerprints = recordClaimedIdentityFingerprints,
+  recordDeletedIdentityFingerprints = recordDeletedAccountIdentityFingerprints,
   recordWalletBalances = recordAccountDeletionWalletBalances,
 }: ProcessAccountDeletionInitialRetriesOptions): Promise<AccountDeletionInitialRetrySummary> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
@@ -1112,6 +1122,7 @@ export async function processAccountDeletionInitialRetries({
       // Auth step lands here with its auth rows still present, so the retry
       // must record fingerprints and wallets before it deletes them.
       await recordClaimedFingerprints(admin, claim.manifest.ownerUserIds);
+      await recordDeletedIdentityFingerprints(admin, claim.userId);
       await recordWalletBalances(admin, claim.userId, claim.manifest.ownerUserIds);
       await deleteLinkedAuthUsersGuestFirst(
         admin,

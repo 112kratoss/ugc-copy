@@ -15,6 +15,7 @@ import System from '@/app/admin/(console)/system/page';
 import Users from '@/app/admin/(console)/users/page';
 import UserDetail from '@/app/admin/(console)/users/[userId]/page';
 import Payouts from '@/app/admin/(console)/payouts/page';
+import Referrals from '@/app/admin/(console)/referrals/page';
 import Moderation from '@/app/admin/(console)/moderation/page';
 import History from '@/app/admin/(console)/moderation/history/page';
 
@@ -27,6 +28,7 @@ const pages = [
   { name: 'users', run: () => Users({ searchParams: Promise.resolve({}) }) },
   { name: 'user detail', run: () => UserDetail({ params: Promise.resolve({ userId: '10000000-0000-4000-8000-000000000001' }) }) },
   { name: 'payouts', run: () => Payouts({ searchParams: Promise.resolve({}) }) },
+  { name: 'referrals', run: () => Referrals({ searchParams: Promise.resolve({}) }) },
   { name: 'moderation', run: () => Moderation() },
   { name: 'moderation history', run: () => History({ searchParams: Promise.resolve({}) }) },
 ];

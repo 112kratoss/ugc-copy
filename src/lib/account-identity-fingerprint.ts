@@ -29,6 +29,15 @@ import { logBackendWarning } from '@/lib/backend-logger';
 export const ACCOUNT_IDENTITY_FINGERPRINT_TABLE = 'credit_grant_identity_fingerprints';
 
 /**
+ * Digests of the identities of deleted accounts, whatever they had claimed
+ * (20261109213008). Invite & Earn is for new accounts, and an account deleted
+ * and opened again is not one: `claim_referral_visit` refuses a claim whose
+ * digest was recorded here, or in the claim ledger above, before the claiming
+ * account existed.
+ */
+export const DELETED_ACCOUNT_IDENTITY_FINGERPRINT_TABLE = 'deleted_account_identity_fingerprints';
+
+/**
  * Domain separator for the fallback subkey derivation. Fixed and versioned so
  * the derived secret is stable across restarts; bumping the suffix deliberately
  * rotates every fingerprint digest (and with it, the ledger's memory).
@@ -134,6 +143,57 @@ function isMissingAuthUserError(error: unknown) {
   if (typeof error !== 'object' || error === null) return false;
   const record = error as { status?: unknown; statusCode?: unknown };
   return String(record.status ?? record.statusCode ?? '') === '404';
+}
+
+/**
+ * An account's fingerprints, read through the Auth admin API (see
+ * `FingerprintableUser`). Throws when the account cannot be read: the caller
+ * decides whether its guard may be skipped.
+ */
+export async function loadAccountIdentityFingerprints(
+  admin: SupabaseClient,
+  userId: string,
+): Promise<string[]> {
+  const { data, error } = await admin.auth.admin.getUserById(userId);
+  if (error || !data?.user) {
+    throw error ?? new Error(`Could not load auth user ${userId} for identity fingerprinting.`);
+  }
+  return deriveAccountIdentityFingerprints(data.user);
+}
+
+/**
+ * Records the fingerprints of an account that is about to be deleted, so the
+ * same sign-in coming back is known not to be a new account. Runs in the
+ * account-deletion flow beside `recordClaimedIdentityFingerprints`, while the
+ * Auth row still exists. Idempotent: a digest keeps the time it was first
+ * recorded, which is what the referral claim compares with.
+ *
+ * A guest has no sign-in to come back with, and an account already gone has
+ * nothing left to read: both record nothing.
+ */
+export async function recordDeletedAccountIdentityFingerprints(
+  admin: SupabaseClient,
+  userId: string,
+): Promise<{ fingerprintRows: number }> {
+  const { data, error } = await admin.auth.admin.getUserById(userId);
+  if (error && isMissingAuthUserError(error)) return { fingerprintRows: 0 };
+  if (error || !data?.user) {
+    throw error ?? new Error(`Could not load auth user ${userId} for identity fingerprinting.`);
+  }
+  if (data.user.is_anonymous) return { fingerprintRows: 0 };
+
+  const fingerprints = deriveAccountIdentityFingerprints(data.user);
+  if (fingerprints.length === 0) return { fingerprintRows: 0 };
+
+  const { error: insertError } = await admin
+    .from(DELETED_ACCOUNT_IDENTITY_FINGERPRINT_TABLE)
+    .upsert(
+      fingerprints.map((fingerprint) => ({ fingerprint })),
+      { onConflict: 'fingerprint', ignoreDuplicates: true },
+    );
+  if (insertError) throw insertError;
+
+  return { fingerprintRows: fingerprints.length };
 }
 
 /**

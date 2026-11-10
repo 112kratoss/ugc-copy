@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest';
 
 import { collectAdminActivity } from '@/lib/admin-activity-service';
 
+/** The equality filters each table was read with, as "table.column=value". */
+const filters: string[] = [];
+
 function client(rows: Record<string, Array<Record<string, unknown>>>) {
+  filters.length = 0;
   return {
     from(table: string) {
       const result = { data: rows[table] ?? [], error: null };
@@ -12,6 +16,10 @@ function client(rows: Record<string, Array<Record<string, unknown>>>) {
       Object.assign(builder, {
         select: chain,
         not: chain,
+        eq: (column: string, value: unknown) => {
+          filters.push(`${table}.${column}=${String(value)}`);
+          return builder;
+        },
         order: chain,
         limit: () => Promise.resolve(result),
       });
@@ -49,13 +57,22 @@ const SOURCES = {
     resolved_at: '2026-08-18T08:00:00.000Z', status: 'paid',
     resolution_note: 'NEFT.', amount_token_subunits: 1200000,
   }],
+  referral_review_events: [{
+    id: 'rr1', attribution_id: 'a77r1b00-0000-4000-8000-000000000001', referral_code_id: null,
+    action: 'block', reviewer_id: 'r1', reason: 'Two accounts, one person.',
+    created_at: '2026-08-18T07:00:00.000Z',
+  }, {
+    id: 'rr2', attribution_id: null, referral_code_id: 'c0de0000-0000-4000-8000-000000000002',
+    action: 'disable_code', reviewer_id: 'r1', reason: 'Repeated self-invites.',
+    created_at: '2026-08-18T06:00:00.000Z',
+  }],
 };
 
 describe('collectAdminActivity', () => {
   it('merges every action type into one newest-first feed', async () => {
     const feed = await collectAdminActivity(client(SOURCES));
 
-    expect(feed.total).toBe(6);
+    expect(feed.total).toBe(8);
     expect(feed.entries.map((entry) => entry.kind)).toEqual([
       'user-sanction',
       'post-moderation',
@@ -63,7 +80,29 @@ describe('collectAdminActivity', () => {
       'credit-adjustment',
       'subject-moderation',
       'payout',
+      'referral-review',
+      'referral-review',
     ]);
+  });
+
+  // The abuse guard writes its own blocks to the same trail. A feed of what
+  // operators did must not list what nobody did.
+  it('lists an operator’s referral decisions, and reads none of the guard’s', async () => {
+    const feed = await collectAdminActivity(client(SOURCES));
+
+    expect(filters).toEqual(['referral_review_events.source=operator']);
+    expect(feed.entries.find((entry) => entry.id === 'referral-review-rr1')).toMatchObject({
+      kind: 'referral-review',
+      action: 'blocked a referral',
+      reviewerId: 'r1',
+      summary: 'Referral a77r1b00…',
+      rationale: 'Two accounts, one person.',
+      at: '2026-08-18T07:00:00.000Z',
+    });
+    expect(feed.entries.find((entry) => entry.id === 'referral-review-rr2')).toMatchObject({
+      action: 'switched an invite link off',
+      summary: 'Invite link c0de0000…',
+    });
   });
 
   it('includes proactive post actions that have no report row', async () => {
@@ -149,7 +188,7 @@ describe('collectAdminActivity', () => {
         const builder: Record<string, unknown> = {};
         const chain = () => builder;
         Object.assign(builder, {
-          select: chain, not: chain, order: chain,
+          select: chain, not: chain, eq: chain, order: chain,
           limit: () => Promise.resolve({ data: null, error: new Error('permission denied') }),
         });
         return builder;
