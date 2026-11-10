@@ -4,11 +4,17 @@
  * which is server-only code the page must not pull in; `mcp-server-service.test.ts` holds this
  * list to `MCP_POSTS_TOOL_NAMES` and each `readOnly` to the tool's own annotation.
  */
+/**
+ * The two limits the page states, as numbers it can print without importing server code;
+ * `mcp-server-service.test.ts` holds them to `MAX_POST_MEDIA_ITEMS` and `AGENT_PUBLISH_RATE_LIMIT`.
+ */
+export const MCP_POSTS_PAGE_LIMITS = { filesPerPost: 5, publicPostsPerDay: 10 } as const;
+
 export const MCP_POSTS_TOOL_SUMMARIES: ReadonlyArray<{ name: string; readOnly: boolean; summary: string }> = [
   {
     name: 'upload_input',
     readOnly: false,
-    summary: 'Stages a picture or a video for a post, from a public link or from a file the agent sent. The staged copy is kept about two hours.',
+    summary: 'Stages a picture or a video for a post, from a public link or from a file the agent sent. A staged file is temporary: it is there to be posted soon after.',
   },
   {
     name: 'request_upload',

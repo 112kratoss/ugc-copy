@@ -252,14 +252,14 @@ async function handleMcpPost(request: NextRequest, dependencies: McpRouteDepende
   if (!authorization) {
     // Every connection starts with this call: the challenge it answers is how a client finds the
     // authorization server. Information, not a warning.
-    logBackendInfo('mcp_request_refused', { code: 'UNAUTHORIZED', reason: 'no_token' });
+    logBackendInfo('mcp_request_refused', { code: 'UNAUTHORIZED', reason: 'no_token', surface });
     return unauthorizedResponse(siteOrigin, 'Sign in to Magicbooklet to use this server.', surface);
   }
 
   const admission = await evaluateUserFacingRouteIdentity(request, dependencies.identity);
   if (admission.rejection) {
     const code = typeof admission.claims?.sub === 'string' ? 'identity' : 'token';
-    logBackendWarning('mcp_request_refused', { status: admission.rejection.status, reason: code });
+    logBackendWarning('mcp_request_refused', { status: admission.rejection.status, reason: code, surface });
     return admission.rejection.status === 401
       ? unauthorizedResponse(siteOrigin, 'The access token is invalid or has expired. Sign in again.', surface)
       : admission.rejection;
@@ -267,11 +267,11 @@ async function handleMcpPost(request: NextRequest, dependencies: McpRouteDepende
   const clientId = agentTokenClientId(admission.claims);
   const userId = typeof admission.claims?.sub === 'string' ? admission.claims.sub : null;
   if (!userId) {
-    logBackendWarning('mcp_request_refused', { code: 'UNAUTHORIZED', reason: 'no_claims' });
+    logBackendWarning('mcp_request_refused', { code: 'UNAUTHORIZED', reason: 'no_claims', surface });
     return unauthorizedResponse(siteOrigin, 'The access token could not be verified. Sign in again.', surface);
   }
   if (!clientId) {
-    logBackendWarning('mcp_request_refused', { code: 'AGENT_TOKEN_REQUIRED', userId });
+    logBackendWarning('mcp_request_refused', { code: 'AGENT_TOKEN_REQUIRED', userId, surface });
     return forbiddenResponse(
       'AGENT_TOKEN_REQUIRED',
       'Only a token issued to an agent through the Magicbooklet OAuth server can use the MCP server.',
@@ -280,7 +280,7 @@ async function handleMcpPost(request: NextRequest, dependencies: McpRouteDepende
 
   if (surface === 'full' && isPostingOnlyClientId(clientId)) {
     // The consent page showed this client the posting-only list (`oauth-consent-service.ts`).
-    logBackendWarning('mcp_request_refused', { code: 'AGENT_SURFACE_NOT_ALLOWED', userId, clientId });
+    logBackendWarning('mcp_request_refused', { code: 'AGENT_SURFACE_NOT_ALLOWED', userId, clientId, surface });
     return forbiddenResponse(
       'AGENT_SURFACE_NOT_ALLOWED',
       'This app was connected for posting only. It can use the Magicbooklet posting server, not this one.',

@@ -88,24 +88,32 @@ describe('consent gate', () => {
     expect(AGENT_ACCESS[0].detail).toContain(`except prompt enhancement, a fixed ${getPromptEnhancementCost()} credit`);
   });
 
-  it('shows a posting-only client the posting-only list: no run, no charge, and it says so', async () => {
+  it('shows a posting-only client the posting-only list: every posting tool, no run, no charge', async () => {
     const postingClientId = MCP_POSTING_ONLY_CLIENT_IDS.claudeDirectory;
-    expect(agentAccessFor(postingClientId)).toBe(POSTING_AGENT_ACCESS);
-    expect(agentAccessFor(postingClientId.toUpperCase())).toBe(POSTING_AGENT_ACCESS);
+    for (const id of Object.values(MCP_POSTING_ONLY_CLIENT_IDS)) {
+      expect(agentAccessFor(id), id).toBe(POSTING_AGENT_ACCESS);
+      expect(agentAccessFor(id.toUpperCase()), id).toBe(POSTING_AGENT_ACCESS);
+    }
     // Every other client, a missing id included, is shown the full list: never less than it can do.
     for (const clientId of [...Object.values(MCP_CLIENT_IDS), 'client-1', '', null, undefined]) {
       expect(agentAccessFor(clientId), String(clientId)).toBe(AGENT_ACCESS);
     }
     expect(POSTING_AGENT_ACCESS.map((item) => item.title)).toEqual([
       'Publish posts as you',
-      'Read your creations',
-      'Nothing that spends credits',
+      'Change and delete your posts',
+      'Read your creations and posts',
+      'No tool that spends credits',
     ]);
+    // delete_post and a visibility change are the person's to know before they allow it, and
+    // get_post reads another account's post while it is public.
+    expect(POSTING_AGENT_ACCESS[1].detail).toBe('Make a post public or private, or delete one of your posts, when you ask.');
+    expect(POSTING_AGENT_ACCESS[2].detail).toContain('Of other accounts, only posts that are public.');
     expect(JSON.stringify(POSTING_AGENT_ACCESS)).not.toMatch(/openid|scope|Create images and videos/i);
     // What a post may carry and where a sale goes is said here as on the full list.
     expect(POSTING_AGENT_ACCESS[0].detail).toContain('free or at a price you approve');
     expect(POSTING_AGENT_ACCESS[0].detail).toContain('in the Marketplace');
-    expect(POSTING_AGENT_ACCESS[2].detail).toBe('This connection cannot create media, enhance a prompt or use your balance.');
+    // What it has no tool for, said as that: the token is still the account's session (agent-token.ts).
+    expect(POSTING_AGENT_ACCESS[3].detail).toBe('It is given no way to create media, enhance a prompt or use your balance.');
 
     // The page gets the list with the details, chosen by the client GoTrue names.
     const fake = client({

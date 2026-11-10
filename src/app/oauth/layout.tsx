@@ -12,7 +12,7 @@ import { createNoIndexMetadata } from '@/lib/seo';
  */
 export const metadata: Metadata = createNoIndexMetadata(
   'Connect an app',
-  'Allow an AI assistant to create media and publish posts with your Magicbooklet account.'
+  'Allow an AI assistant to act with your Magicbooklet account.'
 );
 
 export default function OAuthLayout({ children }: { children: React.ReactNode }) {

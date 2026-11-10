@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import PostingConnectorGuide from '@/app/developers/mcp/posting/PostingConnectorGuide';
 import PostingConnectorPage, { metadata } from '@/app/developers/mcp/posting/page';
-import { MCP_CLIENT_IDS, MCP_POSTS_SERVER_URL } from '@/lib/mcp-client-directory';
+import { MCP_CLIENT_IDS, MCP_POSTING_ONLY_CLIENT_IDS, MCP_POSTS_SERVER_URL } from '@/lib/mcp-client-directory';
 import { MCP_POSTS_TOOL_SUMMARIES } from '@/lib/mcp-posts-tool-summaries';
 
 afterEach(cleanup);
@@ -26,6 +26,9 @@ describe('the posting connector page', () => {
     const tools = [...document.querySelectorAll<HTMLElement>('[data-tool]')].map((card) => card.dataset.tool);
     expect(tools).toEqual(MCP_POSTS_TOOL_SUMMARIES.map((tool) => tool.name));
     expect(tools).toHaveLength(6);
+    // Two copy buttons for the same URL are told apart by their labels.
+    const copyLabels = screen.getAllByRole('button').map((button) => button.getAttribute('aria-label') ?? button.textContent ?? '');
+    expect(new Set(copyLabels).size).toBe(copyLabels.length);
     // Each card says whether the tool reads or writes, as the server's annotations do.
     expect(screen.getAllByText('Reads')).toHaveLength(2);
     expect(screen.getAllByText('Writes')).toHaveLength(4);
@@ -44,12 +47,19 @@ describe('the posting connector page', () => {
     // What a person decides is said in words: a public post, a price, the daily limit.
     expect(words).toContain('unless you ask for a private one');
     expect(words).toContain('Claude never chooses one');
-    expect(words).toContain('ten public posts a day');
+    expect(words).toContain('10 public posts a day');
+    expect(words).toContain('Up to 5 files in one post.');
+    // It does not send a person to search a directory it may not be in yet.
+    expect(words).toContain('Once Magic Booklet is listed in Claude’s connectors directory');
+    // What it can change is said beside what it can publish.
+    expect(words).toContain('make one of your posts public or private, or delete it');
   });
 
-  it('is served with the public Claude client and metadata of its own', () => {
+  it('is served with the posting-only public client, never the full server\'s, and metadata of its own', () => {
     const { container } = render(<PostingConnectorPage />);
-    expect(container.textContent).toContain(MCP_CLIENT_IDS.claude);
+    // The full server's client would show the full access list on the consent page and reach every tool.
+    expect(container.textContent).toContain(MCP_POSTING_ONLY_CLIENT_IDS.claudeByUrl);
+    for (const id of Object.values(MCP_CLIENT_IDS)) expect(container.textContent, id).not.toContain(id);
     expect(metadata.title).toBe('Post to Magic Booklet from Claude');
     expect(String(metadata.description)).toContain('It creates no media and spends no credits.');
     expect(metadata.alternates?.canonical).toContain('/developers/mcp/posting');

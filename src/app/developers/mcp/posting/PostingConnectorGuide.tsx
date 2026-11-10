@@ -8,7 +8,7 @@ import {
   MCP_POSTS_PROTECTED_RESOURCE_METADATA_URL,
   MCP_POSTS_SERVER_URL,
 } from '@/lib/mcp-client-directory';
-import { MCP_POSTS_TOOL_SUMMARIES } from '@/lib/mcp-posts-tool-summaries';
+import { MCP_POSTS_PAGE_LIMITS, MCP_POSTS_TOOL_SUMMARIES } from '@/lib/mcp-posts-tool-summaries';
 import { buildBreadcrumbSchema } from '@/lib/seo';
 
 import CopyableCode from '../CopyableCode';
@@ -18,7 +18,7 @@ const CAPABILITIES: Highlight[] = [
   {
     icon: ImageUp,
     title: 'Post media you made elsewhere',
-    body: 'Give Claude a picture or a video from another tool by its link, and it posts it under your name, saying what made it. Up to five files in one post.',
+    body: `Give Claude the link of a picture or a video from another tool, and it posts it under your name, saying what made it. Up to ${MCP_POSTS_PAGE_LIMITS.filesPerPost} files in one post.`,
   },
   {
     icon: PenLine,
@@ -38,7 +38,7 @@ const CAPABILITIES: Highlight[] = [
 ];
 
 const EXAMPLES = [
-  'Post this image to my Magic Booklet profile as a private post, titled “Studio lighting test”. It was made with Midjourney.',
+  'Post the image at this link to my Magic Booklet profile as a private post, titled “Studio lighting test”. It was made with Midjourney: https://example.com/lighting-test.png',
   'Write a text post on Magic Booklet sharing the prompt we just wrote, as a free prompt card.',
   'List my Magic Booklet creations and publish the newest finished one with the title “Morning ad, take two”.',
 ];
@@ -46,7 +46,14 @@ const EXAMPLES = [
 function connectSteps(claudeClientId: string): { directory: SetupStep[]; byUrl: SetupStep[] } {
   return {
     directory: [
-      { text: <>In Claude, open <strong>Customize → Connectors</strong> and search for <strong>Magic Booklet</strong>.</> },
+      {
+        text: (
+          <>
+            Once Magic Booklet is listed in Claude’s connectors directory, open <strong>Customize → Connectors</strong> in
+            Claude and search for <strong>Magic Booklet</strong>. Until then, add it by URL.
+          </>
+        ),
+      },
       { text: <>Choose <strong>Connect</strong>. Magic Booklet opens in your browser, names the app and lists what it may do.</> },
       { text: <>Choose <strong>Allow</strong>. Claude can now post for you; ask it in your own words.</> },
     ],
@@ -54,11 +61,11 @@ function connectSteps(claudeClientId: string): { directory: SetupStep[]; byUrl: 
       { text: <>In Claude, open <strong>Customize → Connectors</strong> and choose <strong>Add custom connector</strong>.</> },
       {
         text: <>Name it Magic Booklet and enter the server URL.</>,
-        code: { value: MCP_POSTS_SERVER_URL, label: 'the posting server URL' },
+        code: { value: MCP_POSTS_SERVER_URL, label: 'the posting server URL for the connector' },
       },
       {
         text: <>Open <strong>Advanced settings</strong> and enter this client ID. Leave the secret blank.</>,
-        code: { value: claudeClientId, label: 'the Claude client ID' },
+        code: { value: claudeClientId, label: 'the posting client ID' },
       },
       { text: <>Choose <strong>Add</strong>, then <strong>Connect</strong>, and allow it on Magic Booklet.</> },
     ],
@@ -118,8 +125,8 @@ export default function PostingConnectorGuide({ claudeClientId }: { claudeClient
                 </Text>
                 <Text>
                   A prompt, a guide or a skill you share is free unless you name a price. Claude never chooses one:
-                  it states the price you gave and waits for your yes. An account can publish ten public posts a day
-                  through an agent.
+                  it states the price you gave and waits for your yes. An account can publish{' '}
+                  {MCP_POSTS_PAGE_LIMITS.publicPostsPerDay} public posts a day through an agent.
                 </Text>
               </div>
             </Surface>
@@ -158,7 +165,7 @@ export default function PostingConnectorGuide({ claudeClientId }: { claudeClient
           </section>
 
           <section className="space-y-6">
-            <SectionHeader eyebrow="Tools" title="The six tools" />
+            <SectionHeader eyebrow="Tools" title="Its tools" />
             <div className="grid gap-4 md:grid-cols-2">
               {MCP_POSTS_TOOL_SUMMARIES.map((tool) => (
                 <Surface as="article" key={tool.name} variant="card" padding="lg">
@@ -180,14 +187,15 @@ export default function PostingConnectorGuide({ claudeClientId }: { claudeClient
             <ul className="max-w-3xl space-y-3">
               <li>
                 <Text>
-                  It reads the list of your own creations and the posts you ask about. It never reads what a paid
-                  resource holds, or anything of another account’s that is not public.
+                  It reads the list of your own creations, your posts in any state, and other accounts’ posts only
+                  while they are public. It never reads what a resource holds.
                 </Text>
               </li>
               <li>
                 <Text>
-                  It writes the posts you ask for and the files you give it to post. Each call is recorded with the
-                  tool’s name and its outcome, never with your words or files.
+                  It writes the posts you ask for and the files you give it to post, and it can make one of your
+                  posts public or private, or delete it. Each call is recorded with the tool’s name and its outcome,
+                  never with your words or files.
                 </Text>
               </li>
               <li>

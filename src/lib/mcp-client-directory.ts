@@ -40,7 +40,6 @@ export const MCP_DEVELOPERS_PAGE_URL = `${MCP_SERVER_ORIGIN}${MCP_DEVELOPERS_PAG
 
 /** The posting-only server's own page: the documentation its directory listing links to. */
 export const MCP_POSTS_PAGE_PATH = '/developers/mcp/posting';
-export const MCP_POSTS_PAGE_URL = `${MCP_SERVER_ORIGIN}${MCP_POSTS_PAGE_PATH}`;
 
 /**
  * Production's RFC 9728 document for the server, as `protectedResourceMetadataUrl` builds it for
@@ -101,14 +100,23 @@ export const MCP_CLIENT_IDS: McpClientIds = {
 
 /**
  * The production OAuth clients that are posting-only: a token issued to one drives
- * `/api/mcp/posts` and is refused at `/api/mcp`, and the consent page shows it the posting-only
- * access list (`mcp-surfaces.ts`). One today, registered 2026-11-10 for the listing in Claude's
- * connectors directory: a confidential client whose secret Anthropic holds, with the hosted
- * Claude apps' redirect URI (`https://claude.ai/api/mcp/auth_callback`). The `claude` client above
- * stays the public one a creator types into a custom connector for the full server.
+ * `/api/mcp/posts` and is refused at `/api/mcp`, and the consent page and Connected apps show it
+ * the posting-only access (`mcp-surfaces.ts`). Both were registered 2026-11-10 with the hosted
+ * Claude apps' redirect URI (`https://claude.ai/api/mcp/auth_callback`):
+ *
+ * - `claudeDirectory`: the confidential client of the listing in Claude's connectors directory,
+ *   whose secret Anthropic holds.
+ * - `claudeByUrl`: the public client a person types into a custom connector for the posting
+ *   server's URL (`/developers/mcp/posting`). The `claude` client above is the full server's; a
+ *   person who adds the posting server with it has approved the full list, and has it.
+ *
+ * The line is a deny-list, so it fails open: an id leaves this list only after its client is
+ * deleted from the OAuth server. A client replaced by a new one (a lost secret) is deleted
+ * first, or its id stays here beside the new one (the runbook, "Its OAuth clients").
  */
-export const MCP_POSTING_ONLY_CLIENT_IDS: Readonly<Record<'claudeDirectory', string>> = {
+export const MCP_POSTING_ONLY_CLIENT_IDS: Readonly<Record<'claudeDirectory' | 'claudeByUrl', string>> = {
   claudeDirectory: '1b4db392-2141-413b-be41-f833dfdcab42',
+  claudeByUrl: '1e2e3615-17a1-448f-9d4c-5cbcd2a572a7',
 };
 
 /** Whether an OAuth client is one of the posting-only ones. */

@@ -41,8 +41,10 @@ export const AGENT_ACCESS = [
 ] as const;
 
 /**
- * What a posting-only client may do (`MCP_POSTING_ONLY_CLIENT_IDS`, `mcp-surfaces.ts`): the
- * route refuses its token at the full server, so the page lists no run and no charge, and says so.
+ * What a posting-only client may do (`MCP_POSTING_ONLY_CLIENT_IDS`, `mcp-surfaces.ts`): each of
+ * the posting server's tools, said in a person's words, and what it is given no tool for. The
+ * route refuses its token at the full server, so the last line holds on Magicbooklet's own
+ * routes; like any agent's sign-in it is still the account's session (`agent-token.ts`).
  */
 export const POSTING_AGENT_ACCESS = [
   {
@@ -50,12 +52,16 @@ export const POSTING_AGENT_ACCESS = [
     detail: 'Pictures and videos the agent brings from elsewhere, your finished creations, and text posts, with prompts or guides attached free or at a price you approve, on your profile, in Explore and in the Marketplace, under your name, with the rules every post follows.',
   },
   {
-    title: 'Read your creations',
-    detail: 'Your library, with its prompts and links, to find one to post. Nothing of anyone else\'s.',
+    title: 'Change and delete your posts',
+    detail: 'Make a post public or private, or delete one of your posts, when you ask.',
   },
   {
-    title: 'Nothing that spends credits',
-    detail: 'This connection cannot create media, enhance a prompt or use your balance.',
+    title: 'Read your creations and posts',
+    detail: 'Your library, with its prompts and links, and your posts in any state. Of other accounts, only posts that are public.',
+  },
+  {
+    title: 'No tool that spends credits',
+    detail: 'It is given no way to create media, enhance a prompt or use your balance.',
   },
 ] as const;
 

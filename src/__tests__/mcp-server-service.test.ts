@@ -33,6 +33,7 @@ import {
   MCP_TOOLS,
   createMcpServer,
   mcpToolDescription,
+  mcpToolInputSchema,
   mcpToolsFor,
   registerMcpTools,
   runMcpTool,
@@ -42,7 +43,7 @@ import {
   type McpToolDefinition,
   type McpToolServices,
 } from '@/lib/mcp-server-service';
-import { MCP_POSTS_TOOL_SUMMARIES } from '@/lib/mcp-posts-tool-summaries';
+import { MCP_POSTS_PAGE_LIMITS, MCP_POSTS_TOOL_SUMMARIES } from '@/lib/mcp-posts-tool-summaries';
 import {
   MCP_RESULT_CHARACTER_CAP,
   capToolResult,
@@ -468,6 +469,7 @@ describe('MCP tool registry', () => {
     expect(MCP_ROUTE_MAX_DURATION_SECONDS).toBe(300);
     // Next reads the route's limit as a literal: it is held to the constant here, and to the composer route's own.
     expect(readFileSync(path.join(process.cwd(), 'src/app/api/mcp/route.ts'), 'utf8')).toContain(`export const maxDuration = ${MCP_ROUTE_MAX_DURATION_SECONDS};`);
+    expect(readFileSync(path.join(process.cwd(), 'src/app/api/mcp/posts/route.ts'), 'utf8')).toContain(`export const maxDuration = ${MCP_ROUTE_MAX_DURATION_SECONDS};`);
     expect(readFileSync(path.join(process.cwd(), 'src/app/api/posts/route.ts'), 'utf8')).toContain(`export const maxDuration = ${MCP_ROUTE_MAX_DURATION_SECONDS};`);
 
     // A text post is a title and a body, at the composer's lengths.
@@ -3055,15 +3057,16 @@ describe('tool results', () => {
 });
 
 describe('the posting-only server', () => {
-  // The tools the full server has and the posting server must not: each starts a run, prices
-  // one, reads the model catalog or spends a credit.
-  const ABSENT = ['list_models', 'get_model', 'quote_generation', 'create_media', 'get_generation', 'enhance_prompt'];
+  // The tools the full server has and the posting server must not, from the registry itself: each
+  // starts a run, prices one, reads the model catalog, follows a run or spends a credit.
+  const ABSENT = MCP_TOOLS.map((entry) => entry.name).filter((name) => !MCP_POSTS_TOOL_NAMES.includes(name));
   const ABSENT_PATTERN = new RegExp(ABSENT.join('|'), 'u');
 
   it('offers the six posting tools and none that starts a run or spends a credit', () => {
     const tools = mcpToolsFor('posts');
     expect(tools.map((entry) => entry.name)).toEqual(['upload_input', 'request_upload', 'list_creations', 'publish_post', 'get_post', 'delete_post']);
     expect([...MCP_POSTS_TOOL_NAMES].sort()).toEqual(tools.map((entry) => entry.name).sort());
+    expect(ABSENT).toEqual(['list_models', 'get_model', 'quote_generation', 'create_media', 'get_generation', 'enhance_prompt']);
     for (const name of ABSENT) expect(tools.map((entry) => entry.name)).not.toContain(name);
     // The full server is every tool, in the registry's order; no surface is the full one.
     expect(mcpToolsFor('full')).toEqual(MCP_TOOLS);
@@ -3085,13 +3088,31 @@ describe('the posting-only server', () => {
       const description = mcpToolDescription(entry, 'posts');
       expect(description.length, entry.name).toBeGreaterThan(120);
       expect(description, entry.name).not.toMatch(ABSENT_PATTERN);
-      // What the agent sends is described by the schema too.
-      expect(JSON.stringify(z.toJSONSchema(entry.inputSchema)), entry.name).not.toMatch(ABSENT_PATTERN);
+      // What the agent sends is described by the schema too, and offers no kind of file a post cannot hold.
+      const schema = JSON.stringify(z.toJSONSchema(mcpToolInputSchema(entry, 'posts')));
+      expect(schema, entry.name).not.toMatch(ABSENT_PATTERN);
+      expect(schema, entry.name).not.toMatch(/audio/u);
+      // The posting server's schema is the tool's own shape in other words: the same keys, the same rules.
+      const own = z.toJSONSchema(entry.inputSchema) as { properties: Record<string, unknown>; required?: string[] };
+      const posting = z.toJSONSchema(mcpToolInputSchema(entry, 'posts')) as { properties: Record<string, unknown>; required?: string[] };
+      expect(Object.keys(posting.properties), entry.name).toEqual(Object.keys(own.properties));
+      expect(posting.required, entry.name).toEqual(own.required);
+      const strip = (value: unknown) => JSON.parse(JSON.stringify(value, (key, inner) => (key === 'description' ? undefined : inner)));
+      expect(strip(posting), entry.name).toEqual(strip(own));
     }
+    // The full server keeps its own schema.
+    expect(mcpToolInputSchema(tool('upload_input'))).toBe(tool('upload_input').inputSchema);
+    expect(JSON.stringify(z.toJSONSchema(mcpToolInputSchema(tool('request_upload'), 'full')))).toContain('audio/mpeg');
     expect(MCP_POSTS_SERVER_INSTRUCTIONS).not.toMatch(ABSENT_PATTERN);
     expect(MCP_POSTS_SERVER_INSTRUCTIONS).toContain('It starts no run and spends no credits.');
     expect(MCP_POSTS_SERVER_INSTRUCTIONS).toContain('get their yes before publishing, and never choose a price yourself');
     expect(MCP_POSTS_SERVER_INSTRUCTIONS).toContain('list_creations → publish_post with its generation_id');
+    // The page says Claude checks with the person first, so the server asks it to: ask, not tell,
+    // and say that a creation's recipe is shared with it.
+    expect(MCP_POSTS_SERVER_INSTRUCTIONS).toContain('ask the person before you publish, say whether it will be public');
+    expect(MCP_POSTS_SERVER_INSTRUCTIONS).toContain('unless allow_remixes is false: say so when you ask');
+    expect(mcpToolDescription(tool('publish_post'), 'posts')).toContain('Ask the person before you publish, and give them post_url after.');
+    expect(mcpToolDescription(tool('publish_post'), 'full')).toContain('Tell the person before you publish, and give them post_url after.');
     // The full server keeps its own words.
     expect(mcpToolDescription(tool('upload_input'), 'full')).toBe(tool('upload_input').description);
     expect(mcpToolDescription(tool('upload_input'))).toContain('create_media');
@@ -3109,6 +3130,7 @@ describe('the posting-only server', () => {
     for (const [name, config] of registerTool.mock.calls) {
       expect(config.description, name).toBe(mcpToolDescription(tool(name), 'posts'));
       expect(config.annotations, name).toEqual(tool(name).annotations);
+      expect(config.inputSchema, name).toBe(mcpToolInputSchema(tool(name), 'posts'));
     }
   });
 
@@ -3127,8 +3149,39 @@ describe('the posting-only server', () => {
     const running = posts({ readCreationForPublish: vi.fn(async () => creation({ status: 'processing' })) as never });
     const notReady = await tool('publish_post').handle({ generation_id: GENERATION_ID, title: 'A red bicycle' }, running.context);
     expect(structured(notReady).error).toMatchObject({ code: 'NOT_READY' });
-    expect(text(notReady)).toContain('Check list_creations until its status is succeeded');
+    expect(text(notReady)).toContain('list_creations shows each creation\'s status');
+    // No loop: it is told when to stop trying.
+    expect(text(notReady)).toContain('tell the person rather than trying again');
     expect(text(notReady)).not.toMatch(ABSENT_PATTERN);
+
+    // A failed creation never succeeds: it is refused as it is, on either server, with nothing to wait for.
+    for (const surface of ['posts', 'full'] as const) {
+      const failed = harness({ readCreationForPublish: vi.fn(async () => creation({ status: 'failed' })) as never });
+      const refusal = await tool('publish_post').handle({ generation_id: GENERATION_ID, title: 'A red bicycle' }, { ...failed.context, surface });
+      expect(structured(refusal).error, surface).toMatchObject({ code: 'INVALID_REQUEST' });
+      expect(text(refusal), surface).toContain(`Creation ${GENERATION_ID} failed, so it has nothing to publish.`);
+      expect(text(refusal), surface).not.toMatch(/get_generation|until/u);
+      expect(failed.services.publishGenerationToShowcaseForRoute).not.toHaveBeenCalled();
+    }
+
+    // A track is refused before a byte is staged or an upload reserved, where its type is said.
+    const audio = posts();
+    const byBase64 = await tool('upload_input').handle({ base64: 'AAAA', mime_type: 'audio/mpeg' }, audio.context);
+    expect(structured(byBase64).error).toMatchObject({ code: 'UNSUPPORTED_MEDIA' });
+    const reserved = await tool('request_upload').handle({ file_name: 'track.mp3', mime_type: ' Audio/MPEG ', size_bytes: 1024 }, audio.context);
+    expect(structured(reserved).error).toMatchObject({ code: 'UNSUPPORTED_MEDIA' });
+    expect(audio.services.stageAgentInput).not.toHaveBeenCalled();
+    expect(audio.services.requestAgentUpload).not.toHaveBeenCalled();
+    expect(audio.services.enforceBackendRateLimit).not.toHaveBeenCalled();
+    // By url the kind is known only once the file is read: the answer then says so.
+    const fetched = posts({ stageAgentInput: vi.fn(async () => ({ ...(await harness().services.stageAgentInput({} as never)), kind: 'audio' as const, mimeType: 'audio/mpeg' })) as never });
+    const track = text(await tool('upload_input').handle({ url: 'https://cdn.example.com/a.mp3' }, fetched.context));
+    expect(track).toContain('this track cannot be published');
+    expect(track).not.toContain('publish_post.uploads[]');
+    // The full server stages a track as before: it feeds a run.
+    const full = harness();
+    await tool('request_upload').handle({ file_name: 'track.mp3', mime_type: 'audio/mpeg', size_bytes: 1024 }, full.context);
+    expect(full.services.requestAgentUpload).toHaveBeenCalledTimes(1);
 
     // The same refusal from the publish service itself.
     const refused = posts({
@@ -3142,7 +3195,7 @@ describe('the posting-only server', () => {
     const thrown = posts({ readPostForAgent: vi.fn(async () => { throw new Error('boom'); }) as never });
     const failure = await runMcpTool(tool('get_post'), { post_id: POST_ID }, thrown.context);
     expect(structured(failure).error).toMatchObject({ code: 'INTERNAL_ERROR' });
-    expect(text(failure)).not.toMatch(/charged|run may have started/u);
+    expect(text(failure)).not.toMatch(/charged|run may have started|publish/u);
   });
 
   it('is listed on its public page as it is registered', () => {
@@ -3151,5 +3204,7 @@ describe('the posting-only server', () => {
       expect(entry.readOnly, entry.name).toBe(tool(entry.name).annotations.readOnlyHint);
       expect(entry.summary, entry.name).not.toMatch(ABSENT_PATTERN);
     }
+    // The two limits the page prints are the server's own.
+    expect(MCP_POSTS_PAGE_LIMITS).toEqual({ filesPerPost: MAX_POST_MEDIA_ITEMS, publicPostsPerDay: AGENT_PUBLISH_RATE_LIMIT.limit });
   });
 });

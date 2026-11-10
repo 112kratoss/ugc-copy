@@ -8,6 +8,8 @@
  * React or Supabase, so the decisions are tested on their own.
  */
 
+import { isPostingOnlyClientId } from '@/lib/mcp-client-directory';
+
 export type ConnectedApp = {
   clientId: string;
   name: string;
@@ -16,8 +18,16 @@ export type ConnectedApp = {
   grantedAt: string | null;
 };
 
-/** What every connected app may do, in the consent screen's words: the server authorizes no finer. */
+/** What a connected app may do, in the consent screen's words. */
 export const CONNECTED_APP_ACCESS = 'Can create media with your credits and publish posts as you.';
+
+/** What a posting-only app may do (`MCP_POSTING_ONLY_CLIENT_IDS`): the server refuses it the rest. */
+export const POSTING_CONNECTED_APP_ACCESS = 'Can publish, change and delete posts as you. Cannot create media or spend credits.';
+
+/** The line under a connected app's name: the access its client was shown on the consent page. */
+export function connectedAppAccess(clientId: string | null | undefined): string {
+  return isPostingOnlyClientId(clientId) ? POSTING_CONNECTED_APP_ACCESS : CONNECTED_APP_ACCESS;
+}
 
 export const CONNECTED_APPS_COPY = {
   title: 'Connected apps',

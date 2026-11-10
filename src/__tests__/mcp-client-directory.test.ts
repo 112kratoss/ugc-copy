@@ -10,7 +10,7 @@ import {
   MCP_CLIENT_REDIRECT_URIS,
   MCP_DEVELOPERS_PAGE_URL,
   MCP_POSTING_ONLY_CLIENT_IDS,
-  MCP_POSTS_PAGE_URL,
+  MCP_POSTS_PAGE_PATH,
   MCP_POSTS_PROTECTED_RESOURCE_METADATA_URL,
   MCP_POSTS_SERVER_URL,
   MCP_PROTECTED_RESOURCE_METADATA_URL,
@@ -50,11 +50,16 @@ describe('the MCP client directory', () => {
     expect(MCP_POSTS_SERVER_URL).toBe('https://magicbooklet.com/api/mcp/posts');
     expect(MCP_POSTS_SERVER_URL).toBe(mcpResourceUrl(MCP_SERVER_ORIGIN, 'posts'));
     expect(MCP_POSTS_PROTECTED_RESOURCE_METADATA_URL).toBe(protectedResourceMetadataUrl(MCP_SERVER_ORIGIN, 'posts'));
-    expect(MCP_POSTS_PAGE_URL).toBe('https://magicbooklet.com/developers/mcp/posting');
+    expect(MCP_POSTS_PAGE_PATH).toBe('/developers/mcp/posting');
 
     // The posting-only clients are their own rows: none is a client a creator is given for the full server.
     const postingOnly = Object.values(MCP_POSTING_ONLY_CLIENT_IDS);
-    expect(postingOnly).toEqual(['1b4db392-2141-413b-be41-f833dfdcab42']);
+    // The directory listing's confidential client, and the public one for a connector added by URL.
+    expect(MCP_POSTING_ONLY_CLIENT_IDS).toEqual({
+      claudeDirectory: '1b4db392-2141-413b-be41-f833dfdcab42',
+      claudeByUrl: '1e2e3615-17a1-448f-9d4c-5cbcd2a572a7',
+    });
+    expect(new Set(postingOnly).size).toBe(postingOnly.length);
     for (const id of postingOnly) {
       expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
       expect(Object.values(MCP_CLIENT_IDS)).not.toContain(id);

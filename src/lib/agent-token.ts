@@ -1,5 +1,5 @@
 /**
- * What makes a bearer token an agent's token, and the one route such a token may drive.
+ * What makes a bearer token an agent's token, and the routes such a token may drive.
  *
  * An agent (Claude.ai, Claude Desktop, Claude Code, ChatGPT, Codex, Cursor) signs a creator in
  * through Supabase Auth's OAuth 2.1 server, which issues an ordinary Supabase JWT carrying the

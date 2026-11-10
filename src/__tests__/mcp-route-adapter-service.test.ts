@@ -1,4 +1,9 @@
 import type { SupabaseClient, User } from '@supabase/supabase-js';
+import {
+  CLIENT_CAPABILITIES_META_KEY,
+  CLIENT_INFO_META_KEY,
+  PROTOCOL_VERSION_META_KEY,
+} from '@modelcontextprotocol/server';
 import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -50,6 +55,33 @@ function rpc(method: string, params?: Record<string, unknown>, options: { token?
     method: 'POST',
     headers,
     body: JSON.stringify({ jsonrpc: '2.0', id: options.id ?? 1, method, ...(params ? { params } : {}) }),
+  });
+}
+
+/** A request in the 2026-07-28 envelope: the version, the client and its capabilities ride in `_meta`, with no handshake. */
+function modernRpc(method: string, params: Record<string, unknown> = {}, options: { path?: string; id?: number } = {}) {
+  return new NextRequest(`${SITE}${options.path ?? '/api/mcp'}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      authorization: 'Bearer agent-token',
+      'mcp-protocol-version': '2026-07-28',
+      'mcp-method': method,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: options.id ?? 1,
+      method,
+      params: {
+        ...params,
+        _meta: {
+          [PROTOCOL_VERSION_META_KEY]: '2026-07-28',
+          [CLIENT_INFO_META_KEY]: { name: 'test-client', version: '1.0.0' },
+          [CLIENT_CAPABILITIES_META_KEY]: {},
+        },
+      },
+    }),
   });
 }
 
@@ -472,10 +504,19 @@ describe('the posting-only MCP route', () => {
 
   it('refuses a tool it does not have, and runs one it has under the same record', async () => {
     const { handlers, log, insert, settled, listOwnerGenerationsForRoute } = harness({ surface: 'posts', claims: POSTING_CLIENT_CLAIMS });
-    const absent = await handlers.POST(rpc('tools/call', { name: 'create_media', arguments: {} }, { path: POSTS }));
-    const absentBody = await absent.json();
-    expect(absentBody.error ?? absentBody.result?.isError).toBeTruthy();
+    // Every tool the full server has and this one has not is unknown here: refused by name, and nothing of it runs.
+    const absentNames = MCP_TOOLS.map((tool) => tool.name).filter((name) => !mcpToolsFor('posts').some((tool) => tool.name === name));
+    expect(absentNames).toHaveLength(6);
+    for (const name of absentNames) {
+      const absent = await handlers.POST(rpc('tools/call', { name, arguments: {} }, { path: POSTS }));
+      const absentBody = await absent.json();
+      const refusal = JSON.stringify(absentBody.error ?? absentBody.result);
+      expect(absentBody.error ?? absentBody.result?.isError, name).toBeTruthy();
+      expect(refusal, name).toMatch(/not found|unknown tool/iu);
+      expect(refusal, name).toContain(name);
+    }
     expect(insert).not.toHaveBeenCalled();
+    expect(log.mock.calls.filter(([, event]) => event === 'mcp_tool_call')).toHaveLength(0);
 
     const response = await handlers.POST(rpc('tools/call', { name: 'list_creations', arguments: { limit: 5 } }, { id: 3, path: POSTS }));
     expect(response.status).toBe(200);
@@ -504,5 +545,28 @@ describe('the posting-only MCP route', () => {
     expect(((await full.json()).result.tools as unknown[]).length).toBe(6);
     const fullOnFull = await harness().handlers.POST(rpc('tools/list'));
     expect(((await fullOnFull.json()).result.tools as unknown[]).length).toBe(MCP_TOOLS.length);
+  });
+
+  it('holds the same line for a request in the 2026-07-28 envelope', async () => {
+    // The SDK serves that revision through its own handler, built per request from the admitted context.
+    const posting = await harness({ surface: 'posts', claims: POSTING_CLIENT_CLAIMS }).handlers.POST(modernRpc('tools/list', {}, { path: POSTS }));
+    expect(posting.status).toBe(200);
+    const tools = (await posting.json()).result.tools as Array<{ name: string }>;
+    expect(tools.map((tool) => tool.name).sort()).toEqual(mcpToolsFor('posts').map((tool) => tool.name).sort());
+
+    const full = await harness().handlers.POST(modernRpc('tools/list'));
+    expect(full.status).toBe(200);
+    expect(((await full.json()).result.tools as unknown[]).length).toBe(MCP_TOOLS.length);
+
+    // The posting-only client is refused at the full server before either protocol leg is reached.
+    const refused = await harness({ claims: POSTING_CLIENT_CLAIMS }).handlers.POST(modernRpc('tools/list'));
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: 'AGENT_SURFACE_NOT_ALLOWED' });
+
+    const absent = await harness({ surface: 'posts', claims: POSTING_CLIENT_CLAIMS }).handlers.POST(
+      modernRpc('tools/call', { name: 'create_media', arguments: {} }, { path: POSTS }),
+    );
+    const absentBody = await absent.json();
+    expect(absentBody.error ?? absentBody.result?.isError).toBeTruthy();
   });
 });

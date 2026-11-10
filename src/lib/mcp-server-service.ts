@@ -365,6 +365,11 @@ export interface McpToolDefinition<Schema extends AnySchema = AnySchema> {
    * does not have (`MCP_POSTS_TOOL_NAMES`); left out, the description above serves both.
    */
   postsDescription?: string;
+  /**
+   * The schema's words on the posting-only server, for a tool whose own offer a kind of file that
+   * server cannot post. The same keys and rules as `inputSchema`: only the descriptions differ.
+   */
+  postsInputSchema?: Schema;
   annotations: ToolAnnotations;
   inputSchema: Schema;
   // A method signature rather than a property: TypeScript relates methods bivariantly, so a
@@ -1159,6 +1164,16 @@ async function refuseUploadOverLimit(context: McpToolContext): Promise<CallToolR
   }
 }
 
+function isAudioMimeType(mimeType: string | undefined): boolean {
+  return typeof mimeType === 'string' && mimeType.trim().toLowerCase().startsWith('audio/');
+}
+
+/** The posting-only server's refusal of a track, before anything is staged or reserved. */
+function audioCannotBePosted(field: string): CallToolResult {
+  const message = 'A post takes pictures and clips, so an audio track cannot be published. Stage a picture or a clip instead.';
+  return toolFailure('UNSUPPORTED_MEDIA', message, { field_errors: { [field]: message } });
+}
+
 const uploadInputTool = defineTool({
   name: 'upload_input',
   title: 'Stage a file',
@@ -1184,6 +1199,12 @@ const uploadInputTool = defineTool({
     mime_type: z.string().min(3).max(100).optional().describe('The file\'s own type, required with base64 (image/jpeg, image/png, video/mp4, audio/mpeg, …).'),
     upload_id: z.uuid().optional().describe('The upload_id request_upload gave, after the file was PUT to its upload_url. The file is checked against the size and type request_upload was told.'),
   }),
+  postsInputSchema: z.object({
+    url: z.url().optional().describe('A public https URL of the picture or clip. Give exactly one of url, base64 or upload_id.'),
+    base64: z.string().min(4).max(AGENT_BASE64_MAX_CHARACTERS).optional().describe(`The file\'s bytes in standard base64 (a data: URL is accepted), at most ${megabytes(AGENT_BASE64_MAX_BYTES)} decoded.`),
+    mime_type: z.string().min(3).max(100).optional().describe('The file\'s own type, required with base64 (image/jpeg, image/png, video/mp4, …).'),
+    upload_id: z.uuid().optional().describe('The upload_id request_upload gave, after the file was PUT to its upload_url. The file is checked against the size and type request_upload was told.'),
+  }),
   async handle({ url, base64, mime_type: mimeType, upload_id: uploadId }, context) {
     const sources = [url, base64, uploadId].filter((source) => source !== undefined).length;
     if (sources !== 1) {
@@ -1196,6 +1217,10 @@ const uploadInputTool = defineTool({
         field_errors: { mime_type: 'Required with base64.' },
       });
     }
+    // The posting-only server has no run for a track to feed: one that says it is audio is
+    // refused before a byte is staged. By url or upload_id the kind is known only once the file
+    // is read, and the answer then says it cannot be posted.
+    if (context.surface === 'posts' && isAudioMimeType(mimeType)) return audioCannotBePosted('mime_type');
     const limited = await refuseUploadOverLimit(context);
     if (limited) return limited;
     const staged = await context.services.stageAgentInput({
@@ -1274,7 +1299,14 @@ const requestUploadTool = defineTool({
     mime_type: z.string().trim().min(3).max(100).describe('The file\'s own type: image/jpeg, image/png, image/webp, image/gif, video/mp4, video/quicktime, video/webm, audio/mpeg, audio/wav, …'),
     size_bytes: z.int().min(1).describe('The file\'s exact size in bytes (wc -c < FILE). The stored file must be exactly this size.'),
   }),
+  postsInputSchema: z.object({
+    file_name: z.string().trim().min(1).max(200).describe('The file\'s name with its extension (photo.png, clip.mp4). The upload is filed under a cleaned form of it.'),
+    mime_type: z.string().trim().min(3).max(100).describe('The file\'s own type: image/jpeg, image/png, image/webp, image/gif, video/mp4, video/quicktime, video/webm, …'),
+    size_bytes: z.int().min(1).describe('The file\'s exact size in bytes (wc -c < FILE). The stored file must be exactly this size.'),
+  }),
   async handle({ file_name: fileName, mime_type: mimeType, size_bytes: sizeBytes }, context) {
+    // No upload is reserved for a file the posting-only server could never post.
+    if (context.surface === 'posts' && isAudioMimeType(mimeType)) return audioCannotBePosted('mime_type');
     const limited = await refuseUploadOverLimit(context);
     if (limited) return limited;
     const upload = await context.services.requestAgentUpload({
@@ -1417,10 +1449,15 @@ function invalidPublishRequest(body: { error: string; field?: string }, fields: 
  * the service wants priced is priced on the website); `noPrompt` that the creation has no prompt
  * for the tool to build a recipe from.
  */
-/** How an agent learns that a creation has finished, in the tools its server has. */
+/**
+ * What to do about a creation that cannot be published yet, in the tools its server has. The
+ * posting-only server has no tool that waits on a run, and its words must not send an agent
+ * round a loop: a creation that failed never succeeds, and one that succeeded with no media yet
+ * is not waiting on its status.
+ */
 function creationNotReadyNextStep(surface: McpSurface | undefined): string {
   return surface === 'posts'
-    ? 'Check list_creations until its status is succeeded, then publish.'
+    ? 'list_creations shows each creation\'s status: publish it once it reads succeeded and has a preview. If it is still not ready a minute later, tell the person rather than trying again.'
     : 'Wait for get_generation to say succeeded, then publish.';
 }
 
@@ -2025,7 +2062,7 @@ async function publishComposedPost(args: PublishPostArgs, context: McpToolContex
 function publishPostDescription(surface: McpSurface): string {
   return [
     'Publish a post on the creator\'s profile and in the Magicbooklet showcase, from one of three sources. generation_id: one of the creator\'s finished creations made here. uploads: media made elsewhere (another tool, the person\'s own files), as 1 to 5 pictures or clips you staged with upload_input. Neither of them: a text post, of a title and a body. Never generation_id and uploads together.',
-    'The post is public at once (visibility public, the default): anyone can see it, and it enters the feed and the moderation queue as any post does. Pass visibility private instead to keep it on the creator\'s profile, visible to them alone, which they can make public later. Tell the person before you publish, and give them post_url after.',
+    `The post is public at once (visibility public, the default): anyone can see it, and it enters the feed and the moderation queue as any post does. Pass visibility private instead to keep it on the creator's profile, visible to them alone, which they can make public later. ${surface === 'posts' ? 'Ask the person before you publish' : 'Tell the person before you publish'}, and give them post_url after.`,
     `With generation_id, only the creator's own succeeded creation publishes (NOT_FOUND for any other creation, NOT_READY for a run still going or a creation its creator archived); ${surface === 'posts' ? 'list_creations gives each creation\'s status' : 'get_generation says when a run has succeeded'}. Give a title, or leave it out for the title the web suggests from the creation; description, body (the post's text) and category are optional.`,
     'allow_remixes (default true) publishes the creation\'s recipe with the post, so others can remix it: its exact prompt and the saved inputs it may share, free unless resource_price_tokens prices it. False posts the media alone, with no recipe.',
     'With uploads, title is required and so is made_with, which names what made the media (the tool, and its model where it has one) and is shown on the post as Made with: never Magic Booklet, whose own media is published with generation_id. Each upload is the storage_path upload_input answered, and is spent by the post. The answer\'s post_id is the only handle on such a post (list_creations lists creations), so keep it.',
@@ -2082,6 +2119,14 @@ const publishPostTool = defineTool({
         MCP_ERROR_CODES.NOT_READY,
         `Creation ${generationId} is archived; the creator restores it on the website before it can be published.`,
         { generation_id: generationId, status: 'archived' },
+      );
+    }
+    if (creation.status === 'failed') {
+      // A failed run never succeeds: waiting on it, as NOT_READY's next step says, would loop.
+      return toolFailure(
+        MCP_ERROR_CODES.INVALID_REQUEST,
+        `Creation ${generationId} failed, so it has nothing to publish. Tell the person; list_creations shows the ones that succeeded.`,
+        { generation_id: generationId, status: creation.status },
       );
     }
     if (creation.status !== 'succeeded') {
@@ -2409,6 +2454,11 @@ export function mcpToolsFor(surface: McpSurface = 'full'): ReadonlyArray<McpTool
     : MCP_TOOLS;
 }
 
+/** A tool's input schema as a server gives it: the same shape, in that server's words. */
+export function mcpToolInputSchema(tool: McpToolDefinition, surface: McpSurface = 'full'): McpToolDefinition['inputSchema'] {
+  return surface === 'posts' ? tool.postsInputSchema ?? tool.inputSchema : tool.inputSchema;
+}
+
 /** A tool's description as a server gives it. */
 export function mcpToolDescription(tool: McpToolDefinition, surface: McpSurface = 'full'): string {
   return surface === 'posts' ? tool.postsDescription ?? tool.description : tool.description;
@@ -2427,8 +2477,8 @@ export const MCP_POSTS_SERVER_INSTRUCTIONS = [
   'This server publishes to the signed-in creator\'s Magicbooklet profile: media the creator made elsewhere, text posts with prompts, guides or skills attached, and creations already in their Magicbooklet library. It starts no run and spends no credits.',
   'Flow for media made elsewhere (another tool, the person\'s own files): stage each picture or clip with upload_input, by url, or for a file on your machine request_upload → run the curl command it gives → upload_input with the upload_id; then publish_post with uploads, a title and made_with naming what made the media. Ask the person before posting it publicly, and keep the post_id.',
   'Flow for a text post, or for sharing a prompt, a guide or a skill: publish_post with a title and a body and neither generation_id nor uploads; resources attaches cards of text and links, where the whole prompt or skill goes. A resource is free unless the person names a price: state resource_price_tokens to them (100 tokens = $1.00) and get their yes before publishing, and never choose a price yourself.',
-  'Flow for a creation in the library: list_creations → publish_post with its generation_id and a title.',
-  'A post is public at once unless visibility is private; tell the person before publishing and give them post_url after. get_post reads a post, delete_post removes one of the creator\'s own.',
+  'Flow for a creation in the library: list_creations → publish_post with its generation_id and a title. That also shares the creation\'s recipe (its exact prompt) for others to remix unless allow_remixes is false: say so when you ask.',
+  'A post is public at once unless visibility is private: ask the person before you publish, say whether it will be public, and give them post_url after. get_post reads a post, delete_post removes one of the creator\'s own after they confirm.',
 ].join(' ');
 
 const SERVER_DESCRIPTIONS: Readonly<Record<McpSurface, string>> = {
@@ -2479,7 +2529,7 @@ export async function runMcpTool(
     return toolFailure(
       'INTERNAL_ERROR',
       context.surface === 'posts'
-        ? 'The tool failed unexpectedly. Try again: a publish that went through answers the same post, and get_post reads one.'
+        ? 'The tool failed unexpectedly. Try again in a moment; if it fails again, tell the person.'
         : 'The tool failed unexpectedly. Nothing is known to have been charged; try again, and if the run may have started, check list_creations first.',
     );
   }
@@ -2492,7 +2542,7 @@ export function registerMcpTools(server: McpServer, context: McpToolContext): vo
       {
         title: tool.title,
         description: mcpToolDescription(tool, context.surface),
-        inputSchema: tool.inputSchema,
+        inputSchema: mcpToolInputSchema(tool, context.surface),
         annotations: tool.annotations,
       },
       (args) => runMcpTool(tool, args, context),

@@ -44,7 +44,7 @@ the API function's configured Mumbai region: the feed handler freshly verifies
 claims, session, ban and lifecycle state before calling its adapter, then
 supplies a new assertion for route reuse, and feed performance reports
 `route-identity`, `route-verify`, `route-lifecycle` for this check. For
-`/api/mcp` (every method) the MCP adapter runs it itself, because its refusals
+`/api/mcp` and its posting-only form `/api/mcp/posts` (every method) the MCP adapter runs it itself, because its refusals
 differ from the proxy's: a missing or invalid token answers 401 with the
 `WWW-Authenticate` challenge MCP clients start their OAuth flow from, and a
 token without the agent claim (`agent-token.ts`) answers 403
