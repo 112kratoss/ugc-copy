@@ -16,8 +16,10 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'reac
 
 import { AudioCreationPlayer } from '@/components/audio-creation-player';
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
-import { AppleZoomTopControlsCue } from '@/components/apple-zoom-progress';
+import { AppleZoomReturnLandingCue, AppleZoomTopControlsCue } from '@/components/apple-zoom-progress';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
+import { parseAppleZoomSourceId } from '@/lib/apple-zoom';
+import { createReelTouches } from '@/lib/reel-touches';
 import { MediaZoomCarriedPicture, MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
 import { closesPictureAlone, IOS_BACK_FLIES_PICTURE, mediaItemAspectRatio, mediaRectInScreen, showcaseMediaZoomPreview, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
@@ -621,23 +623,32 @@ function ImmersivePreviewViewer() {
     return () => playbackHandoff.setAutoplayAllowed(false);
   }, [handoffAutoplayAllowed, playbackHandoff]);
   const activeItem = items[activeIndex];
-  // The zoom's close lands in the tile of the post the reader is on, not the one they tapped.
-  useAppleZoomRetarget(activeItem?.id ?? null);
   const detailsOpenForActive = Boolean(activeItem) && detailsPageOpenItemId === activeItem.id;
   // The shape of the picture on screen, so a reel growing out of a tile — or
   // shrinking back into one — lines up with the media rather than beside it;
   // and the picture itself, for a close that has to shrink a copy of it.
   const activeMedia = useMemo(() => {
-    if (!activeItem) return { aspectRatio: null, picture: null, playbackUrl: null };
+    if (!activeItem) return { aspectRatio: null, picture: null, playbackUrl: null, cover: false };
     const pages = buildImmersiveSlidePages(activeItem);
     const page = pages.find((candidate) => slidePageKey(candidate) === position?.mediaPageKey) ?? pages[0];
-    if (page?.type !== 'media') return { aspectRatio: null, picture: null, playbackUrl: null };
+    if (page?.type !== 'media') return { aspectRatio: null, picture: null, playbackUrl: null, cover: false };
     return {
       aspectRatio: mediaItemAspectRatio(page.mediaItem),
       picture: showcaseViewerMediaPicture(page.mediaItem),
       playbackUrl: page.mediaItem.mediaKind === 'video' ? getShowcasePlaybackUrl(page.mediaItem) : null,
+      // The post's first media, which is what its tile shows.
+      cover: page === pages.find((candidate) => candidate.type === 'media'),
     };
   }, [activeItem, position?.mediaPageKey]);
+  // The zoom's close lands in the tile of the post the reader is on, not the
+  // one they tapped, and on that tile's picture when the reel is showing the
+  // same still picture (components/apple-zoom.ios.tsx).
+  const pictureReturns = !onEndSlide && !reducedMotion && activeMedia.cover && Boolean(activeMedia.picture) && !activeMedia.playbackUrl;
+  useAppleZoomRetarget(activeItem?.id ?? null, pictureReturns);
+  // The surface of the tile the reel came out of, and whether a finger is on
+  // the reel: what tells when a close has landed (`AppleZoomReturnLandingCue`).
+  const zoomSurfaceId = parseAppleZoomSourceId(nativeZoomSourceId)?.surfaceId ?? null;
+  const [reelTouches] = useState(createReelTouches);
   // iOS: a still picture out of a tile closes by flying home alone
   // (components/media-zoom.tsx), which the reel has to start before the pop, so
   // it keeps the reel's own Back: the bar's pops before the app hears of it,
@@ -1548,7 +1559,10 @@ function ImmersivePreviewViewer() {
         shrinks back into it, so opening a post reads as that post getting
         bigger rather than as another screen arriving. */}
     <MediaZoomStage stage={zoom} screen={{ width, height }} groundClear={groundClear}>
-    <View style={{ flex: 1, backgroundColor: ground }}>
+    {/* The touch handlers only read whether a finger is on the reel, which a
+        close UIKit's zoom is dragging tells nothing else (lib/reel-touches.ts). */}
+    <View style={{ flex: 1, backgroundColor: ground }} {...reelTouches.handlers}>
+      {zoomSurfaceId ? <AppleZoomReturnLandingCue surfaceId={zoomSurfaceId} itemId={activeItem?.id ?? null} touches={reelTouches} /> : null}
       {/* iOS: a reel pushed out of a tile keeps the navigator's default
           animation, which is how react-native-screens leaves the pop to UIKit's
           zoom back into the tile (lib/apple-zoom.ts); its dismissal gestures go

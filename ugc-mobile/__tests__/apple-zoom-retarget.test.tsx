@@ -6,8 +6,9 @@ import { describe, expect, it, vi } from 'vitest';
  * A reel grows out of the page-shaped view beside its tile
  * (`appleZoomOpenSourceId`) and closes into the tile's own view, which UIKit
  * shrinks it into the shape of (lib/apple-zoom.ts). It points the zoom at the
- * tile's view once its push has landed, and not before: the source of a
- * running zoom must not move.
+ * tile's view once it has landed, and not before: when the navigator reports
+ * the push's end, or once the reel has had the time to draw at full size,
+ * whichever comes first.
  */
 
 type Listener = (event: { data?: { closing?: boolean } }) => void;
@@ -40,11 +41,12 @@ vi.mock('expo-router', () => ({
 vi.mock('expo-router/build/link/preview/native', () => ({ LinkZoomTransitionSource: () => null }));
 vi.mock('../lib/apple-zoom-available', () => ({ isAppleZoomAvailable: () => true }));
 
-import { APPLE_ZOOM_LANDING_DEADLINE_MS, useAppleZoomRetarget } from '../components/apple-zoom.ios';
+import { APPLE_ZOOM_LANDED_AFTER_MS, useAppleZoomRetarget } from '../components/apple-zoom.ios';
 import { APPLE_ZOOM_SOURCE_PARAM, appleZoomOpenSourceId, appleZoomSourceId } from '../lib/apple-zoom';
+import { isAppleZoomReturnPictureHeld, noteAppleZoomPopEnded, resetAppleZoomReturnPictures } from '../lib/apple-zoom-surface';
 
-function Reel({ activeItemId }: { activeItemId: string }) {
-  useAppleZoomRetarget(activeItemId);
+function Reel({ activeItemId, pictureReturns }: { activeItemId: string; pictureReturns?: boolean }) {
+  useAppleZoomRetarget(activeItemId, pictureReturns);
   return null;
 }
 
@@ -87,7 +89,10 @@ describe('a reel grown out of its tile\'s page-shaped view', () => {
     renderer.act(() => tree.unmount());
   });
 
-  it('counts the push as landed after a deadline when its landing was never heard', () => {
+  // UIKit reports the push's end half a second after the reel is at full
+  // size, and a Back in that half second closed into the view the reel grew
+  // out of. The same timer stands in for a report sent before the reel listened.
+  it('counts the reel as landed once it has had the time to draw at full size, ahead of the navigator\'s word', () => {
     vi.useFakeTimers();
     try {
       const tile = appleZoomSourceId(':r1:', 'post-1');
@@ -97,11 +102,14 @@ describe('a reel grown out of its tile\'s page-shaped view', () => {
       renderer.act(() => {
         tree = renderer.create(<Reel activeItemId="post-1" />);
       });
-      // The navigator reported the landing before the reel listened, and sends it once.
-      renderer.act(() => { vi.advanceTimersByTime(APPLE_ZOOM_LANDING_DEADLINE_MS - 1); });
+      // The zoom is still growing the reel: its source stays put.
+      renderer.act(() => { vi.advanceTimersByTime(APPLE_ZOOM_LANDED_AFTER_MS - 1); });
       expect(setParams).not.toHaveBeenCalled();
       renderer.act(() => { vi.advanceTimersByTime(1); });
       expect(setParams).toHaveBeenCalledWith({ [APPLE_ZOOM_SOURCE_PARAM]: tile });
+      // The navigator's word, when it comes, changes nothing more.
+      renderer.act(() => emit('transitionEnd', false));
+      expect(setParams).toHaveBeenCalledTimes(1);
       renderer.act(() => tree.unmount());
     } finally {
       vi.useRealTimers();
@@ -119,5 +127,101 @@ describe('a reel grown out of its tile\'s page-shaped view', () => {
     renderer.act(() => tree.update(<Reel activeItemId="post-2" />));
     expect(setParams).toHaveBeenCalledWith({ [APPLE_ZOOM_SOURCE_PARAM]: appleZoomSourceId(':r1:', 'post-2') });
     renderer.act(() => tree.unmount());
+  });
+});
+
+/**
+ * A reel showing a post's still picture has the post's tile hold that picture
+ * in the view a close shrinks the reel into, so the picture is there all the
+ * way down into the tile instead of the page fading out short of it
+ * (lib/apple-zoom-surface.ts).
+ */
+describe('the picture a reel\'s close lands on', () => {
+  const held = (itemId: string) => isAppleZoomReturnPictureHeld(':r1:', itemId);
+
+  function mountLanded(pictureReturns: boolean) {
+    params = { [APPLE_ZOOM_SOURCE_PARAM]: appleZoomOpenSourceId(appleZoomSourceId(':r1:', 'post-1')) };
+    listeners.clear();
+    resetAppleZoomReturnPictures();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<Reel activeItemId="post-1" pictureReturns={pictureReturns} />);
+    });
+    return tree;
+  }
+
+  it('is held once the push has landed, by the tile of the post the reader is on', () => {
+    const tree = mountLanded(true);
+    // The push still runs: a close now shrinks into the view the push grew out of.
+    expect(held('post-1')).toBe(false);
+
+    renderer.act(() => emit('transitionEnd', false));
+    expect(held('post-1')).toBe(true);
+
+    renderer.act(() => tree.update(<Reel activeItemId="post-2" pictureReturns />));
+    expect(held('post-1')).toBe(false);
+    expect(held('post-2')).toBe(true);
+
+    // On to a clip, or a later picture of the post: its tile holds nothing.
+    renderer.act(() => tree.update(<Reel activeItemId="post-2" pictureReturns={false} />));
+    expect(held('post-2')).toBe(false);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('is not asked for by a reel that is not showing its tile\'s picture', () => {
+    const tree = mountLanded(false);
+    renderer.act(() => emit('transitionEnd', false));
+    expect(held('post-1')).toBe(false);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('is let go when the reel goes after UIKit\'s own pop, which is over by then', () => {
+    const tree = mountLanded(true);
+    renderer.act(() => emit('transitionEnd', false));
+    // The bar's Back, a drag or the edge swipe: the reel hears the pop begin
+    // and leaves React only once it has ended.
+    renderer.act(() => emit('transitionStart', true));
+    expect(held('post-1')).toBe(true);
+    renderer.act(() => tree.unmount());
+    expect(held('post-1')).toBe(false);
+  });
+
+  it('stays through a pop the app asks for, which begins after the reel has left React', () => {
+    const tree = mountLanded(true);
+    renderer.act(() => emit('transitionEnd', false));
+    renderer.act(() => tree.unmount());
+    // UIKit has yet to ask what to shrink the reel into.
+    expect(held('post-1')).toBe(true);
+    noteAppleZoomPopEnded();
+    expect(held('post-1')).toBe(false);
+  });
+
+  it('stays through a pop the app asks for after a close the reader let go of', () => {
+    const tree = mountLanded(true);
+    renderer.act(() => emit('transitionEnd', false));
+    // A drag begun and let go: the reel is back.
+    renderer.act(() => emit('transitionStart', true));
+    renderer.act(() => emit('gestureCancel', false));
+    renderer.act(() => tree.unmount());
+    expect(held('post-1')).toBe(true);
+    noteAppleZoomPopEnded();
+    expect(held('post-1')).toBe(false);
+  });
+
+  it('survives React running the reel\'s effects twice, as it does in development', () => {
+    params = { [APPLE_ZOOM_SOURCE_PARAM]: appleZoomSourceId(':r1:', 'post-1') };
+    listeners.clear();
+    resetAppleZoomReturnPictures();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<React.StrictMode><Reel activeItemId="post-1" pictureReturns /></React.StrictMode>);
+    });
+    expect(held('post-1')).toBe(true);
+    // Moving on lets the old tile go at once: nothing is waiting on a pop.
+    renderer.act(() => tree.update(<React.StrictMode><Reel activeItemId="post-2" pictureReturns /></React.StrictMode>));
+    expect(held('post-1')).toBe(false);
+    expect(held('post-2')).toBe(true);
+    renderer.act(() => tree.unmount());
+    noteAppleZoomPopEnded();
   });
 });

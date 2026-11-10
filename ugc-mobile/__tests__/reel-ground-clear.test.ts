@@ -42,11 +42,13 @@ describe('the reel\'s ground as it grows out of its tile and shrinks back', () =
   // UIKit resizes the view it grows or shrinks the reel with to the window, and
   // React Native content keeps its own frames: given the tile, the tile's
   // picture dropped and a copy of the card rode over the growing reel. It is
-  // given two empty views beside the tile instead: a page-shaped one for opens
-  // and one in the tile's own shape for closes.
-  it('iOS: UIKit zooms two empty views beside the tile, never the tile itself', () => {
-    expect(zoom).toMatch(/<AppleZoomSource identifier=\{source\.appleZoomId\} [^>]*>\s*<View pointerEvents="none" collapsable=\{false\} style=\{\[StyleSheet\.absoluteFill/);
-    expect(zoom).toMatch(/<AppleZoomSource identifier=\{appleZoomOpenSourceId\(source\.appleZoomId\)\} [^>]*pageShaped=\{pageFrame !== null\}>/);
+  // given two views beside the tile instead: an empty page-shaped one for
+  // opens, and one in the tile's own shape for closes, which draws the tile's
+  // picture while a reel showing that picture is up and nothing otherwise
+  // (2026-11-10, lib/apple-zoom-surface.ts).
+  it('iOS: UIKit zooms two views beside the tile, never the tile itself', () => {
+    expect(zoom).toMatch(/<AppleZoomSource identifier=\{source\.appleZoomId\} [^>]*>\s*\{source\.returnPicture \? \(\s*<AppleZoomReturnPictureView returnPicture=\{source\.returnPicture\} radius=\{radius\} \/>/);
+    expect(zoom).toMatch(/<AppleZoomSource identifier=\{appleZoomOpenSourceId\(source\.appleZoomId\)\} [^>]*pageShaped=\{pageFrame !== null\}>\s*<View\s+pointerEvents="none"/);
     // The tile's own view, the one it measures, is not inside an AppleZoomSource.
     expect(zoom).toMatch(/<Animated\.View collapsable=\{false\} style=\{\[ZOOM_SOURCE_FILL, style, source\.hiddenStyle\]\}>\s*<View\s+ref=\{source\.ref\}/);
   });

@@ -28,6 +28,10 @@
  * the zoom aligns with the picture (`AppleZoomTarget`). That mark is not
  * mounted once Back has taken the reel out of React, so each tile hands over
  * the same rectangle itself (`AppleZoomSource`, `appleZoomAlignmentRect`).
+ * UIKit crossfades the shrinking page into whatever the tile's own view draws,
+ * so while the reel shows a post's still picture that view holds the picture,
+ * and the close carries it home into the tile instead of fading out short of
+ * it (lib/apple-zoom-surface.ts).
  *
  * Only some of Expo Router's pieces are public — `Link.AppleZoom` needs a
  * `Link`, and the tiles open imperatively — so `components/apple-zoom.ios.tsx`
