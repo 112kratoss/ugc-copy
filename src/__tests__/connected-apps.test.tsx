@@ -102,11 +102,14 @@ describe('the Connected apps section', () => {
     expect(screen.getByRole('heading', { name: CONNECTED_APPS_COPY.title })).toBeInTheDocument();
     // The section links to the setup page: nothing else in the signed-in app says how an agent is connected.
     expect(screen.getByRole('link', { name: /How to connect an agent/u })).toHaveAttribute('href', '/developers/mcp');
+    // The section is named, so a screen reader's list of regions has it.
+    expect(screen.getByRole('region', { name: CONNECTED_APPS_COPY.title })).toBeInTheDocument();
   });
 
   it('links to the setup page from the signed-out home\'s footer too', () => {
     const home = readFileSync(path.join(process.cwd(), 'src/components/AnonymousHome.tsx'), 'utf8');
-    expect(home).toContain('<Link href="/developers/mcp" prefetch={false} className="hover:text-[var(--ui-text-primary)]">AI agents</Link>');
+    const footer = home.slice(home.indexOf('<footer'), home.indexOf('</footer>'));
+    expect(footer).toMatch(/<Link href="\/developers\/mcp" prefetch=\{false\}[^>]*>AI agents<\/Link>/u);
   });
 
   it('says of a posting-only app what it may do, not what every other app may', async () => {

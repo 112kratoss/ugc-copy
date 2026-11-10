@@ -137,7 +137,7 @@ export default function ConnectedApps({ client }: { client?: ConnectedAppsClient
   }
 
   return (
-    <section aria-labelledby="connected-apps-title" className="ui-enter mt-10">
+    <section aria-label={CONNECTED_APPS_COPY.title} className="ui-enter mt-10">
       <SectionHeader
         compact
         eyebrow={CONNECTED_APPS_COPY.eyebrow}
@@ -146,6 +146,8 @@ export default function ConnectedApps({ client }: { client?: ConnectedAppsClient
         actionHref={MCP_DEVELOPERS_PAGE_PATH}
         actionLabel={CONNECTED_APPS_COPY.guideLabel}
         actionIcon={BookOpenText}
+        // No prefetch: a visit to profile settings does not fetch the guide on sight.
+        actionPrefetch={false}
         className="mb-5"
       />
       {body}
