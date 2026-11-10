@@ -23,7 +23,9 @@ export function clearAppleZoomReturn(surfaceId: string, itemId: string) {
 export function forgetAppleZoomSurface(surfaceId: string) {
   surfaces.delete(surfaceId);
   requested.delete(surfaceId);
+  bottomBars.delete(surfaceId);
   const prefix = `${surfaceId} `;
+  for (const key of [...tileShapes.keys()]) if (key.startsWith(prefix)) tileShapes.delete(key);
   let changed = false;
   for (const key of [...returnPictures.keys()]) {
     if (!key.startsWith(prefix)) continue;
@@ -31,6 +33,44 @@ export function forgetAppleZoomSurface(surfaceId: string) {
     changed = true;
   }
   if (changed) emitReturnPictures();
+}
+
+// ---------------------------------------------------------------------------
+// The bar a surface's tiles go under
+// ---------------------------------------------------------------------------
+
+/**
+ * How much of the bottom of the screen each surface's own bar floats over: the
+ * tab bar, on the tab screens. A tile can sit partly under it, and a picture
+ * flown home above the navigator (lib/reel-close-flight.ts) is above the bar
+ * too: landing there, it covered the bar's buttons, which then came back
+ * through it as it faded (owner's recording, 2026-11-10: "still feels like
+ * having a ghosting"). So the flight stops short of the bar, and has to know
+ * where the bar begins.
+ */
+export interface AppleZoomSurfaceBottomBar {
+  /** How far up from the bottom of the screen the bar reaches. */
+  height: number;
+  /** What stands up out of the middle of it (the tab bar's Create button): how wide, and how far above the bar. */
+  capWidth: number;
+  capHeight: number;
+}
+
+const NO_BOTTOM_BAR: AppleZoomSurfaceBottomBar = { height: 0, capWidth: 0, capHeight: 0 };
+const bottomBars = new Map<string, AppleZoomSurfaceBottomBar>();
+
+/** A surface's bar, as a flight into a tile under it has to know it. Returns what takes it back. */
+export function noteAppleZoomSurfaceBottomBar(surfaceId: string, bar: AppleZoomSurfaceBottomBar): () => void {
+  if (!(bar.height > 0)) return () => {};
+  bottomBars.set(surfaceId, bar);
+  return () => {
+    if (bottomBars.get(surfaceId) === bar) bottomBars.delete(surfaceId);
+  };
+}
+
+/** That surface's bar; of no height with none. */
+export function appleZoomSurfaceBottomBar(surfaceId: string | null | undefined): AppleZoomSurfaceBottomBar {
+  return (surfaceId ? bottomBars.get(surfaceId) : undefined) ?? NO_BOTTOM_BAR;
 }
 
 // ---------------------------------------------------------------------------
@@ -204,4 +244,51 @@ export function subscribeToAppleZoomReturnPictures(listener: () => void) {
 export function resetAppleZoomReturnPictures() {
   for (const key of [...returnPictures.keys()]) dropReturnPicture(key);
   returnPictureListeners.clear();
+  tileShapes.clear();
+  bottomBars.clear();
+}
+
+// ---------------------------------------------------------------------------
+// The shape a close lands in
+// ---------------------------------------------------------------------------
+
+/** A tile as a closing reel needs to know it: its size on the page and its corners. */
+export interface AppleZoomTileShape {
+  width: number;
+  height: number;
+  radius: number;
+}
+
+/**
+ * UIKit's zoom shrinks the reel's whole page toward the tile and crossfades it
+ * into the tile's picture, lined up on the part of the reel's picture that has
+ * the tile's shape. Everything else on the page hangs outside the tile on the
+ * way down and fades there, over the feed: the rest of a picture taller than
+ * its tile, the page's black, the caption and the rail (owner, 2026-11-10,
+ * with a recording of a Home card: "when closing some ghosting like thing is
+ * happening"). So a reel that closes cuts its page down to that part of the
+ * picture as the close begins (components/reel-close-morph.tsx), and for that
+ * it has to know the tile's shape, which only the tile does.
+ */
+const tileShapes = new Map<string, AppleZoomTileShape>();
+
+/**
+ * A tile's shape, for the reel that closes into it. Returns what takes it back
+ * when the tile goes or changes shape: only if no other tile of the same post
+ * has reported since (a list keeps a pinned copy of a tile beside the one in
+ * its grid, and either may go first).
+ */
+export function noteAppleZoomTileShape(surfaceId: string, itemId: string, shape: AppleZoomTileShape): () => void {
+  if (!(shape.width > 0 && shape.height > 0)) return () => {};
+  const key = returnPictureKey(surfaceId, itemId);
+  tileShapes.set(key, shape);
+  return () => {
+    if (tileShapes.get(key) === shape) tileShapes.delete(key);
+  };
+}
+
+/** The shape of the tile a reel on this post would close into, if that tile is laid out. */
+export function appleZoomTileShape(surfaceId: string | null | undefined, itemId: string | null | undefined): AppleZoomTileShape | null {
+  if (!surfaceId || !itemId) return null;
+  return tileShapes.get(returnPictureKey(surfaceId, itemId)) ?? null;
 }
