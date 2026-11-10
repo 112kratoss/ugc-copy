@@ -15,12 +15,6 @@ import { mediaColors } from '@/lib/theme';
  *
  * Mute sits in the bar too: under a bar of its own it could not be pressed, and
  * beside the system's Back it is the same glass at the same height.
- *
- * The button being UIKit's, the app hears of its press only once the pop is
- * under way. A still picture's own flight home (lib/reel-close-flight.ts)
- * therefore reads the finger lifting off it on the UI thread, from a view
- * above the navigator, and where the button is drawn is written there
- * (`reelBackButtonRegion`): move the button and that moves with it.
  */
 export type ViewerNativeBarMute = {
   muted: boolean;
