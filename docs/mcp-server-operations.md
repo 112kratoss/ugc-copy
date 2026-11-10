@@ -549,6 +549,15 @@ ports 563xx; never production), the tools with the real services behind them:
   moderation list reading `text` / `free`, `text` / `paid`, `upload` / `paid` and `creation` /
   `paid`. A deleted text post was made again by the same title and body.
 
+**After the review (2026-11-10).** The fresh-context review of PR #751 found fifteen gaps (the
+plan lists them). Both runs above were repeated on the same kind of stack after the fixes, with
+the real services: the upload run whole; a repeat that named another price with a visibility
+change refused (`INVALID_REQUEST`), on a text post and on a creation's post, with the post still
+private and its resource and price untouched, and the same call without the price then put the
+resource on offer at its own; the schema refusing a misspelled `generationId`; the derived ids
+version 4; and the moderation list, asked for ten posts after sixty unchanged repeats of one of
+them had been recorded, still listing all five.
+
 After a release that carries a change here, check it on production from Claude Code without
 putting anything on sale: `publish_post` with a title, a body, one `guide` card, a preview and
 `visibility: private` (answer: `source: text`, `resource_access: free`, `resource_status: draft`);
