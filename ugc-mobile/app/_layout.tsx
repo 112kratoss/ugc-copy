@@ -15,6 +15,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import 'react-native-reanimated';
 import { AppState, Platform, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ActionSheetHost } from '@/components/action-sheet';
@@ -23,6 +24,7 @@ import { FirstOpenIntroHost } from '@/components/first-open-intro-host';
 import { LaunchSplash } from '@/components/launch-splash';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { MediaZoomFlightLayer, noteRootScreenTransitionEnd, noteRootScreenTransitionStart } from '@/components/media-zoom';
+import { ReelCloseFlightLayer, ReelCloseFlightTouches } from '@/components/reel-close-flight';
 import { ZoomPostChrome, ZoomPostPreparer } from '@/components/zoom-post-chrome';
 import { OverlayHost } from '@/components/overlay-host';
 import { WelcomeCreditsPopup } from '@/components/welcome-credits-popup';
@@ -284,6 +286,10 @@ function RootLayoutNav() {
               >
               {/* Claims the touch that closes a native menu, so it closes the
                   menu and nothing else (`lib/native-menu-shield.ts`). */}
+              {/* iOS: a press of the reel's Back is read here, on the UI thread,
+                  so a picture can leave for its tile in the frame the button
+                  pops the reel (lib/reel-close-flight.ts). */}
+              <ReelCloseFlightTouches>
               <View style={{ flex: 1, backgroundColor: theme.colors.app }} {...nativeMenuTouchGuardProps}>
                 <ReelBackdrop />
                 {/* Light icons on the dark scheme, dark icons on paper. The reel
@@ -420,7 +426,9 @@ function RootLayoutNav() {
                     // its first render, and on iOS clears it behind its media so
                     // that a zoom close shrinks the picture alone (`groundClear`
                     // in app/viewer.tsx). A native screen did not take a new
-                    // background once mounted, so this one never changes.
+                    // background once mounted, so this one never changes. Any
+                    // colour here, however faint, and UIKit's zoom draws the
+                    // closing page opaque in it (simulator, 2026-11-10).
                     contentStyle: { backgroundColor: 'transparent' },
                     animation: reducedMotion ? 'none' : viewerAnimation(route.params),
                     animationDuration: 250,
@@ -469,9 +477,11 @@ function RootLayoutNav() {
                     controls — from its first frame. */}
                 <ThemeScope scheme="dark">
                   <MediaZoomFlightLayer renderPost={renderZoomPost} />
+                  <ReelCloseFlightLayer />
                 </ThemeScope>
                 <ZoomPostPreparer />
               </View>
+              </ReelCloseFlightTouches>
               </GestureHandlerRootView>
             </ThemeProvider>
           </SafeAreaProvider>

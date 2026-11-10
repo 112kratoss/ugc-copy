@@ -17,6 +17,10 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'reac
 import { AudioCreationPlayer } from '@/components/audio-creation-player';
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { AppleZoomReturnLandingCue, AppleZoomTopControlsCue } from '@/components/apple-zoom-progress';
+import { ReelCloseFlightArm, ReelCloseFlightContext } from '@/components/reel-close-flight';
+import { forgetReelCloseFlight, nextReelCloseFlightId, reelBackButtonRegion } from '@/lib/reel-close-flight';
+import { REEL_CLOSE_MORPH_DRAWN_MS, ReelCloseMorphClip, ReelCloseMorphCue, ReelCloseMorphProvider, startReelCloseMorph, useReelCloseMorph } from '@/components/reel-close-morph';
+import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
 import { parseAppleZoomSourceId } from '@/lib/apple-zoom';
 import { createReelTouches } from '@/lib/reel-touches';
@@ -649,14 +653,23 @@ function ImmersivePreviewViewer() {
   // the reel: what tells when a close has landed (`AppleZoomReturnLandingCue`).
   const zoomSurfaceId = parseAppleZoomSourceId(nativeZoomSourceId)?.surfaceId ?? null;
   const [reelTouches] = useState(createReelTouches);
+  // What the page is cut down to as UIKit's zoom closes it into that tile
+  // (components/reel-close-morph.tsx).
+  const closeMorph = useReelCloseMorph();
+  // And what a press of the bar's Back does instead: the picture flies home
+  // itself (lib/reel-close-flight.ts).
+  const [closeFlightId] = useState(nextReelCloseFlightId);
+  useEffect(() => () => forgetReelCloseFlight(closeFlightId), [closeFlightId]);
   // iOS: a still picture out of a tile closes by flying home alone
   // (components/media-zoom.tsx), which the reel has to start before the pop, so
   // it keeps the reel's own Back: the bar's pops before the app hears of it,
   // under UIKit's zoom. A bar button of the app's own in its place took the
   // back swipe away with the system Back (simulator, 2026-11-07); hidden, the
   // bar leaves the swipe as it was. Off on iOS since 2026-11-08
-  // (`IOS_BACK_FLIES_PICTURE`): every post has the bar's own Back, and UIKit's
-  // zoom shrinks the page into the tile, as Instagram's Back does.
+  // (`IOS_BACK_FLIES_PICTURE`): every post has the bar's own Back. Under it
+  // UIKit's zoom shrinks a video's page into the tile, and a still picture
+  // flies home itself from the frame the button is let go of (`closeFlight`
+  // below, lib/reel-close-flight.ts).
   const flownBack = IOS_BACK_FLIES_PICTURE && Boolean(nativeZoomSourceId) && !onEndSlide && closesPictureAlone({
     picture: activeMedia.picture,
     videoUrl: activeMedia.playbackUrl,
@@ -664,6 +677,25 @@ function ImmersivePreviewViewer() {
     fromTile: true,
   });
   const barBack = nativeBack && !flownBack;
+  // The reel's own Back: UIKit shrinks a snapshot of the page, so the page is
+  // cut down to the tile's part of its picture before the pop is asked for.
+  const activeItemId = activeItem?.id ?? null;
+  // What the slide on screen needs to get its picture ready to fly home
+  // (components/reel-close-flight.ios.tsx): only under the bar's Back, the
+  // button that flight leaves on, and only while that button is the one a
+  // press there reaches. A screen pushed over the reel (a creator's page)
+  // draws a Back of its own in the same place, and a sheet over the reel can
+  // put a control there.
+  const closeFlight = {
+    reelId: closeFlightId,
+    surfaceId: zoomSurfaceId,
+    activeItemId,
+    enabled: barBack && pictureReturns && !detailsOpenForActive && isFocused && !overlayOpenItemId,
+    back: reelBackButtonRegion(insets.top),
+  };
+  const beforeNativeClose = useCallback(() => (
+    pictureReturns && startReelCloseMorph(closeMorph, zoomSurfaceId, activeItemId) ? REEL_CLOSE_MORPH_DRAWN_MS : 0
+  ), [activeItemId, closeMorph, pictureReturns, zoomSurfaceId]);
   const zoom = useMediaZoomStage({
     screen: { width, height },
     initialItemId: initialId,
@@ -680,18 +712,21 @@ function ImmersivePreviewViewer() {
     // A close into the tile this video came from hands the tile its player back.
     activeVideoUrl: activeMedia.playbackUrl,
     playerFor: playbackHandoff.playerFor,
+    closeMorph: closeMorph.progress,
+    closeFlightId,
+    beforeNativeClose,
     onExit: leaveViewer,
   });
-  // iOS: the reel keeps its black behind its media, and UIKit's zoom grows and
-  // shrinks that page, black, buttons and all, as Instagram's does (filmed on
-  // the owner's iPhone 16e beside ours, 2026-11-08), over a page left lit, into
-  // and out of the tile's shape
-  // (`useAppleZoomRetarget`). Clear behind its media, as the reel was from
-  // 2026-11-07, its page showed UIKit's own ground in the bands round a picture
-  // that does not fill the screen: white in the light scheme, a black slab in
-  // the dark one.
+  // iOS 18: the reel is clear behind its media, over the stage's one black
+  // ground (components/media-zoom.tsx). UIKit's zoom grows and shrinks that
+  // page, black, buttons and all, as Instagram's does (filmed on the owner's
+  // iPhone 16e beside ours, 2026-11-08), and as a close goes on the ground and
+  // the chrome fade and the picture is trimmed to its tile's part
+  // (components/reel-close-morph.tsx): left black, the page hung outside the
+  // tile and faded there, over the feed (owner's recording, 2026-11-10).
+  // Before iOS 18 there is no zoom and the page keeps its own black.
   const groundClear = Platform.OS === 'ios'
-    ? false
+    ? isAppleZoomAvailable()
     // Android shrinks the reel itself (components/media-zoom.tsx), window and
     // all, in about three frames: too fast for a re-render to clear it as the
     // shrink begins (filmed on the Pixel 9a emulator). So it is always clear
@@ -1553,6 +1588,8 @@ function ImmersivePreviewViewer() {
   return (
     <ViewerPlaybackContext.Provider value={playbackHandoff}>
     <ViewerLeavingContext.Provider value={leaving}>
+    <ReelCloseMorphProvider morph={closeMorph}>
+    <ReelCloseFlightContext.Provider value={closeFlight}>
     <ViewerGroundContext.Provider value={ground}>
     <ViewerActionsMenuProvider callbacksFor={actionCallbacksFor}>
     {/* The reel is drawn inside a window that grows out of the tapped tile and
@@ -1563,6 +1600,7 @@ function ImmersivePreviewViewer() {
         close UIKit's zoom is dragging tells nothing else (lib/reel-touches.ts). */}
     <View style={{ flex: 1, backgroundColor: ground }} {...reelTouches.handlers}>
       {zoomSurfaceId ? <AppleZoomReturnLandingCue surfaceId={zoomSurfaceId} itemId={activeItem?.id ?? null} touches={reelTouches} /> : null}
+      {zoomSurfaceId ? <ReelCloseMorphCue morph={closeMorph} reelId={closeFlightId} surfaceId={zoomSurfaceId} itemId={activeItem?.id ?? null} touches={reelTouches} enabled={pictureReturns} /> : null}
       {/* iOS: a reel pushed out of a tile keeps the navigator's default
           animation, which is how react-native-screens leaves the pop to UIKit's
           zoom back into the tile (lib/apple-zoom.ts); its dismissal gestures go
@@ -1860,6 +1898,8 @@ function ImmersivePreviewViewer() {
     </MediaZoomStage>
     </ViewerActionsMenuProvider>
     </ViewerGroundContext.Provider>
+    </ReelCloseFlightContext.Provider>
+    </ReelCloseMorphProvider>
     </ViewerLeavingContext.Provider>
     </ViewerPlaybackContext.Provider>
   );
@@ -2896,6 +2936,7 @@ function ImmersiveMedia({
         onDoublePress={handleDoublePress}
         style={{ width, height }}
       >
+        <ReelCloseMorphClip width={width} height={height} aspectRatio={mediaAspectRatio}>
         <FeedMediaFrame
           kind="image"
           onImageDisplay={reportSlidePainted}
@@ -2917,6 +2958,8 @@ function ImmersiveMedia({
           recyclingKey={`viewer:${mediaItem.id}`}
           style={{ width, height }}
         />
+        </ReelCloseMorphClip>
+        {onScreen ? <ReelCloseFlightArm postId={postId} picture={image} aspectRatio={mediaAspectRatio} width={width} height={height} /> : null}
         {carriedPicture}
         {zoomTargetRect}
       </DoubleTapPressable>

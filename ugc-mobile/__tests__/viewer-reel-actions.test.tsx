@@ -185,6 +185,14 @@ vi.mock('@/components/apple-zoom', () => ({
   useAppleZoomSourceId: () => null,
 }));
 vi.mock('@/components/apple-zoom-progress', () => ({ AppleZoomTopControlsCue: nothing }));
+vi.mock('@/components/reel-close-morph', () => ({
+  REEL_CLOSE_MORPH_DRAWN_MS: 0,
+  ReelCloseMorphClip: passThrough,
+  ReelCloseMorphCue: nothing,
+  ReelCloseMorphProvider: passThrough,
+  startReelCloseMorph: () => false,
+  useReelCloseMorph: () => ({ progress: { value: 0 }, tile: { value: null } }),
+}));
 vi.mock('@/components/app-scheme-scope', () => ({ AppSchemeScope: passThrough }));
 vi.mock('@/components/audio-creation-player', () => ({ AudioCreationPlayer: nothing }));
 vi.mock('@/components/comments-sheet', () => ({ CommentsSheet: nothing }));

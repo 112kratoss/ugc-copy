@@ -13,6 +13,7 @@ import { Link, useLocalSearchParams, useNavigation } from 'expo-router';
 import { LinkZoomTransitionSource } from 'expo-router/build/link/preview/native';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
+import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 
 import {
   APPLE_ZOOM_SOURCE_PARAM,
@@ -30,6 +31,7 @@ import {
   subscribeToAppleZoomReturnPictures,
 } from '@/lib/apple-zoom-surface';
 import { appleZoomAlignmentRect, type ZoomPreview, type ZoomRect, type ZoomSize } from '@/lib/media-zoom-transition';
+import { reelCloseFlightSource } from '@/lib/reel-close-flight';
 import { listenForScreenLeaving, listenToTransition } from '@/lib/use-screen-leaving';
 
 /**
@@ -328,10 +330,30 @@ export function useAppleZoomReturnPicture(
  * what it holds at the size and place Yoga gave it, where expo-image's own
  * image view fills its bounds as they change.
  */
-export function AppleZoomReturnPictureView({ returnPicture, radius }: { returnPicture?: AppleZoomReturnPicture; radius: number }) {
+export function AppleZoomReturnPictureView({
+  identifier,
+  returnPicture,
+  radius,
+}: {
+  /** The identifier this view is registered with UIKit's zoom under. */
+  identifier: string | null;
+  returnPicture?: AppleZoomReturnPicture;
+  radius: number;
+}) {
   const picture = returnPicture?.picture ?? null;
+  // A picture flying home on its own (lib/reel-close-flight.ts) leaves UIKit a
+  // page with nothing in it, and UIKit still draws a ground of its own behind
+  // that page, in a window that closes in on this view: a dark box shrinking
+  // over the feed toward the tile (filmed 2026-11-10; lining the page up with
+  // a point instead did not move it). So for that flight this view, empty by
+  // then, is made larger than the screen, on the UI thread, before the pop
+  // asks where it is: the window has nowhere smaller to go, and UIKit's
+  // ground covers the whole screen evenly as it fades.
+  const flownStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: identifier !== null && reelCloseFlightSource.value === identifier ? FLOWN_SOURCE_SCALE : 1 }],
+  }));
   return (
-    <Image
+    <AnimatedImage
       pointerEvents="none"
       accessible={false}
       source={picture ? { uri: picture.url, cacheKey: picture.cacheKey ?? undefined } : null}
@@ -342,8 +364,17 @@ export function AppleZoomReturnPictureView({ returnPicture, radius }: { returnPi
       transition={0}
       cachePolicy="memory-disk"
       onDisplay={returnPicture?.onDisplay}
-      style={[StyleSheet.absoluteFill, { borderRadius: radius, borderCurve: 'continuous' } as ImageStyle]}
+      style={[StyleSheet.absoluteFill, { borderRadius: radius, borderCurve: 'continuous' } as ImageStyle, flownStyle]}
     />
   );
 }
+
+const AnimatedImage = Animated.createAnimatedComponent(Image);
+
+/**
+ * How much larger than its tile that view is while the tile's picture flies
+ * home on its own: enough to cover the screen from the smallest tile in its
+ * furthest corner.
+ */
+const FLOWN_SOURCE_SCALE = 40;
 
