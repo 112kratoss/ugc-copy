@@ -1,3 +1,5 @@
+> **Graduated on 2026-11-11** into `patches/expo-notifications+55.0.27.patch` for store build 0.1.9 (both platforms), applied like every shipped change; the copy that lived here is gone, so the apply and reverse steps below are history.
+
 # iOS notification delegate lock
 
 Status: **written and checked as code; waiting for the next iOS store build, and not yet run inside the app.** The patch is deliberately outside `patches/`, so `postinstall` does not apply it: `@expo/fingerprint` hashes `patches/` and the patched `node_modules/expo-notifications/ios`, and either would stop JavaScript-only updates reaching the binaries already out. It moves into `patches/` in the commit that store build is cut from ("Graduating" below), and `__tests__/ios-notification-delegates-lock.test.ts` fails the release bump that leaves it behind.

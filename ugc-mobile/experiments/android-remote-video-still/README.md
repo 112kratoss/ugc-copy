@@ -1,3 +1,5 @@
+> **Graduated on 2026-11-11** into `patches/expo-video+55.0.21+007+android-remote-video-still.patch` for store build 0.1.9 (both platforms), applied like every shipped change; the copy that lived here is gone, so the apply and reverse steps below are history.
+
 # Android remote video still
 
 Status: **built into an Android dev client and run on the Pixel 9a emulator (2026-10-31); waiting for the next Android store build (the 0.1.9 plan). Not yet run in a release build or on a phone.**

@@ -1,8 +1,8 @@
 // Keeps the development-only native modules out of the runtime fingerprint.
 // Production builds never link them (plugins/withBuildProfileAutolinking.js),
 // so their versions should not decide which binaries an over-the-air update
-// reaches. Parked: see experiments/fingerprint-dev-only/README.md. Graduated,
-// this file sits beside app.json, where @expo/fingerprint reads it.
+// reaches. Shipped from store build 0.1.9 (notes: experiments/fingerprint-dev-only/README.md);
+// it sits beside app.json, where @expo/fingerprint reads it.
 const { DEVELOPMENT_ONLY_NATIVE_MODULES } = require('./plugins/withBuildProfileAutolinking');
 
 /** @type {import('@expo/fingerprint').Config} */

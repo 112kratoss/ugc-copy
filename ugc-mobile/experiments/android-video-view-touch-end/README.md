@@ -1,3 +1,5 @@
+> **Graduated on 2026-11-11** into `patches/expo-video+55.0.21+005+android-video-view-touch-end.patch` for store build 0.1.9 (both platforms), applied like every shipped change; the copy that lived here is gone, so the apply and reverse steps below are history.
+
 # Android video view touch end
 
 Status: **built into the Android dev client and run on the Pixel 9a emulator (2026-10-05); waiting for the next Android store build. Not yet run in a release build of this app or on a phone.**

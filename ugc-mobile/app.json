@@ -2,7 +2,7 @@
   "expo": {
     "name": "Magic Booklet",
     "slug": "magicbooklet-mobile",
-    "version": "0.1.8",
+    "version": "0.1.9",
     "icon": "./assets/images/icon.png",
     "scheme": "magicbooklet",
     "userInterfaceStyle": "automatic",
@@ -160,6 +160,7 @@
       "./plugins/withBuildProfileAutolinking",
       "./plugins/withAndroidLocalCleartextDebug",
       "./plugins/withAndroidReleaseSafety",
+      "./plugins/withIosHermesSourceMap",
       [
         "expo-notifications",
         {

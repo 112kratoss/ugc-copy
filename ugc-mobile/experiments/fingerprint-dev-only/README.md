@@ -1,3 +1,5 @@
+> **Graduated on 2026-11-11** into `fingerprint.config.js` beside `app.json` for store build 0.1.9 (both platforms), applied like every shipped change; the copy that lived here is gone, so the apply and reverse steps below are history.
+
 # Development-only modules out of the fingerprint
 
 Status: **written and measured against the fingerprint; waiting for the next store build.** The config is deliberately outside the app root, where `@expo/fingerprint` does not read it: in place it moves both runtime fingerprints once, so no JavaScript-only update would reach the binaries already out. It moves beside `app.json` in the commit the next store build is cut from ("Graduating" below), and `__tests__/fingerprint-dev-only.test.ts` fails the release bump that leaves it behind.
