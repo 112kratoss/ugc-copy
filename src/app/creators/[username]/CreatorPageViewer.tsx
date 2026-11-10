@@ -20,6 +20,7 @@ import {
   useSupabaseAuthCookieHint,
 } from '@/components/useSupabaseAuthCookieHint';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
+import { useInviteVisitFromSharedLink } from '@/lib/invite-share-landing';
 import { useOwnerCreatorProfile, type OwnerCreatorProfile } from '@/lib/owner-page-edits';
 import type { EditableCreatorProfile } from '@/lib/profile';
 import { SHARE_SOURCE_QUERY_PARAM } from '@/lib/share';
@@ -147,6 +148,16 @@ export function CreatorPageViewer({
       body: JSON.stringify({ username, eventType: 'share_visit', sourceSurface }),
     }).catch(() => undefined);
   }, [accessToken, search, username, viewerKey]);
+
+  // A shared profile link also carries its sharer's invite, `?r=<code>`,
+  // recorded for a visitor with no account as the post page records it
+  // (`useShowcasePostViewer`).
+  useInviteVisitFromSharedLink({
+    search,
+    path: `/creators/${encodeURIComponent(username)}`,
+    viewerKnown: viewerKey !== null,
+    viewerHasAccount: Boolean(viewerUserId) && user?.is_anonymous !== true,
+  });
 
   const markUnblocked = useCallback(() => {
     if (viewerUserId) setBlockRead({ viewerUserId, block: 'none' });

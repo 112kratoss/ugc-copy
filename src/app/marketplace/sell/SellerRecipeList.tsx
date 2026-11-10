@@ -8,6 +8,7 @@ import { ChevronDown, CircleAlert, Copy, PencilLine, Plus } from 'lucide-react';
 
 import { Button, IconButton, StatusCallout, Surface, Text, getAccentClasses, type UiAccent } from '@/components/DesignSystem';
 import { buildShowcaseDetailPath, buildShowcaseDetailUrl } from '@/lib/share';
+import { withSharersInvite } from '@/lib/share-client';
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
 import SellerRecipeCover from './SellerRecipeCover';
@@ -110,7 +111,10 @@ export default function SellerRecipeList({ recipes }: { recipes: SellerRecipe[] 
 
   const copyRecipeLink = async (postId: string) => {
     try {
-      await navigator.clipboard.writeText(`${buildShowcaseDetailUrl(postId, window.location.origin, COPIED_LINK_SURFACE)}#recipe`);
+      // A copied link leaves the product as a shared one does, with the seller's invite on it.
+      await navigator.clipboard.writeText(
+        withSharersInvite(`${buildShowcaseDetailUrl(postId, window.location.origin, COPIED_LINK_SURFACE)}#recipe`),
+      );
       setCopyFeedback('Recipe link copied.');
     } catch {
       setCopyFeedback('Could not copy the recipe link.');

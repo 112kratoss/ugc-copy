@@ -139,7 +139,8 @@ function referralErrorResponse(request: Request, message: string, status: number
 /**
  * An operator switched the account's link off (`/admin/referrals`). A state,
  * not an outage: 409 with this code, which the share links read as "this
- * account has no invite to carry", and no error log.
+ * account has no invite to carry", and no error log. One constant with both
+ * clients (`invite-share-code-policy.ts`).
  */
 export { REFERRAL_LINK_DISABLED_CODE };
 

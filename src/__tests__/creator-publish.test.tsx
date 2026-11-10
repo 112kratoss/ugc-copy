@@ -32,7 +32,9 @@ vi.mock('@/components/AuthProvider', () => ({
 }));
 
 vi.mock('@/components/PublicShareButton', () => ({
-  default: ({ label }: { label?: string }) => <button type="button">{label}</button>,
+  default: ({ label, generationId }: { label?: string; generationId: string }) => (
+    <button type="button" data-share-id={generationId}>{label}</button>
+  ),
 }));
 
 vi.mock('@/components/useHandleAvailability', () => ({
@@ -912,7 +914,9 @@ describe('CreatorPublishPanel: Posted', () => {
     expect(screen.getByText(/“Harbour at dusk” is live on your profile and in Explore\. You’ll get an alert when someone remixes yours\./)).toBeInTheDocument();
     expect(screen.getByText(/@fluffy was told when your remix finished\. Your recipe is free, so others can remix yours too\./)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'View your post' })).toHaveAttribute('href', '/showcase/gen-1');
-    expect(screen.getByRole('button', { name: 'Share the link' })).toBeInTheDocument();
+    // The post's own id: the creation's reaches the post through a cached
+    // redirect that drops the link's invite (review of 2026-11-10).
+    expect(screen.getByRole('button', { name: 'Share the link' })).toHaveAttribute('data-share-id', 'post-new');
     expect(screen.getByText('6 credits left')).toBeInTheDocument();
     expect(screen.queryByTestId('creator-publish-bar')).toBeNull();
   });

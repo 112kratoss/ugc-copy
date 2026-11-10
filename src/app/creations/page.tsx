@@ -56,7 +56,8 @@ import {
   getPostResourceKindLabel,
 } from '@/lib/post-resource-bundles';
 import UnlockLibrary from './UnlockLibrary';
-import { buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
+import { SHARE_SOURCE_QUERY_PARAM, buildShowcaseDetailPath, supportsPublicCreationSharing } from '@/lib/share';
+import { withSharersInvite } from '@/lib/share-client';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 import UnavailableMediaNote from '@/components/UnavailableMediaNote';
 
@@ -1184,7 +1185,11 @@ export default function CreationsPage() {
 
     const copyPostLink = async (path: string) => {
         try {
-            await navigator.clipboard.writeText(`${window.location.origin}${path}`);
+            // As it leaves the product: its surface for the share-visit count, and the sharer's
+            // invite (review of 2026-11-10: a copied link carried neither).
+            const target = new URL(path, window.location.origin);
+            if (!target.searchParams.has(SHARE_SOURCE_QUERY_PARAM)) target.searchParams.set(SHARE_SOURCE_QUERY_PARAM, 'my-creations');
+            await navigator.clipboard.writeText(withSharersInvite(target.toString()));
             pushToast({ tone: 'success', message: 'Post link copied.' });
         } catch (error) {
             console.error('Failed to copy post link:', error);

@@ -1,7 +1,9 @@
 import { useRoute } from '@react-navigation/native';
+import { useEffect, useState } from 'react';
 
 import { SignInWall } from '@/components/sign-in-wall';
-import { authNoticeForRedirect } from '@/lib/auth-error-copy';
+import { authNoticeForRedirect, type AuthNotice } from '@/lib/auth-error-copy';
+import { readSharedInviteNotice } from '@/lib/shared-invite-notice';
 import { normalizeAuthReturnTo } from '@/lib/auth-navigation';
 import { signInOpensOnEmailForm } from '@/lib/join-navigation';
 
@@ -32,7 +34,21 @@ export default function AuthRoute() {
     inPlace?: string | string[];
   };
   const opensOnEmail = signInOpensOnEmailForm(email);
-  const redirectNotice = authNoticeForRedirect(notice);
+  // Someone who came by a shared post that carried an invite is told, before
+  // joining, that the person who shared it may earn from it (Terms §5; the web
+  // says so on the post page; re-review of 2026-11-10). A redirect's own
+  // notice comes first.
+  const [inviteNotice, setInviteNotice] = useState<AuthNotice | null>(null);
+  useEffect(() => {
+    let live = true;
+    void readSharedInviteNotice().then((sharedNotice) => {
+      if (live && sharedNotice) setInviteNotice(sharedNotice);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const redirectNotice = authNoticeForRedirect(notice) ?? inviteNotice;
 
   return (
     <SignInWall

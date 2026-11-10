@@ -25,6 +25,7 @@ import {
 import { supabase } from '@/lib/supabase';
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 import { useWelcomePromise } from '@/lib/welcome-promise';
+import { settlePendingSharedInviteVisit } from '@/lib/invite-share-landing';
 
 import { SIGN_IN_PILL, SIGN_IN_PILLS, SignInProviderButtons, type SignInInFlight } from './sign-in-parts';
 
@@ -232,6 +233,8 @@ export default function LoginClient({
 
     const continueWith = async (provider: SignInProvider) => {
         if (!startSignIn(provider)) return;
+        // A shared link's invite this tab could not record must be recorded before the account is.
+        await settlePendingSharedInviteVisit();
         const failure = await startProviderSignIn(provider, redirectTo);
         // Once it has started, the page is leaving for the provider, and stays held.
         if (failure) {
@@ -245,6 +248,7 @@ export default function LoginClient({
         if (!startSignIn('email')) return;
 
         try {
+            await settlePendingSharedInviteVisit();
             const { error } = await supabase.auth.signInWithPassword({
                 email,
                 password,

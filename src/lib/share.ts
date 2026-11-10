@@ -1,4 +1,5 @@
 import { isAudioModel } from '@/lib/client-generation-models';
+import { INVITE_SHARE_QUERY_PARAM } from '../../ugc-mobile/lib/invite-share-link/invite-share-link';
 
 export const GENERATION_SHARE_SOURCE_SURFACES = [
   'create-image',
@@ -159,6 +160,9 @@ export function stripShowcaseViewerState(path: string): string {
   // into in-app navigation, or an internal click would be counted as a visit
   // from outside.
   params.delete(SHARE_SOURCE_QUERY_PARAM);
+  // Nor the invite the shared link carried: it was the sharer's, for the visit
+  // that opened it, and a way back is neither.
+  params.delete(INVITE_SHARE_QUERY_PARAM);
   // Nor a card's delivery: it rides only on the link that card opened, so a
   // way back to a post page does not credit the card with what is done there
   // afterwards.

@@ -21,6 +21,8 @@ import {
   type GenerationMediaKind,
 } from './generation-media';
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
+import { currentInviteShareCode } from './invite-share-code-state';
+import { withInviteShareCode } from './invite-share-link/invite-share-link';
 import { mediaItemAspectRatio } from './media-zoom-transition';
 import { FREE_RECIPE_LABEL, UNKNOWN_AMOUNT_LABEL, formatUnlockCreditPrice } from './pricing';
 
@@ -393,8 +395,20 @@ export function getWalletCardContent(payout: {
  */
 export const OWN_PROFILE_SHARE_SOURCE: ProfileShareSourceSurface = 'profile';
 
-export function ownProfileShareUrl(siteUrl: string, username: string) {
-  return `${siteUrl.replace(/\/$/, '')}/creators/${encodeURIComponent(username)}?s=${OWN_PROFILE_SHARE_SOURCE}`;
+/**
+ * It also carries the sharer's invite, `&r=<code>`, as every link the app sends
+ * out does (`buildShareUrl` in `viewer-actions.ts`): the signed-in account's by
+ * default.
+ */
+export function ownProfileShareUrl(
+  siteUrl: string,
+  username: string,
+  inviteCode: string | null = currentInviteShareCode(),
+) {
+  return withInviteShareCode(
+    `${siteUrl.replace(/\/$/, '')}/creators/${encodeURIComponent(username)}?s=${OWN_PROFILE_SHARE_SOURCE}`,
+    inviteCode,
+  );
 }
 
 /**

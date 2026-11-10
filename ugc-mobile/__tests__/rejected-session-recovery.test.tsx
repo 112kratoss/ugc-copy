@@ -94,7 +94,10 @@ vi.mock('../lib/persisted-account-state', () => ({
 }));
 vi.mock('../lib/apple-auth', () => ({ signInWithNativeApple: vi.fn() }));
 vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: vi.fn() }));
-vi.mock('../lib/referral-attribution', () => ({ claimPendingReferral: vi.fn(async () => undefined) }));
+vi.mock('../lib/referral-attribution', () => ({
+  claimPendingReferral: vi.fn(async () => undefined),
+  retryPendingReferralVisit: vi.fn(async () => undefined),
+}));
 vi.mock('../lib/notifications', () => ({
   forgetLastPushRegistration: vi.fn(),
   setPushRegistrationSession: vi.fn(),
