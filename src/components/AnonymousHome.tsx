@@ -146,6 +146,8 @@ function AnonymousFooter() {
           <Link href="/ai-video-generator" prefetch={false} className="hover:text-[var(--ui-text-primary)]">AI video</Link>
           <Link href="/ai-motion-transfer" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Motion transfer</Link>
           <Link href="/ai-workflow-builder" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Workflows</Link>
+          {/* The MCP setup page: how Claude, Codex or Cursor is connected to an account. */}
+          <Link href="/developers/mcp" prefetch={false} className="hover:text-[var(--ui-text-primary)]">AI agents</Link>
         </nav>
         <nav className="flex flex-wrap justify-center gap-x-5 gap-y-2" aria-label="Legal and support">
           <Link href="/contact" prefetch={false} className="hover:text-[var(--ui-text-primary)]">Contact</Link>
