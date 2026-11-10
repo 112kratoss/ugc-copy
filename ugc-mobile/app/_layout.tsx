@@ -24,6 +24,7 @@ import { LaunchSplash } from '@/components/launch-splash';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { MediaZoomFlightLayer, noteRootScreenTransitionEnd, noteRootScreenTransitionStart } from '@/components/media-zoom';
 import { ZoomPostChrome, ZoomPostPreparer } from '@/components/zoom-post-chrome';
+import { InviteInstallHandoff } from '@/components/invite-install-handoff';
 import { OverlayHost } from '@/components/overlay-host';
 import { WelcomeCreditsPopup } from '@/components/welcome-credits-popup';
 import { PublicIdentitySheetHost } from '@/components/public-identity-sheet';
@@ -462,6 +463,11 @@ function RootLayoutNav() {
                     sign-up asked for on a creator offers them on the creator,
                     not a top-up (owner, 2026-11-09). */}
                 <WelcomeCreditsPopup />
+                {/* Once per install: the invite the web handed over before the app
+                    was installed (lib/invite-install-handoff.ts). Android reads it
+                    from Play and draws nothing; an iPhone offers Apple's Paste
+                    button when a link is waiting, after the first-open intro. */}
+                <InviteInstallHandoff />
                 {/* Above every screen: the flight a tapped tile's picture makes
                     to the full screen and back, which no screen change can
                     interrupt. Nothing is rendered unless a post is opening or
