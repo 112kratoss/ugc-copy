@@ -36,6 +36,7 @@ vi.mock('@/lib/server-helpers', () => ({
 
 import { deriveAccountIdentityFingerprints } from '@/lib/account-identity-fingerprint';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
+import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { hashReferralDevice } from '@/lib/referral-device';
 import {
   claimReferralResponse,
@@ -144,6 +145,62 @@ describe('referral API route service', () => {
     });
   });
 
+  // It records the calling device, so a loop of made-up installation ids could
+  // fill an account's device list (review of 2026-11-10).
+  it('rate-limits the dashboard per account', async () => {
+    mocks.enforceBackendRateLimit.mockRejectedValueOnce(new BackendRateLimitError({
+      allowed: false,
+      limit: 60,
+      remaining: 0,
+      retryAfterSeconds: 30,
+      resetAt: '2026-11-10T10:10:00.000Z',
+    }));
+    const response = await getReferralOverviewResponse(new Request('https://magicbooklet.com/api/referrals/me', {
+      headers: { Authorization: 'Bearer token' },
+    }));
+
+    expect(response.status).toBe(429);
+    expect(mocks.enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      scope: 'referral-dashboard:read',
+      key: 'user-1',
+    }));
+    expect(mocks.rpc).not.toHaveBeenCalledWith('get_referral_dashboard', expect.anything());
+  });
+
+  // A link an operator switched off is a state, not an outage: the share links
+  // remember "no invite" only on this code, and nothing is logged as an error.
+  it('answers a switched-off link with 409 and its code, logging nothing', async () => {
+    mocks.rpc.mockResolvedValue({ data: { status: 'ready', code, enabled: false }, error: null });
+    const logged: BackendLogRecord[] = [];
+    const restoreLogSink = setBackendLogSink((record) => { logged.push(record); });
+    try {
+      const response = await createReferralLinkResponse(new Request('https://magicbooklet.com/api/referrals/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer token' },
+        body: JSON.stringify({}),
+      }));
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        success: false,
+        error: 'Your invite link is switched off.',
+        code: 'REFERRAL_LINK_DISABLED',
+      });
+    } finally {
+      restoreLogSink();
+    }
+    expect(logged).toEqual([]);
+
+    // An RPC failure is still an outage.
+    mocks.rpc.mockResolvedValue({ data: null, error: { message: 'down' } });
+    const failed = await createReferralLinkResponse(new Request('https://magicbooklet.com/api/referrals/link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer token' },
+      body: JSON.stringify({}),
+    }));
+    expect(failed.status).toBe(503);
+    await expect(failed.json()).resolves.not.toHaveProperty('code');
+  });
+
   it('creates immutable share links with a safe destination', async () => {
     mocks.rpc.mockResolvedValue({ data: { status: 'ready', code, enabled: true }, error: null });
     const response = await createReferralLinkResponse(new Request('https://magicbooklet.com/api/referrals/link', {
@@ -181,6 +238,7 @@ describe('referral API route service', () => {
       success: true,
       visitToken,
       code,
+      preserved: false,
       expiresAt: '2026-08-11T10:00:00.000Z',
       // The same terms /api/referrals/me carries, for a visitor with no account.
       program: { inviterPercent: 5, inviteeFirstPurchasePercent: 5, attributionWindowDays: 30 },
@@ -192,7 +250,34 @@ describe('referral API route service', () => {
       p_channel: 'web',
       p_code: code,
       p_existing_visit_token: null,
+      p_kind: 'invite',
     }));
+  });
+
+  // A post or profile link that carried its sharer's invite says so, and an
+  // invite link the visitor opens after it replaces it (create_referral_visit).
+  it('passes on whether the visit came by a shared link, and says when an earlier invite is kept', async () => {
+    mocks.rpc.mockResolvedValue({
+      data: { status: 'preserved', code: 'earlier12', visit_token: visitToken, expires_at: '2026-08-11T10:00:00.000Z' },
+      error: null,
+    });
+    const response = await recordReferralVisitResponse(new Request('https://magicbooklet.com/api/referrals/visit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, source: 'web', kind: 'shared_link', next: '/showcase/post-1' }),
+    }));
+
+    await expect(response.json()).resolves.toMatchObject({ success: true, code: 'earlier12', preserved: true });
+    expect(mocks.rpc).toHaveBeenCalledWith('create_referral_visit', expect.objectContaining({ p_kind: 'shared_link' }));
+
+    // Anything else is an invite link.
+    mocks.rpc.mockClear();
+    await recordReferralVisitResponse(new Request('https://magicbooklet.com/api/referrals/visit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, source: 'web', kind: 'something-else' }),
+    }));
+    expect(mocks.rpc).toHaveBeenCalledWith('create_referral_visit', expect.objectContaining({ p_kind: 'invite' }));
   });
 
   // 03-7: the landing pages printed 5 % and 30 days of their own. The visit
@@ -327,17 +412,42 @@ describe('referral API route service', () => {
     await expect(response.json()).resolves.toEqual({ success: true, claimed: true });
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
     // The claim carries the account's identity digests: an identity that had an
-    // account before is refused as not new (20261109213008).
+    // account before is refused as not new (20261110070035).
     expect(mocks.getUserById).toHaveBeenCalledWith('user-1');
     expect(mocks.rpc).toHaveBeenCalledWith('claim_referral_visit', {
       p_invitee_user_id: 'user-1',
       p_visit_token: visitToken,
       p_identity_fingerprints: deriveAccountIdentityFingerprints(authUser as never),
+      p_claim_device_hash: null,
     });
     expect(deriveAccountIdentityFingerprints(authUser as never)).toHaveLength(2);
   });
 
-  it('still applies the invite, without the re-registration guard, when the account cannot be read', async () => {
+  // The guard compares the device that claims, not only the one that opened
+  // the link: a visit scripted without a device and claimed on the inviter's
+  // phone is caught there (review of 2026-11-10).
+  it('passes the claiming installation to the guard', async () => {
+    mocks.rpc.mockResolvedValue({ data: { status: 'claimed', attribution_id: 'attribution-1' }, error: null });
+    const installationId = `fid_${'c'.repeat(64)}`;
+    await claimReferralResponse(new Request('https://magicbooklet.com/api/referrals/claim', {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer token',
+        'Content-Type': 'application/json',
+        'x-magicbooklet-installation-id': installationId,
+      },
+      body: JSON.stringify({ visitToken }),
+    }));
+
+    expect(mocks.rpc).toHaveBeenCalledWith('claim_referral_visit', expect.objectContaining({
+      p_claim_device_hash: hashReferralDevice(installationId),
+    }));
+  });
+
+  // Letting the claim through unchecked made the re-registration guard a
+  // single failed read away from nothing (review of 2026-11-10). The claim
+  // waits: the app keeps its invite and asks again, the web keeps its cookie.
+  it('defers the invite when the account cannot be read, and claims nothing', async () => {
     mocks.getUserById.mockResolvedValue({ data: { user: null }, error: { status: 503, message: 'auth unavailable' } });
     mocks.rpc.mockResolvedValue({ data: { status: 'claimed', attribution_id: 'attribution-1' }, error: null });
     const logged: BackendLogRecord[] = [];
@@ -346,20 +456,21 @@ describe('referral API route service', () => {
     try {
       const response = await claimReferralResponse(new Request('https://magicbooklet.com/api/referrals/claim', {
         method: 'POST',
-        headers: { Authorization: 'Bearer token', 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: 'Bearer token',
+          'Content-Type': 'application/json',
+          Cookie: `mb_referral_visit=${visitToken}`,
+        },
         body: JSON.stringify({ visitToken }),
       }));
-      await expect(response.json()).resolves.toEqual({ success: true, claimed: true });
+      expect(response.status).toBe(503);
+      expect(response.headers.get('set-cookie')).toBeNull();
     } finally {
       restoreLogSink();
     }
 
-    expect(logged.map((record) => record.msg)).toEqual(['referral_claim_identity_fingerprints_unavailable']);
-    expect(mocks.rpc).toHaveBeenCalledWith('claim_referral_visit', {
-      p_invitee_user_id: 'user-1',
-      p_visit_token: visitToken,
-      p_identity_fingerprints: null,
-    });
+    expect(logged.map((record) => record.msg)).toEqual(['referral_claim_failed']);
+    expect(mocks.rpc).not.toHaveBeenCalledWith('claim_referral_visit', expect.anything());
   });
 
   it('tells a refused re-registration what a pre-existing account is told', async () => {
@@ -373,9 +484,10 @@ describe('referral API route service', () => {
     await expect(response.json()).resolves.toEqual({ success: true, claimed: false, reason: 'existing_account' });
   });
 
-  // A blocked referral is the operator's to see, not the claimant's: the answer
-  // is the one a clean claim gets.
-  it('answers a claim the guard blocked like any other applied invite', async () => {
+  // A blocked referral is the friend's invite all the same, but no bonus is on
+  // its way: telling them it was applied promised one (review of 2026-11-10).
+  // The reason stays the operator's.
+  it('answers a claim the guard blocked as applied but on hold', async () => {
     mocks.rpc.mockResolvedValue({
       data: { status: 'claimed', attribution_id: 'attribution-1', reward_state: 'blocked' },
       error: null,
@@ -386,7 +498,7 @@ describe('referral API route service', () => {
       body: JSON.stringify({ visitToken }),
     }));
 
-    await expect(response.json()).resolves.toEqual({ success: true, claimed: true });
+    await expect(response.json()).resolves.toEqual({ success: true, claimed: true, held: true });
   });
 
   describe('the device a visit came from', () => {

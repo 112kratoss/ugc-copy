@@ -83,6 +83,18 @@ describe.skipIf(!configPath || !connectionString)('referral intake through actua
       expect((await db.query('select id from public.referral_rewards where beneficiary_user_id=any($1::uuid[])', [users])).rows).toEqual([]);
       expect((await db.query('select id from public.transactions where user_id=any($1::uuid[])', [users])).rows).toEqual([]);
     } finally {
+      // The abuse guard (20261110070035) writes its decisions to an
+      // append-only trail: those rows go first, in one privileged transaction
+      // with triggers off, as in the guard's own suite.
+      await db.query('begin');
+      try {
+        await db.query('set local session_replication_role=replica');
+        await db.query(`delete from public.referral_review_events
+          where attribution_id in (select id from public.referral_attributions where inviter_user_id=any($1::uuid[]) or invitee_user_id=any($1::uuid[]))
+             or referral_code_id in (select id from public.referral_codes where user_id=any($1::uuid[]) or code=any($2::text[]))`, [users, codes]);
+        await db.query('delete from public.referral_account_devices where user_id=any($1::uuid[])', [users]);
+        await db.query('commit');
+      } catch (error) { await db.query('rollback'); throw error; }
       await db.query('delete from public.referral_attributions where inviter_user_id=any($1::uuid[]) or invitee_user_id=any($1::uuid[])', [users]);
       await db.query('delete from public.referral_visits where inviter_user_id=any($1::uuid[])', [users]);
       await db.query('delete from public.referral_codes where user_id=any($1::uuid[]) or code=any($2::text[])', [users, codes]);

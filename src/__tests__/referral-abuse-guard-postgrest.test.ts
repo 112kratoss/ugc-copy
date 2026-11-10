@@ -157,8 +157,8 @@ describe.skipIf(!configPath || !connectionString)('referral abuse guard through 
     const visitToken = await makeAppVisit(code, phone);
     const friend = await makeActor();
 
-    // The claimant is answered as any applied invite is: the block is the operator's to see.
-    expect(await claimAs(friend, visitToken)).toEqual({ success: true, claimed: true });
+    // The claimant hears the invite is on hold, never why: the reason is the operator's to see.
+    expect(await claimAs(friend, visitToken)).toEqual({ success: true, claimed: true, held: true });
     expect(await attributionOf(friend)).toMatchObject({
       reward_state: 'blocked', reward_state_reason: 'same_device_as_inviter', reward_state_source: 'system',
     });
@@ -289,6 +289,76 @@ describe.skipIf(!configPath || !connectionString)('referral abuse guard through 
     });
     // The guard's own block is on the trail and off the operators' feed.
     expect(activity.entries.filter((entry) => entry.kind === 'referral-review' && entry.reviewerId === null)).toEqual([]);
+  });
+
+  // Review of 2026-11-10: the visit's device is whatever the caller sends, so a
+  // visit scripted with none was a way past the guard. The device that claims
+  // is checked too, and a sign-up that names none anywhere is held.
+  it('blocks a device-less visit claimed on the inviter\u2019s phone, and holds one with no device at all', async () => {
+    const phone = installation();
+    const code = await makeCode({ 'x-magicbooklet-installation-id': phone });
+    const scripted = await visit(request('visit', { code, source: 'web' }, null));
+    expect(scripted.status).toBe(200);
+    const scriptedToken = (await scripted.json()).visitToken as string;
+    expect((await db.query('select device_hash from public.referral_visits where public_token=$1', [scriptedToken])).rows[0].device_hash).toBeNull();
+
+    const friend = await makeActor();
+    const claimed = await claim(request('claim', { visitToken: scriptedToken }, friend, { 'x-magicbooklet-installation-id': phone }));
+    expect(await claimed.json()).toEqual({ success: true, claimed: true, held: true });
+    expect(await attributionOf(friend)).toMatchObject({ reward_state: 'blocked', reward_state_reason: 'same_device_as_inviter' });
+
+    const second = await visit(request('visit', { code, source: 'web' }, null));
+    const other = await makeActor();
+    expect(await claimAs(other, (await second.json()).visitToken as string)).toEqual({ success: true, claimed: true, held: true });
+    expect(await attributionOf(other)).toMatchObject({ reward_state: 'blocked', reward_state_reason: 'no_device' });
+  });
+
+  // A switched-off link used to stop new friends only, and every referral it
+  // had made kept paying (review of 2026-11-10).
+  it('holds the referrals of a switched-off link, tells its owner, and pays once it is back on', async () => {
+    const code = await makeCode({ 'x-magicbooklet-installation-id': installation() });
+    const visitToken = await makeAppVisit(code, installation());
+    const friend = await makeActor(), reviewer = await makeActor();
+    expect(await claimAs(friend, visitToken)).toEqual({ success: true, claimed: true });
+    const linkId = (await db.query('select id from public.referral_codes where code=$1', [code])).rows[0].id as string;
+    const decide = (action: 'disable_link' | 'enable_link') => applyReferralReviewAction(admin, {
+      action, subjectId: linkId, reason: 'Repeated self-invites.', reviewerUserId: reviewer.id,
+    });
+
+    expect(await decide('disable_link')).toEqual({ ok: true, status: 'updated' });
+    const answer = await link(request('link', {}, inviter));
+    expect(answer.status).toBe(409);
+    expect(await answer.json()).toMatchObject({ code: 'REFERRAL_LINK_DISABLED' });
+
+    const purchase = await buyStarterPack(friend);
+    expect(await settleCreditPurchaseReferralRewards({
+      adminSupabase: admin, purchaserUserId: friend.id, transactionId: purchase, source: 'razorpay_verify',
+    })).toEqual({ status: 'link_disabled', purchaserBonusCredits: 0, rewarded: false });
+    expect(await hasUnsettledReferralPurchaseTransactions(admin)).toBe(false);
+
+    expect(await decide('enable_link')).toEqual({ ok: true, status: 'updated' });
+    expect(await reconcileReferralPurchaseRewards(admin)).toMatchObject({ processed: 1, settled: 1, failed: 0 });
+    expect([await promotionalCredits(inviter), await promotionalCredits(friend)]).toEqual([25, 25]);
+  });
+
+  // A shared post's visit gives way to an invite link opened after it in the
+  // same browser; the answer names the invite actually kept.
+  it('lets an invite link replace a shared link\u2019s visit, and never the other way round', async () => {
+    const sharerCode = await makeCode();
+    const friendInviter = await makeActor();
+    const inviteCode = await makeCode({}, friendInviter);
+    const shared = await visit(request('visit', { code: sharerCode, source: 'web', kind: 'shared_link' }, null));
+    const sharedToken = (await shared.json()).visitToken as string;
+
+    const invited = await visit(request('visit', { code: inviteCode, source: 'web' }, null, { cookie: `mb_referral_visit=${sharedToken}` }));
+    const invitedBody = await invited.json();
+    expect(invitedBody).toMatchObject({ code: inviteCode, preserved: false });
+    expect(invitedBody.visitToken).not.toBe(sharedToken);
+
+    const sharedAgain = await visit(request('visit', { code: sharerCode, source: 'web', kind: 'shared_link' }, null, {
+      cookie: `mb_referral_visit=${invitedBody.visitToken}`,
+    }));
+    expect(await sharedAgain.json()).toMatchObject({ code: inviteCode, preserved: true, visitToken: invitedBody.visitToken });
   });
 
   it('switches an inviter’s link off for new visits, and on again', async () => {

@@ -70,6 +70,9 @@ describe('admin referral review route', () => {
 
   it.each([
     ['a body that is not JSON', '{', true, 'Invalid request body.'],
+    // JSON that parses but has no fields to read: it crashed the route with an unlogged 500.
+    ['a JSON null body', 'null', true, 'Invalid request body.'],
+    ['a JSON array body', '[]', true, 'Invalid request body.'],
     ['an action the program does not know', { action: 'pay', attributionId: ATTRIBUTION, reason: 'A reason.' }, false, 'Unsupported referral action.'],
     ['a block with no referral', { action: 'block', reason: 'A reason.' }, false, 'A referral id is required.'],
     ['a block that names a link instead', { action: 'block', referralCodeId: LINK, reason: 'A reason.' }, false, 'A referral id is required.'],

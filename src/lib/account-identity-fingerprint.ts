@@ -30,7 +30,7 @@ export const ACCOUNT_IDENTITY_FINGERPRINT_TABLE = 'credit_grant_identity_fingerp
 
 /**
  * Digests of the identities of deleted accounts, whatever they had claimed
- * (20261109213008). Invite & Earn is for new accounts, and an account deleted
+ * (20261110070035). Invite & Earn is for new accounts, and an account deleted
  * and opened again is not one: `claim_referral_visit` refuses a claim whose
  * digest was recorded here, or in the claim ledger above, before the claiming
  * account existed.
@@ -153,12 +153,16 @@ function isMissingAuthUserError(error: unknown) {
 export async function loadAccountIdentityFingerprints(
   admin: SupabaseClient,
   userId: string,
+  derive: typeof deriveAccountIdentityFingerprints = deriveAccountIdentityFingerprints,
 ): Promise<string[]> {
+  // One loader for both identity checks (the welcome claim and the referral
+  // claim), with one failure policy: an unreadable identity throws and the
+  // caller defers, never treats the account as new.
   const { data, error } = await admin.auth.admin.getUserById(userId);
   if (error || !data?.user) {
     throw error ?? new Error(`Could not load auth user ${userId} for identity fingerprinting.`);
   }
-  return deriveAccountIdentityFingerprints(data.user);
+  return derive(data.user);
 }
 
 /**

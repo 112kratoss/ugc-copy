@@ -47,7 +47,10 @@ export async function postAdminReferralReview(request: Request): Promise<NextRes
 
   let body: ReferralReviewBody;
   try {
-    body = await request.json();
+    const parsed: unknown = await request.json();
+    // A JSON `null`, array or number parses fine and has no fields to read.
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+    body = parsed as ReferralReviewBody;
   } catch {
     return NextResponse.json({ error: 'Invalid request body.' }, { status: 400, headers });
   }

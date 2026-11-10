@@ -194,7 +194,7 @@ export default function PrivacyPolicy() {
                     <section>
                         <h2 className="text-2xl font-semibold text-white mb-4">8. Cookies</h2>
                         <p className="mb-4">
-                            We use essential cookies to maintain your session and preferences. When you open a referral link, we also use an opaque first-party referral cookie for up to 30 days so a new-account signup can be attributed to the correct inviter. An opaque first-party device identifier cookie keeps your feed consistent between visits and lets us tell when an invite is opened on the inviter&apos;s own device.
+                            We use essential cookies to maintain your session and preferences. When you open a referral link, we also use an opaque first-party referral cookie for up to 30 days so a new-account signup can be attributed to the correct inviter. An opaque first-party device identifier cookie keeps your feed consistent between visits and lets us tell when an invite is opened, or the invited account signed in to, on the inviter&apos;s own device.
                         </p>
                         <p>
                             Referral visit and fraud-prevention signals are retained in identifiable or pseudonymous form only as long as needed to operate and protect the program. Short-lived visit signals are normally removed or aggregated after 90 days, while purchase and reward records may be retained for account, financial, dispute, and legal obligations. You can control cookies through your browser settings, although blocking the referral cookie prevents automatic attribution.

@@ -5,12 +5,13 @@ import { createHash } from 'node:crypto';
 import type { NextResponse } from 'next/server';
 
 import {
-  FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
   FEED_ANONYMOUS_COOKIE_NAME,
   FEED_INSTALLATION_ID_HEADER,
   createFeedInstallationId,
   isSameSiteBrowserFetch,
   isValidFeedInstallationId,
+  readRequestCookie,
+  setFeedAnonymousCookie,
 } from '@/lib/showcase-feed-identity';
 
 /**
@@ -27,7 +28,7 @@ import {
  * The digest takes no secret. The id is 256 random bits, so nothing can be
  * guessed back from it, and `referral_device_hash()` in the database computes
  * the same value to compare a visit with the installations `onboarding_events`
- * holds for an account (20261109213008). `referral-device.test.ts` and
+ * holds for an account (20261110070035). `referral-device.test.ts` and
  * `referral_abuse_guard.test.sql` pin both sides to one vector.
  */
 const REFERRAL_DEVICE_HASH_PREFIX = 'magicbooklet-referral-device-v1:';
@@ -45,64 +46,56 @@ export function hashReferralDevice(installationId: string): string {
     .digest('hex');
 }
 
-function readCookie(request: Request, name: string): string | null {
-  for (const pair of (request.headers.get('cookie') ?? '').split(';')) {
-    const separatorIndex = pair.indexOf('=');
-    if (separatorIndex < 0) continue;
-    if (pair.slice(0, separatorIndex).trim() !== name) continue;
-    try {
-      return decodeURIComponent(pair.slice(separatorIndex + 1).trim());
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
 /**
- * Reads the request's device: the app's installation id when it sent one, else
- * the browser's feed cookie. A browser that has no cookie yet is given one, but
- * only on a fetch from a page of this site: a caller that keeps no cookies (a
- * script, a crawler, an app build that sends no id) would otherwise look like a
- * new device on every request.
+ * Reads the request's device.
+ *
+ * A browser is known by the feed cookie this site set (httpOnly, so no page
+ * script can write it), never by an id it puts in a header or a body: any page
+ * can send those, so a browser could name a made-up device and slip past the
+ * guard (review of 2026-11-10). A browser with no cookie yet is given one, but
+ * only on a fetch from a page of this site.
+ *
+ * Anything else is the app, which names its installation in a header and, on
+ * a visit, in the body (`allowBodyInstallationId`). A caller that names
+ * nothing at all gets no device: the guard holds a claim whose visit and claim
+ * both came without one.
  */
 export function resolveReferralDevice(
   request: Request,
-  options: { bodyInstallationId?: unknown } = {},
+  options: { bodyInstallationId?: unknown; allowBodyInstallationId?: boolean } = {},
 ): ReferralDevice {
+  const cookieId = readRequestCookie(request, FEED_ANONYMOUS_COOKIE_NAME);
+  if (request.headers.has('sec-fetch-site')) {
+    if (isValidFeedInstallationId(cookieId)) {
+      return { deviceHash: hashReferralDevice(cookieId), cookieValueToSet: null };
+    }
+    if (!isSameSiteBrowserFetch(request)) {
+      return { deviceHash: null, cookieValueToSet: null };
+    }
+    const generatedId = createFeedInstallationId();
+    return { deviceHash: hashReferralDevice(generatedId), cookieValueToSet: generatedId };
+  }
+
   const headerId = request.headers.get(FEED_INSTALLATION_ID_HEADER);
   if (isValidFeedInstallationId(headerId)) {
     return { deviceHash: hashReferralDevice(headerId), cookieValueToSet: null };
   }
 
-  const bodyId = typeof options.bodyInstallationId === 'string' ? options.bodyInstallationId : null;
+  const bodyId = options.allowBodyInstallationId && typeof options.bodyInstallationId === 'string'
+    ? options.bodyInstallationId
+    : null;
   if (isValidFeedInstallationId(bodyId)) {
     return { deviceHash: hashReferralDevice(bodyId), cookieValueToSet: null };
   }
 
-  const cookieId = readCookie(request, FEED_ANONYMOUS_COOKIE_NAME);
   if (isValidFeedInstallationId(cookieId)) {
     return { deviceHash: hashReferralDevice(cookieId), cookieValueToSet: null };
   }
 
-  if (!isSameSiteBrowserFetch(request)) {
-    return { deviceHash: null, cookieValueToSet: null };
-  }
-
-  const generatedId = createFeedInstallationId();
-  return { deviceHash: hashReferralDevice(generatedId), cookieValueToSet: generatedId };
+  return { deviceHash: null, cookieValueToSet: null };
 }
 
 /** Sets the feed cookie exactly as the feed route does, when one was minted. */
 export function applyReferralDeviceCookie(response: NextResponse, device: ReferralDevice): void {
-  if (!device.cookieValueToSet) return;
-  response.cookies.set({
-    name: FEED_ANONYMOUS_COOKIE_NAME,
-    value: device.cookieValueToSet,
-    httpOnly: true,
-    secure: true,
-    sameSite: 'lax',
-    path: '/',
-    maxAge: FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
-  });
+  if (device.cookieValueToSet) setFeedAnonymousCookie(response, device.cookieValueToSet);
 }

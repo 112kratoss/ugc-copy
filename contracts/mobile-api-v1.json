@@ -2968,6 +2968,7 @@
         "success": true,
         "visitToken": "123e4567-e89b-42d3-a456-426614174000",
         "code": "creator1",
+        "preserved": false,
         "expiresAt": "2026-11-14T10:00:00.000Z",
         "program": {
           "inviterPercent": 5,
@@ -2980,6 +2981,7 @@
           "success": true,
           "visitToken": "123e4567-e89b-42d3-a456-426614174000",
           "code": "creator1",
+          "preserved": false,
           "expiresAt": "2026-11-14T10:00:00.000Z",
           "program": null
         }

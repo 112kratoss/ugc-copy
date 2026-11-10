@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { readBoundedAdminRows } from '@/lib/admin-bounded-query';
 import { runPagedQuery } from '@/lib/admin-paged-query';
 
 /**
@@ -15,8 +16,8 @@ import { runPagedQuery } from '@/lib/admin-paged-query';
 
 export const ADMIN_REFERRALS_PAGE_SIZE = 25;
 
-/** A page's purchase events and rewards are read whole, up to this many rows. */
-const DETAIL_ROW_LIMIT = 2000;
+/** A page's purchase events and rewards are read in pages, up to this many rows each. */
+const DETAIL_ROW_LIMIT = 5000;
 
 export type AdminReferralFilter = 'all' | 'blocked' | 'flagged';
 
@@ -81,6 +82,7 @@ async function countOf(query: PromiseLike<{ count: number | null; error: unknown
 }
 
 const NO_ROWS = { data: [], error: null };
+const NO_DETAIL = Promise.resolve({ rows: [] as Array<Record<string, unknown>>, truncated: false });
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null;
@@ -137,26 +139,37 @@ export async function getAdminReferralOverview(
     inviterIds.length === 0
       ? NO_ROWS
       : client.from('referral_codes').select('id, user_id, is_enabled, disabled_reason').in('user_id', inviterIds),
+    // PostgREST answers at most 1000 rows a request, so the details of a busy
+    // page are read in pages up to a budget; past it the totals are a floor and
+    // the page says so (`detailTruncated`).
     attributionIds.length === 0
-      ? NO_ROWS
-      : client
-          .from('referral_purchase_events')
-          .select('attribution_id')
-          .in('attribution_id', attributionIds)
-          .limit(DETAIL_ROW_LIMIT),
+      ? NO_DETAIL
+      : readBoundedAdminRows(
+          (from, to) => client
+            .from('referral_purchase_events')
+            .select('attribution_id, transaction_id', { count: 'exact' })
+            .in('attribution_id', attributionIds)
+            .order('transaction_id', { ascending: true })
+            .range(from, to),
+          DETAIL_ROW_LIMIT,
+        ),
     attributionIds.length === 0
-      ? NO_ROWS
-      : client
-          .from('referral_rewards')
-          .select('attribution_id, active_credits')
-          .in('attribution_id', attributionIds)
-          .limit(DETAIL_ROW_LIMIT),
+      ? NO_DETAIL
+      : readBoundedAdminRows(
+          (from, to) => client
+            .from('referral_rewards')
+            .select('id, attribution_id, active_credits', { count: 'exact' })
+            .in('attribution_id', attributionIds)
+            .order('id', { ascending: true })
+            .range(from, to),
+          DETAIL_ROW_LIMIT,
+        ),
   ]);
   // A failed read is unknown support data, not an empty history.
   const profileRows = rows(profileResult);
   const codeRows = rows(codeResult);
-  const purchaseRows = rows(purchaseResult);
-  const rewardRows = rows(rewardResult);
+  const purchaseRows = purchaseResult.rows;
+  const rewardRows = rewardResult.rows;
 
   const profiles = new Map(profileRows.map((row) => [String(row.id), row]));
   const codes = new Map(codeRows.map((row) => [String(row.user_id), row]));
@@ -214,7 +227,7 @@ export async function getAdminReferralOverview(
     total: page.total,
     offset: page.offset,
     pageSize: ADMIN_REFERRALS_PAGE_SIZE,
-    detailTruncated: purchaseRows.length >= DETAIL_ROW_LIMIT || rewardRows.length >= DETAIL_ROW_LIMIT,
+    detailTruncated: purchaseResult.truncated || rewardResult.truncated,
   };
 }
 

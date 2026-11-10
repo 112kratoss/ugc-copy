@@ -131,7 +131,7 @@ describe('operational data retention', () => {
       profileShareEventsDeleted: 6,
       abandonedFreeUnlockOrdersDeleted: 2,
       accountMergeTicketsDeleted: 0,
-      // The Privacy Policy's 90 days for referral visit signals (20261109213008).
+      // The Privacy Policy's 90 days for referral visit signals (20261110070035).
       referralRiskSignalsCleared: 5,
       uploadByteReservationsDeleted: 0,
       supplementaryBatchLimitReached: false,

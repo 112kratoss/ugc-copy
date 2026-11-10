@@ -198,7 +198,7 @@ describe('recordClaimedIdentityFingerprints', () => {
 
 // Invite & Earn is for new accounts. A sign-in that had an account before is
 // not one, whatever that account had claimed, so its digests are kept when the
-// account goes (20261109213008) and the referral claim is given the new
+// account goes (20261110070035) and the referral claim is given the new
 // account's to compare.
 describe('the deleted-identity record', () => {
   function adminStub({

@@ -27,8 +27,32 @@ describe('the device a referral request came from', () => {
     )).toEqual({ deviceHash: FID_HASH, cookieValueToSet: null });
   });
 
-  it('reads the id an app visit carries in its body', () => {
+  it('reads the id an app visit carries in its body, and only where the caller allows it', () => {
+    expect(resolveReferralDevice(request(), { bodyInstallationId: FID, allowBodyInstallationId: true }))
+      .toEqual({ deviceHash: FID_HASH, cookieValueToSet: null });
+    // A web visit's body is anyone's to write.
     expect(resolveReferralDevice(request(), { bodyInstallationId: FID }))
+      .toEqual({ deviceHash: null, cookieValueToSet: null });
+  });
+
+  // Any page can send a header or a body; only this site can set the httpOnly
+  // feed cookie. A browser naming a made-up device was a way past the guard
+  // (review of 2026-11-10).
+  it('knows a browser by its feed cookie alone, whatever id it sends', () => {
+    const forged = { 'sec-fetch-site': 'same-origin', 'x-magicbooklet-installation-id': OTHER_FID };
+    expect(resolveReferralDevice(
+      request({ ...forged, cookie: `__Host-magicbooklet-feed-id=${FID}` }),
+      { bodyInstallationId: OTHER_FID, allowBodyInstallationId: true },
+    )).toEqual({ deviceHash: FID_HASH, cookieValueToSet: null });
+
+    // With no cookie yet it is given one, never the id it named.
+    const minted = resolveReferralDevice(request(forged), { bodyInstallationId: OTHER_FID, allowBodyInstallationId: true });
+    expect(minted.cookieValueToSet).toMatch(/^fid_[a-f0-9]{64}$/);
+    expect(minted.cookieValueToSet).not.toBe(OTHER_FID);
+    expect(minted.deviceHash).toBe(hashReferralDevice(minted.cookieValueToSet!));
+
+    // A sign-in redirect from the identity provider reads the cookie and mints none.
+    expect(resolveReferralDevice(request({ 'sec-fetch-site': 'cross-site', cookie: `__Host-magicbooklet-feed-id=${FID}` })))
       .toEqual({ deviceHash: FID_HASH, cookieValueToSet: null });
   });
 

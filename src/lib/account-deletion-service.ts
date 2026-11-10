@@ -710,7 +710,7 @@ export async function finishInitialAccountDeletion({
   // throws and leaves the job retryable rather than deleting Auth unrecorded.
   await recordClaimedFingerprints(admin, manifest.ownerUserIds);
   // So does the record that this sign-in had an account: Invite & Earn is for
-  // new accounts, and one deleted and opened again is not new (20261109213008).
+  // new accounts, and one deleted and opened again is not new (20261110070035).
   await recordDeletedIdentityFingerprints(admin, userId);
   // The wallet ledger follows the same rule, as late as it can be written.
   await recordWalletBalances(admin, userId, manifest.ownerUserIds);

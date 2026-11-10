@@ -119,6 +119,37 @@ describe('the admin referrals overview', () => {
     expect(overview).toMatchObject({ filter: 'all', total: 3, offset: 0, pageSize: 25, detailTruncated: false });
   });
 
+  // PostgREST answers at most 1000 rows a request, so the old single read of
+  // up to 2000 could never see its own limit (review of 2026-11-10). The
+  // details are read in pages, and a page past the budget is flagged.
+  it('reads a busy page\'s purchases in pages and says when its totals are a floor', async () => {
+    const purchases = Array.from({ length: 5001 }, (_, index) => ({
+      transaction_id: `transaction-${String(index).padStart(5, '0')}`,
+      attribution_id: 'attribution-1',
+    }));
+    const pageWindows: Array<[number, number]> = [];
+    const { supabase } = client({ ...TABLES, referral_purchase_events: purchases });
+    const from = supabase.from.bind(supabase);
+    (supabase as unknown as { from: typeof from }).from = ((table: string) => {
+      const builder = from(table) as unknown as { range: (start: number, end: number) => unknown };
+      if (table !== 'referral_purchase_events') return builder;
+      const range = builder.range.bind(builder);
+      builder.range = (start: number, end: number) => {
+        pageWindows.push([start, end]);
+        return range(start, end);
+      };
+      return builder;
+    }) as unknown as typeof from;
+
+    const overview = await getAdminReferralOverview(supabase);
+
+    // No request asks for more than PostgREST returns.
+    expect(pageWindows.every(([start, end]) => end - start + 1 <= 1000)).toBe(true);
+    expect(pageWindows).toHaveLength(5);
+    expect(overview.detailTruncated).toBe(true);
+    expect(overview.referrals.find((referral) => referral.id === 'attribution-1')?.settledPurchases).toBe(5000);
+  });
+
   it('joins each referral to its two accounts, its inviter’s link and what it has paid', async () => {
     const overview = await getAdminReferralOverview(client().supabase);
 

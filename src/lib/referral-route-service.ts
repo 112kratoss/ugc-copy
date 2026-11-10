@@ -36,6 +36,8 @@ type JsonRecord = Record<string, unknown>;
 export type ReferralClaimOutcome = {
   claimed: boolean;
   clearCookie: boolean;
+  /** Claimed, but the abuse guard holds its rewards for an operator. */
+  held?: boolean;
   reason?: string;
 };
 
@@ -126,12 +128,19 @@ export function resetReferralProgramTermsCacheForTests(): void {
   pendingReferralProgramTerms = null;
 }
 
-function referralErrorResponse(request: Request, message: string, status: number) {
+function referralErrorResponse(request: Request, message: string, status: number, code?: string) {
   return applyPrivateNoStoreApiResponseHeaders(
-    NextResponse.json({ success: false, error: message }, { status }),
+    NextResponse.json({ success: false, error: message, ...(code ? { code } : {}) }, { status }),
     request,
   );
 }
+
+/**
+ * An operator switched the account's link off (`/admin/referrals`). A state,
+ * not an outage: 409 with this code, which the share links read as "this
+ * account has no invite to carry", and no error log.
+ */
+export const REFERRAL_LINK_DISABLED_CODE = 'REFERRAL_LINK_DISABLED';
 
 function referralJsonResponse(request: Request, body: unknown, status = 200) {
   return applyPrivateNoStoreApiResponseHeaders(
@@ -200,7 +209,11 @@ function isCrossSiteBrowserRequest(request: Request): boolean {
  * fails or delays the request it rides on: a device that was not recorded only
  * leaves the guard with what it knew before.
  */
-async function recordReferralAccountDevice(
+/**
+ * Records the device an account is using, for the abuse guard. Best-effort:
+ * a referral request, or a sign-in, never waits on or fails because of it.
+ */
+export async function recordReferralAccountDevice(
   adminSupabase: SupabaseClient,
   request: Request,
   userId: string,
@@ -278,6 +291,16 @@ export async function getReferralOverviewResponse(request: Request) {
   if (!userId) return referralErrorResponse(request, 'Unauthorized', 401);
 
   const adminSupabase = createServiceClient();
+  // It records the calling device, so an unbounded loop of made-up ids would
+  // fill the account's device list.
+  const rateLimit = await enforceReferralRateLimit(adminSupabase, {
+    scope: 'referral-dashboard:read',
+    key: userId,
+    limit: 60,
+    windowSeconds: 10 * 60,
+  });
+  if (rateLimit) return rateLimitResponse(request, rateLimit);
+
   const device = resolveReferralDevice(request);
   const [{ data, error }] = await Promise.all([
     adminSupabase.rpc('get_referral_dashboard', { p_user_id: userId }),
@@ -320,6 +343,9 @@ export async function createReferralLinkResponse(request: Request) {
     recordReferralAccountDevice(adminSupabase, request, userId, device),
   ]);
   const code = isRecord(data) ? normalizeReferralCode(data.code) : null;
+  if (!error && code && isRecord(data) && data.enabled === false) {
+    return referralErrorResponse(request, 'Your invite link is switched off.', 409, REFERRAL_LINK_DISABLED_CODE);
+  }
   if (error || !code || data?.enabled !== true) {
     logBackendError('referral_code_creation_failed', { error: error });
     return referralErrorResponse(request, 'Your referral link is unavailable.', 503);
@@ -345,6 +371,9 @@ export async function recordReferralVisitResponse(request: Request) {
   const code = normalizeReferralCode(body.code);
   const source = body.source === 'mobile' ? 'native' : body.source === 'web' ? 'web' : null;
   if (!code || !source) return referralErrorResponse(request, 'Invalid referral code.', 400);
+  // A post or profile link that carried its sharer's invite, or an invite link.
+  // An invite link replaces an unclaimed visit a shared link left.
+  const kind = body.kind === 'shared_link' ? 'shared_link' : 'invite';
 
   const risk = getReferralRiskContext(request.headers);
   const adminSupabase = createServiceClient();
@@ -365,7 +394,10 @@ export async function recordReferralVisitResponse(request: Request) {
     : risk.userAgentHash;
   // The device that opened the link: what the abuse guard compares with its
   // inviter's devices when the visit is claimed.
-  const device = resolveReferralDevice(request, { bodyInstallationId: body.installationId });
+  const device = resolveReferralDevice(request, {
+    bodyInstallationId: body.installationId,
+    allowBodyInstallationId: source === 'native',
+  });
   const { data, error } = await adminSupabase.rpc('create_referral_visit', {
     p_code: code,
     p_channel: source,
@@ -374,6 +406,7 @@ export async function recordReferralVisitResponse(request: Request) {
     p_ip_hash: risk.ipHash,
     p_user_agent_hash: userAgentHash,
     p_device_hash: device.deviceHash,
+    p_kind: kind,
   });
 
   if (error || !isRecord(data)) {
@@ -399,6 +432,9 @@ export async function recordReferralVisitResponse(request: Request) {
     success: true,
     visitToken,
     code: responseCode,
+    // True when an earlier invite this browser opened is the one kept, so the
+    // landing can say whose invite it is rather than "saved".
+    preserved: status === 'preserved',
     expiresAt,
     // The landing pages read the offer from here rather than printing their own
     // numbers (03-7).
@@ -419,44 +455,37 @@ export async function recordReferralVisitResponse(request: Request) {
   return response;
 }
 
-/**
- * The claiming account's identity digests, for the re-registration guard in
- * `claim_referral_visit`. Null when they cannot be read: the claim then runs
- * without that one guard rather than not at all, because an invite that fails
- * to apply costs a real friend their bonus and the guard only stops an account
- * deleted and opened again.
- */
-async function loadClaimIdentityFingerprints(
-  adminSupabase: SupabaseClient,
-  userId: string,
-): Promise<string[] | null> {
-  try {
-    return await loadAccountIdentityFingerprints(adminSupabase, userId);
-  } catch (error) {
-    logBackendError('referral_claim_identity_fingerprints_unavailable', { error });
-    return null;
-  }
-}
-
 export async function claimReferralForUser({
   adminSupabase,
   userId,
   visitToken,
+  claimDeviceHash = null,
 }: {
   adminSupabase: SupabaseClient;
   userId: string;
   visitToken: string;
+  /** The device the claim came from (`resolveReferralDevice`), when it named one. */
+  claimDeviceHash?: string | null;
 }): Promise<ReferralClaimOutcome> {
+  // The re-registration guard needs the account's identity digests. When they
+  // cannot be read the claim waits (this throws; callers keep the invite for
+  // the next try) rather than letting an account through unchecked.
+  const identityFingerprints = await loadAccountIdentityFingerprints(adminSupabase, userId);
   const { data, error } = await adminSupabase.rpc('claim_referral_visit', {
     p_invitee_user_id: userId,
     p_visit_token: visitToken,
-    p_identity_fingerprints: await loadClaimIdentityFingerprints(adminSupabase, userId),
+    p_identity_fingerprints: identityFingerprints,
+    p_claim_device_hash: claimDeviceHash,
   });
   if (error || !isRecord(data) || typeof data.status !== 'string') {
     throw error || new Error('Referral claim RPC returned an invalid response');
   }
 
-  if (data.status === 'claimed') return { claimed: true, clearCookie: true };
+  if (data.status === 'claimed') {
+    // A referral the guard recorded as blocked is the friend's invite all the
+    // same, but its bonus is not on its way: they are told it is on hold.
+    return { claimed: true, clearCookie: true, held: data.reward_state === 'blocked' };
+  }
   if (data.status === 'profile_not_found') return { claimed: false, clearCookie: false, reason: data.status };
   return { claimed: false, clearCookie: true, reason: data.status };
 }
@@ -495,10 +524,17 @@ export async function claimReferralResponse(request: Request) {
   if (rateLimit) return rateLimitResponse(request, rateLimit);
 
   try {
-    const outcome = await claimReferralForUser({ adminSupabase, userId, visitToken });
+    const device = resolveReferralDevice(request);
+    const outcome = await claimReferralForUser({
+      adminSupabase,
+      userId,
+      visitToken,
+      claimDeviceHash: device.deviceHash,
+    });
     const response = referralJsonResponse(request, {
       success: true,
       claimed: outcome.claimed,
+      ...(outcome.held ? { held: true } : {}),
       ...(outcome.reason ? { reason: outcome.reason } : {}),
     });
     if (outcome.clearCookie) {

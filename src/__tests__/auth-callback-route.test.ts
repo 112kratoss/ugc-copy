@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { hashReferralDevice } from '@/lib/referral-device';
+
 const mocks = vi.hoisted(() => ({
   createAuthRouteClient: vi.fn(),
   resolveServerPostAuthPath: vi.fn(),
@@ -8,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   claimReferralForUser: vi.fn(),
   clearReferralVisitCookie: vi.fn(),
+  recordReferralAccountDevice: vi.fn(),
   postOnboardingEventRouteResponse: vi.fn(),
   after: vi.fn(),
   logBackendError: vi.fn(),
@@ -21,6 +24,7 @@ vi.mock('@/lib/auth-onboarding-server', () => ({
 vi.mock('@/lib/referral-route-service', () => ({
   claimReferralForUser: (...args: unknown[]) => mocks.claimReferralForUser(...args),
   clearReferralVisitCookie: (...args: unknown[]) => mocks.clearReferralVisitCookie(...args),
+  recordReferralAccountDevice: (...args: unknown[]) => mocks.recordReferralAccountDevice(...args),
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
@@ -74,6 +78,7 @@ function resetMocks() {
   mocks.getSession.mockResolvedValue({ data: { session: { access_token: 'session-access-token' } } });
   mocks.exchangeCodeForSession.mockResolvedValue({ error: null });
   mocks.claimReferralForUser.mockResolvedValue({ claimed: true, clearCookie: true });
+  mocks.recordReferralAccountDevice.mockResolvedValue(undefined);
   mocks.postOnboardingEventRouteResponse.mockResolvedValue(new Response('{}'));
 }
 
@@ -122,9 +127,54 @@ describe('/auth/callback', () => {
       adminSupabase: { service: true },
       userId: 'user-1',
       visitToken: VISIT_TOKEN,
+      claimDeviceHash: null,
     });
     expect(response.headers.get('location')).toBe('https://magicbooklet.com/create/video?model=kling');
     expect(mocks.clearReferralVisitCookie).toHaveBeenCalledWith(response, true);
+  });
+
+  // A friend who signed up elsewhere and then signs in on the inviter's
+  // browser shows it at the next purchase (review of 2026-11-10): every
+  // sign-in records its browser, from the feed cookie the browser holds, and
+  // the claim compares the browser it was made in.
+  it('records the browser a sign-in came from and claims the invite with it', async () => {
+    const { GET } = await import('@/app/auth/callback/route');
+    const feedId = `fid_${'d'.repeat(64)}`;
+    await GET(new Request('https://magicbooklet.com/auth/callback?code=auth-code&next=%2Fcreate', {
+      headers: {
+        // The identity provider's redirect: a cross-site navigation, which still
+        // carries the site's Lax cookies.
+        'sec-fetch-site': 'cross-site',
+        cookie: `__Host-magicbooklet-feed-id=${feedId}; mb_referral_visit=${VISIT_TOKEN}`,
+      },
+    }));
+
+    const device = { deviceHash: hashReferralDevice(feedId), cookieValueToSet: null };
+    expect(mocks.recordReferralAccountDevice).toHaveBeenCalledWith(
+      { service: true },
+      expect.any(Request),
+      'user-1',
+      device,
+    );
+    expect(mocks.claimReferralForUser).toHaveBeenCalledWith(expect.objectContaining({
+      claimDeviceHash: device.deviceHash,
+    }));
+  });
+
+  it('records the browser of a sign-in that carries no invite too', async () => {
+    const { GET } = await import('@/app/auth/callback/route');
+    const feedId = `fid_${'e'.repeat(64)}`;
+    await GET(new Request('https://magicbooklet.com/auth/callback?code=auth-code&next=%2Fcreate', {
+      headers: { 'sec-fetch-site': 'cross-site', cookie: `__Host-magicbooklet-feed-id=${feedId}` },
+    }));
+
+    expect(mocks.claimReferralForUser).not.toHaveBeenCalled();
+    expect(mocks.recordReferralAccountDevice).toHaveBeenCalledWith(
+      { service: true },
+      expect.any(Request),
+      'user-1',
+      { deviceHash: hashReferralDevice(feedId), cookieValueToSet: null },
+    );
   });
 
   it('tells a new account its invite was applied on the page its creator-name step opens', async () => {

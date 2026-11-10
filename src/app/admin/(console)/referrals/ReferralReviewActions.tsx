@@ -112,6 +112,9 @@ export function ReferralReviewActions({
             disabled={pending !== null || !hasReason}
             onClick={() => submit(linkAction)}
             className="ui-button ui-button-secondary ui-focus-ring"
+            title={linkAction === 'disable_link'
+              ? 'Stops new invites and holds the rewards of every referral this link made'
+              : 'Takes new invites again; held rewards are paid within the hour'}
           >
             {linkAction === 'disable_link'
               ? <Link2Off className="h-3.5 w-3.5" aria-hidden />
