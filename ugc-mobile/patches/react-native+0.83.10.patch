@@ -140,6 +140,104 @@ index 1e773ba..9b55ff4 100644
      )
    }
 
+diff --git a/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/scroll/ReactHorizontalScrollView.java b/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/scroll/ReactHorizontalScrollView.java
+index f4896af..d792fdb 100644
+--- a/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/scroll/ReactHorizontalScrollView.java
++++ b/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/scroll/ReactHorizontalScrollView.java
+@@ -1622,12 +1622,42 @@ public class ReactHorizontalScrollView extends HorizontalScrollView
+     // does not work in RTL.
+     if (v.getLayoutDirection() == LAYOUT_DIRECTION_RTL) {
+       adjustPositionForContentChangeRTL(left, right, oldLeft, oldRight);
+-    } else if (mMaintainVisibleContentPositionHelper != null) {
+-      mMaintainVisibleContentPositionHelper.updateScrollPosition();
++    } else {
++      if (mMaintainVisibleContentPositionHelper != null) {
++        mMaintainVisibleContentPositionHelper.updateScrollPosition();
++      }
++      if (isShown()) {
++        clampScrollXToContent();
++      }
+     }
+     ReactScrollViewHelper.emitLayoutChangeEvent(this);
+   }
+ 
++  /**
++   * Magicbooklet patch: the horizontal view never pulled its offset back when its content shrank,
++   * so a row whose items were taken away (a blocked creator's posts) could sit scrolled past its
++   * end, drawing nothing. Left to right only: right-to-left keeps its offset from the right edge
++   * in adjustPositionForContentChangeRTL.
++   */
++  private void clampScrollXToContent() {
++    if (!isContentReady() || getLayoutDirection() == LAYOUT_DIRECTION_RTL) {
++      return;
++    }
++    int maxScrollX = Math.max(0, computeHorizontalScrollRange() - getWidth());
++    if (getScrollX() > maxScrollX) {
++      scrollTo(maxScrollX, getScrollY());
++    }
++  }
++
++  @Override
++  public void onVisibilityAggregated(boolean isVisible) {
++    super.onVisibilityAggregated(isVisible);
++    // Runs when this view or a parent becomes visible again and as it is attached to a window.
++    if (isVisible) {
++      clampScrollXToContent();
++    }
++  }
++
+   /**
+    * If we are in the middle of a fling animation from the user removing their finger (OverScroller
+    * is in `FLING_MODE`), recreate the existing fling animation since it was calculated against
+diff --git a/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/scroll/ReactScrollView.java b/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/scroll/ReactScrollView.java
+index b0f6203..61124fd 100644
+--- a/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/scroll/ReactScrollView.java
++++ b/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/scroll/ReactScrollView.java
+@@ -1425,17 +1425,38 @@ public class ReactScrollView extends ScrollView
+       mMaintainVisibleContentPositionHelper.updateScrollPosition();
+     }
+ 
+-    if (isShown() && isContentReady()) {
+-      int currentScrollY = getScrollY();
+-      int maxScrollY = getMaxScrollY();
+-      if (currentScrollY > maxScrollY) {
+-        scrollTo(getScrollX(), maxScrollY);
+-      }
++    if (isShown()) {
++      clampScrollYToContent();
+     }
+ 
+     ReactScrollViewHelper.emitLayoutChangeEvent(this);
+   }
+ 
++  /**
++   * Magicbooklet patch: pulls the offset back inside the content. onLayoutChange clamps only while
++   * the view is shown, so content that shrank while this view sat under another screen (a
++   * native-stack push, or a display:none parent) left it scrolled past its end, drawing nothing,
++   * once it came back: its own frame had not changed, so nothing laid it out again.
++   */
++  private void clampScrollYToContent() {
++    if (!isContentReady()) {
++      return;
++    }
++    int maxScrollY = getMaxScrollY();
++    if (getScrollY() > maxScrollY) {
++      scrollTo(getScrollX(), maxScrollY);
++    }
++  }
++
++  @Override
++  public void onVisibilityAggregated(boolean isVisible) {
++    super.onVisibilityAggregated(isVisible);
++    // Runs when this view or a parent becomes visible again and as it is attached to a window.
++    if (isVisible) {
++      clampScrollYToContent();
++    }
++  }
++
+   @Override
+   public void setBackgroundColor(int color) {
+     BackgroundStyleApplicator.setBackgroundColor(this, color);
 diff --git a/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/view/WindowUtil.kt b/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/view/WindowUtil.kt
 index 0cff3bc..6e2f537 100644
 --- a/node_modules/react-native/ReactAndroid/src/main/java/com/facebook/react/views/view/WindowUtil.kt

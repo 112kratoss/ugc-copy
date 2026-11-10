@@ -160,6 +160,7 @@
       "./plugins/withBuildProfileAutolinking",
       "./plugins/withAndroidLocalCleartextDebug",
       "./plugins/withAndroidReleaseSafety",
+      "./plugins/withIosHermesSourceMap",
       [
         "expo-notifications",
         {
