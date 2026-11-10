@@ -130,7 +130,16 @@ export const MCP_SERVER_VERSION = '1.2.0';
  * final read must all fit under the route's 60 seconds and the MCP client's own 60-second request
  * timeout, so 45 leaves little room on a slow day.
  */
-/** The route's own limit (`maxDuration` in `src/app/api/mcp/route.ts`): how long one call's work may run on. */
+/**
+ * The route's own limit (`maxDuration` in `src/app/api/mcp/route.ts`, which Next reads as a
+ * literal): how long one call's work may run on. It is the composer route's (`/api/posts`):
+ * publish_post from uploads runs the same create, which downloads and previews each staged file
+ * before the post's row exists. Cut off at 60 seconds, a post of several files would leave them
+ * claimed and no post, and every repeat would be told to wait for a publish that had died. An
+ * MCP client gives up on a request after about 60 seconds of its own, so the waits below and the
+ * upload caps stay sized for that; past it the publish finishes here, and the agent's repeat
+ * finds the post by its derived id.
+ */
 export const MCP_ROUTE_MAX_DURATION_SECONDS = 300;
 export const MCP_GENERATION_WAIT_MAX_SECONDS = 45;
 export const MCP_GENERATION_WAIT_SUGGESTED_SECONDS = 30;
