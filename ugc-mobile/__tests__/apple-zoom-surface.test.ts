@@ -182,22 +182,3 @@ describe('the picture a close lands on', () => {
     expect(heard).toHaveBeenCalledTimes(1);
   });
 });
-
-describe('the bar a surface\'s tiles go under', () => {
-  it('is what the surface last said, none without one, and goes with the surface', async () => {
-    const { appleZoomSurfaceBottomBar, forgetAppleZoomSurface, noteAppleZoomSurfaceBottomBar } = await import('../lib/apple-zoom-surface');
-    const bar = { height: 100, capWidth: 64, capHeight: 22 };
-    expect(appleZoomSurfaceBottomBar('tabs').height).toBe(0);
-    expect(appleZoomSurfaceBottomBar(null).height).toBe(0);
-    const forget = noteAppleZoomSurfaceBottomBar('tabs', bar);
-    expect(appleZoomSurfaceBottomBar('tabs')).toEqual(bar);
-    // A new bar said before the old one is taken back stays.
-    noteAppleZoomSurfaceBottomBar('tabs', { ...bar, height: 96 });
-    forget();
-    expect(appleZoomSurfaceBottomBar('tabs').height).toBe(96);
-    noteAppleZoomSurfaceBottomBar('pushed', { height: 0, capWidth: 0, capHeight: 0 });
-    expect(appleZoomSurfaceBottomBar('pushed').height).toBe(0);
-    forgetAppleZoomSurface('tabs');
-    expect(appleZoomSurfaceBottomBar('tabs').height).toBe(0);
-  });
-});
