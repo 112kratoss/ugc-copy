@@ -1679,6 +1679,11 @@ function ImmersivePreviewViewer() {
           });
         }}
         scrollEventThrottle={16}
+        // iOS scrolls this list to offset 0 on a tap of the status bar, which
+        // in a reel throws the reader back to the first post (the band above
+        // the Back button is the status bar). Instagram and TikTok ignore that
+        // tap in their reels; so does this one. No effect on Android.
+        scrollsToTop={false}
         // Android's default paging restarts a fixed-duration animation at release.
         // Interval snapping uses its native fling and limits momentum to the next page.
         pagingEnabled={Platform.OS !== 'android'}

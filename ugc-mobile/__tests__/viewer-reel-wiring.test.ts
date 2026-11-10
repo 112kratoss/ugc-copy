@@ -165,3 +165,11 @@ describe('a reel with nothing to show', () => {
     expect(viewer).not.toContain('or is still loading');
   });
 });
+
+describe("the reel's vertical list", () => {
+  it('ignores the iOS status-bar tap, which would throw the reader back to the first post', () => {
+    // A tap on the band above Back (the status bar) scrolled the reel to
+    // offset 0 on iOS (owner's recording, 2026-11-10).
+    expect(slice('<FlatList\n        keyboardShouldPersistTaps="never"', 'renderItem={')).toContain('scrollsToTop={false}');
+  });
+});
