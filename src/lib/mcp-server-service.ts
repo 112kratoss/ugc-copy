@@ -1187,7 +1187,7 @@ const uploadInputTool = defineTool({
   postsDescription: [
     'Stage a picture or a clip of the person\'s own, and get back what publish_post takes for it as an upload.',
     `Give exactly one source. url: a public https URL this server fetches (at most ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.image)} for a picture, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.video)} for a clip; one redirect on the same host is followed). base64 with mime_type (at most ${megabytes(AGENT_BASE64_MAX_BYTES)} decoded; send a larger file by url). upload_id: a file on your own machine that you sent to the upload_url request_upload gave, once that upload has finished.`,
-    'The answer\'s input.storage_path goes into publish_post.uploads[]. A post takes pictures and clips, so an audio track cannot be published. The staged file is kept about two hours, so stage right before you publish.',
+    'The answer\'s input.storage_path goes into publish_post.uploads[]. A post takes pictures and clips, so an audio track cannot be published. A staged file is temporary, so stage right before you publish.',
     'Only public hosts are fetched (PRIVATE_ADDRESS otherwise), and the file\'s type is checked against its own bytes (UNSUPPORTED_MEDIA). A creation already in the creator\'s library needs no staging: publish_post takes its generation_id.',
     'With upload_id, NOT_READY means nothing is stored yet (send the file, then call again), and UPLOAD_BYTES_LIMIT, from any source, that the creator\'s open uploads hold all the staging space an account has.',
   ].join(' '),
@@ -1258,7 +1258,9 @@ const uploadInputTool = defineTool({
           : context.surface === 'posts'
             ? 'To post it: put its storage_path in publish_post.uploads[], with a title and made_with.'
             : 'For a post of the file as it is: put its storage_path in publish_post.uploads[], with a title and made_with.',
-        `The staged file is kept about two hours; its URL lasts ${Math.round(staged.expiresInSeconds / 60)} minutes.`,
+        context.surface === 'posts'
+          ? 'A staged file is temporary: publish soon.'
+          : `The staged file is kept about two hours; its URL lasts ${Math.round(staged.expiresInSeconds / 60)} minutes.`,
       ].join(' '),
       {
         input: { url: staged.input.url, storage_path: staged.input.storagePath },

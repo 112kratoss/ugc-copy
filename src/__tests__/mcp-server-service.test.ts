@@ -3144,6 +3144,9 @@ describe('the posting-only server', () => {
     expect(staged).toContain('Staged an image of 4096 bytes (image/jpeg).');
     expect(staged).toContain('publish_post.uploads[]');
     expect(staged).not.toMatch(ABSENT_PATTERN);
+    // How long a staged file lasts is not this server's to promise in hours: it says to publish soon.
+    expect(staged).toContain('A staged file is temporary: publish soon.');
+    expect(`${staged} ${mcpToolDescription(tool('upload_input'), 'posts')}`).not.toMatch(/two hours/u);
 
     // A creation still running: the status is read from the list this server has.
     const running = posts({ readCreationForPublish: vi.fn(async () => creation({ status: 'processing' })) as never });
