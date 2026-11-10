@@ -7,18 +7,23 @@ vi.mock('@/components/feedback-state', () => ({ pushToast: toasts.pushToast }));
 import {
   INVITE_SHARE_DISCLOSURE,
   INVITE_VISIT_RETRY_DELAYS_MS,
+  PENDING_SHARED_INVITE_KEY,
   recordInviteVisitFromSharedLink,
+  settlePendingSharedInviteVisit,
   useInviteVisitFromSharedLink,
 } from '@/lib/invite-share-landing';
 
 const CODE = '30b5f916c7aa';
 
-function answers(...statuses: Array<number | Error>) {
+/** The visit route's answers in turn: a status, an error, or a body for a 200. */
+function answers(...statuses: Array<number | Error | Record<string, unknown>>) {
   const queue = [...statuses];
   return vi.fn(async () => {
     const next = queue.shift() ?? 200;
     if (next instanceof Error) throw next;
-    return new Response('{}', { status: next });
+    if (typeof next === 'object') return new Response(JSON.stringify(next), { status: 200 });
+    const body = next === 200 ? { success: true, code: CODE, preserved: false } : { success: false };
+    return new Response(JSON.stringify(body), { status: next });
   }) as unknown as typeof fetch & ReturnType<typeof vi.fn>;
 }
 
@@ -72,6 +77,20 @@ describe('recording the invite a shared link carried', () => {
     expect(noWait.mock.calls.map(([ms]) => ms)).toEqual([...INVITE_VISIT_RETRY_DELAYS_MS]);
   });
 
+  // The browser keeps an earlier invite; telling the visitor this link's
+  // sharer may earn named the wrong person (re-review of 2026-11-10).
+  it('says true only when this link\u2019s invite is the one newly kept', async () => {
+    for (const body of [
+      { success: true, code: 'earlier12', preserved: true },
+      { success: true, code: CODE, preserved: true },
+      { success: true, code: 'earlier12', preserved: false },
+    ]) {
+      await expect(recordInviteVisitFromSharedLink({
+        search: `r=${CODE}`, path: '/', viewerHasAccount: false, fetchImpl: answers(body), sleep: noWait,
+      })).resolves.toBe(false);
+    }
+  });
+
   it('gives up after three tries, and never on a code the server refuses', async () => {
     const failing = answers(503, 503, 503, 200);
     await expect(recordInviteVisitFromSharedLink({
@@ -84,6 +103,50 @@ describe('recording the invite a shared link carried', () => {
       search: `r=${CODE}`, path: '/', viewerHasAccount: false, fetchImpl: refused, sleep: noWait,
     })).resolves.toBe(false);
     expect(refused).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A capture that failed every try is kept for the tab, and the sign-in page
+// records it before the account is made: a visit after it is refused
+// (re-review of 2026-11-10).
+describe('a shared link\u2019s invite that could not be recorded', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  it('is kept for the tab, and recorded before a sign-in', async () => {
+    await recordInviteVisitFromSharedLink({
+      search: `r=${CODE}`, path: '/showcase/post-1', viewerHasAccount: false, fetchImpl: answers(503, 503, 503), sleep: noWait,
+    });
+    expect(JSON.parse(window.sessionStorage.getItem(PENDING_SHARED_INVITE_KEY)!)).toEqual({ code: CODE, path: '/showcase/post-1' });
+
+    const fetchImpl = answers(200);
+    await settlePendingSharedInviteVisit({ fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledWith('/api/referrals/visit', expect.objectContaining({
+      body: JSON.stringify({ code: CODE, source: 'web', kind: 'shared_link', next: '/showcase/post-1' }),
+    }));
+    expect(window.sessionStorage.getItem(PENDING_SHARED_INVITE_KEY)).toBeNull();
+  });
+
+  it('stays kept while offline, goes once refused, and never holds a sign-in long', async () => {
+    window.sessionStorage.setItem(PENDING_SHARED_INVITE_KEY, JSON.stringify({ code: CODE, path: '/' }));
+    await settlePendingSharedInviteVisit({ fetchImpl: answers(new TypeError('Failed to fetch')) });
+    expect(window.sessionStorage.getItem(PENDING_SHARED_INVITE_KEY)).not.toBeNull();
+
+    await settlePendingSharedInviteVisit({ fetchImpl: answers(404) });
+    expect(window.sessionStorage.getItem(PENDING_SHARED_INVITE_KEY)).toBeNull();
+
+    window.sessionStorage.setItem(PENDING_SHARED_INVITE_KEY, JSON.stringify({ code: CODE, path: '/' }));
+    const never = vi.fn(() => new Promise<Response>(() => undefined)) as unknown as typeof fetch;
+    const started = Date.now();
+    await settlePendingSharedInviteVisit({ fetchImpl: never, timeoutMs: 20 });
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('does nothing with nothing kept', async () => {
+    const fetchImpl = answers();
+    await settlePendingSharedInviteVisit({ fetchImpl });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

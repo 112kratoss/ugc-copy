@@ -1048,6 +1048,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!registeredUserId) {
       forgetInviteShareCode();
+      // Only once the session is known: at a cold start nobody is signed in
+      // until it is read, and a visit then would be an account's (re-review
+      // of 2026-11-10).
+      if (isLoading) return;
       void retryPendingReferralVisit(api);
       const subscription = AppState.addEventListener('change', (state) => {
         if (state === 'active') void retryPendingReferralVisit(api);
@@ -1059,7 +1063,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (state === 'active') void primeInviteShareCode(api, registeredUserId);
     });
     return () => subscription.remove();
-  }, [api, registeredUserId]);
+  }, [api, isLoading, registeredUserId]);
 
   /**
    * Keeps a merge ticket for the guest on this device (audit 02-7), minting one
@@ -1499,6 +1503,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signInsInFlightRef.current += 1;
     try {
       await Promise.all([guestBootstrapRef.current, ...guestTicketMintsRef.current.values()]);
+      // An invite this phone saved from a link but could not record yet must
+      // be recorded before an account is made: a visit made after the account
+      // exists is refused (re-review of 2026-11-10). One try, bounded.
+      await Promise.race([
+        retryPendingReferralVisit(api),
+        new Promise<void>((resolve) => { setTimeout(resolve, 2_500); }),
+      ]);
       await signIn();
     } finally {
       signInsInFlightRef.current -= 1;

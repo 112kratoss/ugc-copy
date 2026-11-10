@@ -31,7 +31,6 @@ import {
 } from '@/lib/referral-device';
 import { REFERRAL_LINK_DISABLED_CODE } from '@/lib/referral-link-status';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
-import { REFERRAL_LINK_DISABLED_CODE } from '../../ugc-mobile/lib/invite-share-link/invite-share-code-policy';
 
 type JsonRecord = Record<string, unknown>;
 

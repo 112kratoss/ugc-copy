@@ -38,12 +38,15 @@ export function inviteShareParam(value: string | string[] | undefined): string |
 export const INVITE_SHARE_CAPTURE_RETRY_DELAYS_MS = [2_000, 8_000, 30_000] as const;
 
 /**
- * Captures made in this run, by code. One code is captured once per run
- * however many screens ask: the legacy-id resolver re-opens the post page with
- * the same link, and two screens at once each posted a visit (review of
- * 2026-11-10). A capture that fails leaves the map, so it can be tried again.
+ * Captures made in this run, by code, with every screen still waiting on each.
+ * One code is captured once per run however many screens ask: the legacy-id
+ * resolver re-opens the post page with the same link, and two screens at once
+ * each posted a visit (review of 2026-11-10). It keeps trying while any of
+ * those screens is open, not only the first, which the resolver unmounts
+ * (re-review of 2026-11-10). A capture that fails leaves the map, so it can be
+ * tried again.
  */
-const captures = new Map<string, Promise<boolean>>();
+const captures = new Map<string, { attempt: Promise<boolean>; waiting: Set<() => boolean> }>();
 
 function wait(ms: number) {
   return new Promise<void>((resolve) => {
@@ -64,13 +67,18 @@ export function captureInviteFromSharedLink(
   sleep: (ms: number) => Promise<void> = wait,
 ): Promise<boolean> {
   const existing = captures.get(code);
-  if (existing) return existing;
+  if (existing) {
+    existing.waiting.add(isCurrent);
+    return existing.attempt;
+  }
 
+  const waiting = new Set<() => boolean>([isCurrent]);
+  const anyoneWaiting = () => [...waiting].some((current) => current());
   const attempt = (async () => {
     for (let index = 0; index <= INVITE_SHARE_CAPTURE_RETRY_DELAYS_MS.length; index += 1) {
       if (index > 0) {
         await sleep(INVITE_SHARE_CAPTURE_RETRY_DELAYS_MS[index - 1]!);
-        if (!isCurrent()) break;
+        if (!anyoneWaiting()) break;
       }
       try {
         await capturePendingReferral(api, code, { next, kind: 'shared_link' });
@@ -83,7 +91,7 @@ export function captureInviteFromSharedLink(
     captures.delete(code);
     return false;
   })();
-  captures.set(code, attempt);
+  captures.set(code, { attempt, waiting });
   return attempt;
 }
 

@@ -4,18 +4,31 @@ import { useEffect, useRef } from 'react';
 
 import { pushToast } from '@/components/feedback-state';
 
-import { readInviteShareCode, withoutInviteShareCode } from '../../ugc-mobile/lib/invite-share-link/invite-share-link';
+import {
+  INVITE_SHARE_DISCLOSURE,
+  readInviteShareCode,
+  withoutInviteShareCode,
+} from '../../ugc-mobile/lib/invite-share-link/invite-share-link';
+
+export { INVITE_SHARE_DISCLOSURE };
 
 /** Waits before the second and third try of a visit that failed to record. */
 export const INVITE_VISIT_RETRY_DELAYS_MS = [2_000, 8_000] as const;
 
 /**
- * Told to a visitor whose invite was recorded: the person who shared the link
- * may earn credits from it, which the share itself never said (review of
- * 2026-11-10; Terms §5).
+ * A shared link's invite that could not be recorded (offline, an outage), kept
+ * for this tab so the sign-in page records it before an account is made: a
+ * visit made after the account exists is refused (re-review of 2026-11-10).
  */
-export const INVITE_SHARE_DISCLOSURE =
-  'Shared with an invite: the person who shared this may earn bonus credits if you join.';
+export const PENDING_SHARED_INVITE_KEY = 'mb.shared-invite-pending.v1';
+
+function pendingStorage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null {
+  try {
+    return typeof window === 'undefined' ? null : window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
 
 function wait(ms: number) {
   return new Promise<void>((resolve) => {
@@ -70,13 +83,63 @@ export async function recordInviteVisitFromSharedLink({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, source: 'web', kind: 'shared_link', next: path }),
       });
-      if (response.ok) return true;
+      if (response.ok) {
+        pendingStorage()?.removeItem(PENDING_SHARED_INVITE_KEY);
+        const body = await response.json().catch(() => null) as { code?: unknown; preserved?: unknown } | null;
+        // Only this link's invite, newly kept: an earlier invite the browser
+        // keeps is someone else's to disclose (re-review of 2026-11-10).
+        return body?.preserved !== true && body?.code === code;
+      }
       if (response.status !== 429 && response.status < 500) return false;
     } catch {
       // Offline or cut off: try again.
     }
   }
+  try {
+    pendingStorage()?.setItem(PENDING_SHARED_INVITE_KEY, JSON.stringify({ code, path }));
+  } catch {
+    // Nothing to keep it in.
+  }
   return false;
+}
+
+/**
+ * Records the shared link's invite this tab could not record, before a sign-in
+ * starts (`LoginClient`). One try, bounded: a sign-in never waits on it long.
+ */
+export async function settlePendingSharedInviteVisit({
+  fetchImpl = fetch,
+  timeoutMs = 2_500,
+}: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<void> {
+  const storage = pendingStorage();
+  let pending: { code?: unknown; path?: unknown } | null = null;
+  try {
+    pending = JSON.parse(storage?.getItem(PENDING_SHARED_INVITE_KEY) ?? 'null');
+  } catch {
+    pending = null;
+  }
+  const code = typeof pending?.code === 'string' ? readInviteShareCode(`r=${pending.code}`) : null;
+  if (!code) {
+    storage?.removeItem(PENDING_SHARED_INVITE_KEY);
+    return;
+  }
+  const path = typeof pending?.path === 'string' ? pending.path : '/';
+  const attempt = (async () => {
+    try {
+      const response = await fetchImpl('/api/referrals/visit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, source: 'web', kind: 'shared_link', next: path }),
+      });
+      // Kept, or refused for good: either way there is nothing left to try.
+      if (response.ok || (response.status !== 429 && response.status < 500)) {
+        storage?.removeItem(PENDING_SHARED_INVITE_KEY);
+      }
+    } catch {
+      // Still offline: the next sign-in tries again.
+    }
+  })();
+  await Promise.race([attempt, wait(timeoutMs)]);
 }
 
 /**

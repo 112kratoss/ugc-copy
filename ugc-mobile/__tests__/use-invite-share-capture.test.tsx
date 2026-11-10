@@ -177,6 +177,28 @@ describe('a page opened by a shared link', () => {
     expect(sleeps).toEqual([INVITE_SHARE_CAPTURE_RETRY_DELAYS_MS[0]]);
   });
 
+  // The legacy-id resolver replaces the first screen with a second showing the
+  // same post: the capture keeps trying for the second (re-review of 2026-11-10).
+  it('keeps trying while any screen waiting on the capture is open', async () => {
+    const sleeps: number[] = [];
+    let firstOpen = true;
+    state.capturePendingReferral
+      .mockRejectedValueOnce(new Error('Network request failed'))
+      .mockResolvedValue({ pending: { code: CODE, visitToken: 'visit-1' }, keptEarlierInvite: false });
+    const sleep = async (ms: number) => {
+      sleeps.push(ms);
+      firstOpen = false;
+    };
+
+    const first = captureInviteFromSharedLink(state.auth.api as never, CODE, '/showcase/post-1', () => firstOpen, sleep);
+    const second = captureInviteFromSharedLink(state.auth.api as never, CODE, '/showcase/post-1', () => true, sleep);
+
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+    expect(state.capturePendingReferral).toHaveBeenCalledTimes(2);
+    expect(sleeps).toEqual([INVITE_SHARE_CAPTURE_RETRY_DELAYS_MS[0]]);
+  });
+
   // The legacy-id resolver re-opens the post page with the same link: one
   // capture per code per run (review of 2026-11-10).
   it('captures one code once however many screens ask', async () => {

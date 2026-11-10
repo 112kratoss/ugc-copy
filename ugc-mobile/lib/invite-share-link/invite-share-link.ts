@@ -24,6 +24,15 @@
  * `URL` either: a path with no origin must work, and so must Hermes.
  */
 
+/**
+ * What a visitor whose invite a shared link recorded is told, on the web's
+ * post or profile page and on the app's sign-in page: the person who shared
+ * it may earn from it, which the share itself never says (Terms §5; review of
+ * 2026-11-10).
+ */
+export const INVITE_SHARE_DISCLOSURE =
+  'This link carries an invite: the person who shared it may earn bonus credits if you join.';
+
 /** The query parameter a shared link carries its sharer's invite code in. */
 export const INVITE_SHARE_QUERY_PARAM = 'r';
 

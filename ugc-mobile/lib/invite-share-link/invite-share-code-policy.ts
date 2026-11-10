@@ -19,7 +19,11 @@ import { normalizeInviteShareCode } from './invite-share-link';
  * Shared with the web by relative import: no React Native, Expo or Node here.
  */
 
-/** The error code the link route answers a switched-off link with (409). */
+/**
+ * The error code the link route answers a switched-off link with (409). The
+ * server's copy is `src/lib/referral-link-status.ts`;
+ * `src/__tests__/invite-share-code-policy.test.ts` holds the two equal.
+ */
 export const REFERRAL_LINK_DISABLED_CODE = 'REFERRAL_LINK_DISABLED';
 
 /** A stored "no link to share" is asked about again after this long. */

@@ -1551,6 +1551,47 @@ describe('the invite the links it shares carry', () => {
     unmount();
   });
 
+  // At a cold start nobody is signed in until the session is read; a visit
+  // recorded then would be an account's (re-review of 2026-11-10).
+  it('records no pending invite before the session is read', async () => {
+    const { retryPendingReferralVisit } = await import('../lib/referral-attribution');
+    vi.mocked(retryPendingReferralVisit).mockClear();
+    let answer: (value: unknown) => void = () => undefined;
+    state.getSession.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    const { unmount } = await mount();
+    expect(retryPendingReferralVisit).not.toHaveBeenCalled();
+
+    await renderer.act(async () => { answer({ data: { session: accountA() }, error: null }); });
+    await flush();
+    expect(retryPendingReferralVisit).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  // A visit made after the account exists is refused as not new: an invite the
+  // phone could not record yet is recorded before the sign-in starts.
+  it('records a pending invite before a sign-in starts', async () => {
+    const { retryPendingReferralVisit } = await import('../lib/referral-attribution');
+    const order: string[] = [];
+    vi.mocked(retryPendingReferralVisit).mockImplementation(async () => { order.push('visit'); });
+    signInLandsOn(accountA());
+    state.signInWithPassword.mockImplementation(async () => {
+      order.push('sign-in');
+      state.authCallback?.('SIGNED_IN', accountA());
+      return { data: { session: accountA(), user: accountA().user }, error: null };
+    });
+    state.mergeGuestAccount.mockResolvedValue({ status: 'merged', creditsMoved: 0, promotionalCreditsMoved: 0, credits: 0 });
+    const { latest, unmount } = await mount(guestSession());
+    order.length = 0;
+
+    await renderer.act(async () => {
+      await latest.current?.signInWithPassword('a@example.com', 'correct-Horse-1');
+    });
+
+    expect(order.slice(0, 2)).toEqual(['visit', 'sign-in']);
+    vi.mocked(retryPendingReferralVisit).mockImplementation(async () => undefined);
+    unmount();
+  });
+
   it('lets go of it at a sign-out, so a link shared after carries no invite', async () => {
     const { latest, unmount } = await mount(accountA());
     expect(currentInviteShareCode()).toBe(INVITE_CODES['account-a']);
