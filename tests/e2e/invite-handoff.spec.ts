@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import creator from './fixtures/creator-profile.json';
+import recipePost from './fixtures/post-with-recipe.json';
 
 // A shared profile link carries its sharer's invite (`?r=<code>`). A visitor with no account
 // who opens one is offered the way to keep it on the device they are on (the cross-device
@@ -71,6 +72,23 @@ test.describe('on an iPhone', () => {
     await expect(offer(page)).toHaveCount(0);
   });
 
+  test('a shared post link draws the offer above the post, and its Close takes the tap', async ({ page }) => {
+    const visits = await answerVisit(page);
+    const postPath = `/showcase/${recipePost.post.id}`;
+    await page.goto(`${postPath}?s=feed&r=${CODE}`);
+
+    await expect(offer(page).getByText('Join here to keep your invite')).toBeVisible(COLD_PAGE);
+    await expect(offer(page).getByRole('link', { name: 'Join free' })).toHaveAttribute('href', `/login?mode=signup&next=${encodeURIComponent(postPath)}`);
+    expect(visits).toEqual([{ code: CODE, source: 'web', kind: 'shared_link', next: postPath }]);
+
+    const offerBox = (await offer(page).boundingBox())!;
+    const titleBox = (await page.getByRole('heading', { level: 1 }).first().boundingBox())!;
+    expect(offerBox.y + offerBox.height).toBeLessThanOrEqual(titleBox.y);
+    // Drawn over the page's backdrop, and pressable.
+    await offer(page).getByRole('button', { name: 'Close' }).click();
+    await expect(offer(page)).toHaveCount(0);
+  });
+
   test('with the preview switch, Get the app copies the invite’s link and only then opens the App Store', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await answerVisit(page);
@@ -79,6 +97,9 @@ test.describe('on an iPhone', () => {
     await page.goto(`${PROFILE}?s=creator-profile&r=${CODE}&handoff=preview`);
 
     await expect(offer(page).getByText('Get the app and keep your invite')).toBeVisible(COLD_PAGE);
+    await expect(offer(page).getByText('Preview: the app in the stores can’t keep an invite yet.')).toBeVisible();
+    // The switch is for this page: off the address, so a copied address does not pass it on.
+    expect(new URL(page.url()).search).toBe('?s=creator-profile');
     await expect(offer(page).getByText('This copies your invite link. After installing, open the app and tap Paste to keep it.')).toBeVisible();
     const siteOrigin = new URL(page.url()).origin;
     await offer(page).getByRole('button', { name: 'Get the app' }).click();

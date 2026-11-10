@@ -20,6 +20,7 @@ import {
     holdStoredInviteShareCode,
     primeInviteShareCode,
 } from '@/lib/invite-share-code';
+import { clearStoredInviteHandoff } from '@/lib/invite-handoff';
 import {
     useHasHydratedSupabaseAuthCookieHint,
     useSupabaseAuthCookieHint,
@@ -566,6 +567,12 @@ export function AuthProvider({
         ? session.user.id
         : null;
     const inviteAccessToken = inviteUserId ? session?.access_token ?? null : null;
+    // An account holds no invite to carry on to the app: the one this tab kept for the page's
+    // offer (`invite-handoff.ts`) goes as soon as any page sees the account, so a later
+    // sign-out in the tab does not bring the offer back for an invite already used.
+    useEffect(() => {
+        if (inviteUserId) clearStoredInviteHandoff();
+    }, [inviteUserId]);
     useEffect(() => {
         if (!inviteUserId || !inviteAccessToken) {
             // Only once the session is known: an optional-auth page mounts this provider with no

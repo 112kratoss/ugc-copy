@@ -31,6 +31,9 @@ import {
  */
 export const INVITE_HANDOFF_DISCLOSURE = 'Whoever invited you may earn bonus credits if you join.';
 
+/** On a page opened with the preview switch: what it shows is not true of the app yet. */
+export const INVITE_HANDOFF_PREVIEW_NOTE = 'Preview: the app in the stores can’t keep an invite yet.';
+
 const PRIMARY_CLASS = 'ui-focus-ring inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-black text-[var(--ui-primary-on)] transition hover:brightness-105';
 const LINK_CLASS = 'ui-focus-ring rounded-lg font-extrabold text-[var(--ui-primary)] underline underline-offset-2';
 
@@ -109,7 +112,7 @@ function InviteHandoffOfferBody({ handoff, variant }: { handoff: StoredInviteHan
 
   const stores = getAppStoreLinks();
   const offer = inviteHandoffOffer({ device: browser.device, inAppBrowser: browser.inAppBrowser, preview: handoff.preview });
-  const joinPath = inviteJoinPath(handoff.path);
+  const joinPath = inviteJoinPath(handoff);
   const phoneBrowser = browser.device === 'ios' ? 'Safari' : 'Chrome';
   const storeName = browser.device === 'ios' ? 'the App Store' : 'Google Play';
   const storeUrl = browser.device === 'ios' ? stores.appStore : stores.playStore;
@@ -137,7 +140,7 @@ function InviteHandoffOfferBody({ handoff, variant }: { handoff: StoredInviteHan
 
   const openInBrowserNote = (
     <p className="text-xs leading-5 text-[var(--ui-text-muted)]">
-      {offer === 'open-in-browser' ? 'Nobody can join from inside this app. ' : 'To join on the web instead, '}
+      {offer === 'open-in-browser' ? 'Google sign-in doesn’t work inside this app. ' : 'To join on the web instead, '}
       {chromeUrl ? (
         <><a href={chromeUrl} className={LINK_CLASS}>Open in Chrome</a>, or use this app’s menu and choose “Open in browser”.</>
       ) : (
@@ -164,6 +167,9 @@ function InviteHandoffOfferBody({ handoff, variant }: { handoff: StoredInviteHan
           </p>
           {variant === 'bar' ? (
             <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">{INVITE_HANDOFF_DISCLOSURE}</p>
+          ) : null}
+          {handoff.preview && offer === 'app' ? (
+            <p className="mt-1 text-xs font-extrabold leading-5 text-[var(--ui-accent-commerce)]">{INVITE_HANDOFF_PREVIEW_NOTE}</p>
           ) : null}
 
           {offer === 'app' ? (

@@ -33,6 +33,7 @@ vi.mock('@/components/useSupabaseAuthCookieHint', () => ({
 }));
 
 import { AuthProvider } from '@/components/AuthProvider';
+import { readStoredInviteHandoff, storeInviteHandoff } from '@/lib/invite-handoff';
 
 function sessionOf(user: Record<string, unknown>, accessToken = 'access-token-1'): Session {
   return {
@@ -82,6 +83,22 @@ describe('AuthProvider and the signed-in account’s invite code', () => {
 
     expect(inviteCode.prime).toHaveBeenCalledWith({ userId: 'user-1', accessToken: 'access-token-1' });
     expect(inviteCode.forget).not.toHaveBeenCalled();
+  });
+
+  // The invite a tab kept for the page's offer to carry it on to the app (`invite-handoff.ts`):
+  // an account has none to carry, and a later sign-out in the tab brought the offer back for
+  // an invite already used (review of 2026-11-10).
+  it('forgets the invite the tab held for a visitor once any page sees the account', () => {
+    const held = { code: '30b5f916c7aa', kind: 'shared_link' as const, path: '/creators/mira', preview: false };
+    storeInviteHandoff(held);
+    const { unmount } = render(<AuthProvider initialSession={guest} hasResolvedInitialState><span /></AuthProvider>);
+    expect(readStoredInviteHandoff()).toEqual(held);
+    unmount();
+    render(<AuthProvider initialSession={null} hasResolvedInitialState><span /></AuthProvider>);
+    expect(readStoredInviteHandoff()).toEqual(held);
+
+    render(<AuthProvider initialSession={account} hasResolvedInitialState><span /></AuthProvider>);
+    expect(readStoredInviteHandoff()).toBeNull();
   });
 
   it('holds nothing for a visitor', async () => {

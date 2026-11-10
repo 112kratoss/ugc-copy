@@ -18,6 +18,7 @@ import {
   readInviteHandoffPreview,
   readStoredInviteHandoff,
   storeInviteHandoff,
+  withoutInviteHandoffPreview,
 } from '@/lib/invite-handoff';
 
 const CODE = '30b5f916c7aa';
@@ -31,6 +32,10 @@ const UA = {
   androidWebView: 'Mozilla/5.0 (Linux; Android 15; SM-S921B; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0.0.0 Mobile Safari/537.36',
   androidInstagram: 'Mozilla/5.0 (Linux; Android 15; SM-S921B; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0.0.0 Mobile Safari/537.36 Instagram 350.0.0.0 Android',
   macChrome: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  // A web view names no browser: Gmail's, Telegram's, Discord's and the rest.
+  iphoneWebView: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+  iphoneChrome: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0.0.0 Mobile/15E148 Safari/604.1',
+  iphoneFirefox: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/131.0 Mobile/15E148 Safari/605.1.15',
   windowsEdge: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
 };
 
@@ -45,10 +50,10 @@ describe('which device and browser an invite was opened on', () => {
   });
 
   it('knows another app’s own browser, where nobody can join', () => {
-    for (const inApp of [UA.iphoneInstagram, UA.iphoneFacebook, UA.androidWebView, UA.androidInstagram]) {
+    for (const inApp of [UA.iphoneInstagram, UA.iphoneFacebook, UA.androidWebView, UA.androidInstagram, UA.iphoneWebView]) {
       expect(isInAppBrowser(inApp)).toBe(true);
     }
-    for (const own of [UA.iphoneSafari, UA.androidChrome, UA.macChrome, UA.windowsEdge, UA.ipadDesktopSite]) {
+    for (const own of [UA.iphoneSafari, UA.iphoneChrome, UA.iphoneFirefox, UA.androidChrome, UA.macChrome, UA.windowsEdge, UA.ipadDesktopSite]) {
       expect(isInAppBrowser(own)).toBe(false);
     }
   });
@@ -96,14 +101,26 @@ describe('what the page offers a visitor who holds an invite', () => {
   });
 
   it('sends joining to the sign-up page, back to the page the invite led to', () => {
-    expect(inviteJoinPath('/creators/mira')).toBe('/login?mode=signup&next=%2Fcreators%2Fmira');
-    expect(inviteJoinPath('https://evil.example')).toBe('/login?mode=signup&next=%2F');
+    expect(inviteJoinPath({ kind: 'shared_link', path: '/creators/mira' })).toBe('/login?mode=signup&next=%2Fcreators%2Fmira');
+    expect(inviteJoinPath({ kind: 'invite', path: '/create-video?model=x' })).toBe('/login?mode=signup&next=%2Fcreate-video%3Fmodel%3Dx');
+    expect(inviteJoinPath({ kind: 'invite', path: 'https://evil.example' })).toBe('/login?mode=signup&next=%2F');
+    expect(inviteJoinPath({ kind: 'shared_link', path: '/admin' })).toBe('/login?mode=signup&next=%2F');
   });
 
-  it('builds the Android link that opens a page in Chrome', () => {
-    expect(androidOpenInChromeUrl(`https://magicbooklet.com/creators/mira?r=${CODE}#top`))
-      .toBe(`intent://magicbooklet.com/creators/mira?r=${CODE}#Intent;scheme=https;package=com.android.chrome;end`);
+  // With no Chrome to open, the tap loads the page where the visitor is: never nothing.
+  it('builds the Android link that opens a page in Chrome, with the page itself as its fallback', () => {
+    const page = `https://magicbooklet.com/creators/mira?r=${CODE}`;
+    expect(androidOpenInChromeUrl(`${page}#top`))
+      .toBe(`intent://magicbooklet.com/creators/mira?r=${CODE}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(page)};end`);
     expect(androidOpenInChromeUrl('http://localhost:3000/x')).toBeNull();
+  });
+
+  // The switch is in a public repository: it must not travel on by a copied address.
+  it('takes the preview switch off an address, and nothing else', () => {
+    expect(withoutInviteHandoffPreview(`/creators/mira?s=feed&handoff=preview&r=${CODE}#top`)).toBe(`/creators/mira?s=feed&r=${CODE}#top`);
+    expect(withoutInviteHandoffPreview('/r/abcdefgh1234?handoff=preview')).toBe('/r/abcdefgh1234');
+    expect(withoutInviteHandoffPreview('/creators/mira?s=feed')).toBe('/creators/mira?s=feed');
+    expect(withoutInviteHandoffPreview('/creators/mira#handoff=preview')).toBe('/creators/mira#handoff=preview');
   });
 });
 
@@ -112,8 +129,9 @@ describe('the invite a tab holds for the offer', () => {
 
   it('keeps it for the tab, and forgets it', () => {
     expect(readStoredInviteHandoff()).toBeNull();
+    // Never the preview switch: it is for the page it was opened on, not for the tab.
     storeInviteHandoff({ code: CODE, kind: 'invite', path: '/create', preview: true });
-    expect(readStoredInviteHandoff()).toEqual({ code: CODE, kind: 'invite', path: '/create', preview: true });
+    expect(readStoredInviteHandoff()).toEqual({ code: CODE, kind: 'invite', path: '/create', preview: false });
     clearStoredInviteHandoff();
     expect(readStoredInviteHandoff()).toBeNull();
   });
@@ -123,7 +141,9 @@ describe('the invite a tab holds for the offer', () => {
       window.sessionStorage.setItem(INVITE_HANDOFF_STORAGE_KEY, stored);
       expect(readStoredInviteHandoff()).toBeNull();
     }
-    window.sessionStorage.setItem(INVITE_HANDOFF_STORAGE_KEY, JSON.stringify({ code: CODE, kind: 'other', path: '//evil.example', preview: 'yes' }));
+    window.sessionStorage.setItem(INVITE_HANDOFF_STORAGE_KEY, JSON.stringify({ code: CODE, kind: 'other', path: '//evil.example', preview: true }));
+    expect(readStoredInviteHandoff()).toEqual({ code: CODE, kind: 'shared_link', path: '/', preview: false });
+    window.sessionStorage.setItem(INVITE_HANDOFF_STORAGE_KEY, JSON.stringify({ code: CODE, kind: 'shared_link', path: '/admin' }));
     expect(readStoredInviteHandoff()).toEqual({ code: CODE, kind: 'shared_link', path: '/', preview: false });
   });
 

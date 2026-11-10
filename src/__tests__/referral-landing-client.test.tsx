@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ReferralLandingClient from '@/app/r/[code]/ReferralLandingClient';
 
+import { readInviteInstallReferrer } from '../../ugc-mobile/lib/invite-share-link/invite-install-handoff';
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -88,6 +90,25 @@ describe('ReferralLandingClient', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Get the app' }));
     expect(await screen.findByRole('dialog', { name: 'Scan to open this on your phone' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+  });
+
+  // The earlier invite was handed on as a shared link to this landing's destination, a page
+  // that records nothing: the phone joined with no invite (review of 2026-11-10).
+  it('hands a kept earlier invite on as that invite\u2019s own landing', async () => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 (Linux; Android 15; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+      maxTouchPoints: 5,
+    });
+    window.history.replaceState(null, '', '/r/creator123?handoff=preview');
+    fetchMock.mockResolvedValue(jsonResponse({ ...visitAnswer(null), code: 'earlier12', preserved: true }));
+    renderLanding();
+
+    const href = (await screen.findByRole('link', { name: 'Get the app' })).getAttribute('href')!;
+    const carried = decodeURIComponent(href.slice(href.indexOf('referrer=') + 'referrer='.length));
+    expect(readInviteInstallReferrer(carried)).toEqual({ code: 'earlier12', kind: 'invite', path: '/create' });
+    // The preview switch goes off the address as it is read.
+    expect(window.location.search).toBe('');
+    window.history.replaceState(null, '', '/');
   });
 
   it('offers nothing while the invite is not saved', async () => {

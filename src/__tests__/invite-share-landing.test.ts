@@ -236,11 +236,42 @@ describe('the page that a shared link opened', () => {
     await waitFor(() => expect(result.current).toMatchObject({ code: CODE }));
   });
 
-  it('carries the preview switch with the invite', async () => {
+  // The switch is for this page only: off the address, and never kept for the tab
+  // (review of 2026-11-10: a copied address passed the preview on).
+  it('carries the preview switch with the invite, off the address and out of the tab\u2019s store', async () => {
+    window.history.replaceState(null, '', `/showcase/post-1?s=feed&r=${CODE}&handoff=preview`);
     const { result } = renderHook(() => useInviteVisitFromSharedLink({
       search: `?s=feed&r=${CODE}&handoff=preview`, path: '/showcase/post-1', viewerKnown: true, viewerHasAccount: false,
     }));
+    expect(window.location.search).toBe('?s=feed');
     await waitFor(() => expect(result.current).toMatchObject({ code: CODE, preview: true }));
+    expect(readStoredInviteHandoff()).toMatchObject({ code: CODE, preview: false });
+  });
+
+  it('takes the preview switch off inside another app\u2019s browser too, where the code stays', async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148' });
+    window.history.replaceState(null, '', `/showcase/post-1?s=feed&r=${CODE}&handoff=preview`);
+    renderHook(() => useInviteVisitFromSharedLink({
+      search: `?s=feed&r=${CODE}&handoff=preview`, path: '/showcase/post-1', viewerKnown: true, viewerHasAccount: false,
+    }));
+    expect(window.location.search).toBe(`?s=feed&r=${CODE}`);
+  });
+
+  // The viewer read as a visitor, the visit was sent, then the session arrived: the answer
+  // stored an invite for an account, and nothing cleared it (review of 2026-11-10).
+  it('keeps nothing for a viewer who turned out to have an account while the visit was on its way', async () => {
+    let answer: (response: Response) => void = () => undefined;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
+    const { result, rerender } = renderHook((props: { viewerHasAccount: boolean }) => useInviteVisitFromSharedLink({
+      search: `?s=feed&r=${CODE}`, path: '/showcase/post-1', viewerKnown: true, viewerHasAccount: props.viewerHasAccount,
+    }), { initialProps: { viewerHasAccount: false } });
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+
+    rerender({ viewerHasAccount: true });
+    answer(new Response(JSON.stringify({ success: true, code: CODE, preserved: false }), { status: 200 }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(result.current).toBeNull();
+    expect(readStoredInviteHandoff()).toBeNull();
   });
 
   it('takes the code off for an account too, and records and says nothing', async () => {

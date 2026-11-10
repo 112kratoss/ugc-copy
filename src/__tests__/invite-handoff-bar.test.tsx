@@ -15,7 +15,7 @@ vi.mock('@/lib/invite-handoff', async (importOriginal) => ({
   openStoreListing: store.open,
 }));
 
-import { INVITE_HANDOFF_DISCLOSURE, InviteHandoffBar, InviteHandoffLandingOffer } from '@/components/InviteHandoffBar';
+import { INVITE_HANDOFF_DISCLOSURE, INVITE_HANDOFF_PREVIEW_NOTE, InviteHandoffBar, InviteHandoffLandingOffer } from '@/components/InviteHandoffBar';
 import { inviteHandoffDismissed, type StoredInviteHandoff } from '@/lib/invite-handoff';
 
 import { readInviteHandoffLink, readInviteInstallReferrer } from '../../ugc-mobile/lib/invite-share-link/invite-install-handoff';
@@ -64,6 +64,7 @@ describe('the offer to keep an invite, at the top of the page a shared link open
 
     expect(screen.getByText('Join here to keep your invite')).toBeInTheDocument();
     expect(screen.getByText(INVITE_HANDOFF_DISCLOSURE)).toBeInTheDocument();
+    expect(screen.queryByText(INVITE_HANDOFF_PREVIEW_NOTE)).toBeNull();
     expect(screen.getByRole('link', { name: 'Join free' })).toHaveAttribute('href', '/login?mode=signup&next=%2Fcreators%2Fmira');
     expect(screen.getByRole('link', { name: 'the App Store' })).toHaveAttribute('href', 'https://apps.apple.com/app/id6773286115');
     expect(screen.getByText(/An account made in the app can’t keep this invite yet/)).toBeInTheDocument();
@@ -82,7 +83,8 @@ describe('the offer to keep an invite, at the top of the page a shared link open
     onDevice(UA.iphoneInstagram);
     render(<InviteHandoffBar handoff={SHARED} />);
     expect(screen.getByText('Open this page in Safari to keep your invite')).toBeInTheDocument();
-    expect(screen.getByText(/Nobody can join from inside this app/)).toBeInTheDocument();
+    // Apple's sign-in works there, so "nobody can join" was not true (review of 2026-11-10).
+    expect(screen.getByText(/Google sign-in doesn\u2019t work inside this app/)).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Join free' })).toBeNull();
   });
 
@@ -148,6 +150,8 @@ describe('the offer once the app keeps the invite', () => {
     onDevice(UA.androidChrome);
     render(<InviteHandoffBar handoff={PREVIEW} />);
     expect(screen.getByText('Get the app and keep your invite')).toBeInTheDocument();
+    // What it shows is not true of the app yet, and it says so.
+    expect(screen.getByText(INVITE_HANDOFF_PREVIEW_NOTE)).toBeInTheDocument();
     const href = screen.getByRole('link', { name: 'Get the app' }).getAttribute('href')!;
     expect(href.startsWith('https://play.google.com/store/apps/details?id=com.magicbooklet.mobile&referrer=')).toBe(true);
     // As Play hands it to the app.

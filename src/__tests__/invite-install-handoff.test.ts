@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { getSafeReferralDestination } from '@/lib/referral';
+import { SAFE_TOP_LEVEL_PATHS, getSafeReferralDestination } from '@/lib/referral';
 
 import {
+  INVITE_DESTINATION_TOP_LEVELS,
   INVITE_INSTALL_REFERRER_SOURCE,
   buildInviteHandoffLink,
   buildInviteInstallReferrer,
@@ -63,12 +64,67 @@ describe('the invite Google Play carries through an install', () => {
     expect(readInviteInstallReferrer(referrer)).toBeNull();
   });
 
-  it('falls back to the front page for a path that is not one of ours', () => {
-    for (const path of ['https://evil.example/x', '//evil.example', '/a\\b', '/a?b=1', '/a#b', 'create', `/${'a'.repeat(600)}`, '/a\nb']) {
-      expect(normalizeInviteHandoffPath(path)).toBe('/');
-      const referrer = `utm_source=${INVITE_INSTALL_REFERRER_SOURCE}&mb_r=${CODE}&mb_p=${encodeURIComponent(path)}`;
-      expect(readInviteInstallReferrer(referrer)).toEqual({ code: CODE, kind: 'shared_link', path: '/' });
+  it('falls back to the front page for a path that is not one of ours, and keeps the invite', () => {
+    for (const path of ['https://evil.example/x', '//evil.example', '/create\\b', '/create#b', 'create', `/create/${'a'.repeat(600)}`, '/create\nb', '/create b']) {
+      expect(normalizeInviteHandoffPath(path, 'invite')).toBe('/');
+      expect(normalizeInviteHandoffPath(path, 'shared_link')).toBe('/');
+      const referrer = `utm_source=${INVITE_INSTALL_REFERRER_SOURCE}&utm_content=invite&mb_r=${CODE}&mb_p=${encodeURIComponent(path)}`;
+      expect(readInviteInstallReferrer(referrer)).toEqual({ code: CODE, kind: 'invite', path: '/' });
     }
+  });
+});
+
+// The app goes where the path says with nothing in between, from code built into the
+// binary that no update can tighten: it takes only the pages the web writes (review of
+// 2026-11-10: `/oauth/consent`, `/showcase/../admin` and `/settings/delete-account` were
+// all read as "where the app may take the person").
+describe('where a handed-over invite may lead', () => {
+  it('lets a shared link lead only to the post or the creator page it was opened on', () => {
+    expect(normalizeInviteHandoffPath('/showcase/8d4b1b9e-0c53-4c0e-9d2f-0d3a6f1c2b77', 'shared_link')).toBe('/showcase/8d4b1b9e-0c53-4c0e-9d2f-0d3a6f1c2b77');
+    expect(normalizeInviteHandoffPath('/creators/mira%20k', 'shared_link')).toBe('/creators/mira%20k');
+    for (const path of [
+      '/', '/admin', '/oauth/consent', '/settings/delete-account', '/create', '/showcase', '/creators/',
+      '/showcase/abc/edit', '/showcase/../admin', '/showcase/%2e%2e', '/creators/..', '/creators/a%2Fb', '/creators/mira?x=1',
+    ]) {
+      expect(normalizeInviteHandoffPath(path, 'shared_link')).toBe('/');
+    }
+  });
+
+  it('lets an invite link lead where the server lets a visit lead, query and all', () => {
+    expect([...INVITE_DESTINATION_TOP_LEVELS].sort()).toEqual([...SAFE_TOP_LEVEL_PATHS].sort());
+    for (const path of ['/create', '/create-video?model=veo-3.1&prompt=a%20cat', '/showcase/abc', '/pricing', '/']) {
+      expect(normalizeInviteHandoffPath(path, 'invite')).toBe(path);
+      expect(getSafeReferralDestination(path, '/nope')).toBe(path);
+    }
+    for (const path of ['/admin', '/oauth/consent', '/settings/delete-account', '/api/account', '/create/../admin', '/create/%2E%2E/admin', '/r/abcdefgh1234']) {
+      expect(normalizeInviteHandoffPath(path, 'invite')).toBe('/');
+    }
+  });
+
+  it('reads no steering out of a crafted referrer or link', () => {
+    expect(readInviteInstallReferrer(`utm_source=${INVITE_INSTALL_REFERRER_SOURCE}&mb_r=${CODE}&mb_p=%2Fadmin`))
+      .toEqual({ code: CODE, kind: 'shared_link', path: '/' });
+    expect(readInviteHandoffLink(`https://magicbooklet.com/oauth/consent?r=${CODE}`))
+      .toEqual({ code: CODE, kind: 'shared_link', path: '/' });
+    expect(readInviteHandoffLink(`https://magicbooklet.com/showcase/../admin?r=${CODE}`))
+      .toEqual({ code: CODE, kind: 'shared_link', path: '/' });
+    expect(readInviteHandoffLink(`https://magicbooklet.com/r/${CODE}?next=%2Fsettings%2Fdelete-account`))
+      .toEqual({ code: CODE, kind: 'invite', path: '/' });
+  });
+
+  // A destination with a query was dropped whole, and the phone landed on the default page.
+  it('carries an invite link\u2019s destination with its query, both ways', () => {
+    const handoff = { code: CODE, kind: 'invite' as const, path: '/create-video?model=veo-3.1' };
+    const link = buildInviteHandoffLink('https://magicbooklet.com', handoff);
+    expect(link).toBe(`https://magicbooklet.com/r/${CODE}?next=%2Fcreate-video%3Fmodel%3Dveo-3.1`);
+    expect(readInviteHandoffLink(link)).toEqual(handoff);
+    expect(readInviteInstallReferrer(buildInviteInstallReferrer(handoff))).toEqual(handoff);
+  });
+
+  // No page but the landing, a post and a creator records an invite.
+  it('sends a shared link with no page of its own out as the invite\u2019s landing', () => {
+    expect(buildInviteHandoffLink('https://magicbooklet.com', { code: CODE, kind: 'shared_link', path: '/create' }))
+      .toBe(`https://magicbooklet.com/r/${CODE}`);
   });
 });
 

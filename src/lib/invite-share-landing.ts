@@ -10,6 +10,7 @@ import {
   readInviteHandoffPreview,
   readStoredInviteHandoff,
   storeInviteHandoff,
+  withoutInviteHandoffPreview,
   type StoredInviteHandoff,
 } from '@/lib/invite-handoff';
 
@@ -191,13 +192,20 @@ export function useInviteVisitFromSharedLink({
   viewerHasAccount: boolean;
 }): StoredInviteHandoff | null {
   const handled = useRef(false);
+  const hasAccount = useRef(viewerHasAccount);
   const [handoff, setHandoff] = useState<StoredInviteHandoff | null>(null);
+
+  // An account holds no invite to carry on, whenever the page learns of it: a
+  // session can arrive after the visit below was sent (review of 2026-11-10).
+  useEffect(() => {
+    hasAccount.current = viewerHasAccount;
+    if (viewerKnown && viewerHasAccount) clearStoredInviteHandoff();
+  }, [viewerHasAccount, viewerKnown]);
 
   useEffect(() => {
     if (handled.current || search === null || !viewerKnown) return;
     handled.current = true;
 
-    if (viewerHasAccount) clearStoredInviteHandoff();
     if (!readInviteShareCode(search)) {
       // No invite on this link: the one an earlier page of the tab kept, if any.
       const stored = viewerHasAccount ? null : readStoredInviteHandoff();
@@ -205,17 +213,17 @@ export function useInviteVisitFromSharedLink({
       return;
     }
 
-    if (!isInAppBrowser(window.navigator.userAgent)) {
-      const { pathname, search: currentSearch, hash } = window.location;
-      const withoutCode = withoutInviteShareCode(`${pathname}${currentSearch}${hash}`);
-      if (withoutCode !== `${pathname}${currentSearch}${hash}`) {
-        window.history.replaceState(window.history.state, '', withoutCode);
-      }
-    }
+    // The preview switch goes off the address everywhere; the code stays on it
+    // only inside another app's browser.
+    const { pathname, search: currentSearch, hash } = window.location;
+    const address = `${pathname}${currentSearch}${hash}`;
+    const withoutPreview = withoutInviteHandoffPreview(address);
+    const cleaned = isInAppBrowser(window.navigator.userAgent) ? withoutPreview : withoutInviteShareCode(withoutPreview);
+    if (cleaned !== address) window.history.replaceState(window.history.state, '', cleaned);
 
     const preview = readInviteHandoffPreview(search);
     void recordInviteVisitFromSharedLink({ search, path, viewerHasAccount }).then(({ recorded, keptCode }) => {
-      if (keptCode) {
+      if (keptCode && !hasAccount.current) {
         const kept: StoredInviteHandoff = { code: keptCode, kind: 'shared_link', path, preview };
         storeInviteHandoff(kept);
         setHandoff(kept);

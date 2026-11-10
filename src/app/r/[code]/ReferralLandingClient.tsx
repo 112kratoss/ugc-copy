@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
 import { InviteHandoffLandingOffer } from '@/components/InviteHandoffBar';
-import { readInviteHandoffPreview, type StoredInviteHandoff } from '@/lib/invite-handoff';
+import { readInviteHandoffPreview, withoutInviteHandoffPreview, type StoredInviteHandoff } from '@/lib/invite-handoff';
 
 import { normalizeInviteShareCode } from '../../../../ugc-mobile/lib/invite-share-link/invite-share-link';
 
@@ -49,7 +49,8 @@ export default function ReferralLandingClient({
   // keeps the first invite link; a shared post's invite gives way to this one).
   const [keptEarlierInvite, setKeptEarlierInvite] = useState(false);
   // The invite this browser now holds, for the offer to carry it on to the app: this link's, or
-  // the earlier one the server kept in its place (which may have come by a shared post).
+  // the earlier invite link's the server kept in its place. Either way an invite link's: a
+  // shared post's invite gives way to this one, so only another invite link is ever kept.
   const [handoff, setHandoff] = useState<StoredInviteHandoff | null>(null);
   const [retryKey, setRetryKey] = useState(0);
 
@@ -69,12 +70,14 @@ export default function ReferralLandingClient({
       const keptCode = normalizeInviteShareCode(payload?.code) ?? code.toLowerCase();
       const keptEarlier = keptCode !== code.toLowerCase();
       setKeptEarlierInvite(keptEarlier);
-      setHandoff({
-        code: keptCode,
-        kind: keptEarlier ? 'shared_link' : 'invite',
-        path: destination,
-        preview: readInviteHandoffPreview(window.location.search),
-      });
+      // Handed on as its own landing (`/r/<kept code>`), which is the page that records it
+      // on the phone: the destination alone records nothing (review of 2026-11-10).
+      const preview = readInviteHandoffPreview(window.location.search);
+      setHandoff({ code: keptCode, kind: 'invite', path: destination, preview });
+      if (preview) {
+        const { pathname, search, hash } = window.location;
+        window.history.replaceState(window.history.state, '', withoutInviteHandoffPreview(`${pathname}${search}${hash}`));
+      }
       setState('ready');
     }).catch((nextError: unknown) => {
       if (nextError instanceof DOMException && nextError.name === 'AbortError') return;

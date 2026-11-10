@@ -42,17 +42,57 @@ const MAX_PATH_LENGTH = 512;
 const MAX_CARRIED_LENGTH = 2048;
 
 /**
- * `path` as a page of this product, or `/`: it starts with one slash, holds no
- * backslash, control character, query or fragment, and is not too long to carry.
+ * The top-level folders an invite link may lead to: the server's own list for
+ * a visit's destination (`SAFE_TOP_LEVEL_PATHS` in `src/lib/referral.ts`, held
+ * equal by `src/__tests__/invite-install-handoff.test.ts`).
  */
-export function normalizeInviteHandoffPath(path: unknown): string {
+export const INVITE_DESTINATION_TOP_LEVELS: readonly string[] = [
+  '', 'ai-image-generator', 'ai-motion-transfer', 'ai-video-generator', 'ai-workflow-builder', 'blog',
+  'contact', 'create', 'create-image', 'create-motion', 'create-video', 'create-workflow', 'creations',
+  'creators', 'invite', 'login', 'marketplace', 'post', 'pricing', 'privacy', 'profile', 'showcase',
+  'templates', 'terms',
+];
+
+/** The two pages a shared link opens: a post, a creator. One segment under each. */
+const SHARED_LINK_PAGE_PATTERN = /^\/(?:showcase|creators)\/[^/]+$/;
+
+/** A `.` or `..` segment, plain or percent-encoded, or a segment that hides a slash. */
+function hasTraversal(pathname: string): boolean {
+  for (const segment of pathname.split('/')) {
+    let decoded = segment;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return true;
+    }
+    if (decoded === '.' || decoded === '..' || decoded.includes('/') || decoded.includes('\\')) return true;
+  }
+  return false;
+}
+
+/**
+ * `path` as a page this site would have written for an invite of `kind`, or `/`.
+ *
+ * The app goes where this says with nothing in between, and it reads it at its
+ * first launch from the code built into the binary, which no over-the-air
+ * update can tighten (review of 2026-11-10): so it takes only what the web
+ * writes. A shared link's is the post or the creator page it was opened on,
+ * with no query. An invite link's is a destination the server allows for a
+ * visit, query and all. Neither holds a fragment, a backslash, a control
+ * character, white space or a `..`.
+ */
+export function normalizeInviteHandoffPath(path: unknown, kind: InviteHandoffKind): string {
   if (typeof path !== 'string') return '/';
   const trimmed = path.trim();
   if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return '/';
   if (trimmed.length > MAX_PATH_LENGTH) return '/';
   // eslint-disable-next-line no-control-regex
-  if (/[\\?#\u0000-\u001f\u007f]/.test(trimmed)) return '/';
-  return trimmed;
+  if (/[\\#\s\u0000-\u001f\u007f]/.test(trimmed)) return '/';
+  const queryIndex = trimmed.indexOf('?');
+  const pathname = queryIndex >= 0 ? trimmed.slice(0, queryIndex) : trimmed;
+  if (hasTraversal(pathname)) return '/';
+  if (kind === 'shared_link') return queryIndex < 0 && SHARED_LINK_PAGE_PATTERN.test(pathname) ? pathname : '/';
+  return INVITE_DESTINATION_TOP_LEVELS.includes(pathname.split('/')[1] ?? '') ? trimmed : '/';
 }
 
 function normalizeKind(value: unknown): InviteHandoffKind {
@@ -84,7 +124,7 @@ export function buildInviteInstallReferrer(handoff: InviteInstallHandoff): strin
   const code = normalizeInviteShareCode(handoff.code);
   if (!code) return null;
   const kind = normalizeKind(handoff.kind);
-  const path = normalizeInviteHandoffPath(handoff.path);
+  const path = normalizeInviteHandoffPath(handoff.path, kind);
   return [
     `utm_source=${INVITE_INSTALL_REFERRER_SOURCE}`,
     'utm_medium=invite',
@@ -104,11 +144,8 @@ export function readInviteInstallReferrer(referrer: unknown): InviteInstallHando
   if (pairs.get('utm_source') !== INVITE_INSTALL_REFERRER_SOURCE) return null;
   const code = normalizeInviteShareCode(pairs.get('mb_r'));
   if (!code) return null;
-  return {
-    code,
-    kind: normalizeKind(pairs.get('utm_content')),
-    path: normalizeInviteHandoffPath(pairs.get('mb_p')),
-  };
+  const kind = normalizeKind(pairs.get('utm_content'));
+  return { code, kind, path: normalizeInviteHandoffPath(pairs.get('mb_p'), kind) };
 }
 
 /** The Play listing's link with `handoff` on it; the listing's own link when there is nothing to carry. */
@@ -129,14 +166,16 @@ export function withInviteInstallReferrer(playStoreUrl: string, handoff: InviteI
  * The link the web copies for an iPhone, and draws as a QR code for a laptop:
  * the invite's own page on `origin`. An invite link is `/r/<code>` with where
  * it led; a shared link is the page it was opened on with `r` back on it. Both
- * are links the installed app already opens.
+ * are links the installed app already opens. A shared link with no page of its
+ * own to name goes out as the invite's landing: no other page records an invite.
  */
 export function buildInviteHandoffLink(origin: string, handoff: InviteInstallHandoff): string | null {
   const code = normalizeInviteShareCode(handoff.code);
   if (!code) return null;
   const base = origin.replace(/\/+$/, '');
-  const path = normalizeInviteHandoffPath(handoff.path);
-  if (normalizeKind(handoff.kind) === 'invite') {
+  const kind = normalizeKind(handoff.kind);
+  const path = normalizeInviteHandoffPath(handoff.path, kind);
+  if (kind === 'invite' || path === '/') {
     return `${base}${INVITE_LANDING_PREFIX}${code}${path === '/' ? '' : `?next=${encodeURIComponent(path)}`}`;
   }
   return `${base}${path}?${INVITE_SHARE_QUERY_PARAM}=${code}`;
@@ -169,12 +208,13 @@ export function readInviteHandoffLink(
     }
     const code = normalizeInviteShareCode(rawCode);
     if (!code) return null;
-    return { code, kind: 'invite', path: normalizeInviteHandoffPath(readQuery(query).get('next')) };
+    return { code, kind: 'invite', path: normalizeInviteHandoffPath(readQuery(query).get('next'), 'invite') };
   }
 
   const code = readInviteShareCode(query);
   if (!code) return null;
-  // The page's path as the link spells it, encoding and all: it goes back to
-  // the server as written, which checks it again (`getSafeReferralDestination`).
-  return { code, kind: 'shared_link', path: normalizeInviteHandoffPath(path) };
+  // The page's path as the link spells it, encoding and all. A link with an
+  // invite on any page but a post's or a creator's is not one this site shares:
+  // its invite is kept, and it leads nowhere.
+  return { code, kind: 'shared_link', path: normalizeInviteHandoffPath(path, 'shared_link') };
 }
