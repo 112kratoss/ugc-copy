@@ -40,7 +40,7 @@ let seen!: AppleZoomReturnPicture;
 function Tile({ itemId = 'post-1', preview = PREVIEW }: { itemId?: string; preview?: typeof PREVIEW | null }) {
   const returnPicture = useAppleZoomReturnPicture(':r1:', itemId, preview);
   seen = returnPicture;
-  return <AppleZoomReturnPictureView returnPicture={returnPicture} radius={16} />;
+  return <AppleZoomReturnPictureView identifier={`zoom|:r1:|${itemId}`} returnPicture={returnPicture} radius={16} />;
 }
 
 const mounted: renderer.ReactTestRenderer[] = [];

@@ -109,7 +109,8 @@ import { useCreatorPayoutState } from '@/lib/use-creator-payout-state';
 import { useScrollWithinContent } from '@/lib/use-scroll-within-content';
 import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
+import { getMagicTabBarMetrics, magicTabBarCover } from '@/lib/tab-bar-layout';
+import type { AppleZoomSurfaceBottomBar } from '@/lib/apple-zoom-surface';
 import { formatCreditBalance } from '@/lib/pricing';
 import { SHOWCASE_PLAYBACK_VIEWABILITY } from '@/lib/showcase-feed-events';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
@@ -666,6 +667,7 @@ export function ProfileDashboard({
         activeTab={activeTab}
         cards={signedOutPreviewCards}
         contentBottomPadding={tabBarMetrics.contentBottomOverlapPadding}
+        bottomBar={magicTabBarCover(width, bottomInset)}
         emptyTitle={activeTab === 'Saved' ? 'Sign in to view saved media' : `Sign in to view your ${activeTab.toLowerCase()}`}
         fallbackAvatarInitials="C"
         header={(
@@ -720,6 +722,7 @@ export function ProfileDashboard({
       viewKey={tabScope.join(':')}
       cards={tabCards}
       contentBottomPadding={tabBarMetrics.contentBottomOverlapPadding}
+        bottomBar={magicTabBarCover(width, bottomInset)}
       emptyTitle={getProfileMediaEmptyTitle(...tabScope)}
       emptyBody={getProfileMediaEmptyBody(...tabScope)}
       fallbackAvatarInitials={initials}
@@ -807,6 +810,7 @@ function ProfileMediaList({
   viewKey = activeTab,
   cards,
   contentBottomPadding,
+  bottomBar,
   emptyBody,
   emptyTitle,
   fallbackAvatarInitials,
@@ -837,6 +841,8 @@ function ProfileMediaList({
   viewKey?: string;
   cards: ProfileMediaCard[];
   contentBottomPadding: number;
+  /** The tab bar this grid's tiles go under (`MediaZoomSurface`). */
+  bottomBar: AppleZoomSurfaceBottomBar;
   emptyBody?: string;
   emptyTitle: string;
   fallbackAvatarInitials: string;
@@ -937,7 +943,7 @@ function ProfileMediaList({
 
   return (
     // Saved tiles here are what the reel grows out of and returns to.
-    <MediaZoomSurface revealItem={revealItem}>
+    <MediaZoomSurface revealItem={revealItem} bottomBar={bottomBar}>
     <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <FlashList
         keyboardShouldPersistTaps="never"

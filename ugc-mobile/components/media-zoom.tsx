@@ -28,6 +28,7 @@ import Animated, {
   useFrameCallback,
   useSharedValue,
   withTiming,
+  type SharedValue,
 } from 'react-native-reanimated';
 
 import {
@@ -100,7 +101,7 @@ import { setZoomUnderlayHidden } from '@/lib/zoom-underlay';
 import { listenToTransition } from '@/lib/use-screen-leaving';
 import { signedMediaIdentity } from '@/lib/use-stable-signed-url';
 import { useReducedMotion } from '@/lib/motion';
-import { appleZoomOpenSourceId, appleZoomSourceId, type AppleZoomOpen } from '@/lib/apple-zoom';
+import { appleZoomOpenSourceId, appleZoomSourceId, parseAppleZoomSourceId, type AppleZoomOpen } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { mediaColors } from '@/lib/theme';
 import {
@@ -110,7 +111,16 @@ import {
   withholdAppleZoomSource,
   type AppleZoomReturnPicture,
 } from '@/components/apple-zoom';
-import { forgetAppleZoomSurface, noteAppleZoomPopBegan, noteAppleZoomPopEnded, registerAppleZoomSurface } from '@/lib/apple-zoom-surface';
+import {
+  forgetAppleZoomSurface,
+  noteAppleZoomPopBegan,
+  noteAppleZoomPopEnded,
+  noteAppleZoomSurfaceBottomBar,
+  noteAppleZoomTileShape,
+  registerAppleZoomSurface,
+  type AppleZoomSurfaceBottomBar,
+} from '@/lib/apple-zoom-surface';
+import { reelCloseFlightHides } from '@/lib/reel-close-flight';
 import { LetterboxBands } from '@/components/letterbox-bands';
 import { TopScrim } from '@/components/top-scrim';
 import { resolvedTopInset } from '@/lib/safe-area';
@@ -900,8 +910,28 @@ export function useMediaZoomPaintReport() {
  * per mounted screen, so two surfaces showing the same post (Home and Explore,
  * or two creator profiles) never return a reel to the wrong one.
  */
-export function MediaZoomSurface({ children, revealItem }: { children: ReactNode; revealItem?: (itemId: string) => void }) {
+export function MediaZoomSurface({
+  children,
+  revealItem,
+  bottomBar,
+}: {
+  children: ReactNode;
+  revealItem?: (itemId: string) => void;
+  /**
+   * This screen's own bar, floating over the foot of its tiles (the tab bar,
+   * on a tab screen; `magicTabBarCover`): a picture flown home into a tile
+   * under it stops at the bar (lib/apple-zoom-surface.ts).
+   */
+  bottomBar?: AppleZoomSurfaceBottomBar;
+}) {
   const surfaceId = useId();
+  const barHeight = bottomBar?.height ?? 0;
+  const barCapWidth = bottomBar?.capWidth ?? 0;
+  const barCapHeight = bottomBar?.capHeight ?? 0;
+  useEffect(
+    () => noteAppleZoomSurfaceBottomBar(surfaceId, { height: barHeight, capWidth: barCapWidth, capHeight: barCapHeight }),
+    [barCapHeight, barCapWidth, barHeight, surfaceId]
+  );
   useEffect(() => revealItem ? registerAppleZoomSurface(surfaceId, revealItem) : undefined, [revealItem, surfaceId]);
   useEffect(() => () => forgetAppleZoomSurface(surfaceId), [surfaceId]);
   return <MediaZoomSurfaceContext.Provider value={surfaceId}>{children}</MediaZoomSurfaceContext.Provider>;
@@ -1170,6 +1200,14 @@ export function MediaZoomSourceView({
   }, []);
   const zoomed = Boolean(source.appleZoomId);
   const radius = source.radius ?? 0;
+  // A reel closing into this tile cuts its page down to the tile's shape
+  // (components/reel-close-morph.tsx), which it reads from here.
+  const appleZoomId = source.appleZoomId;
+  useEffect(() => {
+    const tile = parseAppleZoomSourceId(appleZoomId);
+    if (!tile || !appleZoomTile) return undefined;
+    return noteAppleZoomTileShape(tile.surfaceId, tile.itemId, { width: appleZoomTile.width, height: appleZoomTile.height, radius });
+  }, [appleZoomId, appleZoomTile, radius]);
   // The view UIKit's zoom grows the reel out of: the reel's whole screen at the
   // tile's scale, placed so that its picture covers the tile
   // (`appleZoomPageFrame`), so that the zoom lines up with the whole screen and
@@ -1233,7 +1271,7 @@ export function MediaZoomSourceView({
         // corners, lined up with the part of the picture the tile shows, so the
         // page comes down into the tile's shape and lands on the tile itself.
         <AppleZoomSource identifier={source.appleZoomId} aspectRatio={source.aspectRatio} tile={appleZoomTile}>
-          <AppleZoomReturnPictureView returnPicture={source.returnPicture} radius={radius} />
+          <AppleZoomReturnPictureView identifier={source.appleZoomId} returnPicture={source.returnPicture} radius={radius} />
         </AppleZoomSource>
       ) : null}
       {zoomed && source.appleZoomId ? (
@@ -1387,6 +1425,9 @@ export function useMediaZoomStage({
   expectsNeighbours,
   activeVideoUrl = null,
   playerFor,
+  closeMorph,
+  closeFlightId = 0,
+  beforeNativeClose,
   onExit,
 }: {
   screen: ZoomSize;
@@ -1419,8 +1460,33 @@ export function useMediaZoomStage({
    * into the tile hands it back only when it is still the one the tile lent.
    */
   playerFor?: (itemId: string, url: string) => VideoPlayer | null;
+  /**
+   * iOS 18: how far the page has been cut down to the tile's part of its
+   * picture for a close UIKit's zoom runs (components/reel-close-morph.tsx).
+   * The stage's ground and the reel's chrome fade out with it.
+   */
+  closeMorph?: SharedValue<number>;
+  /**
+   * iOS 18: this reel, for the picture's own flight home on Back
+   * (lib/reel-close-flight.ts): the page is hidden from the frame its picture
+   * takes off, so UIKit's zoom has nothing of it to be seen moving. 0 for a
+   * reel no picture flies from.
+   */
+  closeFlightId?: number;
+  /**
+   * iOS 18: called as the reel's own Back hands the close to UIKit's zoom.
+   * Returns how long to wait before the pop, in ms, for what it changed on
+   * the page to have been drawn; 0 pops at once.
+   */
+  beforeNativeClose?: () => number;
   onExit: () => void;
 }): MediaZoomStageValue {
+  const noCloseMorph = useSharedValue(0);
+  const morph = closeMorph ?? noCloseMorph;
+  const beforeNativeCloseRef = useRef(beforeNativeClose);
+  useEffect(() => {
+    beforeNativeCloseRef.current = beforeNativeClose;
+  }, [beforeNativeClose]);
   const [origin] = useState<ZoomOrigin | null>(() => (
     reducedMotion ? null : peekPendingZoomOrigin(initialItemId, Date.now())
   ));
@@ -1979,7 +2045,12 @@ export function useMediaZoomStage({
     // it begins).
     // On iOS 18 the picture does not fly on its own (`IOS_BACK_FLIES_PICTURE`).
     if (nativeZoom && (!IOS_BACK_FLIES_PICTURE || !pictureOnly)) {
-      leave();
+      // A pop the app asks for takes the reel out of React first, and UIKit
+      // shrinks a snapshot of it taken then: whatever the page is to look
+      // like on the way down has to be drawn before the pop is asked for.
+      const wait = beforeNativeCloseRef.current?.() ?? 0;
+      if (wait > 0) setTimeout(leave, wait);
+      else leave();
       return;
     }
     if (!origin || reducedMotion) {
@@ -2151,16 +2222,20 @@ export function useMediaZoomStage({
       : computeZoomFrame(localGeometry.value, 1)
   ));
 
-  const stageStyle = useAnimatedStyle(() => ({
-    opacity: closeDissolves.value
-      ? stageOpacity.value * interpolate(flightTime.value, [0, CLOSE_DISSOLVE_FROM], [0, 1], Extrapolation.CLAMP)
-      : stageOpacity.value,
-  }));
+  const stageStyle = useAnimatedStyle(() => {
+    // Its picture is flying home on its own, over the page.
+    if (closeFlightId !== 0 && reelCloseFlightHides.value === closeFlightId) return { opacity: 0 };
+    return {
+      opacity: closeDissolves.value
+        ? stageOpacity.value * interpolate(flightTime.value, [0, CLOSE_DISSOLVE_FROM], [0, 1], Extrapolation.CLAMP)
+        : stageOpacity.value,
+    };
+  });
 
   const groundStyle = useAnimatedStyle(() => ({
     opacity: following.value
       ? interpolate(flightProgress.value, [GROUND_RAMP_FROM, 1], [0, 1], Extrapolation.CLAMP)
-      : 1,
+      : 1 - morph.value,
   }));
 
   const clipStyle = useAnimatedStyle(() => ({
@@ -2183,7 +2258,7 @@ export function useMediaZoomStage({
   // the reel once the flight has landed, and on a collapse the reel shrinks with
   // it — fading, not cut away (`CLOSE_CHROME_HOLD`).
   const chromeStyle = useAnimatedStyle(() => {
-    if (!following.value) return { opacity: 1 };
+    if (!following.value) return { opacity: 1 - morph.value };
     if (flightClosing.value) {
       return {
         opacity: interpolate(flightTime.value, [CLOSE_CHROME_GONE, CLOSE_CHROME_HOLD], [0, 1], Extrapolation.CLAMP),
@@ -2270,7 +2345,7 @@ export function MediaZoomStage({
     >
       <Animated.View
         pointerEvents="none"
-        style={[StyleSheet.absoluteFill, { backgroundColor: groundClear && Platform.OS === 'ios' ? 'transparent' : '#000' }, stage.groundStyle]}
+        style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, stage.groundStyle]}
       />
       <Animated.View
         collapsable={false}

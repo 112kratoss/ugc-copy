@@ -110,7 +110,7 @@ import {
 import { formatCreditBalance } from '@/lib/pricing';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
-import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
+import { getMagicTabBarMetrics, magicTabBarCover } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type {
@@ -1070,7 +1070,7 @@ export function HomeDashboard() {
   return (
     // Tiles on this screen are what the reel grows out of and returns to.
     <FeedVideoActivationContext.Provider value={activationStore}>
-    <MediaZoomSurface>
+    <MediaZoomSurface bottomBar={magicTabBarCover(width, bottomInset)}>
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <FlashList
         keyboardShouldPersistTaps="never"

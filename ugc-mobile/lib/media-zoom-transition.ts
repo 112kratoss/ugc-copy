@@ -703,6 +703,11 @@ export function appleZoomPageFrame(
  * (lib/reel-backdrop.ts), and with it the cover over the pop the flight
  * withholds the zoom from, which scales the page beneath up from about 92%
  * (filmed on the iPhone 16e, 2026-11-08). Android always flies it.
+ *
+ * Since 2026-11-10 a still picture under the bar's Back does fly home alone,
+ * by another route that waits for nothing: lib/reel-close-flight.ts takes it
+ * off in the frame the finger lifts, over the pop the button starts. This
+ * switch, and the flight it turns on, stay off.
  */
 export const IOS_BACK_FLIES_PICTURE = false;
 

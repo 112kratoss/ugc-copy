@@ -104,7 +104,7 @@ import {
   type ShowcaseGridLayout,
   type ShowcaseMasonryCard,
 } from '@/lib/showcase-feed-view-model';
-import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
+import { getMagicTabBarMetrics, magicTabBarCover } from '@/lib/tab-bar-layout';
 import { SHOWCASE_DRAW_DISTANCE, SHOWCASE_MAX_ACTIVE_VIDEO_PREVIEWS } from '@/lib/media-performance';
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia } from '@/lib/showcase-media';
 import { Reveal } from '@/components/reveal';
@@ -262,6 +262,8 @@ export default function ShowcaseScreen() {
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
+  // Where the tab bar is, for a picture flying home into a tile under it (lib/reel-close-flight.ts).
+  const tabBarCover = magicTabBarCover(width, bottomInset);
   const gridLayout = useMemo(() => getShowcaseGridLayout(width), [width]);
   const feedRef = useRef<FlashListRef<ShowcaseMasonryCard>>(null);
   useScrollToTop(feedRef);
@@ -930,7 +932,7 @@ export default function ShowcaseScreen() {
   return (
     // Pins on this grid are what the reel grows out of and returns to.
     <FeedVideoActivationContext.Provider value={activationStore}>
-    <MediaZoomSurface>
+    <MediaZoomSurface bottomBar={tabBarCover}>
     <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} enabled={!isSwipingMedia}>
       <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <FlashList
