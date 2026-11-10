@@ -24,6 +24,10 @@ export type PromptMentionAnchor = {
  * keystroke already; a scroll of the prompt's text, which only the open @ menu needs, would add a
  * render of the whole composer per frame of the scroll. The menu, mounted only while a mention is
  * being typed, reads this through `usePromptMentionGeometry` and is the one thing that redraws.
+ *
+ * It holds no ref to the card: anything of it passed to a `ref` prop makes React Compiler take the
+ * whole anchor for a ref, and every handler read off it in render for a ref read, and skip the
+ * composer. The menu measures the card through the field's own ref instead.
  */
 export function createPromptMentionAnchor(): PromptMentionAnchor {
   let geometry: PromptMentionGeometry = { cardHeight: null, field: null, scrollY: 0 };
@@ -57,10 +61,19 @@ export function createPromptMentionAnchor(): PromptMentionAnchor {
   };
 }
 
-/** One anchor for the life of a composer. */
-export function usePromptMentionAnchor() {
-  const [anchor] = useState(createPromptMentionAnchor);
-  return anchor;
+/**
+ * One anchor per prompt field. `fieldKey` names the field the composer is drawing: when it changes
+ * the field is a new one (the video tool's single prompt comes back after a story), which starts
+ * unscrolled and reports no scroll to say so, so the anchor starts over with it.
+ */
+export function usePromptMentionAnchor(fieldKey: string | number | boolean = '') {
+  const [held, setHeld] = useState(() => ({ fieldKey, anchor: createPromptMentionAnchor() }));
+  if (held.fieldKey !== fieldKey) {
+    const next = { fieldKey, anchor: createPromptMentionAnchor() };
+    setHeld(next);
+    return next.anchor;
+  }
+  return held.anchor;
 }
 
 export function usePromptMentionGeometry(anchor: PromptMentionAnchor) {
