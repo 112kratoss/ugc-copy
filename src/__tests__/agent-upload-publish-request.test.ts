@@ -65,7 +65,8 @@ describe('the id of a post made from uploads', () => {
     // A UUID wherever one is checked: the tools' schema, the audit row's columns, the posts table.
     expect(z.uuid().safeParse(id).success).toBe(true);
     expect(uuidOrNull(id)).toBe(id);
-    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+    // Version 4, as every other post id is: no check that reads a post id can tell it apart.
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
 
     const others = [
       agentUploadPostId(OTHER_USER_ID, [PICTURE, CLIP]),
@@ -88,7 +89,8 @@ describe('the id of a text post', () => {
     expect(agentTextPostId(USER_ID.toUpperCase(), '  A prompt for product shots ', '\nThree lines that work.\r\nTry them.  ')).toBe(id);
     expect(z.uuid().safeParse(id).success).toBe(true);
     expect(uuidOrNull(id)).toBe(id);
-    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+    // Version 4, as every other post id is: no check that reads a post id can tell it apart.
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
 
     const others = [
       agentTextPostId(OTHER_USER_ID, 'A prompt for product shots', 'Three lines that work.\nTry them.'),

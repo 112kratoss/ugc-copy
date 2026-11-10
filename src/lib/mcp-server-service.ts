@@ -1272,12 +1272,23 @@ function resourceFields(resource: AgentPostResource): { resource_access: AgentPo
   return { resource_access: resource.access, resource_price_tokens: resource.priceTokens, resource_status: resource.status };
 }
 
-/** The same three facts in a sentence, for the text beside the data. */
-function describeResource(resource: AgentPostResource): string {
+/** What a post carries, in the words a refusal and an answer both use. */
+function describeStoredResource(resource: AgentPostResource): string {
+  if (resource.access === 'none') return 'no resource';
+  return resource.access === 'paid' ? `a paid resource at ${resource.priceTokens} tokens` : 'a free resource';
+}
+
+/**
+ * The same three facts in a sentence, for the text beside the data. A draft on a private post is
+ * waiting for the post; a draft on a public one is a resource the listing rule kept off offer (a
+ * save that changes the visibility alone leaves it there without a refusal), and is said so.
+ */
+function describeResource(resource: AgentPostResource, postIsPublic: boolean): string {
   if (resource.access === 'none') return 'It carries no resource.';
-  const what = resource.access === 'paid' ? `a paid resource at ${resource.priceTokens} tokens` : 'a free resource';
-  return resource.status === 'published'
-    ? `It carries ${what}, on offer.`
+  const what = describeStoredResource(resource);
+  if (resource.status === 'published') return `It carries ${what}, on offer.`;
+  return postIsPublic
+    ? `It carries ${what}, but it is not on offer: the post is public and the resource's listing did not pass what a public one needs (a post title of ${RECIPE_TITLE_MIN_LENGTH} or more characters, and a preview or summary that says what it includes). The person completes the listing on the website.`
     : `It carries ${what}, held as a draft: a resource is on offer only while its post is public.`;
 }
 
@@ -1336,8 +1347,16 @@ function invalidPublishRequest(body: { error: string; field?: string }, fields: 
   return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, body.error, field ? { field_errors: { [field]: body.error } } : {});
 }
 
-/** The publish service's refusals, as stable codes with the next step. */
-function publishRefusal(result: { status: number; body: { error: string; field?: string; code?: string } }): CallToolResult {
+/**
+ * The publish service's refusals, as stable codes with the next step. `existingPost` says the
+ * call was a visibility change of a post that exists (a repeat changes nothing else, so a recipe
+ * the service wants priced is priced on the website); `noPrompt` that the creation has no prompt
+ * for the tool to build a recipe from.
+ */
+function publishRefusal(
+  result: { status: number; body: { error: string; field?: string; code?: string } },
+  situation: { existingPost?: boolean; noPrompt?: boolean } = {},
+): CallToolResult {
   const { status, body } = result;
   // Another creator's creation and a missing one answer alike: what exists under an id that is
   // not the caller's is not the caller's to learn (the service's own rule for template results).
@@ -1353,19 +1372,28 @@ function publishRefusal(result: { status: number; body: { error: string; field?:
     });
   }
   // A remix keeps the terms of the recipe it remixed (owner, 2026-11-05): the service's rule, and
-  // the price is still the person's to name.
+  // the price is still the person's to name. The step named is one that works from here: a
+  // repeat cannot price a post that exists, and the tool builds no recipe without a prompt, so
+  // sending the agent back to resource_price_tokens there would bring the same refusal for ever.
   if (body.code === REMIX_RECIPE_MUST_BE_PAID_CODE) {
+    const next = situation.existingPost
+      ? 'The post already exists, so the person prices its recipe on the website; then publish again with visibility public.'
+      : situation.noPrompt
+        ? 'This creation has no prompt for the tool to build a recipe from: the person publishes it on the website, which builds the recipe from its saved inputs.'
+        : 'Ask the person what to charge, then publish with resource_price_tokens and allow_remixes left on.';
     return toolFailure(
       MCP_ERROR_CODES.INVALID_REQUEST,
-      `${body.error} Ask the person what to charge, then publish with resource_price_tokens and allow_remixes left on.`,
-      { field_errors: { resource_price_tokens: body.error }, publish_code: body.code },
+      `${body.error} ${next}`,
+      { ...(situation.existingPost || situation.noPrompt ? {} : { field_errors: { resource_price_tokens: body.error } }), publish_code: body.code },
     );
   }
   if (body.code === REMIX_RECIPE_STAYS_FREE_CODE) {
     return toolFailure(
       MCP_ERROR_CODES.INVALID_REQUEST,
-      `${body.error} Publish without resource_price_tokens.`,
-      { field_errors: { resource_price_tokens: body.error }, publish_code: body.code },
+      situation.existingPost
+        ? `${body.error} The post already exists, so the person makes its recipe free on the website; then publish again with visibility public.`
+        : `${body.error} Publish without resource_price_tokens.`,
+      { ...(situation.existingPost ? {} : { field_errors: { resource_price_tokens: body.error } }), publish_code: body.code },
     );
   }
   if (status === 409) {
@@ -1415,13 +1443,16 @@ const MADE_WITH_NAME_MAX_LENGTH = 80;
 /** A price is an integer column: the largest one that is still a whole step. */
 const RESOURCE_PRICE_TOKENS_MAX = 2_147_483_640;
 
-const PUBLISH_POST_SCHEMA = z.object({
+// Strict, at every level: the SDK parses a call with this schema, and a plain object would drop a
+// key it does not know. With both source keys optional, a misspelled one (`generationId`) would
+// leave a title and a body to publish as a public text post (PR #751's review).
+const PUBLISH_POST_SCHEMA = z.strictObject({
   generation_id: GENERATION_ID.optional().describe('A creation made here, to publish as a post: the generation_id create_media or list_creations gave. Never with uploads.'),
-  uploads: z.array(z.object({
+  uploads: z.array(z.strictObject({
     storage_path: z.string().trim().min(1).max(512).describe('The input.storage_path upload_input answered for the file.'),
   })).min(1).max(MAX_POST_MEDIA_ITEMS).optional()
     .describe(`Media made elsewhere, to publish as a post: 1 to ${MAX_POST_MEDIA_ITEMS} pictures or clips you staged with upload_input, in the order the post shows them. Needs title and made_with. Never with generation_id.`),
-  made_with: z.array(z.object({
+  made_with: z.array(z.strictObject({
     tool: z.string().trim().min(1).max(MADE_WITH_NAME_MAX_LENGTH).describe('The tool or app that made the media, as its makers name it (Midjourney, Photoshop, Blender, a camera). Never Magic Booklet: media made here is published with generation_id.'),
     model: z.string().trim().min(1).max(MADE_WITH_NAME_MAX_LENGTH).optional().describe('The model or version, where the tool has one (v7, FLUX.1 Pro).'),
   })).min(1).max(MADE_WITH_MAX_ENTRIES).optional()
@@ -1433,7 +1464,7 @@ const PUBLISH_POST_SCHEMA = z.object({
   visibility: PUBLISH_VISIBILITY.optional().describe('public (the default for a new post) or private. On a post that already exists, given, it changes the visibility; left out, the post stays as it is.'),
   is_nsfw: z.boolean().optional().describe('Mark the post mature: it stays covered until a viewer who allows mature content reveals it.'),
   allow_remixes: z.boolean().optional().describe('With generation_id only. Default true: the post carries the creation\'s recipe (its exact prompt and the saved inputs it may share), so others can remix it. False posts the media alone. Refused with uploads and on a text post, which have no recipe.'),
-  resources: z.array(z.object({
+  resources: z.array(z.strictObject({
     type: z.enum(['prompt', 'guide', 'external_link']).describe('prompt: reusable prompt text. guide: instructions or notes, such as a skill. external_link: an https address.'),
     title: z.string().trim().min(1).max(AGENT_RESOURCE_CARD_TITLE_MAX_LENGTH).describe(`What the person gets, at most ${AGENT_RESOURCE_CARD_TITLE_MAX_LENGTH} characters. Shown to everyone.`),
     description: z.string().trim().max(POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH).optional().describe(`The card's public line, at most ${POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH} characters. Shown to everyone.`),
@@ -1448,6 +1479,81 @@ const PUBLISH_POST_SCHEMA = z.object({
 });
 
 type PublishPostArgs = z.output<typeof PUBLISH_POST_SCHEMA>;
+
+/** What a post is, for a repeat's arguments to be held against; null where it could not be read. */
+type RepeatTarget = {
+  postId: string;
+  state: AgentPostState;
+  isNsfw: boolean | null;
+  remixesAllowed: boolean | null;
+  resource: AgentPostResource | null;
+};
+
+/**
+ * A repeat of a publish finds the post it made and may change its visibility, and nothing else:
+ * a price, a resource, the mature mark and the remix switch are changed on the website (owner,
+ * 2026-11-10). So a repeat that asks for a visibility change while naming another price, mark or
+ * switch than the post has, or a resource for a post that has none, is refused before any limit
+ * is spent. Changing the visibility and dropping the rest without a word would put the post
+ * public on terms the person did not ask for: "make it public at 250" would put a free resource
+ * on offer, and a mature mark sent with the change would leave the media uncovered (PR #751's
+ * review). What cannot be compared is not applied, and the answer says so: the cards and listing
+ * lines of a post that has a resource, since no tool reads what one holds.
+ *
+ * Nor is the visibility of a post that is archived, hidden or removed changed: the save would
+ * take an archived post's, and the answer would call it live.
+ */
+function refuseRepeatBeyondVisibility(args: PublishPostArgs, target: RepeatTarget): CallToolResult | null {
+  const named = `Post ${target.postId}`;
+  const unchanged = 'Nothing was changed.';
+  if (target.state !== 'live' && target.state !== 'private') {
+    return toolFailure(
+      'CONFLICT',
+      `${named} is ${target.state}, and its visibility is not changed while it is. ${target.state === 'archived' ? 'The creator restores it on the website first.' : 'It is under a moderation decision.'} ${unchanged}`,
+      { post_id: target.postId, state: target.state },
+    );
+  }
+  const invalid = (field: string, message: string) => (
+    toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, message, { field_errors: { [field]: message }, post_id: target.postId })
+  );
+  const rule = 'Publishing again changes a post\'s visibility and nothing else';
+  const namesListing = args.resources !== undefined || args.resource_summary !== undefined || args.resource_preview !== undefined;
+  const namesMore = namesListing || args.resource_price_tokens !== undefined || args.is_nsfw !== undefined || args.allow_remixes !== undefined;
+  if (namesMore && (!target.resource || target.isNsfw === null || target.remixesAllowed === null)) {
+    return toolFailure(
+      MCP_ERROR_CODES.UNAVAILABLE,
+      `What ${named.toLowerCase()} carries could not be read right now, so what this call names could not be held against it. ${unchanged} Try again in a moment.`,
+    );
+  }
+  const stored = target.resource;
+  if (stored && args.resource_price_tokens !== undefined) {
+    const price = args.resource_price_tokens;
+    const same = price > 0 ? stored.access === 'paid' && stored.priceTokens === price : stored.access !== 'paid';
+    if (!same) {
+      return invalid('resource_price_tokens', `${named} already exists with ${describeStoredResource(stored)}. ${rule}: a price is changed on the website. ${unchanged} To change the visibility alone, publish again without resource_price_tokens.`);
+    }
+  }
+  if (stored && stored.access === 'none' && namesListing) {
+    return invalid(
+      args.resources !== undefined ? 'resources' : args.resource_summary !== undefined ? 'resource_summary' : 'resource_preview',
+      `${named} was published with no resource, and publishing again cannot add one: a resource is added on the website. ${unchanged} To change the visibility alone, publish again without resources, resource_summary and resource_preview.`,
+    );
+  }
+  if (args.is_nsfw !== undefined && target.isNsfw !== null && args.is_nsfw !== target.isNsfw) {
+    return invalid('is_nsfw', `${named} ${target.isNsfw ? 'is marked mature' : 'is not marked mature'}. ${rule}: the mark is changed on the website. ${unchanged} To change the visibility alone, publish again without is_nsfw.`);
+  }
+  if (args.allow_remixes !== undefined && target.remixesAllowed !== null && args.allow_remixes !== target.remixesAllowed) {
+    return invalid('allow_remixes', `${named} ${target.remixesAllowed ? 'allows remixes' : 'does not allow remixes'}. ${rule}: the switch is changed on the website. ${unchanged} To change the visibility alone, publish again without allow_remixes.`);
+  }
+  return null;
+}
+
+/** What a repeat sent that could not be held against the post and was not applied; empty where it sent none. */
+function repeatListingNote(args: PublishPostArgs): string {
+  return args.resources !== undefined || args.resource_summary !== undefined || args.resource_preview !== undefined
+    ? 'Its resource is the one it was published with: the cards and listing lines sent with a repeat are not applied, and are changed on the website.'
+    : '';
+}
 
 /** How an existing post's state reads in a sentence: its visibility, and what else holds it back. */
 function describeExistingState(existing: { visibility: 'public' | 'private'; state: AgentPostState }): string {
@@ -1505,6 +1611,14 @@ function refuseStagedUpload(upload: AgentStagedUpload | undefined, index: number
     case 'finalizing':
       return toolFailure(MCP_ERROR_CODES.NOT_READY, `${named} has not been through upload_input. Once the file is sent, call upload_input with its upload_id, then publish.`, details);
     case 'consuming':
+      // The composer claims each file before the post's row exists. A retry in that moment finds
+      // no post yet: told to stage again, it would publish the same files under new paths, a new
+      // id and so a second post, the very thing the derived id is for (PR #751's review).
+      return toolFailure(
+        MCP_ERROR_CODES.NOT_READY,
+        `${named} is being published by another call right now. Call publish_post again with the same uploads in a few seconds: it answers the post once it is saved. The file is not to be staged a second time.`,
+        details,
+      );
     case 'consumed':
       return toolFailure('CONFLICT', `${named} was already used by a post or a run, and a staged file is used once. Stage the file again to publish it.`, details);
     default:
@@ -1614,7 +1728,7 @@ async function publishComposedPost(args: PublishPostArgs, context: McpToolContex
       return toolSuccess(
         [
           `${isText ? 'This text post is' : 'These uploads are'} already published as post ${postId} (${describeExistingState(existing)}): ${url}. Nothing was changed.`,
-          describeResource(existing.resource),
+          describeResource(existing.resource, existing.state === 'live'),
           asksToChangeResource ? 'A resource and its price are changed on the website, not by publishing again.' : '',
           existing.state === 'private' ? `Publish again with ${same} and visibility public to make it public.` : '',
         ].filter(Boolean).join(' '),
@@ -1630,6 +1744,14 @@ async function publishComposedPost(args: PublishPostArgs, context: McpToolContex
         },
       );
     }
+    const beyond = refuseRepeatBeyondVisibility(args, {
+      postId,
+      state: existing.state,
+      isNsfw: existing.isNsfw,
+      remixesAllowed: existing.remixesAllowed,
+      resource: existing.resource,
+    });
+    if (beyond) return beyond;
     const limited = await refusePublishOverLimit(context, args.visibility === 'public');
     if (limited) return limited;
     const result = await services.updateOwnerPostForRoute({
@@ -1648,7 +1770,8 @@ async function publishComposedPost(args: PublishPostArgs, context: McpToolContex
     return toolSuccess(
       [
         `Post ${postId} is now ${result.body.visibility}: ${url}.${nowPublic ? ' Anyone can see it.' : ' Only the creator sees it.'}`,
-        resource.access === 'none' ? '' : describeResource(resource),
+        resource.access === 'none' ? '' : describeResource(resource, nowPublic),
+        repeatListingNote(args),
       ].filter(Boolean).join(' '),
       {
         post_id: postId,
@@ -1722,7 +1845,7 @@ async function publishComposedPost(args: PublishPostArgs, context: McpToolContex
       isPublic
         ? `Published ${what} as post ${postId}: ${url}. It is public now; anyone can see it, and it goes through moderation as any post does.`
         : `Saved ${what} as private post ${postId}: ${url}. Only the creator sees it; publish again with ${same} and visibility public to make it public.`,
-      resource.access === 'none' ? '' : describeResource(resource),
+      resource.access === 'none' ? '' : describeResource(resource, isPublic),
       `Keep this post_id: list_creations lists creations, not ${isText ? 'text posts' : 'posts made from uploads'}. get_post reads it and delete_post removes it.`,
       'Give the person the link.',
     ].filter(Boolean).join(' '),
@@ -1839,18 +1962,28 @@ const publishPostTool = defineTool({
           },
         );
       }
-      // A visibility change alone: the service republishes the stored post as it is.
+      // A visibility change alone: the service republishes the stored post as it is. Whatever
+      // else the call names is held against the post first.
+      const beyond = refuseRepeatBeyondVisibility(args, {
+        postId: existing.id,
+        state: existing.state,
+        isNsfw: stored.ok ? stored.post.isNsfw : null,
+        remixesAllowed: stored.ok ? stored.post.remixesAllowed : null,
+        resource: storedResource,
+      });
+      if (beyond) return beyond;
       const limited = await refusePublishOverLimit(context, args.visibility === 'public');
       if (limited) return limited;
       const result = await makePost({ generationId, visibility: args.visibility });
-      if (!result.ok) return publishRefusal(result);
+      if (!result.ok) return publishRefusal(result, { existingPost: true });
       const resource = storedResource && storedResource.access !== 'none'
         ? { ...storedResource, status: result.body.resourceBundleStatus ?? storedResource.status }
         : storedResource;
       return toolSuccess(
         [
           `Post ${existing.id} is now ${result.body.visibility}: ${url}.${result.body.visibility === 'public' ? ' Anyone can see it.' : ' Only the creator sees it.'}`,
-          resource && resource.access !== 'none' ? describeResource(resource) : '',
+          resource && resource.access !== 'none' ? describeResource(resource, result.body.visibility === 'public') : '',
+          repeatListingNote(args),
         ].filter(Boolean).join(' '),
         {
           post_id: existing.id,
@@ -1910,7 +2043,7 @@ const publishPostTool = defineTool({
       ...(args.resource_summary !== undefined ? { recipeSummary: args.resource_summary } : {}),
       ...(args.resource_preview !== undefined ? { recipePreview: args.resource_preview } : {}),
     }));
-    if (!result.ok) return publishRefusal(result);
+    if (!result.ok) return publishRefusal(result, { noPrompt: !(creation.prompt?.trim()) });
     const postId = result.body.postId;
     const url = postId ? postUrl(context.siteOrigin, postId) : null;
     const isPublic = result.body.visibility === 'public';
@@ -1997,7 +2130,7 @@ const getPostTool = defineTool({
         `${counts.saves} save${counts.saves === 1 ? '' : 's'}, ${counts.comments} comment${counts.comments === 1 ? '' : 's'}, ${counts.remixes} remix${counts.remixes === 1 ? '' : 'es'}, ${counts.shares} share${counts.shares === 1 ? '' : 's'}.`,
         post.isOwn ? 'It is the creator\'s own.' : 'It is another creator\'s.',
         post.generationId ? '' : post.format === 'text' ? 'It is a text post.' : 'It was made from uploaded media, not from a creation here.',
-        post.resource.access === 'none' ? '' : describeResource(post.resource),
+        post.resource.access === 'none' ? '' : describeResource(post.resource, post.state === 'live'),
       ].filter(Boolean).join(' '),
       postView(post, context),
     );

@@ -76,11 +76,17 @@ export type AgentComposedPostArgs = {
 const UPLOAD_POST_ID_NAMESPACE = 'magicbooklet:agent-upload-post:v1';
 const TEXT_POST_ID_NAMESPACE = 'magicbooklet:agent-text-post:v1';
 
-/** A UUID whose bits are a SHA-256 of the parts, marked version 8 (RFC 9562's form for an id of one's own making) with RFC 4122's variant bits, so it is a UUID wherever one is checked. */
+/**
+ * A UUID whose bits are a SHA-256 of the parts, marked version 4 with RFC 4122's variant bits:
+ * the form every other post id has (`randomUUID`), so every check that reads a post id takes it.
+ * Not version 8, RFC 9562's form for an id of one's own making: account deletion reads each post's
+ * storage paths with a pattern that takes versions 1 to 5 (`account-deletion-service.ts`), after
+ * the account is marked as deleting, and an id it refused would leave the account never erased.
+ */
 function derivedPostId(parts: readonly unknown[]): string {
   const digest = createHash('sha256').update(JSON.stringify(parts)).digest();
   const bytes = Buffer.from(digest.subarray(0, 16));
-  bytes[6] = (bytes[6] & 0x0f) | 0x80;
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = bytes.toString('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;

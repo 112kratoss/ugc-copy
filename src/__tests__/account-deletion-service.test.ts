@@ -13,6 +13,7 @@ import {
   removeAccountStorage,
   startInitialAccountDeletion,
 } from '@/lib/account-deletion-service';
+import { agentTextPostId, agentUploadPostId } from '@/lib/agent-upload-publish-request';
 
 const USER_ID = '87c4b811-7a50-4e1a-9c38-7ab2693c1182';
 const GUEST_ID = '99f5ee80-66c9-4c85-8ada-fcd6d02ef4c1';
@@ -159,6 +160,20 @@ describe('account deletion cleanup service', () => {
     expect(mock.removed).toContainEqual({ bucket: 'post_media', paths: [
       `${prefix}/original.mp4`, `${prefix}/display.webp`,
     ] });
+  });
+
+  // An agent's post of uploaded media gets a derived id (`agentUploadPostId`), and its media is
+  // filed under that id like any post's. The manifest is read after the account is marked as
+  // deleting, so an id this parser refused would leave the account locked and never erased
+  // (PR #751's review: the ids were version 8, and this parser takes versions 1 to 5).
+  it('takes the storage paths of a post an agent published under a derived id', () => {
+    const uploadPostId = agentUploadPostId(USER_ID, [`uploads/${USER_ID}/55555555-5555-4555-8555-555555555555-paper-fox.png`]);
+    const textPostId = agentTextPostId(USER_ID, 'A prompt for product shots', 'Three lines that work.');
+    for (const postId of [uploadPostId, textPostId]) {
+      const paths = [`private-posts/${postId}/0/original.png`, `posts/${postId}/0/display.webp`, `showcase/${postId}/cover.webp`];
+      expect(parseAccountDeletionStorageManifest({ ...storageManifest, showcase_media_paths: paths }), postId)
+        .toMatchObject({ showcaseMediaPaths: paths });
+    }
   });
 
   it('rejects unsafe or incomplete persisted storage manifests', () => {

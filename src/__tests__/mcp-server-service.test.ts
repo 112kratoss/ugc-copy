@@ -475,6 +475,16 @@ describe('MCP tool registry', () => {
       expect(publish.safeParse({ ...textPost, resources: [card], resource_price_tokens: price }).success, String(price)).toBe(false);
     }
     expect(publish.safeParse({ generation_id: GENERATION_ID, resource_price_tokens: 250 }).success).toBe(true);
+
+    // An argument the tool does not have is refused, never dropped: with the source keys optional,
+    // a misspelled one would otherwise leave a title and a body to publish as a public text post
+    // (PR #751's review, finding 4).
+    expect(publish.safeParse({ generationId: GENERATION_ID, ...textPost }).success).toBe(false);
+    expect(publish.safeParse({ upload: [upload], ...textPost }).success).toBe(false);
+    expect(publish.safeParse({ ...textPost, price: 250 }).success).toBe(false);
+    expect(publish.safeParse({ ...textPost, resources: [{ ...card, content: 'x' }] }).success).toBe(false);
+    expect(publish.safeParse({ uploads: [{ storage_path: STAGED_PICTURE, storagePath: STAGED_PICTURE }], title: 'A paper fox', made_with: [{ tool: 'Midjourney' }] }).success).toBe(false);
+    expect(publish.safeParse({ uploads: [upload], title: 'A paper fox', made_with: [{ tool: 'Midjourney', version: 'v7' }] }).success).toBe(false);
   });
 
   it('registers each tool on the server with its title, description, schema and annotations', () => {
@@ -1569,6 +1579,83 @@ describe('publish_post', () => {
     }
   });
 
+  // PR #751's review, finding 2, on the creation path: "make it public at 250" on a post saved
+  // private with a free recipe went public with the recipe free.
+  it('refuses a visibility change of a creation\'s post that names another price, mature mark or remix switch than the post has, before any limit is spent', async () => {
+    const existing = creation({ post: { id: POST_ID, visibility: 'private', state: 'private' } });
+    const cases: Array<[string, Partial<AgentPostView>, Record<string, unknown>, string, RegExp]> = [
+      ['a price on a free recipe', { resource: { access: 'free', priceTokens: 0, status: 'draft' } }, { resource_price_tokens: 250 }, 'resource_price_tokens', /already exists with a free resource.*a price is changed on the website/u],
+      ['another price', { resource: { access: 'paid', priceTokens: 250, status: 'draft' } }, { resource_price_tokens: 990 }, 'resource_price_tokens', /already exists with a paid resource at 250 tokens/u],
+      ['a price on a post with no recipe', {}, { resource_price_tokens: 250 }, 'resource_price_tokens', /already exists with no resource/u],
+      ['a mature mark the post does not have', {}, { is_nsfw: true }, 'is_nsfw', /is not marked mature/u],
+      ['remixes switched off', { remixesAllowed: true }, { allow_remixes: false }, 'allow_remixes', /allows remixes.*changed on the website/u],
+    ];
+    for (const [label, stored, extra, field, words] of cases) {
+      const repeat = harness({
+        readCreationForPublish: vi.fn(async () => existing),
+        readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ visibility: 'private', state: 'private', ...stored }) })) as never,
+      });
+      const result = await tool('publish_post').handle({ ...args, visibility: 'public', ...extra }, repeat.context);
+      expect(toolFailureCode(result), label).toBe('INVALID_REQUEST');
+      expect((structured(result).error as { field_errors: Record<string, string> }).field_errors[field], label).toMatch(words);
+      for (const service of [repeat.services.publishGenerationToShowcaseForRoute, repeat.services.enforceBackendRateLimit, repeat.services.countAgentPublicPublishesSince]) {
+        expect(service, label).not.toHaveBeenCalled();
+      }
+    }
+    // What the post carries could not be read: a price cannot be held against it, so nothing goes public.
+    const blind = harness({ readCreationForPublish: vi.fn(async () => existing), readPostForAgent: vi.fn(async () => ({ ok: false, code: 'UNAVAILABLE' })) as never });
+    const unread = await tool('publish_post').handle({ ...args, visibility: 'public', resource_price_tokens: 250 }, blind.context);
+    expect(toolFailureCode(unread)).toBe('UNAVAILABLE');
+    expect(blind.services.publishGenerationToShowcaseForRoute).not.toHaveBeenCalled();
+    // The same price the recipe has changes the visibility alone.
+    const same = harness({
+      readCreationForPublish: vi.fn(async () => existing),
+      readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ visibility: 'private', state: 'private', resource: { access: 'paid', priceTokens: 250, status: 'draft' } }) })) as never,
+    });
+    const opened = await tool('publish_post').handle({ ...args, visibility: 'public', resource_price_tokens: 250 }, same.context);
+    expect(structured(opened)).toMatchObject({ visibility_changed: true, visibility: 'public', resource_access: 'paid', resource_price_tokens: 250 });
+    expect(await publishBody(same.services)).toEqual({ generationId: GENERATION_ID, visibility: 'public' });
+
+    // Finding 12, on this path: an archived or hidden post's visibility is not changed.
+    for (const state of ['archived', 'hidden', 'removed'] as const) {
+      const shelved = harness({ readCreationForPublish: vi.fn(async () => creation({ post: { id: POST_ID, visibility: 'private', state } })) });
+      const result = await tool('publish_post').handle({ ...args, visibility: 'public' }, shelved.context);
+      expect(toolFailureCode(result), state).toBe('CONFLICT');
+      expect(shelved.services.publishGenerationToShowcaseForRoute, state).not.toHaveBeenCalled();
+      expect(shelved.services.enforceBackendRateLimit, state).not.toHaveBeenCalled();
+    }
+  });
+
+  // Finding 3: a remix of a paid recipe must be public with a paid recipe. The refusal told the
+  // agent to add a price where the tool then ignored or refused one, so it came back for ever.
+  it('answers the remix terms with a step that works: a price on a new post, the website for an existing post or a creation with no prompt', async () => {
+    const mustBePaid = { ok: false, status: 400, body: { error: 'This creation remixes a paid recipe, so its recipe has to be paid. You set the price.', code: 'REMIX_RECIPE_MUST_BE_PAID', field: 'resourceBundle' } };
+    const refusing = () => vi.fn(async () => mustBePaid) as never;
+
+    const fresh = harness({ publishGenerationToShowcaseForRoute: refusing() });
+    const onNew = await tool('publish_post').handle(args, fresh.context);
+    expect(toolFailureCode(onNew)).toBe('INVALID_REQUEST');
+    expect(text(onNew)).toContain('Ask the person what to charge, then publish with resource_price_tokens and allow_remixes left on.');
+
+    // The post exists: a repeat cannot price it, so the price is set on the website.
+    const existing = harness({
+      readCreationForPublish: vi.fn(async () => creation({ post: { id: POST_ID, visibility: 'private', state: 'private' } })),
+      readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ visibility: 'private', state: 'private', resource: { access: 'free', priceTokens: 0, status: 'draft' } }) })) as never,
+      publishGenerationToShowcaseForRoute: refusing(),
+    });
+    const onExisting = await tool('publish_post').handle({ ...args, visibility: 'public' }, existing.context);
+    expect(toolFailureCode(onExisting)).toBe('INVALID_REQUEST');
+    expect(text(onExisting)).toContain('The post already exists, so the person prices its recipe on the website; then publish again with visibility public.');
+    expect(text(onExisting)).not.toContain('publish with resource_price_tokens');
+
+    // No prompt: the tool has no recipe to send, and the website builds one from the saved inputs.
+    const silent = harness({ readCreationForPublish: vi.fn(async () => creation({ prompt: null })), publishGenerationToShowcaseForRoute: refusing() });
+    const onSilent = await tool('publish_post').handle(args, silent.context);
+    expect(toolFailureCode(onSilent)).toBe('INVALID_REQUEST');
+    expect(text(onSilent)).toContain('This creation has no prompt for the tool to build a recipe from: the person publishes it on the website');
+    expect(text(onSilent)).not.toContain('publish with resource_price_tokens');
+  });
+
   it('refuses resources with a creation, whose resource is its own recipe, before anything is read', async () => {
     const { context, services } = harness();
     const result = await tool('publish_post').handle({ ...args, resources: [{ type: 'prompt', title: 'Hook prompt', text: 'Cinematic hook, 35mm' }] }, context);
@@ -1868,10 +1955,86 @@ describe('publish_post with uploads', () => {
         body: { success: true as const, postId, visibility: 'public' as const, showcasePath: `/showcase/${postId}`, ownerPath: `/post/${postId}/edit`, resourceBundlePath: `/showcase/${postId}#recipe`, resourceBundleStatus: 'published' as const },
       })) as never,
     });
-    const listed = await tool('publish_post').handle({ ...args, visibility: 'public', resources: [{ type: 'prompt', title: 'The fox prompt', text: 'paper-cut fox' }], resource_price_tokens: 990 }, onOffer.context);
+    const listed = await tool('publish_post').handle({ ...args, visibility: 'public', resources: [{ type: 'prompt', title: 'The fox prompt', text: 'paper-cut fox' }], resource_price_tokens: 250 }, onOffer.context);
     expect(structured(listed)).toMatchObject({ visibility_changed: true, resource_access: 'paid', resource_price_tokens: 250, resource_status: 'published' });
     expect(text(listed)).toContain('It carries a paid resource at 250 tokens, on offer.');
+    // The cards a repeat sends are not compared (no tool reads what a resource holds), so the answer says they were not applied.
+    expect(text(listed)).toContain('Its resource is the one it was published with');
     expect(onOffer.services.updateOwnerPostForRoute).toHaveBeenCalledWith(expect.objectContaining({ body: { visibility: 'public' } }));
+  });
+
+  // PR #751's review, finding 2: a repeat that changed the visibility dropped a new price without
+  // a word, so "make it public at 250" put a free resource on offer.
+  it('refuses a repeat that asks for a visibility change and names a price, a mature mark or a resource the post does not have, before any limit is spent', async () => {
+    const card = { type: 'prompt' as const, title: 'The fox prompt', text: 'paper-cut fox' };
+    const cases: Array<[string, Partial<AgentPostView>, Record<string, unknown>, string, RegExp]> = [
+      ['a price on a free resource', { resource: { access: 'free', priceTokens: 0, status: 'draft' } }, { resources: [card], resource_price_tokens: 250 }, 'resource_price_tokens', /already exists with a free resource.*a price is changed on the website/u],
+      ['another price', { resource: { access: 'paid', priceTokens: 250, status: 'draft' } }, { resources: [card], resource_price_tokens: 990 }, 'resource_price_tokens', /already exists with a paid resource at 250 tokens/u],
+      ['free asked of a paid resource', { resource: { access: 'paid', priceTokens: 250, status: 'draft' } }, { resources: [card], resource_price_tokens: 0 }, 'resource_price_tokens', /already exists with a paid resource at 250 tokens/u],
+      ['a resource on a post with none', {}, { resources: [card] }, 'resources', /was published with no resource, and publishing again cannot add one/u],
+      ['listing lines on a post with none', {}, { resources: [card], resource_preview: 'The exact prompt behind the fox.' }, 'resources', /was published with no resource/u],
+      ['a mature mark the post does not have', {}, { is_nsfw: true }, 'is_nsfw', /is not marked mature.*the mark is changed on the website/u],
+      ['a mature mark taken off', { isNsfw: true }, { is_nsfw: false }, 'is_nsfw', /is marked mature/u],
+    ];
+    for (const [label, stored, extra, field, words] of cases) {
+      const repeat = harness({ readPostForAgent: found({ visibility: 'private', state: 'private', ...stored }) });
+      const result = await tool('publish_post').handle({ ...args, visibility: 'public', ...extra }, repeat.context);
+      expect(toolFailureCode(result), label).toBe('INVALID_REQUEST');
+      expect((structured(result).error as { field_errors: Record<string, string> }).field_errors[field], label).toMatch(words);
+      expect(text(result), label).toContain('Nothing was changed');
+      // The post stays as it is, and nothing is spent: no save, no limit, no cap read.
+      for (const service of [repeat.services.updateOwnerPostForRoute, repeat.services.createOwnerPostForRoute, repeat.services.enforceBackendRateLimit, repeat.services.countAgentPublicPublishesSince]) {
+        expect(service, label).not.toHaveBeenCalled();
+      }
+    }
+    // The same arguments the post was published with change the visibility alone.
+    const same = harness({ readPostForAgent: found({ visibility: 'private', state: 'private', isNsfw: true, resource: { access: 'free', priceTokens: 0, status: 'draft' } }) });
+    const opened = await tool('publish_post').handle({ ...args, visibility: 'public', is_nsfw: true, resources: [card], resource_price_tokens: 0 }, same.context);
+    expect(opened.isError).toBeUndefined();
+    expect(structured(opened)).toMatchObject({ visibility_changed: true, visibility: 'public' });
+  });
+
+  // Finding 12: the composer's save takes an archived post's visibility, and the answer called it live.
+  it('changes no visibility of a post that is archived, hidden or removed, and says which', async () => {
+    for (const state of ['archived', 'hidden', 'removed'] as const) {
+      const shelved = harness({ readPostForAgent: found({ visibility: 'private', state }) });
+      const result = await tool('publish_post').handle({ ...args, visibility: 'public' }, shelved.context);
+      expect(toolFailureCode(result), state).toBe('CONFLICT');
+      expect(text(result), state).toContain(`is ${state}`);
+      for (const service of [shelved.services.updateOwnerPostForRoute, shelved.services.enforceBackendRateLimit, shelved.services.countAgentPublicPublishesSince]) {
+        expect(service, state).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  // Finding 6: a stored resource that fails the listing rule stays a draft on a post that went
+  // public, and the answer said it was held "while its post is not public".
+  it('says a resource left off offer on a post that went public is not listed, and why', async () => {
+    const unlisted = harness({
+      readPostForAgent: found({ visibility: 'private', state: 'private', resource: { access: 'free', priceTokens: 0, status: 'draft' } }),
+      updateOwnerPostForRoute: vi.fn(async ({ postId }: { postId: string }) => ({
+        ok: true as const,
+        body: { success: true as const, postId, visibility: 'public' as const, showcasePath: `/showcase/${postId}`, ownerPath: `/post/${postId}/edit`, resourceBundlePath: `/post/${postId}/edit#recipe`, resourceBundleStatus: 'draft' as const },
+      })) as never,
+    });
+    const result = await tool('publish_post').handle({ ...args, visibility: 'public' }, unlisted.context);
+    expect(structured(result)).toMatchObject({ visibility: 'public', state: 'live', resource_access: 'free', resource_status: 'draft' });
+    expect(text(result)).toContain('It carries a free resource, but it is not on offer');
+    expect(text(result)).toContain('a preview or summary');
+    expect(text(result)).not.toContain('only while its post is public');
+  });
+
+  // Finding 5: the composer claims each file before the post's row exists, so a retry in that
+  // moment found no post and a file "already used", and was told to stage again: a second post.
+  it('tells a retry that arrives while the first publish is still running to call again, never to stage the files again', async () => {
+    const { context, services } = fresh({ readAgentStagedUploads: stagedAs({ kind: 'staged', status: 'consuming', contentType: 'image/png' }) });
+    const result = await tool('publish_post').handle(args, context);
+    expect(toolFailureCode(result)).toBe('NOT_READY');
+    expect(text(result)).toContain('is being published by another call right now');
+    expect(text(result)).toContain('Call publish_post again with the same uploads');
+    expect(text(result)).not.toMatch(/[Ss]tage the file again/u);
+    expect(services.createOwnerPostForRoute).not.toHaveBeenCalled();
+    expect(services.enforceBackendRateLimit).not.toHaveBeenCalled();
     const capped = harness({ readPostForAgent: found({ visibility: 'private', state: 'private' }), countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
     expect(toolFailureCode(await tool('publish_post').handle({ ...args, visibility: 'public' }, capped.context))).toBe('RATE_LIMITED');
     expect(capped.services.updateOwnerPostForRoute).not.toHaveBeenCalled();
@@ -1959,7 +2122,7 @@ describe('publish_post with uploads', () => {
       [{ kind: 'staged', status: 'finalizing', contentType: 'image/png' }, 'NOT_READY', /has not been through upload_input/u],
       // Spent by an earlier post or run.
       [{ kind: 'staged', status: 'consumed', contentType: 'image/png' }, 'CONFLICT', /already used by a post or a run/u],
-      [{ kind: 'staged', status: 'consuming', contentType: 'image/png' }, 'CONFLICT', /Stage the file again/u],
+      [{ kind: 'staged', status: 'consumed', contentType: 'image/png' }, 'CONFLICT', /Stage the file again/u],
       // Lapsed, or removed for failing a check.
       [{ kind: 'staged', status: 'deleted', contentType: 'image/png' }, 'NOT_FOUND', /no longer staged/u],
       [{ kind: 'staged', status: 'released', contentType: 'image/png' }, 'NOT_FOUND', /no longer staged/u],
