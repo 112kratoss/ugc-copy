@@ -1411,7 +1411,10 @@ const MasonryPin = memo(function MasonryPin({
           borderRadius: layout.mediaRadius,
           borderCurve: 'continuous',
           overflow: 'hidden',
-          backgroundColor: theme.colors.mediaPlaceholder,
+          // No ground while a reel's close is to land its picture here: the
+          // pin is empty until it does, and a ground showed as a slab beside
+          // the picture arriving (components/apple-zoom.ios.tsx).
+          backgroundColor: zoomSource.returnPicture?.covers ? undefined : theme.colors.mediaPlaceholder,
         }}
       >
         <MediaZoomSourceView source={zoomSource} style={{ width: columnWidth, height: mediaHeight }}>

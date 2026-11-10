@@ -22,7 +22,7 @@ import { DialogHost } from '@/components/dialog';
 import { FirstOpenIntroHost } from '@/components/first-open-intro-host';
 import { LaunchSplash } from '@/components/launch-splash';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
-import { MediaZoomFlightLayer, noteRootScreenTransitionStart } from '@/components/media-zoom';
+import { MediaZoomFlightLayer, noteRootScreenTransitionEnd, noteRootScreenTransitionStart } from '@/components/media-zoom';
 import { ZoomPostChrome, ZoomPostPreparer } from '@/components/zoom-post-chrome';
 import { OverlayHost } from '@/components/overlay-host';
 import { WelcomeCreditsPopup } from '@/components/welcome-credits-popup';
@@ -302,7 +302,9 @@ function RootLayoutNav() {
                 <Stack
                 // A screen coming back as a reel's pop begins: the cue for a
                 // picture closing into it to uncover it (components/media-zoom.tsx).
-                screenListeners={{ transitionStart: noteRootScreenTransitionStart }}
+                // And that screen back for good as the pop ends: the cue for the
+                // tile the reel closed into to draw itself again.
+                screenListeners={{ transitionStart: noteRootScreenTransitionStart, transitionEnd: noteRootScreenTransitionEnd }}
                 screenOptions={{
                   animation: reducedMotion ? 'none' : 'default',
                   gestureEnabled: true,

@@ -12,11 +12,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  * reel's screen, and the two pictures slid across each other as the reel shrank.
  * So a tile works the rectangle out from its laid-out size and hands it over.
  *
- * Each tile gives UIKit two empty views beside it (2026-11-08): one in its own
+ * Each tile gives UIKit two views beside it (2026-11-08): one in its own
  * shape, which the closes shrink the reel into, lined up with the picture as
  * above, and a page-shaped one the push grows the reel out of, lined up with
  * the whole screen, so that the zoom's first frame has no offset to get wrong
- * (`appleZoomPageFrame`).
+ * (`appleZoomPageFrame`). Both are empty, but for the first while a reel is
+ * showing the tile's still picture, when it draws that picture for the close
+ * to land on (2026-11-10, lib/apple-zoom-surface.ts).
  */
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
@@ -47,6 +49,8 @@ vi.mock('../lib/apple-zoom-available', () => ({ isAppleZoomAvailable: () => true
 vi.mock('@/components/apple-zoom', () => import('../components/apple-zoom.ios'));
 
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '../components/media-zoom';
+import { parseAppleZoomSourceId } from '../lib/apple-zoom';
+import { holdAppleZoomReturnPicture, releaseAppleZoomReturnPicture, resetAppleZoomReturnPictures } from '../lib/apple-zoom-surface';
 import { appleZoomAlignmentRect, appleZoomPageFrame, resetMediaZoomTransitions } from '../lib/media-zoom-transition';
 import { rememberDecodedImageAspectRatio } from '../lib/decoded-image-aspect-ratio';
 
@@ -91,14 +95,16 @@ function mountTile(aspectRatio: number | null) {
     expect(found).toHaveLength(1);
     return found[0]!;
   };
+  // The measured view is the tile's own, beside the views UIKit's zoom is given.
+  const tileView = () => tree.root.find((node) => typeof node.type === 'string' && typeof node.props.onLayout === 'function');
   const layOut = (size: { width: number; height: number }) => {
-    // The measured view is the tile's own, beside the views UIKit's zoom is given.
-    const tileView = tree.root.find((node) => typeof node.type === 'string' && typeof node.props.onLayout === 'function');
     renderer.act(() => {
-      tileView.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, ...size } } });
+      tileView().props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, ...size } } });
     });
   };
-  return { nativeSource, openSource, layOut };
+  /** The style the tile's own view ends up with. */
+  const tileStyle = (): Record<string, unknown> => Object.assign({}, ...(tileView().props.style as (object | null)[]).filter(Boolean));
+  return { nativeSource, openSource, layOut, tileStyle };
 }
 
 describe('a tile under UIKit’s zoom', () => {
@@ -143,15 +149,47 @@ describe('a tile under UIKit’s zoom', () => {
     expect(frame.tile).toEqual({ x: picture.x * scale, y: picture.y * scale, width: HOME_CARD.width, height: HOME_CARD.height });
   });
 
-  it('gives UIKit empty views, never the tile with its media', () => {
+  it('gives UIKit views of their own, never the tile with its media', () => {
     const { nativeSource, openSource, layOut } = mountTile(HOLI);
     layOut(HOME_CARD);
-    for (const source of [nativeSource(), openSource()]) {
-      const views = source.findAllByType('view' as never);
-      expect(views).toHaveLength(1);
-      expect(views[0]!.props.children).toBeUndefined();
-      expect(views[0]!.props.onLayout).toBeUndefined();
-    }
+    // The view the push grows the reel out of: empty.
+    const page = openSource().findAllByType('view' as never);
+    expect(page).toHaveLength(1);
+    expect(page[0]!.props.children).toBeUndefined();
+    expect(page[0]!.props.onLayout).toBeUndefined();
+    // The view the closes shrink the reel into: an image view, which fills
+    // its bounds as UIKit changes them, with nothing in it while no reel is
+    // showing the tile's picture.
+    expect(nativeSource().findAllByType('view' as never)).toHaveLength(0);
+    const picture = nativeSource().findAllByType('image' as never);
+    expect(picture).toHaveLength(1);
+    expect(picture[0]!.props.source).toBeNull();
+  });
+
+  // The reel's page crossfades into whatever that view draws on its way down.
+  // Empty, it faded to nothing short of the tile, and the close read as a fade
+  // (owner, 2026-11-10); with the tile's picture in it the picture is there
+  // all the way into the tile.
+  it('draws the tile\'s picture in the view a close shrinks the reel into while a reel holds it', () => {
+    const { nativeSource, layOut, tileStyle } = mountTile(HOLI);
+    layOut(HOME_CARD);
+    const { surfaceId } = parseAppleZoomSourceId(nativeSource().props.identifier as string)!;
+    const picture = () => nativeSource().findByType('image' as never);
+
+    renderer.act(() => holdAppleZoomReturnPicture(surfaceId, 'post-1'));
+    expect(picture().props.source).toEqual({ uri: PREVIEW.url, cacheKey: 'tile' });
+    // Until it has drawn, the tile goes on drawing itself.
+    expect(tileStyle().opacity).toBeUndefined();
+
+    renderer.act(() => (picture().props.onDisplay as () => void)());
+    // UIKit takes the view out of the page to fly it: the tile's own picture
+    // must not be showing in its place.
+    expect(tileStyle().opacity).toBe(0);
+
+    renderer.act(() => releaseAppleZoomReturnPicture(surfaceId, 'post-1', false));
+    expect(picture().props.source).toBeNull();
+    expect(tileStyle().opacity).toBeUndefined();
+    resetAppleZoomReturnPictures();
   });
 
   it('follows a tile that is laid out again at another size', () => {
