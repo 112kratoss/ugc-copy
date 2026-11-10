@@ -387,6 +387,20 @@ Claude Code: stage a small picture with `request_upload` and the command, `uploa
 `publish_post` with `uploads`, `visibility: private`, a real title and `made_with`; repeat the
 same publish (`already_published`); `get_post`; then `delete_post`.
 
+Done on 2026-11-10 at about 16:54 UTC, on the release of PR #751 (`1be72e76e`), as the owner's
+account: `tools/list` named twelve tools; `request_upload`, the printed command (stored),
+`upload_input` (a 5,747-byte PNG), `publish_post` (`source: upload`, `media_count: 1`,
+private), the repeat (`already_published: true`), `get_post` (`format: media`), `delete_post`,
+and `get_post` again answering `NOT_FOUND`.
+
+A session that was open before the release cannot run this check with its own tools: its tool
+list is the one it started with, so `request_upload` is not callable and a list argument such
+as `uploads` or `resources` reaches the server as a string and is refused by the schema. The
+check ran over HTTP with a fresh sign-in through the Claude Code client (authorization code
+with PKCE on its registered port, the token held in the script's memory only). That sign-in
+showed the consent page and waited for the owner's click; it did not take the already-approved
+redirect.
+
 ### Text posts, resources and prices
 
 Since 2026-11-10 (the owner's decisions of that day, in the same server 1.2.0) `publish_post` has
@@ -576,6 +590,15 @@ putting anything on sale: `publish_post` with a title, a body, one `guide` card,
 `visibility: private` (answer: `source: text`, `resource_access: free`, `resource_status: draft`);
 repeat it (`already_published`); `get_post`; then `delete_post`. A price is checked the same way
 on a private post, where the resource stays a draft, and only with a number the owner gave.
+
+Done on 2026-11-10, on the release of PR #751, as the owner's account and with nothing put on
+sale: the answer was `source: text`, `resources_included: 1`, `resource_access: free`,
+`resource_status: draft`; the repeat `already_published: true`; `get_post` the same three
+facts with `format: text`; no answer held the card's text; `delete_post`, then `NOT_FOUND`.
+The same hour, through a session's own tools: a private text post with no resource published,
+repeated, read and deleted; a no-op republish and a `get_post` of a live creation post
+answering `resource_access: free`, `resource_status: published`; and a `resources` sent as a
+string refused by the schema. No price was checked on production: the owner gave no number.
 
 ### The audit table
 
@@ -947,9 +970,10 @@ already has. `server.json`'s version and the server's own `MCP_SERVER_VERSION` m
 
 Phase 4 moved both to 1.2.0 (twelve tools: `request_upload` added, `publish_post` taking
 `uploads`, text posts, `resources` and `resource_price_tokens`); the description is unchanged,
-and still true. The registry keeps 1.1.0 until 1.2.0 is published by the steps above, after the
-release that carries it is live and the production checks under "Media made elsewhere" and "Text
-posts, resources and prices" have passed.
+and still true. 1.2.0 was published on 2026-11-10 at 16:57 UTC by the steps above, once the
+release that carries it was live and the production checks under "Media made elsewhere" and
+"Text posts, resources and prices" had passed: the registry answers 1.2.0 `status: active` and
+`isLatest`, and 1.1.0 no longer latest.
 
 The DNS alternative needs no deploy: a TXT record on the apex, `magicbooklet.com`, never under
 a selector such as `_mcp-auth.magicbooklet.com`:
