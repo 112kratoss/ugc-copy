@@ -11,12 +11,14 @@ import {
   agentUploadCurlCommand,
   agentUploadFileName,
   decodeAgentBase64,
-  isUploadStillEmpty,
+  isStoredObjectMissing,
   readAgentStagedUploads,
+  readAgentUploadIntent,
   readStoredObjectHead,
   requestAgentUpload,
   stageAgentInput,
   type AgentInputUploadDependencies,
+  type AgentUploadIntent,
 } from '@/lib/agent-input-upload';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS } from '@/lib/showcase-media-cache';
 import { MAX_UPLOAD_BYTES_BY_KIND } from '@/lib/temporary-media-upload-sign';
@@ -60,7 +62,9 @@ function fakes(overrides: Partial<AgentInputUploadDependencies> = {}) {
       ok: true as const,
       response: { success: true as const, signedUrl: 'https://project.supabase.test/storage/v1/object/sign/uploads/x?token=read', expiresInSeconds: 3600 },
     })) as unknown as AgentInputUploadDependencies['createTemporaryMediaReadUrl'],
-    isUploadStillEmpty: vi.fn(async () => false),
+    // No upload is read unless a test names one: finalize then answers, as for an unknown id.
+    readAgentUploadIntent: vi.fn(async () => null),
+    isStoredObjectMissing: vi.fn(async () => false),
     readStoredObjectHead: vi.fn(async () => JPEG),
     deleteReservedObjectAndConfirm: vi.fn(async () => true),
     ...overrides,
@@ -77,6 +81,26 @@ function finalizedAs(contentType: string, fileName: string, overrides: Record<st
     canonicalPath: filePath,
     reservationId: UPLOAD_ID,
   };
+}
+
+/** An upload as its reservation records it, signed for a file of this type and name. */
+function intentFor(contentType: string, fileName: string, overrides: Partial<AgentUploadIntent> = {}): AgentUploadIntent {
+  return { bucket: 'uploads', path: `${USER_ID}/${UPLOAD_ID}-${fileName}`, status: 'issued', declaredType: contentType, ...overrides };
+}
+
+/** The agent sent a file to its upload: the reservation is open, and finalize will take the file. */
+function sent(contentType: string, fileName: string, intent: Partial<AgentUploadIntent> = {}): Partial<AgentInputUploadDependencies> {
+  return {
+    readAgentUploadIntent: vi.fn(async () => intentFor(contentType, fileName, intent)),
+    finalizeUploadById: vi.fn(async () => finalizedAs(contentType, fileName)) as never,
+  };
+}
+
+/** The order two fakes were first called in. */
+function calledBefore(first: unknown, second: unknown): boolean {
+  const [a] = vi.mocked(first as () => unknown).mock.invocationCallOrder;
+  const [b] = vi.mocked(second as () => unknown).mock.invocationCallOrder;
+  return a !== undefined && b !== undefined && a < b;
 }
 
 describe('the base64 source', () => {
@@ -237,8 +261,8 @@ describe('the upload_id source', () => {
     stageAgentInput({ admin: made.admin, userId: USER_ID, source: { uploadId: UPLOAD_ID }, dependencies: made.dependencies })
   );
 
-  it('finalizes the upload for the caller, holds the stored file to the signature rule and answers the same input, with nothing fetched or stored here', async () => {
-    const made = fakes({ finalizeUploadById: vi.fn(async () => finalizedAs('image/jpeg', 'cat.jpg')) as never });
+  it('reads the upload, holds the stored file to the signature rule, then finalizes it for the caller and answers the same input', async () => {
+    const made = fakes(sent('image/jpeg', 'cat.jpg'));
     expect(await stage(made)).toEqual({
       ok: true,
       input: { url: 'https://project.supabase.test/storage/v1/object/sign/uploads/x?token=read', storagePath: `uploads/${USER_ID}/${UPLOAD_ID}-cat.jpg` },
@@ -248,10 +272,15 @@ describe('the upload_id source', () => {
       expiresInSeconds: 3600,
       sourceUrl: null,
     });
-    // Finalize loads the intent by its id and the caller's own: another account's id is no intent.
+    // The upload is read, and finalized, by its id and the caller's own: another account's id is no upload.
+    expect(made.dependencies.readAgentUploadIntent).toHaveBeenCalledWith(made.admin, { uploadId: UPLOAD_ID, userId: USER_ID });
     expect(made.dependencies.finalizeUploadById).toHaveBeenCalledTimes(1);
     expect(made.dependencies.finalizeUploadById).toHaveBeenCalledWith(made.admin, { uploadId: UPLOAD_ID, userId: USER_ID });
-    expect(made.dependencies.readStoredObjectHead).toHaveBeenCalledWith(made.admin, { bucket: 'uploads', path: `${USER_ID}/${UPLOAD_ID}-cat.jpg` });
+    // The rule reads the stored object once, at the path the upload was signed for, before finalize:
+    // a file that fails it is never finalized, and only a finalized upload can become a post.
+    expect(made.dependencies.readStoredObjectHead).toHaveBeenCalledTimes(1);
+    expect(made.dependencies.readStoredObjectHead).toHaveBeenCalledWith(made.admin, expect.objectContaining({ bucket: 'uploads', path: `${USER_ID}/${UPLOAD_ID}-cat.jpg` }));
+    expect(calledBefore(made.dependencies.readStoredObjectHead, made.dependencies.finalizeUploadById)).toBe(true);
     expect(made.dependencies.createTemporaryMediaReadUrl).toHaveBeenCalledWith(expect.objectContaining({
       body: { storagePath: `uploads/${USER_ID}/${UPLOAD_ID}-cat.jpg` },
       userId: USER_ID,
@@ -260,14 +289,20 @@ describe('the upload_id source', () => {
     expect(made.dependencies.createTemporaryMediaUploadIntent).not.toHaveBeenCalled();
     expect(made.upload).not.toHaveBeenCalled();
     expect(made.dependencies.deleteReservedObjectAndConfirm).not.toHaveBeenCalled();
+
+    // Asked again about an upload already staged, it checks the file again and answers it again.
+    const again = fakes(sent('image/jpeg', 'cat.jpg', { status: 'finalized' }));
+    expect(await stage(again)).toMatchObject({ ok: true, kind: 'image' });
+    expect(again.dependencies.isStoredObjectMissing).not.toHaveBeenCalled();
+    expect(again.dependencies.readStoredObjectHead).toHaveBeenCalledTimes(1);
   });
 
   it('answers an upload nothing was sent to yet as not ready, and leaves it open for the file', async () => {
-    const made = fakes({ isUploadStillEmpty: vi.fn(async () => true) });
+    const made = fakes({ ...sent('image/png', 'cat.png'), isStoredObjectMissing: vi.fn(async () => true) });
     const result = await stage(made);
     expect(result).toMatchObject({ ok: false, code: 'NOT_READY', details: { upload_id: UPLOAD_ID } });
     expect(!result.ok && result.message).toMatch(/Nothing is stored for upload .* yet\. Run the command request_upload gave.*call upload_input again/u);
-    expect(made.dependencies.isUploadStillEmpty).toHaveBeenCalledWith(made.admin, { uploadId: UPLOAD_ID, userId: USER_ID });
+    expect(made.dependencies.isStoredObjectMissing).toHaveBeenCalledWith(made.admin, expect.objectContaining({ bucket: 'uploads', path: `${USER_ID}/${UPLOAD_ID}-cat.png` }));
     // Finalize closes an upload it finds empty for good, and the upload keeps its staging space
     // until the reclaim: an early call must not cost the agent the upload, so finalize is not run.
     expect(made.dependencies.finalizeUploadById).not.toHaveBeenCalled();
@@ -276,145 +311,181 @@ describe('the upload_id source', () => {
   });
 
   it('answers an unknown id, another account\'s, a closed upload and one already used with a clear code, touching nothing', async () => {
-    const cases: Array<[{ status: number; code: string; error: string }, string, RegExp]> = [
-      // No intent under this id for the caller: an unknown id, and another account's, answer alike.
-      [{ status: 404, code: 'UPLOAD_NOT_FOUND', error: 'Upload intent not found.' }, 'NOT_FOUND', /No upload .* exists for this creator\. request_upload gives an upload_id/u],
-      // Closed earlier (refused, or removed), or its file vanished: the agent starts again.
-      [{ status: 400, code: 'UPLOAD_NOT_FOUND', error: 'The uploaded object was not found.' }, 'NOT_FOUND', /holds no file and is closed.*Call request_upload again/u],
-      [{ status: 400, code: 'UPLOAD_NOT_FOUND', error: 'That upload is no longer available.' }, 'NOT_FOUND', /holds no file and is closed/u],
-      // The stored size or type is not the declared one: finalize removed the file itself.
-      [{ status: 400, code: 'UPLOAD_METADATA_MISMATCH', error: 'Uploaded object metadata did not match the server-issued upload intent.' }, 'UNSUPPORTED_MEDIA', /exact size_bytes and mime_type/u],
-      [{ status: 409, code: 'UPLOAD_NOT_READY', error: 'That upload was already consumed with a non-reusable disposition.' }, 'CONFLICT', /already used or being collected: That upload was already consumed/u],
-      [{ status: 500, code: 'UPLOAD_FINALIZATION_UNAVAILABLE', error: 'Failed to load the upload intent.' }, 'UPLOAD_FAILED', /Failed to load the upload intent/u],
+    const cases: Array<[AgentUploadIntent | null, { status: number; code: string; error: string }, string, RegExp]> = [
+      // No upload under this id for the caller: an unknown id, and another account's, answer alike.
+      [null, { status: 404, code: 'UPLOAD_NOT_FOUND', error: 'Upload intent not found.' }, 'NOT_FOUND', /No upload .* exists for this creator\. request_upload gives an upload_id/u],
+      // Closed earlier (refused, or removed): the agent starts again.
+      [intentFor('image/png', 'cat.png', { status: 'deleted' }), { status: 400, code: 'UPLOAD_NOT_FOUND', error: 'That upload is no longer available.' }, 'NOT_FOUND', /holds no file and is closed.*Call request_upload again/u],
+      // Used by a post or a run.
+      [intentFor('image/png', 'cat.png', { status: 'consumed' }), { status: 409, code: 'UPLOAD_NOT_READY', error: 'That upload was already consumed with a non-reusable disposition.' }, 'CONFLICT', /already used or being collected: That upload was already consumed/u],
+      // The read of the upload failed: finalize answers, here that it could not load it either.
+      [null, { status: 500, code: 'UPLOAD_FINALIZATION_UNAVAILABLE', error: 'Failed to load the upload intent.' }, 'UPLOAD_FAILED', /Failed to load the upload intent/u],
     ];
-    for (const [answer, code, words] of cases) {
-      const made = fakes({ finalizeUploadById: vi.fn(async () => ({ ok: false as const, ...answer })) as never });
+    for (const [intent, answer, code, words] of cases) {
+      const made = fakes({
+        readAgentUploadIntent: vi.fn(async () => intent),
+        finalizeUploadById: vi.fn(async () => ({ ok: false as const, ...answer })) as never,
+      });
       const result = await stage(made);
       expect(result, answer.error).toMatchObject({ ok: false, code, details: { upload_id: UPLOAD_ID, finalize_code: answer.code } });
       expect(!result.ok && result.message, answer.error).toMatch(words);
+      // An upload that cannot be finalized any more is not looked at: nothing is read or removed.
+      expect(made.dependencies.isStoredObjectMissing, answer.error).not.toHaveBeenCalled();
       expect(made.dependencies.readStoredObjectHead, answer.error).not.toHaveBeenCalled();
       expect(made.dependencies.createTemporaryMediaReadUrl, answer.error).not.toHaveBeenCalled();
       expect(made.dependencies.deleteReservedObjectAndConfirm, answer.error).not.toHaveBeenCalled();
     }
+
+    // The file's bytes pass, but its stored size or type is not the declared one: finalize removes it itself.
+    const mismatch = fakes({
+      ...sent('image/jpeg', 'cat.jpg'),
+      finalizeUploadById: vi.fn(async () => ({ ok: false as const, status: 400, code: 'UPLOAD_METADATA_MISMATCH', error: 'Uploaded object metadata did not match the server-issued upload intent.' })) as never,
+    });
+    const refused = await stage(mismatch);
+    expect(refused).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { finalize_code: 'UPLOAD_METADATA_MISMATCH' } });
+    expect(!refused.ok && refused.message).toMatch(/exact size_bytes and mime_type/u);
+    expect(mismatch.dependencies.deleteReservedObjectAndConfirm).not.toHaveBeenCalled();
   });
 
-  it('removes a stored file whose bytes are not what its type says, closes its reservation, and refuses it', async () => {
+  it('removes a stored file whose bytes are not what its type says before it is ever finalized, and closes its upload', async () => {
     // A picture's type over a track's bytes.
-    const track = fakes({
-      finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'cat.png')) as never,
-      readStoredObjectHead: vi.fn(async () => WAV),
-    });
+    const track = fakes({ ...sent('image/png', 'cat.png'), readStoredObjectHead: vi.fn(async () => WAV) });
     const refused = await stage(track);
     expect(refused).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { upload_id: UPLOAD_ID, mime_type: 'image/png', sniffed_kind: 'audio' } });
     expect(!refused.ok && refused.message).toContain('request_upload was told image/png, but the file\'s bytes are a track. It was removed');
     expect(track.dependencies.deleteReservedObjectAndConfirm).toHaveBeenCalledWith(track.admin, 'uploads', `${USER_ID}/${UPLOAD_ID}-cat.png`);
-    // With the object gone, finalize runs once more and closes the intent, as it closes one nothing was sent to.
-    expect(track.dependencies.finalizeUploadById).toHaveBeenCalledTimes(2);
+    // Finalize runs once, after the removal: it finds nothing stored and closes the upload, as it
+    // closes one nothing was sent to. The failing file was never finalized.
+    expect(track.dependencies.finalizeUploadById).toHaveBeenCalledTimes(1);
+    expect(calledBefore(track.dependencies.deleteReservedObjectAndConfirm, track.dependencies.finalizeUploadById)).toBe(true);
     expect(track.dependencies.createTemporaryMediaReadUrl).not.toHaveBeenCalled();
 
     // A picture's type over bytes with no picture's signature: a page saved under a picture's name.
     const page = fakes({
-      finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'page.png')) as never,
+      ...sent('image/png', 'page.png'),
       readStoredObjectHead: vi.fn(async () => Buffer.from('<!doctype html><html><body>hello there</body></html>')),
     });
     expect(await stage(page)).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { sniffed_kind: null } });
     expect(page.dependencies.deleteReservedObjectAndConfirm).toHaveBeenCalledTimes(1);
 
+    // A picture's type over a file with no bytes at all.
+    const empty = fakes({ ...sent('image/png', 'empty.png'), readStoredObjectHead: vi.fn(async () => Buffer.alloc(0)) });
+    expect(await stage(empty)).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { sniffed_kind: null } });
+
     // A clip's type over a picture's bytes.
-    const still = fakes({ finalizeUploadById: vi.fn(async () => finalizedAs('video/mp4', 'clip.mp4')) as never });
+    const still = fakes(sent('video/mp4', 'clip.mp4'));
     expect(await stage(still)).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { mime_type: 'video/mp4', sniffed_kind: 'image' } });
     expect(still.dependencies.deleteReservedObjectAndConfirm).toHaveBeenCalledTimes(1);
 
     // A clip with a clip's signature, and a track of a format with no signature, keep their type,
-    // as the other two sources keep them.
-    const clip = fakes({
-      finalizeUploadById: vi.fn(async () => finalizedAs('video/mp4', 'clip.mp4')) as never,
-      readStoredObjectHead: vi.fn(async () => MP4),
-    });
+    // as the other two sources keep them. A picker's alias is judged as the type it names.
+    const clip = fakes({ ...sent('video/mp4', 'clip.mp4'), readStoredObjectHead: vi.fn(async () => MP4) });
     expect(await stage(clip)).toMatchObject({ ok: true, kind: 'video', mimeType: 'video/mp4' });
     const plain = fakes({
-      finalizeUploadById: vi.fn(async () => finalizedAs('audio/aac', 'voice.aac')) as never,
+      readAgentUploadIntent: vi.fn(async () => intentFor('audio/x-m4a', 'voice.m4a')),
+      finalizeUploadById: vi.fn(async () => finalizedAs('audio/mp4', 'voice.m4a')) as never,
       readStoredObjectHead: vi.fn(async () => Buffer.alloc(64, 7)),
     });
-    expect(await stage(plain)).toMatchObject({ ok: true, kind: 'audio' });
+    expect(await stage(plain)).toMatchObject({ ok: true, kind: 'audio', mimeType: 'audio/mp4' });
     expect(plain.dependencies.deleteReservedObjectAndConfirm).not.toHaveBeenCalled();
   });
 
-  it('removes nothing when the stored file cannot be read, and still refuses a mismatch whose removal fails', async () => {
-    const unreadable = fakes({
-      finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'cat.png')) as never,
-      readStoredObjectHead: vi.fn(async () => null),
-    });
-    // The file may be fine: the same call may pass in a moment, so it stays staged.
+  it('finalizes nothing it could not check, and nothing whose removal failed', async () => {
+    const unreadable = fakes({ ...sent('image/png', 'cat.png'), readStoredObjectHead: vi.fn(async () => null) });
+    // The file may be fine: the same call may pass in a moment, so it stays where it is, unfinalized.
     expect(await stage(unreadable)).toMatchObject({ ok: false, code: 'UPLOAD_FAILED' });
     expect(unreadable.dependencies.deleteReservedObjectAndConfirm).not.toHaveBeenCalled();
-    expect(unreadable.dependencies.finalizeUploadById).toHaveBeenCalledTimes(1);
+    expect(unreadable.dependencies.finalizeUploadById).not.toHaveBeenCalled();
 
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     const stuck = fakes({
-      finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'cat.png')) as never,
+      ...sent('image/png', 'cat.png'),
       readStoredObjectHead: vi.fn(async () => WAV),
       deleteReservedObjectAndConfirm: vi.fn(async () => false),
     });
     expect(await stage(stuck)).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA' });
-    // The reservation is not closed over an object that is still there; the reclaim sweep takes it.
-    expect(stuck.dependencies.finalizeUploadById).toHaveBeenCalledTimes(1);
+    // The file that failed the rule is still stored, so its upload is neither closed nor finalized:
+    // no post can be made from it, and the reclaim sweep takes it.
+    expect(stuck.dependencies.finalizeUploadById).not.toHaveBeenCalled();
     expect(stuck.dependencies.createTemporaryMediaReadUrl).not.toHaveBeenCalled();
     logged.mockRestore();
+  });
+
+  it('applies the rule after finalize where the upload could not be read first', async () => {
+    // The read of the upload failed, finalize went through: the file is checked before it is answered.
+    const late = fakes({
+      finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'cat.png')) as never,
+      readStoredObjectHead: vi.fn(async () => WAV),
+    });
+    expect(await stage(late)).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { mime_type: 'image/png', sniffed_kind: 'audio' } });
+    expect(late.dependencies.deleteReservedObjectAndConfirm).toHaveBeenCalledWith(late.admin, 'uploads', `${USER_ID}/${UPLOAD_ID}-cat.png`);
+    // Finalized, then closed by a second finalize once the file is gone.
+    expect(late.dependencies.finalizeUploadById).toHaveBeenCalledTimes(2);
+    expect(late.dependencies.createTemporaryMediaReadUrl).not.toHaveBeenCalled();
+
+    const fine = fakes({ finalizeUploadById: vi.fn(async () => finalizedAs('image/jpeg', 'cat.jpg')) as never });
+    expect(await stage(fine)).toMatchObject({ ok: true, kind: 'image' });
+    expect(fine.dependencies.readStoredObjectHead).toHaveBeenCalledTimes(1);
   });
 
   it('takes only an upload staged in the uploads bucket', async () => {
     // A reservation of the creator's in another bucket (a recipe file) is no staged input.
     const elsewhere = fakes({
+      readAgentUploadIntent: vi.fn(async () => intentFor('image/png', 'cat.png', { bucket: 'post_resource_files' })),
       finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'cat.png', { bucket: 'post_resource_files' })) as never,
     });
     expect(await stage(elsewhere)).toMatchObject({ ok: false, code: 'NOT_FOUND', details: { upload_id: UPLOAD_ID } });
     expect(elsewhere.dependencies.readStoredObjectHead).not.toHaveBeenCalled();
+    expect(elsewhere.dependencies.isStoredObjectMissing).not.toHaveBeenCalled();
   });
 });
 
-describe('isUploadStillEmpty', () => {
-  function client(row: unknown, info: { data?: unknown; error: unknown }, rowError: unknown = null) {
+describe('reading an upload before finalize', () => {
+  function client(row: unknown, rowError: unknown = null) {
     const query = {
       select: vi.fn(() => query),
       eq: vi.fn(() => query),
       maybeSingle: vi.fn(async () => ({ data: row, error: rowError })),
     };
+    return { admin: { from: vi.fn(() => query) } as unknown as SupabaseClient, query };
+  }
+  function storage(info: { data?: unknown; error: unknown }) {
     const objectInfo = vi.fn(async () => info);
     const from = vi.fn(() => ({ info: objectInfo }));
-    return { admin: { from: vi.fn(() => query), storage: { from } } as unknown as SupabaseClient, query, from, objectInfo };
+    return { admin: { storage: { from } } as unknown as SupabaseClient, from, objectInfo };
   }
-  const issued = { bucket_id: 'uploads', storage_path: `${USER_ID}/${UPLOAD_ID}-cat.png`, finalization_status: 'issued' };
-  const ask = (made: ReturnType<typeof client>) => isUploadStillEmpty(made.admin, { uploadId: UPLOAD_ID, userId: USER_ID });
+  const row = { bucket_id: 'uploads', storage_path: `${USER_ID}/${UPLOAD_ID}-cat.png`, finalization_status: 'issued', expected_content_type: 'image/png' };
 
-  it('is true only for the caller\'s own open upload with nothing stored at its path', async () => {
-    const empty = client(issued, { data: null, error: { statusCode: '404', message: 'Object not found' } });
-    expect(await ask(empty)).toBe(true);
-    // The intent is read by its id and the caller's own, and the object by the path it was signed for.
-    expect(vi.mocked(empty.admin.from)).toHaveBeenCalledWith('upload_byte_reservations');
-    expect(empty.query.eq.mock.calls).toEqual([['id', UPLOAD_ID], ['user_id', USER_ID]]);
-    expect(empty.from).toHaveBeenCalledWith('uploads');
-    expect(empty.objectInfo).toHaveBeenCalledWith(`${USER_ID}/${UPLOAD_ID}-cat.png`);
-    expect(await ask(client(issued, { data: null, error: { status: 404 } }))).toBe(true);
+  it('reads the upload by its id and the caller\'s own, and nothing for another\'s, an unknown one or a failed read', async () => {
+    const found = client(row);
+    expect(await readAgentUploadIntent(found.admin, { uploadId: UPLOAD_ID, userId: USER_ID }))
+      .toEqual({ bucket: 'uploads', path: `${USER_ID}/${UPLOAD_ID}-cat.png`, status: 'issued', declaredType: 'image/png' });
+    expect(vi.mocked(found.admin.from)).toHaveBeenCalledWith('upload_byte_reservations');
+    expect(found.query.select).toHaveBeenCalledWith('bucket_id, storage_path, finalization_status, expected_content_type');
+    // The owner is part of the read: another account's id finds no row.
+    expect(found.query.eq.mock.calls).toEqual([['id', UPLOAD_ID], ['user_id', USER_ID]]);
+
+    expect(await readAgentUploadIntent(client(null).admin, { uploadId: UPLOAD_ID, userId: OTHER_USER_ID })).toBeNull();
+    expect(await readAgentUploadIntent(client(null, { message: 'down' }).admin, { uploadId: UPLOAD_ID, userId: USER_ID })).toBeNull();
+    const thrown = client(row);
+    thrown.query.maybeSingle.mockRejectedValueOnce(new Error('socket hang up'));
+    expect(await readAgentUploadIntent(thrown.admin, { uploadId: UPLOAD_ID, userId: USER_ID })).toBeNull();
   });
 
-  it('is false for everything finalize is to answer: a stored file, another state, no such upload, a failed read', async () => {
+  it('calls a path empty only on Storage\'s own not-found, never on a failed read', async () => {
+    const location = { bucket: 'uploads', path: `${USER_ID}/${UPLOAD_ID}-cat.png` };
+    const missing = storage({ data: null, error: { statusCode: '404', message: 'Object not found' } });
+    expect(await isStoredObjectMissing(missing.admin, location)).toBe(true);
+    expect(missing.from).toHaveBeenCalledWith('uploads');
+    expect(missing.objectInfo).toHaveBeenCalledWith(`${USER_ID}/${UPLOAD_ID}-cat.png`);
+    expect(await isStoredObjectMissing(storage({ data: null, error: { status: 404 } }).admin, location)).toBe(true);
     // The file arrived.
-    expect(await ask(client(issued, { data: { id: 'object-1', size: 10 }, error: null }))).toBe(false);
-    // Storage failed for a reason that is not absence.
-    expect(await ask(client(issued, { data: null, error: { statusCode: '500', message: 'storage down' } }))).toBe(false);
-    // Already finalized, used, or closed: the object is not looked at.
-    for (const status of ['finalized', 'consumed', 'deleted', 'reserved']) {
-      const other = client({ ...issued, finalization_status: status }, { data: null, error: { statusCode: '404' } });
-      expect(await ask(other), status).toBe(false);
-      expect(other.objectInfo, status).not.toHaveBeenCalled();
-    }
-    // An unknown id, or another account's.
-    expect(await ask(client(null, { data: null, error: null }))).toBe(false);
-    expect(await ask(client(null, { data: null, error: null }, { message: 'down' }))).toBe(false);
-    const thrown = client(issued, { data: null, error: null });
+    expect(await isStoredObjectMissing(storage({ data: { id: 'object-1', size: 10 }, error: null }).admin, location)).toBe(false);
+    // Storage failed for a reason that is not absence: finalize is left to answer.
+    expect(await isStoredObjectMissing(storage({ data: null, error: { statusCode: '500', message: 'storage down' } }).admin, location)).toBe(false);
+    const thrown = storage({ data: null, error: null });
     thrown.objectInfo.mockRejectedValueOnce(new Error('socket hang up'));
-    expect(await ask(thrown)).toBe(false);
+    expect(await isStoredObjectMissing(thrown.admin, location)).toBe(false);
   });
 });
 
@@ -463,6 +534,13 @@ describe('readStoredObjectHead', () => {
     const never = vi.fn();
     expect(await readStoredObjectHead(unsigned.admin, { bucket: 'uploads', path: 'u/a' }, never as unknown as typeof fetch)).toBeNull();
     expect(never).not.toHaveBeenCalled();
+
+    // A file with no bytes has no first bytes: Storage cannot satisfy the range, and the head is empty,
+    // so a picture's type over it fails the rule instead of asking the agent to try again for ever.
+    const none = vi.fn(async () => new Response(null, { status: 416 }));
+    const empty = await readStoredObjectHead(storage(SIGNED).admin, { bucket: 'uploads', path: 'u/a' }, none as unknown as typeof fetch);
+    expect(empty).not.toBeNull();
+    expect(empty?.length).toBe(0);
 
     const refused = vi.fn(async () => new Response('no', { status: 404 }));
     expect(await readStoredObjectHead(storage(SIGNED).admin, { bucket: 'uploads', path: 'u/a' }, refused as unknown as typeof fetch)).toBeNull();

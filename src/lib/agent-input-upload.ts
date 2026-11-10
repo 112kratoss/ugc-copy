@@ -147,6 +147,8 @@ export async function readStoredObjectHead(
       headers: { range: `bytes=0-${AGENT_SIGNATURE_HEAD_BYTES - 1}` },
       signal: AbortSignal.timeout(SIGNATURE_READ_TIMEOUT_MS),
     });
+    // An object with no bytes has no first bytes to give: Storage answers a range it cannot satisfy.
+    if (response.status === 416) return Buffer.alloc(0);
     if (!response.ok || !response.body) return null;
     const reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
@@ -164,27 +166,45 @@ export async function readStoredObjectHead(
   }
 }
 
+/** An upload as its reservation records it: where its file goes, where it stands, and the type it was signed for. */
+export type AgentUploadIntent = {
+  bucket: string;
+  path: string;
+  status: UploadReservationRow['finalization_status'];
+  declaredType: string | null;
+};
+
 /**
- * Whether an upload is still waiting for its file: signed for the caller, not yet finalized, and
- * with nothing stored at its path. Asked before finalize, which closes an upload it finds empty
- * for good: an agent that asks a moment too soon, or whose command failed, should send the file
- * and ask again, not lose the upload and the staging space it holds. False for anything else,
- * a failed read included, so finalize answers every other case as it always has.
+ * The caller's upload by its id, read before finalize is asked to judge it. Null for none (an
+ * unknown id, and another account's: the read is by id and owner) and for a failed read, which
+ * leaves the answer to finalize, as before this read existed.
  */
-export async function isUploadStillEmpty(
+export async function readAgentUploadIntent(
   admin: SupabaseClient,
   { uploadId, userId }: { uploadId: string; userId: string },
-): Promise<boolean> {
+): Promise<AgentUploadIntent | null> {
   try {
     const { data, error } = await admin
       .from(UPLOAD_RESERVATIONS_TABLE)
-      .select('bucket_id, storage_path, finalization_status')
+      .select('bucket_id, storage_path, finalization_status, expected_content_type')
       .eq('id', uploadId)
       .eq('user_id', userId)
       .maybeSingle();
-    const row = data as Pick<UploadReservationRow, 'bucket_id' | 'storage_path' | 'finalization_status'> | null;
-    if (error || !row || row.finalization_status !== 'issued') return false;
-    const info = await admin.storage.from(row.bucket_id).info(row.storage_path);
+    const row = data as Pick<UploadReservationRow, 'bucket_id' | 'storage_path' | 'finalization_status' | 'expected_content_type'> | null;
+    if (error || !row) return null;
+    return { bucket: row.bucket_id, path: row.storage_path, status: row.finalization_status, declaredType: row.expected_content_type };
+  } catch {
+    return null;
+  }
+}
+
+/** Whether nothing is stored at a path: true only on Storage's own "not found", never on a failed read. */
+export async function isStoredObjectMissing(
+  admin: SupabaseClient,
+  { bucket, path }: { bucket: string; path: string },
+): Promise<boolean> {
+  try {
+    const info = await admin.storage.from(bucket).info(path);
     const missing = info.error as { status?: unknown; statusCode?: unknown } | null;
     return Boolean(missing && (missing.status === 404 || missing.statusCode === 404 || missing.statusCode === '404'));
   } catch {
@@ -197,7 +217,8 @@ export type AgentInputUploadDependencies = {
   createTemporaryMediaUploadIntent: typeof createTemporaryMediaUploadIntent;
   finalizeUploadById: typeof finalizeUploadById;
   createTemporaryMediaReadUrl: typeof createTemporaryMediaReadUrl;
-  isUploadStillEmpty: typeof isUploadStillEmpty;
+  readAgentUploadIntent: typeof readAgentUploadIntent;
+  isStoredObjectMissing: typeof isStoredObjectMissing;
   /** The first bytes of a stored object, for the signature rule; null when they could not be read. */
   readStoredObjectHead: (admin: SupabaseClient, location: { bucket: string; path: string }) => Promise<Buffer | null>;
   deleteReservedObjectAndConfirm: typeof deleteReservedObjectAndConfirm;
@@ -209,7 +230,8 @@ export function defaultAgentInputUploadDependencies(): AgentInputUploadDependenc
     createTemporaryMediaUploadIntent,
     finalizeUploadById,
     createTemporaryMediaReadUrl,
-    isUploadStillEmpty,
+    readAgentUploadIntent,
+    isStoredObjectMissing,
     readStoredObjectHead,
     deleteReservedObjectAndConfirm,
   };
@@ -413,12 +435,65 @@ function uploadIdRefusal(uploadId: string, finalized: Extract<UploadFinalization
 }
 
 /**
- * The `upload_id` source: the agent PUT the file to the URL `requestAgentUpload` signed, and this
- * finalizes it for the caller (finalize loads the intent by id and owner, so another account's id
- * is no intent at all, and compares the stored size and type with the declared ones). The bytes
- * never passed through this server, so the signature rule the other sources apply to bytes they
- * hold is applied to the stored object's first bytes; a file that fails it is removed, and its
- * reservation closed, before the refusal is answered.
+ * The signature rule for a file the agent stored itself, which the other two sources apply to
+ * bytes they hold: a picture must carry a picture's signature, and a clip or a track is refused
+ * only when its bytes say another kind. Read from the stored object's first bytes. A file that
+ * fails is removed, and its upload closed by finalize, which closes one it finds empty. Null
+ * when the file passes.
+ */
+async function refuseStoredSignature({
+  admin,
+  userId,
+  uploadId,
+  location,
+  contentType,
+  kind,
+  dependencies,
+}: {
+  admin: SupabaseClient;
+  userId: string;
+  uploadId: string;
+  location: { bucket: string; path: string };
+  contentType: string;
+  kind: StorageMediaKind;
+  dependencies: AgentInputUploadDependencies;
+}): Promise<AgentInputRefusal | null> {
+  const head = await dependencies.readStoredObjectHead(admin, location);
+  if (!head) {
+    // Nothing is removed or finalized: the file may be fine, and the same call may pass in a moment.
+    return { ok: false, code: 'UPLOAD_FAILED', message: 'The uploaded file could not be read to check it.', details: { upload_id: uploadId } };
+  }
+  const sniffed = sniffMediaKind(head);
+  if (kind === 'image' ? sniffed === 'image' : sniffed === null || sniffed === kind) return null;
+  const removed = await dependencies.deleteReservedObjectAndConfirm(admin, location.bucket, location.path);
+  if (removed) {
+    await dependencies.finalizeUploadById(admin, { uploadId, userId });
+  } else {
+    // The file stays where it is and the upload as it was, for the reclaim sweep. An upload this
+    // rule met before finalize is still unfinalized, so no post can be made from it.
+    logBackendError('agent_upload_signature_mismatch_not_removed', { uploadId });
+  }
+  return {
+    ok: false,
+    code: 'UNSUPPORTED_MEDIA',
+    message: sniffed
+      ? `request_upload was told ${contentType}, but the file's bytes are ${KIND_NOUN[sniffed]}. It was removed; call request_upload again with the file's own type.`
+      : `request_upload was told ${contentType}, but the file's bytes are not a picture of a type Magicbooklet takes. It was removed.`,
+    details: { upload_id: uploadId, mime_type: contentType, sniffed_kind: sniffed },
+  };
+}
+
+/**
+ * The `upload_id` source: the agent PUT the file to the URL `requestAgentUpload` signed. In
+ * order:
+ *
+ * 1. The upload is read by its id and the caller's own (another account's id is no upload).
+ * 2. One still waiting for its file answers NOT_READY and is left open. Finalize would close it
+ *    for good, and a closed upload keeps its staging space until the reclaim: an agent that asks
+ *    a moment too soon, or whose command failed, sends the file and asks again.
+ * 3. The signature rule, before finalize, so a file that fails it is never finalized: a post is
+ *    made only from a finalized upload, and this is the one way an agent's own PUT becomes one.
+ * 4. Finalize, which holds the stored size and type to the declared ones.
  */
 async function stageUploadedFile({
   admin,
@@ -431,7 +506,13 @@ async function stageUploadedFile({
   uploadId: string;
   dependencies: AgentInputUploadDependencies;
 }): Promise<AgentInputUploadResult> {
-  if (await dependencies.isUploadStillEmpty(admin, { uploadId, userId })) {
+  const intent = await dependencies.readAgentUploadIntent(admin, { uploadId, userId });
+  // Only an upload that can still be finalized is looked at here; finalize answers for the rest
+  // (none, used, closed), and for a read that failed.
+  const open = intent && intent.bucket === STAGING_BUCKET && (intent.status === 'issued' || intent.status === 'finalized')
+    ? intent
+    : null;
+  if (open?.status === 'issued' && await dependencies.isStoredObjectMissing(admin, open)) {
     return {
       ok: false,
       code: 'NOT_READY',
@@ -439,6 +520,13 @@ async function stageUploadedFile({
       details: { upload_id: uploadId },
     };
   }
+  const declaredType = open?.declaredType ? canonicalStorageMediaMimeType(open.declaredType) : null;
+  const declaredKind = declaredType ? mediaKindOfMimeType(declaredType) : null;
+  if (open && declaredType && declaredKind) {
+    const refusal = await refuseStoredSignature({ admin, userId, uploadId, location: open, contentType: declaredType, kind: declaredKind, dependencies });
+    if (refusal) return refusal;
+  }
+
   const finalized = await dependencies.finalizeUploadById(admin, { uploadId, userId });
   if (!finalized.ok) return uploadIdRefusal(uploadId, finalized);
   const { descriptor } = finalized;
@@ -452,31 +540,12 @@ async function stageUploadedFile({
       details: { upload_id: uploadId },
     };
   }
-
-  const head = await dependencies.readStoredObjectHead(admin, { bucket: descriptor.bucket, path: descriptor.path });
-  if (!head) {
-    // Nothing is removed: the file may be fine, and the same call may pass in a moment.
-    return { ok: false, code: 'UPLOAD_FAILED', message: 'The uploaded file could not be read to check it.', details: { upload_id: uploadId } };
-  }
-  const sniffed = sniffMediaKind(head);
-  if (kind === 'image' ? sniffed !== 'image' : sniffed !== null && sniffed !== kind) {
-    const removed = await dependencies.deleteReservedObjectAndConfirm(admin, descriptor.bucket, descriptor.path);
-    if (removed) {
-      // The reservation follows its object: finalize finds nothing stored and closes the intent,
-      // as it closes one nothing was ever sent to.
-      await dependencies.finalizeUploadById(admin, { uploadId, userId });
-    } else {
-      // Left for the reclaim sweep, which collects an upload nothing used.
-      logBackendError('agent_upload_signature_mismatch_not_removed', { uploadId });
-    }
-    return {
-      ok: false,
-      code: 'UNSUPPORTED_MEDIA',
-      message: sniffed
-        ? `request_upload was told ${descriptor.contentType}, but the file's bytes are ${KIND_NOUN[sniffed]}. It was removed; call request_upload again with the file's own type.`
-        : `request_upload was told ${descriptor.contentType}, but the file's bytes are not a picture of a type Magicbooklet takes. It was removed.`,
-      details: { upload_id: uploadId, mime_type: descriptor.contentType, sniffed_kind: sniffed },
-    };
+  if (!declaredKind) {
+    // The upload was not read before finalize (the read failed): the rule is applied now.
+    const refusal = await refuseStoredSignature({
+      admin, userId, uploadId, location: { bucket: descriptor.bucket, path: descriptor.path }, contentType: descriptor.contentType, kind, dependencies,
+    });
+    if (refusal) return refusal;
   }
 
   return answerStagedInput({ admin, userId, descriptor, kind, sourceUrl: null, dependencies });
