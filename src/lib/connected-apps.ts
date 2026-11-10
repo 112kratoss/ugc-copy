@@ -33,6 +33,8 @@ export const CONNECTED_APPS_COPY = {
   title: 'Connected apps',
   eyebrow: 'Agent access',
   description: 'Apps and AI agents you have let act as you on Magicbooklet. Disconnect one to end its access at once.',
+  /** The link to the setup page (`/developers/mcp`): the only way from the app to how an agent is connected. */
+  guideLabel: 'How to connect an agent',
   emptyTitle: 'No apps connected',
   emptyBody: 'When you connect Magicbooklet to an agent such as Claude, ChatGPT, Codex or Cursor and approve it, it is listed here.',
   loading: 'Loading connected apps',
