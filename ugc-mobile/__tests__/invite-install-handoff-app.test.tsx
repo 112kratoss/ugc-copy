@@ -23,7 +23,11 @@ const phone = vi.hoisted(() => ({
   pasteButton: true,
 }));
 const router = vi.hoisted(() => ({ push: vi.fn() }));
-const capture = vi.hoisted(() => ({ fromLink: vi.fn(async () => true) }));
+const screen = vi.hoisted(() => ({ pathname: '/', r: undefined as string | undefined }));
+const referral = vi.hoisted(() => ({
+  capture: vi.fn(),
+  pending: vi.fn(),
+}));
 const events = vi.hoisted(() => ({ track: vi.fn(async () => undefined) }));
 const clipboard = vi.hoisted(() => ({ hasUrl: vi.fn(), read: vi.fn() }));
 
@@ -44,7 +48,11 @@ vi.mock('react-native', () => ({
 vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 47, bottom: 34, left: 0, right: 0 }),
 }));
-vi.mock('expo-router', () => ({ router }));
+vi.mock('expo-router', () => ({
+  router,
+  usePathname: () => screen.pathname,
+  useGlobalSearchParams: () => ({ r: screen.r }),
+}));
 vi.mock('expo', () => ({
   requireOptionalNativeModule: () => ({
     getInstallReferrerAsync: async () => {
@@ -83,7 +91,7 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => ({ api: {}, user: phone.user, isLoading: phone.authLoading }),
 }));
 vi.mock('@/lib/onboarding', () => ({ trackOnboardingEvent: events.track }));
-vi.mock('@/lib/use-invite-share-capture', () => ({ captureInviteFromSharedLink: capture.fromLink }));
+vi.mock('@/lib/referral-attribution', () => ({ capturePendingReferral: referral.capture, getPendingReferral: referral.pending }));
 vi.mock('@/lib/welcome-promise', () => ({ readWelcomePromise: async () => phone.neverSignedIn }));
 vi.mock('@/lib/first-open-intro', () => ({
   isFirstOpenIntroShowing: () => phone.introShowing,
@@ -103,19 +111,23 @@ vi.mock('@/lib/theme', () => ({
 }));
 
 import {
-  INVITE_PASTE_KEPT,
   INVITE_PASTE_NOT_AN_INVITE,
   INVITE_PASTE_OFFER_BODY,
   INVITE_PASTE_OFFER_TITLE,
+  INVITE_PASTE_RESULTS,
   INVITE_PASTE_RESULT_MS,
+  INVITE_PASTE_WORKING,
   InviteInstallHandoff,
 } from '../components/invite-install-handoff';
 import {
   INSTALL_HANDOFF_FRESH_INSTALL_MS,
+  INSTALL_HANDOFF_RECORD_TIMEOUT_MS,
   INSTALL_HANDOFF_STORAGE_KEY,
   decideInstallHandoff,
   inviteHandoffRoute,
   readPastedInvite,
+  recordInstallHandoff,
+  shouldOpenHandoffScreen,
 } from '../lib/invite-install-handoff';
 
 const mounted: renderer.ReactTestRenderer[] = [];
@@ -151,7 +163,12 @@ beforeEach(() => {
   phone.linkWaiting = true;
   phone.pasteButton = true;
   router.push.mockReset();
-  capture.fromLink.mockClear();
+  screen.pathname = '/';
+  screen.r = undefined;
+  referral.capture.mockReset();
+  referral.capture.mockResolvedValue({ pending: { code: CODE }, keptEarlierInvite: false });
+  referral.pending.mockReset();
+  referral.pending.mockResolvedValue(null);
   events.track.mockClear();
   clipboard.read.mockReset();
   clipboard.hasUrl.mockReset();
@@ -220,6 +237,38 @@ describe('where a handed-over invite opens', () => {
   });
 });
 
+describe('recording a handed-over invite, and where the app goes with it', () => {
+  const handoff = { code: CODE, kind: 'shared_link' as const, path: '/creators/mira' };
+
+  it('says what became of it', async () => {
+    const pendingNone = async () => null;
+    const kept = async () => ({ pending: { code: CODE }, keptEarlierInvite: false });
+    const earlier = async () => ({ pending: { code: 'earlier12' }, keptEarlierInvite: true });
+    const fails = async () => { throw new Error('offline'); };
+    const run = (capture: unknown, pending: unknown = pendingNone) => recordInstallHandoff({} as never, handoff, {
+      capture: capture as never, pending: pending as never, timeoutMs: 50,
+    });
+    await expect(run(kept)).resolves.toBe('kept');
+    await expect(run(earlier)).resolves.toBe('kept-earlier');
+    // A refused code is taken off the phone; a failed request leaves it saved.
+    await expect(run(fails)).resolves.toBe('unavailable');
+    await expect(run(fails, async () => ({ code: CODE }))).resolves.toBe('saved');
+    await expect(run(() => new Promise(() => undefined))).resolves.toBe('saved');
+  });
+
+  it('moves the app only from Home for an invite that arrived unasked, and always for a paste', () => {
+    const at = (via: 'referrer' | 'paste', pathname: string, shownInvite?: string) => shouldOpenHandoffScreen({ via, handoff, pathname, shownInvite });
+    expect(at('referrer', '/')).toBe(true);
+    expect(at('referrer', '/showcase/abc')).toBe(false);
+    expect(at('referrer', '/auth')).toBe(false);
+    expect(at('paste', '/auth')).toBe(true);
+    // Never over a screen already showing that invite.
+    expect(at('paste', '/creators/mira', CODE)).toBe(false);
+    expect(at('paste', `/r/${CODE}`)).toBe(false);
+    expect(at('paste', '/creators/mira', 'another1')).toBe(true);
+  });
+});
+
 describe('Android: the invite Google Play carried through the install', () => {
   beforeEach(() => {
     phone.os = 'android';
@@ -230,7 +279,8 @@ describe('Android: the invite Google Play carried through the install', () => {
     phone.referrer = `utm_source=magicbooklet-invite&utm_medium=invite&utm_content=shared_link&mb_r=${CODE}&mb_p=%2Fcreators%2Fmira`;
     const tree = await launch();
 
-    expect(capture.fromLink).toHaveBeenCalledWith({}, CODE, '/creators/mira', undefined, undefined, 'shared_link');
+    expect(referral.capture).toHaveBeenCalledTimes(1);
+    expect(referral.capture).toHaveBeenCalledWith({}, CODE, { next: '/creators/mira', kind: 'shared_link' });
     expect(router.push).toHaveBeenCalledWith(`/creators/mira?r=${CODE}`);
     expect(steps()).toEqual(['invite_handoff_play_referrer']);
     expect(phone.store.has(INSTALL_HANDOFF_STORAGE_KEY)).toBe(true);
@@ -241,18 +291,48 @@ describe('Android: the invite Google Play carried through the install', () => {
     expect(router.push).not.toHaveBeenCalled();
   });
 
-  // The landing records an invite link itself: recording it here too sent two visits.
-  it('opens an invite link’s landing, which records it', async () => {
+  // Recorded here first, as an invite link's: the landing it opens finds the visit made.
+  it('records an invite link as one, then opens its landing', async () => {
     phone.referrer = `utm_source=magicbooklet-invite&utm_medium=invite&utm_content=invite&mb_r=${CODE}&mb_p=%2Fcreate`;
+    const order: string[] = [];
+    referral.capture.mockImplementation(async () => {
+      order.push('recorded');
+      return { pending: { code: CODE }, keptEarlierInvite: false };
+    });
+    router.push.mockImplementation(() => { order.push('opened'); });
     await launch();
+    expect(referral.capture).toHaveBeenCalledWith({}, CODE, { next: '/create', kind: 'invite' });
     expect(router.push).toHaveBeenCalledWith(`/r/${CODE}?next=%2Fcreate`);
-    expect(capture.fromLink).not.toHaveBeenCalled();
+    expect(order).toEqual(['recorded', 'opened']);
+  });
+
+  // Someone tapped the shared link itself after installing: the app is already on that page.
+  it('opens nothing over a screen a link already opened, and still records the invite', async () => {
+    phone.referrer = `utm_source=magicbooklet-invite&utm_content=shared_link&mb_r=${CODE}&mb_p=%2Fcreators%2Fmira`;
+    screen.pathname = '/creators/mira';
+    screen.r = CODE;
+    await launch();
+    expect(referral.capture).toHaveBeenCalledTimes(1);
+    expect(router.push).not.toHaveBeenCalled();
+
+    phone.store.clear();
+    screen.pathname = '/showcase/other-post';
+    screen.r = undefined;
+    await launch();
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it('opens nothing for a code the server refuses', async () => {
+    phone.referrer = `utm_source=magicbooklet-invite&utm_content=shared_link&mb_r=${CODE}&mb_p=%2Fcreators%2Fmira`;
+    referral.capture.mockRejectedValue(Object.assign(new Error('Invalid referral code.'), { status: 404 }));
+    await launch();
+    expect(router.push).not.toHaveBeenCalled();
   });
 
   it('does nothing for an install that carried no invite, and never looks again', async () => {
     await launch();
     expect(router.push).not.toHaveBeenCalled();
-    expect(capture.fromLink).not.toHaveBeenCalled();
+    expect(referral.capture).not.toHaveBeenCalled();
     expect(steps()).toEqual([]);
     expect(phone.store.has(INSTALL_HANDOFF_STORAGE_KEY)).toBe(true);
   });
@@ -301,9 +381,11 @@ describe('iPhone: the offer to paste the invite’s link', () => {
       pasteButton(tree)[0]!.props.onPress({ type: 'text', text: `https://magicbooklet.com/showcase/abc?s=feed&r=${CODE}` });
     });
 
-    expect(capture.fromLink).toHaveBeenCalledWith({}, CODE, '/showcase/abc', undefined, undefined, 'shared_link');
+    await renderer.act(async () => undefined);
+    expect(referral.capture).toHaveBeenCalledWith({}, CODE, { next: '/showcase/abc', kind: 'shared_link' });
     expect(router.push).toHaveBeenCalledWith(`/showcase/abc?r=${CODE}`);
-    expect(texts(tree)).toEqual([INVITE_PASTE_KEPT]);
+    // What the bonus really is: the first top-up's, not a gift for joining.
+    expect(texts(tree)).toEqual(['Invite kept. Your first credit top-up gets its bonus.']);
     expect(pasteButton(tree)).toHaveLength(0);
     expect(steps()).toEqual(['invite_handoff_paste_offered', 'invite_handoff_paste_used']);
     expect(phone.store.has(INSTALL_HANDOFF_STORAGE_KEY)).toBe(true);
@@ -321,9 +403,77 @@ describe('iPhone: the offer to paste the invite’s link', () => {
     });
     expect(texts(tree)).toEqual([INVITE_PASTE_NOT_AN_INVITE]);
     expect(router.push).not.toHaveBeenCalled();
-    expect(capture.fromLink).not.toHaveBeenCalled();
+    expect(referral.capture).not.toHaveBeenCalled();
     expect(steps()).toEqual(['invite_handoff_paste_offered', 'invite_handoff_paste_not_invite']);
     expect(phone.store.has(INSTALL_HANDOFF_STORAGE_KEY)).toBe(true);
+  });
+
+  // "Invite kept" was said whatever happened (review of 2026-11-11).
+  it.each([
+    ['another invite was already on the phone', () => referral.capture.mockResolvedValue({ pending: { code: 'earlier12' }, keptEarlierInvite: true }), 'kept-earlier', true],
+    ['the server refuses the code', () => referral.capture.mockRejectedValue(Object.assign(new Error('gone'), { status: 404 })), 'unavailable', false],
+    ['the phone is offline', () => {
+      referral.capture.mockRejectedValue(new TypeError('Network request failed'));
+      referral.pending.mockResolvedValue({ code: CODE, kind: 'shared_link' });
+    }, 'saved', true],
+  ] as const)('says what became of the invite when %s', async (_name, arrange, outcome, opens) => {
+    arrange();
+    const tree = await launch();
+    await renderer.act(async () => {
+      pasteButton(tree)[0]!.props.onPress({ type: 'text', text: `https://magicbooklet.com/creators/mira?r=${CODE}` });
+    });
+    await renderer.act(async () => undefined);
+    expect(texts(tree)).toEqual([INVITE_PASTE_RESULTS[outcome]]);
+    expect(router.push.mock.calls.length).toBe(opens ? 1 : 0);
+  });
+
+  it('says it is keeping the invite while the visit is on its way, then carries on with it saved', async () => {
+    referral.capture.mockImplementation(() => new Promise(() => undefined));
+    const tree = await launch();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await renderer.act(async () => {
+      pasteButton(tree)[0]!.props.onPress({ type: 'text', text: `https://magicbooklet.com/creators/mira?r=${CODE}` });
+    });
+    expect(texts(tree)).toEqual([INVITE_PASTE_WORKING]);
+    expect(router.push).not.toHaveBeenCalled();
+
+    await renderer.act(async () => {
+      vi.advanceTimersByTime(INSTALL_HANDOFF_RECORD_TIMEOUT_MS);
+    });
+    await renderer.act(async () => undefined);
+    expect(texts(tree)).toEqual([INVITE_PASTE_RESULTS.saved]);
+    expect(router.push).toHaveBeenCalledWith(`/creators/mira?r=${CODE}`);
+  });
+
+  // A link that is no post's and no creator's goes to the invite's landing, which
+  // recorded it a second time while the first request was on its way.
+  it('records a pasted invite once, before the screen that would record it opens', async () => {
+    const order: string[] = [];
+    referral.capture.mockImplementation(async () => {
+      order.push('recorded');
+      return { pending: { code: CODE }, keptEarlierInvite: false };
+    });
+    router.push.mockImplementation(() => { order.push('opened'); });
+    const tree = await launch();
+    await renderer.act(async () => {
+      pasteButton(tree)[0]!.props.onPress({ type: 'text', text: `https://magicbooklet.com/?r=${CODE}` });
+    });
+    await renderer.act(async () => undefined);
+    expect(router.push).toHaveBeenCalledWith(`/r/${CODE}`);
+    expect(order).toEqual(['recorded', 'opened']);
+    expect(referral.capture).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts the offer away when an account signs in while it is up', async () => {
+    const tree = await launch();
+    expect(pasteButton(tree)).toHaveLength(1);
+    phone.user = { id: 'user-1' };
+    await renderer.act(async () => {
+      tree.update(<InviteInstallHandoff />);
+    });
+    expect(tree.toJSON()).toBeNull();
+    expect(phone.store.has(INSTALL_HANDOFF_STORAGE_KEY)).toBe(true);
+    expect(referral.capture).not.toHaveBeenCalled();
   });
 
   it('goes at Not now, for good', async () => {

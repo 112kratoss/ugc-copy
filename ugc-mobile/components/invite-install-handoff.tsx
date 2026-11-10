@@ -1,5 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
-import { router } from 'expo-router';
+import { router, useGlobalSearchParams, usePathname } from 'expo-router';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,25 +17,38 @@ import {
   readInstallReferrerInvite,
   readInstallTime,
   readPastedInvite,
+  recordInstallHandoff,
+  shouldOpenHandoffScreen,
+  type InstallHandoffOutcome,
 } from '@/lib/invite-install-handoff';
 import type { InviteInstallHandoff } from '@/lib/invite-share-link/invite-install-handoff';
 import { MotionView, useOverlayPresence } from '@/lib/motion';
 import { trackOnboardingEvent } from '@/lib/onboarding';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-import { captureInviteFromSharedLink } from '@/lib/use-invite-share-capture';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
 import { readWelcomePromise } from '@/lib/welcome-promise';
 
 /** What the iPhone's offer says, and what it says once Paste has been tapped. */
 export const INVITE_PASTE_OFFER_TITLE = 'Opened an invite before installing?';
 export const INVITE_PASTE_OFFER_BODY = 'Tap Paste to keep it. Whoever invited you may earn bonus credits if you join.';
-export const INVITE_PASTE_KEPT = 'Invite kept. Join to get your bonus.';
+export const INVITE_PASTE_WORKING = 'Keeping your invite…';
 export const INVITE_PASTE_NOT_AN_INVITE = 'That wasn’t an invite link, so nothing was kept.';
+/**
+ * What the card says once the invite has been tried, by what became of it. The
+ * bonus is the program's: it comes with the first credit top-up, not with
+ * joining (review of 2026-11-11: "Join to get your bonus" promised more).
+ */
+export const INVITE_PASTE_RESULTS: Record<InstallHandoffOutcome, string> = {
+  kept: 'Invite kept. Your first credit top-up gets its bonus.',
+  'kept-earlier': 'An earlier invite on this phone is the one kept.',
+  unavailable: 'That invite is no longer available, so nothing was kept.',
+  saved: 'Invite saved on this phone. It will be recorded once you’re online.',
+};
 /** How long the line after a paste stays. */
 export const INVITE_PASTE_RESULT_MS = 4000;
 
-type Offer = 'offered' | 'kept' | 'not-an-invite' | null;
+type Offer = 'offered' | 'working' | 'not-an-invite' | InstallHandoffOutcome | null;
 
 /** How an invite reached the app, as the `step` of a funnel event: counts only, never a code. */
 type HandoffStep = 'play_referrer' | 'paste_offered' | 'paste_used' | 'paste_not_invite' | 'paste_dismissed';
@@ -61,6 +74,13 @@ export function InviteInstallHandoff() {
   const looked = useRef(false);
   const offerCounted = useRef(false);
   const hasUser = Boolean(user);
+  // The screen in front when an invite arrives, read then and not at render.
+  const pathname = usePathname();
+  const shownInvite = useGlobalSearchParams<{ r?: string | string[] }>().r;
+  const front = useRef({ pathname, shownInvite });
+  useEffect(() => {
+    front.current = { pathname, shownInvite };
+  });
 
   useEffect(() => {
     let live = true;
@@ -89,19 +109,21 @@ export function InviteInstallHandoff() {
     void trackOnboardingEvent(api, 'screen_viewed', { step: `invite_handoff_${step}` }).catch(() => undefined);
   }, [api]);
 
-  // Records the invite and opens the screen its link would have opened. An
-  // invite link's landing records it itself; a shared link's page shares this
-  // capture (one per code per run), so neither is recorded twice.
-  const accept = useCallback((handoff: InviteInstallHandoff) => {
-    const captureHere = () => {
-      void captureInviteFromSharedLink(api, handoff.code, handoff.path, undefined, undefined, handoff.kind);
-    };
-    if (handoff.kind === 'shared_link') captureHere();
-    try {
-      router.push(inviteHandoffRoute(handoff) as never);
-    } catch {
-      if (handoff.kind === 'invite') captureHere();
-    }
+  // Records the invite, then opens the screen its link would have opened: that
+  // screen finds the visit on the phone and makes no second (review of
+  // 2026-11-11: recorded here and by the landing at once, a visit was sent twice).
+  const accept = useCallback(async (handoff: InviteInstallHandoff, via: 'referrer' | 'paste') => {
+    const outcome = await recordInstallHandoff(api, handoff);
+    const shown = front.current.shownInvite;
+    const open = outcome !== 'unavailable' && shouldOpenHandoffScreen({
+      via,
+      handoff,
+      pathname: front.current.pathname,
+      shownInvite: Array.isArray(shown) ? shown[0] : shown,
+    });
+    // expo-router holds a push made before the navigator is ready, and makes it then.
+    if (open) router.push(inviteHandoffRoute(handoff) as never);
+    return outcome;
   }, [api]);
 
   const step = decideInstallHandoff({
@@ -131,7 +153,7 @@ export function InviteInstallHandoff() {
         settle();
         if (!handoff) return;
         count('play_referrer');
-        accept(handoff);
+        void accept(handoff, 'referrer');
       });
       return;
     }
@@ -165,7 +187,7 @@ export function InviteInstallHandoff() {
   }, [count, offer, visible]);
 
   useEffect(() => {
-    if (offer !== 'kept' && offer !== 'not-an-invite') return undefined;
+    if (offer === null || offer === 'offered' || offer === 'working') return undefined;
     const timer = setTimeout(() => setOffer(null), INVITE_PASTE_RESULT_MS);
     return () => clearTimeout(timer);
   }, [offer]);
@@ -173,7 +195,13 @@ export function InviteInstallHandoff() {
   const presence = useOverlayPresence(visible);
   const [shown, setShown] = useState<Offer>(offer);
   if (offer && offer !== shown) setShown(offer);
-  const message = shown === 'kept' ? INVITE_PASTE_KEPT : shown === 'not-an-invite' ? INVITE_PASTE_NOT_AN_INVITE : INVITE_PASTE_OFFER_TITLE;
+  const message = shown === null || shown === 'offered'
+    ? INVITE_PASTE_OFFER_TITLE
+    : shown === 'working'
+      ? INVITE_PASTE_WORKING
+      : shown === 'not-an-invite'
+        ? INVITE_PASTE_NOT_AN_INVITE
+        : INVITE_PASTE_RESULTS[shown];
   useAnnounceNotice(visible ? shown : null, visible ? message : null);
 
   if (!presence.mounted || !shown) return null;
@@ -188,8 +216,8 @@ export function InviteInstallHandoff() {
       return;
     }
     count('paste_used');
-    setOffer('kept');
-    accept(handoff);
+    setOffer('working');
+    void accept(handoff, 'paste').then(setOffer);
   };
   const notNow = () => {
     if (offer !== 'offered') return;

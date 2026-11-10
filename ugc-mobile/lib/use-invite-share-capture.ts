@@ -65,8 +65,6 @@ export function captureInviteFromSharedLink(
   next: string,
   isCurrent: () => boolean = () => true,
   sleep: (ms: number) => Promise<void> = wait,
-  /** An invite handed over at install keeps the kind it came with (`lib/invite-install-handoff.ts`). */
-  kind: 'invite' | 'shared_link' = 'shared_link',
 ): Promise<boolean> {
   const existing = captures.get(code);
   if (existing) {
@@ -83,7 +81,7 @@ export function captureInviteFromSharedLink(
         if (!anyoneWaiting()) break;
       }
       try {
-        await capturePendingReferral(api, code, { next, kind });
+        await capturePendingReferral(api, code, { next, kind: 'shared_link' });
         return true;
       } catch {
         // Offline, or the server busy: the code is saved on the phone either

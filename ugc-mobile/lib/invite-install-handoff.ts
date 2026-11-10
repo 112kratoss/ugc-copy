@@ -8,6 +8,7 @@ import {
   type InviteInstallHandoff,
 } from './invite-share-link/invite-install-handoff';
 import { INVITE_SHARE_QUERY_PARAM } from './invite-share-link/invite-share-link';
+import { capturePendingReferral, getPendingReferral } from './referral-attribution';
 
 /**
  * The app's half of carrying an invite through an install (the cross-device
@@ -27,8 +28,9 @@ import { INVITE_SHARE_QUERY_PARAM } from './invite-share-link/invite-share-link'
  *   and shows no prompt) and, if one is, offers Apple's own Paste button. The
  *   clipboard is read only by that tap, and by the system, not by this code.
  *
- * What it finds is recorded as the page's own capture would record it, and the
- * app opens the screen the link would have opened had the app been installed.
+ * What it finds is recorded first, as the page's own capture would record it,
+ * and then the app opens the screen the link would have opened had the app
+ * been installed: that screen finds the visit already made and makes no second.
  *
  * This runs at the first launch, which runs the code built into the binary:
  * an over-the-air update reaches a phone only from its second launch. So it
@@ -91,6 +93,85 @@ export function inviteHandoffRoute(handoff: InviteInstallHandoff): string {
     return `/r/${handoff.code}${path === '/' ? '' : `?next=${encodeURIComponent(path)}`}`;
   }
   return `${path}?${INVITE_SHARE_QUERY_PARAM}=${handoff.code}`;
+}
+
+/** What became of a handed-over invite once the app tried to record it. */
+export type InstallHandoffOutcome =
+  /** Recorded: this invite is the one the phone holds. */
+  | 'kept'
+  /** The phone already held another invite, and that one stays (an invite link replaces only a shared link's). */
+  | 'kept-earlier'
+  /** The server refused the code (unknown, switched off): nothing is held. */
+  | 'unavailable'
+  /** Not recorded yet (offline, slow): the code is saved on the phone and recorded at the next try. */
+  | 'saved';
+
+/** How long the hand-off waits for the visit before it carries on with the code saved. */
+export const INSTALL_HANDOFF_RECORD_TIMEOUT_MS = 4000;
+
+type ReferralApi = Parameters<typeof capturePendingReferral>[0];
+
+/**
+ * Records a handed-over invite, once, and says what became of it. The visit is
+ * made here and only here: the screen opened afterwards finds it on the phone.
+ */
+export async function recordInstallHandoff(
+  api: ReferralApi,
+  handoff: InviteInstallHandoff,
+  {
+    capture = capturePendingReferral,
+    pending = getPendingReferral,
+    timeoutMs = INSTALL_HANDOFF_RECORD_TIMEOUT_MS,
+  }: {
+    capture?: typeof capturePendingReferral;
+    pending?: typeof getPendingReferral;
+    timeoutMs?: number;
+  } = {},
+): Promise<InstallHandoffOutcome> {
+  const attempt = (async (): Promise<InstallHandoffOutcome> => {
+    try {
+      const { keptEarlierInvite } = await capture(api, handoff.code, { next: handoff.path, kind: handoff.kind });
+      return keptEarlierInvite ? 'kept-earlier' : 'kept';
+    } catch {
+      // A code the server refused is taken off the phone; anything else stays saved for the next try.
+      const held = await pending().catch(() => null);
+      return held ? 'saved' : 'unavailable';
+    }
+  })();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<InstallHandoffOutcome>((resolve) => {
+    timer = setTimeout(() => resolve('saved'), timeoutMs);
+  });
+  try {
+    return await Promise.race([attempt, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Whether the app goes to the invite's screen once it is recorded.
+ *
+ * Never when the screen in front already shows that invite (the link itself
+ * opened the app after the install). An invite Play carried arrives unasked,
+ * so it moves only an app still on the screen it opened on, Home: someone a
+ * link took elsewhere stays there. A paste was asked for, and goes.
+ */
+export function shouldOpenHandoffScreen({
+  via,
+  handoff,
+  pathname,
+  shownInvite,
+}: {
+  via: 'referrer' | 'paste';
+  handoff: InviteInstallHandoff;
+  /** The screen in front, as `usePathname()` names it. */
+  pathname: string | null | undefined;
+  /** The `r` of the screen in front, if it has one. */
+  shownInvite: string | null | undefined;
+}): boolean {
+  if (shownInvite === handoff.code || pathname === `/r/${handoff.code}`) return false;
+  return via === 'paste' || pathname === '/';
 }
 
 /** The invite in what the Paste button handed over, or null: only a link to this site counts. */
