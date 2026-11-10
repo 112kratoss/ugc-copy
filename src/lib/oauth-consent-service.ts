@@ -1,5 +1,7 @@
 import type { OAuthAuthorizationDetails, OAuthRedirect, User } from '@supabase/supabase-js';
 
+import { isPostingOnlyClientId } from '@/lib/mcp-client-directory';
+
 import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 /**
@@ -37,6 +39,32 @@ export const AGENT_ACCESS = [
     detail: 'Your library, with its prompts, settings and links. Nothing of anyone else\'s.',
   },
 ] as const;
+
+/**
+ * What a posting-only client may do (`MCP_POSTING_ONLY_CLIENT_IDS`, `mcp-surfaces.ts`): the
+ * route refuses its token at the full server, so the page lists no run and no charge, and says so.
+ */
+export const POSTING_AGENT_ACCESS = [
+  {
+    title: 'Publish posts as you',
+    detail: 'Pictures and videos the agent brings from elsewhere, your finished creations, and text posts, with prompts or guides attached free or at a price you approve, on your profile, in Explore and in the Marketplace, under your name, with the rules every post follows.',
+  },
+  {
+    title: 'Read your creations',
+    detail: 'Your library, with its prompts and links, to find one to post. Nothing of anyone else\'s.',
+  },
+  {
+    title: 'Nothing that spends credits',
+    detail: 'This connection cannot create media, enhance a prompt or use your balance.',
+  },
+] as const;
+
+export type AgentAccessItem = { readonly title: string; readonly detail: string };
+
+/** The access list the consent page shows for a client: the posting-only one for a posting-only client. */
+export function agentAccessFor(clientId: string | null | undefined): ReadonlyArray<AgentAccessItem> {
+  return isPostingOnlyClientId(clientId) ? POSTING_AGENT_ACCESS : AGENT_ACCESS;
+}
 
 /** The id GoTrue issues: URL-safe characters, 32 on the stacks seen; bounded either way. */
 const AUTHORIZATION_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
@@ -113,6 +141,8 @@ export type ConsentDetails = {
   clientUri: string | null;
   redirectUri: string;
   redirect: RedirectTarget | null;
+  /** What this client may do, as the page lists it (`agentAccessFor`). */
+  access: ReadonlyArray<AgentAccessItem>;
 };
 
 export type ConsentView =
@@ -187,6 +217,7 @@ export async function loadConsentView(
         clientUri: httpUrlOrNull(details.client.uri),
         redirectUri: details.redirect_uri,
         redirect: describeRedirectTarget(details.redirect_uri),
+        access: agentAccessFor(details.client.id),
       },
     },
   };

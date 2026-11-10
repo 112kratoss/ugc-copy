@@ -4,6 +4,8 @@ import {
   AGENT_ACCESS,
   CONSENT_DECISION_FAILED_MESSAGE,
   CONSENT_UNAVAILABLE_MESSAGE,
+  POSTING_AGENT_ACCESS,
+  agentAccessFor,
   buildConsentPath,
   buildConsentSignInHref,
   decideConsent,
@@ -14,6 +16,7 @@ import {
   type OAuthConsentClient,
 } from '@/lib/oauth-consent-service';
 import { getSafeAuthNextPath } from '@/lib/auth-onboarding';
+import { MCP_CLIENT_IDS, MCP_POSTING_ONLY_CLIENT_IDS } from '@/lib/mcp-client-directory';
 import { getPromptEnhancementCost } from '@/lib/prompt-enhancer';
 
 const AUTHORIZATION_ID = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6';
@@ -84,6 +87,39 @@ describe('consent gate', () => {
     // Prompt enhancement charges with no price step; the consent screen says so with the service's own cost.
     expect(AGENT_ACCESS[0].detail).toContain(`except prompt enhancement, a fixed ${getPromptEnhancementCost()} credit`);
   });
+
+  it('shows a posting-only client the posting-only list: no run, no charge, and it says so', async () => {
+    const postingClientId = MCP_POSTING_ONLY_CLIENT_IDS.claudeDirectory;
+    expect(agentAccessFor(postingClientId)).toBe(POSTING_AGENT_ACCESS);
+    expect(agentAccessFor(postingClientId.toUpperCase())).toBe(POSTING_AGENT_ACCESS);
+    // Every other client, a missing id included, is shown the full list: never less than it can do.
+    for (const clientId of [...Object.values(MCP_CLIENT_IDS), 'client-1', '', null, undefined]) {
+      expect(agentAccessFor(clientId), String(clientId)).toBe(AGENT_ACCESS);
+    }
+    expect(POSTING_AGENT_ACCESS.map((item) => item.title)).toEqual([
+      'Publish posts as you',
+      'Read your creations',
+      'Nothing that spends credits',
+    ]);
+    expect(JSON.stringify(POSTING_AGENT_ACCESS)).not.toMatch(/openid|scope|Create images and videos/i);
+    // What a post may carry and where a sale goes is said here as on the full list.
+    expect(POSTING_AGENT_ACCESS[0].detail).toContain('free or at a price you approve');
+    expect(POSTING_AGENT_ACCESS[0].detail).toContain('in the Marketplace');
+    expect(POSTING_AGENT_ACCESS[2].detail).toBe('This connection cannot create media, enhance a prompt or use your balance.');
+
+    // The page gets the list with the details, chosen by the client GoTrue names.
+    const fake = client({
+      getAuthorizationDetails: vi.fn(async () => ({
+        data: { ...DETAILS, redirect_uri: 'https://claude.ai/api/mcp/auth_callback', client: { ...DETAILS.client, id: postingClientId, name: 'Claude (posting)' } },
+        error: null,
+      })),
+    });
+    const result = await loadConsentView(fake, AUTHORIZATION_ID);
+    expect(result.ok && result.view.kind === 'consent' ? result.view.details : null).toMatchObject({
+      clientName: 'Claude (posting)',
+      access: POSTING_AGENT_ACCESS,
+    });
+  });
 });
 
 describe('redirect targets', () => {
@@ -121,6 +157,8 @@ describe('loading the consent view', () => {
           clientUri: 'https://claude.com/claude-code',
           redirectUri: 'http://localhost:8976/callback',
           redirect: { host: 'localhost:8976', loopback: true },
+          // Any client but a posting-only one is shown the full list.
+          access: AGENT_ACCESS,
         },
       },
     });

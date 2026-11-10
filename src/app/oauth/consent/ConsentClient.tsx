@@ -5,7 +5,6 @@ import { useEffect, useState } from 'react';
 
 import { Button, Kicker, StatusCallout, Surface, Text } from '@/components/DesignSystem';
 import {
-  AGENT_ACCESS,
   CONSENT_DECISION_FAILED_MESSAGE,
   CONSENT_UNAVAILABLE_MESSAGE,
   decideConsent,
@@ -125,7 +124,7 @@ export default function ConsentClient({ authorizationId, email }: { authorizatio
       <div>
         <Text as="h2" variant="label" id="consent-access">It will be able to</Text>
         <ul className="mt-2 space-y-3" aria-labelledby="consent-access">
-          {AGENT_ACCESS.map((item) => (
+          {details.access.map((item) => (
             <li key={item.title} className="flex gap-3">
               <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]">
                 <Check className="h-3.5 w-3.5" aria-hidden />

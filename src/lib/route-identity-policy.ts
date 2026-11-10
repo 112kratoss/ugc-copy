@@ -211,6 +211,9 @@ const REGISTERED_ROUTES = [
   // itself (route-owned-identity-admission.ts), which also requires the
   // agent-token claim; a guest's token is refused as on every registered route.
   '/api/mcp',
+  // Its posting-only form, the server Claude's connectors directory lists: the same admission,
+  // and no tool that starts a run (mcp-surfaces.ts).
+  '/api/mcp/posts',
 ] as const;
 
 /**

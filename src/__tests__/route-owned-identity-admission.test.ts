@@ -64,7 +64,10 @@ describe('route-owned identity admission', () => {
     expect(usesRouteOwnedIdentityAdmission(request('POST', '/api/showcase/feed'))).toBe(false);
     for (const method of ['GET', 'POST', 'DELETE', 'OPTIONS']) {
       expect(usesRouteOwnedIdentityAdmission(request(method, '/api/mcp')), method).toBe(true);
+      // The posting-only server is the same adapter at a second path.
+      expect(usesRouteOwnedIdentityAdmission(request(method, '/api/mcp/posts')), method).toBe(true);
     }
+    expect(usesRouteOwnedIdentityAdmission(request('POST', '/api/mcp/posts/other'))).toBe(false);
     expect(usesRouteOwnedIdentityAdmission(request('POST', '/api/mcp/other'))).toBe(false);
     expect(usesRouteOwnedIdentityAdmission(request('GET', '/api/showcase/feed/events'))).toBe(false);
     expect(usesRouteOwnedIdentityAdmission(request('GET', '/api/generations'))).toBe(false);
@@ -77,6 +80,8 @@ describe('route-owned identity admission', () => {
       ['POST', '/api/mcp'],
       ['GET', '/api/mcp'],
       ['DELETE', '/api/mcp'],
+      ['POST', '/api/mcp/posts'],
+      ['GET', '/api/mcp/posts'],
     ]) {
       const createUserClient = vi.fn();
       const response = await proxy(request(method, path), { createUserClient });

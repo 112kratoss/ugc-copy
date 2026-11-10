@@ -27,6 +27,7 @@ const INDEXABLE_ROUTES: Array<{
     { path: '/models', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/alternatives', changeFrequency: 'monthly', priority: 0.7 },
     { path: '/developers/mcp', changeFrequency: 'monthly', priority: 0.6 },
+    { path: '/developers/mcp/posting', changeFrequency: 'monthly', priority: 0.5 },
     { path: '/contact', changeFrequency: 'monthly', priority: 0.55 },
     { path: '/child-safety', changeFrequency: 'yearly', priority: 0.4 },
     { path: '/terms', changeFrequency: 'yearly', priority: 0.3 },

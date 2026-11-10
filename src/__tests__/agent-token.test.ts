@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AGENT_TOKEN_CLAIM,
+  MCP_POSTS_ROUTE_PATH,
+  MCP_ROUTE_PATHS,
   MCP_ROUTE_PATH,
   agentTokenClientId,
   isAgentToken,
@@ -27,10 +29,13 @@ describe('agent tokens', () => {
     }
   });
 
-  it('is admitted to the MCP route and to no other path', () => {
+  it('is admitted to the MCP routes, the full server and its posting-only form, and to no other path', () => {
     expect(MCP_ROUTE_PATH).toBe('/api/mcp');
+    expect(MCP_POSTS_ROUTE_PATH).toBe('/api/mcp/posts');
+    expect(MCP_ROUTE_PATHS).toEqual(['/api/mcp', '/api/mcp/posts']);
     expect(routeAcceptsAgentToken('/api/mcp')).toBe(true);
-    for (const pathname of ['/api/mcp/', '/api/mcp/other', '/api/generations', '/api/showcase/feed', '/api', '/']) {
+    expect(routeAcceptsAgentToken('/api/mcp/posts')).toBe(true);
+    for (const pathname of ['/api/mcp/', '/api/mcp/other', '/api/mcp/posts/', '/api/mcp/posts/x', '/api/posts', '/api/generations', '/api/showcase/feed', '/api', '/']) {
       expect(routeAcceptsAgentToken(pathname), pathname).toBe(false);
     }
   });

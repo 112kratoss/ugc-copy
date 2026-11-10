@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 
-import { MCP_ROUTE_PATH } from '@/lib/agent-token';
+import { MCP_POSTS_ROUTE_PATH, MCP_ROUTE_PATH } from '@/lib/agent-token';
 import {
   createAdmittedIdentityHeaders,
   evaluateUserFacingRouteIdentity,
@@ -18,9 +18,9 @@ import {
  *
  * - The showcase feed's reads run admission next to the database, in the API function's
  *   Mumbai region, so the lifecycle round trip is a local one.
- * - The MCP server answers an agent's missing or invalid token with the `WWW-Authenticate`
- *   challenge MCP clients need, which the proxy's 401 does not carry, and requires the
- *   agent-token claim the proxy refuses everywhere else (`agent-token.ts`).
+ * - The MCP server, at both its paths, answers an agent's missing or invalid token with the
+ *   `WWW-Authenticate` challenge MCP clients need, which the proxy's 401 does not carry, and
+ *   requires the agent-token claim the proxy refuses everywhere else (`agent-token.ts`).
  */
 const ROUTE_OWNED_ADMISSION: ReadonlyArray<{
   pathname: string;
@@ -29,6 +29,7 @@ const ROUTE_OWNED_ADMISSION: ReadonlyArray<{
 }> = [
   { pathname: '/api/showcase/feed', methods: new Set(['GET', 'HEAD']) },
   { pathname: MCP_ROUTE_PATH, methods: 'all' },
+  { pathname: MCP_POSTS_ROUTE_PATH, methods: 'all' },
 ];
 
 export function usesRouteOwnedIdentityAdmission(request: NextRequest): boolean {

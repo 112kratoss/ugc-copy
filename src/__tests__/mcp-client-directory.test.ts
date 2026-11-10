@@ -9,6 +9,10 @@ import {
   MCP_CLIENT_IDS,
   MCP_CLIENT_REDIRECT_URIS,
   MCP_DEVELOPERS_PAGE_URL,
+  MCP_POSTING_ONLY_CLIENT_IDS,
+  MCP_POSTS_PAGE_URL,
+  MCP_POSTS_PROTECTED_RESOURCE_METADATA_URL,
+  MCP_POSTS_SERVER_URL,
   MCP_PROTECTED_RESOURCE_METADATA_URL,
   MCP_SERVER_ORIGIN,
   MCP_SERVER_URL,
@@ -19,6 +23,7 @@ import {
   codexConfigToml,
   cursorMcpJson,
   isPendingClientId,
+  isPostingOnlyClientId,
 } from '@/lib/mcp-client-directory';
 import { mcpResourceUrl, protectedResourceMetadataUrl } from '@/lib/oauth-protected-resource-metadata';
 
@@ -39,6 +44,26 @@ describe('the MCP client directory', () => {
     expect(MCP_SERVER_URL).toBe(mcpResourceUrl(MCP_SERVER_ORIGIN));
     expect(MCP_PROTECTED_RESOURCE_METADATA_URL).toBe(protectedResourceMetadataUrl(MCP_SERVER_ORIGIN));
     expect(MCP_DEVELOPERS_PAGE_URL).toBe('https://magicbooklet.com/developers/mcp');
+  });
+
+  it('names the posting-only server, its metadata and its page, and the client registered for its listing', () => {
+    expect(MCP_POSTS_SERVER_URL).toBe('https://magicbooklet.com/api/mcp/posts');
+    expect(MCP_POSTS_SERVER_URL).toBe(mcpResourceUrl(MCP_SERVER_ORIGIN, 'posts'));
+    expect(MCP_POSTS_PROTECTED_RESOURCE_METADATA_URL).toBe(protectedResourceMetadataUrl(MCP_SERVER_ORIGIN, 'posts'));
+    expect(MCP_POSTS_PAGE_URL).toBe('https://magicbooklet.com/developers/mcp/posting');
+
+    // The posting-only clients are their own rows: none is a client a creator is given for the full server.
+    const postingOnly = Object.values(MCP_POSTING_ONLY_CLIENT_IDS);
+    expect(postingOnly).toEqual(['1b4db392-2141-413b-be41-f833dfdcab42']);
+    for (const id of postingOnly) {
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+      expect(Object.values(MCP_CLIENT_IDS)).not.toContain(id);
+      expect(isPostingOnlyClientId(id)).toBe(true);
+      expect(isPostingOnlyClientId(` ${id.toUpperCase()} `)).toBe(true);
+    }
+    for (const id of [...Object.values(MCP_CLIENT_IDS), '', '  ', 'client-claude', null, undefined]) {
+      expect(isPostingOnlyClientId(id), String(id)).toBe(false);
+    }
   });
 
   it('tells a placeholder from a registered client id', () => {

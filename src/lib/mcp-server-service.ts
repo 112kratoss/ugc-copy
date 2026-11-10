@@ -60,6 +60,7 @@ import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { createGenerationModelQuote } from '@/lib/generation-model-quote-service';
 import { fetchImageContentBlock } from '@/lib/mcp-preview-image';
+import { type McpSurface } from '@/lib/mcp-surfaces';
 import { MCP_ERROR_CODES, toolFailure, toolSuccess } from '@/lib/mcp-tool-results';
 import {
   readModelCatalogCurrent,
@@ -294,6 +295,11 @@ export type McpToolContext = {
   userId: string;
   /** The OAuth client the token was issued to (`agent-token.ts`). */
   clientId: string;
+  /**
+   * Which server the request reached (`mcp-surfaces.ts`): the full one unless said. On `posts`
+   * only the posting tools are registered, and an answer names no tool that is not there.
+   */
+  surface?: McpSurface;
   /** The site's origin, for the permanent links results carry. */
   siteOrigin: string;
   kieApiKey: string | undefined;
@@ -354,6 +360,11 @@ export interface McpToolDefinition<Schema extends AnySchema = AnySchema> {
   title: string;
   /** Written for the agent: when to call the tool and what to do with the answer. */
   description: string;
+  /**
+   * The description on the posting-only server, for a tool whose own names a tool that server
+   * does not have (`MCP_POSTS_TOOL_NAMES`); left out, the description above serves both.
+   */
+  postsDescription?: string;
   annotations: ToolAnnotations;
   inputSchema: Schema;
   // A method signature rather than a property: TypeScript relates methods bivariantly, so a
@@ -1024,6 +1035,11 @@ const listCreationsTool = defineTool({
     `Page with limit (at most ${MCP_LIST_PAGE_MAX}) and next_cursor.`,
     'Use it to find a creation to show the person, or to check what they have already made before creating again.',
   ].join(' '),
+  postsDescription: [
+    'List the creator\'s creations, newest first: status, model, a short prompt, cost, a preview URL, the permanent link, and posted (whether it has been published as a post).',
+    `Page with limit (at most ${MCP_LIST_PAGE_MAX}) and next_cursor.`,
+    'Use it to find a finished creation to publish (status succeeded, posted false), or to show the person what they have made.',
+  ].join(' '),
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   inputSchema: z.object({
     limit: z.int().min(1).max(MCP_LIST_PAGE_MAX).optional().describe(`Creations per page, at most ${MCP_LIST_PAGE_MAX} (default 20).`),
@@ -1153,6 +1169,13 @@ const uploadInputTool = defineTool({
     'Only public hosts are fetched (PRIVATE_ADDRESS otherwise), and only the picture, clip and track types Magicbooklet takes, checked against the file\'s own bytes (UNSUPPORTED_MEDIA). The creator\'s own outputs need no staging: pass their URL from get_generation or list_creations.',
     'With upload_id, NOT_READY means nothing is stored yet (send the file, then call again), and UPLOAD_BYTES_LIMIT, from any source, that the creator\'s open uploads hold all the staging space an account has.',
   ].join(' '),
+  postsDescription: [
+    'Stage a picture or a clip of the person\'s own, and get back what publish_post takes for it as an upload.',
+    `Give exactly one source. url: a public https URL this server fetches (at most ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.image)} for a picture, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.video)} for a clip; one redirect on the same host is followed). base64 with mime_type (at most ${megabytes(AGENT_BASE64_MAX_BYTES)} decoded; send a larger file by url). upload_id: a file on your own machine that you sent to the upload_url request_upload gave, once that upload has finished.`,
+    'The answer\'s input.storage_path goes into publish_post.uploads[]. A post takes pictures and clips, so an audio track cannot be published. The staged file is kept about two hours, so stage right before you publish.',
+    'Only public hosts are fetched (PRIVATE_ADDRESS otherwise), and the file\'s type is checked against its own bytes (UNSUPPORTED_MEDIA). A creation already in the creator\'s library needs no staging: publish_post takes its generation_id.',
+    'With upload_id, NOT_READY means nothing is stored yet (send the file, then call again), and UPLOAD_BYTES_LIMIT, from any source, that the creator\'s open uploads hold all the staging space an account has.',
+  ].join(' '),
   // Open world: by URL it reaches hosts outside Magicbooklet.
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   inputSchema: z.object({
@@ -1199,10 +1222,17 @@ const uploadInputTool = defineTool({
     return toolSuccess(
       [
         `Staged ${STAGED_KIND_NOUN[staged.kind]} of ${staged.bytes} bytes (${staged.mimeType}).`,
-        'For a run: in create_media.inputs[], send this input\'s url and storage_path with the slot and kind get_model names for it.',
+        // The posting-only server has no run to feed.
+        ...(context.surface === 'posts'
+          ? []
+          : ['For a run: in create_media.inputs[], send this input\'s url and storage_path with the slot and kind get_model names for it.']),
         staged.kind === 'audio'
-          ? 'A track feeds a run only; a post takes pictures and clips.'
-          : 'For a post of the file as it is: put its storage_path in publish_post.uploads[], with a title and made_with.',
+          ? context.surface === 'posts'
+            ? 'A post takes pictures and clips, so this track cannot be published.'
+            : 'A track feeds a run only; a post takes pictures and clips.'
+          : context.surface === 'posts'
+            ? 'To post it: put its storage_path in publish_post.uploads[], with a title and made_with.'
+            : 'For a post of the file as it is: put its storage_path in publish_post.uploads[], with a title and made_with.',
         `The staged file is kept about two hours; its URL lasts ${Math.round(staged.expiresInSeconds / 60)} minutes.`,
       ].join(' '),
       {
@@ -1227,6 +1257,13 @@ const requestUploadTool = defineTool({
     'Get a signed URL to send a file from your own machine to Magicbooklet\'s staging, for an agent that can run a command (Claude Code, Codex, Cursor). An agent with no shell stages by link instead: upload_input with url.',
     `Tell it the file's name, its own type (mime_type) and its exact size in bytes (size_bytes): at most ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.image)} for a picture, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.video)} for a clip, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.audio)} for a track.`,
     'The answer gives upload_url, the headers to send and the one curl command that does it (PUT the raw bytes; any HTTP client that sends the same method, headers and body works). Run it with the file\'s path, wait for it to finish, then call upload_input with the upload_id: that checks the stored file against the size and type given here and its own bytes, and answers the input create_media and publish_post take.',
+    'Nothing is staged until upload_input says so, and a file whose size or type differs from what was declared is removed. The URL lasts about two hours; tell the person which file you are sending before you send it.',
+    `Send and stage one file at a time (request_upload, the command, upload_input, then the next file): a creator can have at most ${AGENT_OPEN_UPLOADS_MAX} uploads open at once, and one that was refused or never finished keeps its place for up to a day (UPLOAD_BYTES_LIMIT says so).`,
+  ].join(' '),
+  postsDescription: [
+    'Get a signed URL to send a file from your own machine to Magicbooklet\'s staging, for an agent that can run a command (Claude Code, Codex, Cursor). An agent with no shell stages by link instead: upload_input with url.',
+    `Tell it the file's name, its own type (mime_type) and its exact size in bytes (size_bytes): at most ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.image)} for a picture, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.video)} for a clip.`,
+    'The answer gives upload_url, the headers to send and the one curl command that does it (PUT the raw bytes; any HTTP client that sends the same method, headers and body works). Run it with the file\'s path, wait for it to finish, then call upload_input with the upload_id: that checks the stored file against the size and type given here and its own bytes, and answers the upload publish_post takes.',
     'Nothing is staged until upload_input says so, and a file whose size or type differs from what was declared is removed. The URL lasts about two hours; tell the person which file you are sending before you send it.',
     `Send and stage one file at a time (request_upload, the command, upload_input, then the next file): a creator can have at most ${AGENT_OPEN_UPLOADS_MAX} uploads open at once, and one that was refused or never finished keeps its place for up to a day (UPLOAD_BYTES_LIMIT says so).`,
   ].join(' '),
@@ -1380,9 +1417,16 @@ function invalidPublishRequest(body: { error: string; field?: string }, fields: 
  * the service wants priced is priced on the website); `noPrompt` that the creation has no prompt
  * for the tool to build a recipe from.
  */
+/** How an agent learns that a creation has finished, in the tools its server has. */
+function creationNotReadyNextStep(surface: McpSurface | undefined): string {
+  return surface === 'posts'
+    ? 'Check list_creations until its status is succeeded, then publish.'
+    : 'Wait for get_generation to say succeeded, then publish.';
+}
+
 function publishRefusal(
   result: { status: number; body: { error: string; field?: string; code?: string } },
-  situation: { existingPost?: boolean; noPrompt?: boolean } = {},
+  situation: { existingPost?: boolean; noPrompt?: boolean; surface?: McpSurface } = {},
 ): CallToolResult {
   const { status, body } = result;
   // Another creator's creation and a missing one answer alike: what exists under an id that is
@@ -1391,7 +1435,7 @@ function publishRefusal(
     return toolFailure(MCP_ERROR_CODES.NOT_FOUND, 'No such creation of this creator\'s. list_creations lists theirs.');
   }
   if (status === 400 && /has not succeeded|no media to publish/iu.test(body.error)) {
-    return toolFailure(MCP_ERROR_CODES.NOT_READY, `${body.error}. Wait for get_generation to say succeeded, then publish.`);
+    return toolFailure(MCP_ERROR_CODES.NOT_READY, `${body.error}. ${creationNotReadyNextStep(situation.surface)}`);
   }
   if (body.code === 'CREATION_RECIPE_REQUIRED') {
     return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, `${body.error} Publish with allow_remixes false to post the media alone.`, {
@@ -1474,7 +1518,7 @@ const RESOURCE_PRICE_TOKENS_MAX = 2_147_483_640;
 // key it does not know. With both source keys optional, a misspelled one (`generationId`) would
 // leave a title and a body to publish as a public text post (PR #751's review).
 const PUBLISH_POST_SCHEMA = z.strictObject({
-  generation_id: GENERATION_ID.optional().describe('A creation made here, to publish as a post: the generation_id create_media or list_creations gave. Never with uploads.'),
+  generation_id: GENERATION_ID.optional().describe('One of the creator\'s creations made here, to publish as a post: its generation_id, as list_creations gives it. Never with uploads.'),
   uploads: z.array(z.strictObject({
     storage_path: z.string().trim().min(1).max(512).describe('The input.storage_path upload_input answered for the file.'),
   })).min(1).max(MAX_POST_MEDIA_ITEMS).optional()
@@ -1977,13 +2021,12 @@ async function publishComposedPost(args: PublishPostArgs, context: McpToolContex
   );
 }
 
-const publishPostTool = defineTool({
-  name: 'publish_post',
-  title: 'Publish a post',
-  description: [
+/** publish_post's description; only how an agent learns a creation has finished differs by server. */
+function publishPostDescription(surface: McpSurface): string {
+  return [
     'Publish a post on the creator\'s profile and in the Magicbooklet showcase, from one of three sources. generation_id: one of the creator\'s finished creations made here. uploads: media made elsewhere (another tool, the person\'s own files), as 1 to 5 pictures or clips you staged with upload_input. Neither of them: a text post, of a title and a body. Never generation_id and uploads together.',
     'The post is public at once (visibility public, the default): anyone can see it, and it enters the feed and the moderation queue as any post does. Pass visibility private instead to keep it on the creator\'s profile, visible to them alone, which they can make public later. Tell the person before you publish, and give them post_url after.',
-    `With generation_id, only the creator's own succeeded creation publishes (NOT_FOUND for any other creation, NOT_READY for a run still going or a creation its creator archived); get_generation says when a run has succeeded. Give a title, or leave it out for the title the web suggests from the creation; description, body (the post's text) and category are optional.`,
+    `With generation_id, only the creator's own succeeded creation publishes (NOT_FOUND for any other creation, NOT_READY for a run still going or a creation its creator archived); ${surface === 'posts' ? 'list_creations gives each creation\'s status' : 'get_generation says when a run has succeeded'}. Give a title, or leave it out for the title the web suggests from the creation; description, body (the post's text) and category are optional.`,
     'allow_remixes (default true) publishes the creation\'s recipe with the post, so others can remix it: its exact prompt and the saved inputs it may share, free unless resource_price_tokens prices it. False posts the media alone, with no recipe.',
     'With uploads, title is required and so is made_with, which names what made the media (the tool, and its model where it has one) and is shown on the post as Made with: never Magic Booklet, whose own media is published with generation_id. Each upload is the storage_path upload_input answered, and is spent by the post. The answer\'s post_id is the only handle on such a post (list_creations lists creations), so keep it.',
     `A text post needs title (at most ${TITLE_MAX_LENGTH} characters) and body (at most ${BODY_MAX_LENGTH}); description takes ${DESCRIPTION_MAX_LENGTH}, and made_with is optional. Keep its post_id too.`,
@@ -1991,7 +2034,14 @@ const publishPostTool = defineTool({
     `A resource is free unless resource_price_tokens is given: a whole number of tokens, ${POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS} or more in steps of ${POST_RESOURCE_PRICE_INCREMENT_USD_CENTS}, where 100 tokens = $1.00. It prices the cards, or with generation_id the creation's recipe. Buyers pay the creator as they do on the site, and a resource is on sale only once its post is public: on a private post it is a draft. State the price to the person and get their yes before publishing a paid resource; never choose a price yourself. A price or a resource is changed on the website after publishing, not by this tool.`,
     `Publishing the same creation, the same uploads or the same title and body again returns the existing post with already_published true and changes nothing, its resource and price included, unless visibility is given and differs, which changes the post's visibility. Public posts by an agent are capped at ${AGENT_PUBLISH_RATE_LIMIT.limit} per creator per UTC day, counting publications, not refused attempts (RATE_LIMITED says when the next is allowed).`,
     'The answer reports resource_access (none, free or paid), resource_price_tokens and resource_status (draft, or published once on offer).',
-  ].join(' '),
+  ].join(' ');
+}
+
+const publishPostTool = defineTool({
+  name: 'publish_post',
+  title: 'Publish a post',
+  description: publishPostDescription('full'),
+  postsDescription: publishPostDescription('posts'),
   // Open world: the post is seen by everyone, outside the agent's conversation.
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   inputSchema: PUBLISH_POST_SCHEMA,
@@ -2037,7 +2087,9 @@ const publishPostTool = defineTool({
     if (creation.status !== 'succeeded') {
       return toolFailure(
         MCP_ERROR_CODES.NOT_READY,
-        `Creation ${generationId} is ${creation.status}, not succeeded. Call get_generation with wait_seconds ${MCP_GENERATION_WAIT_SUGGESTED_SECONDS} until it has, then publish.`,
+        context.surface === 'posts'
+          ? `Creation ${generationId} is ${creation.status}, not succeeded. ${creationNotReadyNextStep('posts')}`
+          : `Creation ${generationId} is ${creation.status}, not succeeded. Call get_generation with wait_seconds ${MCP_GENERATION_WAIT_SUGGESTED_SECONDS} until it has, then publish.`,
         { generation_id: generationId, status: creation.status },
       );
     }
@@ -2089,7 +2141,7 @@ const publishPostTool = defineTool({
       const limited = await refusePublishOverLimit(context, args.visibility === 'public');
       if (limited) return limited;
       const result = await makePost({ generationId, visibility: args.visibility });
-      if (!result.ok) return publishRefusal(result, { existingPost: true });
+      if (!result.ok) return publishRefusal(result, { existingPost: true, surface: context.surface });
       const resource = storedResource && storedResource.access !== 'none'
         ? { ...storedResource, status: result.body.resourceBundleStatus ?? storedResource.status }
         : storedResource;
@@ -2157,7 +2209,7 @@ const publishPostTool = defineTool({
       ...(args.resource_summary !== undefined ? { recipeSummary: args.resource_summary } : {}),
       ...(args.resource_preview !== undefined ? { recipePreview: args.resource_preview } : {}),
     }));
-    if (!result.ok) return publishRefusal(result, { noPrompt: !(creation.prompt?.trim()) });
+    if (!result.ok) return publishRefusal(result, { noPrompt: !(creation.prompt?.trim()), surface: context.surface });
     const postId = result.body.postId;
     const url = postId ? postUrl(context.siteOrigin, postId) : null;
     const isPublic = result.body.visibility === 'public';
@@ -2335,6 +2387,33 @@ export const MCP_TOOLS: ReadonlyArray<McpToolDefinition> = [
   enhancePromptTool,
 ];
 
+/**
+ * The posting-only server's tools (`mcp-surfaces.ts`): staging a file, publishing, reading and
+ * deleting a post, and listing the creator's creations. No tool here starts a run, prices one,
+ * reads the model catalog or enhances a prompt, so nothing on that server generates media or
+ * spends a credit; `mcp-server-service.test.ts` holds the list to that.
+ */
+export const MCP_POSTS_TOOL_NAMES: ReadonlyArray<McpToolName> = [
+  'upload_input',
+  'request_upload',
+  'list_creations',
+  'publish_post',
+  'get_post',
+  'delete_post',
+];
+
+/** A server's tools, in the registry's order. */
+export function mcpToolsFor(surface: McpSurface = 'full'): ReadonlyArray<McpToolDefinition> {
+  return surface === 'posts'
+    ? MCP_TOOLS.filter((tool) => MCP_POSTS_TOOL_NAMES.includes(tool.name))
+    : MCP_TOOLS;
+}
+
+/** A tool's description as a server gives it. */
+export function mcpToolDescription(tool: McpToolDefinition, surface: McpSurface = 'full'): string {
+  return surface === 'posts' ? tool.postsDescription ?? tool.description : tool.description;
+}
+
 export const MCP_SERVER_INSTRUCTIONS = [
   'Magicbooklet makes AI images, videos and motion clips with the signed-in creator\'s credits, and publishes them, media the creator made elsewhere, and text posts with prompts, guides or skills attached, to the creator\'s profile.',
   'Flow for a creation: list_models → get_model → (upload_input for the person\'s own files) → quote_generation → tell the person the price → create_media with expected_cost_credits → get_generation with wait_seconds until settled.',
@@ -2343,6 +2422,19 @@ export const MCP_SERVER_INSTRUCTIONS = [
   'Flow for a text post, or for sharing a prompt, a guide or a skill: publish_post with a title and a body and neither generation_id nor uploads; resources attaches cards of text and links, where the whole prompt or skill goes. A resource is free unless the person names a price: state resource_price_tokens to them (100 tokens = $1.00) and get their yes before publishing, and never choose a price yourself.',
   'Every run spends the creator\'s credits; a failed run refunds them. Never promise a result before get_generation says succeeded.',
 ].join(' ');
+
+export const MCP_POSTS_SERVER_INSTRUCTIONS = [
+  'This server publishes to the signed-in creator\'s Magicbooklet profile: media the creator made elsewhere, text posts with prompts, guides or skills attached, and creations already in their Magicbooklet library. It starts no run and spends no credits.',
+  'Flow for media made elsewhere (another tool, the person\'s own files): stage each picture or clip with upload_input, by url, or for a file on your machine request_upload → run the curl command it gives → upload_input with the upload_id; then publish_post with uploads, a title and made_with naming what made the media. Ask the person before posting it publicly, and keep the post_id.',
+  'Flow for a text post, or for sharing a prompt, a guide or a skill: publish_post with a title and a body and neither generation_id nor uploads; resources attaches cards of text and links, where the whole prompt or skill goes. A resource is free unless the person names a price: state resource_price_tokens to them (100 tokens = $1.00) and get their yes before publishing, and never choose a price yourself.',
+  'Flow for a creation in the library: list_creations → publish_post with its generation_id and a title.',
+  'A post is public at once unless visibility is private; tell the person before publishing and give them post_url after. get_post reads a post, delete_post removes one of the creator\'s own.',
+].join(' ');
+
+const SERVER_DESCRIPTIONS: Readonly<Record<McpSurface, string>> = {
+  full: 'Create AI media with your Magicbooklet credits, and publish it, media you made elsewhere, or text posts that share a prompt, a guide or a skill, to your profile.',
+  posts: 'Publish to your Magicbooklet profile: media you made elsewhere, text posts that share a prompt, a guide or a skill, and creations already in your library.',
+};
 
 /** The tools whose successful answer charged the creator; a quote's cost_credits is a price, not a charge. */
 const CHARGING_TOOLS: ReadonlySet<McpToolName> = new Set(['create_media', 'enhance_prompt']);
@@ -2386,18 +2478,20 @@ export async function runMcpTool(
     report({ outcome: 'threw', code: 'INTERNAL_ERROR', costCredits: null, error });
     return toolFailure(
       'INTERNAL_ERROR',
-      'The tool failed unexpectedly. Nothing is known to have been charged; try again, and if the run may have started, check list_creations first.',
+      context.surface === 'posts'
+        ? 'The tool failed unexpectedly. Try again: a publish that went through answers the same post, and get_post reads one.'
+        : 'The tool failed unexpectedly. Nothing is known to have been charged; try again, and if the run may have started, check list_creations first.',
     );
   }
 }
 
 export function registerMcpTools(server: McpServer, context: McpToolContext): void {
-  for (const tool of MCP_TOOLS) {
+  for (const tool of mcpToolsFor(context.surface)) {
     server.registerTool(
       tool.name,
       {
         title: tool.title,
-        description: tool.description,
+        description: mcpToolDescription(tool, context.surface),
         inputSchema: tool.inputSchema,
         annotations: tool.annotations,
       },
@@ -2406,17 +2500,21 @@ export function registerMcpTools(server: McpServer, context: McpToolContext): vo
   }
 }
 
-/** A server for one admitted request: the registry bound to that request's creator and client. */
+/**
+ * A server for one admitted request: the registry bound to that request's creator and client,
+ * with the tools and the words of the server the request reached.
+ */
 export function createMcpServer(context: McpToolContext): McpServer {
+  const surface = context.surface ?? 'full';
   const server = new McpServer(
     {
       name: MCP_SERVER_NAME,
       version: MCP_SERVER_VERSION,
       title: 'Magicbooklet',
       websiteUrl: context.siteOrigin,
-      description: 'Create AI media with your Magicbooklet credits, and publish it, media you made elsewhere, or text posts that share a prompt, a guide or a skill, to your profile.',
+      description: SERVER_DESCRIPTIONS[surface],
     },
-    { instructions: MCP_SERVER_INSTRUCTIONS },
+    { instructions: surface === 'posts' ? MCP_POSTS_SERVER_INSTRUCTIONS : MCP_SERVER_INSTRUCTIONS },
   );
   registerMcpTools(server, context);
   return server;

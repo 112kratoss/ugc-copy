@@ -44,7 +44,7 @@ import { connectSentence } from './mcp-page-copy';
 
 const ENHANCEMENT_COST = `${PROMPT_ENHANCEMENT_COST_CREDITS} credit${PROMPT_ENHANCEMENT_COST_CREDITS === 1 ? '' : 's'}`;
 
-type Highlight = { icon: LucideIcon; title: string; body: ReactNode };
+export type Highlight = { icon: LucideIcon; title: string; body: ReactNode };
 
 const CAPABILITIES: Highlight[] = [
   {
@@ -81,7 +81,8 @@ const CAPABILITIES: Highlight[] = [
   },
 ];
 
-const CONTROLS: Highlight[] = [
+/** How the account stays the creator's own; the posting connector's page shows the same three. */
+export const CONTROLS: Highlight[] = [
   {
     icon: ShieldCheck,
     title: 'You approve each app',
@@ -132,11 +133,11 @@ const FAQS = [
   },
 ];
 
-function Code({ children }: { children: ReactNode }) {
+export function Code({ children }: { children: ReactNode }) {
   return <Text as="code" variant="code" className="text-[var(--ui-text-primary)]">{children}</Text>;
 }
 
-type SetupStep = { text: ReactNode; code?: { value: string; label: string } };
+export type SetupStep = { text: ReactNode; code?: { value: string; label: string } };
 
 type ClientSetup = {
   surface: McpClientSurface;
@@ -272,7 +273,7 @@ function clientSetups(clientIds: McpClientIds): ClientSetup[] {
 }
 
 /** Three cards sit in a row and six in two rows of three; four sit two by two, so none is left alone on a line. */
-function HighlightGrid({ items }: { items: Highlight[] }) {
+export function HighlightGrid({ items }: { items: Highlight[] }) {
   return (
     <div className={items.length === 4 ? 'grid gap-4 md:grid-cols-2' : 'grid gap-4 md:grid-cols-3'}>
       {items.map(({ icon: Icon, title, body }) => (
@@ -288,7 +289,7 @@ function HighlightGrid({ items }: { items: Highlight[] }) {
   );
 }
 
-function StepList({ steps }: { steps: SetupStep[] }) {
+export function StepList({ steps }: { steps: SetupStep[] }) {
   return (
     <ol className="space-y-5">
       {steps.map((step, index) => (

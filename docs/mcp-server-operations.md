@@ -135,6 +135,11 @@ plugin read.
 | Cursor | `cd3b041d-a942-4917-b37f-735744ca4026` | `http://localhost:8787/callback`, `https://www.cursor.com/agents/mcp/oauth/callback` |
 | Codex | `6508034a-cdb9-4f23-9263-7bf332096acb` | `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` and `http://localhost:8977/callback/PPpoTd8EYBlz` (the URI Codex derives from the server URL, below, and its `localhost` spare; registered 2026-11-10), plus the earlier `http://127.0.0.1:8977/callback/magicbooklet` and `http://localhost:8977/callback/magicbooklet` |
 | ChatGPT | not yet: the owner creates the connector first | per connector, from its management page |
+| Claude (posting), for the directory listing | `1b4db392-2141-413b-be41-f833dfdcab42` | `https://claude.ai/api/mcp/auth_callback` |
+
+The last row is the one confidential client (registered 2026-11-10, `client_secret_post`), and
+the one posting-only client (`MCP_POSTING_ONLY_CLIENT_IDS`): "Anthropic's Connectors Directory",
+below, says what that means and where its secret is.
 
 Codex never sends the two `/callback/magicbooklet` URIs to this server. Production's metadata
 advertises no `authorization_response_iss_parameter_supported`, so Codex appends its callback ID
@@ -991,10 +996,73 @@ with the new private key. Remove a retired TXT record: a stale one is tried firs
 
 ### Anthropic's Connectors Directory
 
-The directory does not list AI media generation without a written exception from Anthropic, so
-listing needs the owner to ask for one. Until then the custom connector, the Claude Code
-command and this repository's plugin marketplace need no review. A draft the owner can send to
-mcp-review@anthropic.com:
+Checked against Anthropic's documentation on 2026-11-10 (`claude.com/docs/connectors/building/submission`,
+`.../review-criteria`, `.../authentication`, and the Software Directory Policy).
+
+**How a listing happens.** There is no form and no partner programme. Anyone on a paid Claude
+plan submits at `claude.ai/directory/manage` → Submit new → MCP connector. An automated policy
+scan lists the connector with the **Community** label by default; **Verified** (the checkmark) is
+Anthropic's own escalation, with no application.
+
+**What the directory refuses.** Section 4.B of the policy, and the review checklist's
+"unsupported use cases", take no connector that generates images, video or audio with AI, and
+step 9 of the portal has the submitter acknowledge it. The portal reads the tool list from the
+server, so the full server (`/api/mcp`, with `create_media`) cannot be submitted without a
+written exception from Anthropic.
+
+**What is submitted: the posting-only server.** `https://magicbooklet.com/api/mcp/posts`
+(`src/lib/mcp-surfaces.ts`) is the same server at a second path, registering six tools:
+`upload_input`, `request_upload`, `list_creations`, `publish_post`, `get_post`, `delete_post`.
+Nothing on it starts a run, prices one, reads the model catalog, enhances a prompt or spends a
+credit, and no description, instruction or answer on it names a tool it does not have
+(`mcp-server-service.test.ts`, "the posting-only server"). It is a protected resource of its own:
+its 401 names `/.well-known/oauth-protected-resource/api/mcp/posts`, whose `resource` is its own
+URL, because Claude takes a document only when its `resource` equals the URL the person
+connected. Its documentation is `/developers/mcp/posting`, which describes posting alone and
+links nowhere that creates media. The kill switch, the audit table, the rate limits and the
+daily cap are the full server's: one `MCP_SERVER_DISABLED` stops both, and a public post
+through either counts toward the same ten a day.
+
+The listing must stand on its own. A tool description that pointed a person at the full server
+would break the checklist's rule against promoting other software, and the policy's clause on
+redirecting users around its safeguards (4.E), so nothing on the posting server or its page does.
+
+**Its OAuth client.** For the hosted Claude apps the portal wants a confidential client that
+Anthropic holds ("Anthropic-held client credentials"): `Claude (posting)`,
+`1b4db392-2141-413b-be41-f833dfdcab42`, redirect `https://claude.ai/api/mcp/auth_callback`,
+registered with `npm run ops:oauth-clients -- create --name "Claude (posting)" --redirect-uri
+https://claude.ai/api/mcp/auth_callback --client-uri https://claude.ai --confidential --apply`.
+
+- Its secret was shown once and is kept on the dev Mac in
+  `~/.config/magicbooklet/claude-posting-client-secret` (owner-only, never in the repository).
+  To enter it in the portal: `pbcopy < ~/.config/magicbooklet/claude-posting-client-secret`, then
+  paste. A lost secret means registering a new client and putting its id in
+  `MCP_POSTING_ONLY_CLIENT_IDS`.
+- GoTrue holds a client to the method it was registered with: this one answers
+  `client_secret_post` only. `client_secret_basic` and no secret are refused with `invalid
+  authentication method: client is registered for 'client_secret_post' but '…' was used`
+  (checked 2026-11-10 with a bogus code: `invalid_grant` by post, that refusal otherwise). If
+  Claude's token exchange fails with that message in the Auth logs, register the client again
+  with the method Claude sent.
+- It is **posting-only** (`MCP_POSTING_ONLY_CLIENT_IDS` in `src/lib/mcp-client-directory.ts`): the
+  consent page shows it a list of its own (publish posts, read creations, nothing that spends
+  credits; `POSTING_AGENT_ACCESS`), and a token issued to it answers 403
+  `AGENT_SURFACE_NOT_ALLOWED` at `/api/mcp`. So what the person approved is what the token can
+  do on this app's routes. Every other client may use either path. Against the Supabase project
+  itself the token is the creator's session under RLS, as any agent token is.
+
+**What a listing does not cover.** Claude Code signs in from a listing with a client ID metadata
+document or dynamic registration on any loopback port. Production has neither (registration is
+off; GoTrue's metadata advertises no `client_id_metadata_document_supported`), so in Claude Code
+the listing cannot sign in, and the plugin and the setup page's command stay the way in.
+
+**Before submitting.** Add `https://magicbooklet.com/api/mcp/posts` in Claude as a custom
+connector with the public Claude client id and run each of the six tools; the portal asks for
+that. Reviewers need a test account with a few creations and posts. The portal's ten steps and
+the listing's words are in the work's record (`archive/mcp-posting-connector-2026-11-10/`).
+
+**The full server, by exception.** The policy allows what Anthropic permits in writing. A draft
+the owner can send to mcp-review@anthropic.com:
 
 > Subject: Written exception request: Magic Booklet MCP server (AI image and video generation)
 >
@@ -1003,21 +1071,23 @@ mcp-review@anthropic.com:
 > Magic Booklet (https://magicbooklet.com) is a platform where creators make AI images and
 > videos and share them with a community. We run a remote MCP server at
 > https://magicbooklet.com/api/mcp and would like it listed in the Connectors Directory. As we
-> understand the directory's policy, AI media generation needs a written exception, so we are
-> asking for one.
+> understand the Software Directory Policy (section 4.B), AI media generation needs a written
+> exception, so we are asking for one.
 >
 > A connected agent works as the signed-in creator: it lists our models, prices a run, creates
 > images and videos with the creator's own credits, follows a run to the end and, when asked,
-> publishes a creation to the creator's profile.
+> publishes to the creator's profile. It can also post media the creator made elsewhere and
+> text posts with a prompt or guide attached.
 >
 > - Sign-in is OAuth 2.1 with PKCE. The creator approves each app on our consent page; guest
 >   sessions cannot connect, and the creator can disconnect an app at any time.
 > - Every charge is quoted first: a run must carry the price the agent confirmed and is never
->   charged more, a failed run refunds itself, and agents cannot buy credits.
+>   charged more, a failed run refunds itself, and agents cannot buy credits or move money.
 > - Posts an agent publishes follow the same rules and moderation as posts made on our site and
 >   app, including our child-safety policy (https://magicbooklet.com/child-safety), with a daily
 >   limit on agent posts.
-> - Access tokens last an hour, and we can switch the whole server off at once.
+> - Access tokens last an hour, every tool call is logged, and we can switch the whole server
+>   off at once.
 >
 > Setup and documentation: https://magicbooklet.com/developers/mcp. Registry entry:
 > com.magicbooklet/mcp. We are glad to provide a reviewer account with credits.

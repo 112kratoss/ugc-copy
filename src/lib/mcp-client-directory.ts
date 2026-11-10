@@ -1,4 +1,4 @@
-import { MCP_ROUTE_PATH } from '@/lib/agent-token';
+import { MCP_POSTS_ROUTE_PATH, MCP_ROUTE_PATH } from '@/lib/agent-token';
 
 /**
  * The agents a creator can connect to the MCP server, and the OAuth client each one signs in
@@ -25,6 +25,12 @@ export const MCP_SERVER_ORIGIN = 'https://magicbooklet.com';
 /** The server's URL, as every client is told to connect to it. */
 export const MCP_SERVER_URL = `${MCP_SERVER_ORIGIN}${MCP_ROUTE_PATH}`;
 
+/**
+ * The posting-only server's URL (`mcp-surfaces.ts`): what Claude's connectors directory lists.
+ * No setup command names it; a person connects it from the directory, or by URL.
+ */
+export const MCP_POSTS_SERVER_URL = `${MCP_SERVER_ORIGIN}${MCP_POSTS_ROUTE_PATH}`;
+
 /** The name the setup commands and config files give the server. */
 export const MCP_SERVER_KEY = 'magicbooklet';
 
@@ -32,12 +38,17 @@ export const MCP_SERVER_KEY = 'magicbooklet';
 export const MCP_DEVELOPERS_PAGE_PATH = '/developers/mcp';
 export const MCP_DEVELOPERS_PAGE_URL = `${MCP_SERVER_ORIGIN}${MCP_DEVELOPERS_PAGE_PATH}`;
 
+/** The posting-only server's own page: the documentation its directory listing links to. */
+export const MCP_POSTS_PAGE_PATH = '/developers/mcp/posting';
+export const MCP_POSTS_PAGE_URL = `${MCP_SERVER_ORIGIN}${MCP_POSTS_PAGE_PATH}`;
+
 /**
  * Production's RFC 9728 document for the server, as `protectedResourceMetadataUrl` builds it for
  * any origin (`oauth-protected-resource-metadata.ts`, which imports this module, so the value is
  * spelled out here and the test holds the two together).
  */
 export const MCP_PROTECTED_RESOURCE_METADATA_URL = `${MCP_SERVER_ORIGIN}/.well-known/oauth-protected-resource${MCP_ROUTE_PATH}`;
+export const MCP_POSTS_PROTECTED_RESOURCE_METADATA_URL = `${MCP_SERVER_ORIGIN}/.well-known/oauth-protected-resource${MCP_POSTS_ROUTE_PATH}`;
 
 /**
  * The Claude Code plugin marketplace this public repository serves (`.claude-plugin/marketplace.json`)
@@ -87,6 +98,25 @@ export const MCP_CLIENT_IDS: McpClientIds = {
   codex: '6508034a-cdb9-4f23-9263-7bf332096acb',
   cursor: 'cd3b041d-a942-4917-b37f-735744ca4026',
 };
+
+/**
+ * The production OAuth clients that are posting-only: a token issued to one drives
+ * `/api/mcp/posts` and is refused at `/api/mcp`, and the consent page shows it the posting-only
+ * access list (`mcp-surfaces.ts`). One today, registered 2026-11-10 for the listing in Claude's
+ * connectors directory: a confidential client whose secret Anthropic holds, with the hosted
+ * Claude apps' redirect URI (`https://claude.ai/api/mcp/auth_callback`). The `claude` client above
+ * stays the public one a creator types into a custom connector for the full server.
+ */
+export const MCP_POSTING_ONLY_CLIENT_IDS: Readonly<Record<'claudeDirectory', string>> = {
+  claudeDirectory: '1b4db392-2141-413b-be41-f833dfdcab42',
+};
+
+/** Whether an OAuth client is one of the posting-only ones. */
+export function isPostingOnlyClientId(clientId: string | null | undefined): boolean {
+  if (typeof clientId !== 'string') return false;
+  const trimmed = clientId.trim().toLowerCase();
+  return trimmed !== '' && Object.values(MCP_POSTING_ONLY_CLIENT_IDS).includes(trimmed);
+}
 
 /**
  * The exact redirect URIs each client sends, which its OAuth client must be registered with

@@ -25,11 +25,15 @@ import {
 import { getCreationPostTitleSuggestion } from '@/lib/creation-post-title';
 import {
   MCP_GENERATION_POLL_INTERVAL_MS,
+  MCP_POSTS_SERVER_INSTRUCTIONS,
+  MCP_POSTS_TOOL_NAMES,
   MCP_ROUTE_MAX_DURATION_SECONDS,
   MCP_SERVER_INSTRUCTIONS,
   MCP_SERVER_VERSION,
   MCP_TOOLS,
   createMcpServer,
+  mcpToolDescription,
+  mcpToolsFor,
   registerMcpTools,
   runMcpTool,
   type CreationForPublish,
@@ -38,6 +42,7 @@ import {
   type McpToolDefinition,
   type McpToolServices,
 } from '@/lib/mcp-server-service';
+import { MCP_POSTS_TOOL_SUMMARIES } from '@/lib/mcp-posts-tool-summaries';
 import {
   MCP_RESULT_CHARACTER_CAP,
   capToolResult,
@@ -3046,5 +3051,105 @@ describe('tool results', () => {
 
     const small = capToolResult(toolSuccess('ok', { rows: [1, 2, 3] }));
     expect(small.structuredContent).toEqual({ rows: [1, 2, 3] });
+  });
+});
+
+describe('the posting-only server', () => {
+  // The tools the full server has and the posting server must not: each starts a run, prices
+  // one, reads the model catalog or spends a credit.
+  const ABSENT = ['list_models', 'get_model', 'quote_generation', 'create_media', 'get_generation', 'enhance_prompt'];
+  const ABSENT_PATTERN = new RegExp(ABSENT.join('|'), 'u');
+
+  it('offers the six posting tools and none that starts a run or spends a credit', () => {
+    const tools = mcpToolsFor('posts');
+    expect(tools.map((entry) => entry.name)).toEqual(['upload_input', 'request_upload', 'list_creations', 'publish_post', 'get_post', 'delete_post']);
+    expect([...MCP_POSTS_TOOL_NAMES].sort()).toEqual(tools.map((entry) => entry.name).sort());
+    for (const name of ABSENT) expect(tools.map((entry) => entry.name)).not.toContain(name);
+    // The full server is every tool, in the registry's order; no surface is the full one.
+    expect(mcpToolsFor('full')).toEqual(MCP_TOOLS);
+    expect(mcpToolsFor()).toEqual(MCP_TOOLS);
+    // Every tool carries what Claude's directory asks of one: a title, and a hint that says
+    // whether it only reads or may destroy.
+    for (const entry of tools) {
+      expect(entry.title.length, entry.name).toBeGreaterThan(3);
+      expect(entry.name.length, entry.name).toBeLessThanOrEqual(64);
+      expect(typeof entry.annotations.readOnlyHint, entry.name).toBe('boolean');
+      if (!entry.annotations.readOnlyHint) expect(typeof entry.annotations.destructiveHint, entry.name).toBe('boolean');
+    }
+    expect(tools.filter((entry) => entry.annotations.readOnlyHint).map((entry) => entry.name)).toEqual(['list_creations', 'get_post']);
+    expect(tools.filter((entry) => entry.annotations.destructiveHint).map((entry) => entry.name)).toEqual(['delete_post']);
+  });
+
+  it('describes each tool, and the server, without naming a tool it does not have', () => {
+    for (const entry of mcpToolsFor('posts')) {
+      const description = mcpToolDescription(entry, 'posts');
+      expect(description.length, entry.name).toBeGreaterThan(120);
+      expect(description, entry.name).not.toMatch(ABSENT_PATTERN);
+      // What the agent sends is described by the schema too.
+      expect(JSON.stringify(z.toJSONSchema(entry.inputSchema)), entry.name).not.toMatch(ABSENT_PATTERN);
+    }
+    expect(MCP_POSTS_SERVER_INSTRUCTIONS).not.toMatch(ABSENT_PATTERN);
+    expect(MCP_POSTS_SERVER_INSTRUCTIONS).toContain('It starts no run and spends no credits.');
+    expect(MCP_POSTS_SERVER_INSTRUCTIONS).toContain('get their yes before publishing, and never choose a price yourself');
+    expect(MCP_POSTS_SERVER_INSTRUCTIONS).toContain('list_creations → publish_post with its generation_id');
+    // The full server keeps its own words.
+    expect(mcpToolDescription(tool('upload_input'), 'full')).toBe(tool('upload_input').description);
+    expect(mcpToolDescription(tool('upload_input'))).toContain('create_media');
+    expect(mcpToolDescription(tool('publish_post'), 'full')).toContain('get_generation says when a run has succeeded.');
+    expect(mcpToolDescription(tool('publish_post'), 'posts')).toContain('list_creations gives each creation\'s status.');
+    // A tool with nothing to change says the same on both.
+    expect(mcpToolDescription(tool('get_post'), 'posts')).toBe(tool('get_post').description);
+    expect(mcpToolDescription(tool('delete_post'), 'posts')).toBe(tool('delete_post').description);
+  });
+
+  it('registers only its tools, with its descriptions', () => {
+    const registerTool = vi.fn();
+    registerMcpTools({ registerTool } as never, { ...harness().context, surface: 'posts' });
+    expect(registerTool.mock.calls.map(([name]) => name)).toEqual(mcpToolsFor('posts').map((entry) => entry.name));
+    for (const [name, config] of registerTool.mock.calls) {
+      expect(config.description, name).toBe(mcpToolDescription(tool(name), 'posts'));
+      expect(config.annotations, name).toEqual(tool(name).annotations);
+    }
+  });
+
+  it('answers without naming a tool it does not have', async () => {
+    const posts = (overrides: Partial<McpToolServices> = {}) => {
+      const made = harness(overrides);
+      return { ...made, context: { ...made.context, surface: 'posts' as const } };
+    };
+    // A staged picture: where it goes in a post, and nothing about a run.
+    const staged = text(await tool('upload_input').handle({ url: 'https://cdn.example.com/a.jpg' }, posts().context));
+    expect(staged).toContain('Staged an image of 4096 bytes (image/jpeg).');
+    expect(staged).toContain('publish_post.uploads[]');
+    expect(staged).not.toMatch(ABSENT_PATTERN);
+
+    // A creation still running: the status is read from the list this server has.
+    const running = posts({ readCreationForPublish: vi.fn(async () => creation({ status: 'processing' })) as never });
+    const notReady = await tool('publish_post').handle({ generation_id: GENERATION_ID, title: 'A red bicycle' }, running.context);
+    expect(structured(notReady).error).toMatchObject({ code: 'NOT_READY' });
+    expect(text(notReady)).toContain('Check list_creations until its status is succeeded');
+    expect(text(notReady)).not.toMatch(ABSENT_PATTERN);
+
+    // The same refusal from the publish service itself.
+    const refused = posts({
+      publishGenerationToShowcaseForRoute: vi.fn(async () => ({ ok: false as const, status: 400, body: { error: 'Cannot publish a generation that has not succeeded' } })) as never,
+    });
+    const late = await tool('publish_post').handle({ generation_id: GENERATION_ID, title: 'A red bicycle' }, refused.context);
+    expect(structured(late).error).toMatchObject({ code: 'NOT_READY' });
+    expect(text(late)).not.toMatch(ABSENT_PATTERN);
+
+    // A tool that throws: no word of a charge on a server that charges nothing.
+    const thrown = posts({ readPostForAgent: vi.fn(async () => { throw new Error('boom'); }) as never });
+    const failure = await runMcpTool(tool('get_post'), { post_id: POST_ID }, thrown.context);
+    expect(structured(failure).error).toMatchObject({ code: 'INTERNAL_ERROR' });
+    expect(text(failure)).not.toMatch(/charged|run may have started/u);
+  });
+
+  it('is listed on its public page as it is registered', () => {
+    expect(MCP_POSTS_TOOL_SUMMARIES.map((entry) => entry.name)).toEqual(mcpToolsFor('posts').map((entry) => entry.name));
+    for (const entry of MCP_POSTS_TOOL_SUMMARIES) {
+      expect(entry.readOnly, entry.name).toBe(tool(entry.name).annotations.readOnlyHint);
+      expect(entry.summary, entry.name).not.toMatch(ABSENT_PATTERN);
+    }
   });
 });
