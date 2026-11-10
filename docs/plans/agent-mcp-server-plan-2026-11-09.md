@@ -327,7 +327,8 @@ Codex derives). The production clients for Claude, Claude Code, Cursor and Codex
 on 2026-11-09, and the Codex client gained that derived redirect on 2026-11-10 (runbook,
 "Registered clients"). Phase 2 (#749) merged first and #748 took it in, so the page's and the
 skills' publishing and Connected apps went live with its release, and the registry
-entry is version 1.1.0, the server's, published to the registry on 2026-11-09 at 20:28 UTC
+entry was version 1.1.0, the server's, published to the registry on 2026-11-09 at 20:28 UTC
+(1.2.0 since 2026-11-10, with phase 4)
 (runbook, "MCP registry"). Left: ChatGPT's client (after its connector), one real Codex sign-in
 (runbook, switch-on check 5), the owner's steps below, and `run_template`, still waiting for its
 usage check.
