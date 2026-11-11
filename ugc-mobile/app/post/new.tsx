@@ -205,7 +205,7 @@ import { BackGlyph, CloseGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { formatCreditAmount } from '@/lib/pricing';
-import { appTheme, mediaColors } from '@/lib/theme';
+import { appTheme, fieldTypeStyle, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
 import { useHardwareBack } from '@/lib/use-hardware-back';
@@ -4788,7 +4788,7 @@ function MobileCreatablePicker({
             borderColor: isOpen ? `${theme.colors.image}88` : theme.colors.border,
             backgroundColor: disabled ? theme.colors.surface : theme.colors.surfaceInset,
             color: disabled ? theme.colors.faint : theme.colors.text,
-            ...appTheme.type.bodySm,
+            ...fieldTypeStyle('bodySm'),
             fontWeight: '700',
             paddingLeft: appTheme.spacing.gap,
             paddingRight: appTheme.touch.compact,

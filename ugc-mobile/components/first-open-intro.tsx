@@ -73,8 +73,9 @@ const LETTER = {
   bodyAfter:
     '. We’re building a kind, creative community where anyone can make something amazing, share it, and earn when others build on it. We’re so glad you’re here.',
   signature: '— Magicbooklet',
-  // It opens onto Home for a new install: this button only moves on.
-  action: 'Continue',
+  // It opens onto Home for a new install: this button only moves on, and
+  // says where to (owner, 2026-11-11: "make it explore").
+  action: 'Explore',
 };
 const LETTER_START = 0.55; // how far into the dust the note starts to come in
 // The note's own timeline (ms): headline, then the paragraph, then the
@@ -298,7 +299,7 @@ export function FirstOpenIntro({ onDone, held = false }: { onDone: () => void; /
     Animated.timing(ground, { toValue: 0, duration: FADE_OUT, easing: Easing.out(Easing.quad), useNativeDriver: true }).start(onDone);
   };
 
-  // Android's back button lifts the intro off, as Continue does; without this
+  // Android's back button lifts the intro off, as Explore does; without this
   // it went to the screen beneath and left the app from behind the intro.
   useHardwareBack(phase !== 'leaving', leave);
 

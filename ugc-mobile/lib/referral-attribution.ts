@@ -172,45 +172,19 @@ export async function clearPendingReferral(storage: ReferralStorage = defaultSto
   await storage.removeItem(PENDING_REFERRAL_STORAGE_KEY);
 }
 
-/** The claim recorded for this code in the last few minutes, with the terms it used. */
-export async function getRecentReferralClaimRecord(
-  code: string,
-  storage: ReferralStorage = defaultStorage,
-  now = Date.now()
-): Promise<RecentReferralClaim | null> {
-  const serialized = await storage.getItem(RECENT_REFERRAL_CLAIM_STORAGE_KEY);
-  if (!serialized) return null;
-
-  try {
-    const recent = JSON.parse(serialized) as Partial<RecentReferralClaim>;
-    const claimedAt = typeof recent.claimedAt === 'string' ? Date.parse(recent.claimedAt) : Number.NaN;
-    if (
-      recent.code !== code
-      || !recent.response?.success
-      || typeof recent.claimedAt !== 'string'
-      || !Number.isFinite(claimedAt)
-      || claimedAt + RECENT_CLAIM_WINDOW_MS <= now
-    ) {
-      await storage.removeItem(RECENT_REFERRAL_CLAIM_STORAGE_KEY);
-      return null;
-    }
-    return {
-      code,
-      claimedAt: recent.claimedAt,
-      response: recent.response,
-      program: readReferralProgram(recent.program),
-    };
-  } catch {
-    await storage.removeItem(RECENT_REFERRAL_CLAIM_STORAGE_KEY);
-    return null;
-  }
-}
-
 /**
- * The claim this phone recorded in the last few minutes, whichever invite it
- * was: what the welcome card says after a sign-up ("Invite applied"), since
- * the claim itself runs unseen as the account is made (`lib/auth.tsx`). Left
- * in place for the invite's own landing to read.
+ * The claim this account made in the last few minutes, whichever invite it
+ * was, with the terms it used: what the welcome card says after a sign-up
+ * ("Invite applied"), since the claim itself runs unseen as the account is made
+ * (`lib/auth.tsx`), and what an invite's landing shows when it is opened again
+ * by that account, whichever invite it is for: the account has its invite.
+ *
+ * Only to the account that made it. The record is the phone's, and iOS keeps
+ * SecureStore through an uninstall: read without asking whose it was, it told a
+ * fresh install's guest that pasted the same invite "Invite applied" with no
+ * account at all (iPhone 16e, 0.1.9 (61), 2026-11-11). Never removed here, so
+ * one account's look cannot take another's record from it; the next claim
+ * replaces it.
  */
 export async function getLatestReferralClaimRecord(
   userId: string | null | undefined,
@@ -274,14 +248,6 @@ export function inviteClaimLine(
     default:
       return { tone: 'info', text: 'Invite not applied: this account is not eligible for this invite.' };
   }
-}
-
-export async function getRecentReferralClaim(
-  code: string,
-  storage: ReferralStorage = defaultStorage,
-  now = Date.now()
-): Promise<ReferralClaimResponse | null> {
-  return (await getRecentReferralClaimRecord(code, storage, now))?.response ?? null;
 }
 
 export async function capturePendingReferral(

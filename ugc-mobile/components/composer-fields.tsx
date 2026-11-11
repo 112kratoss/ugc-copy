@@ -2,7 +2,7 @@ import type { ReactNode, RefObject } from 'react';
 import { TextInput, View, type TextInputProps } from 'react-native';
 
 import { AppText } from '@/components/ui';
-import { appTheme } from '@/lib/theme';
+import { appTheme, fieldTypeStyle } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
 /**
@@ -99,7 +99,7 @@ export function ComposerInput({
         borderColor: theme.colors.border,
         backgroundColor: editable ? theme.colors.surfaceInset : theme.colors.surface,
         color: editable ? theme.colors.text : theme.colors.faint,
-        ...appTheme.type.bodySm,
+        ...fieldTypeStyle('bodySm', Boolean(multiline)),
         fontWeight: '500',
         paddingHorizontal: appTheme.spacing.gap,
         paddingVertical: appTheme.spacing.gap,

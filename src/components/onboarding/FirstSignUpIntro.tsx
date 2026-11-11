@@ -40,14 +40,14 @@ import { createIntroStage, type IntroFaces, type IntroStage } from './first-sign
  * "Create anything / Share the magic / Earn as it grows" arrives a line at a
  * time, each note written in beside its word; everything holds, then the
  * words turn to dust and blow away (a canvas, `first-sign-up-intro-stage.ts`),
- * and a note from the team comes in as they go. Continue lifts the intro off
+ * and a note from the team comes in as they go. Explore lifts the intro off
  * the page beneath, as Escape does at any point.
  *
  * Reduced motion: the words fade in together, stay, and cross-fade to the
  * note, which arrives whole. No dust, no writing.
  *
  * A screen reader reads the words, then the note, each as one item (the
- * drawing is hidden from it); the focus moves to Continue as it can be
+ * drawing is hidden from it); the focus moves to Explore as it can be
  * pressed, which reads the note as the dialog's description. The page beneath
  * is inert and hidden from assistive technology while the intro is up.
  */
@@ -304,7 +304,7 @@ export function FirstSignUpIntro({ entrance, onDone }: { entrance: FirstSignUpIn
     };
   }, [calm, phase]);
 
-  // The focus moves to Continue as it can be pressed.
+  // The focus moves to Explore as it can be pressed.
   useEffect(() => {
     if (letterRead) continueRef.current?.focus({ preventScroll: true });
   }, [letterRead]);
