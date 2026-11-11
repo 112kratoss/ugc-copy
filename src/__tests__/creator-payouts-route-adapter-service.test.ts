@@ -9,7 +9,13 @@ vi.mock('@/lib/server-auth-user', () => ({
   })),
 }));
 
+vi.mock('@/lib/creator-payout-details-crypto', () => ({
+  encryptCreatorPayoutDetails: vi.fn((plain: string) => `sealed:${plain.length}`),
+}));
+
 import { createCreatorPayoutsRouteHandlers } from '@/lib/creator-payouts-route-adapter-service';
+
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 function routeWith() {
   const requestCreatorPayout = vi.fn(async () => ({
@@ -69,5 +75,66 @@ describe('POST /api/creator/payouts', () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: 'Choose how you want to be paid.', code: 'INVALID_METHOD' });
     expect(requestCreatorPayout).not.toHaveBeenCalled();
+  });
+});
+
+// The app files its payout through this route (owner, 2026-11-11), so the answer
+// and every refusal are pinned under `requestCreatorPayout` in
+// contracts/mobile-api-v1.json, which the app's suite reads too. The real
+// service runs here against a stand-in for the database's RPC.
+describe('POST /api/creator/payouts against the mobile contract', () => {
+  const endpoint = mobileApiContract.endpoints.requestCreatorPayout;
+
+  function contractRoute(rpcAnswer: Record<string, unknown>) {
+    const rpc = vi.fn(async () => ({ data: rpcAnswer, error: null }));
+    const handlers = createCreatorPayoutsRouteHandlers({
+      dependencies: {
+        createUserClient: vi.fn(() => ({}) as unknown as SupabaseClient),
+        createServiceClient: vi.fn(() => ({ rpc }) as unknown as SupabaseClient),
+        enforceBackendRateLimit: vi.fn(async () => undefined as never),
+        logError: vi.fn(),
+      },
+    });
+    const post = (body: unknown) => handlers.POST(new Request(`https://magicbooklet.test${endpoint.path}`, {
+      method: endpoint.method,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }));
+    return { post, rpc };
+  }
+
+  it('answers a request in the shape the contract pins', async () => {
+    const { post, rpc } = contractRoute({
+      status: 'requested',
+      request_id: endpoint.response.requestId,
+      amount_token_subunits: endpoint.response.amountTokenSubunits,
+    });
+
+    const response = await post(endpoint.request);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+    await expect(response.json()).resolves.toEqual(endpoint.response);
+    expect(rpc).toHaveBeenCalledWith('request_creator_payout', expect.objectContaining({
+      p_user_id: 'creator-1',
+      p_payout_method: endpoint.request.payoutMethod,
+    }));
+  });
+
+  it.each([
+    ['belowMinimum', { status: 'below_minimum' }, endpoint.request],
+    ['alreadyPending', { status: 'already_pending' }, endpoint.request],
+    ['invalidMethod', { status: 'requested' }, { ...endpoint.request, payoutMethod: 'crypto' }],
+    ['methodUnavailable', { status: 'requested' }, { ...endpoint.request, payoutMethod: 'paypal' }],
+    ['invalidDetails', { status: 'requested' }, { ...endpoint.request, payoutDetails: ' ' }],
+    ['invalidDetails', { status: 'requested' }, { ...endpoint.request, payoutDetails: 'x'.repeat(501) }],
+  ] as const)('answers %s in the contract\'s words', async (key, rpcAnswer, body) => {
+    const refusal = endpoint.errors[key];
+    const { post } = contractRoute(rpcAnswer);
+
+    const response = await post(body);
+
+    expect(response.status).toBe(refusal.status);
+    await expect(response.json()).resolves.toEqual(refusal.response);
   });
 });

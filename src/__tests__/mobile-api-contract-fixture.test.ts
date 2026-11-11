@@ -224,6 +224,7 @@ const expectedEndpointKeys = [
   'recordReferralVisit',
   'getCreditHistory',
   'getHomeShelf',
+  'requestCreatorPayout',
 ] as const;
 
 describe('shared mobile API v1 contract fixture', () => {

@@ -20,6 +20,11 @@ import {
 } from '@/lib/creator-payouts';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
+import {
+  CREATOR_PAYOUT_DETAILS_MIN_LENGTH,
+  CREATOR_PAYOUT_DETAILS_MISSING,
+} from '../../ugc-mobile/lib/creator-payout-policy/creator-payout-policy';
+
 type CreatorPayoutsRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
@@ -105,9 +110,12 @@ async function handlePOST(request: Request, dependencies: ReturnType<typeof reso
     return NextResponse.json(creatorPayoutMethodRefusal(body.payoutMethod), { status: 400 });
   }
 
-  if (typeof body.payoutDetails !== 'string' || body.payoutDetails.trim().length < 3) {
+  // The full rule runs in requestCreatorPayout; this only turns away a body
+  // with no text before the rate-limited write. Every refusal carries a code,
+  // which the app reads.
+  if (typeof body.payoutDetails !== 'string' || body.payoutDetails.trim().length < CREATOR_PAYOUT_DETAILS_MIN_LENGTH) {
     return NextResponse.json(
-      { error: 'Add the account details we should send the payout to.' },
+      { error: CREATOR_PAYOUT_DETAILS_MISSING, code: 'INVALID_DETAILS' },
       { status: 400 },
     );
   }

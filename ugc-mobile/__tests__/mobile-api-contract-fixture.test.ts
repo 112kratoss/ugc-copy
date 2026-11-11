@@ -551,6 +551,10 @@ const extendedOperationCases: Array<{
 }> = [
   { key: 'getContentPreferences', call: (api) => api.getContentPreferences() },
   { key: 'getCreatorPayoutState', call: (api) => api.getCreatorPayoutState() },
+  {
+    key: 'requestCreatorPayout',
+    call: (api) => api.requestCreatorPayout({ payoutMethod: 'upi', payoutDetails: 'creator@okbank' }),
+  },
   { key: 'revealNsfwPost', call: (api) => api.revealNsfwPost('post-1') },
   { key: 'getGenerationDetails', call: (api) => api.getGenerationDetails('generation-1') },
   { key: 'deleteGeneration', call: (api) => api.deleteGeneration('generation-1') },

@@ -99,6 +99,7 @@ import {
   normalizeTemplateRunResponse,
   type TemplateReportReason,
 } from './media-templates';
+import type { CreatorPayoutMethod } from './creator-payout-policy/creator-payout-policy';
 import type { MediaDiagnosticsReport } from './media-diagnostics';
 import type { SeedanceAssetKind } from './model-catalog/seedance-assets';
 import type { PlaybackMetricsReport } from './playback-metrics';
@@ -513,6 +514,18 @@ export type CreatorPayoutStateResponse = {
   canRequest: boolean;
   pendingRequest: CreatorPayoutRequestSummary | null;
   history: CreatorPayoutRequestSummary[];
+};
+
+/** `POST /api/creator/payouts`: how to pay, and where to. */
+export type CreatorPayoutRequestBody = {
+  payoutMethod: CreatorPayoutMethod;
+  payoutDetails: string;
+};
+
+export type CreatorPayoutRequestResponse = {
+  success: true;
+  requestId: string;
+  amountTokenSubunits: number;
 };
 
 export type ModerationReportSourceSurface =
@@ -1258,6 +1271,17 @@ export function createApiClient({
       }, { timeoutMs: ACCOUNT_DELETION_TIMEOUT_MS }),
     /** The seller's unpaid balance, which deleting the account forfeits. */
     getCreatorPayoutState: () => request<CreatorPayoutStateResponse>('/api/creator/payouts'),
+    /**
+     * Files a payout of the whole available balance (owner, 2026-11-11). A
+     * refusal is an `ApiError` carrying the server's words and its `code`
+     * (`BELOW_MINIMUM`, `ALREADY_PENDING`, `INVALID_METHOD`, `METHOD_UNAVAILABLE`,
+     * `INVALID_DETAILS`, or `RATE_LIMITED`).
+     */
+    requestCreatorPayout: (body: CreatorPayoutRequestBody) =>
+      request<CreatorPayoutRequestResponse>('/api/creator/payouts', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
     /**
      * Called while still a guest, immediately before the sign-in that will
      * replace this session. Returns a one-time ticket to persist securely.

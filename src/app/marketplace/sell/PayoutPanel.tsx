@@ -9,6 +9,20 @@ import { POST_RESOURCE_CREATOR_SHARE_PERCENT, POST_RESOURCE_TOKEN_SUBUNITS } fro
 import { formatUsdCents } from '@/lib/post-resource-bundles';
 import { supabase } from '@/lib/supabase';
 
+import {
+  CREATOR_PAYOUT_ARRIVAL_DAYS,
+  CREATOR_PAYOUT_COMING_SOON_LABELS,
+  CREATOR_PAYOUT_DETAILS_CAUTION,
+  CREATOR_PAYOUT_DETAILS_MAX_LENGTH,
+  CREATOR_PAYOUT_DETAILS_MIN_LENGTH,
+  CREATOR_PAYOUT_METHOD_OPTIONS,
+  checkPayoutDetails,
+  creatorPayoutRailsLine,
+  creatorPayoutStatusLabel,
+  formatCreatorPayoutMethod,
+  type CreatorPayoutMethod,
+} from '../../../../ugc-mobile/lib/creator-payout-policy/creator-payout-policy';
+
 type PayoutRequest = {
   id: string;
   amountUsd: string;
@@ -33,32 +47,13 @@ type PayoutState = {
   lifetimeEarnedTokenSubunits?: number;
 };
 
-// What a new payout can be sent by. Payouts go out in rupees over Indian rails,
-// so the server takes UPI and Indian bank transfers only (decision 7,
-// 2026-10-17) and answers a PayPal request 400 METHOD_UNAVAILABLE.
-const PAYOUT_METHODS = [
-  { value: 'upi', label: 'UPI', placeholder: 'your-name@bank' },
-  { value: 'bank_transfer', label: 'Indian bank transfer', placeholder: 'Account name and last 4 digits, plus a contact' },
-] as const;
-
-// Shown so a seller abroad sees they are planned; never selectable or sent.
-const COMING_SOON_PAYOUT_METHODS = ['PayPal', 'International transfer'] as const;
-
-type PayoutMethod = (typeof PAYOUT_METHODS)[number]['value'];
-
-// A request made before 2026-10-17 may name PayPal, and still reads by name.
-const STORED_PAYOUT_METHOD_LABELS: Record<string, string> = { paypal: 'PayPal' };
-
-// The server refuses details past this length (creator-payouts.ts) with a
-// message that does not say the text was too long.
-const PAYOUT_DETAILS_MAX_LENGTH = 500;
-
-// The server keeps the method's id ("bank_transfer"); the seller reads its name.
-function formatPayoutMethod(value: string): string {
-  return PAYOUT_METHODS.find((option) => option.value === value)?.label
-    ?? STORED_PAYOUT_METHOD_LABELS[value]
-    ?? value.replace(/_/g, ' ');
-}
+// What a new payout can be sent by, the details rule and their words are shared
+// with the server and the app (`ugc-mobile/lib/creator-payout-policy/`).
+// Payouts go out in rupees over Indian rails (decision 7, 2026-10-17).
+const PAYOUT_METHODS = CREATOR_PAYOUT_METHOD_OPTIONS;
+const COMING_SOON_PAYOUT_METHODS = CREATOR_PAYOUT_COMING_SOON_LABELS;
+const PAYOUT_DETAILS_MAX_LENGTH = CREATOR_PAYOUT_DETAILS_MAX_LENGTH;
+const formatPayoutMethod = formatCreatorPayoutMethod;
 
 function formatDate(value: string): string {
   const parsed = new Date(value);
@@ -101,7 +96,7 @@ export default function PayoutPanel({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
-  const [method, setMethod] = useState<PayoutMethod>('upi');
+  const [method, setMethod] = useState<CreatorPayoutMethod>('upi');
   const [details, setDetails] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -180,6 +175,12 @@ export default function PayoutPanel({
   };
 
   const submit = async () => {
+    // The server runs the same check; asking it first would only send a refusal.
+    const detailsProblem = checkPayoutDetails(method, details);
+    if (detailsProblem) {
+      setError(detailsProblem);
+      return;
+    }
     setIsSubmitting(true);
     setError(null);
     setNotice(null);
@@ -306,7 +307,7 @@ export default function PayoutPanel({
               <StatusCallout
                 tone="success"
                 title={`${state.pendingRequest.amountUsd} payout in progress`}
-                body={`Requested ${formatDate(state.pendingRequest.requestedAt)} via ${formatPayoutMethod(state.pendingRequest.payoutMethod)}. It arrives within 14 days of the request.`}
+                body={`Requested ${formatDate(state.pendingRequest.requestedAt)} via ${formatPayoutMethod(state.pendingRequest.payoutMethod)}. It arrives within ${CREATOR_PAYOUT_ARRIVAL_DAYS} days of the request.`}
               />
             ) : canWithdraw ? (
               <Button
@@ -341,7 +342,7 @@ export default function PayoutPanel({
                 {/* Said under every balance, not only in the form: a seller
                     abroad learns here that payouts go to Indian rails. */}
                 <p className="mt-2 text-xs font-semibold leading-5 text-[var(--ui-text-muted)]">
-                  Withdraw from {state.minimumUsd}, paid in INR to UPI or an Indian bank.
+                  {creatorPayoutRailsLine(state.minimumUsd)}
                 </p>
               </div>
             )}
@@ -375,7 +376,7 @@ export default function PayoutPanel({
                   {state.history.map((entry) => (
                     <li key={entry.id} className="flex flex-wrap items-baseline justify-between gap-x-2">
                       <span className="text-[var(--ui-text-secondary)]">
-                        {entry.amountUsd} · {entry.status === 'paid' ? 'Paid' : entry.status === 'rejected' ? 'Rejected' : 'In progress'}
+                        {entry.amountUsd} · {creatorPayoutStatusLabel(entry.status)}
                       </span>
                       <span className="text-[var(--ui-text-faint)]">{formatDate(entry.resolvedAt ?? entry.requestedAt)}</span>
                       {entry.status === 'rejected' && entry.resolutionNote ? (
@@ -408,7 +409,7 @@ export default function PayoutPanel({
                 <Text as="h2" variant="cardTitle" id={`${formId}-title`}>Withdraw {state.availableUsd}</Text>
                 <Text variant="bodySm" className="mt-1">
                   You keep {POST_RESOURCE_CREATOR_SHARE_PERCENT}% of every paid unlock. Payouts are paid in INR to a UPI ID
-                  or an Indian bank account within 14 days of your request.
+                  or an Indian bank account within {CREATOR_PAYOUT_ARRIVAL_DAYS} days of your request.
                 </Text>
               </div>
               <Button variant="ghost" icon={X} iconPosition="start" disabled={isSubmitting} onClick={closeForm}>Cancel</Button>
@@ -472,15 +473,14 @@ export default function PayoutPanel({
               />
             </label>
             <Text variant="caption" className="mt-2 max-w-xl">
-              Never paste a full account number here. Send a UPI ID, or the account name with the last
-              four digits and a contact we can reach you on.
+              {CREATOR_PAYOUT_DETAILS_CAUTION}
             </Text>
 
             <div className="mt-5 flex flex-wrap items-center gap-3">
               <Button
                 variant="primary"
                 onClick={() => void submit()}
-                disabled={isSubmitting || details.trim().length < 3}
+                disabled={isSubmitting || details.trim().length < CREATOR_PAYOUT_DETAILS_MIN_LENGTH}
               >
                 {isSubmitting ? 'Requesting…' : 'Request payout'}
               </Button>
