@@ -608,7 +608,7 @@ describe('Have an invite code? (owner, 2026-11-11)', () => {
     expect(authState.api.recordReferralVisit).toHaveBeenCalledWith({ code: 'K7P2QX', source: 'mobile', kind: 'code' });
     expect(textOf(tree)).toContain('Invite saved. Create your new account to get 10% bonus credits on your first top-up.');
     expect(codeField(tree)).toBeUndefined();
-    expect(JSON.parse(secureStore.get(PENDING_KEY)!)).toMatchObject({ code: 'a43ea71e6475', shortCode: 'K7P2QX', kind: 'code' });
+    expect(JSON.parse(secureStore.get(PENDING_KEY)!)).toMatchObject({ code: 'a43ea71e6475', shortCode: 'K7P2QX', visitToken: '11111111-1111-4111-8111-111111111111' });
     renderer.act(() => tree.unmount());
   });
 

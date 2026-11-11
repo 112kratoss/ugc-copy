@@ -51,6 +51,8 @@ export interface PendingReferral {
 export interface RecentReferralClaim {
   code: string;
   claimedAt: string;
+  /** The account that made the claim, so another account on the phone is never told of it. */
+  userId?: string;
   response: ReferralClaimResponse;
   /** The terms of the invite the claim used, for the landing's "Invite applied". */
   program?: ReferralProgramSummary | null;
@@ -211,16 +213,21 @@ export async function getRecentReferralClaimRecord(
  * in place for the invite's own landing to read.
  */
 export async function getLatestReferralClaimRecord(
+  userId: string | null | undefined,
   storage: ReferralStorage = defaultStorage,
   now = Date.now()
 ): Promise<RecentReferralClaim | null> {
+  if (!userId) return null;
   const serialized = await storage.getItem(RECENT_REFERRAL_CLAIM_STORAGE_KEY).catch(() => null);
   if (!serialized) return null;
   try {
     const recent = JSON.parse(serialized) as Partial<RecentReferralClaim>;
     const claimedAt = typeof recent.claimedAt === 'string' ? Date.parse(recent.claimedAt) : Number.NaN;
+    // Only this account's own claim: two sign-ups on one phone within the
+    // window must not tell the second of the first's invite (review of #766).
     if (
       typeof recent.code !== 'string'
+      || recent.userId !== userId
       || !recent.response?.success
       || !Number.isFinite(claimedAt)
       || claimedAt + RECENT_CLAIM_WINDOW_MS <= now
@@ -229,6 +236,7 @@ export async function getLatestReferralClaimRecord(
     }
     return {
       code: recent.code,
+      userId,
       claimedAt: recent.claimedAt as string,
       response: recent.response,
       program: readReferralProgram(recent.program),
@@ -315,6 +323,7 @@ export async function capturePendingReferral(
   if (pending.visitToken) {
     return { pending, keptEarlierInvite: pending.code !== requestedCode };
   }
+  const recordingCode = pending.code;
 
   let visit: Awaited<ReturnType<ReferralApi['recordReferralVisit']>>;
   try {
@@ -329,6 +338,13 @@ export async function capturePendingReferral(
       await clearPendingReferral(storage);
     }
     throw error;
+  }
+  // An invite recorded meanwhile by another capture (a code typed on the
+  // sign-in page while this one waited on the network) stays: it is newer, and
+  // the screen that saved it has already said so (review of #766).
+  const current = await getPendingReferral(storage, now).catch(() => null);
+  if (current?.visitToken && current.code !== recordingCode) {
+    return { pending: current, keptEarlierInvite: current.code !== requestedCode };
   }
   const shortCode = normalizeInviteShortCode(visit.shortCode);
   const recorded: PendingReferral = {
@@ -346,10 +362,15 @@ export async function capturePendingReferral(
 
 /**
  * A code typed on the sign-in page (owner, 2026-11-11): it replaces any invite
- * this phone holds, unless it is that invite's own code, as the server does for
- * a browser. Unlike a link it is saved only once the server has recorded its
- * visit: the person is there to try again, and a wrong or unknown code must
- * leave the invite they already had in place.
+ * this phone holds, unless it is that invite's own code. The server decides
+ * which, as it does for a browser: the held visit's token goes with the code,
+ * and the answer is the visit kept, the held one or a new one. Unlike a link it
+ * is saved only once the server has answered: the person is there to try
+ * again, and a wrong or unknown code must leave the invite they had in place.
+ *
+ * It is kept on the phone as an invite's: the same rules hold for it here (a
+ * later invite link or shared link replaces neither), and a bundle from before
+ * typed codes, which an update rolled back to would run, can still read it.
  */
 async function captureTypedCode(
   api: ReferralApi,
@@ -357,21 +378,19 @@ async function captureTypedCode(
   existing: PendingReferral | null,
   options: { storage: ReferralStorage; now: number; next?: string },
 ) {
-  if (existing?.visitToken && (existing.code === typedCode || existing.shortCode === typedCode)) {
-    return { pending: existing, keptEarlierInvite: false };
-  }
   const visit = await api.recordReferralVisit({
     code: typedCode,
     source: 'mobile',
     kind: 'code',
+    ...(existing?.visitToken ? { visitToken: existing.visitToken } : {}),
     ...(options.next ? { next: options.next } : {}),
   });
   const shortCode = normalizeInviteShortCode(visit.shortCode);
   const recorded: PendingReferral = {
     code: visit.code,
     ...(shortCode ? { shortCode } : {}),
-    capturedAt: new Date(options.now).toISOString(),
-    kind: 'code',
+    capturedAt: existing?.visitToken === visit.visitToken ? existing.capturedAt : new Date(options.now).toISOString(),
+    kind: 'invite',
     visitToken: visit.visitToken,
     expiresAt: visit.expiresAt,
     program: readReferralProgram(visit.program),
@@ -445,7 +464,7 @@ function isTerminalClaimError(error: unknown) {
 
 export async function claimPendingReferral(
   api: ReferralApi,
-  options: { storage?: ReferralStorage; now?: number } = {}
+  options: { storage?: ReferralStorage; now?: number; userId?: string } = {}
 ): Promise<ReferralClaimResponse | null> {
   const storage = options.storage ?? defaultStorage;
   const inFlight = claimPromises.get(storage);
@@ -466,6 +485,7 @@ export async function claimPendingReferral(
       });
       const recentClaim: RecentReferralClaim = {
         code: pending.code,
+        ...(options.userId ? { userId: options.userId } : {}),
         claimedAt: new Date(options.now ?? Date.now()).toISOString(),
         response,
         program: pending.program ?? null,

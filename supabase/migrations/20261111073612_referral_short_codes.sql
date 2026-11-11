@@ -72,6 +72,25 @@ ALTER TABLE public.referral_codes
   ALTER COLUMN short_code SET DEFAULT public.new_referral_short_code(),
   ALTER COLUMN short_code SET NOT NULL;
 
+-- Once drawn, a short code is as fixed as the link code: people write it down and say
+-- it to friends. (Replaced after the backfill, which had to give every row its first.)
+CREATE OR REPLACE FUNCTION public.prevent_referral_identity_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF NEW.user_id IS DISTINCT FROM OLD.user_id
+     OR NEW.code IS DISTINCT FROM OLD.code
+     OR NEW.short_code IS DISTINCT FROM OLD.short_code
+     OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+    RAISE EXCEPTION 'referral code identity is immutable';
+  END IF;
+  NEW.updated_at := timezone('utc'::text, now());
+  RETURN NEW;
+END;
+$$;
+
 -- 2. A visit can come from a typed code --------------------------------------------------
 
 ALTER TABLE public.referral_visits
@@ -323,10 +342,14 @@ BEGIN
     END IF;
 
     IF v_keep THEN
-      -- A visit kept from before the device digest existed learns it now.
-      IF p_device_hash IS NOT NULL AND v_existing.device_hash IS NULL THEN
+      -- A visit kept from before the device digest existed learns it now. A
+      -- shared link's or invite link's visit whose own code is then typed in
+      -- becomes the typed choice, so a later invite link does not replace it.
+      IF (p_device_hash IS NOT NULL AND v_existing.device_hash IS NULL)
+         OR (v_kind = 'code' AND v_existing.kind <> 'code') THEN
         UPDATE public.referral_visits
-        SET device_hash = p_device_hash
+        SET device_hash = coalesce(device_hash, p_device_hash),
+            kind = CASE WHEN v_kind = 'code' THEN 'code' ELSE kind END
         WHERE id = v_existing.id;
       END IF;
 

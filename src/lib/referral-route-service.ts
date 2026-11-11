@@ -384,7 +384,15 @@ export async function recordReferralVisitResponse(request: Request) {
   // typed at sign-up, or an invite link. An invite link replaces an unclaimed
   // visit a shared link left; a typed code replaces any other invite.
   const kind = body.kind === 'shared_link' ? 'shared_link' : body.kind === 'code' ? 'code' : 'invite';
-  const code = kind === 'code' ? normalizeTypedReferralCode(body.code) : normalizeReferralCode(body.code);
+  // An invite link may carry the six-character code too: the app binaries in
+  // stores have no sign-in field yet, and their Invite & Earn sends a typed
+  // code to the invite landing, whose visit is an invite's (review of #766).
+  // A shared link only ever carries the link code.
+  const code = kind === 'code'
+    ? normalizeTypedReferralCode(body.code)
+    : kind === 'invite'
+      ? normalizeReferralCode(body.code) ?? normalizeInviteShortCode(body.code)
+      : normalizeReferralCode(body.code);
   const source = body.source === 'mobile' ? 'native' : body.source === 'web' ? 'web' : null;
   if (!code || !source) return referralErrorResponse(request, 'Invalid referral code.', 400);
 
@@ -436,7 +444,16 @@ export async function recordReferralVisitResponse(request: Request) {
 
   const visitToken = normalizeReferralVisitToken(data.visit_token);
   const expiresAt = stringValue(data.expires_at);
-  const responseCode = normalizeReferralCode(data.code) || code;
+  const keptShortCode = normalizeInviteShortCode(data.short_code);
+  // An invite landing that sent a short code is answered with the code it sent
+  // when that invite is the one kept: those binaries tell a kept earlier invite
+  // by comparing the two, and would otherwise say someone else's invite is kept.
+  const sentShortCode = kind === 'invite' && typeof body.code === 'string' && normalizeInviteShortCode(body.code)
+    ? body.code.trim()
+    : null;
+  const responseCode = sentShortCode && keptShortCode === normalizeInviteShortCode(sentShortCode)
+    ? sentShortCode
+    : normalizeReferralCode(data.code) || code;
   if (!visitToken || !expiresAt) {
     return referralErrorResponse(request, 'Could not save this invite.', 503);
   }
@@ -446,7 +463,7 @@ export async function recordReferralVisitResponse(request: Request) {
     visitToken,
     code: responseCode,
     // The six-character code of the invite kept, for the screens that show it.
-    shortCode: normalizeInviteShortCode(data.short_code),
+    shortCode: keptShortCode,
     // True when an earlier invite this browser opened is the one kept, so the
     // landing can say whose invite it is rather than "saved".
     preserved: status === 'preserved',

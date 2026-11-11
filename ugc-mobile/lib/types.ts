@@ -302,6 +302,11 @@ export interface ReferralVisitRequest {
    * link left; a typed code replaces any other; a shared link replaces nothing.
    */
   kind?: 'invite' | 'shared_link' | 'code';
+  /**
+   * The visit this phone holds, sent with a typed code so the server can tell
+   * the same invite from another (a link capture sends none).
+   */
+  visitToken?: string;
 }
 
 export interface ReferralVisitResponse {

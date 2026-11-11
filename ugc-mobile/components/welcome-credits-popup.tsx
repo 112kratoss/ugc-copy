@@ -137,10 +137,11 @@ function WelcomeCreditsPopupForAccount() {
   // web's greeting page does (owner, 2026-11-11). Read once the card is offered.
   const [inviteLine, setInviteLine] = useState<ReturnType<typeof inviteClaimLine>>(null);
   const isOffered = Boolean(offered);
+  const userId = user?.id ?? null;
   useEffect(() => {
-    if (!isOffered) return;
+    if (!isOffered || !userId) return;
     let live = true;
-    void getLatestReferralClaimRecord()
+    void getLatestReferralClaimRecord(userId)
       .then((record) => {
         if (live) setInviteLine(inviteClaimLine(record));
       })
@@ -148,7 +149,7 @@ function WelcomeCreditsPopupForAccount() {
     return () => {
       live = false;
     };
-  }, [isOffered]);
+  }, [isOffered, userId]);
   useEffect(() => () => {
     mounted.current = false;
     if (fillTimer.current) clearInterval(fillTimer.current);

@@ -326,20 +326,56 @@ describe('a code typed on the sign-in page (owner, 2026-11-11)', () => {
 
     const typed = await capturePendingReferral(api, 'k7p2-qx', { storage, kind: 'code' });
 
-    expect(api.recordReferralVisit).toHaveBeenLastCalledWith({ code: 'K7P2QX', source: 'mobile', kind: 'code' });
+    // The held visit goes with the code, for the server to tell the same invite from another.
+    expect(api.recordReferralVisit).toHaveBeenLastCalledWith({ code: 'K7P2QX', source: 'mobile', kind: 'code', visitToken: 'visit-b1c2d3e4f5a6' });
     expect(typed.keptEarlierInvite).toBe(false);
-    expect(await getPendingReferral(storage)).toMatchObject({ code: 'a43ea71e6475', shortCode: 'K7P2QX', kind: 'code', visitToken: 'visit-K7P2QX' });
+    // Kept as an invite's on the phone, which a bundle from before typed codes can still read.
+    expect(await getPendingReferral(storage)).toMatchObject({ code: 'a43ea71e6475', shortCode: 'K7P2QX', kind: 'invite', visitToken: 'visit-K7P2QX' });
   });
 
-  it('keeps the visit it has when the held invite’s own code is typed', async () => {
+  it('keeps the visit the server keeps when the held invite’s own code is typed', async () => {
     const storage = memoryStorage();
     const api = codeApi();
-    await capturePendingReferral(api, 'K7P2QX', { storage, kind: 'code' });
-    api.recordReferralVisit.mockClear();
+    await capturePendingReferral(api, 'a43ea71e6475', { storage, kind: 'shared_link' });
+    const held = await getPendingReferral(storage);
+    api.recordReferralVisit.mockResolvedValueOnce({
+      success: true as const,
+      code: 'a43ea71e6475',
+      shortCode: 'K7P2QX',
+      visitToken: held!.visitToken!,
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    });
 
     await capturePendingReferral(api, 'k7p2qx', { storage, kind: 'code' });
 
-    expect(api.recordReferralVisit).not.toHaveBeenCalled();
+    expect(api.recordReferralVisit).toHaveBeenLastCalledWith(expect.objectContaining({ visitToken: held!.visitToken }));
+    // The same visit, now a typed choice: a later invite link no longer replaces it.
+    expect(await getPendingReferral(storage)).toMatchObject({ visitToken: held!.visitToken, kind: 'invite', capturedAt: held!.capturedAt });
+    const later = await capturePendingReferral(api, 'b1c2d3e4f5a6', { storage, kind: 'invite' });
+    expect(later.keptEarlierInvite).toBe(true);
+  });
+
+  it('keeps a typed code a link capture still on the network would have written over', async () => {
+    const storage = memoryStorage();
+    const api = codeApi();
+    let answerLink!: () => void;
+    api.recordReferralVisit.mockImplementationOnce(({ code }) => new Promise((resolve) => {
+      answerLink = () => resolve({
+        success: true as const,
+        code,
+        shortCode: 'M8N9PQ',
+        visitToken: 'visit-link',
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      });
+    }));
+    const linkCapture = capturePendingReferral(api, 'b1c2d3e4f5a6', { storage, kind: 'invite' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await capturePendingReferral(api, 'K7P2QX', { storage, kind: 'code' });
+    answerLink();
+    await linkCapture;
+
+    expect(await getPendingReferral(storage)).toMatchObject({ code: 'a43ea71e6475', visitToken: 'visit-K7P2QX' });
   });
 
   it('is not replaced by an invite link opened after it', async () => {
@@ -376,17 +412,21 @@ describe('a code typed on the sign-in page (owner, 2026-11-11)', () => {
     const storage = memoryStorage();
     storage.values.set('magicbooklet.referral.recentClaim.v1', JSON.stringify({
       code: 'a43ea71e6475',
+      userId: 'creator-1',
       claimedAt: new Date(1_000).toISOString(),
       response: { success: true, claimed: true, held: true },
     }));
 
-    const record = await getLatestReferralClaimRecord(storage, 2_000);
+    // Never another account's claim on the same phone.
+    expect(await getLatestReferralClaimRecord('creator-2', storage, 2_000)).toBeNull();
+    expect(await getLatestReferralClaimRecord(null, storage, 2_000)).toBeNull();
+    const record = await getLatestReferralClaimRecord('creator-1', storage, 2_000);
     expect(inviteClaimLine(record)).toEqual({
       tone: 'info',
       text: 'Invite received: its bonus is on hold while we check it. Contact support if you think this is a mistake.',
     });
     expect(storage.values.has('magicbooklet.referral.recentClaim.v1')).toBe(true);
-    expect(await getLatestReferralClaimRecord(storage, 1_000 + 16 * 60 * 1000)).toBeNull();
+    expect(await getLatestReferralClaimRecord('creator-1', storage, 1_000 + 16 * 60 * 1000)).toBeNull();
     expect(inviteClaimLine(null)).toBeNull();
   });
 });

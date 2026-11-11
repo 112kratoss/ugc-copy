@@ -4,7 +4,7 @@
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path = public, extensions;
-SELECT plan(30);
+SELECT plan(34);
 
 -- ─── The column and its maker ───────────────────────────────────────────────
 
@@ -59,11 +59,16 @@ FROM unnest(ARRAY['a1', 'a2']) AS suffix;
 
 -- ─── The code of an invite ──────────────────────────────────────────────────
 
+SELECT col_has_check('public', 'referral_codes', 'short_code', 'a code is held to the six-character alphabet');
+SELECT ok(
+  (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'referral_codes_short_code_check') LIKE '%[2-9A-HJ-NP-Z]{6}%',
+  'the alphabet has no 0, O, 1 or I'
+);
 SELECT throws_ok(
-  $$UPDATE public.referral_codes SET short_code = 'ABCDE0' WHERE user_id = 'c1000000-0000-4000-8000-0000000000a1'$$,
-  '23514',
-  NULL,
-  'a code with a look-alike character is refused'
+  $$UPDATE public.referral_codes SET short_code = 'ABCDEF' WHERE user_id = 'c1000000-0000-4000-8000-0000000000a1'$$,
+  'P0001',
+  'referral code identity is immutable',
+  'a short code never changes once drawn'
 );
 
 
@@ -193,6 +198,29 @@ SELECT 'link_after_shared', public.create_referral_visit(
   (SELECT (answer ->> 'visit_token')::uuid FROM short_visits WHERE name = 'shared'),
   NULL, NULL, NULL, 'invite');
 SELECT is((SELECT answer ->> 'status' FROM short_visits WHERE name = 'link_after_shared'), 'created', 'an invite link still replaces a shared link');
+
+-- Typing the code of the invite a shared link left makes it the typed choice.
+INSERT INTO short_visits
+SELECT 'shared_again', public.create_referral_visit(answer ->> 'code', 'web', '/showcase/y', NULL, NULL, NULL, NULL, 'shared_link')
+FROM short_codes WHERE suffix = 'a1';
+INSERT INTO short_visits
+SELECT 'typed_over_shared', public.create_referral_visit(
+  (SELECT answer ->> 'short_code' FROM short_codes WHERE suffix = 'a1'), 'web', NULL,
+  (SELECT (answer ->> 'visit_token')::uuid FROM short_visits WHERE name = 'shared_again'),
+  NULL, NULL, NULL, 'code');
+SELECT is(
+  (SELECT kind FROM public.referral_visits WHERE public_token = (SELECT (answer ->> 'visit_token')::uuid FROM short_visits WHERE name = 'typed_over_shared')),
+  'code',
+  'typing a shared link''s own invite code makes it a typed choice'
+);
+SELECT is(
+  public.create_referral_visit(
+    (SELECT answer ->> 'code' FROM short_codes WHERE suffix = 'a2'), 'web', NULL,
+    (SELECT (answer ->> 'visit_token')::uuid FROM short_visits WHERE name = 'typed_over_shared'),
+    NULL, NULL, NULL, 'invite') ->> 'status',
+  'preserved',
+  'which a later invite link no longer replaces'
+);
 
 -- ─── A typed code's visit is claimed like any other ─────────────────────────
 

@@ -1030,7 +1030,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // would burn the invite on an identity that has not registered yet.
     if (!registeredUser) return;
 
-    void claimPendingReferral(api).catch((error) => {
+    void claimPendingReferral(api, { userId: registeredUser.id }).catch((error) => {
       console.warn('Failed to claim pending referral after authentication', error);
     });
   }, [api, registeredUser]);

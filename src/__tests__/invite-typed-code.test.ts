@@ -53,6 +53,17 @@ describe('a typed invite code', () => {
     expect(readTypedInviteCode(typed)).toBeNull();
   });
 
+  it('reads the code out of a whole invite message pasted in (#766 review)', () => {
+    const app = `Try Magicbooklet and get 5% bonus credits on your first top-up. Invite code: K7P2QX. Referral link — I may earn bonus credits if you top up.\nhttps://magicbooklet.com/r/${LINK_CODE}`;
+    const web = `Create with me on Magic Booklet and get 5% bonus credits on your first top-up.\nInvite code: K7P2QX\n\nReferral link — I may earn bonus credits if you top up.\nhttps://magicbooklet.com/r/${LINK_CODE}`;
+    const withoutCode = `Try Magicbooklet and get 5% bonus credits on your first top-up. Referral link — I may earn bonus credits if you top up.\nhttps://magicbooklet.com/r/${LINK_CODE}.`;
+    expect(readTypedInviteCode(app)).toBe('K7P2QX');
+    expect(readTypedInviteCode(web)).toBe('K7P2QX');
+    expect(readTypedInviteCode(withoutCode)).toBe(LINK_CODE);
+    expect(readTypedInviteCode('my code is K7P2QX ok')).toBeNull();
+    expect(readTypedInviteCode('see https://evil.example/r/abc and https://magicbooklet.com/r/x')).toBeNull();
+  });
+
   it('agrees with the server on what a short code is', () => {
     for (const value of ['K7P2QX', 'k7p2qx', 'ABCDE0', 'K7P2Q', LINK_CODE, ' K7P2QX ']) {
       expect(normalizeTypedReferralCode(value)).toBe(normalizeInviteShortCode(value) ?? normalizeReferralCode(value));

@@ -131,6 +131,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
   it('says the invite the sign-up claimed was applied, in the web\'s words (owner 11-11)', async () => {
     secureStore.set('magicbooklet.referral.recentClaim.v1', JSON.stringify({
       code: 'a43ea71e6475',
+      userId: 'creator-1',
       claimedAt: new Date().toISOString(),
       response: { success: true, claimed: true },
       program: { inviterPercent: 5, inviteeFirstPurchasePercent: 10, attributionWindowDays: 30 },
@@ -144,6 +145,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
   it('says why an invite was not applied, and nothing without one', async () => {
     secureStore.set('magicbooklet.referral.recentClaim.v1', JSON.stringify({
       code: 'a43ea71e6475',
+      userId: 'creator-1',
       claimedAt: new Date().toISOString(),
       response: { success: true, claimed: false, reason: 'self_referral' },
     }));

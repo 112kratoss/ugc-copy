@@ -56,6 +56,15 @@ export function readTypedInviteCode(text: unknown): string | null {
   if (typeof text !== 'string') return null;
   const trimmed = text.trim();
   if (!trimmed || trimmed.length > 2048) return null;
+  // The whole invite message pasted in: its "Invite code: K7P2QX" line, or
+  // else the one magicbooklet.com link in it (review of #766).
+  const labelled = /\binvite code:\s*([2-9a-hj-np-z]{6})(?![0-9a-z])/i.exec(trimmed)?.[1];
+  if (labelled) return normalizeInviteShortCode(labelled);
+  if (/\s/.test(trimmed)) {
+    const links = trimmed.split(/\s+/).filter((word) => /magicbooklet\.com|:\/\//i.test(word));
+    if (links.length === 1) return codeFromInviteLink(links[0]!.replace(/[.,;:!?)\]]+$/, ''));
+    if (links.length > 1) return null;
+  }
   if (/magicbooklet\.com/i.test(trimmed) || trimmed.includes('://')) {
     return codeFromInviteLink(trimmed);
   }

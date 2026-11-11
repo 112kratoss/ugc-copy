@@ -40,6 +40,19 @@ describe('referral short codes migration', () => {
     expect(sql).toContain('CREATE UNIQUE INDEX referral_codes_short_code_key');
   });
 
+  it('fixes a short code once drawn, only after the backfill gave every row its first', () => {
+    const guard = sql.indexOf('OR NEW.short_code IS DISTINCT FROM OLD.short_code');
+    expect(guard).toBeGreaterThan(sql.indexOf('ALTER COLUMN short_code SET NOT NULL'));
+    expect(sql).toContain('CREATE OR REPLACE FUNCTION public.prevent_referral_identity_mutation()');
+    // Still a plain trigger function, as in 20260712123000.
+    const body = sql.slice(sql.indexOf('CREATE OR REPLACE FUNCTION public.prevent_referral_identity_mutation()'), guard);
+    expect(body).not.toContain('SECURITY DEFINER');
+  });
+
+  it('makes a typed code that matches the kept invite the typed choice', () => {
+    expect(sql).toContain("kind = CASE WHEN v_kind = 'code' THEN 'code' ELSE kind END");
+  });
+
   it('restates the visit function with the abuse guard intact', () => {
     // Patched in place from 20261110070035: the device digest, the kind, the
     // shared-link rule and the first-invite rule all survive.
