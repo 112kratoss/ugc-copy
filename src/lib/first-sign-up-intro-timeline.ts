@@ -29,7 +29,8 @@ export const INTRO_LETTER = {
     '. We’re building a kind, creative community where anyone can make something amazing, share it, and earn when others build on it. We’re so glad you’re here.',
   /** The name, drawn in the logo's two colours: coral, then lavender. */
   name: ['Magic', 'Booklet'] as const,
-  action: 'Continue',
+  /** The app's word too (owner, 2026-11-11: "make it explore"). */
+  action: 'Explore',
 };
 
 /** The note's paragraph and signature, as a screen reader reads them (the headline names the note). */
@@ -53,7 +54,7 @@ export const LETTER_ACTION = [2150, 2550] as const;
 export const LETTER_TOTAL = 2550;
 
 export const APPEAR_TOTAL = WORD_GAP * (INTRO_WORDS.length - 1) + WORD_IN + NOTE_WRITE;
-/** From the start of the timeline: the dust starts, the note comes in, the dust has gone, Continue can be pressed. */
+/** From the start of the timeline: the dust starts, the note comes in, the dust has gone, Explore can be pressed. */
 export const SNAP_AT = APPEAR_TOTAL + HOLD;
 export const LETTER_AT = SNAP_AT + Math.round(SNAP * LETTER_START);
 export const DUST_END_AT = SNAP_AT + SNAP;

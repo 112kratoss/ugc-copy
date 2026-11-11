@@ -95,20 +95,20 @@ describe('FirstSignUpIntroGate', () => {
     expect(document.documentElement.style.overflow).toBe('hidden');
   });
 
-  it('brings the note in as the words go, then moves the focus to Continue as it can be pressed', async () => {
+  it('brings the note in as the words go, then moves the focus to Explore as it can be pressed', async () => {
     renderGate();
     const dialog = screen.getByRole('dialog');
     await startClock();
 
     await advance(LETTER_AT - 1);
-    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Explore' })).toBeNull();
 
     await advance(1);
     // The note, read as one item: the dialog's name and description.
     expect(dialog).toHaveAccessibleName('A note from the team');
     expect(dialog).toHaveAccessibleDescription(INTRO_LETTER_SPOKEN);
     expect(screen.queryByText(INTRO_WORDS_SPOKEN)).toBeNull();
-    const button = screen.getByRole('button', { name: 'Continue' });
+    const button = screen.getByRole('button', { name: 'Explore' });
     expect(button).toHaveAttribute('inert');
     expect(button).not.toHaveFocus();
 
@@ -117,12 +117,12 @@ describe('FirstSignUpIntroGate', () => {
     expect(button).toHaveFocus();
   });
 
-  it('lifts off the page beneath on Continue, and gives the page back', async () => {
+  it('lifts off the page beneath on Explore, and gives the page back', async () => {
     const { container } = renderGate();
     await startClock();
     await advance(LETTER_READ_AT);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Explore' }));
 
     expect(screen.queryByRole('dialog')).toBeNull();
     // Its own state from before (jsdom has no inert of its own: undefined).
@@ -152,7 +152,7 @@ describe('FirstSignUpIntroGate', () => {
     await advance(CALM_LETTER_AT);
     expect(screen.getByRole('dialog')).toHaveAccessibleName('A note from the team');
     await advance(CALM_LETTER_READ_AT - CALM_LETTER_AT);
-    expect(screen.getByRole('button', { name: 'Continue' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Explore' })).toHaveFocus();
   });
 
   it('plays once per browser', () => {
