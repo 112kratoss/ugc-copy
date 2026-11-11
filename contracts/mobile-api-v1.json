@@ -3850,6 +3850,58 @@
           }
         ]
       }
+    },
+    "requestCreatorPayout": {
+      "method": "POST",
+      "path": "/api/creator/payouts",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "payoutMethod": "upi",
+        "payoutDetails": "creator@okbank"
+      },
+      "response": {
+        "success": true,
+        "requestId": "7d1e4c2a-5b3f-4a6e-9c8d-2f1a0b3c4d5e",
+        "amountTokenSubunits": 1100000
+      },
+      "errors": {
+        "belowMinimum": {
+          "status": 400,
+          "response": {
+            "error": "Payouts start at $100.00. Keep selling and the balance will get there.",
+            "code": "BELOW_MINIMUM"
+          }
+        },
+        "alreadyPending": {
+          "status": 409,
+          "response": {
+            "error": "You already have a payout in progress. It has to be settled before you can request another.",
+            "code": "ALREADY_PENDING"
+          }
+        },
+        "invalidMethod": {
+          "status": 400,
+          "response": {
+            "error": "Choose how you want to be paid.",
+            "code": "INVALID_METHOD"
+          }
+        },
+        "methodUnavailable": {
+          "status": 400,
+          "response": {
+            "error": "PayPal payouts are coming soon. Choose UPI or an Indian bank transfer.",
+            "code": "METHOD_UNAVAILABLE"
+          }
+        },
+        "invalidDetails": {
+          "status": 400,
+          "response": {
+            "error": "Add the account details we should send the payout to.",
+            "code": "INVALID_DETAILS"
+          }
+        }
+      }
     }
   },
   "profileInvalidPayload": {

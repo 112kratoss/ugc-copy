@@ -10,32 +10,19 @@ import { POST_RESOURCE_TOKEN_SUBUNITS, POST_RESOURCE_TOKENS_PER_USD } from '@/li
 export const CREATOR_PAYOUT_MINIMUM_TOKEN_SUBUNITS =
   100 * POST_RESOURCE_TOKENS_PER_USD * POST_RESOURCE_TOKEN_SUBUNITS;
 
-/**
- * What a new request may choose. Payouts are sent by hand in INR over Indian
- * rails (decision 7, 2026-10-17), so PayPal waits until there is a way to pay
- * abroad. A request stored earlier with any method still reads and resolves:
- * the creator's history and /admin treat the stored method as text, and the
- * database keeps accepting it.
- */
-export const CREATOR_PAYOUT_METHODS = ['upi', 'bank_transfer'] as const;
-export type CreatorPayoutMethod = (typeof CREATOR_PAYOUT_METHODS)[number];
+// The methods, the details rule and their words are shared with the web form
+// and the app (owner, 2026-11-11); the database takes any short method name, so
+// which ones a new request may use is decided there.
+import {
+  CREATOR_PAYOUT_DETAILS_MISSING,
+  CREATOR_PAYOUT_METHODS,
+  checkPayoutDetails,
+  creatorPayoutMethodRefusal,
+  isCreatorPayoutMethod,
+  type CreatorPayoutMethod,
+} from '../../ugc-mobile/lib/creator-payout-policy/creator-payout-policy';
 
-/** Offered as "Coming soon"; a request for one is told so, not that it is unknown. */
-const CREATOR_PAYOUT_METHODS_COMING_SOON: readonly string[] = ['paypal'];
-
-export function isCreatorPayoutMethod(value: unknown): value is CreatorPayoutMethod {
-  return typeof value === 'string' && (CREATOR_PAYOUT_METHODS as readonly string[]).includes(value);
-}
-
-/** Why a method a new request may not use is refused. */
-export function creatorPayoutMethodRefusal(value: unknown): {
-  code: 'METHOD_UNAVAILABLE' | 'INVALID_METHOD';
-  error: string;
-} {
-  return typeof value === 'string' && CREATOR_PAYOUT_METHODS_COMING_SOON.includes(value)
-    ? { code: 'METHOD_UNAVAILABLE', error: 'PayPal payouts are coming soon. Choose UPI or an Indian bank transfer.' }
-    : { code: 'INVALID_METHOD', error: 'Choose how you want to be paid.' };
-}
+export { CREATOR_PAYOUT_METHODS, creatorPayoutMethodRefusal, isCreatorPayoutMethod, type CreatorPayoutMethod };
 
 export function tokenSubunitsToUsdCents(subunits: number): number {
   return Math.floor(subunits / POST_RESOURCE_TOKEN_SUBUNITS);
@@ -189,16 +176,13 @@ export async function requestCreatorPayout({
     return { ok: false, status: 400, ...creatorPayoutMethodRefusal(payoutMethod) };
   }
 
-  // The plaintext bound lives here now: the database CHECK and the RPC only
-  // see ciphertext, whose length says nothing about what the creator typed.
+  // The plaintext rule lives here: the database CHECK and the RPC only see
+  // ciphertext, whose length says nothing about what the creator typed. It is
+  // the forms' rule too, so a request they let through is not refused here.
   const trimmedDetails = payoutDetails.trim();
-  if (trimmedDetails.length < 3 || trimmedDetails.length > 500) {
-    return {
-      ok: false,
-      status: 400,
-      code: 'INVALID_DETAILS',
-      error: 'Add the account details we should send the payout to.',
-    };
+  const detailsProblem = checkPayoutDetails(payoutMethod, trimmedDetails);
+  if (detailsProblem) {
+    return { ok: false, status: 400, code: 'INVALID_DETAILS', error: detailsProblem };
   }
 
   const { data, error } = await adminSupabase.rpc('request_creator_payout', {
@@ -245,7 +229,7 @@ export async function requestCreatorPayout({
         ok: false,
         status: 400,
         code: 'INVALID_DETAILS',
-        error: 'Add the account details we should send the payout to.',
+        error: CREATOR_PAYOUT_DETAILS_MISSING,
       };
     default:
       return {

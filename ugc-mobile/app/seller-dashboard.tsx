@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { BarChart3, ChevronRight, DollarSign, LockOpen, PackageCheck } from 'lucide-react-native';
 import { Pressable, View } from 'react-native';
 
+import { CreatorPayoutCard } from '@/components/creator-payout-card';
 import { ResourceKindRow } from '@/components/resource-kind-row';
 import { CardListSkeleton } from '@/components/skeleton';
 import {
@@ -14,13 +15,10 @@ import {
   SecondaryButton,
   SectionTitle,
   StatusBlock,
-  WebLinkButton,
 } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
-import { env } from '@/lib/env';
 import { formatUsdCents } from '@/lib/home-view-model';
 import { FREE_RECIPE_LABEL, UNKNOWN_AMOUNT_LABEL, formatUnlockCreditPrice } from '@/lib/pricing';
-import { WALLET_UNAVAILABLE_CAPTION } from '@/lib/profile-view-model';
 import { appTheme, type ToolAccent } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { OwnerPostBundleSummary, OwnerPostListItem } from '@/lib/types';
@@ -92,7 +90,7 @@ export default function SellerDashboardScreen() {
 
       {!router.canGoBack() ? <SecondaryButton label="Back to profile" onPress={() => router.replace('/(tabs)/profile' as never)} /> : null}
 
-      <PayoutBalance payout={payout} />
+      <CreatorPayoutCard payout={payout} />
 
       {isLoading ? <CardListSkeleton label="Loading your listings" /> : null}
 
@@ -164,33 +162,6 @@ export default function SellerDashboardScreen() {
         </>
       ) : null}
     </Screen>
-  );
-}
-
-/**
- * What can be withdrawn now, and the floor a payout waits for (audit 03-1,
- * 03-2). Payouts are requested on the website, so the link stays whatever the
- * balance: the page there also shows a request in progress and past payouts.
- */
-function PayoutBalance({ payout }: { payout: Pick<ReturnType<typeof useCreatorPayoutState>, 'data' | 'isError'> }) {
-  // A failed read wins over a balance an earlier read left behind, as on the
-  // profile's Wallet card: a stale figure can overstate what is withdrawable.
-  const loading = !payout.isError && !payout.data;
-  const line = payout.isError
-    ? WALLET_UNAVAILABLE_CAPTION
-    : payout.data
-      ? `Payout balance ${payout.data.availableUsd} · Payouts start at ${payout.data.minimumUsd}`
-      : `Payout balance ${UNKNOWN_AMOUNT_LABEL}`;
-
-  return (
-    <Card>
-      {/* A string in every state: Android never clears a label that goes back
-          to undefined, and TalkBack read "loading" under the loaded balance. */}
-      <AppText variant="bodySm" color="textSecondary" accessibilityLabel={loading ? 'Payout balance loading' : line}>
-        {line}
-      </AppText>
-      <WebLinkButton href={`${env.siteUrl}/marketplace/sell`} label="Request a payout on the web" />
-    </Card>
   );
 }
 

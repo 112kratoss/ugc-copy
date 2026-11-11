@@ -328,7 +328,8 @@ function NoAccountSignedIn({ isGuest }: { isGuest: boolean }) {
  * A seller's balance not yet paid out is forfeited with the account (a payout
  * already requested is still paid). Said with the amount when there is one, in
  * general terms when the balance could not be read, and not at all when there
- * is nothing to lose. Payouts are requested on the website.
+ * is nothing to lose. A payout is requested in the app's Withdraw (owner,
+ * 2026-11-11), which reads the balance again on its own.
  */
 function UnpaidEarningsWarning({
   payout,
@@ -338,7 +339,7 @@ function UnpaidEarningsWarning({
   unknown: boolean;
 }) {
   const payoutLink = (
-    <WebLinkButton href={`${env.siteUrl}/marketplace/sell`} label="Request a payout first" />
+    <SecondaryButton label="Request a payout first" onPress={() => router.push('/payout-request' as never)} />
   );
   if (unknown) {
     return (
@@ -360,7 +361,7 @@ function UnpaidEarningsWarning({
         tone="warning"
         title={`Unpaid sales earnings of ${payout.availableUsd} will be forfeited`}
         body={payout.canRequest
-          ? 'Request a payout on the website before you delete your account.'
+          ? 'Request a payout before you delete your account.'
           : belowMinimum ? `Payouts start at ${payout.minimumUsd}, so this balance cannot be paid out.` : undefined}
       />
       {payout.canRequest ? payoutLink : null}

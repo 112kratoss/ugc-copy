@@ -440,6 +440,7 @@ function RootLayoutNav() {
                 <Stack.Screen name="unlock/[unlockId]" options={{ title: 'Recipe' }} />
                 <Stack.Screen name="edit-profile" options={{ headerShown: false, presentation: 'modal', animation: reducedMotion ? 'none' : 'slide_from_bottom' }} />
                 <Stack.Screen name="seller-dashboard" options={{ title: 'Recipe Sales' }} />
+                <Stack.Screen name="payout-request" options={{ title: 'Withdraw' }} />
                 <Stack.Screen name="unlocks" options={{ title: 'Unlocked' }} />
                 <Stack.Screen name="post/remixes/[id]" options={{ title: 'Remixes' }} />
                 <Stack.Screen name="credit-history" options={{ title: 'Credit History' }} />

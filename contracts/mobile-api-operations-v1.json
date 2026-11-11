@@ -639,6 +639,11 @@
       "path": "/api/creator/payouts",
       "auth": "required"
     },
+    "requestCreatorPayout": {
+      "method": "POST",
+      "path": "/api/creator/payouts",
+      "auth": "required"
+    },
     "revealNsfwPost": {
       "method": "POST",
       "path": "/api/posts/:postId/reveal",

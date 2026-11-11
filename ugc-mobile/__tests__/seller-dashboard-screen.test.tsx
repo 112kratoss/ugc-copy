@@ -55,7 +55,9 @@ vi.mock('react-native', () => ({
 
 vi.mock('lucide-react-native', () => ({
   BarChart3: () => null,
+  ChevronDown: () => null,
   ChevronRight: () => null,
+  ChevronUp: () => null,
   DollarSign: () => null,
   LockOpen: () => null,
   PackageCheck: () => null,
@@ -456,7 +458,9 @@ describe('Your Sales listings', () => {
 });
 
 // The app had no payout surface at all; the only payout link was on the
-// delete-account screen (audit 03-1, 03-2).
+// delete-account screen (audit 03-1, 03-2). Since 2026-11-11 the card files a
+// payout itself (owner: withdraw in the app); its rules are the view model's,
+// tested on their own in creator-payout-view-model.test.ts.
 describe('Your Sales payout balance', () => {
   const state = {
     success: true,
@@ -472,27 +476,47 @@ describe('Your Sales payout balance', () => {
     history: [],
   };
 
-  function payoutLink(tree: renderer.ReactTestRenderer) {
-    return ofType(tree.root, 'web-link-button').map((node) => ({ href: node.props.href, label: node.props.label }));
+  function withdrawButtons(tree: renderer.ReactTestRenderer) {
+    return ofType(tree.root, 'primary-button').filter((node) => String(node.props.label).startsWith('Withdraw'));
   }
 
-  it('shows what can be withdrawn and where payouts start, with the way to request one', () => {
+  it('shows what can be withdrawn and where payouts start, below the floor', () => {
     signedInWith([listing('a')]);
     payout.result = { data: state, isError: false, refetch: vi.fn() };
     const tree = renderScreen();
 
-    expect(texts(tree.root)).toContain('Payout balance $12.50 · Payouts start at $100.00');
-    expect(payoutLink(tree)).toEqual([{ href: 'https://site.example/marketplace/sell', label: 'Request a payout on the web' }]);
+    expect(texts(tree.root)).toEqual(expect.arrayContaining([
+      'Payout balance',
+      '$12.50',
+      'Withdraw from $100.00, paid in INR to UPI or an Indian bank.',
+    ]));
+    expect(withdrawButtons(tree)).toEqual([]);
+    expect(ofType(tree.root, 'web-link-button')).toEqual([]);
+  });
+
+  it('opens Withdraw in the app once a request can go in', () => {
+    signedInWith([listing('a')]);
+    payout.result = {
+      data: { ...state, availableTokenSubunits: 1_100_000, availableUsd: '$110.00', canRequest: true },
+      isError: false,
+      refetch: vi.fn(),
+    };
+    const tree = renderScreen();
+
+    const [withdraw] = withdrawButtons(tree);
+    expect(withdraw?.props.label).toBe('Withdraw $110.00');
+    act(() => { (withdraw!.props.onPress as () => void)(); });
+    expect(routerPush()).toContain('/payout-request');
   });
 
   it('says the balance is unavailable when it cannot be read, over a figure an earlier read left', () => {
     signedInWith([listing('a')]);
-    payout.result = { data: state, isError: true, refetch: vi.fn() };
+    payout.result = { data: { ...state, canRequest: true }, isError: true, refetch: vi.fn() };
     const tree = renderScreen();
 
     expect(texts(tree.root)).toContain('Balance unavailable');
     expect(texts(tree.root).join(' ')).not.toContain('$12.50');
-    expect(payoutLink(tree)).toEqual([{ href: 'https://site.example/marketplace/sell', label: 'Request a payout on the web' }]);
+    expect(withdrawButtons(tree)).toEqual([]);
   });
 
   it('draws the dash while the balance loads, and says so', () => {
@@ -505,16 +529,17 @@ describe('Your Sales payout balance', () => {
 
   // Android never clears a label that goes back to undefined: the S24 read
   // "Payout balance loading" under a loaded balance (2026-10-15).
-  it('says what the line shows once the balance has loaded, or could not be', () => {
-    for (const isError of [false, true]) {
-      signedInWith([listing('a')]);
-      payout.result = { data: state, isError, refetch: vi.fn() };
-      const tree = renderScreen();
+  it('says what the card shows once the balance has loaded, or could not be', () => {
+    signedInWith([listing('a')]);
+    payout.result = { data: state, isError: true, refetch: vi.fn() };
+    const failed = renderScreen();
+    expect(ofType(failed.root, 'app-text').find((node) => textOf(node) === 'Balance unavailable')?.props.accessibilityLabel)
+      .toBe('Balance unavailable');
 
-      const shown = isError ? 'Balance unavailable' : 'Payout balance $12.50 · Payouts start at $100.00';
-      const line = ofType(tree.root, 'app-text').find((node) => textOf(node) === shown);
-      expect(line?.props.accessibilityLabel).toBe(shown);
-    }
+    payout.result = { data: state, isError: false, refetch: vi.fn() };
+    const loaded = renderScreen();
+    const summary = loaded.root.find((node) => String(node.props.accessibilityLabel ?? '').startsWith('Payout balance $12.50'));
+    expect(summary.props.accessibilityLabel).toBe('Payout balance $12.50. Lifetime $0.40');
   });
 
   it('stays on screen when the listings could not load', () => {
@@ -523,6 +548,6 @@ describe('Your Sales payout balance', () => {
     payout.result = { data: state, isError: false, refetch: vi.fn() };
     const tree = renderScreen();
 
-    expect(texts(tree.root)).toContain('Payout balance $12.50 · Payouts start at $100.00');
+    expect(texts(tree.root)).toEqual(expect.arrayContaining(['Payout balance', '$12.50']));
   });
 });
