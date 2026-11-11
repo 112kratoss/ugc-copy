@@ -468,6 +468,24 @@ describe('ExploreSearchOverlay search', () => {
     await act(async () => tree.unmount());
   });
 
+  it('counts an emoji as one character, as the server does', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await press(tab(tree, 'Posts'));
+
+    await typeQuery(tree, '\u{1F600}');
+    await advance(300);
+    expect(searchPublicContent).not.toHaveBeenCalled();
+    expect(statusTitles(tree)).toEqual(['Find your next idea']);
+
+    // Two characters: creators only, whatever tab was picked.
+    await typeQuery(tree, '\u{1F600}\u{1F600}');
+    await advance(300);
+    expect(requested()).toEqual([{ query: '\u{1F600}\u{1F600}', type: 'creators' }]);
+
+    await act(async () => tree.unmount());
+  });
+
   it('never asks for posts with "@ab": it searches creators until a third character', async () => {
     searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type));
     const tree = await render({ visible: true, onClose: vi.fn() });

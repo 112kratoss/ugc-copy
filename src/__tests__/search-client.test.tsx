@@ -304,6 +304,23 @@ describe('SearchClient', () => {
       expect(requestedUrls()).toEqual(['/api/search?q=%40jo&type=top']);
     });
 
+    it('counts an emoji as one character, as the server does', async () => {
+      render(<SearchClient initialQuery="" initialType="posts" />);
+
+      typeQuery('\u{1F600}');
+      await settle(300);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(screen.getByText('Start with a creator or idea')).toBeInTheDocument();
+
+      // Two characters: creators only, whatever tab was picked.
+      typeQuery('\u{1F600}\u{1F600}');
+      await settle(300);
+      expect(requestedUrls()).toEqual([
+        `/api/search?q=${encodeURIComponent('\u{1F600}\u{1F600}')}&type=creators`,
+      ]);
+      expect(screen.getByRole('tab', { name: 'Posts' })).toBeDisabled();
+    });
+
     it('keeps posts and recipes closed until three characters follow the @', async () => {
       render(<SearchClient initialQuery="" initialType="posts" />);
 

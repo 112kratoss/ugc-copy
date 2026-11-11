@@ -10,6 +10,7 @@ import {
   normalizeSearchHistoryQuery,
   readSearchHistory,
   rememberSearchQuery,
+  searchQueryLength,
 } from '../lib/search-history';
 
 function memoryStorage(seed: string | null = null) {
@@ -47,6 +48,12 @@ describe('mobile search history', () => {
     expect(normalizeCreatorSearchQuery('  @@Jane\u00a0\u00a0Doe ')).toBe('Jane Doe');
     expect(normalizeCreatorSearchQuery('jane@doe')).toBe('jane@doe');
     expect(normalizeCreatorSearchQuery(null)).toBe('');
+  });
+
+  it('counts a query in characters, as the server and its database do', () => {
+    expect(searchQueryLength('\u{1F600}')).toBe(1);
+    expect(searchQueryLength('\u{1F600}\u{1F600}')).toBe(2);
+    expect(searchQueryLength('veo 3')).toBe(5);
   });
 
   it('removes a single remembered query case-insensitively', async () => {

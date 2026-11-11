@@ -53,6 +53,36 @@ describe('public search service', () => {
     });
   });
 
+  it('searches only creators on Top for a query of two characters, two emoji included', async () => {
+    // Two emoji are four UTF-16 units; search_public_posts counts two
+    // characters and raises, which failed the whole Top answer.
+    const rpc = vi.fn(async (name: string) => {
+      if (name !== 'search_public_creators') throw new Error(`Unexpected RPC ${name}`);
+      return { data: [], error: null };
+    });
+    const getMarketplaceResourceList = vi.fn();
+
+    const result = await searchPublicContent({
+      query: '\u{1F600}\u{1F600}',
+      normalizedQuery: '\u{1F600}\u{1F600}',
+      type: 'top',
+      cursor: null,
+      limit: 20,
+      viewerUserId: null,
+      countryCode: null,
+    }, {
+      createServiceClient: vi.fn(() => ({ rpc }) as unknown as SupabaseClient),
+      getMarketplaceResourceList: getMarketplaceResourceList as never,
+      getShowcaseFeedItemsByPostIds: vi.fn() as never,
+      loadBlockedCreatorIds: vi.fn(async () => new Set()) as never,
+    });
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(getMarketplaceResourceList).not.toHaveBeenCalled();
+    expect(result.posts.items).toEqual([]);
+    expect(result.recipes.items).toEqual([]);
+  });
+
   it('never returns an NSFW-labelled post on Top or Posts, keeps text posts, and pages from the ranked rows', async () => {
     // search_public_posts leaves labelled posts out in SQL. The second row
     // stands for a post labelled between the ranked read and hydration, which

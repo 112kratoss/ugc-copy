@@ -25,6 +25,7 @@ import {
   normalizeCreatorSearchQuery,
   parsePublicSearchLimit,
   parsePublicSearchType,
+  publicSearchQueryLength,
 } from '@/lib/public-search';
 import { searchPublicContent } from '@/lib/public-search-service';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
@@ -89,7 +90,8 @@ async function handlePublicSearchGET(
       return badRequest(request, 'q must be at most 100 characters.');
     }
     const normalizedQuery = normalizeCreatorSearchQuery(rawQuery);
-    if (normalizedQuery.length < PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH) {
+    const queryLength = publicSearchQueryLength(normalizedQuery);
+    if (queryLength < PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH) {
       return badRequest(
         request,
         `q must contain at least ${PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH} characters.`,
@@ -101,7 +103,7 @@ async function handlePublicSearchGET(
     if (!type) return badRequest(request, 'type must be top, creators, posts, or recipes.');
     if (
       (type === 'posts' || type === 'recipes')
-      && normalizedQuery.length < PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH
+      && queryLength < PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH
     ) {
       return badRequest(
         request,

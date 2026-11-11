@@ -28,6 +28,7 @@ import {
   normalizeSearchHistoryQuery,
   readSearchHistory,
   rememberSearchQuery,
+  searchQueryLength,
 } from '@/lib/search-history';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
@@ -49,9 +50,9 @@ const SEARCH_TYPES: Array<{ id: PublicSearchType; label: string }> = [
   { id: 'recipes', label: 'Recipes' },
 ];
 
-// The server's minimums, counted on the query without its leading @
-// (normalizeCreatorSearchQuery): creators from two characters, posts and
-// recipes from three.
+// The server's minimums, counted in characters (searchQueryLength: an emoji
+// is one) on the query without its leading @ (normalizeCreatorSearchQuery):
+// creators from two characters, posts and recipes from three.
 const MIN_CREATOR_QUERY_LENGTH = 2;
 const MIN_CONTENT_QUERY_LENGTH = 3;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -350,7 +351,7 @@ export function ExploreSearchOverlay({
   const [history, setHistory] = useState<string[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const normalizedQuery = useMemo(() => normalizeSearchHistoryQuery(query), [query]);
-  const countedLength = normalizeCreatorSearchQuery(normalizedQuery).length;
+  const countedLength = searchQueryLength(normalizeCreatorSearchQuery(normalizedQuery));
   const creatorsOnly = countedLength >= MIN_CREATOR_QUERY_LENGTH && countedLength < MIN_CONTENT_QUERY_LENGTH;
   const type: PublicSearchType = creatorsOnly && isContentType(pickedType) ? 'creators' : pickedType;
   // From the creator minimum on, the tab in effect always meets its own.

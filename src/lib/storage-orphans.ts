@@ -164,6 +164,7 @@ export const ORPHAN_SCANNED_TABLES: ReadonlyArray<{ table: string; key: readonly
 
 const TELEMETRY = 'telemetry or counters: no stored paths, and too large to read whole';
 const NO_TEXT = 'no text or JSON column';
+const SEARCH_DICTIONARY = 'single words of letters, held to that by a check: never a path';
 const UPLOAD_BOOKKEEPING = 'upload bookkeeping: read for the exclusions, never a reference';
 const RECIPE_SWEEP = "the recipe-copy sweep's own bookkeeping: its folders are excluded";
 const RECIPE_COPY_SOURCES = 'where passed-on recipe copies came from: it names only copies, whose folders are excluded';
@@ -217,6 +218,8 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   referral_account_devices: TELEMETRY,
   referral_purchase_reconciliation_retries: NO_TEXT,
   referral_visits: TELEMETRY,
+  // Search's spelling dictionary: one lowercase word of letters per row.
+  search_terms: SEARCH_DICTIONARY,
   showcase_media_revocations: UPLOAD_BOOKKEEPING,
   showcase_saves: NO_TEXT,
   upload_byte_global_counters: NO_TEXT,

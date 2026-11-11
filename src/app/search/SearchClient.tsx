@@ -12,6 +12,7 @@ import {
   PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH,
   normalizeCreatorSearchQuery,
   normalizePublicSearchQuery,
+  publicSearchQueryLength,
   type PublicSearchResponse,
   type PublicSearchType,
   type RecipeSearchResult,
@@ -166,9 +167,10 @@ export default function SearchClient({
   const scheduledQuery = useRef(initialQuery);
   const tabRefs = useRef<Partial<Record<PublicSearchType, HTMLButtonElement | null>>>({});
   const normalizedQuery = useMemo(() => normalizePublicSearchQuery(query), [query]);
-  // The server strips leading "@" (a handle search) before its length checks,
-  // so the gates count the same characters; "@j" would be refused with a 400.
-  const gatedQueryLength = normalizeCreatorSearchQuery(normalizedQuery).length;
+  // The server strips leading "@" (a handle search) before its length checks
+  // and counts characters, an emoji as one, so the gates count the same;
+  // "@j" would be refused with a 400.
+  const gatedQueryLength = publicSearchQueryLength(normalizeCreatorSearchQuery(normalizedQuery));
   const canSearch = gatedQueryLength >= PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH;
   const contentTabsDisabled = canSearch && gatedQueryLength < PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH;
   const activeType: PublicSearchType = contentTabsDisabled && isContentType(pickedType) ? 'creators' : pickedType;

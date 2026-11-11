@@ -89,6 +89,16 @@ export function normalizeCreatorSearchQuery(value: string | null | undefined): s
   return normalizePublicSearchQuery(value).replace(/^@+/, '');
 }
 
+/**
+ * A query's length as the database counts it (char_length): in characters,
+ * where `.length` counts an emoji as two. search_public_creators and
+ * search_public_posts raise below their minimums, so every gate ahead of them
+ * counts this way; one emoji let through on `.length` was a 500.
+ */
+export function publicSearchQueryLength(value: string): number {
+  return Array.from(value).length;
+}
+
 export function isPublicSearchQueryTooLong(value: string | null | undefined): boolean {
   if (typeof value !== 'string') return false;
   return value.normalize('NFKC').trim().replace(/\s+/g, ' ').length > PUBLIC_SEARCH_MAX_QUERY_LENGTH;
