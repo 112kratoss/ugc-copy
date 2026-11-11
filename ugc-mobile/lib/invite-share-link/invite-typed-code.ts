@@ -64,9 +64,31 @@ export function readTypedInviteCode(text: unknown): string | null {
   return normalizeInviteShortCode(trimmed.replace(/[\s-]+/g, '')) ?? normalizeInviteShareCode(trimmed);
 }
 
+/**
+ * The line an invite message carries its short code in, so a friend who
+ * installs the app before opening the link can still type it. Empty without a
+ * code (an invite made before its code was read).
+ */
+export function inviteCodeShareLine(shortCode: unknown): string {
+  const code = normalizeInviteShortCode(shortCode);
+  return code ? `Invite code: ${code}` : '';
+}
+
 /** What the invite-code field says when what was typed cannot be a code. */
 export const TYPED_INVITE_CODE_INVALID =
   'Enter the 6-character invite code, or paste the invite link you received.';
+
+/** What it says when no invite has that code (the visit route's 404). */
+export const TYPED_INVITE_CODE_NOT_FOUND =
+  'That invite code was not found. Check it with whoever invited you.';
+
+/** What it says when the code could not be saved for any other reason. */
+export const TYPED_INVITE_CODE_FAILED =
+  'Could not save the invite code. Check your connection, then try again.';
+
+/** The field's reminder that an invite is already kept on this device. */
+export const TYPED_INVITE_CODE_HELD =
+  'An invite is saved on this device. Enter a code to use a different one.';
 
 /** What the sign-up pages say once a typed code is saved. */
 export function typedInviteSavedMessage(inviteePercent: number | null | undefined): string {

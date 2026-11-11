@@ -26,11 +26,11 @@ export function describeReferralClaim(status: string | null) {
     case 'existing_account':
       return 'Invite not applied: invite bonuses are for new accounts only.';
     case 'self_referral':
-      return 'Invite not applied: you cannot use your own invite link.';
+      return 'Invite not applied: you cannot use your own invite.';
     case 'already_attributed':
       return 'Invite not applied: this account already has an inviter.';
     case 'visit_unavailable':
-      return 'Invite not applied: this invite link is no longer active. It may have expired or already been used.';
+      return 'Invite not applied: this invite is no longer active. It may have expired or already been used.';
     default:
       return 'Invite not applied: this account is not eligible for this invite.';
   }
