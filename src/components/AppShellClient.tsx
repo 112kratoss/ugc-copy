@@ -53,7 +53,7 @@ import { holdForLeaveGuard } from '@/lib/use-leave-guard';
 // navigation does not name them a second time.
 const NAV_GROUPS = [
   { label: 'Discover', ids: ['home', 'showcase', 'marketplace'] },
-  { label: 'Create', ids: ['studio', 'workflow'] },
+  { label: 'Create', ids: ['studio', 'workflow', 'agents'] },
   { label: 'Account', ids: ['profile'] },
 ] as const;
 

@@ -30,6 +30,11 @@ describe('app shell navigation', () => {
     expect(getActiveAppNavItem('/post/post-1/edit')?.id).toBe('studio');
   });
 
+  it('keeps the agents\' setup pages in the AI agents section', () => {
+    expect(getActiveAppNavItem('/developers/mcp')?.id).toBe('agents');
+    expect(getActiveAppNavItem('/developers/mcp/posting')?.id).toBe('agents');
+  });
+
   it('keeps the community feed itself in the Explore section', () => {
     expect(getActiveAppNavItem('/showcase')?.id).toBe('showcase');
     expect(getActiveAppNavItem('/creators')?.id).toBe('showcase');

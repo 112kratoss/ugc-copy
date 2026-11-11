@@ -411,6 +411,7 @@ describe('AppShellClient', () => {
       'Marketplace',
       'Studio',
       'Workflow Canvas',
+      'AI agents',
       'Profile',
       'Help & feedback',
     ]);
@@ -909,6 +910,7 @@ describe('AppShellClient', () => {
         ['Post', '/post/new', null],
         ['Studio', '/creations', null],
         ['Workflow Canvas', '/create-workflow', null],
+        ['AI agents', '/developers/mcp', null],
         ['Alerts', '/notifications', null],
         ['Profile', '/profile', null],
         ['Help & feedback', '/contact', null],
@@ -967,7 +969,7 @@ describe('AppShellClient', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
 
       expect(drawerLinks().map(([label]) => label)).toEqual([
-        'Magic Booklet', 'Home', 'Explore', 'Marketplace', 'Studio', 'Workflow Canvas', 'Profile', 'Help & feedback',
+        'Magic Booklet', 'Home', 'Explore', 'Marketplace', 'Studio', 'Workflow Canvas', 'AI agents', 'Profile', 'Help & feedback',
       ]);
     });
   });
