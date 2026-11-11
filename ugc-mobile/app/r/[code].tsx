@@ -9,10 +9,12 @@ import {
   bonusCreditsPhrase,
   capturePendingReferral,
   claimPendingReferral,
+  clearPendingReferral,
   formatReferralPercent,
+  getLatestReferralClaimRecord,
   getPendingReferral,
-  getRecentReferralClaimRecord,
   normalizeReferralCode,
+  type RecentReferralClaim,
 } from '@/lib/referral-attribution';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -52,14 +54,21 @@ export default function ReferralLandingScreen() {
       // Whose claim the phone recorded matters, so nothing is read or recorded
       // until the session is known: the effect runs again when it is.
       if (isAuthLoading) return;
+      const showClaim = (claim: RecentReferralClaim) => {
+        setProgram(claim.program ?? null);
+        setState(claim.response.claimed
+          ? { status: 'claimed', code, held: claim.response.held === true }
+          : { status: 'ineligible', code, reason: claim.response.reason });
+      };
       try {
-        const recentClaim = await getRecentReferralClaimRecord(code, user?.id ?? null);
+        // This account's own claim of the last few minutes, whichever invite it
+        // was for: a sign-up that kept an earlier invite comes back to this
+        // landing's, and a second visit and claim here would only answer that
+        // the account already has an inviter (review of #767).
+        const recentClaim = await getLatestReferralClaimRecord(user?.id);
         if (cancelled) return;
         if (recentClaim) {
-          setProgram(recentClaim.program ?? null);
-          setState(recentClaim.response.claimed
-            ? { status: 'claimed', code, held: recentClaim.response.held === true }
-            : { status: 'ineligible', code, reason: recentClaim.response.reason });
+          showClaim(recentClaim);
           return;
         }
 
@@ -69,6 +78,18 @@ export default function ReferralLandingScreen() {
 
         if (!user) {
           setState({ status: 'ready', code: captured.pending.code, keptEarlierInvite: captured.keptEarlierInvite });
+          return;
+        }
+
+        // The claim a sign-up started (`lib/auth.tsx`) can finish while this
+        // visit was being recorded. That claim is the account's: this visit is
+        // put away rather than claimed as well.
+        const settled = await getLatestReferralClaimRecord(user.id);
+        if (cancelled) return;
+        if (settled) {
+          await clearPendingReferral();
+          if (cancelled) return;
+          showClaim(settled);
           return;
         }
 
