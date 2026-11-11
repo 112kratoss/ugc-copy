@@ -22,6 +22,7 @@ import {
   hashReferralRiskSignal,
   normalizeReferralCode,
   normalizeReferralVisitToken,
+  normalizeTypedReferralCode,
   readReferralVisitCookie,
 } from '@/lib/referral';
 import {
@@ -31,6 +32,8 @@ import {
 } from '@/lib/referral-device';
 import { REFERRAL_LINK_DISABLED_CODE } from '@/lib/referral-link-status';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+
+import { normalizeInviteShortCode } from '../../ugc-mobile/lib/invite-share-link/invite-typed-code';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -261,6 +264,7 @@ function normalizeDashboard(data: unknown) {
     success: true as const,
     program: referralProgramTerms(data.offer),
     code: enabled ? code : null,
+    shortCode: enabled ? normalizeInviteShortCode(data.referral.shortCode) : null,
     shareUrl: enabled && code ? buildReferralShareUrl(code) : null,
     stats: {
       visits: Math.max(0, numberValue(data.stats.visits)),
@@ -360,6 +364,8 @@ export async function createReferralLinkResponse(request: Request) {
   const response = referralJsonResponse(request, {
     success: true,
     code,
+    // The code a person can say or type at sign-up.
+    shortCode: isRecord(data) ? normalizeInviteShortCode(data.short_code) : null,
     shareUrl: buildReferralShareUrl(code, body.next),
   });
   applyReferralDeviceCookie(response, device);
@@ -374,12 +380,21 @@ export async function recordReferralVisitResponse(request: Request) {
   const body = await readBody(request);
   if (!body) return referralErrorResponse(request, 'Invalid referral visit request.', 400);
 
-  const code = normalizeReferralCode(body.code);
+  // A post or profile link that carried its sharer's invite, a code someone
+  // typed at sign-up, or an invite link. An invite link replaces an unclaimed
+  // visit a shared link left; a typed code replaces any other invite.
+  const kind = body.kind === 'shared_link' ? 'shared_link' : body.kind === 'code' ? 'code' : 'invite';
+  // An invite link may carry the six-character code too: the app binaries in
+  // stores have no sign-in field yet, and their Invite & Earn sends a typed
+  // code to the invite landing, whose visit is an invite's (review of #766).
+  // A shared link only ever carries the link code.
+  const code = kind === 'code'
+    ? normalizeTypedReferralCode(body.code)
+    : kind === 'invite'
+      ? normalizeReferralCode(body.code) ?? normalizeInviteShortCode(body.code)
+      : normalizeReferralCode(body.code);
   const source = body.source === 'mobile' ? 'native' : body.source === 'web' ? 'web' : null;
   if (!code || !source) return referralErrorResponse(request, 'Invalid referral code.', 400);
-  // A post or profile link that carried its sharer's invite, or an invite link.
-  // An invite link replaces an unclaimed visit a shared link left.
-  const kind = body.kind === 'shared_link' ? 'shared_link' : 'invite';
 
   const risk = getReferralRiskContext(request.headers);
   const adminSupabase = createServiceClient();
@@ -429,7 +444,16 @@ export async function recordReferralVisitResponse(request: Request) {
 
   const visitToken = normalizeReferralVisitToken(data.visit_token);
   const expiresAt = stringValue(data.expires_at);
-  const responseCode = normalizeReferralCode(data.code) || code;
+  const keptShortCode = normalizeInviteShortCode(data.short_code);
+  // An invite landing that sent a short code is answered with the code it sent
+  // when that invite is the one kept: those binaries tell a kept earlier invite
+  // by comparing the two, and would otherwise say someone else's invite is kept.
+  const sentShortCode = kind === 'invite' && typeof body.code === 'string' && normalizeInviteShortCode(body.code)
+    ? body.code.trim()
+    : null;
+  const responseCode = sentShortCode && keptShortCode === normalizeInviteShortCode(sentShortCode)
+    ? sentShortCode
+    : normalizeReferralCode(data.code) || code;
   if (!visitToken || !expiresAt) {
     return referralErrorResponse(request, 'Could not save this invite.', 503);
   }
@@ -438,6 +462,8 @@ export async function recordReferralVisitResponse(request: Request) {
     success: true,
     visitToken,
     code: responseCode,
+    // The six-character code of the invite kept, for the screens that show it.
+    shortCode: keptShortCode,
     // True when an earlier invite this browser opened is the one kept, so the
     // landing can say whose invite it is rather than "saved".
     preserved: status === 'preserved',

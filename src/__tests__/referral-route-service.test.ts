@@ -95,7 +95,7 @@ describe('referral API route service', () => {
           inviteeRewardBps: 500,
           attributionWindowDays: 30,
         },
-        referral: { code, enabled: true },
+        referral: { code, shortCode: 'K7P2QX', enabled: true },
         stats: {
           visits: 12,
           referredUsers: 4,
@@ -127,6 +127,7 @@ describe('referral API route service', () => {
         attributionWindowDays: 30,
       },
       code,
+      shortCode: 'K7P2QX',
       shareUrl: `https://magicbooklet.com/r/${code}`,
       stats: {
         visits: 12,
@@ -222,6 +223,7 @@ describe('referral API route service', () => {
       data: {
         status: 'created',
         code,
+        short_code: 'K7P2QX',
         visit_token: visitToken,
         expires_at: '2026-08-11T10:00:00.000Z',
       },
@@ -238,6 +240,7 @@ describe('referral API route service', () => {
       success: true,
       visitToken,
       code,
+      shortCode: 'K7P2QX',
       preserved: false,
       expiresAt: '2026-08-11T10:00:00.000Z',
       // The same terms /api/referrals/me carries, for a visitor with no account.
@@ -290,6 +293,7 @@ describe('referral API route service', () => {
         data: {
           status: 'created',
           code: endpoint.response.code,
+          short_code: endpoint.response.shortCode,
           visit_token: endpoint.response.visitToken,
           expires_at: endpoint.response.expiresAt,
         },
@@ -310,6 +314,122 @@ describe('referral API route service', () => {
     resetReferralProgramTermsCacheForTests();
     mocks.programQuery.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
     await expect(visit()).resolves.toEqual(endpoint.responseVariants.programUnavailable);
+  });
+
+  // Owner, 2026-11-11: a code a person can say. What someone types at sign-up is
+  // sent as kind `code`: the six-character code in any case, or a link code.
+  it('records a typed six-character code in any case as a visit of kind code', async () => {
+    mocks.rpc.mockResolvedValue({
+      data: { status: 'created', code, short_code: 'K7P2QX', visit_token: visitToken, expires_at: '2026-08-11T10:00:00.000Z' },
+      error: null,
+    });
+    const response = await recordReferralVisitResponse(new Request('https://magicbooklet.com/api/referrals/visit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: ' k7p2qx ', source: 'web', kind: 'code' }),
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ success: true, code, shortCode: 'K7P2QX' });
+    expect(mocks.rpc).toHaveBeenCalledWith('create_referral_visit', expect.objectContaining({
+      p_code: 'K7P2QX',
+      p_kind: 'code',
+    }));
+  });
+
+  it('takes a link code typed as a code too, and refuses what can be neither', async () => {
+    mocks.rpc.mockResolvedValue({
+      data: { status: 'created', code, short_code: 'K7P2QX', visit_token: visitToken, expires_at: '2026-08-11T10:00:00.000Z' },
+      error: null,
+    });
+    const typedLinkCode = await recordReferralVisitResponse(new Request('https://magicbooklet.com/api/referrals/visit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: code.toUpperCase(), source: 'mobile', kind: 'code' }),
+    }));
+    expect(typedLinkCode.status).toBe(200);
+    expect(mocks.rpc).toHaveBeenCalledWith('create_referral_visit', expect.objectContaining({ p_code: code, p_kind: 'code' }));
+
+    mocks.rpc.mockClear();
+    for (const typed of ['K7P2Q', 'ABCDE0', 'https://magicbooklet.com/r/abc']) {
+      const refused = await recordReferralVisitResponse(new Request('https://magicbooklet.com/api/referrals/visit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: typed, source: 'web', kind: 'code' }),
+      }));
+      expect(refused.status, typed).toBe(400);
+    }
+    expect(mocks.rpc).not.toHaveBeenCalledWith('create_referral_visit', expect.anything());
+  });
+
+  it('answers an unknown typed code as not found', async () => {
+    mocks.rpc.mockResolvedValue({ data: { status: 'invalid_code' }, error: null });
+    const response = await recordReferralVisitResponse(new Request('https://magicbooklet.com/api/referrals/visit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'ZZZZZZ', source: 'web', kind: 'code' }),
+    }));
+    expect(response.status).toBe(404);
+  });
+
+  it('records the typed code the shared fixture sends, with the visit the phone holds', async () => {
+    const typed = mobileApiContract.endpoints.recordReferralVisit.requestVariants.typedCode;
+    mocks.rpc.mockResolvedValueOnce({
+      data: { status: 'preserved', code, short_code: 'K7P2QX', visit_token: typed.visitToken, expires_at: '2026-08-11T10:00:00.000Z' },
+      error: null,
+    });
+    const response = await recordReferralVisitResponse(new Request('https://magicbooklet.com/api/referrals/visit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(typed),
+    }));
+    expect(response.status).toBe(200);
+    expect(mocks.rpc).toHaveBeenCalledWith('create_referral_visit', expect.objectContaining({
+      p_code: 'K7P2QX',
+      p_kind: 'code',
+      p_channel: 'native',
+      p_existing_visit_token: typed.visitToken,
+    }));
+  });
+
+  it('never reads a six-character code from a shared link', async () => {
+    mocks.rpc.mockClear();
+    const response = await recordReferralVisitResponse(new Request('https://magicbooklet.com/api/referrals/visit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'K7P2QX', source: 'web', kind: 'shared_link' }),
+    }));
+    expect(response.status).toBe(400);
+    expect(mocks.rpc).not.toHaveBeenCalledWith('create_referral_visit', expect.anything());
+  });
+
+  // The app binaries in stores have no sign-in field: their Invite & Earn sends a
+  // typed code to the invite landing, which records an invite's visit (#766 review).
+  it('takes a short code on an invite visit and answers with the code it was sent while that invite is kept', async () => {
+    mocks.rpc.mockResolvedValueOnce({
+      data: { status: 'created', code, short_code: 'K7P2QX', visit_token: visitToken, expires_at: '2026-08-11T10:00:00.000Z' },
+      error: null,
+    });
+    const created = await recordReferralVisitResponse(new Request('https://magicbooklet.com/api/referrals/visit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: ' k7p2qx ', source: 'mobile', kind: 'invite' }),
+    }));
+    expect(created.status).toBe(200);
+    await expect(created.json()).resolves.toMatchObject({ code: 'k7p2qx', shortCode: 'K7P2QX', preserved: false });
+    expect(mocks.rpc).toHaveBeenCalledWith('create_referral_visit', expect.objectContaining({ p_code: 'K7P2QX', p_kind: 'invite' }));
+
+    // An earlier, different invite kept: its own link code, so the landing says so.
+    mocks.rpc.mockResolvedValueOnce({
+      data: { status: 'preserved', code: 'b1c2d3e4f5a6', short_code: 'M8N9PQ', visit_token: visitToken, expires_at: '2026-08-11T10:00:00.000Z' },
+      error: null,
+    });
+    const kept = await recordReferralVisitResponse(new Request('https://magicbooklet.com/api/referrals/visit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'K7P2QX', source: 'mobile', kind: 'invite' }),
+    }));
+    await expect(kept.json()).resolves.toMatchObject({ code: 'b1c2d3e4f5a6', shortCode: 'M8N9PQ', preserved: true });
   });
 
   it('reads the terms of the program a new visit binds to, and keeps them for five minutes', async () => {

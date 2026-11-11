@@ -21,6 +21,7 @@ const summary = {
     attributionWindowDays: 30,
   },
   code: 'MAGIC7K2',
+  shortCode: 'K7P2QX',
   shareUrl: 'https://magicbooklet.com/r/MAGIC7K2',
   stats: {
     visits: 0,
@@ -87,11 +88,39 @@ describe('InviteClient', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy invite' }));
 
     await waitFor(() => {
-      expect(writeTextMock).toHaveBeenCalledWith(buildReferralCopyText(summary.shareUrl, 5));
+      expect(writeTextMock).toHaveBeenCalledWith(buildReferralCopyText(summary.shareUrl, 5, 'K7P2QX'));
     });
     expect(writeTextMock.mock.calls[0]?.[0]).toContain(REFERRAL_DISCLOSURE);
+    expect(writeTextMock.mock.calls[0]?.[0]).toContain('Invite code: K7P2QX');
     expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
     expect(screen.getByText('Invite message copied to your clipboard.')).toBeInTheDocument();
+  });
+
+  it('shows the six-character code and copies it alone', async () => {
+    render(<InviteClient />);
+    await screen.findByDisplayValue(summary.shareUrl);
+
+    expect(screen.getByText('K7P2QX')).toBeInTheDocument();
+    expect(screen.queryByText('MAGIC7K2')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy invite code K7P2QX' }));
+
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith('K7P2QX');
+    });
+    expect(await screen.findByText('Invite code copied.')).toBeInTheDocument();
+  });
+
+  it('leaves the code out of the message for a summary without one', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ...summary, shortCode: 'bad code' }));
+    render(<InviteClient />);
+    await screen.findByDisplayValue(summary.shareUrl);
+
+    expect(screen.queryByText('Invite code')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy invite' }));
+    await waitFor(() => {
+      expect(writeTextMock).toHaveBeenCalledWith(buildReferralCopyText(summary.shareUrl, 5));
+    });
+    expect(writeTextMock.mock.calls[0]?.[0]).not.toContain('Invite code');
   });
 
   it('uses native sharing with benefit copy, disclosure, and the referral URL', async () => {
@@ -109,7 +138,7 @@ describe('InviteClient', () => {
     await waitFor(() => {
       expect(shareMock).toHaveBeenCalledWith({
         title: 'Join me on Magic Booklet',
-        text: buildReferralShareText(5),
+        text: buildReferralShareText(5, 'K7P2QX'),
         url: summary.shareUrl,
       });
     });
@@ -138,14 +167,15 @@ describe('InviteClient', () => {
 
   it('creates a stable link when the summary has not provisioned one yet', async () => {
     fetchMock
-      .mockResolvedValueOnce(jsonResponse({ ...summary, code: null, shareUrl: null }))
-      .mockResolvedValueOnce(jsonResponse({ code: summary.code, shareUrl: summary.shareUrl }));
+      .mockResolvedValueOnce(jsonResponse({ ...summary, code: null, shortCode: null, shareUrl: null }))
+      .mockResolvedValueOnce(jsonResponse({ code: summary.code, shortCode: 'k7p2qx', shareUrl: summary.shareUrl }));
 
     render(<InviteClient />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Create my invite link' }));
 
     expect(await screen.findByDisplayValue(summary.shareUrl)).toBeInTheDocument();
+    expect(screen.getByText('K7P2QX')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/referrals/link', {
       method: 'POST',
       headers: {
@@ -204,7 +234,7 @@ describe('InviteClient', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy invite' }));
     await waitFor(() => {
-      expect(writeTextMock).toHaveBeenCalledWith(buildReferralCopyText(summary.shareUrl, 2.5));
+      expect(writeTextMock).toHaveBeenCalledWith(buildReferralCopyText(summary.shareUrl, 2.5, 'K7P2QX'));
     });
     expect(writeTextMock.mock.calls[0]?.[0]).toContain('get 2.5% bonus credits on your first top-up');
   });

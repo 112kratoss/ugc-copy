@@ -1,6 +1,9 @@
+import { cookies } from 'next/headers';
+
 import LoginClient from '@/app/login/LoginClient';
 import SignInWall from '@/app/login/SignInWall';
 import { getSafeAuthNextPath } from '@/lib/auth-onboarding';
+import { REFERRAL_VISIT_COOKIE_NAME } from '@/lib/referral';
 import { signInHalfForQuery } from '@/lib/sign-in-page';
 import { loadSignInWelcomeCredits, pickSignInWallStart } from '@/lib/sign-in-page-server';
 
@@ -22,6 +25,7 @@ function firstParam(value: string | string[] | undefined): string | undefined {
  * - `email=1` opens on the email form, and `recovery=1` too, with its notice;
  * - `mode=signup`, the invite landing's "Create new account", opens the same page: Apple and
  *   Google make the account.
+ * The invite cookie is read only to say whether this browser keeps an invite, never whose.
  */
 export default async function LoginPage({ searchParams }: LoginPageProps) {
     const params = searchParams ? await searchParams : {};
@@ -32,6 +36,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
     const welcomeCredits = await loadSignInWelcomeCredits();
     // Each visit starts the wall somewhere new along its loop, as each open does in the app.
     const wallStart = pickSignInWallStart();
+    const inviteHeld = (await cookies()).has(REFERRAL_VISIT_COOKIE_NAME);
 
     return (
         <LoginClient
@@ -41,6 +46,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             returnRequested={Boolean(explicitRedirect)}
             welcomeCredits={welcomeCredits}
             wall={<SignInWall start={wallStart} />}
+            inviteHeld={inviteHeld}
         />
     );
 }

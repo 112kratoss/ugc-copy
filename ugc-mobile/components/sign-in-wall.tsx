@@ -11,12 +11,13 @@ import { useIsFocused } from '@react-navigation/native';
 import { router, useNavigation } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Animated, Easing, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Animated, Easing, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { EmailSignInForm } from '@/components/email-sign-in-form';
+import { EmailSignInForm, WorkspaceInput } from '@/components/email-sign-in-form';
+import { KeyboardAvoidingArea, useKeyboardShown } from '@/components/keyboard-aware';
 import { MediaWall } from '@/components/media-wall';
-import { SignInProviderButtons, SignInTerms } from '@/components/sign-in-parts';
+import { BUTTON_MAX_WIDTH, SignInProviderButtons, SignInTerms } from '@/components/sign-in-parts';
 import { AppText, BrandLockup, IconButton } from '@/components/ui';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { useAuth } from '@/lib/auth';
@@ -25,6 +26,7 @@ import { completeAuthScreen, leaveAuthScreen, tookReturnsPlace } from '@/lib/aut
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
 import { providerSignInNext } from '@/lib/join-navigation';
 import { useReducedMotion } from '@/lib/motion';
+import { TYPED_INVITE_CODE_HELD } from '@/lib/invite-share-link/invite-typed-code';
 import { trackOnboardingEvent } from '@/lib/onboarding';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { useSignInPageNotice } from '@/lib/sign-in-page-notice';
@@ -109,6 +111,10 @@ function SignInWallBody({
   const completed = useRef(false);
   const canceled = useRef(false);
   const lastMethod = useRef<SignInMethod | null>(null);
+  // The first half's scroll view, brought to its end when the invite-code field's keyboard
+  // comes up: iOS alone scrolls only as far as the caret, which left the field's lower edge
+  // and its Apply under the keyboard (iPhone 17 Pro simulator, 2026-11-11).
+  const choicesScroll = useRef<ScrollView | null>(null);
 
   useEffect(() => {
     void trackOnboardingEvent(api, 'screen_viewed', { step });
@@ -252,12 +258,17 @@ function SignInWallBody({
         ]}
       >
         {/* Scrolls only when it has to: at the largest text sizes on a small phone, so the
-            buttons are never pushed off the screen. */}
+            buttons are never pushed off the screen, and once the invite-code field is open, to
+            keep it above the keyboard. */}
+        <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
         <ScrollView
+          ref={choicesScroll}
           style={{ flex: 1 }}
+          contentInsetAdjustmentBehavior="never"
+          automaticallyAdjustKeyboardInsets
           alwaysBounceVertical={false}
           showsVerticalScrollIndicator={false}
-          // No field on this half; a keyboard left up by the page beneath gives way to the tap.
+          // A keyboard left up by the page beneath, or the invite code's, gives way to the tap.
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{
             flexGrow: 1,
@@ -327,6 +338,12 @@ function SignInWallBody({
             unavailable={unavailable}
           />
 
+          {/* Before the account is made, as a claim needs (owner, 2026-11-11). */}
+          <SignInInviteCode
+            disabled={busy}
+            onKeyboardShown={() => choicesScroll.current?.scrollToEnd({ animated: true })}
+          />
+
           {/* Email makes no new accounts, so it is a way back in for one, not a third button. */}
           <Pressable
             accessibilityRole="button"
@@ -353,6 +370,7 @@ function SignInWallBody({
             <SignInTerms />
           </View>
         </ScrollView>
+        </KeyboardAvoidingArea>
       </Animated.View>
 
       {/* The email half: rises into place as the first half leaves. */}
@@ -377,6 +395,154 @@ function SignInWallBody({
           />
         </Animated.View>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * "Have an invite code?" under Apple and Google (owner, 2026-11-11: a code a friend can type
+ * instead of opening a link), closed until asked for so the page stays two buttons for everyone
+ * else. A saved code is this phone's invite from then on, recorded before the account is made,
+ * which is what the claim after sign-up needs (`claimPendingReferral` in `lib/auth.tsx`); the
+ * welcome card then says "Invite applied". Saved by the same rules as the web's field.
+ */
+function SignInInviteCode({ disabled, onKeyboardShown }: {
+  disabled: boolean;
+  /** The keyboard came up while the field is open: the page brings the field into view. */
+  onKeyboardShown: () => void;
+}) {
+  const theme = useAppTheme();
+  const { api } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  // An invite already on this phone, from a link: said in a line, so a person
+  // about to type a different code knows it takes that invite's place. A
+  // shared link's own notice already stands above the buttons.
+  const [held, setHeld] = useState(false);
+  // The pending invite lives in SecureStore, loaded only when asked, so the
+  // sign-in page does not load SecureStore with itself (as `shared-invite-notice.ts`).
+  useEffect(() => {
+    let live = true;
+    void import('@/lib/referral-attribution')
+      .then(({ getPendingReferral }) => getPendingReferral())
+      .then((pending) => {
+        if (live && pending && pending.kind !== 'shared_link') setHeld(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useKeyboardShown(onKeyboardShown, open);
+
+  const apply = async () => {
+    if (saving || disabled) return;
+    setSaving(true);
+    setError(null);
+    const { saveTypedInviteCode } = await import('@/lib/referral-attribution');
+    const result = await saveTypedInviteCode(api, value);
+    setSaving(false);
+    if (result.ok) {
+      Keyboard.dismiss();
+      setSaved(result.message);
+      setOpen(false);
+      setValue('');
+      if (Platform.OS === 'ios') AccessibilityInfo.announceForAccessibility(result.message);
+    } else {
+      setError(result.message);
+      if (Platform.OS === 'ios') AccessibilityInfo.announceForAccessibility(result.message);
+    }
+  };
+
+  const toggleLabel = saved || held ? 'Use a different invite code' : 'Have an invite code?';
+
+  return (
+    <View style={{ width: '100%', maxWidth: BUTTON_MAX_WIDTH + 30, alignSelf: 'center', marginTop: open ? 18 : 10, gap: 8 }}>
+      {saved ? (
+        <View accessibilityLiveRegion="polite" style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start', borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: mediaColors.mediaScrimStrong, paddingHorizontal: 14, paddingVertical: 10 }}>
+          <AppText variant="caption" style={{ flex: 1, color: mediaColors.onMedia }}>{saved}</AppText>
+        </View>
+      ) : held && !open ? (
+        <AppText variant="caption" style={{ textAlign: 'center', color: mediaColors.onMediaSecondary }}>{TYPED_INVITE_CODE_HELD}</AppText>
+      ) : null}
+
+      {open ? (
+        <View style={{ gap: 8 }}>
+          <WorkspaceInput
+            label="Invite code"
+            value={value}
+            onChangeText={(next) => {
+              setValue(next);
+              if (error) setError(null);
+            }}
+            autoFocus
+            autoCapitalize="characters"
+            autoCorrect={false}
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={2048}
+            placeholder="K7P2QX or invite link"
+            returnKeyType="go"
+            onSubmitEditing={() => void apply()}
+            editable={!saving}
+            trailingIcon={(
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Apply invite code"
+                accessibilityState={{ disabled: disabled || saving || !value.trim(), busy: saving }}
+                disabled={disabled || saving || !value.trim()}
+                onPress={() => void apply()}
+                hitSlop={4}
+                style={({ pressed }) => ({
+                  minHeight: 36,
+                  minWidth: 72,
+                  paddingHorizontal: 14,
+                  borderRadius: appTheme.radii.pill,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: mediaColors.onMedia,
+                  opacity: disabled || !value.trim() ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+                })}
+              >
+                {saving
+                  ? <ActivityIndicator color={mediaColors.mediaGround} />
+                  : <Text style={{ color: mediaColors.mediaGround, fontSize: 15, fontWeight: '700' }}>Apply</Text>}
+              </Pressable>
+            )}
+          />
+          {error ? (
+            <AppText accessibilityRole="alert" variant="caption" style={{ color: theme.semantic.danger.foreground, paddingHorizontal: 8 }}>
+              {error}
+            </AppText>
+          ) : null}
+        </View>
+      ) : null}
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ disabled, expanded: open }}
+        disabled={disabled}
+        onPress={() => {
+          setError(null);
+          if (open) Keyboard.dismiss();
+          else setSaved(null);
+          setOpen(!open);
+        }}
+        style={({ pressed }) => ({
+          minHeight: appTheme.touch.default,
+          alignItems: 'center',
+          justifyContent: 'center',
+          opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+        })}
+      >
+        <Text style={{ color: mediaColors.onMediaSecondary, fontSize: 15, lineHeight: 20, textAlign: 'center' }}>
+          {open ? 'Cancel' : toggleLabel}
+        </Text>
+      </Pressable>
     </View>
   );
 }

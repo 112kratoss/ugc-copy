@@ -221,7 +221,7 @@ describe('who sees the welcome popup, where (owner 11-09)', () => {
     await settle();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(harness.toasts).toEqual([
-      expect.objectContaining({ tone: 'info', message: 'Invite not applied: you cannot use your own invite link.' }),
+      expect.objectContaining({ tone: 'info', message: 'Invite not applied: you cannot use your own invite.' }),
     ]);
   });
 

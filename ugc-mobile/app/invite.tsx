@@ -19,12 +19,13 @@ import { MetricGridSkeleton } from '@/components/skeleton';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { ShareGlyph } from '@/lib/platform-glyphs';
+import { inviteCodeShareLine, normalizeInviteShortCode } from '@/lib/invite-share-link/invite-typed-code';
 import { formatCreditAmount } from '@/lib/pricing';
 import {
   bonusCreditsPhrase,
   formatReferralPercent,
-  normalizeReferralCode,
   readReferralProgram,
+  saveTypedInviteCode,
 } from '@/lib/referral-attribution';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -41,12 +42,18 @@ export default function InviteScreen() {
     queryFn: api.getReferralOverview,
   });
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  // The six-character code friends can type at sign-up (owner, 2026-11-11).
+  const [shortCode, setShortCode] = useState<string | null>(null);
   const [isPreparingLink, setIsPreparingLink] = useState(false);
   const [notice, setNotice] = useState<{ tone: 'success' | 'danger' | 'neutral'; title: string; body?: string } | null>(null);
 
   useEffect(() => {
     if (overviewQuery.data?.shareUrl) setShareUrl(overviewQuery.data.shareUrl);
   }, [overviewQuery.data?.shareUrl]);
+  useEffect(() => {
+    const code = normalizeInviteShortCode(overviewQuery.data?.shortCode);
+    if (code) setShortCode(code);
+  }, [overviewQuery.data?.shortCode]);
 
   if (!user) return <SignedOutInvite />;
 
@@ -56,25 +63,28 @@ export default function InviteScreen() {
   const inviterBonus = bonusCreditsPhrase(program?.inviterPercent);
   const inviteeBonus = bonusCreditsPhrase(program?.inviteeFirstPurchasePercent);
   const inviterPercentLabel = formatReferralPercent(program?.inviterPercent);
-  const inviteMessage = (url: string) => (
-    `Try Magicbooklet and get ${inviteeBonus} on your first top-up. ${REFERRAL_DISCLOSURE}\n${url}`
-  );
+  const inviteMessage = (url: string, code: string | null) => {
+    const codeLine = inviteCodeShareLine(code);
+    return `Try Magicbooklet and get ${inviteeBonus} on your first top-up.${codeLine ? ` ${codeLine}.` : ''} ${REFERRAL_DISCLOSURE}\n${url}`;
+  };
 
-  const ensureShareUrl = async () => {
-    if (shareUrl) return shareUrl;
+  const ensureShareUrl = async (): Promise<{ url: string; code: string | null }> => {
+    if (shareUrl) return { url: shareUrl, code: shortCode };
     const link = await api.createReferralLink();
+    const code = normalizeInviteShortCode(link.shortCode) ?? shortCode;
     setShareUrl(link.shareUrl);
-    return link.shareUrl;
+    if (code) setShortCode(code);
+    return { url: link.shareUrl, code };
   };
 
   const shareInvite = async () => {
     setIsPreparingLink(true);
     setNotice(null);
     try {
-      const url = await ensureShareUrl();
+      const { url, code } = await ensureShareUrl();
       const result = await Share.share({
         title: 'Invite & Earn with Magicbooklet',
-        message: inviteMessage(url),
+        message: inviteMessage(url, code),
         url,
       });
       // Android's share intent cannot report a dismissal — it answers
@@ -99,9 +109,9 @@ export default function InviteScreen() {
     setIsPreparingLink(true);
     setNotice(null);
     try {
-      const url = await ensureShareUrl();
+      const { url, code } = await ensureShareUrl();
       const message = 'Invite message, referral disclosure, and link copied.';
-      await copyToClipboard(inviteMessage(url), message);
+      await copyToClipboard(inviteMessage(url, code), message);
       setNotice({ tone: 'success', title: 'Link copied', body: message });
     } catch (error) {
       setNotice({
@@ -111,6 +121,17 @@ export default function InviteScreen() {
       });
     } finally {
       setIsPreparingLink(false);
+    }
+  };
+
+  const copyCode = async () => {
+    if (!shortCode) return;
+    setNotice(null);
+    try {
+      await copyToClipboard(shortCode, `Invite code ${shortCode} copied.`);
+      setNotice({ tone: 'success', title: 'Code copied', body: `Friends can type ${shortCode} when they create their account.` });
+    } catch {
+      setNotice({ tone: 'danger', title: 'Could not copy code', body: 'Try again.' });
     }
   };
 
@@ -139,6 +160,41 @@ export default function InviteScreen() {
           onPress={() => void shareInvite()}
           accessibilityHint="Opens the native share sheet with your referral disclosure and link"
         />
+        {shortCode ? (
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: appTheme.spacing.gap,
+              borderRadius: appTheme.radii.lg,
+              borderCurve: 'continuous',
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.surfaceInset,
+              paddingVertical: appTheme.spacing.compact,
+              paddingLeft: appTheme.spacing.card,
+              paddingRight: appTheme.spacing.compact,
+            }}
+          >
+            <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+              <AppText variant="caption" color="muted">Your invite code</AppText>
+              <AppText
+                variant="sectionTitle"
+                selectable
+                accessibilityLabel={`Invite code ${shortCode.split('').join(' ')}`}
+                style={{ letterSpacing: 4, fontVariant: ['tabular-nums'] }}
+              >
+                {shortCode}
+              </AppText>
+            </View>
+            <SecondaryButton
+              label="Copy code"
+              icon={Copy}
+              onPress={() => void copyCode()}
+              accessibilityHint="Copies your six-character invite code, for friends to type when they sign up"
+            />
+          </View>
+        ) : null}
         <SecondaryButton
           label="Copy referral link"
           disabled={isPreparingLink}
@@ -171,8 +227,8 @@ export default function InviteScreen() {
         <RuleRow
           icon={<UserPlus size={appTheme.icon.compact} color={theme.colors.info} />}
           text={program
-            ? `A new friend joins within ${program.attributionWindowDays} days of opening your link.`
-            : 'A new friend joins after opening your link.'}
+            ? `A new friend joins within ${program.attributionWindowDays} days of opening your link, or with your code.`
+            : 'A new friend joins after opening your link, or with your code.'}
         />
         <RuleRow icon={<ShoppingBag size={appTheme.icon.compact} color={theme.colors.commerce} />} text={`They receive ${inviteeBonus} on their first verified credit-pack purchase.`} />
         <RuleRow icon={<CheckCircle2 size={appTheme.icon.compact} color={theme.colors.success} />} text={`You receive ${inviterBonus} on each verified credit-pack purchase they make.`} />
@@ -185,17 +241,27 @@ export default function InviteScreen() {
 
 function SignedOutInvite() {
   const theme = useAppTheme();
+  const { api } = useAuth();
   const [codeInput, setCodeInput] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  const applyCode = () => {
-    const code = normalizeReferralCode(codeInput);
-    if (!code) {
-      setError('Enter the code or full magicbooklet.com invite link you received.');
-      return;
-    }
+  // Saved here, as on the sign-in page: the code is this phone's invite from
+  // now on, and the account made next claims it.
+  const applyCode = async () => {
+    if (saving) return;
+    setSaving(true);
     setError(null);
-    router.push({ pathname: '/r/[code]', params: { code } } as never);
+    setSaved(null);
+    const result = await saveTypedInviteCode(api, codeInput);
+    setSaving(false);
+    if (result.ok) {
+      setSaved(result.message);
+      setCodeInput('');
+    } else {
+      setError(result.message);
+    }
   };
 
   return (
@@ -225,23 +291,29 @@ function SignedOutInvite() {
 
       <Card variant="soft">
         <AppText variant="cardTitle">Have an invite code?</AppText>
-        <AppText variant="bodySm" color="muted">If you installed the app before opening the link, paste the code or full referral link here.</AppText>
+        <AppText variant="bodySm" color="muted">Type the 6-character code a friend gave you, or paste their invite link, before you create your account.</AppText>
         <AppTextInput
           label="Invite code"
-          accessibilityLabel="Invite code or referral link"
-          autoCapitalize="none"
+          accessibilityLabel="Invite code or invite link"
+          autoCapitalize="characters"
           autoCorrect={false}
-          placeholder="Code or https://magicbooklet.com/r/..."
+          placeholder="K7P2QX or invite link"
           value={codeInput}
           onChangeText={(value) => {
             setCodeInput(value);
             if (error) setError(null);
           }}
-          onSubmitEditing={applyCode}
+          onSubmitEditing={() => void applyCode()}
           returnKeyType="go"
         />
-        {error ? <StatusBlock tone="danger" title="Invite code not recognized" body={error} /> : null}
-        <PrimaryButton label="Apply invite code" disabled={!codeInput.trim()} onPress={applyCode} />
+        {error ? <StatusBlock tone="danger" title="Invite code not saved" body={error} /> : null}
+        {saved ? <StatusBlock tone="success" title="Invite saved" body={saved} /> : null}
+        <PrimaryButton
+          label="Apply invite code"
+          loading={saving}
+          disabled={!codeInput.trim() || saving}
+          onPress={() => void applyCode()}
+        />
       </Card>
     </Screen>
   );

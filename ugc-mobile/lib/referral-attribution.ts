@@ -1,6 +1,14 @@
 import * as SecureStore from 'expo-secure-store';
 
 import type { MagicbookletApiClient } from './api-client';
+import {
+  TYPED_INVITE_CODE_FAILED,
+  TYPED_INVITE_CODE_INVALID,
+  TYPED_INVITE_CODE_NOT_FOUND,
+  normalizeInviteShortCode,
+  readTypedInviteCode,
+  typedInviteSavedMessage,
+} from './invite-share-link/invite-typed-code';
 import type { ReferralClaimResponse, ReferralProgramSummary } from './types';
 
 const PENDING_REFERRAL_STORAGE_KEY = 'magicbooklet.referral.pending.v1';
@@ -13,15 +21,22 @@ const UNVERIFIED_REFERRAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const RECENT_CLAIM_WINDOW_MS = 15 * 60 * 1000;
 const REFERRAL_CODE_PATTERN = /^[A-Za-z0-9_-]{3,64}$/;
 
+/** How an invite reached this phone: an invite link, a shared post or profile link, or a typed code. */
+export type PendingReferralKind = 'invite' | 'shared_link' | 'code';
+
 export interface PendingReferral {
+  /** The invite's link code once its visit is recorded; before that, what was opened. */
   code: string;
+  /** The invite's six-character code, once the server has named it. */
+  shortCode?: string;
   capturedAt: string;
   /**
    * How it was captured: an invite link (absent on one saved before this was
-   * recorded), or a shared post or profile link. An invite link opened later
-   * replaces a shared link's invite; nothing else replaces anything.
+   * recorded), a shared post or profile link, or a code typed on the sign-in
+   * page. An invite link opened later replaces a shared link's invite; a typed
+   * code replaces any other; nothing else replaces anything.
    */
-  kind?: 'invite' | 'shared_link';
+  kind?: PendingReferralKind;
   visitToken?: string;
   expiresAt?: string;
   /**
@@ -36,6 +51,8 @@ export interface PendingReferral {
 export interface RecentReferralClaim {
   code: string;
   claimedAt: string;
+  /** The account that made the claim, so another account on the phone is never told of it. */
+  userId?: string;
   response: ReferralClaimResponse;
   /** The terms of the invite the claim used, for the landing's "Invite applied". */
   program?: ReferralProgramSummary | null;
@@ -118,7 +135,8 @@ function isPendingReferral(value: unknown): value is PendingReferral {
     && typeof pending.capturedAt === 'string'
     && (!pending.visitToken || typeof pending.visitToken === 'string')
     && (!pending.expiresAt || typeof pending.expiresAt === 'string')
-    && (!pending.kind || pending.kind === 'invite' || pending.kind === 'shared_link')
+    && (!pending.shortCode || typeof pending.shortCode === 'string')
+    && (!pending.kind || pending.kind === 'invite' || pending.kind === 'shared_link' || pending.kind === 'code')
   );
 }
 
@@ -188,6 +206,76 @@ export async function getRecentReferralClaimRecord(
   }
 }
 
+/**
+ * The claim this phone recorded in the last few minutes, whichever invite it
+ * was: what the welcome card says after a sign-up ("Invite applied"), since
+ * the claim itself runs unseen as the account is made (`lib/auth.tsx`). Left
+ * in place for the invite's own landing to read.
+ */
+export async function getLatestReferralClaimRecord(
+  userId: string | null | undefined,
+  storage: ReferralStorage = defaultStorage,
+  now = Date.now()
+): Promise<RecentReferralClaim | null> {
+  if (!userId) return null;
+  const serialized = await storage.getItem(RECENT_REFERRAL_CLAIM_STORAGE_KEY).catch(() => null);
+  if (!serialized) return null;
+  try {
+    const recent = JSON.parse(serialized) as Partial<RecentReferralClaim>;
+    const claimedAt = typeof recent.claimedAt === 'string' ? Date.parse(recent.claimedAt) : Number.NaN;
+    // Only this account's own claim: two sign-ups on one phone within the
+    // window must not tell the second of the first's invite (review of #766).
+    if (
+      typeof recent.code !== 'string'
+      || recent.userId !== userId
+      || !recent.response?.success
+      || !Number.isFinite(claimedAt)
+      || claimedAt + RECENT_CLAIM_WINDOW_MS <= now
+    ) {
+      return null;
+    }
+    return {
+      code: recent.code,
+      userId,
+      claimedAt: recent.claimedAt as string,
+      response: recent.response,
+      program: readReferralProgram(recent.program),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What the welcome card says of the claim a sign-up made, in the web's words
+ * (`describeReferralClaim`, which a web sign-up's greeting page shows): applied,
+ * held for a check, or why not. Null without a claim.
+ */
+export function inviteClaimLine(
+  claim: Pick<RecentReferralClaim, 'response' | 'program'> | null,
+): { tone: 'success' | 'info'; text: string } | null {
+  if (!claim) return null;
+  const { response } = claim;
+  if (response.claimed && response.held) {
+    return { tone: 'info', text: 'Invite received: its bonus is on hold while we check it. Contact support if you think this is a mistake.' };
+  }
+  if (response.claimed) {
+    return { tone: 'success', text: `Invite applied: your first credit-pack purchase gets ${bonusCreditsPhrase(claim.program?.inviteeFirstPurchasePercent)}.` };
+  }
+  switch (response.reason) {
+    case 'existing_account':
+      return { tone: 'info', text: 'Invite not applied: invite bonuses are for new accounts only.' };
+    case 'self_referral':
+      return { tone: 'info', text: 'Invite not applied: you cannot use your own invite.' };
+    case 'already_attributed':
+      return { tone: 'info', text: 'Invite not applied: this account already has an inviter.' };
+    case 'visit_unavailable':
+      return { tone: 'info', text: 'Invite not applied: this invite is no longer active. It may have expired or already been used.' };
+    default:
+      return { tone: 'info', text: 'Invite not applied: this account is not eligible for this invite.' };
+  }
+}
+
 export async function getRecentReferralClaim(
   code: string,
   storage: ReferralStorage = defaultStorage,
@@ -199,17 +287,19 @@ export async function getRecentReferralClaim(
 export async function capturePendingReferral(
   api: ReferralApi,
   rawCode: string,
-  options: { storage?: ReferralStorage; now?: number; next?: string; kind?: 'invite' | 'shared_link' } = {}
+  options: { storage?: ReferralStorage; now?: number; next?: string; kind?: PendingReferralKind } = {}
 ) {
   const storage = options.storage ?? defaultStorage;
   const now = options.now ?? Date.now();
   const kind = options.kind ?? 'invite';
-  const requestedCode = normalizeReferralCode(rawCode);
+  const requestedCode = kind === 'code' ? readTypedInviteCode(rawCode) : normalizeReferralCode(rawCode);
   if (!requestedCode) {
-    throw new Error('Enter a valid Magicbooklet invite code.');
+    throw new Error(kind === 'code' ? TYPED_INVITE_CODE_INVALID : 'Enter a valid Magicbooklet invite code.');
   }
 
   const existing = await getPendingReferral(storage, now);
+  if (kind === 'code') return captureTypedCode(api, requestedCode, existing, { storage, now, next: options.next });
+
   // Someone who followed a shared post and then opens a friend's invite link
   // chose that friend: the invite replaces the shared link's, as the server
   // does for a browser (create_referral_visit). A shared link replaces
@@ -233,6 +323,7 @@ export async function capturePendingReferral(
   if (pending.visitToken) {
     return { pending, keptEarlierInvite: pending.code !== requestedCode };
   }
+  const recordingCode = pending.code;
 
   let visit: Awaited<ReturnType<ReferralApi['recordReferralVisit']>>;
   try {
@@ -248,9 +339,18 @@ export async function capturePendingReferral(
     }
     throw error;
   }
+  // An invite recorded meanwhile by another capture (a code typed on the
+  // sign-in page while this one waited on the network) stays: it is newer, and
+  // the screen that saved it has already said so (review of #766).
+  const current = await getPendingReferral(storage, now).catch(() => null);
+  if (current?.visitToken && current.code !== recordingCode) {
+    return { pending: current, keptEarlierInvite: current.code !== requestedCode };
+  }
+  const shortCode = normalizeInviteShortCode(visit.shortCode);
   const recorded: PendingReferral = {
     ...pending,
     code: visit.code,
+    ...(shortCode ? { shortCode } : {}),
     visitToken: visit.visitToken,
     expiresAt: visit.expiresAt,
     program: readReferralProgram(visit.program),
@@ -258,6 +358,77 @@ export async function capturePendingReferral(
   await storage.setItem(PENDING_REFERRAL_STORAGE_KEY, JSON.stringify(recorded));
 
   return { pending: recorded, keptEarlierInvite: recorded.code !== requestedCode };
+}
+
+/**
+ * A code typed on the sign-in page (owner, 2026-11-11): it replaces any invite
+ * this phone holds, unless it is that invite's own code. The server decides
+ * which, as it does for a browser: the held visit's token goes with the code,
+ * and the answer is the visit kept, the held one or a new one. Unlike a link it
+ * is saved only once the server has answered: the person is there to try
+ * again, and a wrong or unknown code must leave the invite they had in place.
+ *
+ * It is kept on the phone as an invite's: the same rules hold for it here (a
+ * later invite link or shared link replaces neither), and a bundle from before
+ * typed codes, which an update rolled back to would run, can still read it.
+ */
+async function captureTypedCode(
+  api: ReferralApi,
+  typedCode: string,
+  existing: PendingReferral | null,
+  options: { storage: ReferralStorage; now: number; next?: string },
+) {
+  const visit = await api.recordReferralVisit({
+    code: typedCode,
+    source: 'mobile',
+    kind: 'code',
+    ...(existing?.visitToken ? { visitToken: existing.visitToken } : {}),
+    ...(options.next ? { next: options.next } : {}),
+  });
+  const shortCode = normalizeInviteShortCode(visit.shortCode);
+  const recorded: PendingReferral = {
+    code: visit.code,
+    ...(shortCode ? { shortCode } : {}),
+    capturedAt: existing?.visitToken === visit.visitToken ? existing.capturedAt : new Date(options.now).toISOString(),
+    kind: 'invite',
+    visitToken: visit.visitToken,
+    expiresAt: visit.expiresAt,
+    program: readReferralProgram(visit.program),
+  };
+  await options.storage.setItem(PENDING_REFERRAL_STORAGE_KEY, JSON.stringify(recorded));
+  return { pending: recorded, keptEarlierInvite: false };
+}
+
+export type TypedInviteCodeResult =
+  | { ok: true; message: string; pending: PendingReferral }
+  | { ok: false; message: string };
+
+/**
+ * Saves what someone typed into "Have an invite code?" and says how it went,
+ * in the words the web's sign-in page uses (`invite-typed-code.ts`). Never
+ * throws.
+ */
+export async function saveTypedInviteCode(
+  api: ReferralApi,
+  text: string,
+  options: { storage?: ReferralStorage; now?: number } = {},
+): Promise<TypedInviteCodeResult> {
+  if (!readTypedInviteCode(text)) return { ok: false, message: TYPED_INVITE_CODE_INVALID };
+  try {
+    const { pending } = await capturePendingReferral(api, text, { ...options, kind: 'code' });
+    return {
+      ok: true,
+      message: typedInviteSavedMessage(pending.program?.inviteeFirstPurchasePercent),
+      pending,
+    };
+  } catch (error) {
+    const status = typeof error === 'object' && error !== null && 'status' in error
+      ? Number((error as { status?: unknown }).status)
+      : 0;
+    if (status === 400 || status === 404) return { ok: false, message: TYPED_INVITE_CODE_NOT_FOUND };
+    if (status === 429) return { ok: false, message: 'Too many tries. Wait a few minutes, then try again.' };
+    return { ok: false, message: TYPED_INVITE_CODE_FAILED };
+  }
 }
 
 /**
@@ -293,7 +464,7 @@ function isTerminalClaimError(error: unknown) {
 
 export async function claimPendingReferral(
   api: ReferralApi,
-  options: { storage?: ReferralStorage; now?: number } = {}
+  options: { storage?: ReferralStorage; now?: number; userId?: string } = {}
 ): Promise<ReferralClaimResponse | null> {
   const storage = options.storage ?? defaultStorage;
   const inFlight = claimPromises.get(storage);
@@ -314,6 +485,7 @@ export async function claimPendingReferral(
       });
       const recentClaim: RecentReferralClaim = {
         code: pending.code,
+        ...(options.userId ? { userId: options.userId } : {}),
         claimedAt: new Date(options.now ?? Date.now()).toISOString(),
         response,
         program: pending.program ?? null,

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import * as ReactNative from 'react-native';
 import Animated, {
   useAnimatedKeyboard,
@@ -138,6 +138,25 @@ function useKeyboardHeight() {
     reportedHeight: reportedHeight.value,
     reportedHidden: reportedHidden.value,
   }));
+}
+
+/**
+ * Runs `onShown` each time the keyboard has finished coming up, while `enabled`:
+ * for a surface that must bring more into view than the caret's line, which is
+ * all iOS scrolls a scroll view to (the sign-in page's invite-code field, whose
+ * Apply and lower edge stayed under the keys). The one place outside the areas
+ * above that listens to the keyboard, kept here with them.
+ */
+export function useKeyboardShown(onShown: () => void, enabled = true) {
+  const latest = useRef(onShown);
+  useEffect(() => {
+    latest.current = onShown;
+  });
+  useEffect(() => {
+    if (!enabled || !keyboardApi?.addListener) return;
+    const shown = keyboardApi.addListener('keyboardDidShow', () => latest.current());
+    return () => shown.remove();
+  }, [enabled]);
 }
 
 export const KEYBOARD_AVOIDING_AREA_TEST_ID = 'keyboard-avoiding-area';

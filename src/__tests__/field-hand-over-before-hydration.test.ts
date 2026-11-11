@@ -58,6 +58,8 @@ const NO_HAND_OVER: Record<string, string> = {
     'Draws nothing until the client’s auth listener has a session.',
   'src/app/invite/InviteClient.tsx':
     'Its one field is read-only and draws once the client has read the referral summary.',
+  'src/app/login/InviteCodeEntry.tsx':
+    'Its field draws once “Have an invite code?” is clicked.',
   'src/app/marketplace/MarketplaceBrowser.tsx':
     'Loaded by MarketplaceBootstrap’s import() after a Load more click or a scroll.',
   'src/app/marketplace/MarketplaceToolFilter.tsx':

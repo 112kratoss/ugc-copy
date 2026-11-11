@@ -24,8 +24,13 @@ const mocks = vi.hoisted(() => {
     signInWithPassword: vi.fn(),
     signUp: vi.fn(),
     loadWelcomeCredits: vi.fn(),
+    cookieNames: new Set<string>(),
   };
 });
+
+vi.mock('next/headers', () => ({
+  cookies: async () => ({ has: (name: string) => mocks.cookieNames.has(name) }),
+}));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => mocks.router,
@@ -781,5 +786,87 @@ describe('a sign-in form the browser filled before the page’s script ran', () 
 
     expect(mocks.signInWithPassword).toHaveBeenCalledWith({ email: EMAIL, password: PASSWORD });
     expect(form.email.value).toBe(EMAIL);
+  });
+});
+
+describe('Have an invite code?', () => {
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+    mocks.cookieNames.clear();
+    mocks.getSession.mockResolvedValue({ data: { session: null }, error: null });
+    mocks.loadWelcomeCredits.mockResolvedValue(25);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const openField = () => {
+    fireEvent.click(within(choices()).getByRole('button', { name: 'Have an invite code?' }));
+    return within(choices()).getByRole('textbox', { name: 'Invite code' });
+  };
+
+  it('stays closed until asked for, then saves a typed code as this browser’s invite', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      success: true,
+      code: 'a43ea71e6475',
+      shortCode: 'K7P2QX',
+      preserved: false,
+      program: { inviterPercent: 5, inviteeFirstPurchasePercent: 10, attributionWindowDays: 30 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    renderLogin();
+
+    expect(within(choices()).queryByRole('textbox', { name: 'Invite code' })).toBeNull();
+    fireEvent.change(openField(), { target: { value: ' k7p2-qx ' } });
+    fireEvent.click(within(choices()).getByRole('button', { name: 'Apply' }));
+
+    expect(await within(choices()).findByRole('status')).toHaveTextContent(
+      'Invite saved. Create your new account to get 10% bonus credits on your first top-up.',
+    );
+    expect(fetchMock).toHaveBeenCalledWith('/api/referrals/visit', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ code: 'K7P2QX', source: 'web', kind: 'code' }),
+    }));
+    expect(within(choices()).queryByRole('textbox', { name: 'Invite code' })).toBeNull();
+    expect(within(choices()).getByRole('button', { name: 'Use a different invite code' })).toBeInTheDocument();
+  });
+
+  it('says what is wrong without asking the server when what was typed cannot be a code', async () => {
+    renderLogin();
+    fireEvent.change(openField(), { target: { value: 'hello there' } });
+    fireEvent.click(within(choices()).getByRole('button', { name: 'Apply' }));
+
+    expect(await within(choices()).findByRole('alert')).toHaveTextContent(
+      'Enter the 6-character invite code, or paste the invite link you received.',
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('says a code no invite has was not found', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ success: false, error: 'Referral code not found.' }), { status: 404 }));
+    renderLogin();
+    fireEvent.change(openField(), { target: { value: 'ZZZZZZ' } });
+    fireEvent.click(within(choices()).getByRole('button', { name: 'Apply' }));
+
+    expect(await within(choices()).findByRole('alert')).toHaveTextContent('That invite code was not found.');
+    expect(within(choices()).getByRole('textbox', { name: 'Invite code' })).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('reminds a browser that keeps an invite, read from its cookie by the server', async () => {
+    mocks.cookieNames.add('mb_referral_visit');
+    await renderPageAt('');
+
+    expect(within(choices()).getByText('An invite is saved on this device. Enter a code to use a different one.')).toBeInTheDocument();
+    expect(within(choices()).getByRole('button', { name: 'Use a different invite code' })).toBeInTheDocument();
+  });
+
+  it('says nothing of an invite to a browser without one', async () => {
+    await renderPageAt('');
+
+    expect(within(choices()).queryByText(/An invite is saved/)).toBeNull();
+    expect(within(choices()).getByRole('button', { name: 'Have an invite code?' })).toBeInTheDocument();
   });
 });

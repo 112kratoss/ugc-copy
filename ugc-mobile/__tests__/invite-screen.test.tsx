@@ -15,6 +15,7 @@ const harness = vi.hoisted(() => ({
     api: {
       getReferralOverview: vi.fn(),
       createReferralLink: vi.fn(),
+      recordReferralVisit: vi.fn(),
     },
   },
   share: vi.fn(),
@@ -83,6 +84,7 @@ function overview(program: unknown) {
     success: true,
     program,
     code: 'creator1',
+    shortCode: 'K7P2QX',
     shareUrl: 'https://magicbooklet.com/r/creator1',
     stats: { visits: 0, signups: 0, purchasers: 0, creditsEarned: 0, creditsReversed: 0 },
     recentRewards: [],
@@ -124,7 +126,7 @@ describe('Invite & Earn prints the program the server runs (03-7)', () => {
     const values = texts(tree);
     expect(values).toContain('Friends get 3% bonus credits on their first top-up. You earn 7% bonus credits whenever they top up.');
     expect(values).toContain('Earn 7% in credits');
-    expect(values).toContain('A new friend joins within 45 days of opening your link.');
+    expect(values).toContain('A new friend joins within 45 days of opening your link, or with your code.');
     expect(values).toContain('They receive 3% bonus credits on their first verified credit-pack purchase.');
     expect(values).toContain('You receive 7% bonus credits on each verified credit-pack purchase they make.');
     expect(values.some((value) => /\b5%|\b30 days/.test(value))).toBe(false);
@@ -132,20 +134,31 @@ describe('Invite & Earn prints the program the server runs (03-7)', () => {
     const share = tree.root.find((node) => String(node.type) === 'primary-button' && node.props.label === 'Share invite');
     await renderer.act(async () => { (share.props.onPress as () => void)(); });
     expect(harness.share).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Try Magicbooklet and get 3% bonus credits on your first top-up.'),
+      message: expect.stringContaining('Try Magicbooklet and get 3% bonus credits on your first top-up. Invite code: K7P2QX.'),
     }));
+    renderer.act(() => tree.unmount());
+  });
+
+  it('shows the six-character code and copies it alone (owner 11-11)', async () => {
+    harness.auth.api.getReferralOverview.mockResolvedValue(overview(PROGRAM));
+    const tree = await renderScreen();
+
+    expect(texts(tree)).toContain('K7P2QX');
+    const copyCode = tree.root.find((node) => String(node.type) === 'secondary-button' && node.props.label === 'Copy code');
+    await renderer.act(async () => { (copyCode.props.onPress as () => void)(); });
+    expect(harness.copyToClipboard).toHaveBeenCalledWith('K7P2QX', expect.any(String));
     renderer.act(() => tree.unmount());
   });
 
   it('names no numbers while the overview has not answered', async () => {
     harness.auth.api.getReferralOverview.mockRejectedValue(new Error('Network request failed'));
-    harness.auth.api.createReferralLink.mockResolvedValue({ success: true, code: 'creator1', shareUrl: 'https://magicbooklet.com/r/creator1' });
+    harness.auth.api.createReferralLink.mockResolvedValue({ success: true, code: 'creator1', shortCode: 'K7P2QX', shareUrl: 'https://magicbooklet.com/r/creator1' });
     const tree = await renderScreen();
 
     const values = texts(tree);
     expect(values).toContain('Friends get bonus credits on their first top-up. You earn bonus credits whenever they top up.');
     expect(values).toContain('Earn bonus credits');
-    expect(values).toContain('A new friend joins after opening your link.');
+    expect(values).toContain('A new friend joins after opening your link, or with your code.');
     expect(values.some((value) => /\d+%|\d+ days/.test(value))).toBe(false);
 
     const copy = tree.root.find((node) => String(node.type) === 'secondary-button' && node.props.label === 'Copy referral link');
@@ -165,6 +178,29 @@ describe('Invite & Earn prints the program the server runs (03-7)', () => {
     expect(values).toContain('New users can receive bonus credits on their first top-up. Inviters earn bonus credits when referred friends top up.');
     expect(values.some((value) => /\d+%/.test(value))).toBe(false);
     expect(harness.auth.api.getReferralOverview).not.toHaveBeenCalled();
+    renderer.act(() => tree.unmount());
+  });
+
+  it('saves a typed code in place for someone signed out, before they make an account (owner 11-11)', async () => {
+    harness.auth.user = null;
+    harness.auth.api.recordReferralVisit.mockReset().mockResolvedValue({
+      success: true,
+      visitToken: '11111111-1111-4111-8111-111111111111',
+      code: 'a43ea71e6475',
+      shortCode: 'K7P2QX',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      program: PROGRAM,
+    });
+    const tree = await renderScreen();
+
+    const field = tree.root.find((node) => String(node.type) === 'text-input');
+    renderer.act(() => { (field.props.onChangeText as (value: string) => void)('k7p2qx'); });
+    const apply = tree.root.find((node) => String(node.type) === 'primary-button' && node.props.label === 'Apply invite code');
+    await renderer.act(async () => { (apply.props.onPress as () => void)(); });
+
+    expect(harness.auth.api.recordReferralVisit).toHaveBeenCalledWith({ code: 'K7P2QX', source: 'mobile', kind: 'code' });
+    expect(texts(tree)).toContain('Invite saved');
+    expect(routerState.push).not.toHaveBeenCalledWith(expect.objectContaining({ pathname: '/r/[code]' }));
     renderer.act(() => tree.unmount());
   });
 });

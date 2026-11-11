@@ -41,7 +41,7 @@ import { getShowcaseViewerImageUrl } from '../lib/showcase-media';
 import { generationStartRefusalCode, isAmbiguousGenerationStartFailure } from '../lib/generation-attempts';
 import type { CatalogGenerationRequest } from '../lib/generation-model-catalog';
 import { describeRestoreOutcome, restoreLandedPurchase } from '../lib/pricing-view-model';
-import { readReferralProgram } from '../lib/referral-attribution';
+import { capturePendingReferral, readReferralProgram } from '../lib/referral-attribution';
 
 // referral-attribution keeps its invite in the keychain; only its reader runs here.
 vi.mock('expo-secure-store', () => ({
@@ -1348,6 +1348,40 @@ describe('the shared answers the pricing and invite screens read', () => {
     const visit = await clientForEndpoint('recordReferralVisit').recordReferralVisit({ code: 'CREATOR1', source: 'mobile' });
     expect(readReferralProgram(visit.program)).toEqual(endpoint.response.program);
     expect(readReferralProgram(endpoint.responseVariants.programUnavailable.program)).toBeNull();
+  });
+
+  // Owner, 2026-11-11: a code typed at sign-up goes with the visit the phone
+  // holds, for the server to tell the same invite from another (#766 review).
+  it('sends a typed code in the request the shared fixture pins', async () => {
+    const endpoint = contract.endpoints.recordReferralVisit as unknown as ContractEndpoint & {
+      requestVariants: { typedCode: { code: string; visitToken: string } };
+    };
+    const typed = endpoint.requestVariants.typedCode;
+    const bodies: unknown[] = [];
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse(endpoint.response);
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => null,
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    const values = new Map<string, string>([['magicbooklet.referral.pending.v1', JSON.stringify({
+      code: 'creator1',
+      capturedAt: new Date().toISOString(),
+      kind: 'invite',
+      visitToken: typed.visitToken,
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    })]]);
+    const storage = {
+      getItem: async (key: string) => values.get(key) ?? null,
+      setItem: async (key: string, value: string) => { values.set(key, value); },
+      removeItem: async (key: string) => { values.delete(key); },
+    };
+
+    await capturePendingReferral(api, ` ${typed.code.toLowerCase()} `, { storage, kind: 'code' });
+    expect(bodies).toEqual([typed]);
   });
 
   // The Credit History screen starts over from the newest page on a 400 for an

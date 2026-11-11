@@ -340,7 +340,8 @@ function FieldButton({ label, onPress, children }: { label: string; onPress: () 
   );
 }
 
-function WorkspaceInput({
+/** The sign-in page's labelled pill field, also drawn by its invite-code field (`sign-in-wall.tsx`). */
+export function WorkspaceInput({
   label,
   trailingIcon,
   inputRef,
