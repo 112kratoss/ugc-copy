@@ -1,5 +1,6 @@
 import {
   Bell,
+  Bot,
   Gift,
   Home,
   Layers3,
@@ -16,7 +17,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import { CREATOR_PAGE_PATHS } from '@/lib/creator-pages';
 
 export interface AppNavItem {
-  id: 'home' | 'create' | 'studio' | 'showcase' | 'search' | 'marketplace' | 'workflow' | 'profile' | 'alerts' | 'invite';
+  id: 'home' | 'create' | 'studio' | 'showcase' | 'search' | 'marketplace' | 'workflow' | 'agents' | 'profile' | 'alerts' | 'invite';
   label: string;
   shortLabel: string;
   href: string;
@@ -138,6 +139,17 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
       isExactOrChild(pathname, '/create-workflow') ||
       isExactOrChild(pathname, '/ai-workflow-builder') ||
       isExactOrChild(pathname, '/workflow-canvases'),
+  },
+  {
+    // The agents' setup page (`/developers/mcp`, its posting-only page under it): before
+    // this entry only the signed-out home's footer and Connected apps linked it.
+    id: 'agents',
+    label: 'AI agents',
+    shortLabel: 'Agents',
+    href: '/developers/mcp',
+    description: 'Create and post from Claude, ChatGPT, Codex and Cursor',
+    icon: Bot,
+    match: (pathname) => isExactOrChild(pathname, '/developers'),
   },
   {
     id: 'alerts',
