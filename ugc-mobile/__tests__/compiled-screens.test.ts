@@ -54,6 +54,8 @@ const SCREENS = [
   // 2026-11-01. Its media list stays uncompiled, as before: it reads a ref during render.
   ['components/profile-dashboard.tsx', 'ProfileDashboard'],
   ['components/profile-dashboard.tsx', 'ProfileMediaScopeControl'],
+  // The page requests Profile's grid and the card feed a tile opens both make (2026-11-11).
+  ['lib/use-next-feed-page-request.ts', 'useNextFeedPageRequest'],
   // Every PrimaryButton, SecondaryButton and ToggleButton is an ActionButton: one skipped is ~200 buttons
   // re-rendering with their parents (a `tick = prominence === 'primary'` default did it, 2026-11-03).
   ['components/ui.tsx', 'ActionButton'],

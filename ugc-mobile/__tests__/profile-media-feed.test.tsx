@@ -44,7 +44,11 @@ const libraryState = vi.hoisted(() => ({
   isFetching: false,
   // What the feed asks the library for its next page with.
   fetchNextPage: vi.fn(() => Promise.resolve()),
+  isFetchNextPageError: false,
+  pageCount: 1,
 }));
+
+const navigationState = vi.hoisted(() => ({ focused: true }));
 
 // What the feed last asked of the focus and foreground revalidation.
 const revalidationState = vi.hoisted(() => ({
@@ -127,7 +131,7 @@ vi.mock('expo-router', () => ({
   useLocalSearchParams: () => routerState.params,
 }));
 
-vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true }));
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => navigationState.focused }));
 
 vi.mock('@tanstack/react-query', () => ({
   useQuery: () => ({ data: undefined }),
@@ -301,11 +305,11 @@ vi.mock('@/lib/use-profile-library-source', () => ({
     isError: false,
     isFetching: libraryState.isFetching,
     isFetchingNextPage: false,
-    isFetchNextPageError: false,
+    isFetchNextPageError: libraryState.isFetchNextPageError,
     isLoading: false,
     isStale: false,
     items: libraryState.items,
-    pageCount: 1,
+    pageCount: libraryState.pageCount,
     refetch: vi.fn(),
     retryEnrichment: vi.fn(),
     retrySelection: vi.fn(),
@@ -323,6 +327,7 @@ vi.mock('@/lib/viewer-media-cache', () => ({ applyPostVisibilityToCaches: vi.fn(
 import { ProfileFeedCardView } from '@/components/profile-feed-card';
 import { ProfileMediaFeedScreen } from '@/components/profile-media-feed';
 import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
+import { PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS } from '@/lib/profile-media-query';
 import { appTheme } from '@/lib/theme';
 import { changeGenerationArchive } from '@/lib/use-viewer-action-handlers';
 
@@ -357,6 +362,9 @@ beforeEach(() => {
   libraryState.selection = 'none';
   libraryState.hasNextPage = false;
   libraryState.isFetching = false;
+  libraryState.isFetchNextPageError = false;
+  libraryState.pageCount = 1;
+  navigationState.focused = true;
   authState.user = { id: 'owner-1', email: 'owner@example.com' };
   authState.isGuest = false;
   authState.identityUserId = 'owner-1';
@@ -1022,5 +1030,93 @@ describe('opening the feed on a card', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// The page gate refuses a request inside its cooldown, and the list asks for the
+// next page again as a page lands. One that landed inside the cooldown was
+// refused at that call, and nothing asked again when the cooldown ended: over a
+// short scope (Archived, an Active feed in a library of mostly archived or
+// failed runs) the feed stopped at its end until the reader scrolled away and
+// back, which a feed too short to scroll cannot do.
+describe('a page that lands inside the load-more cooldown', () => {
+  const cooldown = PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS;
+  const askedFor = () => libraryState.fetchNextPage.mock.calls.length;
+  const settle = (work: () => void) => act(async () => { work(); });
+  const show = () => trees.at(-1)!.update(<ProfileMediaFeedScreen />);
+  const reachTheEnd = () => settle(() => listState.props!.onEndReached!());
+  // An Archived feed of one card with pages of the library after it: the reader
+  // is at its end from the start. The next page lands halfway through the
+  // cooldown with nothing for this scope, and the list, at its end again, asks.
+  const landInsideTheCooldown = async () => {
+    routerState.params = { source: 'profile-creations', scope: 'archived' };
+    libraryState.items = [creation('gen-archived', { archivedAt: '2026-10-01T00:00:00.000Z' })];
+    libraryState.hasNextPage = true;
+    renderFeed();
+    await reachTheEnd();
+    expect(askedFor()).toBe(1);
+    await settle(() => { vi.advanceTimersByTime(cooldown / 2); });
+    await settle(() => { libraryState.pageCount = 2; show(); });
+    await reachTheEnd();
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    act(() => { trees.splice(0).forEach((tree) => tree.unmount()); });
+    vi.useRealTimers();
+  });
+
+  it('asks for the next page as the cooldown ends', async () => {
+    await landInsideTheCooldown();
+    expect(askedFor()).toBe(1);
+
+    await settle(() => { vi.advanceTimersByTime(cooldown / 2 - 1); });
+    expect(askedFor()).toBe(1);
+    await settle(() => { vi.advanceTimersByTime(1); });
+    expect(askedFor()).toBe(2);
+  });
+
+  it.each([
+    ['no page is left', () => { libraryState.hasNextPage = false; show(); }],
+    ['the feed is covered', () => { navigationState.focused = false; show(); }],
+    ['the feed has gone', () => { trees.splice(0).forEach((tree) => tree.unmount()); }],
+  ])('asks nothing more once %s', async (_, change) => {
+    await landInsideTheCooldown();
+    await settle(change);
+    await settle(() => { vi.advanceTimersByTime(cooldown * 2); });
+
+    expect(askedFor()).toBe(1);
+  });
+
+  it('asks once the feed is back in front, for the page it was covered for', async () => {
+    await landInsideTheCooldown();
+    await settle(() => { navigationState.focused = false; show(); });
+    await settle(() => { vi.advanceTimersByTime(cooldown * 2); });
+    expect(askedFor()).toBe(1);
+
+    await settle(() => { navigationState.focused = true; show(); });
+    expect(askedFor()).toBe(2);
+  });
+
+  // A failed page keeps the page latch shut, so only the footer's Retry asks for
+  // it again. A refresh of the library's first page that clears the error takes
+  // the footer away, and a feed too short to scroll had no way on.
+  it('asks again once a refresh clears the error a failed page left, which took the Retry away', async () => {
+    routerState.params = { source: 'profile-creations' };
+    libraryState.items = [creation('gen-1')];
+    libraryState.hasNextPage = true;
+    renderFeed();
+    await reachTheEnd();
+    await settle(() => { libraryState.isFetchNextPageError = true; show(); });
+    await settle(() => { vi.advanceTimersByTime(cooldown * 2); });
+    await reachTheEnd();
+    expect(askedFor()).toBe(1);
+
+    await settle(() => { libraryState.isFetchNextPageError = false; show(); });
+
+    expect(askedFor()).toBe(2);
   });
 });
