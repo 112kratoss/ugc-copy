@@ -17,6 +17,7 @@ import {
   runOperationalDataRetentionBackendJob,
   runRecipeCopySweepBackendJob,
   runReferralRewardReconciliationBackendJob,
+  runSearchDictionaryBackendJob,
   runShowcaseMediaRevocationsBackendJob,
   runWorkflowRunStepsBackendJob,
   type BackendJobExecutionResult,
@@ -46,6 +47,7 @@ type BackendJobsRouteDependencies = {
   runOperationalDataRetentionBackendJob?: typeof runOperationalDataRetentionBackendJob;
   runRecipeCopySweepBackendJob?: typeof runRecipeCopySweepBackendJob;
   runReferralRewardReconciliationBackendJob?: typeof runReferralRewardReconciliationBackendJob;
+  runSearchDictionaryBackendJob?: typeof runSearchDictionaryBackendJob;
   runShowcaseMediaRevocationsBackendJob?: typeof runShowcaseMediaRevocationsBackendJob;
   runWorkflowRunStepsBackendJob?: typeof runWorkflowRunStepsBackendJob;
 };
@@ -104,6 +106,8 @@ function resolveDependencies(dependencies: BackendJobsRouteDependencies | undefi
     runReferralRewardReconciliationBackendJob:
       dependencies?.runReferralRewardReconciliationBackendJob
       ?? runReferralRewardReconciliationBackendJob,
+    runSearchDictionaryBackendJob: dependencies?.runSearchDictionaryBackendJob
+      ?? runSearchDictionaryBackendJob,
     runShowcaseMediaRevocationsBackendJob: dependencies?.runShowcaseMediaRevocationsBackendJob
       ?? runShowcaseMediaRevocationsBackendJob,
     runWorkflowRunStepsBackendJob: dependencies?.runWorkflowRunStepsBackendJob
@@ -154,6 +158,8 @@ async function runDueBackendJob(
       return options.dependencies.runRecipeCopySweepBackendJob(runOptions);
     case 'referral-reward-reconciliation':
       return options.dependencies.runReferralRewardReconciliationBackendJob(runOptions);
+    case 'search-dictionary':
+      return options.dependencies.runSearchDictionaryBackendJob(runOptions);
     case 'showcase-media-revocations':
       return options.dependencies.runShowcaseMediaRevocationsBackendJob(runOptions);
     case 'workflow-run-steps':

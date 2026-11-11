@@ -98,6 +98,7 @@ describe('backend job registry', () => {
       'operational-data-retention',
       'recipe-copy-sweep',
       'referral-reward-reconciliation',
+      'search-dictionary',
       'showcase-media-revocations',
       'workflow-run-steps',
     ]);
@@ -117,6 +118,7 @@ describe('backend job registry', () => {
       const boundedDurations: Partial<Record<string, number>> = {
         'feed-embeddings': 120,
         'kie-account-balance': 60,
+        'search-dictionary': 60,
       };
       expect(job.maxDurationSeconds).toBe(boundedDurations[job.name] ?? 300);
       expect(job.maxDurationSeconds).toBeLessThanOrEqual(BACKEND_JOB_SCHEDULER.maxDurationSeconds);
@@ -141,10 +143,11 @@ describe('backend job registry', () => {
     // So does feed-embeddings every ten minutes (+144/day): logical runs, not
     // Vercel invocations. The Kie balance check (+24/day, hourly) is the same:
     // it rides the shared scheduler and adds no cron entry of its own. So does
-    // the recipe copy sweep every six hours (+4/day). Both the Kie check and
+    // the recipe copy sweep every six hours (+4/day) and the search dictionary
+    // rebuild every hour (+24/day). Both the Kie check and
     // the alert push (48/day) counted being configured as work and ran on all
     // 144 ticks until 2026-11-04 (1,231 runs a day then).
-    expect(logicalDailyRuns).toBe(1015);
+    expect(logicalDailyRuns).toBe(1039);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBe(144);
     // The budget bounds real Vercel cron invocations, not logical job runs, so
     // it has to be measured across every entry now that F14 added two. Checking
@@ -172,6 +175,7 @@ describe('backend job registry', () => {
       'backend-alert-delivery',
       'feed-embeddings',
       'mobile-push-receipts',
+      'search-dictionary',
       'workflow-run-steps',
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:10:00.000Z')).map((job) => job.name)).toEqual([
@@ -261,6 +265,23 @@ describe('backend job registry', () => {
       cadenceMinutes: 360,
       dailyInvocations: 4,
       healthExpectedMaxAgeMinutes: 720,
+    });
+  });
+
+  it('rebuilds the search dictionary hourly at :00 inside the shared tick', () => {
+    const due = (timestamp: string) => getDueBackendJobs(Date.parse(timestamp)).map((job) => job.name);
+    expect(due('2026-06-22T10:00:00.000Z')).toContain('search-dictionary');
+    expect(due('2026-06-22T10:10:00.000Z')).not.toContain('search-dictionary');
+    expect(BACKEND_JOB_VERCEL_CRONS.map((cron) => cron.path)).not.toContain('/api/cron/search-dictionary');
+    expect(BACKEND_JOB_REGISTRY.find((job) => job.name === 'search-dictionary')).toMatchObject({
+      route: '/api/cron/search-dictionary',
+      schedule: '0 * * * *',
+      dispatch: 'scheduler',
+      cadenceMinutes: 60,
+      dailyInvocations: 24,
+      maxDurationSeconds: 60,
+      lockTtlSeconds: 120,
+      healthExpectedMaxAgeMinutes: 180,
     });
   });
 

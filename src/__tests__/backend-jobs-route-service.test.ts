@@ -219,6 +219,37 @@ describe('runBackendJobsSchedulerForRoute', () => {
     });
   });
 
+  it('dispatches the search dictionary like every other logical job', async () => {
+    const runSearchDictionaryBackendJob = vi.fn(async () => succeededResult('search-dictionary'));
+
+    const result = await runBackendJobsSchedulerForRoute({
+      request: new Request('http://localhost/api/cron/backend-jobs', {
+        headers: { 'x-vercel-id': 'bom1::scheduler-45' },
+      }),
+      dependencies: {
+        now: () => Date.parse('2026-11-12T06:00:00.000Z'),
+        createServiceClient,
+        getDueBackendJobs: () => [backendJob('search-dictionary')],
+        runSearchDictionaryBackendJob,
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        success: true,
+        dueJobs: ['search-dictionary'],
+        results: [expect.objectContaining({ job: 'search-dictionary', status: 'succeeded' })],
+      },
+    });
+    expect(runSearchDictionaryBackendJob).toHaveBeenCalledWith({
+      requestId: 'bom1::scheduler-45:search-dictionary',
+      startedAtMs: Date.parse('2026-11-12T06:00:00.000Z'),
+      serviceClient,
+      triggerRoute: '/api/cron/backend-jobs',
+    });
+  });
+
   it('skips without creating a Supabase client when no logical job is due', async () => {
     const result = await runBackendJobsSchedulerForRoute({
       request: new Request('http://localhost/api/cron/backend-jobs'),

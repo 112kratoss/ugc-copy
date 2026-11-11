@@ -6,9 +6,10 @@
 --
 --   - a creation made in the app was found by no model name. Its post names
 --     the app as its tool ('Magicbooklet'); the model is the creation's
---     (generations.model, which every card prints) or a Made with row's
---     (post_source_tools, where the tools after the first live as well), and
---     the document read neither;
+--     (generations.model, as every public read names it: a template result's
+--     is 'template-workflow', never its own, src/lib/template-result.ts) or a
+--     Made with row's (post_source_tools, where the tools after the first
+--     live as well), and the document read neither;
 --   - 'veo 3' never met 'veo-3.1': the text-search parser reads that id as
 --     'veo' and the number '-3.1';
 --   - 'portraits' missed 'portrait', and of several words the last had to be
@@ -33,8 +34,12 @@
 -- 3. The posts trigger follows generation_id too, and post_source_tools gets
 --    statement triggers, so a document follows its Made with.
 -- 4. search_terms is the dictionary a misspelling is read against: the words
---    of four letters or more that unlabelled public posts show, added as
---    documents are projected. search_corrected_query reads each word of a
+--    of four letters or more that unlabelled public posts show now.
+--    rebuild_search_terms makes it exactly that, adding and removing, and the
+--    search-dictionary backend job runs it every hour: no post save writes
+--    the table, so two saves never wait on each other's words, and a word
+--    leaves with its last post (one made private, labelled, removed, or
+--    deleted with its account). search_corrected_query reads each word of a
 --    query that no known word starts with as the nearest known one
 --    (trigram similarity of 0.35 or more, the same first letter, within two
 --    letters of its length).
@@ -43,26 +48,35 @@
 --    its corrected reading. Creator search adds word_similarity against the
 --    name and handle, by the indexed operator. Their signatures, eligibility
 --    (the NSFW label included), score, order, definer rights, search paths
---    and grants are kept.
--- 6. Every post document is re-projected at the end, which fills the
---    dictionary.
+--    and grants are kept. A query outside their length limits now finds
+--    nothing where it raised: the route refuses one first, and a character
+--    the two count differently was a 500.
+-- 6. Every post document is re-projected at the end, and the dictionary
+--    built from them.
 --
 -- A misspelling is corrected against the dictionary, never matched against
 -- each document: word_similarity over every document's text took 2.6 to 4 s
 -- a search on 3,000 posts of 6 kB (local replay, 2026-11-12), and its
 -- operator form (<%) takes its threshold from a setting this role may not
--- set for a function. The dictionary keeps a word after its last post goes;
--- a query corrected to such a word finds nothing, as it did uncorrected.
+-- set for a function. A page is read as its own request finds the data: a
+-- post published between two pages that holds the query as typed turns the
+-- next page to the uncorrected reading, which can skip or repeat a post.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
--- As 20261101124828 took them: posts first. SHARE ROW EXCLUSIVE is what
--- CREATE TRIGGER takes; reads go on beside it. A post or a Made with row
--- written while this file runs waits for it, and its triggers then use the
--- new projection. The triggers are made with CREATE OR REPLACE, never DROP
--- TRIGGER, whose ACCESS EXCLUSIVE lock would stop the feed's reads of posts.
-LOCK TABLE public.posts IN SHARE ROW EXCLUSIVE MODE;
+-- Made with first, as its save takes them (save_post_source_tools_with_catalog
+-- writes its rows, then the post), then posts and the recipes as 20261101124828
+-- took them. SHARE ROW EXCLUSIVE is what CREATE TRIGGER takes; reads go on
+-- beside it. A post, a Made with row or a recipe written while this file runs
+-- waits for it, and its triggers then use the new projection: the projection
+-- deletes and inserts a post's document, so a recipe's trigger projecting the
+-- same post during the last statement of this file would fail one of the two
+-- on the document's key. The triggers are made with CREATE OR REPLACE, never
+-- DROP TRIGGER, whose ACCESS EXCLUSIVE lock would stop the feed's reads of
+-- posts.
 LOCK TABLE public.post_source_tools IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.posts IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.post_resource_bundles IN SHARE ROW EXCLUSIVE MODE;
 
 -- ─── 1. How a name and a query are read ─────────────────────────────────────
 
@@ -173,7 +187,59 @@ REVOKE ALL ON TABLE public.search_terms FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.search_terms TO service_role;
 
 COMMENT ON TABLE public.search_terms IS
-  'Backend-owned dictionary for search spelling correction: lowercase words of 4 to 40 letters that unlabelled public posts show, added by refresh_post_search_documents. Words only, never which post held them.';
+  'Backend-owned dictionary for search spelling correction: lowercase words of 4 to 40 letters that unlabelled public posts show, kept to exactly those by rebuild_search_terms (the search-dictionary job). Words only, never which post held them.';
+
+CREATE OR REPLACE FUNCTION public.rebuild_search_terms()
+RETURNS TABLE(added integer, removed integer)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $function$
+DECLARE
+  v_added integer;
+  v_removed integer;
+BEGIN
+  -- One rebuild at a time: a second one finds nothing left to do.
+  IF NOT pg_try_advisory_xact_lock(hashtext('public.rebuild_search_terms')) THEN
+    RETURN QUERY SELECT 0, 0;
+    RETURN;
+  END IF;
+
+  -- The words the documents of unlabelled posts show now. A document exists
+  -- only for a public, unarchived, visible post, and holds its text as public
+  -- reads show it, so no word comes from a paid recipe's caption or prompt.
+  WITH shown AS (
+    SELECT DISTINCT words.lexeme AS term
+    FROM public.post_search_documents AS documents
+    JOIN public.posts AS posts ON posts.id = documents.post_id
+    CROSS JOIN LATERAL unnest(to_tsvector('pg_catalog.simple', documents.search_text)) AS words
+    WHERE posts.is_nsfw = false
+      AND words.lexeme ~ '^[[:alpha:]]{4,40}$'
+  ),
+  gone AS (
+    DELETE FROM public.search_terms AS terms
+    WHERE NOT EXISTS (SELECT 1 FROM shown WHERE shown.term = terms.term)
+    RETURNING 1
+  ),
+  arrived AS (
+    INSERT INTO public.search_terms (term)
+    SELECT shown.term
+    FROM shown
+    ON CONFLICT (term) DO NOTHING
+    RETURNING 1
+  )
+  SELECT (SELECT count(*) FROM arrived), (SELECT count(*) FROM gone)
+  INTO v_added, v_removed;
+
+  RETURN QUERY SELECT v_added, v_removed;
+END;
+$function$;
+
+COMMENT ON FUNCTION public.rebuild_search_terms() IS
+  'Makes search_terms exactly the words unlabelled public posts show now, and says how many it added and removed. Run by the search-dictionary backend job; no post save writes the table.';
+
+REVOKE ALL ON FUNCTION public.rebuild_search_terms() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.rebuild_search_terms() TO service_role;
 
 CREATE OR REPLACE FUNCTION public.search_corrected_query(p_query text)
 RETURNS text
@@ -284,10 +350,16 @@ BEGIN
         WHERE names.name <> ''
       ) AS tool_terms,
       (
-        -- The creation's model is the one every card of the post prints.
+        -- The creation's model as public reads name it (shownGenerationModel,
+        -- src/lib/template-result.ts): a template result's is its author's,
+        -- and every read says 'template-workflow' in its place.
         SELECT string_agg(public.search_term_variants(names.name), ' ' ORDER BY names.name)
         FROM (
-          SELECT lower(btrim(generations.model)) AS name
+          SELECT CASE
+            WHEN generations.template_run_id IS NOT NULL OR generations.template_run_step_id IS NOT NULL
+              THEN 'template-workflow'
+            ELSE lower(btrim(generations.model))
+          END AS name
           UNION
           SELECT lower(btrim(tools.model_label))
           FROM public.post_source_tools AS tools
@@ -304,20 +376,6 @@ BEGIN
     AND posts.visibility = 'public'
     AND posts.archived_at IS NULL
     AND posts.review_status = 'visible';
-
-  -- The words these documents show, for search_corrected_query. In order, so
-  -- two projections adding the same new words never wait on each other in a
-  -- ring. A labelled post's words stay out: search never shows that post.
-  INSERT INTO public.search_terms (term)
-  SELECT DISTINCT words.lexeme
-  FROM public.post_search_documents AS documents
-  JOIN public.posts AS posts ON posts.id = documents.post_id
-  CROSS JOIN LATERAL unnest(to_tsvector('pg_catalog.simple', documents.search_text)) AS words
-  WHERE documents.post_id = ANY (p_post_ids)
-    AND posts.is_nsfw = false
-    AND words.lexeme ~ '^[[:alpha:]]{4,40}$'
-  ORDER BY words.lexeme
-  ON CONFLICT (term) DO NOTHING;
 END;
 $function$;
 
@@ -342,7 +400,9 @@ AS $function$
 DECLARE
   v_post_ids uuid[];
 BEGIN
-  -- Once per statement: a save replaces a post's rows together.
+  -- Once per statement, not per row. A save is still several statements (it
+  -- deletes a post's rows, then inserts each tool, at most five), each
+  -- projecting the post once more.
   IF TG_OP = 'UPDATE' THEN
     v_post_ids := ARRAY(
       SELECT post_id FROM changed_rows
@@ -428,8 +488,11 @@ DECLARE
   v_like text;
   v_tsquery tsquery;
 BEGIN
+  -- The route refuses a query outside these limits before it gets here, by
+  -- its own count; where the two counts differ (a character one of them
+  -- reads as a space) the query finds nothing, where it raised a 500.
   IF char_length(v_query) < 2 OR char_length(v_query) > 100 THEN
-    RAISE EXCEPTION 'Creator search query must contain between 2 and 100 characters';
+    RETURN;
   END IF;
   v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_');
   IF p_limit < 1 OR p_limit > 25 THEN
@@ -528,8 +591,9 @@ DECLARE
   v_tsquery tsquery;
   v_corrected text;
 BEGIN
+  -- As creator search: outside the limits a query finds nothing.
   IF char_length(v_query) < 3 OR char_length(v_query) > 100 THEN
-    RAISE EXCEPTION 'Post search query must contain between 3 and 100 characters';
+    RETURN;
   END IF;
   v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_');
   IF p_limit < 1 OR p_limit > 25 THEN
@@ -543,7 +607,7 @@ BEGIN
   -- No post a search may show holds the query as typed: read its misspelt
   -- words as the nearest known ones and search on that. The test is the
   -- match below, the label included and no cursor, so every page of a search
-  -- reads the query the same way.
+  -- reads the query the same way while the data stands still.
   IF NOT EXISTS (
     SELECT 1
     FROM public.post_search_documents AS documents
@@ -628,5 +692,7 @@ SELECT public.refresh_post_search_documents(ARRAY(
     AND posts.archived_at IS NULL
     AND posts.review_status = 'visible'
 ));
+
+SELECT * FROM public.rebuild_search_terms();
 
 COMMIT;

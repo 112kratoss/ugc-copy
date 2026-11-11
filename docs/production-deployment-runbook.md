@@ -710,6 +710,10 @@ A run takes due rows 50 at a time until none is left or two minutes have passed,
 
 A queued copy still present a day after it was queued fails the job's run, which surfaces as `JOB_LATEST_RUN_FAILED` for `showcase-media-revocations`. Read the row's `last_error` with the service role before intervening; setting `next_attempt_at` to now makes the next hourly run pick the row up again.
 
+## Search Dictionary
+
+The `search-dictionary` job (`src/lib/search-dictionary.ts`, hourly at :00 on the shared scheduler) calls `rebuild_search_terms()`, which makes the spelling dictionary `search_terms` exactly the words that unlabelled public posts show now; no post save writes that table, so this job keeps it current. A run logs `search_dictionary_completed` with `added` and `removed`. Manual trigger route: `/api/cron/search-dictionary`.
+
 ## Recipe Copy Sweep
 
 "Include creation references" copies a creation's saved inputs into its publisher's recipe files (`post_resource_files/<publisher>/generation-references/<generation>/<file>`), and a run start imports a bought recipe's copy into the buyer's inputs (`generation_inputs/<buyer>/recipe-imports/<seller>/<generation>/<file>`). The `recipe-copy-sweep` job (`src/lib/recipe-copy-sweep.ts`, every six hours at :50 on the shared scheduler) removes those nothing names any more: a copy left by a save refused or failing after the copy, the copies of a recipe or post deleted since, and an import whose run kept no input row.
@@ -726,7 +730,7 @@ Review the file (delete a line to keep its object), then `npm run ops:storage-or
 
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-embeddings`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `kie-account-balance`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `recipe-copy-sweep`, `referral-reward-reconciliation`, `showcase-media-revocations`, and `workflow-run-steps`.
+Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-embeddings`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `kie-account-balance`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `recipe-copy-sweep`, `referral-reward-reconciliation`, `search-dictionary`, `showcase-media-revocations`, and `workflow-run-steps`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 

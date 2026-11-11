@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   runMediaPreviewRepairBackendJob: vi.fn(),
   runMobilePushReceiptsBackendJob: vi.fn(),
   runReferralRewardReconciliationBackendJob: vi.fn(),
+  runSearchDictionaryBackendJob: vi.fn(),
   runWorkflowRunStepsBackendJob: vi.fn(),
 }));
 
@@ -60,6 +61,9 @@ vi.mock('@/lib/backend-job-executions', async () => {
     ),
     runReferralRewardReconciliationBackendJob: (...args: unknown[]) => (
       mocks.runReferralRewardReconciliationBackendJob(...args)
+    ),
+    runSearchDictionaryBackendJob: (...args: unknown[]) => (
+      mocks.runSearchDictionaryBackendJob(...args)
     ),
     runWorkflowRunStepsBackendJob: (...args: unknown[]) => (
       mocks.runWorkflowRunStepsBackendJob(...args)
@@ -155,6 +159,14 @@ describe('/api/cron/backend-jobs route', () => {
       status: 'succeeded',
       summary: { processed: 1, settled: 1, failed: 0, failures: [] },
     });
+    mocks.runSearchDictionaryBackendJob.mockReset();
+    mocks.runSearchDictionaryBackendJob.mockResolvedValue({
+      success: true,
+      job: 'search-dictionary',
+      route: '/api/cron/search-dictionary',
+      status: 'succeeded',
+      summary: { added: 1, removed: 0 },
+    });
     mocks.runWorkflowRunStepsBackendJob.mockReset();
     mocks.runWorkflowRunStepsBackendJob.mockResolvedValue({
       success: true,
@@ -189,6 +201,7 @@ describe('/api/cron/backend-jobs route', () => {
     expect(mocks.runMobilePushReceiptsBackendJob).not.toHaveBeenCalled();
     expect(mocks.runReferralRewardReconciliationBackendJob).not.toHaveBeenCalled();
     expect(mocks.runKieAccountBalanceBackendJob).not.toHaveBeenCalled();
+    expect(mocks.runSearchDictionaryBackendJob).not.toHaveBeenCalled();
   });
 
   it('runs every due logical backend job on the top-of-hour scheduler tick', async () => {
@@ -226,6 +239,11 @@ describe('/api/cron/backend-jobs route', () => {
       ...expectedOptions,
       requestId: 'iad1::scheduler-1:feed-embeddings',
     });
+    // The search dictionary is rebuilt once an hour, on the :00 tick.
+    expect(mocks.runSearchDictionaryBackendJob).toHaveBeenCalledWith({
+      ...expectedOptions,
+      requestId: 'iad1::scheduler-1:search-dictionary',
+    });
     // The Kie credit balance is read once an hour, on the :10 tick.
     expect(mocks.runKieAccountBalanceBackendJob).not.toHaveBeenCalled();
     // F14: both are dedicated crons now. Vercel invokes their routes directly,
@@ -236,7 +254,7 @@ describe('/api/cron/backend-jobs route', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       scheduler: '/api/cron/backend-jobs',
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-embeddings', 'mobile-push-receipts', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-embeddings', 'mobile-push-receipts', 'search-dictionary', 'workflow-run-steps'],
     });
   });
 
@@ -319,6 +337,7 @@ describe('/api/cron/backend-jobs route', () => {
         expect.objectContaining({ job: 'backend-alert-delivery', status: 'skipped' }),
         expect.objectContaining({ job: 'feed-embeddings', status: 'skipped' }),
         expect.objectContaining({ job: 'mobile-push-receipts', status: 'succeeded' }),
+        expect.objectContaining({ job: 'search-dictionary', status: 'succeeded' }),
         expect.objectContaining({ job: 'workflow-run-steps', status: 'succeeded' }),
       ],
     });
@@ -428,6 +447,7 @@ describe('/api/cron/backend-jobs route', () => {
         expect.objectContaining({ status: 'skipped' }),
         expect.objectContaining({ job: 'feed-embeddings', status: 'skipped' }),
         expect.objectContaining({ job: 'mobile-push-receipts', status: 'failed' }),
+        expect.objectContaining({ job: 'search-dictionary', status: 'succeeded' }),
         expect.objectContaining({ job: 'workflow-run-steps', status: 'skipped' }),
       ],
     });

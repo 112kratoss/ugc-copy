@@ -70,6 +70,7 @@ describe('search recall migration', () => {
       'search_prefix_tsquery(regconfig, text)',
       'search_query_tsquery(text, boolean)',
       'search_corrected_query(text)',
+      'rebuild_search_terms()',
     ]) {
       expect(migration).toContain(`REVOKE ALL ON FUNCTION public.${signature} FROM PUBLIC, anon, authenticated;`);
       expect(migration).toContain(`GRANT EXECUTE ON FUNCTION public.${signature} TO service_role;`);
@@ -79,7 +80,17 @@ describe('search recall migration', () => {
   it('adds the creation’s model and every Made with name to the document', () => {
     const projection = functionDefinition(migration, 'refresh_post_search_documents');
     expect(projection).toContain('LEFT JOIN public.generations AS generations\n    ON generations.id = posts.generation_id');
-    expect(projection).toContain('SELECT lower(btrim(generations.model)) AS name');
+    // As public reads name it (shownGenerationModel, src/lib/template-result.ts):
+    // a template result's model is its author's and is never given out.
+    expect(projection).toContain(
+      '          SELECT CASE\n'
+        + '            WHEN generations.template_run_id IS NOT NULL OR generations.template_run_step_id IS NOT NULL\n'
+        + "              THEN 'template-workflow'\n"
+        + '            ELSE lower(btrim(generations.model))\n'
+        + '          END AS name',
+    );
+    // The only read of the creation's model.
+    expect(projection.split('generations.model')).toHaveLength(2);
     for (const column of ['tool_label', 'tool_slug', 'model_label', 'model_slug']) {
       expect(projection).toContain(`lower(btrim(tools.${column}))`);
     }
@@ -150,13 +161,21 @@ describe('search recall migration', () => {
     expect(migration).toContain('ALTER TABLE public.search_terms ENABLE ROW LEVEL SECURITY;');
     expect(migration).toContain('REVOKE ALL ON TABLE public.search_terms FROM PUBLIC, anon, authenticated;');
 
-    const { definition } = newestDefinition('refresh_post_search_documents');
-    const fill = definition.slice(definition.indexOf('INSERT INTO public.search_terms (term)'));
-    expect(fill).toContain('WHERE documents.post_id = ANY (p_post_ids)');
+    // No post save writes the dictionary: two saves adding the same new words
+    // in different statements could wait on each other in a ring.
+    expect(newestDefinition('refresh_post_search_documents').definition).not.toContain('search_terms');
+
+    // One job makes it exactly the words shown now, adding and removing.
+    const rebuild = functionDefinition(migration, 'rebuild_search_terms');
+    expect(rebuild).toContain('SECURITY DEFINER');
+    expect(rebuild).toContain("SET search_path = ''");
+    expect(rebuild).toContain("IF NOT pg_try_advisory_xact_lock(hashtext('public.rebuild_search_terms')) THEN");
+    expect(rebuild).toContain('FROM public.post_search_documents AS documents');
     // A labelled post's words never become a correction.
-    expect(fill).toContain('AND posts.is_nsfw = false');
-    // In order, so two projections adding the same words cannot deadlock.
-    expect(fill).toContain('ORDER BY words.lexeme\n  ON CONFLICT (term) DO NOTHING;');
+    expect(rebuild).toContain('WHERE posts.is_nsfw = false');
+    expect(rebuild).toContain("AND words.lexeme ~ '^[[:alpha:]]{4,40}$'");
+    expect(rebuild).toContain('DELETE FROM public.search_terms AS terms\n    WHERE NOT EXISTS (SELECT 1 FROM shown WHERE shown.term = terms.term)');
+    expect(rebuild).toContain('ON CONFLICT (term) DO NOTHING');
   });
 
   it('corrects only a word that is letters, starts no known word and has a near neighbour', () => {
@@ -194,7 +213,10 @@ describe('search recall migration', () => {
     expect(definition).not.toContain('word_similarity');
     // The keyset and the limits of 20260827110000.
     expect(definition).toContain('ORDER BY scored.search_score DESC, scored.post_id ASC');
-    expect(definition).toContain('Post search query must contain between 3 and 100 characters');
+    // A query outside the limits finds nothing: the route refuses one first,
+    // and a character the two count differently must not be a 500.
+    expect(definition).toContain('IF char_length(v_query) < 3 OR char_length(v_query) > 100 THEN\n    RETURN;\n  END IF;');
+    expect(definition).not.toContain('Post search query must contain');
     expect(definition).toContain('Post search limit must be between 1 and 25');
     // Set again for a corrected query.
     expect(definition.split(String.raw`v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_');`)).toHaveLength(3);
@@ -209,7 +231,8 @@ describe('search recall migration', () => {
     expect(definition).toContain('OR v_query OPERATOR(extensions.<%) documents.username_normalized');
     expect(definition).toContain('OR v_query OPERATOR(extensions.<%) documents.display_name_normalized');
     expect(definition).toContain('ORDER BY scored.search_score DESC, scored.creator_user_id ASC');
-    expect(definition).toContain('Creator search query must contain between 2 and 100 characters');
+    expect(definition).toContain('IF char_length(v_query) < 2 OR char_length(v_query) > 100 THEN\n    RETURN;\n  END IF;');
+    expect(definition).not.toContain('Creator search query must contain');
     expect(definition).not.toContain('plainto_tsquery');
   });
 
@@ -233,12 +256,19 @@ describe('search recall migration', () => {
     const statements = migration.replace(/^--.*$/gm, '').trim();
     expect(statements.startsWith("BEGIN;\nSET LOCAL lock_timeout = '5s';")).toBe(true);
     expect(statements.endsWith('COMMIT;')).toBe(true);
-    expect(migration.indexOf('LOCK TABLE public.posts IN SHARE ROW EXCLUSIVE MODE;'))
-      .toBeLessThan(migration.indexOf('LOCK TABLE public.post_source_tools IN SHARE ROW EXCLUSIVE MODE;'));
+    // Made with first, as its save takes them; then posts and the recipes, as
+    // 20261101124828 took them. The recipes are locked because their trigger
+    // projects the same documents the last statement does.
+    const locks = ['post_source_tools', 'posts', 'post_resource_bundles']
+      .map((table) => migration.indexOf(`LOCK TABLE public.${table} IN SHARE ROW EXCLUSIVE MODE;`));
+    expect(locks.every((position) => position > 0)).toBe(true);
+    expect(locks).toEqual([...locks].sort((left, right) => left - right));
     // DROP TRIGGER takes ACCESS EXCLUSIVE, which stops the feed's reads of posts.
     expect(statements).not.toMatch(/DROP\s+TRIGGER/i);
     const backfill = migration.lastIndexOf('SELECT public.refresh_post_search_documents(ARRAY(');
     expect(backfill).toBeGreaterThan(migration.lastIndexOf('$function$;'));
-    expect(backfill).toBeLessThan(migration.lastIndexOf('COMMIT;'));
+    const dictionary = migration.lastIndexOf('SELECT * FROM public.rebuild_search_terms();');
+    expect(dictionary).toBeGreaterThan(backfill);
+    expect(dictionary).toBeLessThan(migration.lastIndexOf('COMMIT;'));
   });
 });

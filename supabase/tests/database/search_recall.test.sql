@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(35);
+select plan(48);
 
 -- 5ea0…01 creates the posts; 5ea0…02 is another creator with nothing posted.
 insert into auth.users (id, email, aud, role, created_at, raw_app_meta_data, raw_user_meta_data)
@@ -73,6 +73,70 @@ insert into public.posts (
     false, now(), now()
   );
 
+-- …16 is a template's result: its model is the template author's, and every
+-- public read names it 'template-workflow' (src/lib/template-result.ts).
+insert into public.templates (id, name, creator_user_id, status, is_active)
+values ('5ea30000-0000-4000-8000-000000000001'::uuid, 'Search recall fixture',
+        '5ea00000-0000-4000-8000-000000000002'::uuid, 'draft', true);
+
+insert into public.template_runs (
+  id, template_id, user_id, graph_snapshot, graph_hash, input_manifest,
+  input_storage_paths, output_node_id, output_kind, status,
+  estimated_total_credits, estimated_remaining_credits
+) values (
+  '5ea40000-0000-4000-8000-000000000001'::uuid, '5ea30000-0000-4000-8000-000000000001'::uuid,
+  '5ea00000-0000-4000-8000-000000000001'::uuid, '{"version":1,"nodes":[],"edges":[]}'::jsonb,
+  repeat('a', 64), '[]'::jsonb, '{}'::jsonb, 'output', 'image', 'collecting_inputs', 10, 10
+);
+
+insert into public.generations (id, user_id, model, status, is_public, template_run_id)
+values ('5ea10000-0000-4000-8000-000000000005'::uuid, '5ea00000-0000-4000-8000-000000000001'::uuid,
+        'kling-2.1-master', 'succeeded', true, '5ea40000-0000-4000-8000-000000000001'::uuid);
+
+-- …17 holds 'portrait' too, so a corrected query has a second page. …18 is
+-- sold: its caption is the saved setup and its prompt the recipe's, and
+-- neither is public.
+insert into public.posts (
+  id, user_id, visibility, category, source_kind, post_format, review_status,
+  title, body, prompt, source_tool, source_tool_slug, generation_id, showcase_asset_path,
+  is_nsfw, created_at, updated_at
+) values
+  (
+    '5ea20000-0000-4000-8000-000000000016'::uuid, '5ea00000-0000-4000-8000-000000000001'::uuid,
+    'public', 'image', 'magicbooklet', 'media', 'visible',
+    'Garden walk at noon', 'Hedges and gravel', null, 'Magicbooklet', 'magicbooklet',
+    '5ea10000-0000-4000-8000-000000000005'::uuid, 'showcase/search-recall-16.png',
+    false, now(), now()
+  ),
+  (
+    '5ea20000-0000-4000-8000-000000000017'::uuid, '5ea00000-0000-4000-8000-000000000001'::uuid,
+    'public', 'image', 'external', 'media', 'visible',
+    'Portrait in window light', 'A quiet face', null, 'Midjourney', 'midjourney',
+    null, 'showcase/search-recall-17.png',
+    false, now(), now()
+  ),
+  (
+    '5ea20000-0000-4000-8000-000000000018'::uuid, '5ea00000-0000-4000-8000-000000000001'::uuid,
+    'public', 'image', 'external', 'media', 'visible',
+    'Tarn study', E'Saved generation setup\nGrade: tarnwhistle', 'quokkaprompt for buyers', 'Midjourney', 'midjourney',
+    null, 'showcase/search-recall-18.png',
+    false, now(), now()
+  );
+
+insert into public.post_resource_bundles (
+  id, post_id, owner_user_id, access_mode, status, title, summary, preview_text,
+  attachments, allow_remix, resource_items, resource_sections,
+  price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at
+) values (
+  '5ea50000-0000-4000-8000-000000000018'::uuid, '5ea20000-0000-4000-8000-000000000018'::uuid,
+  '5ea00000-0000-4000-8000-000000000001'::uuid, 'paid', 'published', 'Tarn recipe',
+  'Three steps to the finished picture', 'A preview long enough to pass the marketplace quality gate.',
+  '[]'::jsonb, false,
+  jsonb_build_array(jsonb_build_object('id', 'item-1', 'type', 'prompt', 'title', 'Prompt',
+                                       'textContent', 'The prompt a buyer unlocks for this picture')),
+  '[]'::jsonb, 300, 0, 0, now(), now()
+);
+
 create function pg_temp.finds(p_query text, p_post_suffix text) returns boolean
 language sql as $$
   select exists (
@@ -89,6 +153,22 @@ language sql as $$
   );
 $$;
 
+-- Every input a person can type must be answered, never raised on.
+create function pg_temp.survives(p_search text) returns void
+language plpgsql as $$
+declare
+  v_input text;
+begin
+  foreach v_input in array array[
+    '''''''', 'it''s', E'\\', E'a\\b', ':*', 'foo:*', '&|!()', 'a & b | !c', '<->', '"quoted"',
+    U&'\+01F600\+01F600\+01F600', 'the and of', '...!!!', '-3.1', 'foo-bar baz', '%_%',
+    repeat('x', 100), repeat('ab ', 33), 'a', ''
+  ] loop
+    execute format('select count(*) from public.%I(%L, null, null, null, 25)', p_search, v_input);
+  end loop;
+end;
+$$;
+
 -- ─── A creation is found by its model ───────────────────────────────────────
 
 select ok(pg_temp.finds('veo', '11'), 'a creation is found by the first word of its model');
@@ -103,6 +183,27 @@ select ok(pg_temp.finds('nano-ban', '12'), 'by a hyphenated model id while it is
 select ok(not pg_temp.finds('veo', '14'), 'a labelled creation is not found by its model');
 select ok(not pg_temp.finds('veo', '12'), 'a model finds only the posts made with it');
 select ok(not pg_temp.finds('veo', '13'), 'and none made elsewhere');
+select ok(not pg_temp.finds('kling', '16'), 'a template''s result is not found by its author''s model');
+select ok(pg_temp.finds('template workflow', '16'), 'it is found by the name public reads give that model');
+
+-- ─── The dictionary ─────────────────────────────────────────────────────────
+
+select ok(
+  (select added > 0 and removed = 0 from public.rebuild_search_terms()),
+  'a rebuild adds the words the posts show'
+);
+select is(
+  (select added + removed from public.rebuild_search_terms()),
+  0,
+  'a second rebuild finds nothing to do'
+);
+select ok(
+  not exists (
+    select 1 from public.search_terms
+    where term in ('quokkaprompt', 'tarnwhistle', 'kling', 'master')
+  ),
+  'the dictionary holds no word of a sold recipe''s prompt or setup, nor of a template author''s model'
+);
 
 -- ─── Words match as people type them ────────────────────────────────────────
 
@@ -126,6 +227,39 @@ select ok(
 );
 select ok(not pg_temp.finds('portrait', '11'), 'a word finds only the posts that hold it');
 select ok(not pg_temp.finds('zebra crossing', '12'), 'and words no post holds find nothing');
+
+select is(
+  (
+    with first_page as (
+      select * from public.search_public_posts('portriat', null, null, null, 1)
+    ), second_page as (
+      select next_page.*
+      from first_page
+      cross join lateral public.search_public_posts(
+        'portriat', null, first_page.search_score, first_page.post_id, 1
+      ) as next_page
+    )
+    select array(
+      select post_id from (select post_id from first_page union all select post_id from second_page) as pages
+      order by post_id
+    )
+  ),
+  array['5ea20000-0000-4000-8000-000000000012', '5ea20000-0000-4000-8000-000000000017']::uuid[],
+  'the pages of a corrected query hold each post once'
+);
+
+select lives_ok($$select pg_temp.survives('search_public_posts')$$, 'post search answers every input a person can type');
+select lives_ok($$select pg_temp.survives('search_public_creators')$$, 'creator search does too');
+select is(
+  (select count(*)::integer from public.search_public_posts('ab', null, null, null, 25)),
+  0,
+  'a post query under three characters finds nothing, and does not raise'
+);
+select is(
+  (select count(*)::integer from public.search_public_creators('m', null, null, null, 25)),
+  0,
+  'a creator query under two characters finds nothing, and does not raise'
+);
 
 select is(
   (select post_id from public.search_public_posts('studio portrait', null, null, null, 25) limit 1),
@@ -173,6 +307,29 @@ select ok(pg_temp.finds_creator('okaf'), 'a creator is found by a later word of 
 select ok(pg_temp.finds_creator('mira oka'), 'by their name with its last word still being typed');
 select ok(pg_temp.finds_creator('mirra okafor'), 'by their name misspelt');
 select ok(not pg_temp.finds_creator('zebra'), 'and not by a word they do not have');
+
+-- ─── A deleted post takes its Made with, its document and its words ─────────
+
+insert into public.post_source_tools (post_id, tool_label, tool_slug, model_label, model_slug, sort_order)
+values ('5ea20000-0000-4000-8000-000000000015'::uuid, 'Magicbooklet', 'magicbooklet', 'Seedream 4.5', 'seedream-4.5', 0);
+
+select lives_ok(
+  $$delete from public.posts where id = '5ea20000-0000-4000-8000-000000000015'::uuid$$,
+  'a post with Made with rows is deleted, its rows'' trigger finding it gone'
+);
+-- The rebuild and the read of what it left are two statements: a statement
+-- does not see what a function it calls has just removed.
+select ok(
+  (select removed > 0 from public.rebuild_search_terms()),
+  'the next rebuild removes words'
+);
+select ok(
+  not exists (select 1 from public.post_search_documents
+              where post_id = '5ea20000-0000-4000-8000-000000000015'::uuid)
+    and not exists (select 1 from public.search_terms where term = 'orchard')
+    and exists (select 1 from public.search_terms where term = 'quiet'),
+  'no document is left for it, the words only it showed are gone, and a word another post shows stays'
+);
 
 select * from finish();
 rollback;

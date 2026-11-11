@@ -28,6 +28,7 @@ import { hasFeedEmbeddingWork, runFeedEmbeddingJob } from '@/lib/feed-embeddings
 import { maintainFeedPersonalization } from '@/lib/feed-maintenance';
 import { pruneOperationalBackendData } from '@/lib/operational-data-retention';
 import { sweepRecipeFileCopies } from '@/lib/recipe-copy-sweep';
+import { rebuildSearchDictionary } from '@/lib/search-dictionary';
 import {
   GenerationCompletionBatchError,
   hasDueGenerationCompletionJobs,
@@ -630,6 +631,29 @@ export function runRecipeCopySweepBackendJob(options: {
     // The candidates are the run's own read; a run that finds none reports zeros.
     hasWork: async () => true,
     run: (client, context) => sweepRecipeFileCopies(client, { now: new Date(context.startedAtMs) }),
+  });
+}
+
+export function runSearchDictionaryBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['search-dictionary'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'search_dictionary_started',
+      skippedNoWork: 'search_dictionary_skipped_no_work',
+      skippedLocked: 'search_dictionary_skipped',
+      completed: 'search_dictionary_completed',
+      failed: 'search_dictionary_failed',
+    },
+    // One bounded SQL call that reports zeros when nothing changed.
+    hasWork: async () => true,
+    run: (client) => rebuildSearchDictionary(client),
   });
 }
 
