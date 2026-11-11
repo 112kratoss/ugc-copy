@@ -7,6 +7,8 @@ import { REFERRAL_CLAIM_REASON_PATTERN, REFERRAL_CLAIM_STATUS_PARAM } from '@/li
 import { logBackendWarning } from '@/lib/backend-logger';
 import { getClientNetworkKey } from '@/lib/client-network-key';
 
+import { normalizeInviteShortCode } from '../../ugc-mobile/lib/invite-share-link/invite-typed-code';
+
 export const REFERRAL_VISIT_COOKIE_NAME = 'mb_referral_visit';
 export const REFERRAL_VISIT_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 export const DEFAULT_REFERRAL_DESTINATION = '/login?mode=signup&next=%2Fcreate';
@@ -45,6 +47,15 @@ export function normalizeReferralCode(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toLowerCase();
   return REFERRAL_CODE_PATTERN.test(normalized) ? normalized : null;
+}
+
+/**
+ * A code someone typed into "Have an invite code?": the six-character code
+ * (upper-cased) or a link code (lower-cased). The sign-up pages read pasted
+ * links themselves (`readTypedInviteCode`), so only a code reaches here.
+ */
+export function normalizeTypedReferralCode(value: unknown): string | null {
+  return normalizeInviteShortCode(value) ?? normalizeReferralCode(value);
 }
 
 export function normalizeReferralVisitToken(value: unknown): string | null {

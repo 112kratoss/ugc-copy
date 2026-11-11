@@ -27,6 +27,7 @@ import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydra
 import { useWelcomePromise } from '@/lib/welcome-promise';
 import { settlePendingSharedInviteVisit } from '@/lib/invite-share-landing';
 
+import InviteCodeEntry from './InviteCodeEntry';
 import { SIGN_IN_PILL, SIGN_IN_PILLS, SignInProviderButtons, type SignInInFlight } from './sign-in-parts';
 
 const SUPPORT_MAILTO = `mailto:${siteConfig.supportEmail}`;
@@ -55,6 +56,8 @@ export interface LoginClientProps {
     welcomeCredits: number | null;
     /** The moving wall, drawn on the server (`SignInWall`); left out in unit tests. */
     wall?: ReactNode;
+    /** Whether this browser already keeps an invite (its visit cookie), for the invite-code line. */
+    inviteHeld?: boolean;
 }
 
 /**
@@ -78,6 +81,7 @@ export default function LoginClient({
     returnRequested = false,
     welcomeCredits,
     wall,
+    inviteHeld = false,
 }: LoginClientProps) {
     const router = useRouter();
     const [half, setHalf] = useState<SignInHalf>(initialHalf);
@@ -332,6 +336,9 @@ export default function LoginClient({
                         {returnLine('centre')}
                         {!onEmail ? errorAlert : null}
                         <SignInProviderButtons inFlight={inFlight} onContinue={(provider) => void continueWith(provider)} describedBy="sign-in-agreement" />
+                        {/* Before the account is made, as a claim needs: a typed code is this
+                            browser's invite from the moment it is saved. */}
+                        <InviteCodeEntry disabled={inFlight !== null} inviteHeld={inviteHeld} />
                         {/* Email makes no new accounts, so it is a way back into one, not a third
                             button. A link, so before the page's script runs it opens the form as a page. */}
                         <Link

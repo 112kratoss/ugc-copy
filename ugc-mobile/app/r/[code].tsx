@@ -70,7 +70,7 @@ export default function ReferralLandingScreen() {
           return;
         }
 
-        const claim = await claimPendingReferral(api);
+        const claim = await claimPendingReferral(api, { userId: user.id });
         if (cancelled) return;
         if (claim?.claimed) {
           setState({ status: 'claimed', code: captured.pending.code, held: claim.held === true });

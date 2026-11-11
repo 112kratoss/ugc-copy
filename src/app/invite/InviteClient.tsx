@@ -27,6 +27,11 @@ import {
 } from '@/components/DesignSystem';
 import SkeletonLoader from '@/components/SkeletonLoader';
 
+import {
+  inviteCodeShareLine,
+  normalizeInviteShortCode,
+} from '../../../ugc-mobile/lib/invite-share-link/invite-typed-code';
+
 export const REFERRAL_DISCLOSURE = 'Referral link — I may earn bonus credits if you top up.';
 
 export interface ReferralProgramSummary {
@@ -36,6 +41,8 @@ export interface ReferralProgramSummary {
     attributionWindowDays: number;
   };
   code: string | null;
+  /** The six-character code a friend can type at sign-up (`K7P2QX`). */
+  shortCode: string | null;
   shareUrl: string | null;
   stats: {
     visits: number;
@@ -53,7 +60,7 @@ export interface ReferralProgramSummary {
   }>;
 }
 
-type ActionTarget = 'share' | 'copy';
+type ActionTarget = 'share' | 'copy' | 'code';
 type ActionStatus = 'idle' | 'loading' | 'copied' | 'shared' | 'error';
 
 interface ActionFeedback {
@@ -104,6 +111,7 @@ function normalizeReferralSummary(value: unknown): ReferralProgramSummary {
       attributionWindowDays,
     },
     code: typeof input.code === 'string' && input.code.trim() ? input.code.trim() : null,
+    shortCode: normalizeInviteShortCode(input.shortCode),
     shareUrl: typeof input.shareUrl === 'string' && input.shareUrl.trim() ? input.shareUrl.trim() : null,
     stats: {
       visits: toNonNegativeNumber(statsInput.visits),
@@ -128,12 +136,13 @@ function normalizeReferralSummary(value: unknown): ReferralProgramSummary {
   };
 }
 
-export function buildReferralShareText(inviteePercent: number) {
-  return `Create with me on Magic Booklet and get ${percentFormatter.format(inviteePercent)}% bonus credits on your first top-up.\n\n${REFERRAL_DISCLOSURE}`;
+export function buildReferralShareText(inviteePercent: number, shortCode?: string | null) {
+  const codeLine = inviteCodeShareLine(shortCode);
+  return `Create with me on Magic Booklet and get ${percentFormatter.format(inviteePercent)}% bonus credits on your first top-up.${codeLine ? `\n${codeLine}` : ''}\n\n${REFERRAL_DISCLOSURE}`;
 }
 
-export function buildReferralCopyText(shareUrl: string, inviteePercent: number) {
-  return `${buildReferralShareText(inviteePercent)}\n${shareUrl}`;
+export function buildReferralCopyText(shareUrl: string, inviteePercent: number, shortCode?: string | null) {
+  return `${buildReferralShareText(inviteePercent, shortCode)}\n${shareUrl}`;
 }
 
 function getErrorMessage(payload: unknown, fallback: string) {
@@ -283,7 +292,7 @@ export default function InviteClient() {
       }
 
       const link = payload && typeof payload === 'object'
-        ? payload as { code?: unknown; shareUrl?: unknown }
+        ? payload as { code?: unknown; shortCode?: unknown; shareUrl?: unknown }
         : {};
       const code = link.code;
       const shareUrl = link.shareUrl;
@@ -293,6 +302,7 @@ export default function InviteClient() {
       setSummary((current) => current ? {
         ...current,
         code,
+        shortCode: normalizeInviteShortCode(link.shortCode),
         shareUrl,
       } : current);
     } catch (linkError) {
@@ -314,7 +324,7 @@ export default function InviteClient() {
     }
 
     await navigator.clipboard.writeText(
-      buildReferralCopyText(summary.shareUrl, summary.program.inviteeFirstPurchasePercent)
+      buildReferralCopyText(summary.shareUrl, summary.program.inviteeFirstPurchasePercent, summary.shortCode)
     );
     finishAction({
       target,
@@ -338,11 +348,31 @@ export default function InviteClient() {
     }
   }, [action.status, copyInvite, finishAction]);
 
+  const handleCopyCode = useCallback(async () => {
+    const shortCode = summary?.shortCode;
+    if (!shortCode || action.status === 'loading') return;
+    if (!navigator.clipboard?.writeText) {
+      finishAction({
+        target: 'code',
+        status: 'error',
+        message: 'Copying is not supported in this browser. Select the code and copy it manually.',
+      });
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(shortCode);
+      finishAction({ target: 'code', status: 'copied', message: 'Invite code copied.' });
+    } catch (copyError) {
+      console.error('Failed to copy referral code:', copyError);
+      finishAction({ target: 'code', status: 'error', message: 'Could not copy your code. Try again.' });
+    }
+  }, [action.status, finishAction, summary?.shortCode]);
+
   const handleShare = useCallback(async () => {
     if (!summary?.shareUrl || action.status === 'loading') return;
 
     setAction({ target: 'share', status: 'loading', message: 'Opening your share options.' });
-    const text = buildReferralShareText(summary.program.inviteeFirstPurchasePercent);
+    const text = buildReferralShareText(summary.program.inviteeFirstPurchasePercent, summary.shortCode);
 
     if (typeof navigator.share === 'function') {
       try {
@@ -456,7 +486,7 @@ export default function InviteClient() {
                     Share once. Earn when friends top up.
                   </h2>
                   <Text variant="bodySm" className="mt-3 max-w-2xl">
-                    A friend must join through your link within {numberFormatter.format(summary.program.attributionWindowDays)} days. Rewards are added after a purchase is verified.
+                    A friend must join through your link, or with your code, within {numberFormatter.format(summary.program.attributionWindowDays)} days. Rewards are added after a purchase is verified.
                   </Text>
 
                   {summary.shareUrl ? (
@@ -472,12 +502,40 @@ export default function InviteClient() {
                           onFocus={(event) => event.currentTarget.select()}
                           className="min-w-0 flex-1 bg-transparent py-3 font-mono text-sm text-zinc-200 outline-none"
                         />
-                        {summary.code ? (
-                          <span className="hidden shrink-0 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 font-mono text-[11px] font-bold text-zinc-400 sm:inline">
-                            {summary.code}
-                          </span>
-                        ) : null}
                       </div>
+
+                      {summary.shortCode ? (
+                        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3">
+                          <div className="min-w-0 flex-1">
+                            <p id="invite-code-label" className="text-xs font-bold uppercase tracking-[0.16em] text-[var(--ui-text-faint)]">
+                              Invite code
+                            </p>
+                            <p
+                              aria-labelledby="invite-code-label"
+                              className="mt-1 select-all font-mono text-2xl font-extrabold tracking-[0.28em] text-[var(--ui-text-primary)]"
+                            >
+                              {summary.shortCode}
+                            </p>
+                            <p className="mt-1 text-xs leading-5 text-[var(--ui-text-faint)]">
+                              Friends can type it when they create their account.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void handleCopyCode()}
+                            disabled={busy}
+                            aria-label={`Copy invite code ${summary.shortCode}`}
+                            className="ui-focus-ring inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-3)] active:scale-[0.985] disabled:cursor-wait disabled:opacity-60"
+                          >
+                            {action.target === 'code' && action.status === 'copied' ? (
+                              <Check className="h-4 w-4 text-emerald-300" aria-hidden />
+                            ) : (
+                              <Copy className="h-4 w-4" aria-hidden />
+                            )}
+                            {action.target === 'code' && action.status === 'copied' ? 'Copied' : 'Copy code'}
+                          </button>
+                        </div>
+                      ) : null}
 
                       <div className="mt-4 grid gap-3 sm:grid-cols-2">
                         <button
@@ -553,8 +611,8 @@ export default function InviteClient() {
                 <Kicker>How it works</Kicker>
                 <ol className="mt-5 space-y-5">
                   {[
-                    { icon: Share2, title: 'Share your link', body: 'Send your personal invite anywhere you talk with creators. Posts and profiles you share carry it too.' },
-                    { icon: UserPlus, title: 'A new friend joins', body: `They create an account through your link within ${numberFormatter.format(summary.program.attributionWindowDays)} days.` },
+                    { icon: Share2, title: 'Share your invite', body: 'Send your link or your code anywhere you talk with creators. Posts and profiles you share carry it too.' },
+                    { icon: UserPlus, title: 'A new friend joins', body: `They create an account through your link, or type your code as they sign up, within ${numberFormatter.format(summary.program.attributionWindowDays)} days.` },
                     { icon: Sparkles, title: 'Both accounts earn', body: 'Verified top-ups add bonus creation credits automatically.' },
                   ].map((step, index) => (
                     <li key={step.title} className="flex gap-3">
