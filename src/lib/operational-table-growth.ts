@@ -88,6 +88,9 @@ export const OPERATIONAL_TABLE_ROW_BUDGETS: Record<string, { warning: number; de
   // good until a pruning migration (the runbook's retention follow-up). A backstop against a
   // runaway agent, sized far above any steady state today.
   agent_tool_calls: { warning: 200_000, degraded: 1_000_000 },
+  // The anonymous search log: one row per first-page search answer, kept 90 days. A backstop
+  // against a runaway client, not a traffic measure: typing steps log one row each.
+  search_query_events: { warning: 500_000, degraded: 2_000_000 },
 };
 
 const DEFAULT_BUDGET = { warning: 100_000, degraded: 500_000 };

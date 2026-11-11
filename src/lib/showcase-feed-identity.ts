@@ -27,7 +27,7 @@ function getFeedIdentitySalt() {
   return 'local-feed-identity-only';
 }
 
-function hashFeedIdentity(namespace: string, value: string) {
+export function hashFeedIdentity(namespace: string, value: string) {
   return createHash('sha256')
     .update(`${getFeedIdentitySalt()}:${namespace}:${value}`)
     .digest('hex');

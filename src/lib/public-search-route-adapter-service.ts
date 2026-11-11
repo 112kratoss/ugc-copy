@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import {
   API_CACHE_CONTROL,
@@ -14,7 +14,8 @@ import {
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
-import { logBackendRouteError } from '@/lib/backend-logger';
+import { logBackendEvent, logBackendRouteError } from '@/lib/backend-logger';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
 import {
@@ -27,6 +28,7 @@ import {
   parsePublicSearchType,
   publicSearchQueryLength,
 } from '@/lib/public-search';
+import { recordSearchAnswer } from '@/lib/public-search-query-log';
 import { searchPublicContent } from '@/lib/public-search-service';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
@@ -38,8 +40,24 @@ type PublicSearchRouteDependencies = {
   getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   searchPublicContent?: typeof searchPublicContent;
   logError?: typeof logBackendRouteError;
+  /** The search log's failure line. */
+  logEvent?: typeof logBackendEvent;
+  /** Where the search log's insert goes once the answer is out; Next's `after` by default. */
+  runAfterResponse?: RunAfterResponse;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
+
+/**
+ * Next's `after`, which takes a task only inside a request. Outside one (a test, a script) it
+ * throws, and the task runs at once instead, in front of nothing.
+ */
+function runAfterResponseByDefault(task: () => Promise<unknown>): void {
+  try {
+    after(task);
+  } catch {
+    void task();
+  }
+}
 
 function resolveDependencies(dependencies?: PublicSearchRouteDependencies) {
   return {
@@ -49,6 +67,8 @@ function resolveDependencies(dependencies?: PublicSearchRouteDependencies) {
     getFeedNetworkKeyHash: dependencies?.getFeedNetworkKeyHash ?? getFeedNetworkKeyHash,
     searchPublicContent: dependencies?.searchPublicContent ?? searchPublicContent,
     logError: dependencies?.logError ?? logBackendRouteError,
+    logEvent: dependencies?.logEvent ?? logBackendEvent,
+    runAfterResponse: dependencies?.runAfterResponse ?? runAfterResponseByDefault,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };
 }
@@ -127,10 +147,11 @@ async function handlePublicSearchGET(
       );
     }
 
+    const viewerKey = actor.viewerUserId ?? dependencies.getFeedNetworkKeyHash(request);
     try {
       await dependencies.enforceBackendRateLimit(dependencies.createServiceClient(), {
         ...PUBLIC_SEARCH_READ_RATE_LIMIT,
-        key: actor.viewerUserId ?? dependencies.getFeedNetworkKeyHash(request),
+        key: viewerKey,
       });
     } catch (error) {
       if (error instanceof BackendRateLimitError) {
@@ -160,6 +181,19 @@ async function handlePublicSearchGET(
       headers: createApiResponseHeaders(request, API_CACHE_CONTROL.privateNoStore, {
         vary: ['Authorization', 'x-vercel-ip-country'],
       }),
+    });
+    // The anonymous search log: scheduled behind the answer, never awaited, never able to fail it.
+    recordSearchAnswer({
+      createClient: dependencies.createServiceClient,
+      runAfterResponse: dependencies.runAfterResponse,
+      logEvent: dependencies.logEvent,
+    }, {
+      hasCursor: cursor !== null,
+      normalizedQuery,
+      type,
+      viewerKey,
+      signedIn: actor.viewerUserId !== null,
+      response: responseBody,
     });
     if (process.env.SCALING_CERTIFICATION_TIMINGS === '1') {
       response.headers.set('Server-Timing', `public-search;dur=${(performance.now() - startedAt).toFixed(2)}`);
