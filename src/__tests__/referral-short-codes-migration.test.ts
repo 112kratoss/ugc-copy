@@ -40,13 +40,13 @@ describe('referral short codes migration', () => {
     expect(sql).toContain('CREATE UNIQUE INDEX referral_codes_short_code_key');
   });
 
-  it('fixes a short code once drawn, only after the backfill gave every row its first', () => {
+  it('fixes a short code once drawn by patching the guard in place, after the backfill', () => {
     const guard = sql.indexOf('OR NEW.short_code IS DISTINCT FROM OLD.short_code');
     expect(guard).toBeGreaterThan(sql.indexOf('ALTER COLUMN short_code SET NOT NULL'));
-    expect(sql).toContain('CREATE OR REPLACE FUNCTION public.prevent_referral_identity_mutation()');
-    // Still a plain trigger function, as in 20260712123000.
-    const body = sql.slice(sql.indexOf('CREATE OR REPLACE FUNCTION public.prevent_referral_identity_mutation()'), guard);
-    expect(body).not.toContain('SECURITY DEFINER');
+    expect(sql).toContain("pg_get_functiondef('public.prevent_referral_identity_mutation()'::regprocedure)");
+    // A restated body dropped 20261007174934's account-deletion rule and broke deleting an
+    // inviter (the Supabase API integration job on #766).
+    expect(sql).not.toContain('CREATE OR REPLACE FUNCTION public.prevent_referral_identity_mutation()');
   });
 
   it('makes a typed code that matches the kept invite the typed choice', () => {

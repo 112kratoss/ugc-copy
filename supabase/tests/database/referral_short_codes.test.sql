@@ -4,7 +4,7 @@
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path = public, extensions;
-SELECT plan(34);
+SELECT plan(35);
 
 -- ─── The column and its maker ───────────────────────────────────────────────
 
@@ -63,6 +63,10 @@ SELECT col_has_check('public', 'referral_codes', 'short_code', 'a code is held t
 SELECT ok(
   (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'referral_codes_short_code_check') LIKE '%[2-9A-HJ-NP-Z]{6}%',
   'the alphabet has no 0, O, 1 or I'
+);
+SELECT ok(
+  pg_get_functiondef('public.prevent_referral_identity_mutation()'::regprocedure) LIKE '%detached_user_id%',
+  'an account''s deletion may still detach its invite'
 );
 SELECT throws_ok(
   $$UPDATE public.referral_codes SET short_code = 'ABCDEF' WHERE user_id = 'c1000000-0000-4000-8000-0000000000a1'$$,

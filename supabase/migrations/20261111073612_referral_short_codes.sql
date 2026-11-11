@@ -73,23 +73,22 @@ ALTER TABLE public.referral_codes
   ALTER COLUMN short_code SET NOT NULL;
 
 -- Once drawn, a short code is as fixed as the link code: people write it down and say
--- it to friends. (Replaced after the backfill, which had to give every row its first.)
-CREATE OR REPLACE FUNCTION public.prevent_referral_identity_mutation()
-RETURNS trigger
-LANGUAGE plpgsql
-SET search_path = public, pg_temp
-AS $$
+-- it to friends. Patched in place, after the backfill that gave every row its first, as
+-- 20261007174934 patched it: a restated body would drop that migration's rule that lets
+-- an account's deletion detach its invite.
+DO $migration$
+DECLARE definition text; old_block text; new_block text;
 BEGIN
-  IF NEW.user_id IS DISTINCT FROM OLD.user_id
-     OR NEW.code IS DISTINCT FROM OLD.code
-     OR NEW.short_code IS DISTINCT FROM OLD.short_code
-     OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
-    RAISE EXCEPTION 'referral code identity is immutable';
+  SELECT pg_get_functiondef('public.prevent_referral_identity_mutation()'::regprocedure) INTO definition;
+  old_block := $old$OR NEW.code IS DISTINCT FROM OLD.code$old$;
+  new_block := $new$OR NEW.code IS DISTINCT FROM OLD.code
+     OR NEW.short_code IS DISTINCT FROM OLD.short_code$new$;
+  IF (length(definition) - length(replace(definition, old_block, ''))) / length(old_block) <> 1 THEN
+    RAISE EXCEPTION 'Expected one link-code check in prevent_referral_identity_mutation()';
   END IF;
-  NEW.updated_at := timezone('utc'::text, now());
-  RETURN NEW;
+  EXECUTE replace(definition, old_block, new_block);
 END;
-$$;
+$migration$;
 
 -- 2. A visit can come from a typed code --------------------------------------------------
 
