@@ -15,7 +15,7 @@ import { AccessibilityInfo, ActivityIndicator, Animated, Easing, Keyboard, Platf
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { EmailSignInForm, WorkspaceInput } from '@/components/email-sign-in-form';
-import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
+import { KeyboardAvoidingArea, useKeyboardShown } from '@/components/keyboard-aware';
 import { MediaWall } from '@/components/media-wall';
 import { BUTTON_MAX_WIDTH, SignInProviderButtons, SignInTerms } from '@/components/sign-in-parts';
 import { AppText, BrandLockup, IconButton } from '@/components/ui';
@@ -111,6 +111,10 @@ function SignInWallBody({
   const completed = useRef(false);
   const canceled = useRef(false);
   const lastMethod = useRef<SignInMethod | null>(null);
+  // The first half's scroll view, brought to its end when the invite-code field's keyboard
+  // comes up: iOS alone scrolls only as far as the caret, which left the field's lower edge
+  // and its Apply under the keyboard (iPhone 17 Pro simulator, 2026-11-11).
+  const choicesScroll = useRef<ScrollView | null>(null);
 
   useEffect(() => {
     void trackOnboardingEvent(api, 'screen_viewed', { step });
@@ -258,6 +262,7 @@ function SignInWallBody({
             keep it above the keyboard. */}
         <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
         <ScrollView
+          ref={choicesScroll}
           style={{ flex: 1 }}
           contentInsetAdjustmentBehavior="never"
           automaticallyAdjustKeyboardInsets
@@ -334,7 +339,10 @@ function SignInWallBody({
           />
 
           {/* Before the account is made, as a claim needs (owner, 2026-11-11). */}
-          <SignInInviteCode disabled={busy} />
+          <SignInInviteCode
+            disabled={busy}
+            onKeyboardShown={() => choicesScroll.current?.scrollToEnd({ animated: true })}
+          />
 
           {/* Email makes no new accounts, so it is a way back in for one, not a third button. */}
           <Pressable
@@ -398,7 +406,11 @@ function SignInWallBody({
  * which is what the claim after sign-up needs (`claimPendingReferral` in `lib/auth.tsx`); the
  * welcome card then says "Invite applied". Saved by the same rules as the web's field.
  */
-function SignInInviteCode({ disabled }: { disabled: boolean }) {
+function SignInInviteCode({ disabled, onKeyboardShown }: {
+  disabled: boolean;
+  /** The keyboard came up while the field is open: the page brings the field into view. */
+  onKeyboardShown: () => void;
+}) {
   const theme = useAppTheme();
   const { api } = useAuth();
   const [open, setOpen] = useState(false);
@@ -425,6 +437,8 @@ function SignInInviteCode({ disabled }: { disabled: boolean }) {
     };
   }, []);
 
+  useKeyboardShown(onKeyboardShown, open);
+
   const apply = async () => {
     if (saving || disabled) return;
     setSaving(true);
@@ -447,7 +461,7 @@ function SignInInviteCode({ disabled }: { disabled: boolean }) {
   const toggleLabel = saved || held ? 'Use a different invite code' : 'Have an invite code?';
 
   return (
-    <View style={{ width: '100%', maxWidth: BUTTON_MAX_WIDTH + 30, alignSelf: 'center', marginTop: 10, gap: 8 }}>
+    <View style={{ width: '100%', maxWidth: BUTTON_MAX_WIDTH + 30, alignSelf: 'center', marginTop: open ? 18 : 10, gap: 8 }}>
       {saved ? (
         <View accessibilityLiveRegion="polite" style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start', borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: mediaColors.mediaScrimStrong, paddingHorizontal: 14, paddingVertical: 10 }}>
           <AppText variant="caption" style={{ flex: 1, color: mediaColors.onMedia }}>{saved}</AppText>
