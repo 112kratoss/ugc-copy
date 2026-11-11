@@ -303,7 +303,8 @@ describe.skipIf(!connectionString || crashWorker)('canvas execution and billing 
     await admin.query("update public.workflow_run_step_jobs set next_attempt_at=now()-interval '1 second' where run_id=$1 and status='pending'", [runId]);
     return processWorkflowRunStepJobs({ supabase: client, lockedBy: randomUUID(), limit: 10, concurrency: 1 });
   }
-  const details = () => getWorkflowRunDetails({ supabase: ownerClient, userId, canvasId, runId });
+  // The routes read a run service-role, found only as the caller's.
+  const details = () => getWorkflowRunDetails({ supabase: client, userId, canvasId, runId });
   async function rows() {
     return (await admin.query('select id,prediction_id,status,cost,refunded from public.generations where user_id=$1 order by created_at,id', [userId])).rows as Array<{ id: string; prediction_id: string; status: string; cost: number; refunded: boolean }>;
   }
@@ -319,7 +320,7 @@ describe.skipIf(!connectionString || crashWorker)('canvas execution and billing 
   }
   async function approve() {
     const gate = (await details()).steps.find(step => step.node_id === approvalId)!;
-    return approveWorkflowRunStep({ ownerSupabase: ownerClient, mutationSupabase: client, userId, canvasId, runId, stepId: gate.id });
+    return approveWorkflowRunStep({ supabase: client, userId, canvasId, runId, stepId: gate.id });
   }
   async function reachApproval() {
     await start();

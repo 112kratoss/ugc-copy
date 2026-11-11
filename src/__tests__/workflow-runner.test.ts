@@ -139,6 +139,8 @@ type RunnerTestState = {
     graph_snapshot: WorkflowCanvasGraph | null;
   };
   graph: WorkflowCanvasGraph;
+  /** The canvas's owner, when it is not the run's. */
+  canvasUserId?: string;
   steps: WorkflowCanvasRunStepRecord[];
   generations: Array<{
     id: string;
@@ -388,7 +390,9 @@ function createSupabaseMock(state: RunnerTestState) {
                 return query;
               },
               async single() {
-                const matchesCanvas = filters.get('id') === state.run.canvas_id;
+                const matchesCanvas = filters.get('id') === state.run.canvas_id && (
+                  !filters.has('user_id') || filters.get('user_id') === (state.canvasUserId ?? state.run.user_id)
+                );
                 return matchesCanvas
                   ? { data: { graph: state.graph }, error: null }
                   : { data: null, error: { message: 'Workflow canvas not found.' } };
@@ -2095,14 +2099,166 @@ describe('workflow-runner recovery', () => {
     expect(resolveOwnedStoredMediaUrlMock).not.toHaveBeenCalled();
   });
 
+  // The run is read service-role, so the rule RLS held a client read to
+  // (workflow_parent_owned) is the code's: a run of the caller's on a canvas
+  // that is not theirs is not found.
+  it('does not find a run of the caller on a canvas someone else owns', async () => {
+    const state = createAwaitingApprovalState();
+    state.canvasUserId = 'user-2';
+    const supabase = createSupabaseMock(state);
+    const stepBefore = structuredClone(state.steps.find((step) => step.id === 'step-approval'));
+
+    const { approveWorkflowRunStep, getWorkflowRunDetails } = await import('@/lib/workflow-runner');
+    const owner = { userId: state.run.user_id, canvasId: state.run.canvas_id, runId: state.run.id };
+    await expect(getWorkflowRunDetails({ supabase: supabase as never, ...owner }))
+      .rejects.toThrow('Workflow run not found.');
+    await expect(approveWorkflowRunStep({ supabase: supabase as never, ...owner, stepId: 'step-approval' }))
+      .rejects.toThrow('Workflow run not found.');
+
+    expect(state.steps.find((step) => step.id === 'step-approval')).toEqual(stepBefore);
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  it('does not find another user\'s run on a canvas of the caller', async () => {
+    const state = createAwaitingApprovalState();
+    const caller = state.run.user_id;
+    state.canvasUserId = caller;
+    state.run.user_id = 'user-2';
+    const supabase = createSupabaseMock(state);
+
+    const { approveWorkflowRunStep, getWorkflowRunDetails } = await import('@/lib/workflow-runner');
+    const ids = { userId: caller, canvasId: state.run.canvas_id, runId: state.run.id };
+    await expect(getWorkflowRunDetails({ supabase: supabase as never, ...ids }))
+      .rejects.toThrow('Workflow run not found.');
+    await expect(approveWorkflowRunStep({ supabase: supabase as never, ...ids, stepId: 'step-approval' }))
+      .rejects.toThrow('Workflow run not found.');
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  // A run's steps that could not be read are not a run without steps: that
+  // derives as `failed`, which the creator's poll takes as the end of the run
+  // and the worker stores for good. The read failing has to fail the call.
+  function failStepsRead(supabase: ReturnType<typeof createSupabaseMock>, { after = 0 } = {}) {
+    const from = supabase.from.bind(supabase);
+    let reads = 0;
+    supabase.from = (table: string) => (table === 'workflow_canvas_run_steps' && reads++ >= after
+      ? {
+        select: () => ({
+          eq: () => ({
+            order: async () => ({
+              data: null,
+              error: { code: '42501', message: 'permission denied for table generations' },
+            }),
+          }),
+        }),
+      } as never
+      : from(table));
+  }
+
+  it('fails the run details read when the run steps cannot be read', async () => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+    failStepsRead(supabase);
+
+    const { getWorkflowRunDetails } = await import('@/lib/workflow-runner');
+    await expect(getWorkflowRunDetails({
+      supabase: supabase as never,
+      userId: state.run.user_id,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    })).rejects.toMatchObject({ code: '42501' });
+  });
+
+  it('leaves a run in progress when a worker tick cannot read its steps', async () => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+    failStepsRead(supabase);
+    const runBefore = structuredClone(state.run);
+
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    await expect(advanceWorkflowRunOnce({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    })).rejects.toMatchObject({ code: '42501' });
+
+    expect(state.run).toEqual(runBefore);
+    expect(startVideoGenerationMock).not.toHaveBeenCalled();
+  });
+
+  // The approval is committed once the RPC answers: a read after it that fails
+  // must not answer the approval as failed, or the creator is shown an error
+  // and a second click finds the step no longer waiting.
+  it('answers a committed approval without a run when the read after it fails', async () => {
+    const state = createAwaitingApprovalState();
+    const supabase = createSupabaseMock(state);
+    failStepsRead(supabase, { after: 1 });
+
+    const { approveWorkflowRunStep } = await import('@/lib/workflow-runner');
+    await expect(approveWorkflowRunStep({
+      supabase: supabase as never,
+      userId: state.run.user_id,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+      stepId: 'step-approval',
+    })).resolves.toBeNull();
+
+    expect(supabase.rpc).toHaveBeenCalledTimes(1);
+    expect(state.steps.find((step) => step.id === 'step-approval')?.status).toBe('succeeded');
+  });
+
+  // The service client reads any run, so the caller filters must apply for any
+  // given caller id, even an empty one, never only for a truthy one.
+  it('finds no run for an empty caller id', async () => {
+    const state = createAwaitingApprovalState();
+    const supabase = createSupabaseMock(state);
+
+    const { approveWorkflowRunStep, getWorkflowRunDetails } = await import('@/lib/workflow-runner');
+    const ids = { userId: '', canvasId: state.run.canvas_id, runId: state.run.id };
+    await expect(getWorkflowRunDetails({ supabase: supabase as never, ...ids }))
+      .rejects.toThrow('Workflow run not found.');
+    await expect(approveWorkflowRunStep({ supabase: supabase as never, ...ids, stepId: 'step-approval' }))
+      .rejects.toThrow('Workflow run not found.');
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  // A run from before graph snapshots reads its canvas's graph. That read
+  // failing is not an empty graph, in which no step has a node: the approval
+  // would answer that the step is not a checkpoint.
+  it('fails an approval when the graph of a run without a snapshot cannot be read', async () => {
+    const state = createAwaitingApprovalState();
+    state.run.graph_snapshot = null;
+    const supabase = createSupabaseMock(state);
+    const from = supabase.from.bind(supabase);
+    supabase.from = (table: string) => {
+      const source = from(table);
+      if (table !== 'workflow_canvases') return source;
+      return {
+        ...source,
+        select: (columns?: string) => (columns === 'graph'
+          ? { eq: () => ({ eq: () => ({ single: async () => ({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }) }) }) }
+          : (source as { select: (columns?: string) => unknown }).select(columns)),
+      } as never;
+    };
+
+    const { approveWorkflowRunStep } = await import('@/lib/workflow-runner');
+    await expect(approveWorkflowRunStep({
+      supabase: supabase as never,
+      userId: state.run.user_id,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+      stepId: 'step-approval',
+    })).rejects.toMatchObject({ code: '57014' });
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
   it('approves a checkpoint and durably queues its downstream branch', async () => {
     const state = createAwaitingApprovalState();
     const supabase = createSupabaseMock(state);
 
     const { approveWorkflowRunStep } = await import('@/lib/workflow-runner');
     const run = await approveWorkflowRunStep({
-      ownerSupabase: supabase as never,
-      mutationSupabase: supabase as never,
+      supabase: supabase as never,
       userId: state.run.user_id,
       canvasId: state.run.canvas_id,
       runId: state.run.id,
@@ -2120,20 +2276,19 @@ describe('workflow-runner recovery', () => {
       p_canvas_id: state.run.canvas_id, p_run_id: state.run.id,
       p_step_id: 'step-approval', p_user_id: state.run.user_id,
     });
-    expect(run.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject({
+    expect(run?.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject({
       status: 'queued',
     });
   });
 
-  it('does not cross the service mutation boundary when the run owner check fails', async () => {
+  it('does not approve a step of a run that is not the caller\'s', async () => {
     const state = createAwaitingApprovalState();
     const supabase = createSupabaseMock(state);
     const stepBefore = structuredClone(state.steps.find((step) => step.id === 'step-approval'));
 
     const { approveWorkflowRunStep } = await import('@/lib/workflow-runner');
     await expect(approveWorkflowRunStep({
-      ownerSupabase: supabase as never,
-      mutationSupabase: supabase as never,
+      supabase: supabase as never,
       userId: 'user-2',
       canvasId: state.run.canvas_id,
       runId: state.run.id,

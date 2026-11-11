@@ -72,18 +72,15 @@ try {
   const other = await fixture('other');
   const rows = [
     ['workflow_canvas_history', { title: 'Audit fixture', graph: {}, kind: 'draft' }],
-    ['workflow_canvas_runs', { start_node_id: 'audit-no-work', mode: 'node', status: 'succeeded' }],
     ['workflow_canvas_assistant_proposals', { summary: 'Audit fixture', proposed_graph: {} }],
     ['workflow_canvas_assistant_messages', { role: 'user', content: 'Audit fixture' }],
   ];
-  let ownRun;
   let ownMessage;
   for (const [table, payload] of rows) {
     const row = success(await owner.auth.from(table).insert({
       ...payload, user_id: owner.id, canvas_id: owner.canvas,
     }).select('id').single(), `${table} valid insert`);
     check(`${table}: valid own insert works`, Boolean(row.id), true);
-    if (table === 'workflow_canvas_runs') ownRun = row.id;
     if (table === 'workflow_canvas_assistant_messages') ownMessage = row.id;
     const denied = await owner.auth.from(table).insert({
       ...payload, user_id: owner.id, canvas_id: other.canvas,
@@ -102,17 +99,37 @@ try {
   check('own proposal link works', linked.proposal_id, owner.proposal);
   check('foreign proposal link denied', (await owner.auth.from('workflow_canvas_assistant_messages')
     .update({ proposal_id: other.proposal }).eq('id', ownMessage)).error?.code, '42501');
-  const step = success(await owner.auth.from('workflow_canvas_run_steps').insert({
+  // Runs and steps are the server's to write (20261121214810): the fixture run
+  // and step are written service-role, as the initializer and worker write
+  // them, and every client write is refused.
+  const ownRun = success(await admin.from('workflow_canvas_runs').insert({
+    canvas_id: owner.canvas, user_id: owner.id, start_node_id: 'audit-no-work', mode: 'node', status: 'succeeded',
+  }).select('id').single(), 'Create fixture run').id;
+  const step = success(await admin.from('workflow_canvas_run_steps').insert({
     run_id: ownRun, node_id: 'audit-no-work', status: 'succeeded', generation_id: owner.generation,
-  }).select('id').single(), 'Create valid step');
-  check('own generation link works', Boolean(step.id), true);
+  }).select('id').single(), 'Create fixture step');
+  for (const [table, id] of [['workflow_canvas_runs', ownRun], ['workflow_canvas_run_steps', step.id]]) {
+    check(`${table}: owner reads own row`, success(await owner.auth.from(table).select('id').eq('id', id), 'Own read').length, 1);
+    check(`${table}: another user cannot read row`, success(await other.auth.from(table).select('id').eq('id', id), 'Foreign read').length, 0);
+  }
+  check('workflow_canvas_runs: own canvas insert denied', (await owner.auth.from('workflow_canvas_runs').insert({
+    canvas_id: owner.canvas, user_id: owner.id, start_node_id: 'audit-no-work', mode: 'node', status: 'succeeded',
+  })).error?.code, '42501');
+  check('workflow_canvas_runs: foreign parent insert denied', (await owner.auth.from('workflow_canvas_runs').insert({
+    canvas_id: other.canvas, user_id: owner.id, start_node_id: 'audit-no-work', mode: 'node', status: 'succeeded',
+  })).error?.code, '42501');
+  check('workflow_canvas_runs: update denied', (await owner.auth.from('workflow_canvas_runs')
+    .update({ canvas_id: other.canvas }).eq('id', ownRun)).error?.code, '42501');
+  check('own generation step insert denied', (await owner.auth.from('workflow_canvas_run_steps').insert({
+    run_id: ownRun, node_id: 'audit-own', status: 'succeeded', generation_id: owner.generation,
+  })).error?.code, '42501');
   check('foreign generation insert denied', (await owner.auth.from('workflow_canvas_run_steps').insert({
     run_id: ownRun, node_id: 'audit-foreign', status: 'succeeded', generation_id: other.generation,
   })).error?.code, '42501');
   check('foreign generation update denied', (await owner.auth.from('workflow_canvas_run_steps')
     .update({ generation_id: other.generation }).eq('id', step.id)).error?.code, '42501');
   success(await admin.auth.admin.signOut(owner.token, 'global'), 'Revoke fixture session');
-  for (const [table] of rows) {
+  for (const [table] of [...rows, ['workflow_canvas_runs']]) {
     const result = success(await owner.auth.from(table).select('id').eq('user_id', owner.id), 'Revoked read');
     check(`${table}: revoked session read denied`, result.length, 0);
   }

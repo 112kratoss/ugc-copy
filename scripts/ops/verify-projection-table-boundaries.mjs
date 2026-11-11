@@ -62,10 +62,12 @@ async function guestIdentity() {
   }), 'Tag guest fixture');
   return { id: session.user.id, client, token: session.access_token };
 }
-// Owner-scoped: a client reads its own rows. Generations are read by the server
-// only, so clients get no column of them at all (20261031033532).
-const ownerScopedTables = ['generation_input_media', 'ai_usage_events'];
-const privateTables = ['generations', ...ownerScopedTables];
+// Owner-scoped: a client reads its own rows. Generations and their input media
+// are read by the server only, so clients get no column of them at all
+// (20261031033532, 20261121214810).
+const ownerScopedTables = ['ai_usage_events'];
+const serverOnlyTables = ['generations', 'generation_input_media'];
+const privateTables = [...serverOnlyTables, ...ownerScopedTables];
 try {
   const owner = await identity('owner');
   const other = await identity('other');
@@ -86,11 +88,6 @@ try {
     success(await admin.from('templates').insert({ id: template, name: `Audit projection ${nonce}`,
       creator_user_id: who.id, status: 'draft', is_active: false }), 'Seed draft');
   }
-  // A mismatched child proves the policy also checks the parent's owner.
-  const mismatch = randomUUID();
-  success(await admin.from('generation_input_media').insert({ id: mismatch,
-    generation_id: generations.get(other.id), user_id: owner.id, media_type: 'image',
-    role: 'reference', storage_path: `audit-projection/${nonce}/mismatch` }), 'Seed mismatched child');
   const tool = randomUUID(); const model = randomUUID();
   fixtures.tools.push(tool); fixtures.models.push(model); remember();
   success(await admin.from('source_tools').insert({ id: tool, slug: `audit-projection-${nonce}`,
@@ -100,8 +97,10 @@ try {
 
   for (const who of [owner, other, guest]) {
     const label = who === guest ? 'guest' : who === owner ? 'owner' : 'other';
-    check(`generations: ${label} direct read denied`,
-      (await who.client.from('generations').select('id').limit(0)).error?.code, '42501');
+    for (const table of serverOnlyTables) {
+      check(`${table}: ${label} direct read denied`,
+        (await who.client.from(table).select('id').limit(0)).error?.code, '42501');
+    }
     for (const table of ownerScopedTables) {
       const rows = success(await who.client.from(table).select('id,user_id').in('user_id', fixtures.users), 'Private projection');
       check(`${table}: ${label} sees only own row`, rows.map(x => x.user_id), [who.id]);

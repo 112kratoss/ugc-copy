@@ -703,6 +703,12 @@ export async function advanceWorkflowRunOnce(params: {
   return nextAdvance;
 }
 
+/**
+ * A run with its graph and steps. `supabase` is the service client. Given a
+ * `userId`, the run is read only as that user's: the run and its canvas must
+ * both be theirs, which is what RLS held a client read to
+ * (workflow_parent_owned), and anything else reads as not found.
+ */
 async function loadWorkflowRunState(params: {
   supabase: SupabaseClient;
   canvasId: string;
@@ -716,13 +722,21 @@ async function loadWorkflowRunState(params: {
     .eq('canvas_id', canvasId)
     .eq('id', runId);
 
-  if (userId) {
+  // Any given caller id binds the read, an empty one too: the service client
+  // would otherwise read any run of the canvas.
+  const caller = userId !== undefined;
+  if (caller) {
     runQuery = runQuery.eq('user_id', userId);
   }
 
-  const { data: run, error } = await runQuery.single();
+  const [{ data: run, error }, ownedCanvas] = await Promise.all([
+    runQuery.single(),
+    caller
+      ? supabase.from('workflow_canvases').select('id').eq('id', canvasId).eq('user_id', userId).single()
+      : null,
+  ]);
 
-  if (error || !run) {
+  if (error || !run || ownedCanvas?.error || (ownedCanvas && !ownedCanvas.data)) {
     throw new Error('Workflow run not found.');
   }
 
@@ -733,18 +747,25 @@ async function loadWorkflowRunState(params: {
       .from('workflow_canvases')
       .select('graph')
       .eq('id', canvasId);
-    if (userId) {
+    if (caller) {
       canvasQuery = canvasQuery.eq('user_id', userId);
     }
-    const { data: canvas } = await canvasQuery.single();
+    const { data: canvas, error: canvasError } = await canvasQuery.single();
+    // Nor is a graph that could not be read an empty one, in which no step has
+    // a node.
+    if (canvasError) throw canvasError;
     runGraph = (canvas?.graph as WorkflowCanvasGraph | null | undefined) ?? null;
   }
 
-  const { data: steps } = await supabase
+  const { data: steps, error: stepsError } = await supabase
     .from('workflow_canvas_run_steps')
     .select('id, node_id, status, generation_id, input_snapshot, output_snapshot, error_message, started_at, finished_at')
     .eq('run_id', runId)
     .order('started_at', { ascending: true });
+  // Steps that could not be read are not a run without steps: those derive as
+  // `failed`, which the creator's poll would show as the end of the run and a
+  // worker tick would store for good.
+  if (stepsError) throw stepsError;
 
   return {
     run: typedRun,
@@ -2047,26 +2068,28 @@ export async function endGivenUpWorkflowRun(params: {
 }
 
 export async function approveWorkflowRunStep(params: {
-  ownerSupabase: SupabaseClient;
-  mutationSupabase: SupabaseClient;
+  /** Service-role: no client role reads run steps. */
+  supabase: SupabaseClient;
+  /** The caller, as the route admitted them. */
   userId: string;
   canvasId: string;
   runId: string;
   stepId: string;
 }) {
   const {
-    ownerSupabase,
-    mutationSupabase,
+    supabase,
     userId,
     canvasId,
     runId,
     stepId,
   } = params;
-  // Authorize with the request-scoped client before crossing into the
-  // service-role mutation boundary. The service client is never used to
-  // discover which run a caller owns.
+  // The run is read service-role and found only as the caller's: the userId
+  // filters in loadWorkflowRunState are the whole ownership check, RLS takes
+  // no part. (It used to be read with the caller's own client, and a step's
+  // generation check under RLS needed a read of generations the caller no
+  // longer has.)
   const { graph, steps } = await loadWorkflowRunState({
-    supabase: ownerSupabase,
+    supabase,
     canvasId,
     runId,
     userId,
@@ -2092,9 +2115,10 @@ export async function approveWorkflowRunStep(params: {
     throw new WorkflowRunApprovalError('The approval preview is no longer available.', 409);
   }
 
-  // The owner-scoped read above authorizes the action. The internal RPC checks
-  // the current gate again under locks and commits its run and ticket together.
-  const approval = await mutationSupabase.rpc('approve_workflow_checkpoint', {
+  // The caller's read above authorizes the action. The internal RPC checks the
+  // owner and the current gate again under locks and commits its run and
+  // ticket together.
+  const approval = await supabase.rpc('approve_workflow_checkpoint', {
     p_canvas_id: canvasId,
     p_run_id: runId,
     p_step_id: stepId,
@@ -2111,16 +2135,26 @@ export async function approveWorkflowRunStep(params: {
     throw new WorkflowRunApprovalError('This approval step is no longer available for review.', 409);
   }
 
-  return getWorkflowRunDetails({
-    supabase: ownerSupabase,
-    userId,
-    canvasId,
-    runId,
-  });
+  // The approval is committed. A read after it that fails answers without a
+  // run rather than as a failed approval: a second try would find the step no
+  // longer waiting, and the creator's page reads the run again on its own.
+  try {
+    return await getWorkflowRunDetails({
+      supabase,
+      userId,
+      canvasId,
+      runId,
+    });
+  } catch (error) {
+    logBackendError('workflow_approval_run_read_failed', { error, runId });
+    return null;
+  }
 }
 
 export async function getWorkflowRunDetails(params: {
+  /** Service-role, like the approval: the run is found only as `userId`'s. */
   supabase: SupabaseClient;
+  /** The caller, as the route admitted them. */
   userId: string;
   canvasId: string;
   runId: string;

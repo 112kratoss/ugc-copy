@@ -14,32 +14,10 @@
 -- the required grants/FK. Application code must never silently restore them.
 
 -- Workflow contraction: owner-scoped reads remain, while all mutation is
--- forced through the server-owned initializer/service boundary.
-REVOKE INSERT, UPDATE, DELETE
-  ON TABLE public.workflow_canvas_runs
-  FROM anon, authenticated;
-REVOKE INSERT, UPDATE, DELETE
-  ON TABLE public.workflow_canvas_run_steps
-  FROM anon, authenticated;
-
-GRANT SELECT ON TABLE public.workflow_canvas_runs TO authenticated;
-GRANT SELECT ON TABLE public.workflow_canvas_run_steps TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE
-  ON TABLE public.workflow_canvas_runs
-  TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE
-  ON TABLE public.workflow_canvas_run_steps
-  TO service_role;
-
-DROP POLICY IF EXISTS "Users can create their own workflow runs"
-  ON public.workflow_canvas_runs;
-DROP POLICY IF EXISTS "Users can update their own workflow runs"
-  ON public.workflow_canvas_runs;
-DROP POLICY IF EXISTS "Users can create their own workflow run steps"
-  ON public.workflow_canvas_run_steps;
-DROP POLICY IF EXISTS "Users can update their own workflow run steps"
-  ON public.workflow_canvas_run_steps;
-
+-- forced through the server-owned initializer/service boundary. Its table half
+-- (client run and step writes and their policies) shipped on its own in
+-- supabase/migrations/20261121214810_retire_client_run_writes_and_input_media_reads.sql.
+-- Left here: the initializer becomes service-only and the legacy starter goes.
 REVOKE ALL ON FUNCTION public.initialize_workflow_canvas_run(
   uuid, uuid, text, text, text, jsonb, text, jsonb
 ) FROM PUBLIC, anon, authenticated;

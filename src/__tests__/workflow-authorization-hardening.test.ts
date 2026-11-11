@@ -13,6 +13,11 @@ const contractMigration = fs.readFileSync(path.resolve(
   'supabase/contract_migrations/security_remediation_stage3.sql',
 ), 'utf8');
 
+const tableContraction = fs.readFileSync(path.resolve(
+  process.cwd(),
+  'supabase/migrations/20261121214810_retire_client_run_writes_and_input_media_reads.sql',
+), 'utf8');
+
 describe('staged workflow authorization hardening', () => {
   it('keeps the legacy boundary compatible but enforces 20 starts per ten minutes internally', () => {
     expect(additiveMigration).toContain('CREATE OR REPLACE FUNCTION public.start_workflow_canvas_run');
@@ -29,17 +34,19 @@ describe('staged workflow authorization hardening', () => {
     expect(additiveMigration).not.toContain('REVOKE INSERT, UPDATE, DELETE');
   });
 
-  it('keeps authenticated polling but removes direct writes in the deferred contract', () => {
-    expect(contractMigration).toMatch(
-      /REVOKE INSERT, UPDATE, DELETE\s+ON TABLE public\.workflow_canvas_runs\s+FROM anon, authenticated;/,
+  // The contract's table half shipped on its own; the deferred file keeps only
+  // what is still deferred, so a later promotion repeats none of it.
+  it('ships the direct-write removal and leaves owner reads, outside the deferred contract', () => {
+    expect(tableContraction).toContain(
+      'REVOKE INSERT, UPDATE, DELETE ON TABLE public.workflow_canvas_runs FROM anon, authenticated;',
     );
-    expect(contractMigration).toMatch(
-      /REVOKE INSERT, UPDATE, DELETE\s+ON TABLE public\.workflow_canvas_run_steps\s+FROM anon, authenticated;/,
+    expect(tableContraction).toContain(
+      'REVOKE INSERT, UPDATE, DELETE ON TABLE public.workflow_canvas_run_steps FROM anon, authenticated;',
     );
-    expect(contractMigration).toContain('GRANT SELECT ON TABLE public.workflow_canvas_runs TO authenticated;');
-    expect(contractMigration).toContain('GRANT SELECT ON TABLE public.workflow_canvas_run_steps TO authenticated;');
-    expect(contractMigration).toContain('DROP POLICY IF EXISTS "Users can create their own workflow runs"');
-    expect(contractMigration).toContain('DROP POLICY IF EXISTS "Users can update their own workflow run steps"');
+    expect(tableContraction).toContain('DROP POLICY IF EXISTS "Users can create their own workflow runs"');
+    expect(tableContraction).toContain('DROP POLICY IF EXISTS "Users can update their own workflow run steps"');
+    expect(contractMigration).not.toMatch(/ON TABLE public\.workflow_canvas_run/);
+    expect(contractMigration).not.toMatch(/DROP POLICY[^;]*workflow/);
   });
 
   it('makes the idempotent initializer service-only only in the deferred contract', () => {
