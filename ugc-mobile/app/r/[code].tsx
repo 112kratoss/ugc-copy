@@ -49,8 +49,11 @@ export default function ReferralLandingScreen() {
       }
 
       setState({ status: 'loading' });
+      // Whose claim the phone recorded matters, so nothing is read or recorded
+      // until the session is known: the effect runs again when it is.
+      if (isAuthLoading) return;
       try {
-        const recentClaim = await getRecentReferralClaimRecord(code);
+        const recentClaim = await getRecentReferralClaimRecord(code, user?.id ?? null);
         if (cancelled) return;
         if (recentClaim) {
           setProgram(recentClaim.program ?? null);
@@ -64,7 +67,6 @@ export default function ReferralLandingScreen() {
         if (cancelled) return;
         setProgram(captured.pending.program ?? null);
 
-        if (isAuthLoading) return;
         if (!user) {
           setState({ status: 'ready', code: captured.pending.code, keptEarlierInvite: captured.keptEarlierInvite });
           return;

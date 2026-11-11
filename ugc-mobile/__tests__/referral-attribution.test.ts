@@ -168,14 +168,14 @@ describe('native referral attribution', () => {
     const now = Date.parse('2026-07-12T00:00:00.000Z');
     await capturePendingReferral(api as never, 'invite-1', { storage, now });
 
-    await expect(claimPendingReferral(api as never, { storage, now: now + 1_000 })).resolves.toEqual({
+    await expect(claimPendingReferral(api as never, { storage, now: now + 1_000, userId: 'creator-1' })).resolves.toEqual({
       success: true,
       claimed: true,
     });
 
     expect(api.claimReferral).toHaveBeenCalledWith({ code: 'invite-1', visitToken: 'visit-token-1' });
     await expect(getPendingReferral(storage, now + 2_000)).resolves.toBeNull();
-    await expect(getRecentReferralClaim('invite-1', storage, now + 2_000)).resolves.toMatchObject({ claimed: true });
+    await expect(getRecentReferralClaim('invite-1', 'creator-1', storage, now + 2_000)).resolves.toMatchObject({ claimed: true });
   });
 
   it('deduplicates simultaneous post-auth claims', async () => {
@@ -237,15 +237,16 @@ describe('the program terms the referral screens print (03-7)', () => {
       program,
     } as never);
     await capturePendingReferral(api as never, 'invite-1', { storage, now });
-    await claimPendingReferral(api as never, { storage, now: now + 1_000 });
+    await claimPendingReferral(api as never, { storage, now: now + 1_000, userId: 'creator-1' });
 
-    await expect(getRecentReferralClaimRecord('invite-1', storage, now + 2_000)).resolves.toEqual({
+    await expect(getRecentReferralClaimRecord('invite-1', 'creator-1', storage, now + 2_000)).resolves.toEqual({
       code: 'invite-1',
+      userId: 'creator-1',
       claimedAt: new Date(now + 1_000).toISOString(),
       response: { success: true, claimed: true },
       program,
     });
-    await expect(getRecentReferralClaim('invite-1', storage, now + 2_000)).resolves.toEqual({ success: true, claimed: true });
+    await expect(getRecentReferralClaim('invite-1', 'creator-1', storage, now + 2_000)).resolves.toEqual({ success: true, claimed: true });
   });
 
   it('knows no terms from an older server, or from an answer without them', async () => {
@@ -428,5 +429,30 @@ describe('a code typed on the sign-in page (owner, 2026-11-11)', () => {
     expect(storage.values.has('magicbooklet.referral.recentClaim.v1')).toBe(true);
     expect(await getLatestReferralClaimRecord('creator-1', storage, 1_000 + 16 * 60 * 1000)).toBeNull();
     expect(inviteClaimLine(null)).toBeNull();
+  });
+
+  // The record is the phone's and iOS keeps SecureStore through an uninstall:
+  // a fresh install's guest opening the same invite was told "Invite applied"
+  // (iPhone 16e, 0.1.9 (61), 2026-11-11).
+  it("answers the invite's landing only for the account that made the claim", async () => {
+    const storage = memoryStorage();
+    const record = {
+      code: 'a43ea71e6475',
+      userId: 'creator-1',
+      claimedAt: new Date(1_000).toISOString(),
+      response: { success: true, claimed: true },
+    };
+    storage.values.set('magicbooklet.referral.recentClaim.v1', JSON.stringify(record));
+
+    expect(await getRecentReferralClaimRecord('a43ea71e6475', null, storage, 2_000)).toBeNull();
+    expect(await getRecentReferralClaimRecord('a43ea71e6475', 'creator-2', storage, 2_000)).toBeNull();
+    // Neither look takes the record from the account it belongs to.
+    expect(await getRecentReferralClaimRecord('a43ea71e6475', 'creator-1', storage, 2_000)).toMatchObject({
+      userId: 'creator-1',
+      response: { claimed: true },
+    });
+    // A record that names no account answers no one.
+    storage.values.set('magicbooklet.referral.recentClaim.v1', JSON.stringify({ ...record, userId: undefined }));
+    expect(await getRecentReferralClaimRecord('a43ea71e6475', 'creator-1', storage, 2_000)).toBeNull();
   });
 });

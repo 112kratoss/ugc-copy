@@ -1,12 +1,13 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 
 const routerState = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
 const paramsState = vi.hoisted(() => ({ params: {} as { code?: string; next?: string } }));
-const authState = vi.hoisted(() => ({ api: {}, user: null, isLoading: false }));
+const authState = vi.hoisted(() => ({ api: {}, user: null as { id: string } | null, isLoading: false }));
+const secureStore = vi.hoisted(() => new Map<string, string>());
 
 vi.mock('expo-router', () => ({
   router: routerState,
@@ -49,9 +50,9 @@ vi.mock('@/components/ui', () => {
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 
 vi.mock('expo-secure-store', () => ({
-  getItemAsync: vi.fn(async () => null),
-  setItemAsync: vi.fn(async () => undefined),
-  deleteItemAsync: vi.fn(async () => undefined),
+  getItemAsync: vi.fn(async (key: string) => secureStore.get(key) ?? null),
+  setItemAsync: vi.fn(async (key: string, value: string) => { secureStore.set(key, value); }),
+  deleteItemAsync: vi.fn(async (key: string) => { secureStore.delete(key); }),
 }));
 
 const attribution = vi.hoisted(() => ({
@@ -184,6 +185,68 @@ describe('the invite terms on the landing (03-7)', () => {
     expect(texts(tree)).toContain('3% first top-up bonus');
     expect(texts(tree)).toContain('Invite saved');
     renderer.act(() => tree.unmount());
+  });
+
+  // The claim an account made in the last 15 minutes is the phone's, in
+  // SecureStore, which iOS keeps through an uninstall: a fresh install's guest
+  // opening the same invite was told "Invite applied" with no account at all
+  // (iPhone 16e, 0.1.9 (61), 2026-11-11). Only its own account may be told.
+  describe("another account's claim on the same phone", () => {
+    const claimedByCreator1 = JSON.stringify({
+      code: 'creator1',
+      userId: 'creator-1',
+      claimedAt: new Date().toISOString(),
+      response: { success: true, claimed: true },
+      program,
+    });
+
+    beforeEach(async () => {
+      const actual = await vi.importActual<typeof import('../lib/referral-attribution')>('../lib/referral-attribution');
+      attribution.getRecentReferralClaimRecord.mockImplementation(actual.getRecentReferralClaimRecord as never);
+      attribution.capturePendingReferral.mockResolvedValue({
+        keptEarlierInvite: false,
+        pending: { code: 'creator1', capturedAt: '2026-10-15T07:00:00.000Z', visitToken: 'visit-2', program },
+      });
+      secureStore.clear();
+      secureStore.set('magicbooklet.referral.recentClaim.v1', claimedByCreator1);
+    });
+
+    afterEach(() => {
+      authState.user = null;
+      secureStore.clear();
+    });
+
+    it('is not shown to a guest, whose invite is saved for the account it makes', async () => {
+      authState.user = null;
+      const tree = await renderWith({ code: 'creator1' });
+
+      const values = texts(tree);
+      expect(values).toContain('Invite saved');
+      expect(values).not.toContain('Invite applied');
+      expect(attribution.capturePendingReferral).toHaveBeenCalled();
+      renderer.act(() => tree.unmount());
+    });
+
+    it('is not shown to another account, which makes its own claim', async () => {
+      authState.user = { id: 'creator-2' };
+      attribution.claimPendingReferral.mockResolvedValue({ success: true, claimed: false, reason: 'already_attributed' });
+      const tree = await renderWith({ code: 'creator1' });
+
+      const values = texts(tree);
+      expect(values).toContain('Invite not applied');
+      expect(attribution.claimPendingReferral).toHaveBeenCalledWith({}, { userId: 'creator-2' });
+      renderer.act(() => tree.unmount());
+    });
+
+    it('is shown to the account that made it, without claiming again', async () => {
+      authState.user = { id: 'creator-1' };
+      const tree = await renderWith({ code: 'creator1' });
+
+      expect(texts(tree)).toContain('Invite applied');
+      expect(attribution.capturePendingReferral).not.toHaveBeenCalled();
+      expect(attribution.claimPendingReferral).not.toHaveBeenCalled();
+      renderer.act(() => tree.unmount());
+    });
   });
 
   it('names no numbers while the terms are unknown', async () => {

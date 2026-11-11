@@ -172,12 +172,22 @@ export async function clearPendingReferral(storage: ReferralStorage = defaultSto
   await storage.removeItem(PENDING_REFERRAL_STORAGE_KEY);
 }
 
-/** The claim recorded for this code in the last few minutes, with the terms it used. */
+/**
+ * The claim this account made for this code in the last few minutes, with the
+ * terms it used: what the invite's landing shows when it comes back after a
+ * sign-up. Only to the account that made it. The record is the phone's, and
+ * iOS keeps SecureStore through an uninstall, so a guest on a fresh install
+ * that opened the same invite was told "Invite applied" with no account at all
+ * (iPhone 16e, 0.1.9 (61), 2026-11-11). Another account's record is left for
+ * it, as `getLatestReferralClaimRecord` leaves it.
+ */
 export async function getRecentReferralClaimRecord(
   code: string,
+  userId: string | null | undefined,
   storage: ReferralStorage = defaultStorage,
   now = Date.now()
 ): Promise<RecentReferralClaim | null> {
+  if (!userId) return null;
   const serialized = await storage.getItem(RECENT_REFERRAL_CLAIM_STORAGE_KEY);
   if (!serialized) return null;
 
@@ -194,8 +204,10 @@ export async function getRecentReferralClaimRecord(
       await storage.removeItem(RECENT_REFERRAL_CLAIM_STORAGE_KEY);
       return null;
     }
+    if (recent.userId !== userId) return null;
     return {
       code,
+      userId,
       claimedAt: recent.claimedAt,
       response: recent.response,
       program: readReferralProgram(recent.program),
@@ -278,10 +290,11 @@ export function inviteClaimLine(
 
 export async function getRecentReferralClaim(
   code: string,
+  userId: string | null | undefined,
   storage: ReferralStorage = defaultStorage,
   now = Date.now()
 ): Promise<ReferralClaimResponse | null> {
-  return (await getRecentReferralClaimRecord(code, storage, now))?.response ?? null;
+  return (await getRecentReferralClaimRecord(code, userId, storage, now))?.response ?? null;
 }
 
 export async function capturePendingReferral(
