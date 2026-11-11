@@ -684,10 +684,12 @@ describe('DeleteAccountScreen warnings', () => {
     expect(byType(tree, 'status-block')[0].props).toMatchObject({
       tone: 'warning',
       title: 'Unpaid sales earnings of $250.00 will be forfeited',
-      body: 'Request a payout on the website before you delete your account.',
+      body: 'Request a payout before you delete your account.',
     });
-    const links = byType(tree, 'web-link-button').map((node) => [node.props.label, node.props.href]);
-    expect(links).toContainEqual(['Request a payout first', 'https://site.example/marketplace/sell']);
+    const request = byType(tree, 'secondary-button').find((node) => node.props.label === 'Request a payout first');
+    renderer.act(() => { (request!.props.onPress as () => void)(); });
+    expect(routerMock.push).toHaveBeenCalledWith('/payout-request');
+    expect(byType(tree, 'web-link-button').map((node) => node.props.label)).not.toContain('Request a payout first');
   });
 
   it('says why a balance under the minimum cannot be paid out, with no payout link', () => {
@@ -702,7 +704,7 @@ describe('DeleteAccountScreen warnings', () => {
       title: 'Unpaid sales earnings of $45.00 will be forfeited',
       body: 'Payouts start at $100.00, so this balance cannot be paid out.',
     });
-    expect(byType(tree, 'web-link-button').map((node) => node.props.label)).not.toContain('Request a payout first');
+    expect(byType(tree, 'secondary-button').map((node) => node.props.label)).not.toContain('Request a payout first');
   });
 
   it('says nothing about earnings when there are none, or while the balance is read', () => {
@@ -721,7 +723,7 @@ describe('DeleteAccountScreen warnings', () => {
       tone: 'warning',
       title: 'Unpaid sales earnings will be forfeited',
     });
-    expect(byType(tree, 'web-link-button').map((node) => node.props.label)).toContain('Request a payout first');
+    expect(byType(tree, 'secondary-button').map((node) => node.props.label)).toContain('Request a payout first');
   });
 
   // Deletion is never held up by a balance (App Store 5.1.1(v)).

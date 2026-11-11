@@ -138,3 +138,14 @@ describe('POST /api/creator/payouts against the mobile contract', () => {
     await expect(response.json()).resolves.toEqual(refusal.response);
   });
 });
+
+// The app's and the web's payout forms say the share a creator keeps from the
+// shared policy; the server's figure is the authority.
+describe('the creator share the payout forms state', () => {
+  it('matches the share the server pays', async () => {
+    const { POST_RESOURCE_CREATOR_SHARE_PERCENT } = await import('@/lib/post-resource-commerce');
+    const { CREATOR_PAYOUT_CREATOR_SHARE_PERCENT } = await import('../../ugc-mobile/lib/creator-payout-policy/creator-payout-policy');
+
+    expect(CREATOR_PAYOUT_CREATOR_SHARE_PERCENT).toBe(POST_RESOURCE_CREATOR_SHARE_PERCENT);
+  });
+});

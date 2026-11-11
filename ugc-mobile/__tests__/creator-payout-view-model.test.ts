@@ -133,20 +133,23 @@ describe('a payout request from the app', () => {
     });
   });
 
-  it.each(Object.entries(endpoint.errors))('shows the server’s words for %s', (key, refusal) => {
+  it.each(Object.entries(endpoint.errors))('shows the server’s words for %s', (_key, refusal) => {
     const error = new ApiError(refusal.response.error, refusal.status, refusal.response, undefined, refusal.response.code);
 
-    expect(payoutRequestFailure(error)).toEqual({
-      message: refusal.response.error,
-      stale: key === 'alreadyPending' || key === 'belowMinimum',
-    });
+    expect(payoutRequestFailure(error)).toBe(refusal.response.error);
   });
 
-  it('says to retry when the request never reached the server', () => {
-    expect(payoutRequestFailure(new TypeError('Network request failed'))).toEqual({
-      message: 'Couldn’t request the payout. Check your connection, then try again.',
-      stale: false,
-    });
+  it('says an ended session in plain words, never a bare "Unauthorized"', () => {
+    expect(payoutRequestFailure(new ApiError('Unauthorized', 401, { error: 'Unauthorized' }, undefined, 'UNAUTHORIZED')))
+      .toBe('Your session ended. Sign in again, then request the payout.');
+  });
+
+  it.each([
+    ['no network', new TypeError('Network request failed')],
+    ['a server error', new ApiError('Failed to request a payout.', 500, { error: 'Failed to request a payout.' })],
+    ['an unknown code', new ApiError('Something odd', 400, {}, undefined, 'SOMETHING_ELSE')],
+  ])('says to retry after %s', (_case, error) => {
+    expect(payoutRequestFailure(error)).toBe('Couldn’t request the payout. Check your connection, then try again.');
   });
 
   it('holds the details to the server’s bounds before sending', () => {

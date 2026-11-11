@@ -1,6 +1,7 @@
 import type { CreatorPayoutRequestSummary, CreatorPayoutStateResponse } from './api-client';
 import {
   CREATOR_PAYOUT_ARRIVAL_DAYS,
+  CREATOR_PAYOUT_CREATOR_SHARE_PERCENT,
   creatorPayoutRailsLine,
   creatorPayoutStatusLabel,
   formatCreatorPayoutMethod,
@@ -9,9 +10,6 @@ import {
 import { formatUsdCents } from './home-view-model';
 import { UNKNOWN_AMOUNT_LABEL } from './pricing';
 import { WALLET_UNAVAILABLE_CAPTION } from './profile-view-model';
-
-/** The share a creator keeps of a paid unlock, as the web's Earnings tile says it. */
-const CREATOR_SHARE_PERCENT = 85;
 
 /** Token subunits per US cent: 100 tokens to the dollar, 100 subunits to the token. */
 const TOKEN_SUBUNITS_PER_CENT = 100;
@@ -109,7 +107,7 @@ export function getCreatorPayoutCard(payout: {
       ? (lifetime ? `Ready to withdraw · lifetime ${lifetime}` : 'Ready to withdraw')
       : lifetime
         ? `Lifetime ${lifetime}`
-        : `You keep ${CREATOR_SHARE_PERCENT}% of every sale`;
+        : `You keep ${CREATOR_PAYOUT_CREATOR_SHARE_PERCENT}% of every sale`;
 
   return {
     kind,
@@ -143,19 +141,35 @@ export function payoutConfirmation(amountUsd: string, method: CreatorPayoutMetho
   };
 }
 
+/** The server's own codes for a payout it refused; their words are written for the creator. */
+const PAYOUT_REFUSAL_CODES = new Set([
+  'BELOW_MINIMUM',
+  'ALREADY_PENDING',
+  'INVALID_METHOD',
+  'METHOD_UNAVAILABLE',
+  'INVALID_DETAILS',
+  'RATE_LIMITED',
+]);
+
 /**
- * What a refused or failed request says, and whether the balance on screen is
- * out of date (another device filed one, or the balance moved), in which case
- * the screen reads the state again and goes back to the card.
+ * What a refused or failed request says. A payout refusal carries the server's
+ * words; an ended session or anything else (no network, a timeout, a server
+ * error) gets plain ones, never a bare "Unauthorized". The screen reads the
+ * balance again after every failure, since a request that timed out may still
+ * have been taken.
  */
-export function payoutRequestFailure(error: unknown): { message: string; stale: boolean } {
+export function payoutRequestFailure(error: unknown): string {
   const code = typeof error === 'object' && error !== null && 'code' in error
     ? (error as { code?: unknown }).code
     : undefined;
-  const serverMessage = error instanceof Error && error.message ? error.message : null;
-  const stale = code === 'ALREADY_PENDING' || code === 'BELOW_MINIMUM';
-  if (typeof code === 'string' && serverMessage) {
-    return { message: serverMessage, stale };
+  const status = typeof error === 'object' && error !== null && 'status' in error
+    ? (error as { status?: unknown }).status
+    : undefined;
+  if (status === 401 || code === 'UNAUTHORIZED') {
+    return 'Your session ended. Sign in again, then request the payout.';
   }
-  return { message: 'Couldn’t request the payout. Check your connection, then try again.', stale: false };
+  if (typeof code === 'string' && PAYOUT_REFUSAL_CODES.has(code) && error instanceof Error && error.message) {
+    return error.message;
+  }
+  return 'Couldn’t request the payout. Check your connection, then try again.';
 }

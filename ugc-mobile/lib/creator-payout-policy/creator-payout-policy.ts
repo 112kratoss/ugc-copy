@@ -42,6 +42,13 @@ const STORED_METHOD_LABELS: Record<string, string> = { paypal: 'PayPal' };
 export const CREATOR_PAYOUT_DETAILS_MIN_LENGTH = 3;
 export const CREATOR_PAYOUT_DETAILS_MAX_LENGTH = 500;
 
+/**
+ * The share of a paid unlock a creator keeps, as both payout forms say it. The
+ * server's figure is `POST_RESOURCE_CREATOR_SHARE_PERCENT`, which a web test
+ * holds this to.
+ */
+export const CREATOR_PAYOUT_CREATOR_SHARE_PERCENT = 85;
+
 /** How long a payout takes from the request, as every surface promises it. */
 export const CREATOR_PAYOUT_ARRIVAL_DAYS = 14;
 
