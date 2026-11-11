@@ -92,7 +92,6 @@ export default function InviteCodeEntry({ disabled, inviteHeld }: {
         <input
           id={fieldId}
           ref={inputRef}
-          name="invite-code"
           value={value}
           onChange={(event) => setValue(event.target.value)}
           autoComplete="off"

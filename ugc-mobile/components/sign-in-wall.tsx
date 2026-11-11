@@ -29,7 +29,6 @@ import { useReducedMotion } from '@/lib/motion';
 import { TYPED_INVITE_CODE_HELD } from '@/lib/invite-share-link/invite-typed-code';
 import { trackOnboardingEvent } from '@/lib/onboarding';
 import { CloseGlyph } from '@/lib/platform-glyphs';
-import { getPendingReferral, saveTypedInviteCode } from '@/lib/referral-attribution';
 import { useSignInPageNotice } from '@/lib/sign-in-page-notice';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { appTheme, mediaColors, SIGN_IN_WALL_SHADE } from '@/lib/theme';
@@ -411,9 +410,12 @@ function SignInInviteCode({ disabled }: { disabled: boolean }) {
   // about to type a different code knows it takes that invite's place. A
   // shared link's own notice already stands above the buttons.
   const [held, setHeld] = useState(false);
+  // The pending invite lives in SecureStore, loaded only when asked, so the
+  // sign-in page does not load SecureStore with itself (as `shared-invite-notice.ts`).
   useEffect(() => {
     let live = true;
-    void getPendingReferral()
+    void import('@/lib/referral-attribution')
+      .then(({ getPendingReferral }) => getPendingReferral())
       .then((pending) => {
         if (live && pending && pending.kind !== 'shared_link') setHeld(true);
       })
@@ -427,6 +429,7 @@ function SignInInviteCode({ disabled }: { disabled: boolean }) {
     if (saving || disabled) return;
     setSaving(true);
     setError(null);
+    const { saveTypedInviteCode } = await import('@/lib/referral-attribution');
     const result = await saveTypedInviteCode(api, value);
     setSaving(false);
     if (result.ok) {
