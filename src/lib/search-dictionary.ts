@@ -13,10 +13,11 @@ function isCount(value: unknown): value is number {
 
 /**
  * The search-dictionary job: makes the spelling dictionary `search_terms`
- * exactly the words unlabelled public posts show now, through the database
- * function `rebuild_search_terms()` (migration
- * `20261111224010_search_recall_models_prefixes_stems_typos.sql`). No post save
- * writes that table, so this hourly run is what keeps it current.
+ * exactly the words unlabelled public posts and listed recipes show now,
+ * through the database function `rebuild_search_terms()` (migration
+ * `20261111224010_search_recall_models_prefixes_stems_typos.sql`, widened to
+ * recipes by `20261111231942_recipe_search_recall_and_relevance.sql`). No post
+ * or recipe save writes that table, so this hourly run is what keeps it current.
  */
 export async function rebuildSearchDictionary(
   client: SupabaseClient,

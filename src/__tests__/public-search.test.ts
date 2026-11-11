@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import { MAX_MARKETPLACE_RESOURCE_OFFSET } from '@/lib/marketplace-resource-list-route-adapter-service';
 import {
+  PUBLIC_SEARCH_MAX_RECIPE_OFFSET,
   decodePublicSearchCursor,
   encodePublicSearchCursor,
   isPublicSearchQueryTooLong,
@@ -61,6 +63,24 @@ describe('public search policy', () => {
       type: 'recipes',
       offset: 24,
     });
+  });
+
+  // An offset past the list's own cap was a safe integer the RPC's integer
+  // parameter overflowed on (a 500), or arbitrarily deep paging.
+  it('caps a recipes cursor at the marketplace list\'s deepest offset', () => {
+    const recipes = (offset: unknown) => decodePublicSearchCursor(
+      Buffer.from(JSON.stringify({ v: 1, t: 'recipes', o: offset }), 'utf8').toString('base64url'),
+      'recipes',
+    );
+
+    expect(PUBLIC_SEARCH_MAX_RECIPE_OFFSET).toBe(MAX_MARKETPLACE_RESOURCE_OFFSET);
+    expect(recipes(0)).toEqual({ version: 1, type: 'recipes', offset: 0 });
+    expect(recipes(PUBLIC_SEARCH_MAX_RECIPE_OFFSET)).toEqual({ version: 1, type: 'recipes', offset: 960 });
+    expect(recipes(PUBLIC_SEARCH_MAX_RECIPE_OFFSET + 1)).toBeNull();
+    expect(recipes(2 ** 31)).toBeNull();
+    expect(recipes(Number.MAX_SAFE_INTEGER)).toBeNull();
+    expect(recipes(-1)).toBeNull();
+    expect(recipes(1.5)).toBeNull();
   });
 
   it('rejects hand-built cursors whose id is not a UUID', () => {

@@ -1447,12 +1447,11 @@ function normalizeMarketplaceSearchQuery(value: string | null | undefined): stri
 // document holds the same text in this order, its title and seller name as
 // shown here (refresh_marketplace_bundle_search_documents, 20261031100330) and
 // its post's caption as the feed shows it (20261101072014: none under a paid
-// recipe when it is the saved generation setup), and the list matches the
-// query literally, so the two find the same recipes. They differ only on a
-// post with no title, shown here under its caption's first line or a fixed
-// label. The migrations' tests hold the two lists together.
-function marketplaceItemMatchesQuery(item: MarketplaceResourceListItem, normalizedQuery: string): boolean {
-  const searchableText = [
+// recipe when it is the saved generation setup). They differ only on a post
+// with no title, shown here under its caption's first line or a fixed label.
+// The migrations' tests hold the two lists together.
+function marketplaceItemSearchText(item: MarketplaceResourceListItem): string {
+  return [
     item.title,
     item.summary,
     item.previewText,
@@ -1466,8 +1465,64 @@ function marketplaceItemMatchesQuery(item: MarketplaceResourceListItem, normaliz
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
+}
 
-  return searchableText.includes(normalizedQuery);
+// The query as one run of characters in the text a visitor sees: what the
+// list matched before 20261111231942, and what its fallback still matches.
+function marketplaceItemMatchesQuery(item: MarketplaceResourceListItem, normalizedQuery: string): boolean {
+  return marketplaceItemSearchText(item).includes(normalizedQuery);
+}
+
+/**
+ * The ids of the listed recipes whose shown text holds the query as the list
+ * read it (20261111231942): every word, the last a prefix, stemmed, a tool
+ * split or joined, or the query corrected when nothing held it as typed. The
+ * list matched each row on its search document; this asks the same of the
+ * text the app shows a visitor who has not unlocked the recipe, so a row is
+ * never kept on words only its unlock, or a stale document, holds.
+ *
+ * A text that holds the query as typed, as one run of characters, is kept
+ * without asking (the list matches that reading too). The rest go to
+ * marketplace_search_texts_match in one call; if it fails, they are dropped,
+ * as the run-of-characters check alone dropped them before.
+ */
+async function recheckSearchedMarketplaceItems(
+  adminSupabase: ReturnType<typeof createServiceClient>,
+  items: readonly MarketplaceResourceListItem[],
+  normalizedQuery: string,
+): Promise<Set<string>> {
+  const matched = new Set<string>();
+  const unsure: { id: string; text: string }[] = [];
+  for (const item of items) {
+    const text = marketplaceItemSearchText(item);
+    if (text.includes(normalizedQuery)) {
+      matched.add(item.id);
+    } else {
+      unsure.push({ id: item.id, text });
+    }
+  }
+  if (unsure.length === 0) {
+    return matched;
+  }
+
+  try {
+    const { data, error } = await adminSupabase.rpc('marketplace_search_texts_match', {
+      p_texts: unsure.map(({ text }) => text),
+      p_query: normalizedQuery,
+    });
+    if (error) {
+      throw error;
+    }
+    const answers = Array.isArray(data) ? data : [];
+    unsure.forEach(({ id }, index) => {
+      if (answers[index] === true) {
+        matched.add(id);
+      }
+    });
+  } catch (error) {
+    logBackendError('marketplace_search_recheck_failed', { error });
+  }
+  return matched;
 }
 
 function normalizeAttachments(value: unknown): PostResourceAttachment[] {
@@ -3223,12 +3278,19 @@ async function getMarketplaceResourceListFallback(options: {
   };
 }
 
+/**
+ * The marketplace's own sorts, and 'relevance', which only unified search asks
+ * for: the list's text rank (20261111231942). Without a query it reads as
+ * 'recent', in the database and here.
+ */
+export type MarketplaceResourceListSort = MarketplaceResourceSort | 'relevance';
+
 type MarketplaceResourceListOptions = {
   filter?: MarketplaceResourceFilter;
   resource?: MarketplaceResourceKindFilter;
   tool?: string | null;
   q?: string | null;
-  sort?: MarketplaceResourceSort;
+  sort?: MarketplaceResourceListSort;
   offset?: number;
   limit?: number;
   countryCode?: string | null;
@@ -3239,7 +3301,7 @@ type MarketplaceResourceListBaseOptions = {
   resource: MarketplaceResourceKindFilter;
   tool: string | null;
   q: string | null;
-  sort: MarketplaceResourceSort;
+  sort: MarketplaceResourceListSort;
   offset: number;
   limit: number;
 };
@@ -3277,7 +3339,7 @@ async function getMarketplaceResourceListBase(
         resource,
         tool,
         q,
-        sort,
+        sort: sort === 'relevance' ? 'recent' : sort,
         offset,
         limit,
         countryCode: null,
@@ -3300,6 +3362,13 @@ async function getMarketplaceResourceListBase(
   // one per hidden row and the next page re-read (and repeated) the rows after
   // it.
   const hydratedById = new Map(hydratedRecipes.map((recipe) => [recipe.item.id, recipe]));
+  const searchMatchedIds = normalizedQuery
+    ? await recheckSearchedMarketplaceItems(
+      adminSupabase,
+      hydratedRecipes.flatMap(({ item }) => (item.post ? [item] : [])),
+      normalizedQuery,
+    )
+    : null;
   const pageItems: MarketplaceResourceListItem[] = [];
   const pageRows: BundleRow[] = [];
   let consumedRowCount = 0;
@@ -3326,7 +3395,7 @@ async function getMarketplaceResourceListBase(
     });
 
     const isEligible = quality.eligible
-      && (!normalizedQuery || marketplaceItemMatchesQuery(item, normalizedQuery));
+      && (searchMatchedIds === null || searchMatchedIds.has(item.id));
     if (isEligible && pageItems.length >= limit) {
       // This is an eligible lookahead row that has not been returned. Leave
       // its raw position for the next page instead of skipping it.
@@ -3455,7 +3524,8 @@ export async function getMarketplaceResourceList(
     ? await loadCachedMarketplaceResourceListBase(
       filter,
       resource,
-      sort,
+      // A page without a query: 'relevance' reads as 'recent' there.
+      sort === 'relevance' ? 'recent' : sort,
       limit,
       normalizedToolFilter || null,
     )
