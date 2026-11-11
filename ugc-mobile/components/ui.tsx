@@ -31,7 +31,7 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { haptic } from '@/lib/haptics';
 import { useAnimatedState, usePressMotion } from '@/lib/motion';
-import { appTheme, type ThemeColorName, type ThemeColors, type ToolAccent, accentColor, accentFill, onAccentFill } from '@/lib/theme';
+import { appTheme, type ThemeColorName, type ThemeColors, type ToolAccent, accentColor, accentFill, fieldTypeStyle, onAccentFill } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
 type TextVariant = keyof typeof appTheme.type;
@@ -1355,7 +1355,7 @@ export function AppTextInput({
               borderCurve: 'continuous',
               backgroundColor: disabled ? theme.colors.surface : theme.colors.surfaceInset,
               color: disabled ? theme.colors.muted : theme.colors.text,
-              ...textRole('bodySm'),
+              ...fieldTypeStyle('bodySm', Boolean(multiline)),
               paddingHorizontal: appTheme.spacing.card,
               paddingVertical: appTheme.spacing.gap,
             },

@@ -674,6 +674,23 @@ export const themes: Readonly<Record<ColorScheme, AppTheme>> = {
  */
 export const appTheme = staticTokens;
 
+/**
+ * The type a text field is typed in. A one-line field takes its role without
+ * the line height: iOS puts a line height's extra space above the text of a
+ * one-line field, so `bodySm`'s 14 pt type on its 21 pt line sat 4 pt below the
+ * middle of a 48 pt box, under the centre of the field's own clear button
+ * (iPhone 17 Pro simulator, 2026-11-12; owner: "the texts are not aligned in
+ * the middle"). One line needs no line spacing on either platform; a field
+ * that wraps keeps it. `__tests__/field-text-centred.test.ts` holds every
+ * one-line `TextInput` to this.
+ */
+export function fieldTypeStyle(role: keyof typeof staticTokens.type, multiline = false) {
+  const style = staticTokens.type[role];
+  if (multiline) return style;
+  const { lineHeight: _wrappedLinesOnly, ...oneLine } = style;
+  return oneLine;
+}
+
 export type ToolAccent = 'primary' | 'image' | 'video' | 'motion' | 'workflow' | 'amber' | 'commerce' | 'danger';
 
 export function accentColor(accent: ToolAccent, colors: ThemeColors = darkColors) {
