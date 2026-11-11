@@ -236,6 +236,8 @@ export interface ReferralOverviewResponse {
   success: true;
   program: ReferralProgramSummary;
   code: string | null;
+  /** The six-character code friends can type at sign-up; null without a link, absent from an older server. */
+  shortCode?: string | null;
   shareUrl: string | null;
   stats: ReferralStats;
   recentRewards: ReferralReward[];
@@ -282,6 +284,8 @@ export interface ReferralLinkRequest {
 export interface ReferralLinkResponse {
   success: true;
   code: string;
+  /** The six-character code friends can type at sign-up; absent from an older server. */
+  shortCode?: string | null;
   shareUrl: string;
 }
 
@@ -291,17 +295,21 @@ export interface ReferralVisitRequest {
   next?: string;
   installationId?: string;
   /**
-   * How the invite came: an invite link (the default), or a post or profile
-   * link that carried its sharer's invite. An invite link replaces an unclaimed
-   * visit a shared link left; a shared link replaces nothing.
+   * How the invite came: an invite link (the default), a post or profile
+   * link that carried its sharer's invite, or a code typed at sign-up (a
+   * six-character code, a link code or a pasted link, read by
+   * `readTypedInviteCode`). An invite link replaces an unclaimed visit a shared
+   * link left; a typed code replaces any other; a shared link replaces nothing.
    */
-  kind?: 'invite' | 'shared_link';
+  kind?: 'invite' | 'shared_link' | 'code';
 }
 
 export interface ReferralVisitResponse {
   success: true;
   visitToken: string;
   code: string;
+  /** The six-character code of the invite kept; absent from an older server. */
+  shortCode?: string | null;
   expiresAt: string;
   /** The program's terms for the landing page; null while no program is active, absent from an older server. */
   program?: ReferralProgramSummary | null;

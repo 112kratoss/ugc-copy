@@ -69,6 +69,17 @@ vi.mock('@/lib/theme-context', () => ({
   }),
   ThemeScope: ({ children }: MockProps) => React.createElement('theme-scope', null, children),
 }));
+// The phone's record of the invite claim a sign-up made, in memory.
+const secureStore = vi.hoisted(() => new Map<string, string>());
+vi.mock('expo-secure-store', () => ({
+  getItemAsync: async (key: string) => secureStore.get(key) ?? null,
+  setItemAsync: async (key: string, value: string) => {
+    secureStore.set(key, value);
+  },
+  deleteItemAsync: async (key: string) => {
+    secureStore.delete(key);
+  },
+}));
 vi.mock('@/lib/use-onboarding-destination', () => ({
   useWelcomeCreditsQuery: () => ({ data: harness.welcome }),
   primeWelcomeCredits: (_client: unknown, _id: string, value: unknown) => harness.primed.push(value),
@@ -115,6 +126,38 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
   });
   afterEach(() => {
     act(() => { for (const tree of trees.splice(0)) tree.unmount(); });
+  });
+
+  it('says the invite the sign-up claimed was applied, in the web\'s words (owner 11-11)', async () => {
+    secureStore.set('magicbooklet.referral.recentClaim.v1', JSON.stringify({
+      code: 'a43ea71e6475',
+      claimedAt: new Date().toISOString(),
+      response: { success: true, claimed: true },
+      program: { inviterPercent: 5, inviteeFirstPurchasePercent: 10, attributionWindowDays: 30 },
+    }));
+    const tree = mount();
+    await act(async () => { await flush(); await flush(); });
+    expect(text(tree)).toContain('Invite applied: your first credit-pack purchase gets 10% bonus credits.');
+    secureStore.clear();
+  });
+
+  it('says why an invite was not applied, and nothing without one', async () => {
+    secureStore.set('magicbooklet.referral.recentClaim.v1', JSON.stringify({
+      code: 'a43ea71e6475',
+      claimedAt: new Date().toISOString(),
+      response: { success: true, claimed: false, reason: 'self_referral' },
+    }));
+    let tree = mount();
+    await act(async () => { await flush(); await flush(); });
+    expect(text(tree)).toContain('Invite not applied: you cannot use your own invite.');
+    act(() => tree.unmount());
+    trees.splice(trees.indexOf(tree), 1);
+
+    secureStore.clear();
+    resetWelcomePopupThisRun();
+    tree = mount();
+    await act(async () => { await flush(); await flush(); });
+    expect(text(tree)).not.toContain('Invite');
   });
 
   it('offers the credits with one Claim button and no "later"', () => {

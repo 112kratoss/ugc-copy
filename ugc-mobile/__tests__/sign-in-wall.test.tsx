@@ -44,7 +44,7 @@ const analytics = vi.hoisted(() => ({
 
 const authState = vi.hoisted(() => ({
   user: null as { id: string } | null,
-  api: {},
+  api: { recordReferralVisit: vi.fn() } as { recordReferralVisit: ReturnType<typeof vi.fn> },
   signInWithPassword: vi.fn(),
   signUpWithPassword: vi.fn(),
   signInWithApple: vi.fn(),
@@ -206,6 +206,17 @@ vi.mock('@/lib/use-hardware-back', () => ({
 }));
 
 vi.mock('../assets/images/sign-in-wall/wall-01.jpg', () => ({ default: 1 }));
+// The phone's pending invite, in memory.
+const secureStore = vi.hoisted(() => new Map<string, string>());
+vi.mock('expo-secure-store', () => ({
+  getItemAsync: async (key: string) => secureStore.get(key) ?? null,
+  setItemAsync: async (key: string, value: string) => {
+    secureStore.set(key, value);
+  },
+  deleteItemAsync: async (key: string) => {
+    secureStore.delete(key);
+  },
+}));
 // The phone's record of whether its account has had the welcome credits: none.
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
@@ -544,5 +555,100 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     await typeAndSignIn(tree);
     await renderer.act(async () => undefined);
     expect(router.dismissTo).toHaveBeenCalledWith(`/onboarding?returnTo=${encodeURIComponent('/create/image?remix=gen-1')}`);
+  });
+});
+
+describe('Have an invite code? (owner, 2026-11-11)', () => {
+  const PENDING_KEY = 'magicbooklet.referral.pending.v1';
+  const flush = () => renderer.act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  const textOf = (tree: renderer.ReactTestRenderer) => JSON.stringify(tree.toJSON());
+  const pressText = (tree: renderer.ReactTestRenderer, label: string) => {
+    const button = tree.root.findAll((node) => String(node.type) === 'pressable'
+      && node.findAll((child) => String(child.type) === 'text' && child.props.children === label).length > 0)[0];
+    if (!button) throw new Error(`No button reads ${label}`);
+    return renderer.act(async () => {
+      (button.props.onPress as () => void)();
+    });
+  };
+  const codeField = (tree: renderer.ReactTestRenderer) => tree.root.findAllByProps({ accessibilityLabel: 'Invite code' })
+    .find((node) => String(node.type) === 'textinput');
+  const apply = (tree: renderer.ReactTestRenderer) => renderer.act(async () => {
+    (tree.root.findByProps({ accessibilityLabel: 'Apply invite code' }).props.onPress as () => void)();
+  });
+
+  beforeEach(() => {
+    secureStore.clear();
+    authState.user = null;
+    paramsState.params = {};
+    authState.api.recordReferralVisit.mockReset();
+  });
+
+  it('stays closed until asked for, then saves a typed code as this phone’s invite', async () => {
+    authState.api.recordReferralVisit.mockResolvedValue({
+      success: true,
+      visitToken: '11111111-1111-4111-8111-111111111111',
+      code: 'a43ea71e6475',
+      shortCode: 'K7P2QX',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      program: { inviterPercent: 5, inviteeFirstPurchasePercent: 10, attributionWindowDays: 30 },
+    });
+    const tree = render(<AuthRoute />);
+    await flush();
+    expect(codeField(tree)).toBeUndefined();
+
+    await pressText(tree, 'Have an invite code?');
+    renderer.act(() => {
+      codeField(tree)!.props.onChangeText(' k7p2-qx ');
+    });
+    await apply(tree);
+    await flush();
+
+    expect(authState.api.recordReferralVisit).toHaveBeenCalledWith({ code: 'K7P2QX', source: 'mobile', kind: 'code' });
+    expect(textOf(tree)).toContain('Invite saved. Create your new account to get 10% bonus credits on your first top-up.');
+    expect(codeField(tree)).toBeUndefined();
+    expect(JSON.parse(secureStore.get(PENDING_KEY)!)).toMatchObject({ code: 'a43ea71e6475', shortCode: 'K7P2QX', kind: 'code' });
+    renderer.act(() => tree.unmount());
+  });
+
+  it('says what is wrong without asking the server when what was typed cannot be a code', async () => {
+    const tree = render(<AuthRoute />);
+    await flush();
+    await pressText(tree, 'Have an invite code?');
+    renderer.act(() => {
+      codeField(tree)!.props.onChangeText('hello there');
+    });
+    await apply(tree);
+
+    expect(textOf(tree)).toContain('Enter the 6-character invite code, or paste the invite link you received.');
+    expect(authState.api.recordReferralVisit).not.toHaveBeenCalled();
+    renderer.act(() => tree.unmount());
+  });
+
+  it('keeps the invite the phone held when the typed code is not found', async () => {
+    const held = {
+      code: 'b1c2d3e4f5a6',
+      capturedAt: new Date().toISOString(),
+      kind: 'invite',
+      visitToken: '22222222-2222-4222-8222-222222222222',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    };
+    secureStore.set(PENDING_KEY, JSON.stringify(held));
+    authState.api.recordReferralVisit.mockRejectedValue(Object.assign(new Error('Referral code not found.'), { status: 404 }));
+    const tree = render(<AuthRoute />);
+    await flush();
+
+    expect(textOf(tree)).toContain('An invite is saved on this device. Enter a code to use a different one.');
+    await pressText(tree, 'Use a different invite code');
+    renderer.act(() => {
+      codeField(tree)!.props.onChangeText('ZZZZZZ');
+    });
+    await apply(tree);
+    await flush();
+
+    expect(textOf(tree)).toContain('That invite code was not found. Check it with whoever invited you.');
+    expect(JSON.parse(secureStore.get(PENDING_KEY)!)).toMatchObject({ code: 'b1c2d3e4f5a6', kind: 'invite' });
+    renderer.act(() => tree.unmount());
   });
 });

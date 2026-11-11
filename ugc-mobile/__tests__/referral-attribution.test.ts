@@ -13,10 +13,13 @@ import {
   formatReferralPercent,
   getPendingReferral,
   getRecentReferralClaim,
+  getLatestReferralClaimRecord,
   getRecentReferralClaimRecord,
+  inviteClaimLine,
   normalizeReferralCode,
   readReferralProgram,
   retryPendingReferralVisit,
+  saveTypedInviteCode,
 } from '../lib/referral-attribution';
 
 function memoryStorage() {
@@ -299,5 +302,91 @@ describe('how long an invite is kept on this device', () => {
 
     await expect(getPendingReferral(storage, now + 29 * day)).resolves.toMatchObject({ code: 'invite-1' });
     await expect(getPendingReferral(storage, now + 31 * day)).resolves.toBeNull();
+  });
+});
+
+describe('a code typed on the sign-in page (owner, 2026-11-11)', () => {
+  function codeApi() {
+    return {
+      recordReferralVisit: vi.fn(async ({ code }: { code: string; source: 'mobile'; kind?: string }) => ({
+        success: true as const,
+        code: code === 'K7P2QX' ? 'a43ea71e6475' : 'b1c2d3e4f5a6',
+        shortCode: code === 'K7P2QX' ? 'K7P2QX' : 'M8N9PQ',
+        visitToken: `visit-${code}`,
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      })),
+      claimReferral: vi.fn(),
+    };
+  }
+
+  it('replaces an invite a link left, and keeps the invite’s link code and short code', async () => {
+    const storage = memoryStorage();
+    const api = codeApi();
+    await capturePendingReferral(api, 'b1c2d3e4f5a6', { storage, kind: 'invite' });
+
+    const typed = await capturePendingReferral(api, 'k7p2-qx', { storage, kind: 'code' });
+
+    expect(api.recordReferralVisit).toHaveBeenLastCalledWith({ code: 'K7P2QX', source: 'mobile', kind: 'code' });
+    expect(typed.keptEarlierInvite).toBe(false);
+    expect(await getPendingReferral(storage)).toMatchObject({ code: 'a43ea71e6475', shortCode: 'K7P2QX', kind: 'code', visitToken: 'visit-K7P2QX' });
+  });
+
+  it('keeps the visit it has when the held invite’s own code is typed', async () => {
+    const storage = memoryStorage();
+    const api = codeApi();
+    await capturePendingReferral(api, 'K7P2QX', { storage, kind: 'code' });
+    api.recordReferralVisit.mockClear();
+
+    await capturePendingReferral(api, 'k7p2qx', { storage, kind: 'code' });
+
+    expect(api.recordReferralVisit).not.toHaveBeenCalled();
+  });
+
+  it('is not replaced by an invite link opened after it', async () => {
+    const storage = memoryStorage();
+    const api = codeApi();
+    await capturePendingReferral(api, 'K7P2QX', { storage, kind: 'code' });
+
+    const later = await capturePendingReferral(api, 'b1c2d3e4f5a6', { storage, kind: 'invite' });
+
+    expect(later.keptEarlierInvite).toBe(true);
+    expect((await getPendingReferral(storage))?.shortCode).toBe('K7P2QX');
+  });
+
+  it('leaves the held invite in place when the server refuses the code', async () => {
+    const storage = memoryStorage();
+    const api = codeApi();
+    await capturePendingReferral(api, 'b1c2d3e4f5a6', { storage, kind: 'invite' });
+    api.recordReferralVisit.mockRejectedValueOnce(Object.assign(new Error('Referral code not found.'), { status: 404 }));
+
+    const result = await saveTypedInviteCode(api, 'ZZZZZZ', { storage });
+
+    expect(result).toEqual({ ok: false, message: 'That invite code was not found. Check it with whoever invited you.' });
+    expect(await getPendingReferral(storage)).toMatchObject({ code: 'b1c2d3e4f5a6', kind: 'invite' });
+  });
+
+  it('asks nothing of the server for text that cannot be a code', async () => {
+    const api = codeApi();
+    const result = await saveTypedInviteCode(api, 'hello there', { storage: memoryStorage() });
+    expect(result.ok).toBe(false);
+    expect(api.recordReferralVisit).not.toHaveBeenCalled();
+  });
+
+  it('reads the latest claim for the welcome card without taking it from the landing', async () => {
+    const storage = memoryStorage();
+    storage.values.set('magicbooklet.referral.recentClaim.v1', JSON.stringify({
+      code: 'a43ea71e6475',
+      claimedAt: new Date(1_000).toISOString(),
+      response: { success: true, claimed: true, held: true },
+    }));
+
+    const record = await getLatestReferralClaimRecord(storage, 2_000);
+    expect(inviteClaimLine(record)).toEqual({
+      tone: 'info',
+      text: 'Invite received: its bonus is on hold while we check it. Contact support if you think this is a mistake.',
+    });
+    expect(storage.values.has('magicbooklet.referral.recentClaim.v1')).toBe(true);
+    expect(await getLatestReferralClaimRecord(storage, 1_000 + 16 * 60 * 1000)).toBeNull();
+    expect(inviteClaimLine(null)).toBeNull();
   });
 });

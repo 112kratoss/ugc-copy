@@ -13,6 +13,7 @@ import { haptic } from '@/lib/haptics';
 import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { MotionView, useReducedMotion, useSpringState } from '@/lib/motion';
+import { getLatestReferralClaimRecord, inviteClaimLine } from '@/lib/referral-attribution';
 import { appTheme } from '@/lib/theme';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { WelcomeCreditResponse } from '@/lib/types';
@@ -131,6 +132,23 @@ function WelcomeCreditsPopupForAccount() {
   useEffect(() => {
     if (eligibleNow && !offered && welcomeQuery.data) setOffered(welcomeQuery.data);
   }, [eligibleNow, offered, welcomeQuery.data]);
+  // What became of the invite the sign-up claimed, unseen, as the account was
+  // made (`lib/auth.tsx`): the card greeting the new account says it, as the
+  // web's greeting page does (owner, 2026-11-11). Read once the card is offered.
+  const [inviteLine, setInviteLine] = useState<ReturnType<typeof inviteClaimLine>>(null);
+  const isOffered = Boolean(offered);
+  useEffect(() => {
+    if (!isOffered) return;
+    let live = true;
+    void getLatestReferralClaimRecord()
+      .then((record) => {
+        if (live) setInviteLine(inviteClaimLine(record));
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [isOffered]);
   useEffect(() => () => {
     mounted.current = false;
     if (fillTimer.current) clearInterval(fillTimer.current);
@@ -282,6 +300,7 @@ function WelcomeCreditsPopupForAccount() {
                 fill={fill}
                 count={count}
                 message={message}
+                inviteLine={inviteLine}
                 onClaim={claim}
                 onFigureMeasured={setOrigin}
               />
@@ -352,6 +371,7 @@ function WelcomeCard({
   fill,
   count,
   message,
+  inviteLine = null,
   onClaim,
   onFigureMeasured,
 }: {
@@ -360,6 +380,8 @@ function WelcomeCard({
   fill: number;
   count: number;
   message: string | null;
+  /** What became of the invite the sign-up claimed, if it claimed one. */
+  inviteLine?: { tone: 'success' | 'info'; text: string } | null;
   onClaim: () => void;
   onFigureMeasured: (origin: ClaimOrigin | null) => void;
 }) {
@@ -478,6 +500,15 @@ function WelcomeCard({
       <View onLayout={keepFirstHeight(setNoteHeight)} style={{ justifyContent: 'center', minHeight: noteHeight }}>
         <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>{note}</AppText>
       </View>
+
+      {inviteLine ? (
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', gap: appTheme.spacing.compact }}>
+          {inviteLine.tone === 'success' ? <Check size={appTheme.icon.compact} color={theme.colors.success} /> : null}
+          <AppText variant="caption" color={inviteLine.tone === 'success' ? 'success' : 'muted'} style={{ flexShrink: 1, textAlign: 'center' }}>
+            {inviteLine.text}
+          </AppText>
+        </View>
+      ) : null}
 
       {message ? (
         <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text>
