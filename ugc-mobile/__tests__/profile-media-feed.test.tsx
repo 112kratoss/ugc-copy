@@ -996,6 +996,42 @@ describe('opening the feed on a card', () => {
     expect(openingCards()).toHaveLength(0);
   });
 
+  // Review of the card-feed retry, 2026-11-11: the ask put off for the page
+  // cooldown came due while a reorder had the list seeking its card again, and
+  // went past the landing's hold.
+  it('keeps an ask put off for the cooldown until a landing started over has ended', async () => {
+    vi.useFakeTimers();
+    const scrollToIndex = listState.handle.scrollToIndex;
+    try {
+      libraryState.hasNextPage = true;
+      openOn('gen-4');
+      await listLaidOut();
+      await act(async () => { listState.props!.onEndReached!(); });
+      expect(libraryState.fetchNextPage).toHaveBeenCalledTimes(1);
+      await act(async () => { vi.advanceTimersByTime(PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS / 2); });
+      libraryState.pageCount = 2;
+      await act(async () => { trees.at(-1)!.update(<ProfileMediaFeedScreen />); });
+      await act(async () => { listState.props!.onEndReached!(); });
+
+      // A refresh puts a new creation above the card, and the scroll back to it hangs.
+      let arrive!: () => void;
+      listState.handle.scrollToIndex = ({ index }) => {
+        listState.scrolledTo.push(index);
+        return new Promise<void>((resolve) => { arrive = resolve; });
+      };
+      libraryState.items = [creation('gen-0'), ...library];
+      await act(async () => { trees.at(-1)!.update(<ProfileMediaFeedScreen />); });
+      await act(async () => { vi.advanceTimersByTime(PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS); });
+      expect(libraryState.fetchNextPage).toHaveBeenCalledTimes(1);
+
+      await act(async () => { arrive(); });
+      expect(libraryState.fetchNextPage).toHaveBeenCalledTimes(2);
+    } finally {
+      listState.handle.scrollToIndex = scrollToIndex;
+      vi.useRealTimers();
+    }
+  });
+
   it('stands whole again when a reorder starts the landing over during its fade', async () => {
     openOn('gen-3');
     await listLaidOut();

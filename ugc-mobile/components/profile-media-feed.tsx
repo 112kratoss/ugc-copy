@@ -390,10 +390,11 @@ export function ProfileMediaFeedScreen() {
   // The library's next page, asked for while the feed is in front. A short
   // scope (Archived, or Active in a library of mostly archived or failed runs)
   // is at its end again as a page lands, and the list's ask then is refused for
-  // the gate's cooldown; the hook asks again when it ends.
+  // the gate's cooldown; the hook asks again when it ends, though not while a
+  // landing seeks its card (below): one asked meanwhile waits for it to end.
   const { requestNextPage, retryNextPage } = useNextFeedPageRequest({
     list: `${source}:${postsScope}:${libraryOwnerId ?? ''}`,
-    enabled: isFocused,
+    enabled: isFocused && landing.phase !== 'seeking',
     cooldownMs: PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
     hasNextPage,
     isBusy: libraryIsFetching,
