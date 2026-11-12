@@ -18,7 +18,9 @@
 // whose free recipe brings its Remix, by a third creator (fixtures/creation-post-free-recipe.json).
 // And one post editor's: an image post of
 // the E2E user's with one picture and no recipe (fixtures/post-composer-saved-twice.json). And
-// Pricing's referral terms: no active program, which Pricing drew from the failed read too. And the
+// Pricing's referral terms: no active program, which Pricing drew from the failed read too. And
+// /api/search/suggest's two calls (its rate limit, by its scope, and its read, for one query:
+// fixtures/search-suggestions.json), a route and not a page. And the
 // E2E user's recipe sales page, /marketplace/sell: two free recipes on text posts of theirs
 // (fixtures/seller-recipes.json), with no unlock orders and no deleted posts.
 // A page added here brings each of its reads, matched by method, path and the filters that name
@@ -55,6 +57,10 @@ const freeRemixPost = require('../fixtures/creation-post-free-recipe.json');
 // getSellerPostResourceBundleDashboard (src/lib/post-resource-bundles-server.ts).
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const sellerRecipes = require('../fixtures/seller-recipes.json');
+// What search_suggestions answers for one query, so that search-typeahead.spec.ts can send a
+// request through the real proxy and the real /api/search/suggest and read the headers of its 200.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const searchSuggestions = require('../fixtures/search-suggestions.json');
 // In the order the page asks for them: its recipes' posts as its read lists the recipes, newest
 // first, and the posts' covers as that read answers (the fixture's posts are in the same order).
 const sellerPostIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.post_id).join(',')})`;
@@ -70,6 +76,21 @@ function json(body, headers = {}) {
 }
 
 const READS = [
+  {
+    // GET /api/search/suggest: its own rate limit (enforceBackendRateLimit), allowed. Matched by the
+    // scope, so every other route's limit still fails offline as it did.
+    methods: ['POST'],
+    path: '/rest/v1/rpc/check_backend_rate_limit',
+    body: { p_scope: 'public-search:suggest' },
+    answer: () => json({ allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0, resetAt: '2026-11-12T12:00:00.000Z' }),
+  },
+  {
+    // ... and its one read (suggestSearch), for the one query the spec sends the real route.
+    methods: ['POST'],
+    path: '/rest/v1/rpc/search_suggestions',
+    body: { p_query: searchSuggestions.query },
+    answer: () => json(searchSuggestions.rows),
+  },
   {
     // loadCreatorProfileRow: the creator by handle. maybeSingle() asks for a list.
     methods: ['GET'],

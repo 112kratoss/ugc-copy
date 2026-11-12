@@ -1,0 +1,28 @@
+{
+  "query": "e2e typeahead vary",
+  "rows": {
+    "creators": [
+      {
+        "id": "workflow-user",
+        "username": "e2e-creator",
+        "display_name": "E2E Creator",
+        "avatar_url": null,
+        "is_following": false
+      }
+    ],
+    "entities": [
+      {
+        "kind": "tool",
+        "key": "e2e-tool",
+        "label": "E2E Tool",
+        "post_count": 2,
+        "post_count_capped": false
+      }
+    ],
+    "completions": [
+      {
+        "text": "e2e typeahead vary proof"
+      }
+    ]
+  }
+}

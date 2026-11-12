@@ -3,13 +3,30 @@ import { Search, X } from 'lucide-react';
 
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
+/**
+ * The typeahead a field controls: the field is then a combobox (the WAI-ARIA
+ * pattern), whose list is drawn by the page (SearchTypeaheadList) under the
+ * id it names.
+ */
+export type SearchFieldCombobox = {
+  /** The list is drawn. */
+  expanded: boolean;
+  listId: string;
+  /** The highlighted option's id, or none while the highlight is in the field. */
+  activeOptionId?: string;
+  /** Sees every key first; one it `preventDefault`s is not the field's. */
+  onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
+};
+
 export function SearchField({
   autoFocus = false,
+  combobox,
   onChange,
   onClear,
   value,
 }: {
   autoFocus?: boolean;
+  combobox?: SearchFieldCombobox;
   onChange: (value: string) => void;
   onClear: () => void;
   value: string;
@@ -29,7 +46,20 @@ export function SearchField({
         type="search"
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        {...(combobox ? {
+          role: 'combobox',
+          'aria-autocomplete': 'list' as const,
+          'aria-haspopup': 'listbox' as const,
+          'aria-expanded': combobox.expanded,
+          // Named only while it is drawn: the id of a list that is not there points at nothing.
+          'aria-controls': combobox.expanded ? combobox.listId : undefined,
+          'aria-activedescendant': combobox.expanded ? combobox.activeOptionId : undefined,
+        } : {})}
         onKeyDown={(event) => {
+          // The typeahead first: its Escape closes the list and keeps the
+          // text, and only with the list closed does Escape clear the field.
+          combobox?.onKeyDown(event);
+          if (event.defaultPrevented) return;
           if (event.key === 'Escape' && value) {
             event.preventDefault();
             onClear();
