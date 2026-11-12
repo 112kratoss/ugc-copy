@@ -205,15 +205,19 @@ select ok(not pg_temp.finds('notes', '0000f5d0-0000-4000-9000-000000000023'::uui
 
 -- ─── A query's characters match themselves ──────────────────────────────────
 
-select ok(not pg_temp.finds('nano_banana', '0000f5d0-0000-4000-9000-000000000021'::uuid),
+-- Since 20261111231942 a search also matches by words, which _, % and \
+-- separate as any punctuation does ('nano_banana' finds "Nano Banana"). These
+-- queries name no word of the text, so only a wildcard or an escape could
+-- find the recipe.
+select ok(not pg_temp.finds('ora_portr', '0000f5d0-0000-4000-9000-000000000021'::uuid),
   'an underscore is not a wildcard');
-select ok(not pg_temp.finds('aurora%recipe', '0000f5d0-0000-4000-9000-000000000021'::uuid),
+select ok(not pg_temp.finds('urora%ecipe', '0000f5d0-0000-4000-9000-000000000021'::uuid),
   'nor is a percent sign');
 select ok(pg_temp.finds('at 100% scale', '0000f5d0-0000-4000-9000-000000000023'::uuid),
   'a percent sign finds itself');
 select ok(pg_temp.finds('shot neo_noir', '0000f5d0-0000-4000-9000-000000000023'::uuid),
   'an underscore finds itself');
-select ok(not pg_temp.finds('golden\ portrait', '0000f5d0-0000-4000-9000-000000000021'::uuid),
+select ok(not pg_temp.finds('olden\ portrai', '0000f5d0-0000-4000-9000-000000000021'::uuid),
   'a backslash is not an escape');
 select ok(pg_temp.finds('file c:\lantern', '0000f5d0-0000-4000-9000-000000000023'::uuid),
   'a backslash finds itself');

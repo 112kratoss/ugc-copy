@@ -372,8 +372,8 @@ export const BACKEND_JOB_REGISTRY = [
   }),
   defineBackendJob({
     // Rebuilds the spelling dictionary `search_terms` from the words unlabelled
-    // public posts show now (search-dictionary.ts, `rebuild_search_terms()`).
-    // No post save writes that table, so this is what keeps it current. Hourly
+    // public posts and listed recipes show now (search-dictionary.ts,
+    // `rebuild_search_terms()`). No post or recipe save writes that table, so this is what keeps it current. Hourly
     // on the shared scheduler is enough: one bounded SQL call, a new post's
     // words are correctable within the hour, and a word leaves with its last
     // post.

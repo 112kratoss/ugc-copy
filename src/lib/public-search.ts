@@ -5,6 +5,14 @@ export const PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH = 3;
 export const PUBLIC_SEARCH_MAX_QUERY_LENGTH = 100;
 export const PUBLIC_SEARCH_DEFAULT_LIMIT = 20;
 export const PUBLIC_SEARCH_MAX_LIMIT = 24;
+/**
+ * The deepest offset a recipes cursor may carry: the marketplace list's own
+ * cap (MAX_MARKETPLACE_RESOURCE_OFFSET in
+ * marketplace-resource-list-route-adapter-service.ts, which this client-safe
+ * module cannot import; public-search.test.ts holds the two equal). Beyond it
+ * a cursor is invalid, a 400, never an integer the list's RPC overflows on.
+ */
+export const PUBLIC_SEARCH_MAX_RECIPE_OFFSET = 960;
 
 export const PUBLIC_SEARCH_TYPES = ['top', 'creators', 'posts', 'recipes'] as const;
 export type PublicSearchType = (typeof PUBLIC_SEARCH_TYPES)[number];
@@ -139,7 +147,13 @@ export function decodePublicSearchCursor(
     const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Record<string, unknown>;
     if (parsed.v !== 1 || parsed.t !== expectedType) return null;
     if (expectedType === 'recipes') {
-      if (!Number.isSafeInteger(parsed.o) || Number(parsed.o) < 0) return null;
+      if (
+        !Number.isSafeInteger(parsed.o)
+        || Number(parsed.o) < 0
+        || Number(parsed.o) > PUBLIC_SEARCH_MAX_RECIPE_OFFSET
+      ) {
+        return null;
+      }
       return { version: 1, type: expectedType, offset: Number(parsed.o) };
     }
     // The id feeds a uuid RPC parameter; rejecting malformed ids here keeps a

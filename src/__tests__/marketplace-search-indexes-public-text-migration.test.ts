@@ -126,7 +126,8 @@ describe('marketplace search indexes public text migration', () => {
       ['item.post?.sourceTool', "nullif(posts.source_tool, '')"],
       ["item.resourceKinds.join(' ')", kindWords],
     ];
-    const appFields = /function marketplaceItemMatchesQuery[\s\S]*?const searchableText = \[([\s\S]*?)\]\s*\.filter\(Boolean\)/.exec(serverSource)?.[1] ?? '';
+    // The text the app checks on (marketplaceItemSearchText since 20261111231942).
+    const appFields = /function marketplaceItemSearchText[\s\S]*?return \[([\s\S]*?)\]\s*\.filter\(Boolean\)/.exec(serverSource)?.[1] ?? '';
 
     expect(appFields.split(',').map((field) => field.trim()).filter(Boolean)).toEqual(fields.map(([app]) => app));
     expect(documentArguments).toEqual(["' '", ...fields.map(([, expression]) => expression)]);

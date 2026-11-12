@@ -96,6 +96,12 @@ let embeddedSourceFilters: Array<{ eq: Record<string, unknown>; or: string[] }>;
 let embeddedSourcePostIds: unknown[][];
 // Rows the marketplace's list RPC returns after `bundleRow`.
 let extraListedBundleRows: BundleRow[];
+// marketplace_search_texts_match, the list's recheck (20261111231942): each
+// call's texts and query, and a fake that holds a text to the query's words.
+let searchRecheckCalls: Array<{ texts: string[]; query: string }>;
+let searchRecheckError: unknown;
+// When set, the recheck answers exactly this data instead.
+let searchRecheckAnswer: { data: unknown } | null;
 // Recipes of other posts the read can return beside `bundleRow`, each already
 // nested with its post, generation and inputs.
 let extraCreationInputSources: Array<Record<string, unknown>>;
@@ -163,6 +169,15 @@ vi.mock('@/lib/server-helpers', () => ({
       }
       // The marketplace lists the published recipes there are, as its SQL
       // matched them: the fake searches nothing.
+      if (name === 'marketplace_search_texts_match') {
+        const texts = args.p_texts as string[];
+        const query = args.p_query as string;
+        searchRecheckCalls.push({ texts, query });
+        if (searchRecheckError) return { data: null, error: searchRecheckError };
+        if (searchRecheckAnswer) return { data: searchRecheckAnswer.data, error: null };
+        const words = query.split(' ');
+        return { data: texts.map((text) => words.every((word) => text.split(/\W+/).some((shown) => shown.startsWith(word)))), error: null };
+      }
       if (name === 'list_marketplace_resource_bundles') {
         return {
           data: [...(bundleRow ? [bundleRow] : []), ...extraListedBundleRows].filter((row) => row.status === 'published'),
@@ -753,6 +768,9 @@ describe('post resource bundle server access', () => {
     embeddedSourcePostIds = [];
     extraCreationInputSources = [];
     extraListedBundleRows = [];
+    searchRecheckCalls = [];
+    searchRecheckError = null;
+    searchRecheckAnswer = null;
   });
 
   it('keeps a published free recipe gated until the viewer adds it', async () => {
@@ -2094,6 +2112,85 @@ describe('post resource bundle server access', () => {
   // the saved generation setup it sells (sanitizePublicPostContent). The
   // marketplace drew that body on the card, sent it to search and matched
   // queries on it.
+  // The list matches a search by words on its search document; the page keeps
+  // a row only when the text its card shows holds them too.
+  describe('the recheck of a searched page', () => {
+    it('keeps a recipe whose card holds the words in another order, asking only about it', async () => {
+      const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+      const page = await getMarketplaceResourceList({ q: 'recipe creation' });
+
+      expect(page.items.map((item) => item.id)).toEqual(['bundle-1']);
+      expect(searchRecheckCalls).toHaveLength(1);
+      expect(searchRecheckCalls[0]?.query).toBe('recipe creation');
+      expect(searchRecheckCalls[0]?.texts).toEqual([expect.stringContaining('creation recipe')]);
+    });
+
+    it('asks nothing when the card holds the query as typed', async () => {
+      const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+      const page = await getMarketplaceResourceList({ q: 'creation recipe' });
+
+      expect(page.items.map((item) => item.id)).toEqual(['bundle-1']);
+      expect(searchRecheckCalls).toEqual([]);
+    });
+
+    it('sends the card’s text only, never what an unlock gives', async () => {
+      const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+      const page = await getMarketplaceResourceList({ q: 'public prompt text' });
+
+      // "Public prompt text" is the prompt item's text and the legacy prompt column.
+      expect(page.items).toEqual([]);
+      expect(searchRecheckCalls).toHaveLength(1);
+      expect(searchRecheckCalls[0]?.texts.join(' ')).not.toContain('public prompt text');
+    });
+
+    it('drops a row the recheck does not keep and still counts it toward the next page', async () => {
+      extraListedBundleRows = [{ ...(bundleRow as BundleRow), id: 'bundle-3', title: 'Lantern recipe' }];
+      const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+      const page = await getMarketplaceResourceList({ q: 'lantern', limit: 1 });
+
+      expect(page.items.map((item) => item.id)).toEqual(['bundle-3']);
+      // bundle-1 was read and dropped, bundle-3 served: the next page starts after both.
+      expect(page.pageInfo).toMatchObject({ hasMore: true, nextOffset: 2, offset: 0, limit: 1 });
+    });
+
+    it('drops the rows it could not ask about when the recheck fails, as the literal check did', async () => {
+      extraListedBundleRows = [{ ...(bundleRow as BundleRow), id: 'bundle-3', title: 'Lantern recipe' }];
+      searchRecheckError = { code: 'PGRST202', message: 'Could not find the function public.marketplace_search_texts_match' };
+      const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+      const reordered = await getMarketplaceResourceList({ q: 'recipe lantern', limit: 1 });
+      const literal = await getMarketplaceResourceList({ q: 'lantern', limit: 1 });
+
+      expect(reordered.items).toEqual([]);
+      expect(reordered.pageInfo).toMatchObject({ hasMore: true, nextOffset: 2 });
+      expect(literal.items.map((item) => item.id)).toEqual(['bundle-3']);
+    });
+
+    it.each([
+      ['an answer shorter than the texts it was asked about', [true]],
+      ['an answer longer than the texts it was asked about', [true, true, true]],
+      ['no answer at all', null],
+      ['an answer that is not a list', { 0: true, 1: true }],
+      ['an answer of nulls', [null, null]],
+    ])('drops every row it asked about on %s, still counting them', async (_case, data) => {
+      extraListedBundleRows = [{ ...(bundleRow as BundleRow), id: 'bundle-3', title: 'Lantern recipe' }];
+      searchRecheckAnswer = { data };
+      const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+      // Neither card holds "recipe lantern" as typed, so both are asked about.
+      const page = await getMarketplaceResourceList({ q: 'recipe lantern', limit: 1 });
+
+      expect(searchRecheckCalls).toHaveLength(1);
+      expect(searchRecheckCalls[0]?.texts).toHaveLength(2);
+      expect(page.items).toEqual([]);
+      expect(page.pageInfo).toMatchObject({ hasMore: true, nextOffset: 2 });
+    });
+  });
+
   describe('a paid recipe whose post’s caption is its saved generation setup', () => {
     const SETUP_CAPTION = 'Saved generation setup\nModel: Nano Banana 2\nLight: quillfeather glow over the water';
 
@@ -2117,7 +2214,11 @@ describe('post resource bundle server access', () => {
       const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
 
       expect((await getMarketplaceResourceList({ q: 'quillfeather glow' })).items).toEqual([]);
+      expect((await getMarketplaceResourceList({ q: 'glow quillfeather' })).items).toEqual([]);
+      // The recheck is asked about the card's text, which does not hold the caption.
+      expect(searchRecheckCalls.flatMap(({ texts }) => texts).join(' ')).not.toContain('quillfeather');
       expect((await getMarketplaceResourceList({ q: 'public recipe post' })).items).toHaveLength(1);
+      expect((await getMarketplaceResourceList({ q: 'post public recipe' })).items).toHaveLength(1);
     });
 
     it('does not name an untitled post after its setup', async () => {

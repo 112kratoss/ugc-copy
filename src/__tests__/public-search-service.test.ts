@@ -253,6 +253,34 @@ describe('public search service', () => {
     expect(pageThree.recipes.nextCursor).toBeNull();
   });
 
+  it('asks the list for recipes by relevance, and offers no next page past the cursor\'s cap', async () => {
+    const getMarketplaceResourceList = vi.fn(async ({ offset = 0, limit = 24 }: { offset?: number; limit?: number }) => ({
+      items: [{ id: `recipe-${offset}`, seller: { id: 'seller-1' } }],
+      pageInfo: { hasMore: true, nextOffset: offset + limit, offset, limit },
+    }));
+    const searchRecipes = (offset: number) => searchPublicContent({
+      query: 'portrait',
+      normalizedQuery: 'portrait',
+      type: 'recipes',
+      cursor: { version: 1, type: 'recipes', offset },
+      limit: 20,
+      viewerUserId: null,
+      countryCode: null,
+    }, {
+      createServiceClient: vi.fn(() => ({ rpc: vi.fn() }) as unknown as SupabaseClient),
+      getMarketplaceResourceList: getMarketplaceResourceList as never,
+    });
+
+    const early = await searchRecipes(920);
+    const last = await searchRecipes(950);
+
+    expect(getMarketplaceResourceList.mock.calls.map(([options]) => (options as { sort?: string }).sort))
+      .toEqual(['relevance', 'relevance']);
+    expect(decodePublicSearchCursor(early.recipes.nextCursor, 'recipes')).toEqual({ version: 1, type: 'recipes', offset: 940 });
+    // 970 would be refused as invalid: the list ends here instead.
+    expect(last.recipes.nextCursor).toBeNull();
+  });
+
   // Decision 6 (2026-10-17): a recipe result counts paid sales and free unlocks apart.
   it('hands a recipe\'s paid sales and free unlocks out apart', async () => {
     const getMarketplaceResourceList = vi.fn(async () => ({
