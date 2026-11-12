@@ -274,6 +274,27 @@ select throws_ok(
   'P0001', 'Entity search limit must be between 1 and 10', 'a limit above ten is refused'
 );
 
+-- The name shown is a visible post's. …34 is labelled and the first post seen
+-- with its tool, under a name of its own; …35 prints the same tool otherwise.
+select pg_temp.post('34', '02', 'Label first', 'A labelled frame', 'image', 'VELLUM   forge', null, interval '1 day', false, true);
+select is(
+  (select label from public.search_entity_labels where kind = 'tool' and key = 'vellum-forge'),
+  'VELLUM   forge',
+  'fixture: the tool is first seen on a labelled post, under the name that post prints'
+);
+select is(pg_temp.entities_found('vellum'), '{}'::text[], 'and is not offered while only that post has it');
+select pg_temp.post('35', '02', 'Label second', 'A quiet frame', 'image', 'Vellum Forge', null, interval '1 day');
+select is(
+  (select array_agg(e.label || '=' || e.post_count) from public.search_public_entities('vellum') as e),
+  array['Vellum Forge=1'],
+  'offered once a visible post has it, under the name the visible post prints, never the labelled post''s'
+);
+select is(
+  (select label from public.post_search_entities where post_id = pg_temp.post_id('35') and kind = 'tool'),
+  'Vellum Forge',
+  'each post''s row keeps the name that post prints'
+);
+
 -- The order: the entity that is the query first, then by count.
 select pg_temp.post('31', '02', 'Brindle one', 'A quiet frame', 'image', 'Brindle Studio', 'brindle-studio', interval '1 day');
 select pg_temp.post('32', '02', 'Brindle two', 'A quiet frame', 'image', 'Brindle Studio', 'brindle-studio', interval '1 day');

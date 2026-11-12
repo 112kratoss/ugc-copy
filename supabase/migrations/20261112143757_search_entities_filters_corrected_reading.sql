@@ -22,21 +22,29 @@
 --                       its name where it has no slug, lowercased, every run
 --                       of other characters a hyphen ('kling-2.6', 'veo-3.1',
 --                       'magicbooklet')
+--      label            the name that post prints for it ('Kling 2.6'); the
+--                       key where it prints none
 --      creator_user_id  the post's creator, so a count leaves both sides of
 --                       a block out without reading the document
 --
---    public.search_entity_labels: every entity ever seen on such a post, by
---    the name posts print.
+--    public.search_entity_labels: every entity ever seen on such a post, the
+--    index a query is matched against.
 --      kind, key        as above; the primary key
---      label            the name as a post shows it ('Kling 2.6'); the key
---                       itself until a post names it better
+--      label            the name the first post seen with it printed; the
+--                       key itself until a post names it better
 --      name_vector      generated from label and key
 --                       (search_term_variants: as written, split, joined),
 --                       what a query is matched against
 --      created_at       when the entity was first seen
 --    A row is never removed when its last post goes: an entity is offered
 --    only while a post the viewer may see has it, so a stale row costs one
---    empty count and shows nothing.
+--    empty count and shows nothing. The name an entity is SHOWN under is
+--    never this row's: it is taken from the rows of the posts the viewer may
+--    see, so a name only a labelled post printed is not shown. (Which words
+--    find an entity can still come from this row. A save writes one name per
+--    slug, save_post_source_tools_with_catalog, and a tool with no slug is
+--    keyed by its name, so the names differ at most in case and
+--    punctuation.)
 --
 --    They are kept by a statement trigger on post_search_documents (AFTER
 --    INSERT; the projection deletes and inserts a post's document on every
@@ -59,7 +67,8 @@
 --    is public.search_public_entities(p_query, p_viewer_user_id, p_limit,
 --    p_made_with), which /api/search calls and a typeahead can call the same
 --    way. It returns
---      kind, key, label   as above
+--      kind, key          as above
+--      label              the name a post the viewer may see prints for it
 --      post_count         the posts the viewer may see that have the entity:
 --                         unlabelled (posts.is_nsfw = false) public posts,
 --                         both sides of a block left out, counted live and no
@@ -171,12 +180,13 @@ REVOKE ALL ON TABLE public.search_entity_labels FROM PUBLIC, anon, authenticated
 GRANT SELECT ON TABLE public.search_entity_labels TO service_role;
 
 COMMENT ON TABLE public.search_entity_labels IS
-  'Backend-owned: every model and tool seen on a post with a search document, by key and by the name posts print, with the vector a query is matched against. Written only by refresh_post_search_entities. Read it through search_public_entities, which returns an entity only while a post the viewer may see has it.';
+  'Backend-owned: every model and tool seen on a post with a search document, by key, with the vector a query is matched against. Written only by refresh_post_search_entities. Read it through search_public_entities, which returns an entity only while a post the viewer may see has it, under the name such a post prints.';
 
 CREATE TABLE public.post_search_entities (
   post_id uuid NOT NULL REFERENCES public.post_search_documents(post_id) ON DELETE CASCADE,
   kind text NOT NULL CHECK (kind IN ('model', 'tool')),
   key text NOT NULL CHECK (char_length(key) BETWEEN 1 AND 80),
+  label text NOT NULL CHECK (char_length(label) BETWEEN 1 AND 80),
   creator_user_id uuid NOT NULL,
   PRIMARY KEY (kind, key, post_id)
 );
@@ -190,7 +200,7 @@ REVOKE ALL ON TABLE public.post_search_entities FROM PUBLIC, anon, authenticated
 GRANT SELECT ON TABLE public.post_search_entities TO service_role;
 
 COMMENT ON TABLE public.post_search_entities IS
-  'Backend-owned: the models and tools each post with a search document is made with, one row per post and entity. Kept by a trigger on post_search_documents; a row leaves with its document. The made-with filter of search_public_posts and the counts of search_public_entities read it.';
+  'Backend-owned: the models and tools each post with a search document is made with, one row per post and entity, under the name that post prints. Kept by a trigger on post_search_documents; a row leaves with its document. The made-with filter of search_public_posts and the counts of search_public_entities read it.';
 
 CREATE FUNCTION public.post_search_entity_rows(p_post_ids uuid[])
 RETURNS TABLE(post_id uuid, creator_user_id uuid, kind text, key text, label text)
@@ -294,8 +304,8 @@ BEGIN
     SELECT * FROM public.post_search_entity_rows(p_post_ids)
   ),
   stored AS (
-    INSERT INTO public.post_search_entities (post_id, kind, key, creator_user_id)
-    SELECT fresh.post_id, fresh.kind, fresh.key, fresh.creator_user_id
+    INSERT INTO public.post_search_entities (post_id, kind, key, label, creator_user_id)
+    SELECT fresh.post_id, fresh.kind, fresh.key, fresh.label, fresh.creator_user_id
     FROM fresh
   )
   INSERT INTO public.search_entity_labels (kind, key, label)
@@ -409,16 +419,19 @@ BEGIN
   SELECT
     labels.kind,
     labels.key,
-    labels.label,
+    counted.label,
     least(counted.post_total, c_count_cap) AS post_count,
     counted.post_total > c_count_cap AS post_count_capped
   FROM public.search_entity_labels AS labels
   CROSS JOIN LATERAL (
     -- The posts a Posts search filtered to this entity pages through for
-    -- this viewer: unlabelled, neither side of a block.
-    SELECT count(*)::integer AS post_total
+    -- this viewer: unlabelled, neither side of a block. The name shown is
+    -- one of theirs, a name that is not just the key before one that is.
+    SELECT
+      count(*)::integer AS post_total,
+      (array_agg(seen.label ORDER BY (seen.label = labels.key), seen.label))[1] AS label
     FROM (
-      SELECT 1
+      SELECT members.label
       FROM public.post_search_entities AS members
       JOIN public.posts AS posts ON posts.id = members.post_id
       WHERE members.kind = labels.kind
@@ -447,7 +460,7 @@ BEGIN
     )
     AND counted.post_total > 0
   ORDER BY
-    (lower(labels.label) = v_query OR labels.key = v_query) DESC,
+    (lower(counted.label) = v_query OR labels.key = v_query) DESC,
     counted.post_total DESC,
     labels.kind,
     labels.key
@@ -456,7 +469,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.search_public_entities(text, uuid, integer, text) IS
-  'The single source for which models and tools exist in search and how many posts each has. For p_query: the entities whose name holds every word of it (the last a prefix), the one that is the query first, then by count. For p_made_with (model:<key> or tool:<key>): that entity. post_count is the unlabelled public posts with the entity that p_viewer_user_id may see (both sides of a block left out), counted live up to 1,000; post_count_capped says there are more. An entity with no such post is never returned. Service role only.';
+  'The single source for which models and tools exist in search and how many posts each has. For p_query: the entities whose name holds every word of it (the last a prefix), the one that is the query first, then by count. For p_made_with (model:<key> or tool:<key>): that entity. label is the name a post the viewer may see prints for it. post_count is the unlabelled public posts with the entity that p_viewer_user_id may see (both sides of a block left out), counted live up to 1,000; post_count_capped says there are more. An entity with no such post is never returned. Service role only.';
 
 REVOKE ALL ON FUNCTION public.search_public_entities(text, uuid, integer, text)
   FROM PUBLIC, anon, authenticated;

@@ -224,6 +224,10 @@ describe('search entities and filters migration', () => {
     expect(entities.match(BLOCKED_BY_VIEWER)).toHaveLength(1);
     expect(entities.match(BLOCKED_THE_VIEWER)).toHaveLength(1);
     expect(entities).toContain('AND counted.post_total > 0');
+    // The name shown comes from the counted rows: a post the viewer may see printed it.
+    expect(entities).toMatch(/\(array_agg\(seen\.label ORDER BY \(seen\.label = labels\.key\), seen\.label\)\)\[1\] AS label/);
+    expect(entities).toMatch(/SELECT\s+labels\.kind,\s+labels\.key,\s+counted\.label,/);
+    expect(entities).not.toMatch(/^\s+labels\.label,$/m);
     // Counted no further than the cap, so one entity every post has costs no more.
     expect(entities).toContain('c_count_cap CONSTANT integer := 1000;');
     expect(entities).toContain('LIMIT c_count_cap + 1');
