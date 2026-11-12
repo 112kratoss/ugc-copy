@@ -53,7 +53,7 @@ type PostSearchRpcRow = {
   created_at: string;
   /**
    * The query as the spelling correction read it, on every row; null when it
-   * was read as typed. Absent from a database before 20261112143757.
+   * was read as typed. Absent from a database before 20261112174210.
    */
   corrected_query?: string | null;
 };

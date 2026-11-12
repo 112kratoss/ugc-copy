@@ -192,7 +192,7 @@ describe('search recall migration', () => {
   it('matches posts on the new query, labelled posts still left out, and corrects a query nothing holds', () => {
     // Re-created since by the ranking migration (20261112103547: tiers, an
     // instant, Latest, blocks) and by the entities and filters migration
-    // (20261112143757: filters, the corrected reading), which must keep every
+    // (20261112174210: filters, the corrected reading), which must keep every
     // rule below.
     const { file, definition } = newestDefinition('search_public_posts');
     expect(file).toMatch(/_search_entities_filters_corrected_reading\.sql$/);

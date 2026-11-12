@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 
 const migrationsDirectory = join(process.cwd(), 'supabase/migrations');
 const migrationNames = readdirSync(migrationsDirectory).filter((name) => name.endsWith('.sql')).sort();
-const MIGRATION = '20261112143757_search_entities_filters_corrected_reading.sql';
+const MIGRATION = '20261112174210_search_entities_filters_corrected_reading.sql';
 const migration = readFileSync(join(migrationsDirectory, MIGRATION), 'utf8');
 const statements = migration.replace(/--.*$/gm, '');
 
@@ -45,8 +45,13 @@ const BLOCKED_BY_VIEWER = /AND NOT EXISTS \(\s+SELECT 1\s+FROM public\.user_bloc
 const BLOCKED_THE_VIEWER = /AND NOT EXISTS \(\s+SELECT 1\s+FROM public\.user_blocks AS blocks\s+WHERE blocks\.blocker_user_id = (?:documents|members)\.creator_user_id\s+AND blocks\.blocked_user_id = p_viewer_user_id\s+\)/g;
 
 describe('search entities and filters migration', () => {
-  it('runs after the ranking migration, as one transaction that gives up on a busy table', () => {
+  it('runs after the ranking and typeahead migrations, as one transaction that gives up on a busy table', () => {
     expect(MIGRATION > '20261112103547').toBe(true);
+    // The release applies migrations in stamp order and refuses a pending one
+    // stamped at or before the newest applied: this file was re-stamped behind
+    // the typeahead migration (20261112144018, #775), which reached main first.
+    expect(MIGRATION > '20261112144018').toBe(true);
+    expect(migrationNames.at(-1) >= MIGRATION).toBe(true);
     expect(statements.trim().startsWith("BEGIN;\nSET LOCAL lock_timeout = '5s';")).toBe(true);
     expect(statements.trim().endsWith('COMMIT;')).toBe(true);
     for (const name of [
@@ -78,10 +83,21 @@ describe('search entities and filters migration', () => {
       'rebuild_search_terms', 'search_corrected_query', 'refresh_post_search_documents',
       'refresh_creator_search_documents', 'search_query_tsquery', 'search_split_terms', 'search_term_variants',
       'search_query_report', 'list_marketplace_resource_bundles', 'marketplace_search_texts_match',
+      // The typeahead migration's (20261112144018), which this file applies after.
+      'search_suggest_completions', 'search_suggest_creators', 'search_suggestions',
     ]) {
       expect(statements, name).not.toMatch(new RegExp(`FUNCTION public\\.${name}\\(`));
     }
     expect(statements).not.toMatch(/\bsearch_terms\b/);
+    expect(statements).not.toContain('search_suggestion_denylist');
+    expect(statements).not.toContain('creator_search_documents');
+    // Each of those is still defined last where it was: nothing here shadows one.
+    expect(newestDefiner('rebuild_search_terms')).toBe('20261112144018_search_suggestions_typeahead.sql');
+    for (const name of ['search_suggest_completions', 'search_suggest_creators', 'search_suggestions']) {
+      expect(newestDefiner(name), name).toBe('20261112144018_search_suggestions_typeahead.sql');
+    }
+    expect(newestDefiner('search_corrected_query')).toBe('20261111231942_recipe_search_recall_and_relevance.sql');
+    expect(newestDefiner('refresh_post_search_documents')).toBe('20261111224010_search_recall_models_prefixes_stems_typos.sql');
   });
 
   it('keeps the call of the app live during the release resolving to one function', () => {

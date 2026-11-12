@@ -117,7 +117,7 @@ fine), and a Latest recipes cursor is read as an offset into the relevance order
 
 Search also offers the models and tools posts are made with ("Kling 2.6, 14
 posts") and narrows Posts by them, by media kind, by "has a recipe" and by
-"from creators I follow" (`20261112143757`). `post_search_entities` holds which
+"from creators I follow" (`20261112174210`). `post_search_entities` holds which
 entities each post with a search document has, each under the name that post
 prints; it is written only by a trigger on `post_search_documents`, a row
 leaves with its document, and nothing else is kept of an entity.

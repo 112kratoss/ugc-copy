@@ -207,7 +207,7 @@ AS $function$
 BEGIN
   -- plpgsql, so the plan is kept: as a sql function with a SET clause this
   -- was planned anew on every call, twice per projected post, and that was
-  -- most of what a projection cost (about 7 ms; 20261112143757's review).
+  -- most of what a projection cost (about 7 ms; 20261112174210's review).
   RETURN QUERY
   WITH subjects AS (
     SELECT
@@ -885,7 +885,7 @@ ALTER TABLE public.search_query_events
   ADD COLUMN corrected boolean;
 
 COMMENT ON COLUMN public.search_query_events.made_with IS
-  'A Posts search''s made-with filter (model:<key> or tool:<key>). NULL without one, for other search types and for rows written before 20261112143757.';
+  'A Posts search''s made-with filter (model:<key> or tool:<key>). NULL without one, for other search types and for rows written before 20261112174210.';
 COMMENT ON COLUMN public.search_query_events.media_kind IS
   'A Posts search''s media filter: image or video. NULL without one.';
 COMMENT ON COLUMN public.search_query_events.has_recipe IS
@@ -893,6 +893,6 @@ COMMENT ON COLUMN public.search_query_events.has_recipe IS
 COMMENT ON COLUMN public.search_query_events.followed_only IS
   'True when a Posts search asked only for posts by creators the viewer follows. NULL otherwise.';
 COMMENT ON COLUMN public.search_query_events.corrected IS
-  'Whether the answer''s posts or recipes were found on a corrected reading of the query. NULL for a Creators search and for rows written before 20261112143757.';
+  'Whether the answer''s posts or recipes were found on a corrected reading of the query. NULL for a Creators search and for rows written before 20261112174210.';
 
 COMMIT;
