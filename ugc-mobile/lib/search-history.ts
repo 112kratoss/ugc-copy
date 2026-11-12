@@ -18,6 +18,15 @@ export function normalizeCreatorSearchQuery(value: string | null | undefined): s
   return normalizeSearchHistoryQuery(value ?? '').replace(/^@+/, '');
 }
 
+/**
+ * A query's length as the server counts it (publicSearchQueryLength in
+ * src/lib/public-search.ts, and the database's char_length behind it): in
+ * characters, where `.length` counts an emoji as two.
+ */
+export function searchQueryLength(value: string): number {
+  return Array.from(value).length;
+}
+
 export async function readSearchHistory(storage: SearchHistoryStorage = AsyncStorage) {
   try {
     const raw = await storage.getItem(SEARCH_HISTORY_KEY);

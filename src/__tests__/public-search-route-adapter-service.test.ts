@@ -65,6 +65,33 @@ describe('public search route adapter service', () => {
     });
   });
 
+  it('refuses a query the database would count as too short, an emoji being one character', async () => {
+    // search_public_creators and search_public_posts raise below two and three
+    // characters by char_length: a query let through on `.length` was a 500.
+    const searchPublicContent = vi.fn(async () => emptyResponse('', 'top'));
+    const ask = (search: string) => getPublicSearchRouteResponse({
+      request: new Request(`http://localhost/api/search?${search}`),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        createUserClient: vi.fn(),
+        enforceBackendRateLimit: vi.fn(allowedRateLimit),
+        getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
+        searchPublicContent,
+        withProviderFetchRequestId: requestIdBoundary,
+      },
+    });
+    const emoji = encodeURIComponent('\u{1F600}');
+
+    expect((await ask(`q=${emoji}`)).status).toBe(400);
+    expect((await ask(`q=${emoji}${emoji}&type=posts`)).status).toBe(400);
+    expect((await ask(`q=${emoji}${emoji}&type=recipes`)).status).toBe(400);
+    expect(searchPublicContent).not.toHaveBeenCalled();
+
+    expect((await ask(`q=${emoji}${emoji}&type=creators`)).status).toBe(200);
+    expect((await ask(`q=${emoji}${emoji}${emoji}&type=posts`)).status).toBe(200);
+    expect(searchPublicContent).toHaveBeenCalledTimes(2);
+  });
+
   it('uses verified optional auth for personalized filtering', async () => {
     const searchPublicContent = vi.fn(async () => emptyResponse('@luna', 'creators'));
     const response = await getPublicSearchRouteResponse({

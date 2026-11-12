@@ -12,6 +12,7 @@ export type BackendJobName =
   | 'operational-data-retention'
   | 'recipe-copy-sweep'
   | 'referral-reward-reconciliation'
+  | 'search-dictionary'
   | 'showcase-media-revocations'
   | 'workflow-run-steps';
 
@@ -69,6 +70,7 @@ export type BackendJobDefinition = {
  * generation request's response, not on a cron, and are latched to one per
  * ten minutes (`kie-account-balance-refusal.ts`). `recipe-copy-sweep` is the
  * same: four logical runs a day inside the shared tick, no cron entry.
+ * `search-dictionary` too: 24 logical runs a day, no cron entry.
  */
 export const BACKEND_JOB_DAILY_INVOCATION_BUDGET = 456;
 
@@ -367,6 +369,21 @@ export const BACKEND_JOB_REGISTRY = [
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'no_unsettled_referral_rewards',
     maxMissedRunsBeforeDegraded: 2,
+  }),
+  defineBackendJob({
+    // Rebuilds the spelling dictionary `search_terms` from the words unlabelled
+    // public posts show now (search-dictionary.ts, `rebuild_search_terms()`).
+    // No post save writes that table, so this is what keeps it current. Hourly
+    // on the shared scheduler is enough: one bounded SQL call, a new post's
+    // words are correctable within the hour, and a word leaves with its last
+    // post.
+    name: 'search-dictionary',
+    route: '/api/cron/search-dictionary',
+    schedule: '0 * * * *',
+    maxDurationSeconds: 60,
+    lockTtlSeconds: 120,
+    noWorkSkipReason: 'search_dictionary_no_work',
+    maxMissedRunsBeforeDegraded: 3,
   }),
   defineBackendJob({
     // Hourly is enough: the post update and publish routes delete a public

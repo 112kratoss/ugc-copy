@@ -172,9 +172,11 @@ describe('post search public caption migration', () => {
 
   it('leaves post search reading the document as before', () => {
     expect(definitionIn(statements, 'FUNCTION', 'search_public_posts')).toBeNull();
-    expect(latest('FUNCTION', 'search_public_posts')).toMatch(
-      /documents\.search_vector @@ plainto_tsquery\('simple', v_query\)\s+OR documents\.search_text ILIKE/,
-    );
+    // Its query has changed since (the search recall migration: prefixes,
+    // stems, misspellings); what it matches is still the document alone.
+    const search = latest('FUNCTION', 'search_public_posts');
+    expect(search).toMatch(/documents\.search_vector @@ v_tsquery\s+OR documents\.search_text ILIKE/);
+    expect(search).not.toMatch(/\bposts\.(?:title|body|prompt|description)\b/);
   });
 
   it('runs as one transaction that gives up on a busy table, and re-projects the documents the rules change last', () => {

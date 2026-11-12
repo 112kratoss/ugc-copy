@@ -67,6 +67,12 @@ insert into public.post_resource_bundles (
   '[]'::jsonb, 300, 0, 0, now(), now()
 );
 
+-- Made with rows cascade from the post, and their statement triggers
+-- (trg_refresh_post_search_document_for_source_tools) re-project it too: they
+-- must find it gone as the recipe's trigger does.
+insert into public.post_source_tools (post_id, tool_label, tool_slug, model_label, model_slug, sort_order)
+values ('0000c5eb-0000-4000-9000-000000000011'::uuid, 'Nano Banana', 'nano-banana', 'Nano Banana Pro', 'nano-banana-pro', 0);
+
 select ok(
   exists (select 1 from public.post_search_documents
           where post_id = '0000c5eb-0000-4000-9000-000000000011'::uuid),

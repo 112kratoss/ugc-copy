@@ -8,12 +8,22 @@ import {
   normalizePublicSearchQuery,
   parsePublicSearchLimit,
   parsePublicSearchType,
+  publicSearchQueryLength,
 } from '@/lib/public-search';
 
 describe('public search policy', () => {
   it('normalizes unicode, whitespace, and creator handles', () => {
     expect(normalizePublicSearchQuery('  AI\t  UGC  ')).toBe('AI UGC');
     expect(normalizeCreatorSearchQuery('  @@Creator-Name  ')).toBe('Creator-Name');
+  });
+
+  it('counts a query in characters, as the database does, not in UTF-16 units', () => {
+    // An emoji is one character to Postgres' char_length and two to `.length`.
+    expect('\u{1F600}'.length).toBe(2);
+    expect(publicSearchQueryLength('\u{1F600}')).toBe(1);
+    expect(publicSearchQueryLength('\u{1F600}\u{1F600}')).toBe(2);
+    expect(publicSearchQueryLength('veo 3')).toBe(5);
+    expect(publicSearchQueryLength('')).toBe(0);
   });
 
   it('rejects oversized raw queries instead of silently accepting truncation', () => {

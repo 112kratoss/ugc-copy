@@ -8,8 +8,10 @@ import {
   type MarketplaceResourceListItem,
 } from '@/lib/post-resource-bundles-server';
 import {
+  PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
   emptyPublicSearchPage,
   encodePublicSearchCursor,
+  publicSearchQueryLength,
   type CreatorSearchResult,
   type PublicSearchCursor,
   type PublicSearchResponse,
@@ -178,7 +180,7 @@ export async function searchPublicContent(
   const dependencies = resolveDependencies(dependencyOverrides);
   const adminSupabase = dependencies.createServiceClient();
   const isTop = options.type === 'top';
-  const contentQueryAllowed = options.normalizedQuery.length >= 3;
+  const contentQueryAllowed = publicSearchQueryLength(options.normalizedQuery) >= PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH;
   const creatorTake = isTop ? 5 : options.limit + 1;
   const postTake = isTop ? 12 : options.limit + 1;
   // The marketplace list already reads one row past the page to learn whether
