@@ -12,6 +12,7 @@ import {
   getUnlockDestination,
   getUnlockStateBadge,
   getUnlockThumbnailUrl,
+  isUnlockOfTextPost,
   hasResourcePictures,
   summarizeUnlockCount,
 } from '@/lib/unlock-library-view-model';
@@ -285,6 +286,15 @@ describe('unlock thumbnails (03-3 / 03-4)', () => {
     expect(getUnlockThumbnailUrl(createUnlock({ post: { ...post, mediaKind: 'video', mediaUrl: 'https://cdn.test/clip.mp4' } })))
       .toBeNull();
     expect(getUnlockThumbnailUrl(createUnlock({ post: null }))).toBeNull();
+  });
+
+  it('knows a recipe on a post of writing, which has no still to wait for', () => {
+    const text = { ...post, category: 'text', postFormat: 'text', mediaUrl: null, mediaKind: null, previewUrl: null };
+    expect(isUnlockOfTextPost(createUnlock({ post: text }))).toBe(true);
+    // Writing posted with a picture is a picture's row.
+    expect(isUnlockOfTextPost(createUnlock({ post: { ...text, mediaUrl: 'https://cdn.test/look.jpg', mediaKind: 'image' } }))).toBe(false);
+    expect(isUnlockOfTextPost(createUnlock({ post: { ...post, category: 'image', postFormat: 'media' } }))).toBe(false);
+    expect(isUnlockOfTextPost(createUnlock({ post: null }))).toBe(false);
   });
 });
 

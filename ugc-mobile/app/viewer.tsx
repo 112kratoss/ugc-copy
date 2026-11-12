@@ -54,6 +54,7 @@ import { env } from '@/lib/env';
 import { TopScrim } from '@/components/top-scrim';
 import { ViewerTopControl } from '@/components/viewer-top-control';
 import { IconShadow, ReelSlideChrome } from '@/components/reel-chrome';
+import { ReelNotesSlide } from '@/components/reel-notes-slide';
 import { ZoomPostChrome } from '@/components/zoom-post-chrome';
 import {
   getImmersiveInitialIndex,
@@ -173,6 +174,7 @@ import { useScreenReturn } from '@/lib/use-screen-return';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
 import { useStableSignedUrl } from '@/lib/use-stable-signed-url';
 import { verticalHitSlop } from '@/lib/hit-target';
+import { buildReelList, closeReachedNoteSets } from '@/lib/reel-note-sets';
 import { changeViewerPage, initialViewerPosition, isDetailsPageCovering, pickViewerItemAfterRemoval, resolveViewerPosition, settleViewerItem, slidePageKey, type ViewerPosition } from '@/lib/viewer-position';
 
 type ViewerParams = {
@@ -513,7 +515,33 @@ function ImmersivePreviewViewer() {
         : sourceItems,
     });
   }
-  const items = sessionItems.ordered;
+  // Notes near each other in a lane share one page, as a row of cards
+  // (lib/reel-note-sets.ts). The page is held in this list by the note in front,
+  // carrying its set: every index below stays one page, one item, and the
+  // reel's current post on that page is the card the reader is looking at, so
+  // its impression, save and comments are that note's own. Owned libraries are
+  // left alone: a text creation there is a slide of its own.
+  const clubsNotes = source === 'showcase-feed' || source === 'creator-profile';
+  const [frontNoteIds, setFrontNoteIds] = useState<Record<string, string>>({});
+  // The sets the reader has reached: closed to newcomers, so a note from the
+  // lane's next page gets a page ahead, not a card behind.
+  const [closedNoteGroups, setClosedNoteGroups] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const currentItemId = savedPosition?.itemId ?? null;
+  const items = useMemo(() => {
+    const ordered = sessionItems.ordered;
+    if (!clubsNotes) return ordered;
+    const list = buildReelList(ordered, {
+      isNote: isReelNote,
+      anchorId: initialId,
+      // A recipe opened from search lands on its post's Details page, which a
+      // row of cards does not have: that note keeps a slide of its own.
+      soloId: initialPage === 'details' ? initialId : null,
+      closedGroups: closedNoteGroups,
+      currentId: currentItemId,
+      frontNoteIds,
+    });
+    return list.some((entry) => entry.noteSet) ? list : ordered;
+  }, [closedNoteGroups, clubsNotes, currentItemId, frontNoteIds, initialId, initialPage, sessionItems.ordered]);
   // The item the route named did not load: deleted, archived elsewhere, or no
   // longer the reader's. Shown as that, never replaced by the first item (C1).
   const selectionMissing = grid
@@ -542,6 +570,11 @@ function ImmersivePreviewViewer() {
     [items, savedPosition, initialId, initialPage]
   );
   const activeIndex = Math.max(0, items.findIndex((item) => item.id === position?.itemId));
+  useEffect(() => {
+    if (!clubsNotes) return;
+    // The same map comes back when nothing new was reached, and React keeps the state.
+    setClosedNoteGroups((current) => closeReachedNoteSets(current, items, activeIndex));
+  }, [activeIndex, clubsNotes, items]);
   // ExoPlayer creation can block Android's handoff commit for hundreds of ms.
   // First activate the already-prepared player; refresh the neighbouring player
   // range in a lower-priority render. iOS keeps its existing preparation timing.
@@ -556,6 +589,13 @@ function ImmersivePreviewViewer() {
       return target ? settleViewerItem(current, target) : current;
     });
   }, [items, initialId, initialPage]);
+  // A sideways swipe on a page of notes: the card that landed becomes the page's
+  // item and the reel's current post, in one commit, so the position never
+  // names a note the list no longer holds.
+  const showFrontNote = useCallback((setKey: string, note: ImmersivePreviewItem) => {
+    setFrontNoteIds((current) => (current[setKey] === note.id ? current : { ...current, [setKey]: note.id }));
+    setSavedPosition((saved) => settleViewerItem(saved, note));
+  }, []);
   const changePage = useCallback((itemId: string, pageKey: string) => {
     setSavedPosition((saved) => {
       const current = resolveViewerPosition(items, saved, initialId, initialPage);
@@ -1594,7 +1634,8 @@ function ImmersivePreviewViewer() {
         initialNumToRender={IMMERSIVE_VERTICAL_LIST_TUNING.initialNumToRender}
         initialScrollIndex={initialIndex}
         contentOffset={initialContentOffset ?? undefined}
-        keyExtractor={(item) => `${item.source}-${item.id}`}
+        // A page of notes keeps its row mounted as the card in front changes.
+        keyExtractor={(item) => `${item.source}-${item.noteSet?.key ?? item.id}`}
         maxToRenderPerBatch={IMMERSIVE_VERTICAL_LIST_TUNING.maxToRenderPerBatch}
         onMomentumScrollEnd={(event) => {
           const nextIndex = Math.round(event.nativeEvent.contentOffset.y / height);
@@ -1692,7 +1733,29 @@ function ImmersivePreviewViewer() {
         // Detaching a TextureView discards the frame we prepared offscreen.
         // Virtualization still bounds mounted rows through windowSize.
         removeClippedSubviews={false}
-        renderItem={({ item, index }) => (
+        renderItem={({ item, index }) => (item.noteSet ? (
+          <ReelNotesSlide
+            active={index === activeIndex}
+            setKey={item.noteSet.key}
+            notes={item.noteSet.notes}
+            frontNoteId={item.id}
+            label={source === 'creator-profile' ? `Notes by ${item.creatorLabel}` : 'Notes for you'}
+            width={width}
+            height={height}
+            topInset={topInset}
+            bottomInset={bottomInset}
+            savingPostId={saveMutation.isPending ? saveMutation.variables?.postId ?? null : null}
+            onFrontNoteChange={showFrontNote}
+            onSave={slideHandlers.onSave}
+            onComments={slideHandlers.onComments}
+            onShare={slideHandlers.onShare}
+            onCreatorOpen={slideHandlers.onCreatorOpen}
+            onActionsOpen={slideHandlers.onActionsOpen}
+            onHorizontalScrollToggle={setIsHorizontalScrolling}
+            onLayoutAsNeighbour={index === activeIndex ? undefined : zoom.reportNeighbourDrawn}
+            onChromeLayout={index === activeIndex ? zoom.reportChromeDrawn : undefined}
+          />
+        ) : (
           <ImmersiveSlide
             active={index === activeIndex}
             /* Creating a player is the most expensive thing the reel mounts, so
@@ -1736,7 +1799,7 @@ function ImmersivePreviewViewer() {
             topInset={topInset}
             width={width}
           />
-        )}
+        ))}
         scrollEnabled={!overlayOpenItemId && !isHorizontalScrolling}
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, backgroundColor: ground }}
@@ -1951,6 +2014,11 @@ function ViewerShell({ topInset, bottomInset, preview = null, video = null, post
       {children}
     </View>
   );
+}
+
+/** A post of writing in someone's lane or grid: what a page of notes gathers. */
+function isReelNote(item: ImmersivePreviewItem) {
+  return item.previewKind === 'text' && item.sourceType === 'showcase' && Boolean(item.showcasePostId);
 }
 
 function leaveViewer() {

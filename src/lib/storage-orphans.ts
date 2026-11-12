@@ -166,6 +166,7 @@ const TELEMETRY = 'telemetry or counters: no stored paths, and too large to read
 const NO_TEXT = 'no text or JSON column';
 const SEARCH_DICTIONARY = 'single words of letters, held to that by a check: never a path';
 const SEARCH_ENTITIES = 'model and tool names and their keys, at most 80 characters, copied from Made with: never a stored path';
+const SEARCH_DENYLIST = 'single words an operator withdrew from suggestions, each with a note: never a path';
 const UPLOAD_BOOKKEEPING = 'upload bookkeeping: read for the exclusions, never a reference';
 const RECIPE_SWEEP = "the recipe-copy sweep's own bookkeeping: its folders are excluded";
 const RECIPE_COPY_SOURCES = 'where passed-on recipe copies came from: it names only copies, whose folders are excluded';
@@ -226,6 +227,8 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   search_visitor_day_keys: TELEMETRY,
   // Search's spelling dictionary: one lowercase word of letters per row.
   search_terms: SEARCH_DICTIONARY,
+  // Words an operator took out of typeahead: a lowercase word and a note per row.
+  search_suggestion_denylist: SEARCH_DENYLIST,
   showcase_media_revocations: UPLOAD_BOOKKEEPING,
   showcase_saves: NO_TEXT,
   upload_byte_global_counters: NO_TEXT,

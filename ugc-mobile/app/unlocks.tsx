@@ -2,7 +2,7 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Image } from 'expo-image';
 import { router, Stack } from 'expo-router';
-import { PackageOpen } from 'lucide-react-native';
+import { FileText, PackageOpen } from 'lucide-react-native';
 import { Platform, Pressable, View } from 'react-native';
 
 import { MatureCover } from '@/components/mature-cover';
@@ -19,6 +19,7 @@ import {
   getUnlockDestination,
   getUnlockStateBadge,
   getUnlockThumbnailUrl,
+  isUnlockOfTextPost,
   summarizeUnlockCount,
 } from '@/lib/unlock-library-view-model';
 import { useMatureReveal } from '@/lib/use-mature-reveal';
@@ -173,6 +174,7 @@ function UnlockRow({ item }: { item: ViewerUnlockItem }) {
           <UnlockThumbnail
             url={thumbnailUrl}
             thumbhash={item.post?.previewThumbhash ?? null}
+            textPost={isUnlockOfTextPost(item)}
             covered={matureCovered}
             reveal={reveal}
             onShow={() => setMatureShown(true)}
@@ -223,12 +225,15 @@ const THUMBNAIL_SIZE = 56;
 function UnlockThumbnail({
   url,
   thumbhash,
+  textPost,
   covered,
   reveal,
   onShow,
 }: {
   url: string | null;
   thumbhash: string | null;
+  /** The recipe is on a post of writing: the slot is a small text plate, not a missing picture. */
+  textPost: boolean;
   /** A mature post's still, behind its plate until the buyer asks for it. */
   covered: boolean;
   reveal: MatureReveal;
@@ -259,7 +264,15 @@ function UnlockThumbnail({
       {/* The icon is the base layer rather than an either/or branch: an image
           that is still loading — or one that quietly resolves to nothing
           without ever firing onError — would otherwise leave a blank tile. */}
-      <PackageOpen size={20} color={theme.colors.muted} />
+      {textPost ? (
+        <>
+          {/* The reel slide's rule down the leading edge, in small. */}
+          <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: theme.colors.primary }} />
+          <FileText size={20} color={theme.colors.primary} />
+        </>
+      ) : (
+        <PackageOpen size={20} color={theme.colors.muted} />
+      )}
       {covered ? <MatureCover variant="tile" reveal={reveal} onShow={onShow} /> : null}
       {showImage ? (
         <Image
