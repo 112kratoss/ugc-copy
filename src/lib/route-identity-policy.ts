@@ -242,6 +242,10 @@ const PUBLIC_ROUTES = [
   '/api/seedance-assets',
   '/api/creators/[username]',
   '/api/search',
+  // Typeahead for the search box: admitted as /api/search is. A token only
+  // marks the viewer's follows, leaves out whom they are blocked with and
+  // keys the rate limit on them.
+  '/api/search/suggest',
   '/api/showcase/feed',
   '/api/showcase/feed/events',
   // Whether a lane has a post newer than the one a client holds: no identity

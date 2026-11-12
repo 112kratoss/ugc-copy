@@ -714,6 +714,26 @@ A queued copy still present a day after it was queued fails the job's run, which
 
 The `search-dictionary` job (`src/lib/search-dictionary.ts`, hourly at :00 on the shared scheduler) calls `rebuild_search_terms()`, which makes the spelling dictionary `search_terms` exactly the words that unlabelled public posts show now; no post save writes that table, so this job keeps it current. A run logs `search_dictionary_completed` with `added` and `removed`. Manual trigger route: `/api/cron/search-dictionary`.
 
+## Search Suggestions
+
+`GET /api/search/suggest?q=…` is the typeahead in front of `/api/search` (`src/lib/search-suggest-route-adapter-service.ts`, `search-suggest-service.ts`; migration `20261112144018_search_suggestions_typeahead.sql`). One database call, `search_suggestions`, answers at most 5 creators (handle or name starting with the query, in Creators search's order; never a guest, a suspended or deleting account, or either side of a block) and at most 6 completions of the word being typed. It is a public route admitted as `/api/search` is, with its own rate limit, `public-search:suggest` (120 a minute per account, or per network for a visitor with no token), and it writes no row to `search_query_events`. An answer to a token is `private, no-store`. A visitor's is `public, s-maxage=60, stale-while-revalidate=300` with `Vary: Authorization`: the edge serves it fresh for a minute and may serve it stale for five more while it fetches a new one, so a visitor can be offered a creator just suspended, or a word just withdrawn, for about six minutes after the database stops offering it. A signed-in viewer never is.
+
+Completions come from `search_terms`, so they are as fresh as the `search-dictionary` job above: a word is offered only once a rebuild has counted it in the public text (title, caption, prompt) of unlabelled posts by two or more creators (`creator_count >= 2`), and it stops being offered at the first rebuild after it falls below that. A post whose tool or model name holds the word is not counted (a template result's model is read as `template-workflow`, as its document reads it). To see why a word is or is not offered: `select term, post_count, creator_count, in_posts from search_terms where term = '…'`, and `select * from search_suggestion_denylist where term = '…'`.
+
+**Withdrawing a word.** Two accounts are enough to make a word a completion. To take one out, in the Supabase SQL editor (or any service-role connection):
+
+```sql
+insert into public.search_suggestion_denylist (term, note)
+values ('theword', 'why, and who asked')
+on conflict (term) do update set note = excluded.note;
+```
+
+The term is one lowercase word, as `search_terms` holds it. From that statement on the database never offers it, alone or as a word of a phrase, and offers no phrase to a query that holds it; search, spelling correction and creator suggestions are unaffected. Signed-in viewers see the change at once; visitors within about six minutes, as the edge's copies of the answers that held it expire (above). `delete from public.search_suggestion_denylist where term = 'theword'` puts it back. The other way is to remove the cause: hide or label the posts (`npm run ops:moderation`), then run the rebuild without waiting for the hour, `/api/cron/search-dictionary` with the cron secret, and wait out the same six minutes. A creator who should not be suggested is a suspension (`/admin`), which the database reads on every request it answers.
+
+**Switching it off.** `SEARCH_SUGGEST_DISABLED=1` in the Vercel Production environment, followed by a configuration-only redeployment, makes the route answer every request `200` with empty lists, `private, no-store`, without verifying a token, counting a rate limit or reading the database; search boxes show no suggestions and search itself is untouched. Unset it and redeploy to bring suggestions back. Answers the edge already holds for visitors are still served until they expire (about six minutes).
+
+Local timings on 5,000 posts, 3,300 creators and a 20,000-word dictionary (2026-11-12): 0.2 to 3.5 ms for a creator or one-word query, 2 to 3.5 ms for the last word of several; the rebuild 0.9 s (0.97 s before the counts).
+
 ## Recipe Copy Sweep
 
 "Include creation references" copies a creation's saved inputs into its publisher's recipe files (`post_resource_files/<publisher>/generation-references/<generation>/<file>`), and a run start imports a bought recipe's copy into the buyer's inputs (`generation_inputs/<buyer>/recipe-imports/<seller>/<generation>/<file>`). The `recipe-copy-sweep` job (`src/lib/recipe-copy-sweep.ts`, every six hours at :50 on the shared scheduler) removes those nothing names any more: a copy left by a save refused or failing after the copy, the copies of a recipe or post deleted since, and an import whose run kept no input row.

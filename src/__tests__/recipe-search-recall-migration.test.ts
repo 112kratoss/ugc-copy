@@ -120,18 +120,26 @@ describe('recipe search recall migration', () => {
 
   it('rebuilds the dictionary from unlabelled posts and listed recipes, and nothing else writes it', () => {
     const { file, definition } = newestDefinition('rebuild_search_terms');
-    expect(file).toBe(MIGRATION);
+    // Re-created by the typeahead migration, which counts the posts and
+    // creators that write each word (search-suggest-migration.test.ts holds
+    // the counting). What this file holds of it is unchanged: which words the
+    // table holds, the recipes' words, the flags, the shape the job reads.
+    expect(file).toBe('20261112144018_search_suggestions_typeahead.sql');
     expect(definition).toContain('SECURITY DEFINER');
     expect(definition).toContain("SET search_path = ''");
     expect(definition).toContain("IF NOT pg_try_advisory_xact_lock(hashtext('public.rebuild_search_terms')) THEN");
     // The posts' words exactly as 20261111224010 reads them: a labelled post's
     // words never become a correction.
     expect(definition).toContain('WHERE posts.is_nsfw = false');
-    const base = readFileSync(join(migrationsDirectory, '20261111224010_search_recall_models_prefixes_stems_typos.sql'), 'utf8');
-    const squash = (sql: string) => withoutComments(sql).replace(/\s+/g, ' ');
-    const baseShown = /WITH shown AS \(\s+(SELECT DISTINCT words\.lexeme AS term[\s\S]*?'\^\[\[:alpha:\]\]\{4,40\}\$')\s+\),/.exec(base);
-    expect(baseShown).not.toBeNull();
-    expect(squash(definition)).toContain(`WITH post_words AS ( ${squash(baseShown![1])} )`);
+    // Read from the same documents by the same reading as 20261111224010
+    // (the simple lexemes of a document's text), and held to the same words
+    // (letters, 4 to 40), now asked once per lexeme after the counting.
+    expect(definition).toMatch(
+      /WITH post_lexemes AS \(\s+SELECT[\s\S]*?FROM public\.post_search_documents AS documents\s+JOIN public\.posts AS posts ON posts\.id = documents\.post_id[\s\S]*?CROSS JOIN LATERAL unnest\(to_tsvector\('pg_catalog\.simple', documents\.search_text\)\) AS words\s+WHERE posts\.is_nsfw = false\s+\),/,
+    );
+    expect(definition).toMatch(
+      /post_words AS \(\s+SELECT counted\.term, counted\.post_count, counted\.creator_count\s+FROM counted\s+WHERE counted\.term ~ '\^\[\[:alpha:\]\]\{4,40\}\$'\s+\),/,
+    );
     // And the listed recipes' documents, their visible text only.
     expect(definition).toMatch(
       /recipe_words AS \(\s+SELECT DISTINCT words\.lexeme AS term\s+FROM public\.marketplace_bundle_search_documents AS recipe_documents\s+JOIN public\.marketplace_bundle_listings AS listings\s+ON listings\.bundle_id = recipe_documents\.bundle_id\s+AND listings\.listable\s+CROSS JOIN LATERAL unnest\(to_tsvector\('pg_catalog\.simple', recipe_documents\.search_text\)\) AS words\s+WHERE words\.lexeme ~ '\^\[\[:alpha:\]\]\{4,40\}\$'\s+\),/,
