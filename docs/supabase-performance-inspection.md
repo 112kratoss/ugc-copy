@@ -85,7 +85,9 @@ against what people actually type and miss. The insert runs behind the response
 A row holds no account id or address: the lowercased query (control characters
 removed, at most 100 characters), the search type, whether a registered account
 (not a guest session) was presented, how many creators, posts and recipes were
-returned, when the request arrived, and `visitor_day`. That is an HMAC of the
+returned, the order a Posts or Recipes search asked for (`sort`: `top` or
+`latest`; empty for Top and Creators searches, which have one order, and for
+rows from before 2026-11-12), when the request arrived, and `visitor_day`. That is an HMAC of the
 viewer's rate-limit key (user id or hashed network address, never stored) under a
 random key made for that UTC day alone (`search_visitor_day_keys`). The sweep
 deletes a key once its day is more than 48 hours old, so `visitor_day` is
