@@ -118,9 +118,11 @@ function isSameRequest(
     && entry.narrowing === narrowing;
 }
 
-// Only the active tab's kinds are drawn, so only they count as results.
+// Only the active tab's kinds are drawn, so only they count as results: on
+// Top, the models and tools the query names among them.
 function shownResultCount(result: PublicSearchResponse, type: PublicSearchType) {
-  return (type === 'top' || type === 'creators' ? result.creators.items.length : 0)
+  return (type === 'top' ? result.entities?.length ?? 0 : 0)
+    + (type === 'top' || type === 'creators' ? result.creators.items.length : 0)
     + (type === 'top' || type === 'posts' ? result.posts.items.length : 0)
     + (type === 'top' || type === 'recipes' ? result.recipes.items.length : 0);
 }

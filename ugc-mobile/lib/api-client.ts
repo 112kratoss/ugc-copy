@@ -86,6 +86,7 @@ import type {
   UndoFeedFeedbackRequest,
   UndoFeedFeedbackResponse,
 } from './types';
+import { NO_SEARCH_FILTERS, searchFilterParams, type SearchFilters } from './public-search-policy/public-search-policy';
 import {
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
   parseGenerationModelCatalog,
@@ -1394,12 +1395,17 @@ export function createApiClient({
       type?: PublicSearchType;
       /** Posts and Recipes only; the ranked order is the server's default and is not named. */
       sort?: PublicSearchSort;
+      /** What narrows a Posts search; only what is on is named, as the web's page names it. */
+      filters?: SearchFilters;
+      /** Read the query as typed, with no spelling correction. */
+      exact?: boolean;
       cursor?: string | null;
       limit?: number;
     }, signal?: AbortSignal) => request<PublicSearchResponse>('/api/search' + buildQuery({
       q: params.query,
       type: params.type ?? 'top',
       sort: params.sort === 'latest' ? params.sort : undefined,
+      ...searchFilterParams(params.filters ?? NO_SEARCH_FILTERS, params.exact ?? false),
       cursor: params.cursor,
       limit: params.limit,
     }), { signal }, { auth: true }),

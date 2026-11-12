@@ -652,8 +652,8 @@ describe('SearchClient', () => {
           'Kling 2.6Model · 14 posts',
           'Klingon FXTool · 1,000+ posts',
         ]);
-        // Entities are results: they count.
-        expect(screen.getByRole('status')).toHaveTextContent('1 result for kling');
+        // Entities are results: two of them and a creator.
+        expect(screen.getByRole('status')).toHaveTextContent('3 results for kling');
 
         fetchMock.mockResolvedValueOnce(postsAnswer({
           filters: { madeWith: { kind: 'model', key: 'kling-2.6', label: 'Kling 2.6' }, mediaKind: null, hasRecipe: false, following: false },
@@ -675,6 +675,15 @@ describe('SearchClient', () => {
         expect(requestedUrls()[2]).toBe('/api/search?q=kling&type=posts');
         expect(address()).toBe('/search?q=kling&type=posts');
         expect(within(screen.getByRole('group', { name: 'Filter posts' })).queryByRole('button', { name: /made with/i })).not.toBeInTheDocument();
+      });
+
+      it('draws an answer that holds nothing but an entity as a result, never as "No results"', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse(searchResponse({ query: 'kling', normalizedQuery: 'kling', entities: [kling] })));
+        render(<SearchClient initialQuery="kling" initialType="top" />);
+        await settle();
+        expect(within(screen.getByRole('region', { name: 'Models and tools' })).getAllByRole('button')).toHaveLength(1);
+        expect(screen.queryByText(/No results for/)).not.toBeInTheDocument();
+        expect(screen.getByRole('status')).toHaveTextContent('1 result for kling');
       });
 
       it('draws no entity section for an answer that carries none, as an older server sends', async () => {

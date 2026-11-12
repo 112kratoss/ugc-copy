@@ -1,4 +1,10 @@
 import type { GenerationSetupEntry } from './generation-setup/generation-setup';
+import type {
+  SearchCorrectedQuery,
+  SearchEntity,
+  SearchEntityKind,
+  SearchMediaKind,
+} from './public-search-policy/public-search-policy';
 import type { SeedanceAssetCollections, SeedanceAssetKind, SeedanceAssetStatus } from './model-catalog/seedance-assets';
 import type { RemixInputSlot } from './remix-input-slots/remix-input-slots';
 import type { RemixCredit } from './remix-credit/remix-credit';
@@ -1207,6 +1213,15 @@ export interface PublicSearchPage<T> {
   nextCursor: string | null;
 }
 
+/** The filters an answer was read with (the web's `PublicSearchAppliedFilters`): the made-with entity by its name. */
+export interface PublicSearchAppliedFilters {
+  madeWith: { kind: SearchEntityKind; key: string; label: string } | null;
+  mediaKind: SearchMediaKind | null;
+  hasRecipe: boolean;
+  /** False for a viewer with no registered account, whatever the request named. */
+  following: boolean;
+}
+
 export interface PublicSearchResponse {
   query: string;
   normalizedQuery: string;
@@ -1217,6 +1232,25 @@ export interface PublicSearchResponse {
    * offers Latest only once an answer has said which order it is in.
    */
   sort?: PublicSearchSort;
+  /**
+   * The models and tools whose name holds the query, on the Top tab. A server
+   * from before entities (2026-11-12) sends none, and the app draws no row.
+   */
+  entities?: SearchEntity[];
+  /**
+   * What narrowed the posts: none except on a Posts search. A server from
+   * before filters says nothing and narrows nothing, whatever a request
+   * names: the app offers filters only once an answer has carried this.
+   */
+  filters?: PublicSearchAppliedFilters;
+  /**
+   * The query as the spelling correction read it for the posts and the
+   * recipes this answer holds; null where they were found on it as typed. A
+   * server from before the reading was reported sends none.
+   */
+  correctedQuery?: SearchCorrectedQuery;
+  /** The request asked for the query as typed. */
+  exact?: boolean;
   creators: PublicSearchPage<CreatorSearchResult>;
   posts: PublicSearchPage<ShowcaseFeedItem>;
   recipes: PublicSearchPage<RecipeSearchResult>;

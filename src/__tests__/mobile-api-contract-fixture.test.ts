@@ -31,7 +31,10 @@ import { sanitizeProfileRecord } from '@/lib/profile';
 import {
   decodePublicSearchCursor,
   encodePublicSearchCursor,
+  publicSearchCursorFilterMark,
+  publicSearchFilterParams,
   type PublicSearchCursor,
+  type PublicSearchFilters,
   type PublicSearchResponse as WebPublicSearchResponse,
 } from '@/lib/public-search';
 import { getPublicSearchRouteResponse } from '@/lib/public-search-route-adapter-service';
@@ -77,6 +80,7 @@ import type {
   ShowcaseFeedEventBatchResponse,
   ShowcaseFeedEventRequest,
 } from '../../ugc-mobile/lib/types';
+import { SEARCH_FILTER_PARAMS } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
 
 type MobileApiContractEndpoint<Response> = {
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -123,15 +127,21 @@ type MobileApiContractFixture = {
     }>;
     mobileNotifications: MobileApiContractEndpoint<MobileNotificationsResponse>;
     searchPublicContent: MobileApiContractEndpoint<PublicSearchResponse> & {
-      responseVariants: Record<'latestPosts' | 'latestPostsNextPage' | 'beforeSorts', {
-        query: Record<string, string>;
-        response: PublicSearchResponse;
-      }>;
-      cursors: Record<'latestPosts' | 'topPosts' | 'topPostsBeforeInstants', {
+      filterParameters: Record<'madeWith' | 'mediaKind' | 'hasRecipe' | 'following' | 'exact', string>;
+      responseVariants: Record<
+        | 'latestPosts' | 'latestPostsNextPage' | 'beforeSorts'
+        | 'filteredPosts' | 'filteredPostsNextPage' | 'correctedPosts' | 'exactPosts' | 'beforeFilters',
+        { query: Record<string, string>; response: PublicSearchResponse }
+      >;
+      cursors: Record<'latestPosts' | 'topPosts' | 'topPostsBeforeInstants' | 'filteredTopPosts', {
         encoded: string;
         decoded: PublicSearchCursor;
+        /** The filters and reading a marked cursor was issued under. */
+        issuedFor?: { filters: PublicSearchFilters; exact: boolean };
       }>;
-      errors: { unknownSort: { query: Record<string, string>; status: number; response: { error: string } } };
+      errors: Record<'unknownSort' | 'unknownMediaKind' | 'unknownMadeWith' | 'cursorOfOtherFilters', {
+        query: Record<string, string>; status: number; response: { error: string };
+      }>;
     };
     recordShowcaseFeedEvents: MobileApiContractEndpoint<ShowcaseFeedEventBatchResponse> & {
       request: { events: Array<ShowcaseFeedEventRequest & { occurredAt: string }> };
@@ -580,20 +590,29 @@ describe('shared mobile API v1 contract fixture', () => {
   // hands a cursor back as it came; the server alone reads it.
   describe('search sort and cursors', () => {
     const endpoint = contract.endpoints.searchPublicContent;
-    async function ask(query: Record<string, string>) {
+    async function ask(query: Record<string, string>, viewer: 'visitor' | 'account' = 'visitor') {
       const searchPublicContent = vi.fn(async (options: PublicSearchOptions): Promise<WebPublicSearchResponse> => ({
         query: options.query,
         normalizedQuery: options.normalizedQuery,
         type: options.type,
         sort: options.sort ?? 'top',
+        entities: [],
+        filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false },
+        correctedQuery: { posts: null, recipes: null },
+        exact: options.exact ?? false,
         creators: { items: [], nextCursor: null },
         posts: { items: [], nextCursor: null },
         recipes: { items: [], nextCursor: null },
       }));
       const response = await getPublicSearchRouteResponse({
-        request: new Request(`http://localhost${endpoint.path}?${new URLSearchParams(query)}`),
+        request: new Request(`http://localhost${endpoint.path}?${new URLSearchParams(query)}`, {
+          headers: viewer === 'account' ? { Authorization: 'Bearer token' } : {},
+        }),
         dependencies: {
           createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          createUserClient: vi.fn(() => ({
+            auth: { getUser: async () => ({ data: { user: { id: 'viewer-1', is_anonymous: false } }, error: null }) },
+          }) as unknown as SupabaseClient),
           enforceBackendRateLimit: vi.fn(async () => ({
             allowed: true, limit: 180, remaining: 179, retryAfterSeconds: 0, resetAt: '2026-11-12T12:00:00.000Z',
           })),
@@ -651,6 +670,81 @@ describe('shared mobile API v1 contract fixture', () => {
       await expect(response.json()).resolves.toEqual(refusal.response);
       expect(options).toBeNull();
     });
+
+    // Entities, filters and the corrected reading (2026-11-12): the request
+    // names what narrows Posts and whether to read the query as typed; the
+    // answer says what it applied and how it read the query; a cursor pages
+    // the filters it was issued under.
+    it('names the filter parameters the shared rules name, which the app sends as the web does', () => {
+      expect(endpoint.filterParameters).toEqual(SEARCH_FILTER_PARAMS);
+      const { filteredPosts } = endpoint.responseVariants;
+      const { issuedFor } = endpoint.cursors.filteredTopPosts;
+      expect(issuedFor).toBeDefined();
+      expect({ q: filteredPosts.query.q, type: 'posts', ...publicSearchFilterParams(issuedFor!.filters, issuedFor!.exact) })
+        .toEqual(filteredPosts.query);
+    });
+
+    it('reads the filters the app sends, applies "following" for an account, and pages them with their cursor', async () => {
+      const { filteredPosts, filteredPostsNextPage } = endpoint.responseVariants;
+      const cursor = endpoint.cursors.filteredTopPosts;
+
+      const first = await ask(filteredPosts.query, 'account');
+      expect(first.response.status).toBe(200);
+      expect(first.options).toMatchObject({ type: 'posts', filters: cursor.issuedFor!.filters, exact: false, cursor: null });
+      // The answer names the made-with entity and says each filter it applied.
+      expect(filteredPosts.response.filters).toEqual({
+        madeWith: { kind: 'model', key: 'kling-2.6', label: 'Kling 2.6' }, mediaKind: 'video', hasRecipe: true, following: true,
+      });
+
+      // The mark is the one this server writes for those filters.
+      expect(cursor.decoded.filters).toBe(publicSearchCursorFilterMark(cursor.issuedFor!.filters, cursor.issuedFor!.exact));
+      expect(filteredPosts.response.posts.nextCursor).toBe(cursor.encoded);
+      expect(filteredPostsNextPage.query.cursor).toBe(cursor.encoded);
+      const next = await ask(filteredPostsNextPage.query, 'account');
+      expect(next.response.status).toBe(200);
+      expect(next.options).toMatchObject({ filters: cursor.issuedFor!.filters, cursor: cursor.decoded });
+
+      // The same request from a visitor: "following" is left out, so the cursor is another search's.
+      const visitor = await ask(filteredPosts.query);
+      expect(visitor.response.status).toBe(200);
+      expect(visitor.options?.filters).toEqual({ ...cursor.issuedFor!.filters, following: false });
+      expect((await ask(filteredPostsNextPage.query)).response.status).toBe(400);
+    });
+
+    it('reads the exact reading the app asks for, and says the corrected one in the shape the fixture pins', async () => {
+      const { correctedPosts, exactPosts } = endpoint.responseVariants;
+      expect((await ask(correctedPosts.query)).options).toMatchObject({ exact: false });
+      const exact = await ask(exactPosts.query);
+      expect(exact.options).toMatchObject({ exact: true });
+      await expect(exact.response.json()).resolves.toMatchObject({ exact: exactPosts.response.exact });
+      expect(correctedPosts.response.correctedQuery).toEqual({ posts: 'neon product', recipes: null });
+      expect(exactPosts.response).toMatchObject({ exact: true, correctedQuery: { posts: null, recipes: null } });
+    });
+
+    it('says every new field on a current answer and none on the one from before them', () => {
+      const added = ['entities', 'filters', 'correctedQuery', 'exact'];
+      for (const answer of [endpoint.response, endpoint.responseVariants.latestPosts.response, endpoint.responseVariants.filteredPosts.response]) {
+        expect(Object.keys(answer)).toEqual(expect.arrayContaining(added));
+      }
+      expect(endpoint.response.entities).toEqual([
+        { kind: 'tool', key: 'neon-product-studio', label: 'Neon Product Studio', postCount: 14, postCountCapped: false },
+      ]);
+      // The server live before 2026-11-12's entities and filters: an app that meets it draws none of them.
+      const before = endpoint.responseVariants.beforeFilters.response;
+      for (const field of added) expect(before).not.toHaveProperty(field);
+      expect(before.sort).toBe('top');
+    });
+
+    it.each(['unknownMediaKind', 'unknownMadeWith', 'cursorOfOtherFilters'] as const)(
+      'refuses %s with the words the fixture pins',
+      async (name) => {
+        const refusal = endpoint.errors[name];
+        const { response, options } = await ask(refusal.query);
+        expect(response.status).toBe(refusal.status);
+        await expect(response.json()).resolves.toEqual(refusal.response);
+        expect(options).toBeNull();
+      },
+    );
   });
 
   // The shelf answers a visitor with no token the creations alone, shared at the

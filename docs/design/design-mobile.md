@@ -494,7 +494,7 @@ Rules:
 
 `app/(tabs)/showcase.tsx`. Job: browse community media and open it.
 
-1. The title, with search (a full-screen overlay) and the workspace menu.
+1. The title, with search (a full-screen overlay) and the workspace menu. Search (`components/explore-search-overlay.tsx`) has the web page's tabs, orders and words (`lib/public-search-policy/`): Top leads with the models and tools the query names, each a row that opens Posts narrowed to it; Posts has filter switches in one row that scrolls sideways (`ChoiceChip`s that say whether they are on, Images and Videos one choice, Has recipe, Following for an account, the made-with filter as a chip that removes it, Clear filters); a corrected spelling is said in a line with "Search instead for “…”" beside it (a live region on Android, announced on iOS); and recent searches show under an empty box. It draws each of these only once an answer has carried it, so against a server from before them it shows none.
 2. Filters: All, Unlocks, Free, Paid, Remixable.
 3. A masonry grid of media posts. Text-only posts live on Home's Notes lane and the post page.
 4. A skeleton grid while loading, and paging at the foot.
