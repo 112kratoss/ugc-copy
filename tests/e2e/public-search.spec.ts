@@ -323,6 +323,51 @@ test.describe('public search', () => {
     await expect(page.getByText('Kling harbor clip')).toBeVisible();
   });
 
+  test('reads a shared link’s "following" for a visitor as not there, and offers no entity for two characters', async ({ page }) => {
+    const requests: string[] = [];
+    await page.route('**/api/search**', async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url.search);
+      const type = url.searchParams.get('type') ?? 'top';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...searchResponse(url.searchParams.get('q') ?? '', type),
+          sort: 'top',
+          // Whatever a server sends: the page draws an entity only where Posts can be searched.
+          entities: [{ kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', postCount: 14, postCountCapped: false }],
+          filters: { madeWith: null, mediaKind: url.searchParams.get('kind'), hasRecipe: false, following: false },
+          correctedQuery: { posts: null, recipes: null },
+          exact: false,
+          creators: type === 'posts' ? emptyPage : searchResponse('', type).creators,
+        }),
+      });
+    });
+
+    // A link an account shared, opened signed out: the filter a visitor cannot have is dropped.
+    await page.goto('/search?q=portrait&type=posts&kind=video&following=1');
+    const filters = page.getByRole('group', { name: 'Filter posts' });
+    await expect(filters.getByRole('button', { name: 'Videos' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page).toHaveURL(/[?&]type=posts&kind=video$/);
+    await expect(filters.getByRole('button', { name: 'Following' })).toHaveCount(0);
+    expect(requests.every((search) => !search.includes('following'))).toBe(true);
+
+    // With only that filter, nothing is left to clear.
+    await page.goto('/search?q=portrait&type=posts&following=1');
+    await expect(page).toHaveURL(/[?&]type=posts$/);
+    await expect(page.getByText('No results for “portrait”')).toBeVisible();
+    await expect(filters.getByRole('button', { name: 'Clear filters' })).toHaveCount(0);
+    await expect(page.getByText('No post matches these filters. Remove one, or clear them all.')).toHaveCount(0);
+
+    // Two characters search creators alone: no model or tool to press into a Posts search that cannot run.
+    await page.goto('/search?q=kl');
+    await expect(page.getByText('Luna Studio')).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Models and tools' })).toHaveCount(0);
+    await page.getByRole('searchbox').fill('kli');
+    await expect(page.getByRole('region', { name: 'Models and tools' })).toBeVisible();
+  });
+
   test('says when it read the query as something else, and searches for it as typed on request', async ({ page }) => {
     const requests: string[] = [];
     await page.route('**/api/search**', async (route) => {

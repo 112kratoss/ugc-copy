@@ -15,6 +15,8 @@ const { replaceMock, routerMock } = vi.hoisted(() => {
 });
 const getSessionMock = vi.fn();
 const fetchMock = vi.fn();
+// The page's auth listener, kept so a test can say "signed out" as Supabase does.
+const authListeners: Array<(event: string) => void> = [];
 
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
@@ -24,6 +26,19 @@ vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
       getSession: () => getSessionMock(),
+      onAuthStateChange: (listener: (event: string) => void) => {
+        authListeners.push(listener);
+        return {
+          data: {
+            subscription: {
+              unsubscribe: () => {
+                const index = authListeners.indexOf(listener);
+                if (index >= 0) authListeners.splice(index, 1);
+              },
+            },
+          },
+        };
+      },
     },
   },
 }));
@@ -122,6 +137,7 @@ describe('SearchClient', () => {
     vi.stubGlobal('fetch', fetchMock);
     window.localStorage.clear();
     window.history.replaceState(null, '', '/search');
+    authListeners.length = 0;
   });
 
   it('renders the initial guidance state until two characters are typed', () => {
@@ -677,6 +693,48 @@ describe('SearchClient', () => {
         expect(within(screen.getByRole('group', { name: 'Filter posts' })).queryByRole('button', { name: /made with/i })).not.toBeInTheDocument();
       });
 
+      it('opens exactly the posts an entity’s row counted: a switch left on from an earlier look at Posts is cleared', async () => {
+        getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-1', user: { id: 'viewer-1', is_anonymous: false } } } });
+        fetchMock.mockImplementation(async (url: string) => jsonResponse(
+          url.includes('type=posts')
+            ? searchResponse({ type: 'posts', posts: { items: [post('post-1', 'Kling portrait', 2)], nextCursor: null } })
+            : searchResponse({ query: 'kling', normalizedQuery: 'kling', entities: [kling] }),
+        ));
+        render(
+          <SearchClient
+            initialQuery="kling"
+            initialType="top"
+            initialFilters={{ madeWith: 'tool:midjourney', mediaKind: 'video', hasRecipe: true, following: true }}
+          />,
+        );
+        await settle();
+        fireEvent.click(screen.getByRole('button', { name: 'Kling 2.6, model, 14 posts. Show posts made with it' }));
+        await settle();
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=kling&type=posts&madeWith=model%3Akling-2.6');
+        for (const name of ['Images', 'Videos', 'Has recipe', 'Following']) expect(chip(name)).toHaveAttribute('aria-pressed', 'false');
+      });
+
+      it('draws no entity for a two-character query, whatever an answer carries: there is no Posts search to open', async () => {
+        fetchMock.mockResolvedValue(jsonResponse(searchResponse({
+          query: 'kl',
+          normalizedQuery: 'kl',
+          entities: [kling],
+          creators: { items: [creator('Klara')], nextCursor: null },
+        })));
+        render(<SearchClient initialQuery="kl" initialType="top" />);
+        await settle();
+        expect(screen.getByText('Klara')).toBeInTheDocument();
+        expect(screen.queryByRole('region', { name: 'Models and tools' })).not.toBeInTheDocument();
+        // And it is not counted as a result.
+        expect(screen.getByRole('status')).toHaveTextContent('1 result for kl');
+
+        // With a third character the same answer's entity is drawn.
+        fetchMock.mockResolvedValue(jsonResponse(searchResponse({ query: 'kli', normalizedQuery: 'kli', entities: [kling] })));
+        typeQuery('kli');
+        await settle(300);
+        expect(screen.getByRole('region', { name: 'Models and tools' })).toBeInTheDocument();
+      });
+
       it('draws an answer that holds nothing but an entity as a result, never as "No results"', async () => {
         fetchMock.mockResolvedValueOnce(jsonResponse(searchResponse({ query: 'kling', normalizedQuery: 'kling', entities: [kling] })));
         render(<SearchClient initialQuery="kling" initialType="top" />);
@@ -756,6 +814,43 @@ describe('SearchClient', () => {
         render(<SearchClient initialQuery="portrait" initialType="posts" />);
         await settle();
         expect(within(screen.getByRole('group', { name: 'Filter posts' })).queryByRole('button', { name: 'Following' })).not.toBeInTheDocument();
+      });
+
+      it('reads a shared link’s "following" for a visitor as not there: no parameter, no address, no Clear filters', async () => {
+        fetchMock.mockResolvedValue(postsAnswer({ posts: { items: [], nextCursor: null } }));
+        render(
+          <SearchClient
+            initialQuery="portrait"
+            initialType="posts"
+            initialFilters={{ madeWith: null, mediaKind: null, hasRecipe: false, following: true }}
+          />,
+        );
+        await settle();
+        // Never sent: the one request names no filter.
+        expect(requestedUrls()).toEqual(['/api/search?q=portrait&type=posts']);
+        expect(address()).toBe('/search?q=portrait&type=posts');
+        const group = screen.getByRole('group', { name: 'Filter posts' });
+        expect(within(group).queryByRole('button', { name: 'Following' })).not.toBeInTheDocument();
+        expect(within(group).queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+        // An unfiltered search that found nothing says so in the unfiltered words.
+        expect(screen.queryByText('No post matches these filters. Remove one, or clear them all.')).not.toBeInTheDocument();
+        expect(screen.getByText('Try a shorter phrase, check the spelling, or search for a creator handle.')).toBeInTheDocument();
+      });
+
+      it('keeps the other filters of a shared link when it drops a visitor’s "following", and a guest session’s too', async () => {
+        getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-2', user: { id: 'guest-1', is_anonymous: true } } } });
+        fetchMock.mockResolvedValue(postsAnswer());
+        render(
+          <SearchClient
+            initialQuery="portrait"
+            initialType="posts"
+            initialFilters={{ madeWith: null, mediaKind: 'video', hasRecipe: false, following: true }}
+          />,
+        );
+        await settle();
+        expect(requestedUrls()).toEqual(['/api/search?q=portrait&type=posts&kind=video']);
+        expect(address()).toBe('/search?q=portrait&type=posts&kind=video');
+        expect(chip('Videos')).toHaveAttribute('aria-pressed', 'true');
       });
 
       it('opens a shared filtered link filtered, pages it with its filters, and sends a post back to it', async () => {
@@ -928,6 +1023,22 @@ describe('SearchClient', () => {
         expect(screen.getByRole('searchbox')).toHaveFocus();
         await settle();
         expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
+      });
+
+      it('ends recent searches at sign-out, as the app does: on this page at once', async () => {
+        window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['kling portrait']));
+        render(<SearchClient initialQuery="" initialType="top" />);
+        await settle();
+        fireEvent.focus(screen.getByRole('searchbox'));
+        expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
+
+        // Another auth event changes nothing.
+        act(() => authListeners.forEach((listener) => listener('TOKEN_REFRESHED')));
+        expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
+
+        act(() => authListeners.forEach((listener) => listener('SIGNED_OUT')));
+        expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
+        expect(window.localStorage.getItem(HISTORY_KEY)).toBeNull();
       });
 
       it('hides recent searches once the focus leaves the box and the list', async () => {

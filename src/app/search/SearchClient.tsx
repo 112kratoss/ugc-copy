@@ -118,10 +118,18 @@ function isSameRequest(
     && entry.narrowing === narrowing;
 }
 
+// The models and tools an answer offers: on Top, and only for a query Posts
+// is searched for (three characters), since pressing one opens Posts.
+function offeredEntities(result: PublicSearchResponse, type: PublicSearchType, query: string) {
+  if (type !== 'top') return [];
+  if (publicSearchQueryLength(normalizeCreatorSearchQuery(query)) < PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH) return [];
+  return result.entities ?? [];
+}
+
 // Only the active tab's kinds are drawn, so only they count as results: on
 // Top, the models and tools the query names among them.
-function shownResultCount(result: PublicSearchResponse, type: PublicSearchType) {
-  return (type === 'top' ? result.entities?.length ?? 0 : 0)
+function shownResultCount(result: PublicSearchResponse, type: PublicSearchType, query: string) {
+  return offeredEntities(result, type, query).length
     + (type === 'top' || type === 'creators' ? result.creators.items.length : 0)
     + (type === 'top' || type === 'posts' ? result.posts.items.length : 0)
     + (type === 'top' || type === 'recipes' ? result.recipes.items.length : 0);
@@ -407,7 +415,16 @@ export default function SearchClient({
       for (const [name, value] of Object.entries(publicSearchFilterParams(activeFilters, activeExact))) params.set(name, value);
       if (cursor) params.set('cursor', cursor);
       const { data: { session } } = await supabase.auth.getSession();
-      setCanFollow(Boolean(session?.user) && session?.user?.is_anonymous !== true);
+      const registered = Boolean(session?.user) && session?.user?.is_anonymous !== true;
+      setCanFollow(registered);
+      if (!registered && activeFilters.following) {
+        // A visitor or a guest follows nobody, and the server would leave the
+        // filter out: a shared link that names it is read without it, in the
+        // page's state and its address, so no switch is on that is not drawn.
+        // The search is asked again once the filter is gone.
+        setPickedFilters((current) => (current.following ? { ...current, following: false } : current));
+        return;
+      }
       const response = await fetch(`/api/search?${params.toString()}`, {
         cache: 'no-store',
         headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
@@ -434,7 +451,7 @@ export default function SearchClient({
       const requestKey = `${request.type}:${request.sort}:${request.narrowing}:${request.query}`;
       if (!append && rememberOnAnswer.current === requestKey) {
         rememberOnAnswer.current = null;
-        if (shownResultCount(next, request.type) > 0) setHistory(rememberSearchQuery(request.query));
+        if (shownResultCount(next, request.type, request.query) > 0) setHistory(rememberSearchQuery(request.query));
       }
       setAnswer((current) => {
         if (!append) return { ...request, result: next };
@@ -473,6 +490,13 @@ export default function SearchClient({
     // empty search, or a press on the server's HTML), and a focus that
     // happened then fires no event here.
     if (searchFormRef.current?.contains(document.activeElement)) setRecentsOpen(true);
+    // Recent searches end at sign-out, as the app's do: a sign-out while this
+    // page is open clears them here; one made anywhere else is caught by the
+    // list's own check of whose it is (search-history.ts).
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') setHistory(clearSearchHistory());
+    });
+    return () => data.subscription.unsubscribe();
   }, []);
 
   useEffect(() => () => {
@@ -516,7 +540,7 @@ export default function SearchClient({
   // the two hold the same results. Another tab's answer holds other kinds, so
   // it is not drawn.
   const shownAnswer = currentAnswer ?? (pending && answer?.type === activeType ? answer : null);
-  const resultCount = shownAnswer ? shownResultCount(shownAnswer.result, activeType) : 0;
+  const resultCount = shownAnswer ? shownResultCount(shownAnswer.result, activeType, normalizedQuery) : 0;
   const staleResultsShown = pending && resultCount > 0;
   // How the search in front read the query, said only of an answer for it.
   const correctionNotice = currentAnswer
@@ -541,11 +565,14 @@ export default function SearchClient({
       ?? parseSearchEntityId(activeFilters.madeWith)?.key
       ?? null);
   const filtersShown = canSearch && publicSearchTypeHasFilters(activeType);
-  const entities = activeType === 'top' && shownAnswer ? shownAnswer.result.entities ?? [] : [];
+  const entities = shownAnswer ? offeredEntities(shownAnswer.result, activeType, normalizedQuery) : [];
 
+  // Pressing an entity opens Posts narrowed to it and to nothing else: its
+  // count is of the posts this query finds with it, so a switch left on from
+  // an earlier look at Posts would open fewer than the row said.
   const pickEntity = (entity: SearchEntityResult) => {
     setEntityLabels((current) => ({ ...current, [searchEntityId(entity)]: entity.label }));
-    setPickedFilters((current) => ({ ...current, madeWith: searchEntityId(entity) }));
+    setPickedFilters({ ...NO_PUBLIC_SEARCH_FILTERS, madeWith: searchEntityId(entity) });
     setPickedType('posts');
   };
 
