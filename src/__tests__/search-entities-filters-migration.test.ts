@@ -51,7 +51,9 @@ describe('search entities and filters migration', () => {
     // stamped at or before the newest applied: this file was re-stamped behind
     // the typeahead migration (20261112144018, #775), which reached main first.
     expect(MIGRATION > '20261112144018').toBe(true);
-    expect(migrationNames.at(-1) >= MIGRATION).toBe(true);
+    const typeahead = migrationNames.indexOf('20261112144018_search_suggestions_typeahead.sql');
+    expect(typeahead).toBeGreaterThanOrEqual(0);
+    expect(migrationNames.indexOf(MIGRATION)).toBeGreaterThan(typeahead);
     expect(statements.trim().startsWith("BEGIN;\nSET LOCAL lock_timeout = '5s';")).toBe(true);
     expect(statements.trim().endsWith('COMMIT;')).toBe(true);
     for (const name of [
