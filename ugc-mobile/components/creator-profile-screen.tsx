@@ -5,12 +5,14 @@ import { GlassView, isGlassEffectAPIAvailable, isLiquidGlassAvailable } from 'ex
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
-import { ChevronRight, ExternalLink, FileText, Globe, Heart, ImageIcon, Layers3, Lock, MapPin, MoreVertical, Pencil, Play, Repeat2 } from 'lucide-react-native';
+import { ChevronRight, ExternalLink, Globe, Heart, ImageIcon, Layers3, Lock, MapPin, MoreVertical, Pencil, Play, Repeat2 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Linking, Pressable, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
+import { TEXT_POST_PLATE_FEATURE_LINE_HEIGHT, TextPostPlate } from '@/components/text-post-plate';
+import { buildTextPostPlate, textPostPlateBodyLines, textPostPlateUnderCaption } from '@/lib/text-post-plate-view-model';
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { NativeMenu } from '@/components/native-menu';
 import { AppText, IconButton, iconButtonMenuTrigger, PrimaryButton, SecondaryButton, SegmentedControl, StatusBlock, ToggleButton } from '@/components/ui';
@@ -80,6 +82,8 @@ const GRID_GAP = 10;
 const LOAD_MORE_COOLDOWN_MS = 800;
 /** A grid tile's picture is 4:5 across the tile, over a caption block at least this tall (`CreatorPostTile`). */
 const TILE_PICTURE_ASPECT = 1.25;
+/** Where a text tile's writing starts when a recipe chip sits in its top corner. */
+const TEXT_PLATE_TOP_UNDER_CHIP = 44;
 const TILE_CAPTION_MIN_HEIGHT = 92;
 
 type CreatorTool = CreatorProfileStats['toolsUsed'][number];
@@ -890,10 +894,22 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
         <MediaZoomSourceView source={zoomSource} style={{ width, height }}>
         <View style={{ height, backgroundColor: theme.colors.surfaceInset }}>
           {isTextPost ? (
-            <View style={{ flex: 1, padding: 13, justifyContent: 'space-between', backgroundColor: theme.colors.panelSoft }}>
-              <FileText size={appTheme.icon.feature} color={accent} />
-              <Text numberOfLines={7} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{displayText}</Text>
-            </View>
+            <TextPostPlate
+              testID="creator-text-post-plate"
+              // The caption under the frame names the post; the frame holds its writing.
+              content={textPostPlateUnderCaption(buildTextPostPlate(item))}
+              size="feature"
+              // Whole lines only, starting clear of the recipe chip when there is one
+              // (it sat on the tile's own glyph, which is gone: the plate says "text").
+              paddingTop={item.asset ? TEXT_PLATE_TOP_UNDER_CHIP : undefined}
+              bodyLines={textPostPlateBodyLines({
+                height,
+                paddingTop: item.asset ? TEXT_PLATE_TOP_UNDER_CHIP : 14,
+                paddingBottom: 14,
+                titleHeight: 0,
+                lineHeight: TEXT_POST_PLATE_FEATURE_LINE_HEIGHT,
+              })}
+            />
           ) : hasShowcasePreviewMedia(item) ? (
             <ShowcaseMediaPreview accent={accent} height={height} mediaItems={tileMediaItems} onPress={open} radius={0} recyclingKey={`creator-profile:${item.id}`} videoActivation={activeVideoPreview ? 'when-poster-missing' : 'never'} width={width} />
           ) : (
@@ -923,7 +939,10 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
           </Text>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
             <TileStat icon={<Heart size={appTheme.icon.xs} color={theme.colors.muted} />} label={formatCompactCount(item.saveCount)} />
-            <TileStat icon={<Repeat2 size={appTheme.icon.xs} color={theme.colors.muted} />} label={formatCompactCount(item.remixCount)} />
+            {/* Writing has nothing to remix, so its tile counts no remixes. */}
+            {isTextPost ? null : (
+              <TileStat icon={<Repeat2 size={appTheme.icon.xs} color={theme.colors.muted} />} label={formatCompactCount(item.remixCount)} />
+            )}
           </View>
         </View>
       </View>

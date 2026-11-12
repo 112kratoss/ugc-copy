@@ -123,6 +123,7 @@ vi.mock('lucide-react-native', () => ({
   ChevronRight: (props: Record<string, unknown>) => React.createElement('chevron-right-icon', props),
   CircleAlert: (props: Record<string, unknown>) => React.createElement('circle-alert-icon', props),
   Crown: (props: Record<string, unknown>) => React.createElement('crown-icon', props),
+  FileText: (props: Record<string, unknown>) => React.createElement('file-text-icon', props),
   Gift: (props: Record<string, unknown>) => React.createElement('gift-icon', props),
   Globe: (props: Record<string, unknown>) => React.createElement('globe-icon', props),
   Heart: (props: Record<string, unknown>) => React.createElement('heart-icon', props),
@@ -2058,7 +2059,11 @@ describe('ProfileDashboard media tiles routing', () => {
     });
 
     expect(findViewByTestId(tree!.root, 'profile-text-preview')).toHaveLength(1);
-    expect(tree!.root.findByProps({ children: 'Text post' })).toBeTruthy();
+    // The post's name leads, then its writing; the corner mark says it is text.
+    expect(tree!.root.findAllByProps({ children: 'Reusable note' }).length).toBeGreaterThan(0);
+    expect(tree!.root.findAllByProps({ children: 'Text post' })).toHaveLength(0);
+    expect(tree!.root.findAllByType('file-text-icon' as never)).toHaveLength(1);
+    expect(tree!.root.findAllByType('image-icon' as never)).toHaveLength(0);
     expect(tree!.root.findByProps({ children: 'A reusable note for framing a product post.' })).toBeTruthy();
   });
 

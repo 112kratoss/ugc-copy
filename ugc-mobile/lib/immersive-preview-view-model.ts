@@ -129,6 +129,12 @@ export interface ImmersivePreviewItem {
   mediaItems: ShowcaseMediaItem[];
   /** A slide that is words, or sound, rather than a picture or video. */
   previewKind?: 'text' | 'audio';
+  /**
+   * Set by the reel on the note that stands for a page of notes: the set that
+   * page shows as a row of cards, this note being the card in front
+   * (`lib/reel-note-sets.ts`). Never set by a builder in this file.
+   */
+  noteSet?: { key: string; notes: ImmersivePreviewItem[] };
   /** Present exactly when `previewKind` is `audio`. */
   audio?: ImmersivePreviewAudio | null;
   /** What kind of creation a generation is; unset for posts. */

@@ -187,6 +187,33 @@ describe("a finger resting on a reel slide's creator", () => {
   });
 });
 
+// iPhone 16e, 2026-11-12: a text post's slide in the reel named no one. The
+// overlay left out its whole caption block, the creator row with it, because
+// the slide prints its own badge, title and body.
+describe("a text post's slide in the reel", () => {
+  const texts = (tree: renderer.ReactTestRenderer) => tree.root
+    .findAll((node) => String(node.type) === 'text' && typeof node.props.children === 'string')
+    .map((node) => node.props.children as string);
+
+  it('names who wrote it, and opens their page', () => {
+    const onCreatorOpen = vi.fn();
+    const tree = renderReelChrome(reelItem({ previewKind: 'text', mediaUrl: null, mediaKind: null, badge: 'Text' }), onCreatorOpen);
+
+    expect(texts(tree)).toContain('@luna');
+    renderer.act(() => (creatorRow(tree).props.onPress as () => void)());
+    expect(onCreatorOpen).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('still leaves the badge and the title to the slide, which prints them', () => {
+    const tree = renderReelChrome(reelItem({ previewKind: 'text', mediaUrl: null, mediaKind: null, badge: 'Text' }));
+
+    expect(texts(tree)).not.toContain('Text');
+    expect(texts(tree)).not.toContain('Neon portrait');
+    renderer.act(() => tree.unmount());
+  });
+});
+
 describe("a finger resting on a Home card's creator", () => {
   function homeCard(creator: ShowcaseFeedItem['creator']): HomeFeedCard {
     const item: ShowcaseFeedItem = {

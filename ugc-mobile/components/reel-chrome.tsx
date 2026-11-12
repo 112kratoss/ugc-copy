@@ -324,9 +324,9 @@ export function ReelSlideChrome({
         }}
       >
         {/* A text slide already prints its own badge, title and body, so the
-            overlay would say all three a second time. */}
+            overlay would say all three a second time. Who wrote it is not on
+            the slide, so the creator row stays: a note in the reel named no one. */}
         {isTextPost ? null : (
-        <>
         <View pointerEvents="none" style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
           <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
             <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
@@ -352,6 +352,7 @@ export function ReelSlideChrome({
             </View>
           ) : null}
         </View>
+        )}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <Pressable
             accessibilityRole="button"
@@ -383,6 +384,8 @@ export function ReelSlideChrome({
             />
           ) : null}
         </View>
+        {isTextPost ? null : (
+        <>
         {/* A remix names what it remixed (owner, 2026-11-05), from the card itself. */}
         <RemixCreditLine
           remixCredit={item.details?.remixCredit}
