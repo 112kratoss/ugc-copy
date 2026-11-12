@@ -238,39 +238,51 @@ async function searchPosts({
 
 /**
  * The models and tools a search offers (search_public_entities, the one
- * source of which exist and how many posts each has for this viewer): those
- * whose name holds the query, or the one a made-with filter names.
+ * source of which exist and how many posts each has for this viewer): those a
+ * post the viewer may see names as the query does, or the one a made-with
+ * filter names. A read that fails offers none, with a line in the log: the
+ * entities are an extra beside the creators, posts and recipes, and a Posts
+ * search narrowed to one is still that search without the name on its chip.
  */
 async function searchEntities({
   adminSupabase,
   limit,
+  logEvent,
   madeWith,
   query,
   viewerUserId,
 }: {
   adminSupabase: SupabaseClient;
   limit: number;
+  logEvent: typeof logBackendEvent;
   /** An entity id: that entity alone, whatever the query. */
   madeWith?: string;
   query: string | null;
   viewerUserId: string | null;
-}) {
-  const { data, error } = await adminSupabase.rpc('search_public_entities', {
-    p_query: query,
-    p_viewer_user_id: viewerUserId,
-    p_limit: limit,
-    p_made_with: madeWith ?? null,
-  });
-  if (error) throw error;
-  return ((data ?? []) as EntitySearchRpcRow[]).map(entityResult);
+}): Promise<SearchEntityResult[]> {
+  try {
+    const { data, error } = await adminSupabase.rpc('search_public_entities', {
+      p_query: query,
+      p_viewer_user_id: viewerUserId,
+      p_limit: limit,
+      p_made_with: madeWith ?? null,
+    });
+    if (error) throw error;
+    return ((data ?? []) as EntitySearchRpcRow[]).map(entityResult);
+  } catch (error) {
+    logEvent('warn', 'public_search_entities_failed', { error });
+    return [];
+  }
 }
 
 /**
  * How the recipes list reads the query (search_recipes_corrected_query): the
  * corrected reading it will search on, or null when it reads it as typed. A
- * read that fails says null, with a line in the log: the notice is lost, the
- * recipes are not.
+ * read that fails is `unknown`, with a line in the log: the caller decides
+ * what a search may still show without knowing.
  */
+type RecipesReading = { known: true; readAs: string | null } | { known: false };
+
 async function recipesCorrectedQuery({
   adminSupabase,
   logEvent,
@@ -279,14 +291,14 @@ async function recipesCorrectedQuery({
   adminSupabase: SupabaseClient;
   logEvent: typeof logBackendEvent;
   query: string;
-}): Promise<string | null> {
+}): Promise<RecipesReading> {
   try {
     const { data, error } = await adminSupabase.rpc('search_recipes_corrected_query', { p_query: query });
     if (error) throw error;
-    return typeof data === 'string' && data ? data : null;
+    return { known: true, readAs: typeof data === 'string' && data ? data : null };
   } catch (error) {
     logEvent('warn', 'public_search_recipes_reading_failed', { error });
-    return null;
+    return { known: false };
   }
 }
 
@@ -378,12 +390,15 @@ export async function searchPublicContent(
       viewerUserId: options.viewerUserId,
     })
     : Promise.resolve([] as PostSearchRpcRow[]);
-  // The Top tab offers the models and tools the query names. A Posts search
+  // The Top tab offers the models and tools the query names, from the three
+  // characters posts are searched from: pressing one opens Posts narrowed to
+  // it, and under three there is no Posts search to open. A Posts search
   // narrowed to one reads that one, for the name its filter is shown under.
-  const entitiesPromise = isTop
+  const entitiesPromise = isTop && contentQueryAllowed
     ? searchEntities({
       adminSupabase,
       limit: PUBLIC_SEARCH_ENTITY_LIMIT,
+      logEvent: dependencies.logEvent,
       query: options.normalizedQuery,
       viewerUserId: options.viewerUserId,
     })
@@ -391,6 +406,7 @@ export async function searchPublicContent(
       ? searchEntities({
         adminSupabase,
         limit: 1,
+        logEvent: dependencies.logEvent,
         madeWith: filters.madeWith,
         query: null,
         viewerUserId: options.viewerUserId,
@@ -410,19 +426,23 @@ export async function searchPublicContent(
     limit: recipeTake,
     countryCode: options.countryCode,
   });
-  const recipesReadingPromise = recipesSearched
+  const recipesReadingPromise: Promise<RecipesReading> = recipesSearched
     ? recipesCorrectedQuery({ adminSupabase, logEvent: dependencies.logEvent, query: options.normalizedQuery })
-    : Promise.resolve(null);
+    : Promise.resolve({ known: true, readAs: null });
   // The list corrects a query only when no recipe holds it as typed, so read
   // as typed such a search is the empty list: it is answered without the
-  // call, which would search on the corrected words.
+  // call, which would search on the corrected words. When the reading cannot
+  // be read the list is not called either: it might correct, under a page
+  // that says "as typed". Recipes are left out of that one answer.
   const recipesPromise = !recipesSearched
     ? Promise.resolve(emptyRecipePage)
     : exact
-      ? recipesReadingPromise.then((readAs) => (readAs ? emptyRecipePage : listRecipes()))
+      ? recipesReadingPromise.then((reading) => (
+        reading.known && reading.readAs === null ? listRecipes() : emptyRecipePage
+      ))
       : listRecipes();
 
-  const [creatorRows, postRows, recipePage, entities, recipesReadAs] = await Promise.all([
+  const [creatorRows, postRows, recipePage, entities, recipesReading] = await Promise.all([
     creatorsPromise,
     postsPromise,
     recipesPromise,
@@ -503,7 +523,8 @@ export async function searchPublicContent(
     // post, or no recipe, has nothing to show results "for".
     correctedQuery: {
       posts: !exact && shownPosts.length > 0 ? postRows[0]?.corrected_query ?? null : null,
-      recipes: !exact && visibleRecipes.length > 0 ? recipesReadAs : null,
+      // A reading that could not be read says nothing: the recipes stand without the notice.
+      recipes: !exact && visibleRecipes.length > 0 && recipesReading.known ? recipesReading.readAs : null,
     },
     exact,
     creators: options.type === 'top' || options.type === 'creators'

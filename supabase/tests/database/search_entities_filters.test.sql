@@ -203,15 +203,25 @@ select is(
   'each row carries its post''s creator'
 );
 select is(
-  (select label from public.search_entity_labels where kind = 'model' and key = 'kling-2.6'),
+  (select label from public.post_search_entities
+   where post_id = pg_temp.post_id('11') and kind = 'model' and key = 'kling-2.6'),
   'Kling 2.6',
-  'an entity is labelled as posts print it'
+  'a post''s row holds the name that post prints'
 );
 select is(
-  (select label from public.search_entity_labels where kind = 'tool' and key = 'topaz-labs'),
+  (select label from public.post_search_entities
+   where post_id = pg_temp.post_id('12') and kind = 'model' and key = 'kling-2.6'),
+  'kling-2.6',
+  'the key, for a creation that prints no name'
+);
+select is(
+  (select label from public.post_search_entities
+   where post_id = pg_temp.post_id('13') and kind = 'tool' and key = 'topaz-labs'),
   'Topaz Labs',
   'a tool with no slug keeps its name as its label'
 );
+select hasnt_table('public', 'search_entity_labels',
+  'nothing is kept of an entity beside its posts'' rows: no list of names to outlive them');
 select is(public.search_entity_key('  Topaz  Labs!! '), 'topaz-labs', 'a key is the name lowercased, other characters a hyphen');
 select is(public.search_entity_key('Veo-3.1'), 'veo-3.1', 'a key keeps a dot between digits');
 select is(public.search_entity_key('   '), null, 'an empty name has no key');
@@ -225,8 +235,10 @@ select is(pg_temp.entities_found('kling', pg_temp.user_id('01')), array['model:k
 select is(pg_temp.entities_found('veo', pg_temp.user_id('01')), '{}'::text[],
   'an entity whose only post is by a creator who blocked the viewer is not offered to them');
 select is(pg_temp.entities_found('veo'), array['model:veo-3.1=1'], 'and is offered to a visitor');
-select is(pg_temp.entities_found('kl'), array['model:kling-2.6=3'], 'two letters are enough, as for creators');
-select is(pg_temp.entities_found('k'), '{}'::text[], 'one letter finds nothing');
+select is(pg_temp.entities_found('kli'), array['model:kling-2.6=3'], 'three letters are enough, as for posts');
+select is(pg_temp.entities_found('kl'), '{}'::text[],
+  'two letters find none: posts are searched from three, and an offer must lead to posts');
+select is(pg_temp.entities_found('k'), '{}'::text[], 'nor does one');
 select is(pg_temp.entities_found('kling 2.6'), array['model:kling-2.6=3'], 'the name as printed');
 select is(pg_temp.entities_found('kling2.6'), array['model:kling-2.6=3'], 'typed without the space');
 select is(pg_temp.entities_found('kling 3'), '{}'::text[],
@@ -236,15 +248,14 @@ select is(pg_temp.entities_found('kling sunmote'), '{}'::text[],
 select is(pg_temp.entities_found('secretool'), '{}'::text[],
   'a tool only a labelled post is made with is never offered');
 select ok(
-  exists (select 1 from public.search_entity_labels where kind = 'tool' and key = 'secretool'),
-  'though its name is on record: only the count keeps it out'
+  exists (select 1 from public.post_search_entities where kind = 'tool' and key = 'secretool'),
+  'though the labelled post has its row: only posts a viewer may see decide what is offered'
 );
 select is(pg_temp.entities_found('magicbooklet'), array['tool:magicbooklet=5'],
   'the app is a tool: its unlabelled public posts, the template''s result among them');
 select is(pg_temp.entities_found('topaz'), array['tool:topaz-labs=1'], 'a tool beyond a post''s first');
-select is(pg_temp.entities_found('m', null, 10), '{}'::text[], 'below two characters nothing');
 select is(
-  (select array_agg(e.kind || ':' || e.key order by e.kind, e.key) from public.search_public_entities('mi', null, 10) as e),
+  (select array_agg(e.kind || ':' || e.key order by e.kind, e.key) from public.search_public_entities('mid', null, 10) as e),
   array['tool:midjourney'],
   'a prefix finds the tools that start with it'
 );
@@ -278,7 +289,7 @@ select throws_ok(
 -- with its tool, under a name of its own; …35 prints the same tool otherwise.
 select pg_temp.post('34', '02', 'Label first', 'A labelled frame', 'image', 'VELLUM   forge', null, interval '1 day', false, true);
 select is(
-  (select label from public.search_entity_labels where kind = 'tool' and key = 'vellum-forge'),
+  (select label from public.post_search_entities where post_id = pg_temp.post_id('34') and kind = 'tool'),
   'VELLUM   forge',
   'fixture: the tool is first seen on a labelled post, under the name that post prints'
 );
@@ -293,6 +304,170 @@ select is(
   (select label from public.post_search_entities where post_id = pg_temp.post_id('35') and kind = 'tool'),
   'Vellum Forge',
   'each post''s row keeps the name that post prints'
+);
+
+-- ─── Only a name a visible post prints finds an entity ───────────────────────
+--
+-- The review's proof (2026-11-12). …71 is labelled and the first post saved
+-- with the slug 'hushtool', under words of its own; …72 is visible and prints
+-- the same slug as "Hushtool". A save keeps a client's words for a tool the
+-- catalog does not know, so the two names share nothing but the key.
+select pg_temp.post('71', '02', 'Private frame', 'A labelled frame', 'image', null, null, interval '1 day', false, true);
+select pg_temp.post('72', '02', 'Open frame', 'A quiet frame', 'image', null, null, interval '1 day');
+insert into public.post_source_tools (post_id, tool_label, tool_slug, sort_order)
+values (pg_temp.post_id('71'), 'Hushword Private Studio', 'hushtool', 0);
+insert into public.post_source_tools (post_id, tool_label, tool_slug, sort_order)
+values (pg_temp.post_id('72'), 'Hushtool', 'hushtool', 0);
+
+select is(pg_temp.entities_found('hushword'), '{}'::text[],
+  'a word only a labelled post names a tool by finds no entity');
+select is(pg_temp.posts_found('hushword'), '{}'::text[], 'as it finds no post');
+select is(pg_temp.entities_found('hushword private'), '{}'::text[], 'nor do two of its words');
+select is(
+  (select array_agg(e.label || '=' || e.post_count) from public.search_public_entities('hushtool') as e),
+  array['Hushtool=1'],
+  'the key finds the entity, under the name the visible post prints, counting the visible post'
+);
+select is(
+  (select array_agg(e.label || '=' || e.post_count) from public.search_public_entities(null, null, 1, 'tool:hushtool') as e),
+  array['Hushtool=1'],
+  'and by its key it is named the same way'
+);
+select is(pg_temp.posts_found('hushtool', null, 'latest', 'tool:hushtool'), array['72'],
+  'pressing it opens the visible post');
+
+-- The labelled post goes: nothing of its words is kept anywhere.
+delete from public.posts where id = pg_temp.post_id('71');
+select is(pg_temp.entities_found('hushword private'), '{}'::text[], 'after the labelled post is deleted its words still find nothing');
+select is(
+  (select count(*)::integer from public.post_search_entities
+   where label ilike '%hushword%' or name_vector @@ to_tsquery('pg_catalog.simple', 'hushword')),
+  0,
+  'and no row holds them'
+);
+
+-- A name a visible post prints finds its entity while that post can be seen, and not after.
+select pg_temp.post('73', '06', 'Works frame', 'A quiet frame', 'image', null, null, interval '1 day');
+insert into public.post_source_tools (post_id, tool_label, tool_slug, sort_order)
+values (pg_temp.post_id('73'), 'Penumbra Works', 'pnmbr', 0);
+select is(pg_temp.entities_found('penumbra works'), array['tool:pnmbr=1'],
+  'a name a visible post prints finds the entity, though the key holds none of its words');
+
+create function pg_temp.words_kept(p_word text) returns integer language sql stable as $$
+  select count(*)::integer from public.post_search_entities
+  where name_vector @@ to_tsquery('pg_catalog.simple', p_word);
+$$;
+
+update public.posts set is_nsfw = true where id = pg_temp.post_id('73');
+select is(pg_temp.entities_found('penumbra works'), '{}'::text[], 'labelled: its name finds nothing');
+select is(
+  (select count(*)::integer from public.search_public_entities(null, null, 1, 'tool:pnmbr')),
+  0,
+  'and names nothing'
+);
+update public.posts set is_nsfw = false where id = pg_temp.post_id('73');
+select is(pg_temp.entities_found('penumbra'), array['tool:pnmbr=1'], 'unlabelled again, it does: nothing waits for a rebuild');
+
+update public.posts set visibility = 'private' where id = pg_temp.post_id('73');
+select is(pg_temp.entities_found('penumbra'), '{}'::text[], 'made private: its name finds nothing');
+select is(pg_temp.words_kept('penumbra'), 0, 'and no row keeps it');
+update public.posts set visibility = 'public' where id = pg_temp.post_id('73');
+
+update public.posts set review_status = 'hidden' where id = pg_temp.post_id('73');
+select is(pg_temp.entities_found('penumbra'), '{}'::text[], 'hidden by review: its name finds nothing');
+select is(pg_temp.words_kept('penumbra'), 0, 'and no row keeps it');
+update public.posts set review_status = 'visible' where id = pg_temp.post_id('73');
+
+update public.posts set archived_at = now() where id = pg_temp.post_id('73');
+select is(pg_temp.entities_found('penumbra'), '{}'::text[], 'archived: its name finds nothing');
+select is(pg_temp.words_kept('penumbra'), 0, 'and no row keeps it');
+update public.posts set archived_at = null where id = pg_temp.post_id('73');
+select is(pg_temp.entities_found('penumbra'), array['tool:pnmbr=1'], 'fixture: back in view, it is found again');
+
+-- Its Made with renamed: the old name is gone with the old row.
+update public.post_source_tools set tool_label = 'Umbral Works' where post_id = pg_temp.post_id('73');
+select is(pg_temp.entities_found('penumbra'), '{}'::text[], 'a name the post no longer prints finds nothing');
+select is(pg_temp.words_kept('penumbra'), 0, 'and no row keeps it');
+select is(pg_temp.entities_found('umbral'), array['tool:pnmbr=1'], 'the name it prints now does');
+
+-- The creator who blocked the viewer prints a name of their own for a tool
+-- the viewer can see elsewhere: for that viewer the name finds nothing.
+select pg_temp.post('74', '05', 'Blocker frame', 'A quiet frame', 'image', null, null, interval '1 day');
+insert into public.post_source_tools (post_id, tool_label, tool_slug, sort_order)
+values (pg_temp.post_id('74'), 'Gloamwright Deluxe', 'hushtool', 0);
+select is(pg_temp.entities_found('gloamwright'), array['tool:hushtool=1'],
+  'a visitor finds the tool by the name the blocker''s post prints, counting that post');
+select is(pg_temp.entities_found('gloamwright', pg_temp.user_id('01')), '{}'::text[],
+  'the viewer they blocked does not: no post that viewer may see prints it');
+select is(
+  (select array_agg(e.label || '=' || e.post_count) from public.search_public_entities('hushtool', pg_temp.user_id('01')) as e),
+  array['Hushtool=1'],
+  'and by its key that viewer is shown the name the post they can see prints'
+);
+
+-- ─── An offer leads to posts, and to as many as it says ──────────────────────
+--
+-- …75 and …76 share a slug. …75 prints it as "Emberline Studio"; …76 prints
+-- it as "Duskloom" and has 'emberline' in its title. …77 is labelled and
+-- prints it as "Nightjar Private"; …78 is visible, prints "Duskloom", and
+-- has 'nightjar' in its title.
+select pg_temp.post('75', '02', 'Plain one', 'A quiet frame', 'image', null, null, interval '1 day');
+select pg_temp.post('76', '02', 'Emberline notes', 'A quiet frame', 'image', null, null, interval '2 days');
+select pg_temp.post('77', '02', 'Plain three', 'A labelled frame', 'image', null, null, interval '3 days', false, true);
+select pg_temp.post('78', '02', 'Nightjar sketch', 'A quiet frame', 'image', null, null, interval '4 days');
+insert into public.post_source_tools (post_id, tool_label, tool_slug, sort_order)
+values
+  (pg_temp.post_id('75'), 'Emberline Studio', 'duskloom', 0),
+  (pg_temp.post_id('76'), 'Duskloom', 'duskloom', 0),
+  (pg_temp.post_id('77'), 'Nightjar Private', 'duskloom', 0),
+  (pg_temp.post_id('78'), 'Duskloom', 'duskloom', 0);
+
+select is(pg_temp.entities_found('emberline'), array['tool:duskloom=2'],
+  'an entity found by a name one post prints counts every post the search for that query narrowed to it returns: the post that names it and the post whose title holds the word');
+select is(pg_temp.posts_found('emberline', null, 'latest', 'tool:duskloom'), array['75', '76'],
+  'which is the list pressing it opens');
+select is(pg_temp.entities_found('nightjar'), '{}'::text[],
+  'a word only a labelled post names the tool by offers nothing, though a visible post with the tool holds the word in its title');
+select is(pg_temp.entities_found('duskloom'), array['tool:duskloom=3'],
+  'by its key: the three visible posts, the labelled one left out');
+select is(pg_temp.posts_found('duskloom', null, 'latest', 'tool:duskloom'), array['75', '76', '78'],
+  'and the list is those three');
+
+-- Every offer, for every query here and both viewers: the Posts search for
+-- that query narrowed to the entity returns at least one post, and exactly
+-- as many as the offer says.
+create function pg_temp.pressed_total(p_query text, p_viewer uuid, p_entity text) returns integer
+language sql stable as $$
+  select count(*)::integer
+  from public.search_public_posts(p_query, p_viewer, null, null, 25, now(), 'top', null, p_entity) as s;
+$$;
+create function pg_temp.broken_offers(p_viewer uuid) returns text[] language sql stable as $$
+  select coalesce(array_agg(
+    asked.query || ' -> ' || offered.kind || ':' || offered.key || ' says ' || offered.post_count
+      || ', opens ' || pg_temp.pressed_total(asked.query, p_viewer, offered.kind || ':' || offered.key)
+    order by asked.query, offered.kind, offered.key
+  ), '{}')
+  from unnest(array[
+    'kling', 'kli', 'kling 2.6', 'kling2.6', 'veo', 'veo 3', 'magicbooklet', 'magic', 'topaz', 'topaz labs',
+    'midjourney', 'mid', 'niji', 'hushtool', 'hushword', 'gloamwright', 'umbral', 'umbral works', 'penumbra',
+    'emberline', 'emberline studio', 'nightjar', 'duskloom', 'vellum', 'vellum forge', 'secretool',
+    'sunmote', 'verdanthal', 'studio', 'works', 'private'
+  ]) as asked(query)
+  cross join lateral public.search_public_entities(asked.query, p_viewer, 10) as offered
+  where pg_temp.pressed_total(asked.query, p_viewer, offered.kind || ':' || offered.key)
+    is distinct from offered.post_count
+    or offered.post_count < 1;
+$$;
+select is(pg_temp.broken_offers(null), '{}'::text[],
+  'for a visitor every offer opens at least one post, and exactly as many as it says');
+select is(pg_temp.broken_offers(pg_temp.user_id('01')), '{}'::text[],
+  'and for the viewer with blocks on both sides');
+select cmp_ok(
+  (select count(*)::integer
+   from unnest(array['kling', 'magicbooklet', 'midjourney', 'emberline', 'duskloom', 'hushtool', 'umbral']) as asked(query)
+   cross join lateral public.search_public_entities(asked.query, null, 10) as offered),
+  '>=', 7,
+  'fixture: those queries do offer entities, so the two checks above compared something'
 );
 
 -- The order: the entity that is the query first, then by count.
@@ -313,22 +488,22 @@ select is(pg_temp.entities_of('13'), array['model:niji-7', 'tool:midjourney', 't
 select is(pg_temp.entities_found('niji'), array['model:niji-7=1'],
   'and the model it no longer has is no longer offered');
 
--- …12's model was first seen under its bare key when it stood alone.
+-- A model a creation names before its post prints a name for it.
 select pg_temp.post('41', '02', 'Wan frame', 'A quiet frame', 'image', 'Magicbooklet', 'magicbooklet', interval '1 day');
 insert into public.generations (id, user_id, model, status, is_public)
 values (pg_temp.creation_id('41'), pg_temp.user_id('02'), 'wan-2.7', 'succeeded', true);
 update public.posts set generation_id = pg_temp.creation_id('41') where id = pg_temp.post_id('41');
 select is(
-  (select label from public.search_entity_labels where kind = 'model' and key = 'wan-2.7'),
+  (select e.label from public.search_public_entities(null, null, 1, 'model:wan-2.7') as e),
   'wan-2.7',
-  'a model only a creation names is labelled by its key'
+  'a model only a creation names is named by its key'
 );
 insert into public.post_source_tools (post_id, tool_label, tool_slug, model_label, model_slug, sort_order)
 values (pg_temp.post_id('41'), 'Magicbooklet', 'magicbooklet', 'Wan 2.7', 'wan-2.7', 0);
 select is(
-  (select label from public.search_entity_labels where kind = 'model' and key = 'wan-2.7'),
+  (select e.label from public.search_public_entities(null, null, 1, 'model:wan-2.7') as e),
   'Wan 2.7',
-  'and takes the name a post prints once one does'
+  'and takes the name its post prints once it prints one'
 );
 select is(pg_temp.entities_of('41'), array['model:wan-2.7', 'tool:magicbooklet'],
   'the post still has the model once, under one key');
@@ -670,31 +845,25 @@ select ok(
   'client roles cannot call the entity helpers'
 );
 select ok(
-  (select bool_and(relrowsecurity) from pg_class
-   where oid in ('public.post_search_entities'::regclass, 'public.search_entity_labels'::regclass)),
-  'row level security is on for both entity tables'
+  (select relrowsecurity from pg_class where oid = 'public.post_search_entities'::regclass),
+  'row level security is on for the entity table'
 );
 select is(
-  (select count(*)::integer from pg_policy
-   where polrelid in ('public.post_search_entities'::regclass, 'public.search_entity_labels'::regclass)),
+  (select count(*)::integer from pg_policy where polrelid = 'public.post_search_entities'::regclass),
   0,
   'with no policy: the Data API roles see nothing'
 );
 select ok(
   not has_table_privilege('anon', 'public.post_search_entities', 'SELECT')
-  and not has_table_privilege('authenticated', 'public.post_search_entities', 'SELECT')
-  and not has_table_privilege('anon', 'public.search_entity_labels', 'SELECT')
-  and not has_table_privilege('authenticated', 'public.search_entity_labels', 'SELECT'),
-  'client roles cannot read the entity tables'
+  and not has_table_privilege('authenticated', 'public.post_search_entities', 'SELECT'),
+  'client roles cannot read the entity table'
 );
 select ok(
   has_table_privilege('service_role', 'public.post_search_entities', 'SELECT')
   and not has_table_privilege('service_role', 'public.post_search_entities', 'INSERT')
-  and not has_table_privilege('service_role', 'public.post_search_entities', 'DELETE')
-  and has_table_privilege('service_role', 'public.search_entity_labels', 'SELECT')
-  and not has_table_privilege('service_role', 'public.search_entity_labels', 'INSERT')
-  and not has_table_privilege('service_role', 'public.search_entity_labels', 'UPDATE'),
-  'the service role reads them and writes them only through the trigger'
+  and not has_table_privilege('service_role', 'public.post_search_entities', 'UPDATE')
+  and not has_table_privilege('service_role', 'public.post_search_entities', 'DELETE'),
+  'the service role reads it and writes it only through the trigger'
 );
 
 -- ─── The search log ──────────────────────────────────────────────────────────

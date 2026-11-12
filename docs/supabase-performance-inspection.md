@@ -118,13 +118,14 @@ fine), and a Latest recipes cursor is read as an offset into the relevance order
 Search also offers the models and tools posts are made with ("Kling 2.6, 14
 posts") and narrows Posts by them, by media kind, by "has a recipe" and by
 "from creators I follow" (`20261112143757`). `post_search_entities` holds which
-entities each post with a search document has and `search_entity_labels` each
-entity's name; both are written only by a trigger on `post_search_documents`,
-so they follow a post's document. `search_public_entities` is the one source of
-which entities exist and how many posts each has: the count is live, per
-viewer (unlabelled public posts, both sides of a block left out) and stops at
-1,000. A label row is never removed when its last post goes; it is offered only
-while a post the viewer may see has it. After a code-only rollback to an app
+entities each post with a search document has, each under the name that post
+prints; it is written only by a trigger on `post_search_documents`, a row
+leaves with its document, and nothing else is kept of an entity.
+`search_public_entities` is the one source of which entities exist and how
+many posts each has: an entity is offered only when a post the viewer may see
+names it as the query does, and its count is the posts the Posts search for
+that query narrowed to it returns (live, per viewer, up to 1,000), so pressing
+one always opens that many posts. After a code-only rollback to an app
 from before that migration, search keeps working against it: that app's call
 names none of the new parameters, so nothing is narrowed, and a cursor issued
 under filters by the newer app pages the unfiltered search from its place.

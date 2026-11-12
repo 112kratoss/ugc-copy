@@ -9,8 +9,9 @@
 -- word with nothing saying so.
 --
 -- 1. ENTITIES. An entity is a model or a tool public posts are made with: the
---    names 20261111224010 put into post documents. Two tables hold them, both
---    backend-owned (service role only, RLS on, no policy):
+--    names 20261111224010 put into post documents. One table holds them,
+--    backend-owned (service role only, RLS on, no policy), and every row is
+--    keyed by its post: no save writes a row another save shares.
 --
 --    public.post_search_entities: which entities a post has. One row per
 --    post and entity, for posts that have a search document (public,
@@ -22,35 +23,25 @@
 --                       its name where it has no slug, lowercased, every run
 --                       of other characters a hyphen ('kling-2.6', 'veo-3.1',
 --                       'magicbooklet')
---      label            the name that post prints for it ('Kling 2.6'); the
---                       key where it prints none
+--      label            the name THAT POST prints for it ('Kling 2.6'); the
+--                       key where it prints none. A save keeps a client's
+--                       own words for a tool or model the catalog does not
+--                       know (save_post_source_tools_with_catalog), so two
+--                       posts can print one key under different names.
+--      name_vector      generated from that post's label and the key
+--                       (search_term_variants: as written, split, joined):
+--                       what a query is matched against
 --      creator_user_id  the post's creator, so a count leaves both sides of
 --                       a block out without reading the document
 --
---    public.search_entity_labels: every entity ever seen on such a post, the
---    index a query is matched against.
---      kind, key        as above; the primary key
---      label            the name the first post seen with it printed; the
---                       key itself until a post names it better
---      name_vector      generated from label and key
---                       (search_term_variants: as written, split, joined),
---                       what a query is matched against
---      created_at       when the entity was first seen
---    A row is never removed when its last post goes: an entity is offered
---    only while a post the viewer may see has it, so a stale row costs one
---    empty count and shows nothing. The name an entity is SHOWN under is
---    never this row's: it is taken from the rows of the posts the viewer may
---    see, so a name only a labelled post printed is not shown. (Which words
---    find an entity can still come from this row. A save writes one name per
---    slug, save_post_source_tools_with_catalog, and a tool with no slug is
---    keyed by its name, so the names differ at most in case and
---    punctuation.)
---
---    They are kept by a statement trigger on post_search_documents (AFTER
+--    It is kept by a statement trigger on post_search_documents (AFTER
 --    INSERT; the projection deletes and inserts a post's document on every
 --    change to its title, text, creation, Made with, recipe or visibility, and
---    the delete cascades). So they follow the document whoever re-creates the
---    projection later, and this file re-creates no function of 20261111224010.
+--    the delete cascades). So a post's rows follow its document whoever
+--    re-creates the projection later, and this file re-creates no function of
+--    20261111224010. Nothing is kept beside the posts' own rows: there is no
+--    list of entities to go stale, and nothing of a post outlives its
+--    document.
 --
 --    What a post's entities are (post_search_entity_rows):
 --      tool   posts.source_tool / source_tool_slug, and each Made with row's
@@ -66,25 +57,40 @@
 --    THE SINGLE SOURCE for "which entities exist and how many posts each has"
 --    is public.search_public_entities(p_query, p_viewer_user_id, p_limit,
 --    p_made_with), which /api/search calls and a typeahead can call the same
---    way. It returns
+--    way. For a query it returns the entities it offers, and what it offers
+--    is exactly what pressing one finds:
+--      - THE POSTS OF AN OFFER are the posts search_public_posts returns for
+--        that query narrowed to the entity: posts the viewer may see
+--        (unlabelled, public, visible, neither side of a block) that have
+--        the entity and hold the query, by the same match, written here a
+--        fourth time and held to the other three by a test.
+--      - AN ENTITY IS OFFERED when one of those posts names it as the query
+--        does: its row's name_vector holds every word of the query (the
+--        last a prefix, unstemmed). So an entity is found only by its key or
+--        by a name a post the viewer may see prints right now. A name only a
+--        labelled, private, hidden or deleted post printed finds nothing and
+--        is shown nowhere, then or later: its row is gone with its document,
+--        or is never read.
 --      kind, key          as above
---      label              the name a post the viewer may see prints for it
---      post_count         the posts the viewer may see that have the entity:
---                         unlabelled (posts.is_nsfw = false) public posts,
---                         both sides of a block left out, counted live and no
---                         further than 1,000
+--      label              the name most of those posts print for it
+--      post_count         how many of those posts there are, counted live
+--                         and no further than 1,000: the total the Posts
+--                         search for that query and entity pages through
 --      post_count_capped  true when there are more than 1,000
---    for the entities whose name holds every word of p_query (the last one a
---    prefix, as post search reads a query, unstemmed), the entity whose name
---    or key is the query first, then by count. With p_made_with
---    ('model:kling-2.6') it returns that one entity instead. An entity with no
---    such post is never returned, so a name only labelled posts carry is
---    never shown.
---    The count is PER VIEWER and live: it is the number of posts a Posts
---    search filtered to the entity would page through for that viewer. A
---    viewer who compares their count with a signed-out one learns how many
---    posts with that entity are by creators on either side of a block with
---    them, which post search already tells them the same way.
+--    ordered the entity whose name or key is the query first, then by count.
+--    A query under three characters finds none: posts are searched from
+--    three, and an offer must lead to posts.
+--    With p_made_with ('model:kling-2.6') and no query it returns that one
+--    entity, counted over every post the viewer may see that has it, for the
+--    name a filter is shown under.
+--    The count is PER VIEWER. A viewer who compares their count with a
+--    signed-out one learns how many of those posts are by creators on either
+--    side of a block with them, which post search already tells them the
+--    same way.
+--    Known limit: the count stops at 1,000, and so does the look for a post
+--    that names the entity as the query does. An entity with more than 1,000
+--    matching posts, found only by a name none of the first 1,001 prints, is
+--    not offered; found by its key, it always is.
 --
 -- 2. FILTERS on search_public_posts, each applied before LIMIT so pages stay
 --    full, and each decided on what a visitor sees:
@@ -158,35 +164,20 @@ COMMENT ON FUNCTION public.search_entity_key(text) IS
 REVOKE ALL ON FUNCTION public.search_entity_key(text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.search_entity_key(text) TO service_role;
 
-CREATE TABLE public.search_entity_labels (
+CREATE TABLE public.post_search_entities (
+  post_id uuid NOT NULL REFERENCES public.post_search_documents(post_id) ON DELETE CASCADE,
   kind text NOT NULL CHECK (kind IN ('model', 'tool')),
   key text NOT NULL CHECK (char_length(key) BETWEEN 1 AND 80),
   label text NOT NULL CHECK (char_length(label) BETWEEN 1 AND 80),
   -- STORED and generated: computed when the row is written and never again,
   -- so a migration that changes search_term_variants must end with
-  --   UPDATE public.search_entity_labels SET label = label;
+  --   UPDATE public.post_search_entities SET label = label;
   name_vector tsvector GENERATED ALWAYS AS (
     to_tsvector(
       'pg_catalog.simple',
       coalesce(public.search_term_variants(label), '') || ' ' || coalesce(public.search_term_variants(key), '')
     )
   ) STORED,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (kind, key)
-);
-
-ALTER TABLE public.search_entity_labels ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON TABLE public.search_entity_labels FROM PUBLIC, anon, authenticated, service_role;
-GRANT SELECT ON TABLE public.search_entity_labels TO service_role;
-
-COMMENT ON TABLE public.search_entity_labels IS
-  'Backend-owned: every model and tool seen on a post with a search document, by key, with the vector a query is matched against. Written only by refresh_post_search_entities. Read it through search_public_entities, which returns an entity only while a post the viewer may see has it, under the name such a post prints.';
-
-CREATE TABLE public.post_search_entities (
-  post_id uuid NOT NULL REFERENCES public.post_search_documents(post_id) ON DELETE CASCADE,
-  kind text NOT NULL CHECK (kind IN ('model', 'tool')),
-  key text NOT NULL CHECK (char_length(key) BETWEEN 1 AND 80),
-  label text NOT NULL CHECK (char_length(label) BETWEEN 1 AND 80),
   creator_user_id uuid NOT NULL,
   PRIMARY KEY (kind, key, post_id)
 );
@@ -195,20 +186,29 @@ CREATE TABLE public.post_search_entities (
 CREATE INDEX post_search_entities_post_idx
   ON public.post_search_entities (post_id);
 
+-- The entities a query names, before any post is read.
+CREATE INDEX post_search_entities_name_idx
+  ON public.post_search_entities USING gin (name_vector);
+
 ALTER TABLE public.post_search_entities ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.post_search_entities FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON TABLE public.post_search_entities TO service_role;
 
 COMMENT ON TABLE public.post_search_entities IS
-  'Backend-owned: the models and tools each post with a search document is made with, one row per post and entity, under the name that post prints. Kept by a trigger on post_search_documents; a row leaves with its document. The made-with filter of search_public_posts and the counts of search_public_entities read it.';
+  'Backend-owned: the models and tools each post with a search document is made with, one row per post and entity, under the name that post prints. Kept by a trigger on post_search_documents; a row leaves with its document, and nothing is kept of an entity beside its posts'' rows. The made-with filter of search_public_posts reads it, and search_public_entities offers an entity only by the rows of posts the viewer may see.';
 
 CREATE FUNCTION public.post_search_entity_rows(p_post_ids uuid[])
 RETURNS TABLE(post_id uuid, creator_user_id uuid, kind text, key text, label text)
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = ''
 AS $function$
+BEGIN
+  -- plpgsql, so the plan is kept: as a sql function with a SET clause this
+  -- was planned anew on every call, twice per projected post, and that was
+  -- most of what a projection cost (about 7 ms; 20261112143757's review).
+  RETURN QUERY
   WITH subjects AS (
     SELECT
       documents.post_id,
@@ -275,10 +275,11 @@ AS $function$
   FROM named
   WHERE named.key IS NOT NULL
   ORDER BY named.post_id, named.kind, named.key, (coalesce(nullif(named.label, ''), named.key) = named.key), named.label;
+END;
 $function$;
 
 COMMENT ON FUNCTION public.post_search_entity_rows(uuid[]) IS
-  'The models and tools of the given posts that have a search document, as post_search_entities holds them, with the name each is printed under. A template result has no model.';
+  'The models and tools of the given posts that have a search document, as post_search_entities holds them, each under the name that post prints. A template result has no model.';
 
 REVOKE ALL ON FUNCTION public.post_search_entity_rows(uuid[]) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.post_search_entity_rows(uuid[]) TO service_role;
@@ -294,49 +295,22 @@ BEGIN
     RETURN;
   END IF;
 
+  -- Only rows keyed by these posts are written: two saves never meet on a
+  -- row, in whatever order they name their tools. Called from the documents'
+  -- trigger the delete finds nothing (the rows went with the old document);
+  -- it is here for a call made on posts whose documents stand.
   DELETE FROM public.post_search_entities
   WHERE post_id = ANY (p_post_ids);
 
-  -- The posts' rows, and a label for every entity not seen before. Labels go
-  -- in key order, so two saves naming the same new entities never wait on
-  -- each other crosswise; a known entity is left as it is, unlocked.
-  WITH fresh AS (
-    SELECT * FROM public.post_search_entity_rows(p_post_ids)
-  ),
-  stored AS (
-    INSERT INTO public.post_search_entities (post_id, kind, key, label, creator_user_id)
-    SELECT fresh.post_id, fresh.kind, fresh.key, fresh.label, fresh.creator_user_id
-    FROM fresh
-  )
-  INSERT INTO public.search_entity_labels (kind, key, label)
-  SELECT named.kind, named.key, named.label
-  FROM (
-    SELECT DISTINCT ON (fresh.kind, fresh.key) fresh.kind, fresh.key, fresh.label
-    FROM fresh
-    ORDER BY fresh.kind, fresh.key, (fresh.label = fresh.key), fresh.label
-  ) AS named
-  ORDER BY named.kind, named.key
-  ON CONFLICT (kind, key) DO NOTHING;
-
-  -- An entity first seen under its bare key (a creation with no Made with
-  -- row) takes the name a later post prints. Rare: it touches only a label
-  -- that is still its key.
-  UPDATE public.search_entity_labels AS labels
-  SET label = named.label
-  FROM (
-    SELECT DISTINCT ON (members.kind, members.key) members.kind, members.key, members.label
-    FROM public.post_search_entity_rows(p_post_ids) AS members
-    WHERE members.label <> members.key
-    ORDER BY members.kind, members.key, members.label
-  ) AS named
-  WHERE labels.kind = named.kind
-    AND labels.key = named.key
-    AND labels.label = labels.key;
+  -- The rows are worked out once.
+  INSERT INTO public.post_search_entities (post_id, kind, key, label, creator_user_id)
+  SELECT fresh.post_id, fresh.kind, fresh.key, fresh.label, fresh.creator_user_id
+  FROM public.post_search_entity_rows(p_post_ids) AS fresh;
 END;
 $function$;
 
 COMMENT ON FUNCTION public.refresh_post_search_entities(uuid[]) IS
-  'Makes post_search_entities hold exactly the models and tools of the given posts (none for a post with no search document) and adds a search_entity_labels row for each entity not seen before. Called by the trigger on post_search_documents.';
+  'Makes post_search_entities hold exactly the models and tools of the given posts (none for a post with no search document). It writes rows of those posts and no other row. Called by the trigger on post_search_documents.';
 
 REVOKE ALL ON FUNCTION public.refresh_post_search_entities(uuid[]) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.refresh_post_search_entities(uuid[]) TO service_role;
@@ -390,52 +364,33 @@ DECLARE
   -- entity every post has costs no more to count than this.
   c_count_cap CONSTANT integer := 1000;
   v_query text := lower(btrim(regexp_replace(coalesce(p_query, ''), '[[:space:]]+', ' ', 'g')));
+  -- The query as post search matches a document on it, and as a name is matched.
+  v_like text;
   v_tsquery tsquery;
+  v_name_tsquery tsquery;
   v_entity_kind text;
   v_entity_key text;
 BEGIN
   IF p_limit < 1 OR p_limit > 10 THEN
     RAISE EXCEPTION 'Entity search limit must be between 1 and 10';
   END IF;
+
   IF p_made_with IS NOT NULL THEN
     v_entity_kind := split_part(p_made_with, ':', 1);
     v_entity_key := substr(p_made_with, char_length(v_entity_kind) + 2);
     IF v_entity_kind NOT IN ('model', 'tool') OR v_entity_key = '' THEN
       RAISE EXCEPTION 'Entity must be model:<key> or tool:<key>';
     END IF;
-  ELSE
-    -- As creator search: outside the limits a query finds nothing.
-    IF char_length(v_query) < 2 OR char_length(v_query) > 100 THEN
-      RETURN;
-    END IF;
-    -- Names are not stemmed.
-    v_tsquery := public.search_query_tsquery(v_query, false);
-    IF numnode(v_tsquery) = 0 THEN
-      RETURN;
-    END IF;
-  END IF;
 
-  RETURN QUERY
-  SELECT
-    labels.kind,
-    labels.key,
-    counted.label,
-    least(counted.post_total, c_count_cap) AS post_count,
-    counted.post_total > c_count_cap AS post_count_capped
-  FROM public.search_entity_labels AS labels
-  CROSS JOIN LATERAL (
-    -- The posts a Posts search filtered to this entity pages through for
-    -- this viewer: unlabelled, neither side of a block. The name shown is
-    -- one of theirs, a name that is not just the key before one that is.
-    SELECT
-      count(*)::integer AS post_total,
-      (array_agg(seen.label ORDER BY (seen.label = labels.key), seen.label))[1] AS label
-    FROM (
+    -- One entity by its key, whatever the query: every post the viewer may
+    -- see that has it, and the name most of them print.
+    RETURN QUERY
+    WITH seen AS MATERIALIZED (
       SELECT members.label
       FROM public.post_search_entities AS members
       JOIN public.posts AS posts ON posts.id = members.post_id
-      WHERE members.kind = labels.kind
-        AND members.key = labels.key
+      WHERE members.kind = v_entity_kind
+        AND members.key = v_entity_key
         AND posts.is_nsfw = false
         AND NOT EXISTS (
           SELECT 1
@@ -450,26 +405,110 @@ BEGIN
             AND blocks.blocked_user_id = p_viewer_user_id
         )
       LIMIT c_count_cap + 1
-    ) AS seen
-  ) AS counted
-  WHERE (
-      CASE
-        WHEN v_entity_key IS NOT NULL THEN labels.kind = v_entity_kind AND labels.key = v_entity_key
-        ELSE labels.name_vector @@ v_tsquery
-      END
     )
-    AND counted.post_total > 0
+    SELECT
+      v_entity_kind,
+      v_entity_key,
+      (
+        SELECT printed.label
+        FROM seen AS printed
+        GROUP BY printed.label
+        ORDER BY (printed.label = v_entity_key), count(*) DESC, printed.label
+        LIMIT 1
+      ),
+      least((SELECT count(*) FROM seen), c_count_cap)::integer,
+      (SELECT count(*) FROM seen) > c_count_cap
+    WHERE EXISTS (SELECT 1 FROM seen);
+    RETURN;
+  END IF;
+
+  -- Posts are searched from three characters, and an entity is offered only
+  -- with posts to open: under three, or past the limit, a query finds none.
+  IF char_length(v_query) < 3 OR char_length(v_query) > 100 THEN
+    RETURN;
+  END IF;
+  v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_');
+  v_tsquery := public.search_query_tsquery(v_query, true);
+  -- Names are not stemmed.
+  v_name_tsquery := public.search_query_tsquery(v_query, false);
+  IF numnode(v_name_tsquery) = 0 THEN
+    RETURN;
+  END IF;
+
+  RETURN QUERY
+  WITH candidates AS (
+    -- The entities some post names as the query does, labelled posts and
+    -- blocked creators' among them: only the posts counted below decide.
+    SELECT DISTINCT members.kind, members.key
+    FROM public.post_search_entities AS members
+    WHERE members.name_vector @@ v_name_tsquery
+  )
+  SELECT
+    candidates.kind,
+    candidates.key,
+    counted.label,
+    least(counted.post_total, c_count_cap) AS post_count,
+    counted.post_total > c_count_cap AS post_count_capped
+  FROM candidates
+  CROSS JOIN LATERAL (
+    -- The posts search_public_posts returns for this query narrowed to this
+    -- entity, for this viewer: the same label, blocks and match, so the
+    -- count is the list pressing the entity opens.
+    WITH seen AS MATERIALIZED (
+      SELECT
+        members.label,
+        members.name_vector @@ v_name_tsquery AS names_it
+      FROM public.post_search_entities AS members
+      JOIN public.post_search_documents AS documents ON documents.post_id = members.post_id
+      JOIN public.posts AS posts ON posts.id = documents.post_id
+      WHERE members.kind = candidates.kind
+        AND members.key = candidates.key
+        AND posts.is_nsfw = false
+        AND (
+          documents.search_vector @@ v_tsquery
+          OR documents.search_text ILIKE ('%' || v_like || '%')
+          OR documents.title_normalized OPERATOR(extensions.%) v_query
+          OR documents.tool_normalized OPERATOR(extensions.%) v_query
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.user_blocks AS blocks
+          WHERE blocks.blocker_user_id = p_viewer_user_id
+            AND blocks.blocked_user_id = documents.creator_user_id
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM public.user_blocks AS blocks
+          WHERE blocks.blocker_user_id = documents.creator_user_id
+            AND blocks.blocked_user_id = p_viewer_user_id
+        )
+      LIMIT c_count_cap + 1
+    )
+    SELECT
+      (SELECT count(*) FROM seen)::integer AS post_total,
+      -- One of those posts names the entity as the query does.
+      (SELECT coalesce(bool_or(named.names_it), false) FROM seen AS named) AS named,
+      (
+        SELECT printed.label
+        FROM seen AS printed
+        GROUP BY printed.label
+        ORDER BY (printed.label = candidates.key), count(*) DESC, printed.label
+        LIMIT 1
+      ) AS label
+  ) AS counted
+  WHERE counted.post_total > 0
+    AND counted.named
   ORDER BY
-    (lower(counted.label) = v_query OR labels.key = v_query) DESC,
+    (lower(counted.label) = v_query OR candidates.key = v_query) DESC,
     counted.post_total DESC,
-    labels.kind,
-    labels.key
+    candidates.kind,
+    candidates.key
   LIMIT p_limit;
 END;
 $function$;
 
 COMMENT ON FUNCTION public.search_public_entities(text, uuid, integer, text) IS
-  'The single source for which models and tools exist in search and how many posts each has. For p_query: the entities whose name holds every word of it (the last a prefix), the one that is the query first, then by count. For p_made_with (model:<key> or tool:<key>): that entity. label is the name a post the viewer may see prints for it. post_count is the unlabelled public posts with the entity that p_viewer_user_id may see (both sides of a block left out), counted live up to 1,000; post_count_capped says there are more. An entity with no such post is never returned. Service role only.';
+  'The single source for which models and tools exist in search and how many posts each has. For p_query (three characters or more): the entities a post the viewer may see names as the query does, each with post_count, the posts search_public_posts returns for that query narrowed to it (counted live up to 1,000; post_count_capped says there are more), under the name most of those posts print; the one that is the query first, then by count. For p_made_with (model:<key> or tool:<key>) with no query: that entity over every post the viewer may see that has it. A name only a labelled, private, hidden or deleted post printed finds and names nothing. Service role only.';
 
 REVOKE ALL ON FUNCTION public.search_public_entities(text, uuid, integer, text)
   FROM PUBLIC, anon, authenticated;

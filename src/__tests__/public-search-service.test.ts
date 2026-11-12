@@ -184,10 +184,10 @@ describe('public search service', () => {
   it('searches only creators on Top for a query of two characters, two emoji included', async () => {
     // Two emoji are four UTF-16 units; search_public_posts counts two
     // characters and raises, which failed the whole Top answer.
-    // Creators and entities are searched from two characters; posts and
-    // recipes, and the recipes' reading, from three.
+    // Creators are searched from two characters; posts, recipes, the recipes'
+    // reading and the entities that open posts, from three.
     const rpc = vi.fn(async (name: string) => {
-      if (name !== 'search_public_creators' && name !== 'search_public_entities') throw new Error(`Unexpected RPC ${name}`);
+      if (name !== 'search_public_creators') throw new Error(`Unexpected RPC ${name}`);
       return { data: [], error: null };
     });
     const getMarketplaceResourceList = vi.fn();
@@ -207,8 +207,10 @@ describe('public search service', () => {
       loadBlockedCreatorIds: vi.fn(async () => new Set()) as never,
     });
 
-    expect(rpc.mock.calls.map(([name]) => name).sort()).toEqual(['search_public_creators', 'search_public_entities']);
+    expect(rpc).toHaveBeenCalledTimes(1);
     expect(getMarketplaceResourceList).not.toHaveBeenCalled();
+    // No entity under three characters: pressing one opens Posts, which is not searched there.
+    expect(result.entities).toEqual([]);
     expect(result.posts.items).toEqual([]);
     expect(result.recipes.items).toEqual([]);
   });
@@ -495,7 +497,7 @@ describe('public search service', () => {
     });
     function harness({
       posts = [{ post_id: POST, creator_user_id: 'creator-1', search_score: 9, created_at: '2026-11-12T09:00:00+00:00', corrected_query: null as string | null }],
-      entities = [] as Array<Record<string, unknown>>,
+      entities = [] as Array<Record<string, unknown>> | Error,
       recipesReadAs = null as string | null | Error,
       recipes = [] as Array<ReturnType<typeof recipe>>,
       hydrated = (ids: string[]) => ids.map((id) => ({ id })),
@@ -503,7 +505,9 @@ describe('public search service', () => {
       const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
         if (name === 'search_public_creators') return { data: [], error: null };
         if (name === 'search_public_posts') return { data: posts.slice(0, Number(args.p_limit)), error: null };
-        if (name === 'search_public_entities') return { data: entities, error: null };
+        if (name === 'search_public_entities') {
+          return entities instanceof Error ? { data: null, error: entities } : { data: entities, error: null };
+        }
         if (name === 'search_recipes_corrected_query') {
           return recipesReadAs instanceof Error ? { data: null, error: recipesReadAs } : { data: recipesReadAs, error: null };
         }
@@ -554,6 +558,39 @@ describe('public search service', () => {
         { kind: 'tool', key: 'klingon-fx', label: 'Klingon FX', postCount: 1000, postCountCapped: true },
         { kind: 'model', key: 'niji-6', label: 'Niji 6', postCount: 2, postCountCapped: false },
       ]);
+    });
+
+    it('offers no entity for a two-character query: pressing one opens Posts, searched from three', async () => {
+      for (const query of ['kl', '\u{1F600}\u{1F600}']) {
+        const { search, argsOf } = harness({ entities: [{ kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', post_count: 14, post_count_capped: false }] });
+        const result = await search({ query, normalizedQuery: query });
+        expect(argsOf('search_public_entities'), query).toEqual([]);
+        expect(result.entities, query).toEqual([]);
+      }
+      const { search, argsOf } = harness();
+      await search({ query: 'kli', normalizedQuery: 'kli' });
+      expect(argsOf('search_public_entities')).toHaveLength(1);
+    });
+
+    it('answers the Top tab without entities when their read fails, and logs it', async () => {
+      const failure = new Error('function search_public_entities does not exist');
+      const { search, logEvent } = harness({ entities: failure, recipes: [recipe('r1')] });
+      const result = await search({ query: 'kling', normalizedQuery: 'kling' });
+      expect(result.entities).toEqual([]);
+      // The rest of the answer stands.
+      expect(result.posts.items).toEqual([{ id: POST }]);
+      expect(result.recipes.items.map((item) => item.id)).toEqual(['r1']);
+      expect(logEvent).toHaveBeenCalledWith('warn', 'public_search_entities_failed', { error: failure });
+    });
+
+    it('answers a Posts search narrowed to an entity when the entity’s name cannot be read: the filter is named by its key', async () => {
+      const failure = new Error('statement timeout');
+      const { search, argsOf, logEvent } = harness({ entities: failure });
+      const result = await search({ type: 'posts', filters: { ...NONE, madeWith: 'model:kling-2.6' } });
+      expect(argsOf('search_public_posts')[0]).toMatchObject({ p_made_with: 'model:kling-2.6' });
+      expect(result.posts.items).toEqual([{ id: POST }]);
+      expect(result.filters.madeWith).toEqual({ kind: 'model', key: 'kling-2.6', label: 'kling-2.6' });
+      expect(logEvent).toHaveBeenCalledWith('warn', 'public_search_entities_failed', { error: failure });
     });
 
     it('offers entities on Top only: a Posts, Creators or Recipes search asks for none', async () => {
@@ -681,6 +718,19 @@ describe('public search service', () => {
       const result = await search({ type: 'recipes', exact: true });
       expect(getMarketplaceResourceList).toHaveBeenCalledTimes(1);
       expect(result.recipes.items.map((item) => item.id)).toEqual(['r1']);
+    });
+
+    it('lists no recipes on an exact search whose reading cannot be read: the list might correct under "as typed"', async () => {
+      const failure = new Error('statement timeout');
+      for (const type of ['recipes', 'top'] as const) {
+        const { search, getMarketplaceResourceList, logEvent } = harness({ recipesReadAs: failure, recipes: [recipe('r1')] });
+        const result = await search({ type, exact: true });
+        expect(getMarketplaceResourceList, type).not.toHaveBeenCalled();
+        expect(result.recipes, type).toEqual({ items: [], nextCursor: null });
+        expect(result.correctedQuery, type).toEqual({ posts: null, recipes: null });
+        expect(result.exact, type).toBe(true);
+        expect(logEvent, type).toHaveBeenCalledWith('warn', 'public_search_recipes_reading_failed', { error: failure });
+      }
     });
 
     it('keeps the recipes when their reading cannot be read: the notice is lost and the failure logged', async () => {

@@ -9,9 +9,10 @@ import { describe, expect, it } from 'vitest';
 // holds the parts a later CREATE OR REPLACE could quietly undo: post search
 // keeps every rule of the ranking migration, each filter sits in all three
 // reads and ahead of the limit, a template result never gets a model, an
-// entity is counted only on posts a viewer may see, the tables stay the
-// backend's, and the release-window signature keeps its first eight
-// parameters.
+// entity is offered only by posts a viewer may see and counted as the search
+// pressing it runs, nothing is kept of an entity beside its posts' rows, the
+// table stays the backend's, and the release-window signature keeps its first
+// eight parameters.
 
 const migrationsDirectory = join(process.cwd(), 'supabase/migrations');
 const migrationNames = readdirSync(migrationsDirectory).filter((name) => name.endsWith('.sql')).sort();
@@ -217,34 +218,71 @@ describe('search entities and filters migration', () => {
     expect(definitionOf('search_entity_key')).toContain("'[^[:alnum:].]+', '-', 'g'");
   });
 
-  it('counts an entity only on posts the viewer may see, and offers none without one', () => {
+  it('offers an entity only by posts the viewer may see, counted as the Posts search pressing it runs', () => {
     const entities = definitionOf('search_public_entities');
     expect(entities).toMatch(/LANGUAGE plpgsql\s+STABLE\s+SECURITY DEFINER\s+SET search_path TO 'public', 'pg_temp'/);
-    expect(entities).toContain('AND posts.is_nsfw = false');
-    expect(entities.match(BLOCKED_BY_VIEWER)).toHaveLength(1);
-    expect(entities.match(BLOCKED_THE_VIEWER)).toHaveLength(1);
-    expect(entities).toContain('AND counted.post_total > 0');
-    // The name shown comes from the counted rows: a post the viewer may see printed it.
-    expect(entities).toMatch(/\(array_agg\(seen\.label ORDER BY \(seen\.label = labels\.key\), seen\.label\)\)\[1\] AS label/);
-    expect(entities).toMatch(/SELECT\s+labels\.kind,\s+labels\.key,\s+counted\.label,/);
-    expect(entities).not.toMatch(/^\s+labels\.label,$/m);
+    // Posts are searched from three characters, and an offer must lead to posts.
+    expect(entities).toContain('IF char_length(v_query) < 3 OR char_length(v_query) > 100 THEN');
+    // The posts of an offer are found by post search's own match: the block
+    // search_public_posts holds three times, a fourth time here, the same text.
+    const match = "posts.is_nsfw = false AND ( documents.search_vector @@ v_tsquery"
+      + " OR documents.search_text ILIKE ('%' || v_like || '%')"
+      + ' OR documents.title_normalized OPERATOR(extensions.%) v_query'
+      + ' OR documents.tool_normalized OPERATOR(extensions.%) v_query )';
+    const oneLine = (definition: string) => definition.replace(/\s+/g, ' ');
+    expect(oneLine(entities).split(match)).toHaveLength(2);
+    expect(oneLine(definitionOf('search_public_posts')).split(match)).toHaveLength(4);
+    // And read as post search reads the query: stemmed for the documents, and the same escape.
+    expect(entities).toContain('v_tsquery := public.search_query_tsquery(v_query, true);');
+    expect(entities).toContain(String.raw`v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_');`);
+    // Both sides of a block, in the offer's count and in the count by key.
+    expect(entities.match(BLOCKED_BY_VIEWER)).toHaveLength(2);
+    expect(entities.match(BLOCKED_THE_VIEWER)).toHaveLength(2);
+    expect(entities.match(/posts\.is_nsfw = false/g)).toHaveLength(2);
+    // Offered only with a post to open, one of which names it as the query does (unstemmed).
+    expect(entities).toContain('v_name_tsquery := public.search_query_tsquery(v_query, false);');
+    expect(entities).toContain('members.name_vector @@ v_name_tsquery AS names_it');
+    expect(entities).toMatch(/WHERE counted\.post_total > 0\s+AND counted\.named/);
+    // The name shown is one those posts print: never a name read from anywhere else.
+    expect(entities).toMatch(/SELECT\s+candidates\.kind,\s+candidates\.key,\s+counted\.label,/);
+    expect(entities.match(/FROM seen AS printed\s+GROUP BY printed\.label/g)).toHaveLength(2);
     // Counted no further than the cap, so one entity every post has costs no more.
     expect(entities).toContain('c_count_cap CONSTANT integer := 1000;');
-    expect(entities).toContain('LIMIT c_count_cap + 1');
-    // Names are matched as creators' are: every word, the last a prefix, unstemmed.
-    expect(entities).toContain('v_tsquery := public.search_query_tsquery(v_query, false);');
-    expect(entities).toContain('labels.name_vector @@ v_tsquery');
-    // The names come from the labels table, the count from the posts' rows:
-    // nothing else is read.
+    expect(entities.match(/LIMIT c_count_cap \+ 1/g)).toHaveLength(2);
+    // The posts' own rows, their documents, the label and the blocks: nothing else is read.
     for (const table of entities.match(/\bpublic\.[a-z_]+ AS\b/g) ?? []) {
       expect([
-        'public.search_entity_labels AS', 'public.post_search_entities AS', 'public.posts AS', 'public.user_blocks AS',
+        'public.post_search_entities AS', 'public.post_search_documents AS', 'public.posts AS', 'public.user_blocks AS',
       ]).toContain(table);
     }
   });
 
+  it('keeps nothing of an entity beside its posts’ rows, and writes no row two saves share', () => {
+    // One table, keyed by the post: no list of names to outlive a post, and
+    // nothing for two saves naming the same new tools to wait on each other for.
+    expect(statements.match(/CREATE TABLE public\.\w+/g)).toEqual(['CREATE TABLE public.post_search_entities']);
+    expect(statements).not.toContain('search_entity_labels');
+    expect(statements).toMatch(
+      /post_id uuid NOT NULL REFERENCES public\.post_search_documents\(post_id\) ON DELETE CASCADE,/,
+    );
+    expect(statements).toContain('PRIMARY KEY (kind, key, post_id)');
+    const refresh = definitionOf('refresh_post_search_entities');
+    expect(refresh.match(/\b(?:INSERT INTO|UPDATE|DELETE FROM) public\.\w+/g)).toEqual([
+      'DELETE FROM public.post_search_entities', 'INSERT INTO public.post_search_entities',
+    ]);
+    expect(refresh).not.toContain('ON CONFLICT');
+    expect(refresh).toContain('WHERE post_id = ANY (p_post_ids)');
+    // The rows are worked out once per statement, by a function whose plan is kept.
+    expect(refresh.match(/public\.post_search_entity_rows\(/g)).toHaveLength(1);
+    expect(definitionOf('post_search_entity_rows')).toMatch(/LANGUAGE plpgsql\s+STABLE\s+SECURITY DEFINER\s+SET search_path = ''/);
+    // A row's own name and key are what a query is matched against.
+    expect(statements).toMatch(
+      /name_vector tsvector GENERATED ALWAYS AS \(\s+to_tsvector\(\s+'pg_catalog\.simple',\s+coalesce\(public\.search_term_variants\(label\), ''\) \|\| ' ' \|\| coalesce\(public\.search_term_variants\(key\), ''\)\s+\)\s+\) STORED,/,
+    );
+  });
+
   it('keeps the entity tables the backend’s and every function the service role’s', () => {
-    for (const table of ['search_entity_labels', 'post_search_entities']) {
+    for (const table of ['post_search_entities']) {
       expect(statements, table).toContain(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY;`);
       expect(statements, table).toContain(`REVOKE ALL ON TABLE public.${table} FROM PUBLIC, anon, authenticated, service_role;`);
       expect(statements, table).toContain(`GRANT SELECT ON TABLE public.${table} TO service_role;`);
@@ -277,6 +315,6 @@ describe('search entities and filters migration', () => {
       'ADD COLUMN followed_only', 'ADD COLUMN corrected',
     ]);
     expect(alter).not.toMatch(/NOT NULL|DEFAULT/);
-    expect(statements.match(/ALTER TABLE/g)).toHaveLength(3);
+    expect(statements.match(/ALTER TABLE/g)).toHaveLength(2);
   });
 });
