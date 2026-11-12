@@ -1513,7 +1513,12 @@ async function recheckSearchedMarketplaceItems(
     if (error) {
       throw error;
     }
-    const answers = Array.isArray(data) ? data : [];
+    // One answer per text, in order, or none is trusted: a list of another
+    // length cannot say which text each answer is for.
+    if (!Array.isArray(data) || data.length !== unsure.length) {
+      throw new Error(`marketplace_search_texts_match answered ${Array.isArray(data) ? data.length : typeof data} for ${unsure.length} texts`);
+    }
+    const answers: unknown[] = data;
     unsure.forEach(({ id }, index) => {
       if (answers[index] === true) {
         matched.add(id);

@@ -10,8 +10,9 @@ import { normalizeMarketplaceResourceSort } from '@/lib/post-resource-bundles';
 // quietly undo it: a recipe search matches only its search document, the
 // document holds only what a visitor who has not unlocked the recipe sees,
 // its vector is generated from that text alone, the dictionary's rebuild takes
-// only a listed recipe's document words and no save writes it, and the app rechecks a page on the text its cards
-// show.
+// only a listed recipe's document words, flagged as recipe words so post search
+// is never corrected to one, no save writes it, and the app rechecks a page on
+// the text its cards show.
 
 const migrationsDirectory = join(process.cwd(), 'supabase/migrations');
 // Version order: every name starts with its UTC stamp.
@@ -77,7 +78,7 @@ describe('recipe search recall migration', () => {
     expect(file).toBe(MIGRATION);
     expect(definition).toContain('(search.search_vector @@ $7 OR search.search_text ILIKE $8)');
     expect(definition).toContain('v_tsquery := public.search_query_tsquery(v_query, true);');
-    expect(definition).toContain('v_corrected := public.search_corrected_query(v_query);');
+    expect(definition).toContain('v_corrected := public.search_corrected_query(v_query, true);');
     expect(definition).toMatch(/v_query := v_corrected;\s+v_tsquery := public\.search_query_tsquery\(v_query, true\);\s+v_like := NULL;/);
     // The correction is decided with no offset and no limit.
     expect(definition).toMatch(/EXECUTE 'SELECT EXISTS \(SELECT 1 ' \|\| v_from \|\| '\)'/);
@@ -89,7 +90,7 @@ describe('recipe search recall migration', () => {
 
   it('adds relevance and keeps every other sort, an unknown one reading as recent', () => {
     const { definition } = newestDefinition('list_marketplace_resource_bundles');
-    expect(definition).toMatch(/IF p_sort = 'relevance' AND v_searching THEN\s+[\s\S]*?ts_rank_cd\(search\.search_vector, \$7\)/);
+    expect(definition).toMatch(/IF p_sort = 'relevance' AND v_searching THEN\s+[\s\S]*?ts_rank_cd\(search\.search_vector, \$7, 1 \| 32\)/);
     expect(definition).toMatch(/END DESC,\s+listings\.created_at DESC, listings\.bundle_id DESC\$order\$;/);
     for (const order of [
       "WHEN 'top-sales' THEN 'listings.sales_count DESC NULLS LAST, listings.created_at DESC, listings.bundle_id DESC'",
@@ -107,7 +108,7 @@ describe('recipe search recall migration', () => {
   it('rechecks with the list’s own reading of the query', () => {
     const { definition } = newestDefinition('marketplace_search_texts_match');
     expect(definition).toContain('public.marketplace_search_vector(lower(coalesce(texts.text, \'\'))) @@ public.search_query_tsquery(v_query, true)');
-    expect(definition).toContain('v_corrected := public.search_corrected_query(v_query);');
+    expect(definition).toContain('v_corrected := public.search_corrected_query(v_query, true);');
     expect(definition).toContain('public.marketplace_search_vector(lower(coalesce(texts.text, \'\'))) @@ public.search_query_tsquery(v_corrected, true)');
     expect(definition).toMatch(/IF char_length\(v_query\) < 3 THEN\s+RETURN ARRAY\(SELECT false FROM unnest\(p_texts\)\);/);
     // A text is read from what it is given, never from a table.
@@ -120,24 +121,26 @@ describe('recipe search recall migration', () => {
     expect(definition).toContain('SECURITY DEFINER');
     expect(definition).toContain("SET search_path = ''");
     expect(definition).toContain("IF NOT pg_try_advisory_xact_lock(hashtext('public.rebuild_search_terms')) THEN");
-    // The posts, as 20261111224010 reads them: a labelled post's words never become a correction.
-    expect(definition).toContain('FROM public.post_search_documents AS documents');
+    // The posts' words exactly as 20261111224010 reads them: a labelled post's
+    // words never become a correction.
     expect(definition).toContain('WHERE posts.is_nsfw = false');
+    const base = readFileSync(join(migrationsDirectory, '20261111224010_search_recall_models_prefixes_stems_typos.sql'), 'utf8');
+    const squash = (sql: string) => withoutComments(sql).replace(/\s+/g, ' ');
+    const baseShown = /WITH shown AS \(\s+(SELECT DISTINCT words\.lexeme AS term[\s\S]*?'\^\[\[:alpha:\]\]\{4,40\}\$')\s+\),/.exec(base);
+    expect(baseShown).not.toBeNull();
+    expect(squash(definition)).toContain(`WITH post_words AS ( ${squash(baseShown![1])} )`);
     // And the listed recipes' documents, their visible text only.
     expect(definition).toMatch(
-      /UNION\s+SELECT words\.lexeme\s+FROM public\.marketplace_bundle_search_documents AS recipe_documents\s+JOIN public\.marketplace_bundle_listings AS listings\s+ON listings\.bundle_id = recipe_documents\.bundle_id\s+AND listings\.listable\s+CROSS JOIN LATERAL unnest\(to_tsvector\('pg_catalog\.simple', recipe_documents\.search_text\)\) AS words\s+WHERE words\.lexeme ~ '\^\[\[:alpha:\]\]\{4,40\}\$'/,
+      /recipe_words AS \(\s+SELECT DISTINCT words\.lexeme AS term\s+FROM public\.marketplace_bundle_search_documents AS recipe_documents\s+JOIN public\.marketplace_bundle_listings AS listings\s+ON listings\.bundle_id = recipe_documents\.bundle_id\s+AND listings\.listable\s+CROSS JOIN LATERAL unnest\(to_tsvector\('pg_catalog\.simple', recipe_documents\.search_text\)\) AS words\s+WHERE words\.lexeme ~ '\^\[\[:alpha:\]\]\{4,40\}\$'\s+\),/,
     );
     expect(definition).not.toMatch(/post_resource_bundles|resource_items/);
+    // Each word flagged with the surfaces that show it; a word neither shows is removed.
+    expect(definition).toMatch(/post_words\.term IS NOT NULL AS in_posts,\s+recipe_words\.term IS NOT NULL AS in_recipes\s+FROM post_words\s+FULL JOIN recipe_words ON recipe_words\.term = post_words\.term/);
     expect(definition).toContain('DELETE FROM public.search_terms AS terms\n    WHERE NOT EXISTS (SELECT 1 FROM shown WHERE shown.term = terms.term)');
-    expect(definition).toContain('ON CONFLICT (term) DO NOTHING');
-    // The base definition, but for the shown set.
-    const base = readFileSync(join(migrationsDirectory, '20261111224010_search_recall_models_prefixes_stems_typos.sql'), 'utf8');
-    const strip = (sql: string) => withoutComments(sql)
-      .replace(/\n\s+UNION\s+SELECT words\.lexeme\s+FROM public\.marketplace_bundle_search_documents[\s\S]*?'\^\[\[:alpha:\]\]\{4,40\}\$'/, '')
-      .replace(/\s+/g, ' ');
-    const baseStart = base.indexOf('CREATE OR REPLACE FUNCTION public.rebuild_search_terms()');
-    const baseDefinition = base.slice(baseStart, base.indexOf('\n$function$;', baseStart));
-    expect(strip(definition)).toBe(strip(baseDefinition));
+    expect(definition).toMatch(/ON CONFLICT \(term\) DO UPDATE\s+SET in_posts = excluded\.in_posts, in_recipes = excluded\.in_recipes/);
+    // Its shape as the job reads it.
+    expect(definition).toMatch(/^CREATE OR REPLACE FUNCTION public\.rebuild_search_terms\(\)\s+RETURNS TABLE\(added integer, removed integer\)/);
+    expect(definition).toContain('RETURN QUERY SELECT v_added, v_removed;');
     expect(statements).toContain('REVOKE ALL ON FUNCTION public.rebuild_search_terms() FROM PUBLIC, anon, authenticated;');
     expect(statements).toContain('GRANT EXECUTE ON FUNCTION public.rebuild_search_terms() TO service_role;');
     expect(statements.trim()).toMatch(/SELECT \* FROM public\.rebuild_search_terms\(\);\s+COMMIT;$/);
@@ -156,10 +159,35 @@ describe('recipe search recall migration', () => {
     expect(statements).not.toContain('add_marketplace_search_terms');
   });
 
+  it('corrects each surface against its own words only, post search unchanged', () => {
+    expect(statements).toMatch(
+      /ALTER TABLE public\.search_terms\s+ADD COLUMN in_posts boolean NOT NULL DEFAULT true,\s+ADD COLUMN in_recipes boolean NOT NULL DEFAULT false,\s+ADD CONSTRAINT search_terms_on_a_surface CHECK \(in_posts OR in_recipes\);/,
+    );
+    const twoArgument = /CREATE OR REPLACE FUNCTION public\.search_corrected_query\(p_query text, p_in_recipes boolean\)[\s\S]*?\n\$function\$;/.exec(statements);
+    expect(twoArgument).not.toBeNull();
+    // The candidate and the spelt-right-so-far test both read the surface's words.
+    expect(twoArgument![0].match(/AND CASE WHEN p_in_recipes THEN (?:terms|known)\.in_recipes ELSE (?:terms|known)\.in_posts END/g)).toHaveLength(2);
+    // The one-argument form, which search_public_posts calls, means posts.
+    const oneArgument = /CREATE OR REPLACE FUNCTION public\.search_corrected_query\(p_query text\)[\s\S]*?\n\$function\$;/.exec(statements);
+    expect(oneArgument?.[0]).toMatch(/AS \$function\$\s+SELECT public\.search_corrected_query\(p_query, false\);\s+\$function\$;$/);
+    expect(newestDefinition('search_corrected_query').file).toBe(MIGRATION);
+    const posts = newestDefinition('search_public_posts');
+    expect(posts.file).toBe('20261111224010_search_recall_models_prefixes_stems_typos.sql');
+    expect(posts.definition).toContain('v_corrected := public.search_corrected_query(v_query);');
+    // Recipe search, in the list and the recheck, reads recipes' words.
+    for (const name of ['list_marketplace_resource_bundles', 'marketplace_search_texts_match']) {
+      const { definition } = newestDefinition(name);
+      expect(definition, name).toContain('public.search_corrected_query(v_query, true)');
+      expect(definition, name).not.toMatch(/search_corrected_query\(v_query\)/);
+    }
+  });
+
   it('keeps every function the service role’s', () => {
     for (const signature of [
       'public.marketplace_search_vector(text)',
       'public.marketplace_search_texts_match(text[], text)',
+      'public.search_corrected_query(text, boolean)',
+      'public.search_corrected_query(text)',
     ]) {
       expect(statements).toContain(`REVOKE ALL ON FUNCTION ${signature} FROM PUBLIC, anon, authenticated;`);
       expect(statements).toContain(`GRANT EXECUTE ON FUNCTION ${signature} TO service_role;`);
@@ -173,7 +201,7 @@ describe('recipe search recall migration', () => {
   it('runs as one transaction that gives up on a busy table, and never drops a trigger or function', () => {
     expect(statements.trim()).toMatch(/^BEGIN;\s+SET LOCAL lock_timeout = '5s';/);
     expect(statements).toMatch(
-      /LOCK TABLE public\.posts IN SHARE ROW EXCLUSIVE MODE;\s+LOCK TABLE public\.post_resource_bundles IN SHARE ROW EXCLUSIVE MODE;\s+LOCK TABLE public\.marketplace_bundle_search_documents IN ACCESS EXCLUSIVE MODE;/,
+      /LOCK TABLE public\.posts IN SHARE ROW EXCLUSIVE MODE;\s+LOCK TABLE public\.post_resource_bundles IN SHARE ROW EXCLUSIVE MODE;\s+LOCK TABLE public\.marketplace_bundle_search_documents IN ACCESS EXCLUSIVE MODE;\s+LOCK TABLE public\.search_terms IN ACCESS EXCLUSIVE MODE;/,
     );
     expect(statements).not.toMatch(/DROP (?:TRIGGER|FUNCTION)/i);
     expect(statements.trim()).toMatch(/COMMIT;$/);

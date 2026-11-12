@@ -100,6 +100,8 @@ let extraListedBundleRows: BundleRow[];
 // call's texts and query, and a fake that holds a text to the query's words.
 let searchRecheckCalls: Array<{ texts: string[]; query: string }>;
 let searchRecheckError: unknown;
+// When set, the recheck answers exactly this data instead.
+let searchRecheckAnswer: { data: unknown } | null;
 // Recipes of other posts the read can return beside `bundleRow`, each already
 // nested with its post, generation and inputs.
 let extraCreationInputSources: Array<Record<string, unknown>>;
@@ -172,6 +174,7 @@ vi.mock('@/lib/server-helpers', () => ({
         const query = args.p_query as string;
         searchRecheckCalls.push({ texts, query });
         if (searchRecheckError) return { data: null, error: searchRecheckError };
+        if (searchRecheckAnswer) return { data: searchRecheckAnswer.data, error: null };
         const words = query.split(' ');
         return { data: texts.map((text) => words.every((word) => text.split(/\W+/).some((shown) => shown.startsWith(word)))), error: null };
       }
@@ -767,6 +770,7 @@ describe('post resource bundle server access', () => {
     extraListedBundleRows = [];
     searchRecheckCalls = [];
     searchRecheckError = null;
+    searchRecheckAnswer = null;
   });
 
   it('keeps a published free recipe gated until the viewer adds it', async () => {
@@ -2164,6 +2168,26 @@ describe('post resource bundle server access', () => {
       expect(reordered.items).toEqual([]);
       expect(reordered.pageInfo).toMatchObject({ hasMore: true, nextOffset: 2 });
       expect(literal.items.map((item) => item.id)).toEqual(['bundle-3']);
+    });
+
+    it.each([
+      ['an answer shorter than the texts it was asked about', [true]],
+      ['an answer longer than the texts it was asked about', [true, true, true]],
+      ['no answer at all', null],
+      ['an answer that is not a list', { 0: true, 1: true }],
+      ['an answer of nulls', [null, null]],
+    ])('drops every row it asked about on %s, still counting them', async (_case, data) => {
+      extraListedBundleRows = [{ ...(bundleRow as BundleRow), id: 'bundle-3', title: 'Lantern recipe' }];
+      searchRecheckAnswer = { data };
+      const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+      // Neither card holds "recipe lantern" as typed, so both are asked about.
+      const page = await getMarketplaceResourceList({ q: 'recipe lantern', limit: 1 });
+
+      expect(searchRecheckCalls).toHaveLength(1);
+      expect(searchRecheckCalls[0]?.texts).toHaveLength(2);
+      expect(page.items).toEqual([]);
+      expect(page.pageInfo).toMatchObject({ hasMore: true, nextOffset: 2 });
     });
   });
 

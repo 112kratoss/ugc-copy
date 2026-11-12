@@ -11,7 +11,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(54);
+select plan(69);
 
 create function pg_temp.page(p_query text, p_sort text, p_offset integer, p_limit integer)
 returns uuid[]
@@ -52,7 +52,11 @@ as $$ select ('0000e5c1-0000-4000-9000-0000000000' || p_suffix)::uuid; $$;
 --   …25 free: a kite study whose summary mentions golden hour, the newest;
 --   …26 a draft (draftlark);
 --   …27 free: a pottery study, to page past, whose public caption also shows
---       quorvantel, so the word is in the dictionary.
+--       quorvantel, so the word is in the dictionary;
+--   …28 free: titled exactly "Lantern glow";
+--   …29 free: a newer street study whose caption repeats "lantern glow"
+--       thirty times, to stuff the rank.
+-- And post …1a with no recipe, the only place the word brindlewick shows.
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at)
 values ('0000e5c1-0000-4000-9000-000000000001'::uuid, 'e5c1-recipe-search@example.invalid',
@@ -94,7 +98,19 @@ insert into public.posts (
   ('0000e5c1-0000-4000-9000-000000000017'::uuid, '0000e5c1-0000-4000-9000-000000000001'::uuid,
    'public', 'image', 'external', 'media', 'visible', false,
    'Pottery wheel study', 'Clay in motion under golden hour light, a quorvantel glaze.',
-   'showcase/e5c1-017.png', 'Midjourney', 'midjourney', now(), now());
+   'showcase/e5c1-017.png', 'Midjourney', 'midjourney', now(), now()),
+  ('0000e5c1-0000-4000-9000-000000000018'::uuid, '0000e5c1-0000-4000-9000-000000000001'::uuid,
+   'public', 'image', 'external', 'media', 'visible', false,
+   'Lantern glow', 'A paper lamp at dusk.',
+   'showcase/e5c1-018.png', 'Midjourney', 'midjourney', now(), now()),
+  ('0000e5c1-0000-4000-9000-000000000019'::uuid, '0000e5c1-0000-4000-9000-000000000001'::uuid,
+   'public', 'image', 'external', 'media', 'visible', false,
+   'Evening street study', btrim(repeat('lantern glow ', 30)),
+   'showcase/e5c1-019.png', 'Midjourney', 'midjourney', now(), now()),
+  ('0000e5c1-0000-4000-9000-00000000001a'::uuid, '0000e5c1-0000-4000-9000-000000000001'::uuid,
+   'public', 'image', 'external', 'media', 'visible', false,
+   'Brindlewick meadow', 'A post with no recipe.',
+   'showcase/e5c1-01a.png', 'Midjourney', 'midjourney', now(), now());
 
 insert into public.post_resource_bundles (
   id, post_id, owner_user_id, access_mode, status, title, summary, preview_text,
@@ -129,7 +145,11 @@ from (
     ('26', '16', 'free', 'draft', 'Draft lantern recipe', 'A draftlark recipe nobody sees yet',
      'The prompt a buyer unlocks for this picture', interval '5 minutes'),
     ('27', '17', 'free', 'published', 'Pottery wheel study', 'Clay shaping in three passes',
-     'The prompt a buyer unlocks for this picture', interval '40 minutes')
+     'The prompt a buyer unlocks for this picture', interval '40 minutes'),
+    ('28', '18', 'free', 'published', 'Lantern glow', 'A warm paper lamp, step by step',
+     'The prompt a buyer unlocks for this picture', interval '45 minutes'),
+    ('29', '19', 'free', 'published', 'Evening street study', 'Streetlights after rain',
+     'The prompt a buyer unlocks for this picture', interval '2 minutes')
 ) as recipe(bundle_suffix, post_suffix, access_mode, status, title, summary, item_text, age);
 
 -- ─── Listed, so a miss below is the reading under test ──────────────────────
@@ -215,6 +235,12 @@ select is(
   array[pg_temp.bundle('23'), pg_temp.bundle('25'), pg_temp.bundle('27')],
   'every page of a misspelt search reads its corrected query, offset or not'
 );
+select is(pg_temp.page('lantern glow', 'relevance', 0, 100),
+  array[pg_temp.bundle('28'), pg_temp.bundle('29')],
+  'a caption repeating the words thirty times does not outrank the recipe titled with them');
+select is(pg_temp.page('lantern glow', 'recent', 0, 100),
+  array[pg_temp.bundle('29'), pg_temp.bundle('28')],
+  'fixture: the repetitive recipe is the newer one');
 
 -- ─── The document's vector ──────────────────────────────────────────────────
 
@@ -260,6 +286,34 @@ select ok(
   'no save writes the dictionary: no trigger function names it, and none sits on it'
 );
 
+-- One dictionary per surface: a search is corrected only to a word its own
+-- results can show.
+select is(
+  (select array[in_posts, in_recipes] from public.search_terms where term = 'chromaflare'),
+  array[false, true],
+  'a word only a recipe shows is a recipe word, not a post word'
+);
+select is(
+  (select array[in_posts, in_recipes] from public.search_terms where term = 'brindlewick'),
+  array[true, false],
+  'a word only a post shows is a post word, not a recipe word'
+);
+select is(
+  (select array[in_posts, in_recipes] from public.search_terms where term = 'rainy'),
+  array[true, true],
+  'a word both show is both'
+);
+select is(public.search_corrected_query('chromaflre'), 'chromaflre',
+  'a post search is not corrected to a word only a recipe shows');
+select is(public.search_corrected_query('brindlewik'), 'brindlewick',
+  'a post search is still corrected to a post''s word');
+select is(public.search_corrected_query('brindlewik', true), 'brindlewik',
+  'a recipe search is not corrected to a word only a post shows');
+select is(public.search_corrected_query('chromaflre', true), 'chromaflare',
+  'a recipe search is corrected to a recipe''s word');
+select is(pg_temp.page('brindlewik', 'recent', 0, 100), '{}'::uuid[],
+  'so the list finds nothing through a post''s word');
+
 -- ─── The app's recheck reads the query the same way ─────────────────────────
 
 select is(
@@ -287,6 +341,37 @@ select is(
 );
 select is(public.marketplace_search_texts_match(array['abc'], 'ab'), array[false],
   'and nothing under three characters');
+select is(
+  public.marketplace_search_texts_match(array['brindlewick meadow', 'cinematic rain grading with chromaflare'], 'brindlewik'),
+  array[false, false],
+  'and corrects as the list does, to a recipe''s word only'
+);
+
+-- ─── As the app calls them: the service role ────────────────────────────────
+
+set local role service_role;
+select is(
+  public.marketplace_search_texts_match(array['rainy street at night', 'neon dancer'], 'rainny street'),
+  array[true, false],
+  'the service role runs the recheck, its correction included'
+);
+select is(
+  (select array_agg(id order by position)
+   from public.list_marketplace_resource_bundles('all', 'all', null, 'lantern glow', 'relevance', 0, 100)
+     with ordinality as listed(
+       id, post_id, owner_user_id, legacy_asset_id, access_mode, status, title, summary, preview_text,
+       prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix,
+       resource_sections, resource_items, price_usd_cents, sales_count, free_unlock_count,
+       earnings_usd_cents, created_at, updated_at, position
+     )),
+  array['0000e5c1-0000-4000-9000-000000000028'::uuid, '0000e5c1-0000-4000-9000-000000000029'::uuid],
+  'and the list by relevance'
+);
+select ok(
+  (select count(*) from public.list_marketplace_resource_bundles('all', 'all', null, 'chromaflre', 'relevance', 0, 100)) = 1,
+  'and the list''s correction'
+);
+reset role;
 
 -- ─── Grants ─────────────────────────────────────────────────────────────────
 
@@ -318,6 +403,11 @@ select ok((select removed > 0 from public.rebuild_search_terms()),
 select ok(not exists (select 1 from public.search_terms where term = 'chromaflare')
             and exists (select 1 from public.search_terms where term = 'rainy'),
   'its summary''s word is gone, its post''s title stays');
+select is(
+  (select array[in_posts, in_recipes] from public.search_terms where term = 'rainy'),
+  array[true, false],
+  'and that title''s word is now a post word only'
+);
 
 select * from finish();
 rollback;

@@ -24,12 +24,13 @@
 --    before, on the query as one run of characters, so every recipe found
 --    before is still found. When no recipe the list may show matches as
 --    typed, with the same filters and no offset, the query is read once more
---    as search_corrected_query reads it, by its words only: every page of a
---    search reads it the same way. Its signature, its other sorts, its grants and its three-
---    character floor are kept; a sort it does not know still reads as
---    'recent'.
+--    as search_corrected_query reads it against recipes' words, by its words
+--    only: every page of a search reads it the same way. Its signature, its
+--    other sorts, its grants and its three-character floor are kept; a sort
+--    it does not know still reads as 'recent'.
 -- 3. A new sort, 'relevance', used by unified search: the text's rank
---    (ts_rank_cd), plus a lift when the recipe's title as its card shows it is
+--    (ts_rank_cd, damped by length and held below 1, so repeating words in a
+--    caption gains almost nothing), plus a lift when the recipe's title as its card shows it is
 --    the query or starts with it, then the recency tie-break and bundle_id as
 --    'recent' orders them. Without a query it reads as 'recent'.
 -- 4. marketplace_search_texts_match is the app's recheck
@@ -39,7 +40,10 @@
 --    corrected. The app drops a row whose shown text does not.
 -- 5. rebuild_search_terms, which makes search_terms (the dictionary a
 --    misspelling is read against) exactly the words shown now, also takes the
---    words of listed recipes' documents. No recipe save writes the table, as
+--    words of listed recipes' documents, each word flagged with the surfaces
+--    that show it (in_posts, in_recipes): post search is corrected only to
+--    posts' words, as before (search_corrected_query(text)), and recipe search
+--    only to recipes' (search_corrected_query(text, true)). No recipe save writes the table, as
 --    no post save does (20261111224010 says why); the hourly search-dictionary
 --    job and the end of this file rebuild it. A recipe that is not listable (a
 --    draft, a labelled or hidden post, a failed quality check) adds no word,
@@ -57,13 +61,22 @@ SET LOCAL lock_timeout = '5s';
 -- write: adding the generated column rewrites them (one row per recipe) under
 -- ACCESS EXCLUSIVE, which only searches read, for the length of this file. A
 -- recipe or post saved meanwhile waits on the first two locks, so it never
--- holds a document's lock while this file waits for it. Nothing here drops a
--- trigger or a function.
+-- holds a document's lock while this file waits for it. Last the dictionary,
+-- which gains its surface flags: only searches and the dictionary job (which
+-- takes nothing above) touch it. Nothing here drops a trigger or a function.
 LOCK TABLE public.posts IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE public.post_resource_bundles IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE public.marketplace_bundle_search_documents IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.search_terms IN ACCESS EXCLUSIVE MODE;
 
 -- ─── 1. The document's vector ───────────────────────────────────────────────
+--
+-- search_vector is a STORED generated column: Postgres computes it when a row
+-- is written and never again, so replacing this function or
+-- search_split_terms leaves every stored vector as the old one read it. A
+-- migration that changes either must end with
+--   UPDATE public.marketplace_bundle_search_documents SET search_text = search_text;
+-- to recompute them.
 
 CREATE OR REPLACE FUNCTION public.marketplace_search_vector(p_text text)
 RETURNS tsvector
@@ -127,7 +140,7 @@ BEGIN
   -- The list read the query corrected when nothing matched it as typed, by
   -- its words: a text that holds them holds what that row matched.
   IF false = ANY (v_matches) THEN
-    v_corrected := public.search_corrected_query(v_query);
+    v_corrected := public.search_corrected_query(v_query, true);
     IF v_corrected IS NOT NULL AND v_corrected <> v_query AND char_length(v_corrected) BETWEEN 3 AND 100 THEN
       SELECT array_agg(
         texts.matched
@@ -151,10 +164,72 @@ GRANT EXECUTE ON FUNCTION public.marketplace_search_texts_match(text[], text) TO
 
 -- ─── 5. A listed recipe's words join the dictionary ─────────────────────────
 --
--- As 20261111224010 left it but for its shown set, which also takes the words
--- of listed recipes' documents.
+-- One table, a flag per surface: a search is corrected only to a word its own
+-- results show, so a post search is never read as a word only a recipe shows
+-- (and finds nothing), nor a recipe search as a post's. The rows already here
+-- are posts' words, as the defaults say.
+ALTER TABLE public.search_terms
+  ADD COLUMN in_posts boolean NOT NULL DEFAULT true,
+  ADD COLUMN in_recipes boolean NOT NULL DEFAULT false,
+  ADD CONSTRAINT search_terms_on_a_surface CHECK (in_posts OR in_recipes);
+
 COMMENT ON TABLE public.search_terms IS
-  'Backend-owned dictionary for search spelling correction: lowercase words of 4 to 40 letters that unlabelled public posts and listed recipes show, kept to exactly those by rebuild_search_terms (the search-dictionary job). Words only, never which post or recipe held them.';
+  'Backend-owned dictionary for search spelling correction: lowercase words of 4 to 40 letters that unlabelled public posts or listed recipes show, flagged by which, kept to exactly those by rebuild_search_terms (the search-dictionary job). Words only, never which post or recipe held them.';
+COMMENT ON COLUMN public.search_terms.in_posts IS
+  'An unlabelled public post shows the word: post search may be corrected to it.';
+COMMENT ON COLUMN public.search_terms.in_recipes IS
+  'A listed recipe''s card shows the word: recipe search may be corrected to it.';
+
+CREATE OR REPLACE FUNCTION public.search_corrected_query(p_query text, p_in_recipes boolean)
+RETURNS text
+LANGUAGE sql
+STABLE
+SET search_path = ''
+AS $function$
+  SELECT string_agg(coalesce(nearest.term, words.word), ' ' ORDER BY words.position)
+  FROM regexp_split_to_table(public.search_split_terms(p_query), ' ')
+    WITH ORDINALITY AS words(word, position)
+  LEFT JOIN LATERAL (
+    SELECT terms.term
+    FROM public.search_terms AS terms
+    WHERE words.word ~ '^[[:alpha:]]{4,40}$'
+      AND CASE WHEN p_in_recipes THEN terms.in_recipes ELSE terms.in_posts END
+      -- A word some known word starts with is spelt right so far.
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.search_terms AS known
+        WHERE known.term LIKE words.word || '%'
+          AND CASE WHEN p_in_recipes THEN known.in_recipes ELSE known.in_posts END
+      )
+      AND terms.term OPERATOR(extensions.%) words.word
+      AND extensions.similarity(terms.term, words.word) >= 0.35
+      AND left(terms.term, 1) = left(words.word, 1)
+      AND abs(char_length(terms.term) - char_length(words.word)) <= 2
+    ORDER BY extensions.similarity(terms.term, words.word) DESC, terms.term
+    LIMIT 1
+  ) AS nearest ON true;
+$function$;
+
+COMMENT ON FUNCTION public.search_corrected_query(text, boolean) IS
+  'A search query (split as search_split_terms reads it) with each misspelt word replaced by the nearest word of search_terms that recipes show (p_in_recipes) or posts show. A word is left alone when it is under four letters, holds a digit, starts a known word of that surface, or has no near neighbour.';
+
+-- Post search (search_public_posts) keeps calling the one-argument form.
+CREATE OR REPLACE FUNCTION public.search_corrected_query(p_query text)
+RETURNS text
+LANGUAGE sql
+STABLE
+SET search_path = ''
+AS $function$
+  SELECT public.search_corrected_query(p_query, false);
+$function$;
+
+COMMENT ON FUNCTION public.search_corrected_query(text) IS
+  'A post search query with each misspelt word replaced by the nearest word posts show: search_corrected_query(p_query, false).';
+
+REVOKE ALL ON FUNCTION public.search_corrected_query(text, boolean) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.search_corrected_query(text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.search_corrected_query(text, boolean) TO service_role;
+GRANT EXECUTE ON FUNCTION public.search_corrected_query(text) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.rebuild_search_terms()
 RETURNS TABLE(added integer, removed integer)
@@ -178,16 +253,18 @@ BEGIN
   -- And the words listed recipes' cards show (20261111231942): a recipe's
   -- document holds only what a visitor who has not unlocked it sees, never
   -- its items or cards, and a recipe is listable only when published on a
-  -- public, visible, unlabelled post and past the quality gate.
-  WITH shown AS (
+  -- public, visible, unlabelled post and past the quality gate. Each word
+  -- is flagged with the surfaces that show it.
+  WITH post_words AS (
     SELECT DISTINCT words.lexeme AS term
     FROM public.post_search_documents AS documents
     JOIN public.posts AS posts ON posts.id = documents.post_id
     CROSS JOIN LATERAL unnest(to_tsvector('pg_catalog.simple', documents.search_text)) AS words
     WHERE posts.is_nsfw = false
       AND words.lexeme ~ '^[[:alpha:]]{4,40}$'
-    UNION
-    SELECT words.lexeme
+  ),
+  recipe_words AS (
+    SELECT DISTINCT words.lexeme AS term
     FROM public.marketplace_bundle_search_documents AS recipe_documents
     JOIN public.marketplace_bundle_listings AS listings
       ON listings.bundle_id = recipe_documents.bundle_id
@@ -195,19 +272,33 @@ BEGIN
     CROSS JOIN LATERAL unnest(to_tsvector('pg_catalog.simple', recipe_documents.search_text)) AS words
     WHERE words.lexeme ~ '^[[:alpha:]]{4,40}$'
   ),
+  shown AS (
+    SELECT
+      coalesce(post_words.term, recipe_words.term) AS term,
+      post_words.term IS NOT NULL AS in_posts,
+      recipe_words.term IS NOT NULL AS in_recipes
+    FROM post_words
+    FULL JOIN recipe_words ON recipe_words.term = post_words.term
+  ),
   gone AS (
     DELETE FROM public.search_terms AS terms
     WHERE NOT EXISTS (SELECT 1 FROM shown WHERE shown.term = terms.term)
     RETURNING 1
   ),
   arrived AS (
-    INSERT INTO public.search_terms (term)
-    SELECT shown.term
+    INSERT INTO public.search_terms AS terms (term, in_posts, in_recipes)
+    SELECT shown.term, shown.in_posts, shown.in_recipes
     FROM shown
-    ON CONFLICT (term) DO NOTHING
-    RETURNING 1
+    ON CONFLICT (term) DO UPDATE
+      SET in_posts = excluded.in_posts, in_recipes = excluded.in_recipes
+      WHERE (terms.in_posts, terms.in_recipes) IS DISTINCT FROM (excluded.in_posts, excluded.in_recipes)
   )
-  SELECT (SELECT count(*) FROM arrived), (SELECT count(*) FROM gone)
+  -- Every part of the statement reads the table as it stood before it, so
+  -- the words added are the shown words it did not hold.
+  SELECT
+    (SELECT count(*) FROM shown
+     WHERE NOT EXISTS (SELECT 1 FROM public.search_terms AS known WHERE known.term = shown.term)),
+    (SELECT count(*) FROM gone)
   INTO v_added, v_removed;
 
   RETURN QUERY SELECT v_added, v_removed;
@@ -303,7 +394,7 @@ BEGIN
         v_tsquery, v_like, v_query;
 
     IF NOT v_found THEN
-      v_corrected := public.search_corrected_query(v_query);
+      v_corrected := public.search_corrected_query(v_query, true);
       IF v_corrected IS NOT NULL AND v_corrected <> v_query AND char_length(v_corrected) BETWEEN 3 AND 100 THEN
         -- By its words only: the corrected query is split, and as one run
         -- of characters would read a typed _ or % as a space.
@@ -317,9 +408,11 @@ BEGIN
 
   IF p_sort = 'relevance' AND v_searching THEN
     -- The text's rank, lifted when the title the card shows is the query or
-    -- starts with it; then as 'recent' orders.
+    -- starts with it; then as 'recent' orders. The rank is damped by the
+    -- text's length (1) and held below 1 (32), so a caption repeating the
+    -- query, read four ways in the vector, can never outrank a title lift.
     v_order := $order$
-      ts_rank_cd(search.search_vector, $7)
+      ts_rank_cd(search.search_vector, $7, 1 | 32)
         + CASE
           WHEN lower(CASE
             WHEN lower(btrim(coalesce(bundles.title, ''))) IN ('', 'attached unlock') THEN 'Recipe'
