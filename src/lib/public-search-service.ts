@@ -8,6 +8,7 @@ import {
   type MarketplaceResourceListItem,
 } from '@/lib/post-resource-bundles-server';
 import {
+  PUBLIC_SEARCH_MAX_RECIPE_OFFSET,
   PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
   emptyPublicSearchPage,
   encodePublicSearchCursor,
@@ -208,6 +209,8 @@ export async function searchPublicContent(
   const recipesPromise = contentQueryAllowed && (options.type === 'top' || options.type === 'recipes')
     ? dependencies.getMarketplaceResourceList({
       q: options.normalizedQuery,
+      // The best matches first, as posts and creators are ordered.
+      sort: 'relevance',
       offset: options.type === 'recipes' ? options.cursor?.offset ?? 0 : 0,
       limit: recipeTake,
       countryCode: options.countryCode,
@@ -262,7 +265,11 @@ export async function searchPublicContent(
   // post, a failed quality check), so only its
   // own nextOffset says where the next page starts. Counting returned items
   // repeated a row after a drop, or ended the list early after two.
+  // A next page past the cursor's cap would be refused as invalid: the list
+  // ends there, as the marketplace's own route ends it.
   const recipeNextOffset = !isTop && recipePage.pageInfo.hasMore
+    && recipePage.pageInfo.nextOffset !== null
+    && recipePage.pageInfo.nextOffset <= PUBLIC_SEARCH_MAX_RECIPE_OFFSET
     ? recipePage.pageInfo.nextOffset
     : null;
   const visibleRecipes = recipePage.items
