@@ -4,6 +4,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { decodePublicSearchCursor } from '@/lib/public-search';
 import { searchPublicContent } from '@/lib/public-search-service';
 
+const SEARCH_BEGAN = new Date('2026-11-12T10:00:00.000Z');
+const now = () => SEARCH_BEGAN;
+
 describe('public search service', () => {
   it('hydrates ranked post ids through the canonical feed mapper and emits a keyset cursor', async () => {
     const rpc = vi.fn(async (name: string) => {
@@ -32,13 +35,21 @@ describe('public search service', () => {
       createServiceClient: vi.fn(() => ({ rpc }) as unknown as SupabaseClient),
       getShowcaseFeedItemsByPostIds: getShowcaseFeedItemsByPostIds as never,
       loadBlockedCreatorIds: vi.fn(async () => new Set()) as never,
+      now,
     });
 
-    expect(rpc).toHaveBeenCalledWith('search_public_posts', expect.objectContaining({
+    expect(rpc).toHaveBeenCalledWith('search_public_posts', {
       p_query: 'product reveal',
       p_limit: 2,
       p_viewer_user_id: 'viewer-1',
-    }));
+      p_after_score: null,
+      p_after_id: null,
+      // Top, scored at the instant the search began.
+      p_as_of: '2026-11-12T10:00:00.000Z',
+      p_sort: 'top',
+      p_after_created_at: null,
+    });
+    expect(result.sort).toBe('top');
     expect(getShowcaseFeedItemsByPostIds).toHaveBeenCalledWith({
       postIds: ['11111111-1111-4111-8111-111111111111'],
       viewerUserId: 'viewer-1',
@@ -50,6 +61,113 @@ describe('public search service', () => {
       type: 'posts',
       score: 8.25,
       id: '11111111-1111-4111-8111-111111111111',
+      // The next page is scored at the same instant.
+      asOf: SEARCH_BEGAN.getTime(),
+    });
+  });
+
+  describe('paging posts', () => {
+    const FIRST = '11111111-1111-4111-8111-111111111111';
+    const SECOND = '22222222-2222-4222-8222-222222222222';
+    const rows = [
+      { post_id: FIRST, creator_user_id: 'creator-1', search_score: 23.5, created_at: '2026-11-12T09:00:00.123456+00:00' },
+      { post_id: SECOND, creator_user_id: 'creator-2', search_score: 13.1, created_at: '2026-11-10T09:00:00.654321+00:00' },
+    ];
+    function harness(clock: () => Date) {
+      const rpc = vi.fn<(name: string, args: Record<string, unknown>) => Promise<{ data: typeof rows; error: null }>>(
+        async () => ({ data: rows, error: null }),
+      );
+      const search = (options: Partial<Parameters<typeof searchPublicContent>[0]>) => searchPublicContent({
+        query: 'portrait',
+        normalizedQuery: 'portrait',
+        type: 'posts',
+        cursor: null,
+        limit: 1,
+        viewerUserId: null,
+        countryCode: null,
+        ...options,
+      }, {
+        createServiceClient: vi.fn(() => ({ rpc }) as unknown as SupabaseClient),
+        getShowcaseFeedItemsByPostIds: vi.fn(async ({ postIds }: { postIds: string[] }) => postIds.map((id) => ({ id }))) as never,
+        getMarketplaceResourceList: vi.fn(async () => ({
+          items: [],
+          pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 6 },
+        })) as never,
+        loadBlockedCreatorIds: vi.fn(async () => new Set()) as never,
+        now: clock,
+      });
+      const postArgs = () => rpc.mock.calls
+        .filter(([name]) => name === 'search_public_posts')
+        .map(([, args]) => args);
+      return { search, postArgs };
+    }
+
+    it('scores the second page at the first page’s instant, however much later it is asked for', async () => {
+      let clock = SEARCH_BEGAN;
+      const { search, postArgs } = harness(() => clock);
+
+      const pageOne = await search({});
+      clock = new Date('2026-11-12T10:07:30.000Z');
+      const cursor = decodePublicSearchCursor(pageOne.posts.nextCursor, 'posts');
+      const pageTwo = await search({ cursor });
+
+      expect(postArgs().map((args) => args.p_as_of)).toEqual([
+        '2026-11-12T10:00:00.000Z',
+        '2026-11-12T10:00:00.000Z',
+      ]);
+      expect(postArgs()[1]).toMatchObject({ p_after_score: 23.5, p_after_id: FIRST, p_after_created_at: null });
+      // And the page after that carries the same instant on.
+      expect(decodePublicSearchCursor(pageTwo.posts.nextCursor, 'posts')?.asOf).toBe(SEARCH_BEGAN.getTime());
+    });
+
+    it('scores a page asked for with a cursor issued before instants existed at its own request, and hands the instant on', async () => {
+      const { search, postArgs } = harness(now);
+      const page = await search({ cursor: { version: 1, type: 'posts', score: 8.25, id: SECOND } });
+
+      expect(postArgs()[0]).toMatchObject({
+        p_after_score: 8.25,
+        p_after_id: SECOND,
+        p_as_of: '2026-11-12T10:00:00.000Z',
+        p_sort: 'top',
+      });
+      expect(decodePublicSearchCursor(page.posts.nextCursor, 'posts')?.asOf).toBe(SEARCH_BEGAN.getTime());
+    });
+
+    it('reads Latest newest first and pages it on created_at, to the microsecond', async () => {
+      const { search, postArgs } = harness(now);
+
+      const pageOne = await search({ sort: 'latest' });
+      expect(pageOne.sort).toBe('latest');
+      expect(postArgs()[0]).toMatchObject({ p_sort: 'latest', p_after_score: null, p_after_created_at: null });
+      // A Top cursor would not decode here, and this one carries no score.
+      expect(decodePublicSearchCursor(pageOne.posts.nextCursor, 'posts')).toBeNull();
+      const cursor = decodePublicSearchCursor(pageOne.posts.nextCursor, 'posts', 'latest');
+      expect(cursor).toEqual({
+        version: 1,
+        type: 'posts',
+        sort: 'latest',
+        createdAt: '2026-11-12T09:00:00.123456+00:00',
+        id: FIRST,
+      });
+
+      await search({ sort: 'latest', cursor });
+      expect(postArgs()[1]).toMatchObject({
+        p_sort: 'latest',
+        p_after_score: null,
+        p_after_id: FIRST,
+        p_after_created_at: '2026-11-12T09:00:00.123456+00:00',
+      });
+    });
+
+    it('reads the Top tab and Creators ranked whatever sort is named', async () => {
+      const { search, postArgs } = harness(now);
+      const top = await search({ type: 'top', sort: 'latest' });
+      const creators = await search({ type: 'creators', sort: 'latest' });
+
+      expect(top.sort).toBe('top');
+      expect(creators.sort).toBe('top');
+      expect(postArgs()).toHaveLength(1);
+      expect(postArgs()[0]).toMatchObject({ p_sort: 'top', p_as_of: '2026-11-12T10:00:00.000Z' });
     });
   });
 
@@ -120,6 +238,7 @@ describe('public search service', () => {
       })) as never,
       getShowcaseFeedItemsByPostIds: getShowcaseFeedItemsByPostIds as never,
       loadBlockedCreatorIds: vi.fn(async () => new Set()) as never,
+      now,
     });
 
     // Signed out on Top and signed in on Posts: the label hides a post from everyone.
@@ -141,10 +260,13 @@ describe('public search service', () => {
       type: 'posts',
       score: 7,
       id: textPost,
+      asOf: SEARCH_BEGAN.getTime(),
     });
     expect([...top.posts.items, ...posts.posts.items].some((item) => item.isNsfw)).toBe(false);
   });
 
+  // Both searches leave both sides of a block out before their limit (20261112103547), so this
+  // pass now catches only a block made after the ranked read, and a blocked seller's recipe.
   it('removes blocked creators before any result reaches the response', async () => {
     const rpc = vi.fn(async () => ({
       data: [
@@ -251,6 +373,34 @@ describe('public search service', () => {
     expect(pageTwo.recipes.nextCursor).not.toBeNull();
     expect(pageThree.recipes.items.map((item) => item.id)).toEqual(['recipe-4']);
     expect(pageThree.recipes.nextCursor).toBeNull();
+  });
+
+  it('asks the list for Latest recipes newest first, and pages them with a Latest cursor', async () => {
+    const getMarketplaceResourceList = vi.fn(async ({ offset = 0, limit = 24 }: { offset?: number; limit?: number }) => ({
+      items: [{ id: `recipe-${offset}`, seller: { id: 'seller-1' } }],
+      pageInfo: { hasMore: true, nextOffset: offset + limit, offset, limit },
+    }));
+    const page = await searchPublicContent({
+      query: 'portrait',
+      normalizedQuery: 'portrait',
+      type: 'recipes',
+      sort: 'latest',
+      cursor: null,
+      limit: 20,
+      viewerUserId: null,
+      countryCode: null,
+    }, {
+      createServiceClient: vi.fn(() => ({ rpc: vi.fn() }) as unknown as SupabaseClient),
+      getMarketplaceResourceList: getMarketplaceResourceList as never,
+    });
+
+    expect((getMarketplaceResourceList.mock.calls[0][0] as { sort?: string }).sort).toBe('recent');
+    expect(page.sort).toBe('latest');
+    expect(decodePublicSearchCursor(page.recipes.nextCursor, 'recipes', 'latest')).toEqual({
+      version: 1, type: 'recipes', sort: 'latest', offset: 20,
+    });
+    // It pages Latest and nothing else.
+    expect(decodePublicSearchCursor(page.recipes.nextCursor, 'recipes')).toBeNull();
   });
 
   it('asks the list for recipes by relevance, and offers no next page past the cursor\'s cap', async () => {

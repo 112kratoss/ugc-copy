@@ -25,7 +25,9 @@ import {
   decodePublicSearchCursor,
   isPublicSearchQueryTooLong,
   normalizeCreatorSearchQuery,
+  appliedPublicSearchSort,
   parsePublicSearchLimit,
+  parsePublicSearchSort,
   parsePublicSearchType,
   publicSearchQueryLength,
 } from '@/lib/public-search';
@@ -133,13 +135,21 @@ async function handlePublicSearchGET(
       );
     }
 
+    // Any request may name a sort, so a client keeps one choice across tabs;
+    // only Posts and Recipes are read in it. An unknown one is refused
+    // whatever the type, as an unknown type is.
+    const requestedSort = parsePublicSearchSort(url.searchParams.get('sort'));
+    if (!requestedSort) return badRequest(request, 'sort must be top or latest.');
+    const sort = appliedPublicSearchSort(type, requestedSort);
+
     const limit = parsePublicSearchLimit(url.searchParams.get('limit'));
     if (!limit) return badRequest(request, 'limit must be an integer between 1 and 24.');
 
     const rawCursor = url.searchParams.get('cursor');
     if (type === 'top' && rawCursor) return badRequest(request, 'Top search does not accept a cursor.');
-    const cursor = rawCursor ? decodePublicSearchCursor(rawCursor, type) : null;
-    if (rawCursor && !cursor) return badRequest(request, 'cursor is invalid for this search type.');
+    // A cursor pages the order it was issued for: one from Top is refused on Latest.
+    const cursor = rawCursor ? decodePublicSearchCursor(rawCursor, type, sort) : null;
+    if (rawCursor && !cursor) return badRequest(request, 'cursor is invalid for this search type and sort.');
 
     const actor = await resolveViewerUserId(request, dependencies);
     if (!actor.ok) {
@@ -174,6 +184,7 @@ async function handlePublicSearchGET(
       query: rawQuery?.trim() ?? normalizedQuery,
       normalizedQuery,
       type,
+      sort,
       cursor,
       limit,
       viewerUserId: actor.viewerUserId,
@@ -193,6 +204,7 @@ async function handlePublicSearchGET(
       hasCursor: cursor !== null,
       normalizedQuery,
       type,
+      sort,
       viewerKey,
       // A registered account: most sessions here are guests, which the log does not call signed in.
       signedIn: actor.viewerUserId !== null && !actor.isGuest,

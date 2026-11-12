@@ -3,14 +3,19 @@ import { describe, expect, it } from 'vitest';
 import { MAX_MARKETPLACE_RESOURCE_OFFSET } from '@/lib/marketplace-resource-list-route-adapter-service';
 import {
   PUBLIC_SEARCH_MAX_RECIPE_OFFSET,
+  PUBLIC_SEARCH_SORTS,
+  PUBLIC_SEARCH_TYPES,
+  appliedPublicSearchSort,
   decodePublicSearchCursor,
   encodePublicSearchCursor,
   isPublicSearchQueryTooLong,
   normalizeCreatorSearchQuery,
   normalizePublicSearchQuery,
   parsePublicSearchLimit,
+  parsePublicSearchSort,
   parsePublicSearchType,
   publicSearchQueryLength,
+  publicSearchTypeHasSorts,
 } from '@/lib/public-search';
 
 describe('public search policy', () => {
@@ -81,6 +86,91 @@ describe('public search policy', () => {
     expect(recipes(Number.MAX_SAFE_INTEGER)).toBeNull();
     expect(recipes(-1)).toBeNull();
     expect(recipes(1.5)).toBeNull();
+  });
+
+  it('names two sorts, top when a request names none, and refuses any other', () => {
+    expect(PUBLIC_SEARCH_SORTS).toEqual(['top', 'latest']);
+    expect(parsePublicSearchSort(null)).toBe('top');
+    expect(parsePublicSearchSort(undefined)).toBe('top');
+    expect(parsePublicSearchSort('top')).toBe('top');
+    expect(parsePublicSearchSort('latest')).toBe('latest');
+    expect(parsePublicSearchSort('')).toBeNull();
+    expect(parsePublicSearchSort('Latest')).toBeNull();
+    expect(parsePublicSearchSort('recent')).toBeNull();
+  });
+
+  it('reads only Posts and Recipes in another order than the ranked one', () => {
+    expect(PUBLIC_SEARCH_TYPES.filter(publicSearchTypeHasSorts)).toEqual(['posts', 'recipes']);
+    expect(appliedPublicSearchSort('posts', 'latest')).toBe('latest');
+    expect(appliedPublicSearchSort('recipes', 'latest')).toBe('latest');
+    expect(appliedPublicSearchSort('top', 'latest')).toBe('top');
+    expect(appliedPublicSearchSort('creators', 'latest')).toBe('top');
+  });
+
+  describe('a posts cursor', () => {
+    const ID = '11111111-1111-1111-1111-111111111111';
+    const AS_OF = Date.parse('2026-11-12T10:00:00.000Z');
+    const forge = (fields: Record<string, unknown>) => (
+      Buffer.from(JSON.stringify({ v: 1, t: 'posts', ...fields }), 'utf8').toString('base64url')
+    );
+
+    it('carries the instant a Top search is scored at', () => {
+      const cursor = encodePublicSearchCursor({ version: 1, type: 'posts', score: 12.5, id: ID, asOf: AS_OF });
+      expect(decodePublicSearchCursor(cursor, 'posts')).toEqual({
+        version: 1, type: 'posts', score: 12.5, id: ID, asOf: AS_OF,
+      });
+      expect(decodePublicSearchCursor(cursor, 'posts', 'top')).not.toBeNull();
+    });
+
+    it('still decodes one issued before instants existed, as a Top cursor without one', () => {
+      // Byte for byte what the app live before 2026-11-12 encodes.
+      const legacy = forge({ s: 4.25, i: ID });
+      expect(decodePublicSearchCursor(legacy, 'posts')).toEqual({ version: 1, type: 'posts', score: 4.25, id: ID });
+      expect(decodePublicSearchCursor(legacy, 'posts', 'latest')).toBeNull();
+    });
+
+    it('carries the last row’s created_at for Latest, as the database wrote it', () => {
+      const createdAt = '2026-11-12T10:00:00.123456+00:00';
+      const cursor = encodePublicSearchCursor({ version: 1, type: 'posts', sort: 'latest', createdAt, id: ID });
+      expect(decodePublicSearchCursor(cursor, 'posts', 'latest')).toEqual({
+        version: 1, type: 'posts', sort: 'latest', createdAt, id: ID,
+      });
+      // A cursor pages the order it was issued for.
+      expect(decodePublicSearchCursor(cursor, 'posts')).toBeNull();
+      expect(decodePublicSearchCursor(cursor, 'posts', 'top')).toBeNull();
+    });
+
+    it('refuses an instant or a created_at a timestamptz parameter would not take', () => {
+      for (const asOf of [0, -1, 1.5, '1762941600000', 253_402_300_800_000, Number.MAX_SAFE_INTEGER, null]) {
+        expect(decodePublicSearchCursor(forge({ s: 4.25, i: ID, a: asOf }), 'posts'), String(asOf)).toBeNull();
+      }
+      expect(decodePublicSearchCursor(forge({ s: 4.25, i: ID, a: 253_402_300_799_999 }), 'posts')).not.toBeNull();
+      for (const createdAt of [
+        '2026-11-12', '2026-11-12 10:00:00+00', 'now()', "2026-11-12T10:00:00Z'; drop table posts; --",
+        '2026-13-45T10:00:00Z', 1762941600000, null, undefined,
+      ]) {
+        expect(
+          decodePublicSearchCursor(forge({ r: 'latest', c: createdAt, i: ID }), 'posts', 'latest'),
+          String(createdAt),
+        ).toBeNull();
+      }
+      expect(decodePublicSearchCursor(forge({ r: 'latest', c: '2026-11-12T10:00:00Z', i: ID }), 'posts', 'latest'))
+        .not.toBeNull();
+      // A Latest cursor needs its id, and an unknown sort is no sort.
+      expect(decodePublicSearchCursor(forge({ r: 'latest', c: '2026-11-12T10:00:00Z' }), 'posts', 'latest')).toBeNull();
+      expect(decodePublicSearchCursor(forge({ r: 'oldest', s: 4.25, i: ID }), 'posts')).toBeNull();
+      expect(decodePublicSearchCursor(forge({ r: 7, s: 4.25, i: ID }), 'posts')).toBeNull();
+    });
+  });
+
+  it('keeps a recipes cursor to the order it was issued for', () => {
+    const latest = encodePublicSearchCursor({ version: 1, type: 'recipes', sort: 'latest', offset: 24 });
+    expect(decodePublicSearchCursor(latest, 'recipes', 'latest')).toEqual({
+      version: 1, type: 'recipes', sort: 'latest', offset: 24,
+    });
+    expect(decodePublicSearchCursor(latest, 'recipes')).toBeNull();
+    const top = encodePublicSearchCursor({ version: 1, type: 'recipes', offset: 24 });
+    expect(decodePublicSearchCursor(top, 'recipes', 'latest')).toBeNull();
   });
 
   it('rejects hand-built cursors whose id is not a UUID', () => {

@@ -33,6 +33,7 @@ function searchResponse(overrides: Partial<PublicSearchResponse> = {}): PublicSe
     query: 'luna',
     normalizedQuery: 'luna',
     type: 'top',
+    sort: 'top',
     creators: { items: [], nextCursor: null },
     posts: { items: [], nextCursor: null },
     recipes: { items: [], nextCursor: null },

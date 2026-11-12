@@ -216,8 +216,8 @@ select ok(
 );
 
 select ok(
-  not has_function_privilege('anon', 'public.search_public_posts(text,uuid,double precision,uuid,integer)', 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.search_public_posts(text,uuid,double precision,uuid,integer)', 'EXECUTE'),
+  not has_function_privilege('anon', 'public.search_public_posts(text,uuid,double precision,uuid,integer,timestamptz,text,timestamptz)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.search_public_posts(text,uuid,double precision,uuid,integer,timestamptz,text,timestamptz)', 'EXECUTE'),
   'client roles cannot call post search RPCs directly'
 );
 

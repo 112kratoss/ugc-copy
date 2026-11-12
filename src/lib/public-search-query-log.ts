@@ -6,7 +6,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendEvent } from '@/lib/backend-logger';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
-import type { PublicSearchResponse, PublicSearchType } from '@/lib/public-search';
+import {
+  publicSearchTypeHasSorts,
+  type PublicSearchResponse,
+  type PublicSearchSort,
+  type PublicSearchType,
+} from '@/lib/public-search';
 
 /**
  * The anonymous search log, `public.search_query_events`: one row per first-page `/api/search`
@@ -16,7 +21,8 @@ import type { PublicSearchResponse, PublicSearchType } from '@/lib/public-search
  *
  * A row holds the lowercased query (control characters removed, at most 100 characters), the
  * search type, whether a registered account was presented, a per-day visitor hash, how many
- * creators, posts and recipes the answer held, and when the request arrived.
+ * creators, posts and recipes the answer held, the order a Posts or Recipes search asked for
+ * (null for Top and Creators, which have one), and when the request arrived.
  *
  * The visitor hash is HMAC-SHA256 of the viewer's rate-limit key (a user id or the hashed network
  * address, never stored) under a random key made for that UTC day alone (`search_visitor_day_keys`).
@@ -41,6 +47,8 @@ export type SearchQueryEventRow = {
   creator_count: number;
   post_count: number;
   recipe_count: number;
+  /** The order a Posts or Recipes search was read in; null for Top and Creators. */
+  sort: PublicSearchSort | null;
 };
 
 export type SearchAnswerLogInput = {
@@ -48,6 +56,8 @@ export type SearchAnswerLogInput = {
   hasCursor: boolean;
   normalizedQuery: string;
   type: PublicSearchType;
+  /** The order the search was read in (the applied one). */
+  sort: PublicSearchSort;
   /** The rate-limit key the adapter computed: the user id, or the hashed network address. */
   viewerKey: string;
   /** A registered (non-guest) account was presented. */
@@ -105,6 +115,7 @@ export function buildSearchQueryEventRow(
     creator_count: input.response.creators.items.length,
     post_count: input.response.posts.items.length,
     recipe_count: input.response.recipes.items.length,
+    sort: publicSearchTypeHasSorts(input.type) ? input.sort : null,
   };
 }
 
