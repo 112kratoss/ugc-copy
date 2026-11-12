@@ -75,6 +75,7 @@ export function SearchTypeaheadList({
   listId,
   sections,
   activeIndex,
+  stale = false,
   onPick,
   onHighlight,
   className = '',
@@ -83,6 +84,13 @@ export function SearchTypeaheadList({
   sections: readonly SearchTypeaheadSection[];
   /** The highlighted row, as an index across every section, or null. */
   activeIndex: number | null;
+  /**
+   * The rows are the answer to the text before this one, kept on show until
+   * this text's arrives: the list says it is busy, and dims only if the answer
+   * is slow (a dim at every letter would be the flicker the keeping avoids).
+   * A row still does what it shows.
+   */
+  stale?: boolean;
   onPick: (row: SearchTypeaheadRow) => void;
   onHighlight: (index: number) => void;
   className?: string;
@@ -96,8 +104,9 @@ export function SearchTypeaheadList({
       id={listId}
       role="listbox"
       aria-label={SEARCH_TYPEAHEAD_LIST_LABEL}
+      aria-busy={stale || undefined}
       onMouseDown={(event) => event.preventDefault()}
-      className={`search-typeahead-list overflow-y-auto overscroll-contain rounded-3xl border border-white/10 bg-[var(--ui-surface-1)] p-2 shadow-[0_24px_80px_-24px_rgba(0,0,0,0.95)] ${className}`}
+      className={`search-typeahead-list overflow-y-auto overscroll-contain rounded-3xl border border-white/10 bg-[var(--ui-surface-1)] p-2 shadow-[0_24px_80px_-24px_rgba(0,0,0,0.95)] ${stale ? 'opacity-60 transition-opacity delay-300 duration-200' : ''} ${className}`}
     >
       {sections.map((section, sectionIndex) => {
         const headingId = `${listId}-${section.id}`;

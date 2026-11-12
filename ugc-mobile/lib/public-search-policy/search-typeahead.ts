@@ -6,9 +6,11 @@
  * its caps:
  *
  *   - when a request is made (the pause in typing it waits for, what text is
- *     worth asking about) and when its answer may be drawn (only for the text
- *     the box holds now, only while the box has the focus, never once the
- *     person has dismissed it or committed the search);
+ *     worth asking about) and what is drawn meanwhile (the answer to the text
+ *     the box holds now, or, until that arrives, the answer before it, so the
+ *     list does not go and come back at every letter; only while the box has
+ *     the focus, never once the person has dismissed it or committed the
+ *     search), and how long an answer may be kept to draw again;
  *   - the sections and their order: creators, models and tools, completions;
  *   - what choosing a row does: a creator opens their profile, a model or tool
  *     opens Posts narrowed to it, a completion fills the box and searches;
@@ -146,6 +148,17 @@ export function parseSearchSuggestResponse(value: unknown): SearchSuggestRespons
  */
 export const SEARCH_TYPEAHEAD_DEBOUNCE_MS = 140;
 
+/**
+ * How long an answer may be kept to draw again without asking (a letter
+ * deleted, the same text typed again), and how many. An answer says whom its
+ * viewer follows and leaves out whom they are blocked with, and a follow or a
+ * block made on another page changes that: so a client keeps answers for one
+ * focus of its box only, drops them with the account, and never draws a kept
+ * one older than this.
+ */
+export const SEARCH_TYPEAHEAD_KEPT_ANSWER_MS = 30_000;
+export const SEARCH_TYPEAHEAD_KEPT_ANSWERS = 30;
+
 /** Entities are offered from the length Posts are searched from: pressing one opens Posts. */
 const SEARCH_TYPEAHEAD_MIN_ENTITY_QUERY_LENGTH = 3;
 
@@ -237,25 +250,76 @@ export function searchTypeaheadRows(sections: readonly SearchTypeaheadSection[])
   return sections.flatMap((section) => section.rows);
 }
 
+/** What a request found for a query. A null response is one that failed, was refused or could not be read. */
+export interface SearchTypeaheadAnswer {
+  query: string;
+  response: SearchSuggestResponse | null;
+}
+
+// A name's words as a query's are compared with them: lower case, split at anything that is not a letter or a digit.
+function foldedWords(text: string): string[] {
+  return text.normalize('NFKC').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
 /**
- * Whether the list is drawn. Only for an answer to what the box asks about now
- * (a stale answer is nothing), only while the box has the focus, only with a
- * row to show, and not once the person closed it (Escape) or committed the
- * search (Enter, or a row) for this same text: typing again opens it again.
+ * Whether an entity an earlier answer offered is still one for what the box
+ * asks about now: every word typed begins a word of its name or its key.
+ * Pressing an entity searches the box's text narrowed to it, so one the text
+ * no longer names is not kept on show beside it.
+ */
+function entityStillNamed(entity: SearchEntity, query: string): boolean {
+  const typed = foldedWords(query);
+  if (typed.length === 0) return false;
+  const named = [...foldedWords(entity.label), ...foldedWords(entity.key)];
+  return typed.every((word) => named.some((name) => name.startsWith(word)));
+}
+
+/**
+ * What is drawn for the answer in hand while the box asks about `query`.
+ *
+ * The answer to this text is drawn as it is. An answer to an earlier text is
+ * kept on show until this text's arrives, `stale`, so that typing "lum" then
+ * "lumi" changes the list once, when the new answer lands, and does not take
+ * it away and bring it back at every letter. It goes at once when the box is
+ * emptied, and when this text's own answer says there is nothing (or failed:
+ * a client records a request it could not make as an answer with no response).
+ *
+ * A stale row must do what it shows whatever the box holds by then: a creator
+ * opens that creator and a completion searches its own text, so both are kept
+ * as they are; an entity narrows a search for the box's text, so it is kept
+ * only while that text still names it. A client marks a stale list busy.
+ */
+export function searchTypeaheadDrawn(
+  answer: SearchTypeaheadAnswer | null,
+  query: string | null,
+): { sections: SearchTypeaheadSection[]; stale: boolean } {
+  if (!answer || !answer.response || query === null) return { sections: [], stale: false };
+  if (answer.query === query) return { sections: searchTypeaheadSections(answer.response, query), stale: false };
+  const sections = searchTypeaheadSections(
+    { ...answer.response, entities: answer.response.entities.filter((entity) => entityStillNamed(entity, query)) },
+    query,
+  );
+  return { sections, stale: sections.length > 0 };
+}
+
+/**
+ * Whether the list is drawn: only while the box has the focus and asks about
+ * something, only with a row to show (searchTypeaheadDrawn: this text's
+ * answer, or the one before it until this text's arrives), and not once the
+ * person closed it (Escape) or committed the search (Enter, or a row) for this
+ * same text: typing again opens it again.
  */
 export function isSearchTypeaheadShown(state: {
   focused: boolean;
   /** What the box asks about now (searchTypeaheadQuery of its text). */
   query: string | null;
-  /** What the answer in hand was asked with, or null for none. */
-  answerQuery: string | null;
   /** The query the list was closed for, or null. */
   closedQuery: string | null;
+  /** The rows of searchTypeaheadDrawn. */
   rowCount: number;
 }): boolean {
   return state.focused
     && state.query !== null
-    && state.answerQuery === state.query
     && state.closedQuery !== state.query
     && state.rowCount > 0;
 }
@@ -313,6 +377,16 @@ export function searchTypeaheadRowLabel(row: SearchTypeaheadRow): string {
   if (row.kind === 'entity') return searchEntityActionLabel(row.entity);
   return `Search for ${row.text}`;
 }
+
+/**
+ * How long the list's count must stand before it is said. Each letter can
+ * change the list (an answer kept from a moment ago is drawn at once), and a
+ * count said at every letter talks over the person's own typing: it is said
+ * once per pause, for this text's own answer and never for a stale list, and a
+ * polite region that is given the same words again says nothing, so a count
+ * that did not change is not repeated.
+ */
+export const SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS = 500;
 
 /** The polite announcement when the list opens or changes: "5 suggestions". Nothing for none. */
 export function searchTypeaheadStatus(rowCount: number): string {

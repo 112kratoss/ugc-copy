@@ -113,6 +113,7 @@ export function AppShellSearch() {
           listId={typeahead.listId}
           sections={typeahead.sections}
           activeIndex={typeahead.activeIndex}
+          stale={typeahead.stale}
           onPick={(row) => runTypeaheadAction(typeahead.pick(row))}
           onHighlight={typeahead.highlightRow}
           // Under the field, over the page: the bar is the page's top layer.

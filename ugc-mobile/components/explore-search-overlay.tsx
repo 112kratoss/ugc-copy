@@ -583,6 +583,7 @@ export function ExploreSearchOverlay({
   const tabBarMetrics = getMagicTabBarMetrics(width, insets.bottom);
   const { mounted, animatedStyle } = useOverlayPresence(visible);
   const inputRef = useRef<TextInput>(null);
+  const resultsScrollRef = useRef<ScrollView>(null);
   const requestSequence = useRef(0);
   const requestController = useRef<AbortController | null>(null);
   // The query of the request last scheduled. A change of tab alone means the
@@ -853,6 +854,19 @@ export function ExploreSearchOverlay({
     setQuery(action.query);
   };
 
+  // The list is the first thing in the results' scroll view, so it is in view
+  // only at the top: the field focused again after the results were scrolled
+  // would offer it off-screen. It is brought into view whenever it is shown.
+  // Chosen over pinning it under the field, outside the scrolled content: a
+  // pinned panel of up to fourteen rows would need a scroll of its own inside
+  // the half of the screen the keyboard leaves and would cover the results it
+  // now only pushes down, and the scroll view is what keeps the keyboard up
+  // for a press on a row.
+  const typeaheadShown = typeahead.shown;
+  useEffect(() => {
+    if (typeaheadShown) resultsScrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [typeaheadShown]);
+
   // Said to a screen reader when the list opens or its count changes.
   const typeaheadStatus = typeahead.status;
   useEffect(() => {
@@ -925,6 +939,7 @@ export function ExploreSearchOverlay({
       </View>
 
       <ScrollView
+        ref={resultsScrollRef}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         contentContainerStyle={{
@@ -937,7 +952,7 @@ export function ExploreSearchOverlay({
         {/* Above everything the search itself draws, in every state of it: the
             person is still typing, and what completes the typing comes first.
             It takes no room once it has nothing to offer or the keyboard is down. */}
-        {typeahead.shown ? <SearchTypeaheadList sections={typeahead.sections} onPick={pickSuggestion} /> : null}
+        {typeahead.shown ? <SearchTypeaheadList sections={typeahead.sections} stale={typeahead.stale} onPick={pickSuggestion} /> : null}
         {filtersShown ? (
           <SearchFilterBar
             filters={filters}

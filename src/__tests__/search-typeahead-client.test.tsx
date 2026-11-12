@@ -1,11 +1,14 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SearchClient from '@/app/search/SearchClient';
+import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
 import type { PublicSearchResponse } from '@/lib/public-search';
 
 import {
+  SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS,
   SEARCH_TYPEAHEAD_DEBOUNCE_MS,
+  SEARCH_TYPEAHEAD_KEPT_ANSWER_MS,
   type SearchSuggestResponse,
 } from '../../ugc-mobile/lib/public-search-policy/search-typeahead';
 
@@ -20,6 +23,9 @@ const { pushMock, routerMock } = vi.hoisted(() => {
   return { pushMock: push, routerMock: { push, replace: vi.fn() } };
 });
 const getSessionMock = vi.fn();
+// The session's listeners, as the typeahead registers them, and the ends of their watches.
+const sessionListeners: Array<(event: string) => void> = [];
+const unsubscribeMock = vi.fn();
 const searchFetchMock = vi.fn();
 const suggestFetchMock = vi.fn();
 
@@ -28,7 +34,10 @@ vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
       getSession: () => getSessionMock(),
-      onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
+      onAuthStateChange: (listener: (event: string) => void) => {
+        sessionListeners.push(listener);
+        return { data: { subscription: { unsubscribe: unsubscribeMock } } };
+      },
     },
   },
 }));
@@ -88,6 +97,14 @@ const list = () => screen.findByRole('listbox', { name: 'Search suggestions' });
 const noList = () => expect(screen.queryByRole('listbox')).toBeNull();
 /** Past the typeahead's pause, so a request that was going to be made has been. */
 const pastThePause = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, SEARCH_TYPEAHEAD_DEBOUNCE_MS + 60)); });
+/** What the typeahead's polite region holds, and the results' own. */
+const said = () => document.querySelector('[data-search-typeahead-status]')?.textContent;
+const resultsSaid = () => document.querySelector('p.sr-only[role="status"]')?.textContent;
+/** Past the pause a count stands for before it is said. */
+const pastTheAnnouncePause = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS + 80)); });
+/** The session says something to everyone watching it (the page watches it too). */
+const sessionSays = (event: string) => act(() => { for (const listener of [...sessionListeners]) listener(event); });
+const options = () => screen.getAllByRole('option').map((option) => option.getAttribute('aria-label'));
 
 describe('search page typeahead', () => {
   beforeEach(() => {
@@ -95,6 +112,8 @@ describe('search page typeahead', () => {
     pushMock.mockReset();
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
+    sessionListeners.length = 0;
+    unsubscribeMock.mockReset();
     searchFetchMock.mockReset();
     searchFetchMock.mockImplementation(async (url: string) => ok(searchAnswer(new URL(url, 'http://localhost').searchParams.get('q') ?? '')));
     suggestFetchMock.mockReset();
@@ -106,6 +125,8 @@ describe('search page typeahead', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('is a combobox that controls a listbox of creators, then models and tools, then completions', async () => {
@@ -135,8 +156,11 @@ describe('search page typeahead', () => {
     // No row is focusable: the focus stays in the box, so it is never trapped in the list.
     expect(within(listbox).queryAllByRole('button')).toHaveLength(0);
     expect(listbox.querySelectorAll('[tabindex], a[href]')).toHaveLength(0);
-    // Said politely, apart from the results' own status.
-    expect(document.querySelector('[data-search-typeahead-status]')?.textContent).toBe('5 suggestions');
+    // Said politely, apart from the results' own status, once the list has stood for a pause.
+    expect(listbox.hasAttribute('aria-busy')).toBe(false);
+    expect(said()).toBe('');
+    await pastTheAnnouncePause();
+    expect(said()).toBe('5 suggestions');
     expect(document.querySelector('[data-search-typeahead-status]')?.getAttribute('aria-live')).toBe('polite');
   });
 
@@ -166,7 +190,7 @@ describe('search page typeahead', () => {
     await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=luma']));
   });
 
-  it('draws no answer for a text the box no longer holds', async () => {
+  it('never draws the answer of a request the next letter ended', async () => {
     const early = deferred<ReturnType<typeof ok>>();
     suggestFetchMock.mockReturnValueOnce(early.promise);
     suggestFetchMock.mockResolvedValueOnce(ok(suggestions({ creators: [], entities: [], completions: [{ text: 'lumina' }] })));
@@ -188,7 +212,140 @@ describe('search page typeahead', () => {
     expect(within(listbox).getAllByRole('option').map((option) => option.textContent)).toEqual(['lumina']);
   });
 
-  it('keeps an answer it had, so deleting a letter redraws the list without asking again', async () => {
+  it('keeps the list of the text before on show, busy, until this text’s answer lands, and says the count only when it changes', async () => {
+    const later = deferred<ReturnType<typeof ok>>();
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    await pastTheAnnouncePause();
+    expect(said()).toBe('5 suggestions');
+
+    // The next letter: nothing goes. What was offered stays, less the model
+    // the text no longer names (pressing it would search "lumi" narrowed to it).
+    suggestFetchMock.mockReturnValueOnce(later.promise);
+    type('lumi');
+    expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true');
+    expect(box().getAttribute('aria-expanded')).toBe('true');
+    expect(options()).toEqual([
+      'Luma Studio, @luma-studio, following. Open profile',
+      '@lumen. Open profile',
+      'Search for luminous',
+      'Search for lumen glow',
+    ]);
+    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum', '/api/search/suggest?q=lumi']));
+    // A stale list is not announced: the region keeps the words it had.
+    await pastTheAnnouncePause();
+    expect(said()).toBe('5 suggestions');
+    expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true');
+
+    // This text's answer takes its place, once, and its count is said after a pause.
+    await act(async () => {
+      later.resolve(ok(suggestions({
+        creators: [{ id: 'c2', username: 'lumen', displayName: 'lumen', avatarUrl: null, isFollowing: false }],
+        entities: [],
+        completions: [{ text: 'lumina' }],
+      })));
+      await later.promise;
+    });
+    await waitFor(() => expect(options()).toEqual(['@lumen. Open profile', 'Search for lumina']));
+    expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false);
+    expect(said()).toBe('5 suggestions');
+    await pastTheAnnouncePause();
+    expect(said()).toBe('2 suggestions');
+  });
+
+  it('has a stale row do what it shows, and keeps the highlight on the row it was put on', async () => {
+    const later = deferred<ReturnType<typeof ok>>();
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    suggestFetchMock.mockReturnValueOnce(later.promise);
+    type('lumi');
+    // Typing on returned the highlight to the box; the arrows walk the stale rows.
+    expect(box().hasAttribute('aria-activedescendant')).toBe(false);
+    key('ArrowDown');
+    key('ArrowDown');
+    const highlighted = () => screen.getAllByRole('option').filter((option) => option.getAttribute('aria-selected') === 'true')
+      .map((option) => option.getAttribute('aria-label'));
+    expect(highlighted()).toEqual(['@lumen. Open profile']);
+
+    // The answer lands with that creator first: the highlight is still on
+    // them, not on whatever now stands second.
+    await act(async () => {
+      later.resolve(ok(suggestions({
+        creators: [
+          { id: 'c2', username: 'lumen', displayName: 'lumen', avatarUrl: null, isFollowing: false },
+          { id: 'c9', username: 'lumiere', displayName: 'Lumiere Films', avatarUrl: null, isFollowing: false },
+        ],
+        entities: [],
+        completions: [],
+      })));
+      await later.promise;
+    });
+    await waitFor(() => expect(options()).toEqual(['@lumen. Open profile', 'Lumiere Films, @lumiere. Open profile']));
+    expect(highlighted()).toEqual(['@lumen. Open profile']);
+    key('Enter');
+    expect(pushMock).toHaveBeenCalledWith('/creators/lumen');
+  });
+
+  it('returns the highlight to the box when the answer no longer has the highlighted row, and presses a stale completion as itself', async () => {
+    const later = deferred<ReturnType<typeof ok>>();
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    suggestFetchMock.mockReturnValueOnce(later.promise);
+    type('lumi');
+    key('ArrowDown');
+    expect(box().getAttribute('aria-activedescendant')).toBeTruthy();
+    await act(async () => {
+      later.resolve(ok(suggestions({ creators: [], entities: [], completions: [{ text: 'lumina' }, { text: 'lumiere' }] })));
+      await later.promise;
+    });
+    await waitFor(() => expect(options()).toEqual(['Search for lumina', 'Search for lumiere']));
+    // Luma Studio is gone: Enter is the search for what is typed, never another row's.
+    expect(box().hasAttribute('aria-activedescendant')).toBe(false);
+    key('Enter');
+    expect(pushMock).not.toHaveBeenCalled();
+    expect((box() as HTMLInputElement).value).toBe('lumi');
+
+    // A stale completion pressed is searched for as it reads.
+    const slow = deferred<ReturnType<typeof ok>>();
+    suggestFetchMock.mockReturnValueOnce(slow.promise);
+    type('lumie');
+    expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true');
+    fireEvent.click(screen.getByRole('option', { name: 'Search for lumina' }));
+    expect((box() as HTMLInputElement).value).toBe('lumina');
+    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lumina&type=top'));
+    noList();
+  });
+
+  it('takes the list of the text before away at once when the box is emptied, and when this text has nothing', async () => {
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    type('');
+    noList();
+    // What is typed next starts from nothing, not from the list of "lum".
+    const slow = deferred<ReturnType<typeof ok>>();
+    suggestFetchMock.mockReturnValueOnce(slow.promise);
+    type('v');
+    noList();
+    await waitFor(() => expect(suggestRequests()).toContain('/api/search/suggest?q=v'));
+    noList();
+    await act(async () => {
+      slow.resolve(ok(suggestions({ creators: [], entities: [], completions: [{ text: 'veo' }] })));
+      await slow.promise;
+    });
+    await waitFor(() => expect(options()).toEqual(['Search for veo']));
+
+    // Stale on the next letter, then gone when that letter's own answer is empty.
+    suggestFetchMock.mockResolvedValueOnce(ok(suggestions({ creators: [], entities: [], completions: [] })));
+    type('vq');
+    expect(options()).toEqual(['Search for veo']);
+    await waitFor(() => noList());
+  });
+
+  it('keeps an answer it had while the box keeps the focus, so deleting a letter redraws the list without asking again', async () => {
     suggestFetchMock.mockImplementation(async (url: string) => {
       const q = new URL(url, 'http://localhost').searchParams.get('q') ?? '';
       return ok(suggestions({ creators: [], entities: [], completions: [{ text: `${q}inous` }] }));
@@ -199,8 +356,146 @@ describe('search page typeahead', () => {
     type('lumi');
     await screen.findByText('lumiinous');
     type('lum');
-    await screen.findByText('luminous');
+    // At once, from what was kept, and not marked busy.
+    expect(options()).toEqual(['Search for luminous']);
+    expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false);
+    await pastThePause();
     expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum', '/api/search/suggest?q=lumi']);
+  });
+
+  it('keeps answers for one focus of the box only: coming back asks again, and draws nothing from before', async () => {
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    fireEvent.blur(box(), { relatedTarget: screen.getByRole('tab', { name: 'Top' }) });
+    noList();
+    // A follow or a block made meanwhile is in the answer asked for now.
+    suggestFetchMock.mockResolvedValueOnce(ok(suggestions({ creators: [], entities: [], completions: [{ text: 'lumen after' }] })));
+    fireEvent.focus(box());
+    noList();
+    await waitFor(() => expect(options()).toEqual(['Search for lumen after']));
+    expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum', '/api/search/suggest?q=lum']);
+  });
+
+  it('never draws a kept answer older than half a minute: the text is asked about again', async () => {
+    const now = vi.spyOn(Date, 'now');
+    const start = 1_800_000_000_000;
+    now.mockReturnValue(start);
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    type('lumi');
+    await waitFor(() => expect(suggestRequests()).toHaveLength(2));
+    // Within the window the kept answer is drawn without asking.
+    now.mockReturnValue(start + SEARCH_TYPEAHEAD_KEPT_ANSWER_MS - 1000);
+    type('lum');
+    await pastThePause();
+    expect(suggestRequests()).toHaveLength(2);
+    // Past it, it is asked again.
+    now.mockReturnValue(start + SEARCH_TYPEAHEAD_KEPT_ANSWER_MS + 1000);
+    type('lumi');
+    await waitFor(() => expect(suggestRequests()).toEqual([
+      '/api/search/suggest?q=lum', '/api/search/suggest?q=lumi', '/api/search/suggest?q=lumi',
+    ]));
+  });
+
+  it.each(['SIGNED_OUT', 'SIGNED_IN', 'USER_UPDATED'])('drops what it drew and kept when the session says %s', async (event) => {
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    type('lumi');
+    await waitFor(() => expect(suggestRequests()).toHaveLength(2));
+    await pastThePause();
+    sessionSays(event);
+    noList();
+    // "lum" was kept for the account before: it is asked about again.
+    type('lum');
+    noList();
+    await list();
+    expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum', '/api/search/suggest?q=lumi', '/api/search/suggest?q=lum']);
+    // A token refresh is the same account: nothing is dropped.
+    sessionSays('TOKEN_REFRESHED');
+    expect(screen.queryByRole('listbox')).not.toBeNull();
+  });
+
+  it('does not draw or keep an answer that was asked as the account before', async () => {
+    const early = deferred<ReturnType<typeof ok>>();
+    suggestFetchMock.mockResolvedValueOnce(ok(suggestions({ creators: [], entities: [], completions: [{ text: 'lu first' }] })));
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lu');
+    await list();
+    suggestFetchMock.mockReturnValueOnce(early.promise);
+    type('lum');
+    await waitFor(() => expect(suggestRequests()).toHaveLength(2));
+    sessionSays('SIGNED_OUT');
+    await act(async () => {
+      early.resolve(ok(suggestions()));
+      await early.promise;
+    });
+    await pastThePause();
+    noList();
+  });
+
+  it('ends its watch on the session when the box leaves the page, and starts none after it has left', async () => {
+    vi.useFakeTimers();
+    const first = renderHook(() => useSearchTypeahead({ text: 'lum', focused: true }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(SEARCH_TYPEAHEAD_DEBOUNCE_MS + 10); });
+    expect(sessionListeners).toHaveLength(1);
+    first.unmount();
+    expect(unsubscribeMock).toHaveBeenCalledTimes(1);
+
+    // The box leaves while its first request is still loading the client:
+    // the pause has passed, the import has not resolved.
+    sessionListeners.length = 0;
+    const second = renderHook(() => useSearchTypeahead({ text: 'lum', focused: true }));
+    act(() => { vi.advanceTimersByTime(SEARCH_TYPEAHEAD_DEBOUNCE_MS + 10); });
+    second.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(sessionListeners).toHaveLength(0);
+    expect(suggestRequests()).toHaveLength(1);
+  });
+
+  it('leaves a key that only confirms an input method’s composition alone', async () => {
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    key('ArrowDown');
+    // Chrome and Firefox: the Enter is still composing. Safari: it comes after
+    // the composition ended, and only its key code, 229, says what it was.
+    expect(fireEvent.keyDown(box(), { key: 'Enter', isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(box(), { key: 'Enter', keyCode: 229 })).toBe(true);
+    expect(fireEvent.keyDown(box(), { key: 'ArrowDown', keyCode: 229 })).toBe(true);
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('listbox')).not.toBeNull();
+    // The Enter after it is the choice.
+    fireEvent.keyDown(box(), { key: 'Enter', keyCode: 13 });
+    expect(pushMock).toHaveBeenCalledWith('/creators/luma-studio');
+  });
+
+  it('keeps the results’ live region silent while the list is open, and lets it speak once the list has closed', async () => {
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    // The page searches as the person types; its outcome is not said over the list's count.
+    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lum&type=top'));
+    await pastTheAnnouncePause();
+    expect(said()).toBe('5 suggestions');
+    expect(resultsSaid()).toBe('');
+    // Enter settles the search: the list goes and the results speak.
+    key('Enter');
+    noList();
+    await waitFor(() => expect(resultsSaid()).toBe('0 results for lum'));
+    // And the list's own region empties without a word.
+    await pastTheAnnouncePause();
+    expect(said()).toBe('');
+  });
+
+  it('lets the results’ live region speak as before when there is no list', async () => {
+    suggestFetchMock.mockResolvedValue(ok(suggestions({ creators: [], entities: [], completions: [] })));
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await waitFor(() => expect(resultsSaid()).toBe('0 results for lum'));
+    noList();
   });
 
   it('moves the highlight with the arrows, Home and End, and back to the box past either end', async () => {
@@ -338,6 +633,8 @@ describe('search page typeahead', () => {
     noList();
     fireEvent.focus(box());
     expect(await list()).toBeTruthy();
+    // Asked again: what was drawn before the focus left is not drawn from memory.
+    expect(suggestRequests()).toHaveLength(2);
   });
 
   it.each([
@@ -354,7 +651,7 @@ describe('search page typeahead', () => {
     noList();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(box().getAttribute('aria-expanded')).toBe('false');
-    expect(document.querySelector('[data-search-typeahead-status]')?.textContent).toBe('');
+    expect(said()).toBe('');
     // The search itself is untouched.
     await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lum&type=top'));
   });

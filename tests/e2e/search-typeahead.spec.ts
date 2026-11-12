@@ -185,8 +185,13 @@ test.describe('search typeahead', () => {
     // The press did not take the focus from the box.
     await expect(box).toBeFocused();
 
-    // A completion: the box is filled and searched.
+    // A completion: the box is filled and searched. The rows of "lum" stay on
+    // show until the answer for "lumi" lands and puts the model back among
+    // them, moving the rows under the pointer: pressed once that has happened.
     await box.fill('lumi');
+    await expect.poll(() => suggests.at(-1)).toBe('lumi');
+    await expect(list.getByRole('option')).toHaveCount(5);
+    await expect(list).not.toHaveAttribute('aria-busy', 'true');
     await list.getByRole('option', { name: 'Search for lumen glow' }).click();
     await expect(box).toHaveValue('lumen glow');
     await expect.poll(() => searches.some((search) => search.includes('q=lumen+glow'))).toBe(true);
@@ -199,7 +204,74 @@ test.describe('search typeahead', () => {
     await expect(page).toHaveURL(/\/creators\/e2e-creator$/, { timeout: 30_000 });
   });
 
-  test('draws nothing for an answer that comes back after the text has changed', async ({ page }) => {
+  test('keeps the rows of the text before on show, busy, until this text’s answer lands, with the results’ region silent meanwhile', async ({ page }) => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await openSearch(page, async (route, query) => {
+      if (query === 'lumi') {
+        await held;
+        await route.fulfill(json({
+          ...suggestions(query),
+          creators: [{ id: 'creator-2', username: 'lumen', displayName: 'Lumen Works', avatarUrl: null, isFollowing: false }],
+          entities: [],
+          completions: [{ text: 'luminous portrait' }],
+        }));
+        return;
+      }
+      await route.fulfill(json(suggestions(query)));
+    });
+    const box = page.getByRole('combobox');
+    const list = page.getByRole('listbox', { name: 'Search suggestions' });
+    const said = page.locator('[data-search-typeahead-status]');
+    const resultsSaid = page.locator('p[role="status"]');
+
+    await box.fill('lum');
+    await expect(list.getByRole('option')).toHaveCount(5);
+    await expect(said).toHaveText('5 suggestions');
+    // The page searches as the box is typed into; its outcome is not said over the list.
+    await expect.poll(() => searches.some((search) => search.includes('q=lum&'))).toBe(true);
+    await expect(resultsSaid).toHaveText('');
+
+    // The next letter, its answer held: the list never goes. It keeps what it
+    // had, less the model "lumi" no longer names, and says it is busy.
+    await box.press('End');
+    await box.press('i');
+    await expect(box).toHaveValue('lumi');
+    await expect(list).toBeVisible();
+    await expect(list).toHaveAttribute('aria-busy', 'true');
+    await expect(list.getByRole('option')).toHaveText([
+      /E2E Creator.*@e2e-creator/,
+      /Lumen Works.*@lumen/,
+      'luminous portrait',
+      'lumen glow',
+    ]);
+    await expect.poll(() => suggests).toEqual(['lum', 'lumi']);
+    // Past the pause a count waits for: a stale list is not announced.
+    await page.waitForTimeout(900);
+    await expect(list).toHaveAttribute('aria-busy', 'true');
+    await expect(said).toHaveText('5 suggestions');
+    await expect(resultsSaid).toHaveText('');
+    await shot(page, 'desktop-stale-list');
+
+    // The highlight is put on a stale row that the answer keeps: it stays on that row.
+    await box.press('ArrowDown');
+    await box.press('ArrowDown');
+    await expect(list.getByRole('option', { name: /Lumen Works/ })).toHaveAttribute('aria-selected', 'true');
+    release();
+    await expect(list.getByRole('option')).toHaveText([/Lumen Works.*@lumen/, 'luminous portrait']);
+    await expect(list).not.toHaveAttribute('aria-busy', 'true');
+    await expect(list.getByRole('option', { name: /Lumen Works/ })).toHaveAttribute('aria-selected', 'true');
+    await expect(said).toHaveText('2 suggestions');
+
+    // Enter settles the search: the list goes and the results speak.
+    await box.press('ArrowUp');
+    await expect(list.locator('[aria-selected="true"]')).toHaveCount(0);
+    await box.press('Enter');
+    await expect(list).toBeHidden();
+    await expect(resultsSaid).toContainText('1 result for lumi');
+  });
+
+  test('draws nothing for the answer of a request the next letter ended', async ({ page }) => {
     let releaseEarly: () => void = () => {};
     const early = new Promise<void>((resolve) => { releaseEarly = resolve; });
     await openSearch(page, async (route, query) => {

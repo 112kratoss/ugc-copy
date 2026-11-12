@@ -66,18 +66,26 @@ function RowWords({ row }: { row: SearchTypeaheadRow }) {
  * list it sits in keeps the keyboard up for the press
  * (`keyboardShouldPersistTaps` on the overlay's scroll view), so a row is
  * chosen in one tap.
+ *
+ * `stale` rows are the answer to the text before this one, kept on show until
+ * this text's arrives so the panel does not go and come back at every letter.
+ * The panel says it is busy and looks the same (a dim at every letter would
+ * be the flicker the keeping avoids); a row still does what it shows.
  */
 export function SearchTypeaheadList({
   sections,
+  stale = false,
   onPick,
 }: {
   sections: readonly SearchTypeaheadSection[];
+  stale?: boolean;
   onPick: (row: SearchTypeaheadRow) => void;
 }) {
   const theme = useAppTheme();
   return (
     <View
       accessibilityLabel={SEARCH_TYPEAHEAD_LIST_LABEL}
+      accessibilityState={{ busy: stale }}
       testID="search-typeahead-list"
       style={{
         borderRadius: appTheme.radii.lg,

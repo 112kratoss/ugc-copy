@@ -7,7 +7,9 @@ import { ExploreSearchOverlay } from '../components/explore-search-overlay';
 import { ApiError, type MagicbookletApiClient } from '../lib/api-client';
 import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
 import {
+  SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS,
   SEARCH_TYPEAHEAD_DEBOUNCE_MS,
+  SEARCH_TYPEAHEAD_KEPT_ANSWER_MS,
   type SearchSuggestResponse,
 } from '../lib/public-search-policy/search-typeahead';
 import type {
@@ -49,6 +51,8 @@ const mocks = vi.hoisted(() => {
     // The registered account, null for a visitor and for a guest session.
     user: { value: null as { id: string } | null },
     announce: vi.fn(),
+    // The results' scroll view, asked to move.
+    scrollTo: vi.fn(),
     readSearchHistory: vi.fn(async () => [] as string[]),
     rememberSearchQuery: vi.fn(async (_query: string) => [] as string[]),
   };
@@ -79,7 +83,10 @@ vi.mock('react-native', () => ({
     ...props,
     style: resolvePressableStyle(style),
   }, children),
-  ScrollView: ({ children, ...props }: MockProps) => React.createElement('scroll-view', props, children),
+  ScrollView: React.forwardRef(({ children, ...props }: MockProps, ref: React.ForwardedRef<{ scrollTo: (to: unknown) => void }>) => {
+    React.useImperativeHandle(ref, () => ({ scrollTo: mocks.scrollTo }));
+    return React.createElement('scroll-view', props, children);
+  }),
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   TextInput: React.forwardRef((props: MockProps, ref: React.ForwardedRef<{ focus: () => void }>) => {
     React.useImperativeHandle(ref, () => ({ focus: () => {} }));
@@ -1400,6 +1407,7 @@ describe('ExploreSearchOverlay search', () => {
 
 describe('ExploreSearchOverlay typeahead', () => {
   const PAUSE = SEARCH_TYPEAHEAD_DEBOUNCE_MS;
+  const ANNOUNCE_PAUSE = SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS;
 
   function suggestions(overrides: Partial<SearchSuggestResponse> = {}): SearchSuggestResponse {
     return {
@@ -1450,6 +1458,7 @@ describe('ExploreSearchOverlay typeahead', () => {
     mocks.rememberSearchQuery.mockClear();
     mocks.user.value = null;
     mocks.announce.mockClear();
+    mocks.scrollTo.mockClear();
     searchPublicContent.mockReset();
     searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type ?? 'top', { sort: 'top', creators: [creator('found')] }, {
       entities: [], filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false }, correctedQuery: { posts: null, recipes: null }, exact: false,
@@ -1485,8 +1494,10 @@ describe('ExploreSearchOverlay typeahead', () => {
       expect(row.props.style.minHeight).toBeGreaterThanOrEqual(44);
     }
     expect(shownTexts(tree)).toEqual(expect.arrayContaining(['@luma-studio · Following', 'Model · 14 posts', 'luminous']));
-    // Said to a screen reader as the list opens.
-    expect(mocks.announce).toHaveBeenCalledWith('5 suggestions');
+    // This text's own answer: not busy.
+    expect(panel.props.accessibilityState).toEqual({ busy: false });
+    // Said to a screen reader once the list has stood for a pause, not as each letter lands.
+    expect(mocks.announce).not.toHaveBeenCalled();
 
     // Above everything the search draws: the first thing in the scroll view, which hands a tap to the row under it
     // without first putting the keyboard away.
@@ -1500,6 +1511,8 @@ describe('ExploreSearchOverlay typeahead', () => {
     expect(searchPublicContent).toHaveBeenCalledTimes(1);
     expect(list(tree)).not.toBeNull();
     expect(shownTexts(tree)).toContain('Creator found');
+    await advance(ANNOUNCE_PAUSE);
+    expect(mocks.announce.mock.calls).toEqual([['5 suggestions']]);
     await act(async () => tree.unmount());
   });
 
@@ -1527,20 +1540,160 @@ describe('ExploreSearchOverlay typeahead', () => {
     await act(async () => tree.unmount());
   });
 
-  it('goes when the keyboard does, and comes back with the focus without asking again', async () => {
+  it('goes when the keyboard does, and asks again when the focus comes back: nothing is drawn from before', async () => {
     const tree = await open();
     await typeQuery(tree, 'lum');
     await advance(PAUSE);
     expect(list(tree)).not.toBeNull();
     await blurField(tree);
     expect(list(tree)).toBeNull();
+    // A follow or a block made on a page opened meanwhile is in the answer asked for now.
+    suggestSearch.mockResolvedValueOnce(suggestions({ creators: [], entities: [], completions: [{ text: 'lumen after' }] }));
     await focusField(tree);
-    expect(list(tree)).not.toBeNull();
-    expect(asked()).toEqual(['lum']);
+    expect(list(tree)).toBeNull();
+    await advance(PAUSE);
+    expect(asked()).toEqual(['lum', 'lum']);
+    expect(rowLabels(tree)).toEqual(['Search for lumen after']);
     await act(async () => tree.unmount());
   });
 
-  it('draws no answer for a text the field no longer holds', async () => {
+  it('keeps the list of the text before on show, busy, until this text’s answer lands, and says the count only when it changes', async () => {
+    const later = deferred<SearchSuggestResponse>();
+    const tree = await open();
+    await typeQuery(tree, 'lum');
+    await advance(PAUSE);
+    await advance(ANNOUNCE_PAUSE);
+    expect(mocks.announce.mock.calls).toEqual([['5 suggestions']]);
+
+    // The next letter: nothing goes. What was offered stays, less the model
+    // the text no longer names (pressing it would search "lumi" narrowed to it).
+    suggestSearch.mockReturnValueOnce(later.promise);
+    await typeQuery(tree, 'lumi');
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: true });
+    expect(rowLabels(tree)).toEqual([
+      'Luma Studio, @luma-studio, following. Open profile',
+      '@lumen. Open profile',
+      'Search for luminous',
+      'Search for lumen glow',
+    ]);
+    await advance(PAUSE);
+    expect(asked()).toEqual(['lum', 'lumi']);
+    // A stale list is not announced, however long its answer takes.
+    await advance(ANNOUNCE_PAUSE * 2);
+    expect(mocks.announce).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      later.resolve(suggestions({
+        creators: [{ id: 'c2', username: 'lumen', displayName: 'lumen', avatarUrl: null, isFollowing: false }],
+        entities: [],
+        completions: [{ text: 'lumina' }],
+      }));
+      await later.promise;
+    });
+    expect(rowLabels(tree)).toEqual(['@lumen. Open profile', 'Search for lumina']);
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
+    expect(mocks.announce).toHaveBeenCalledTimes(1);
+    await advance(ANNOUNCE_PAUSE);
+    expect(mocks.announce.mock.calls).toEqual([['5 suggestions'], ['2 suggestions']]);
+
+    // The same count on the next text is not said again.
+    suggestSearch.mockResolvedValueOnce(suggestions({ creators: [], entities: [], completions: [{ text: 'luminal' }, { text: 'luminar' }] }));
+    await typeQuery(tree, 'lumin');
+    await advance(PAUSE);
+    await advance(ANNOUNCE_PAUSE);
+    expect(rowLabels(tree)).toEqual(['Search for luminal', 'Search for luminar']);
+    expect(mocks.announce).toHaveBeenCalledTimes(2);
+    await act(async () => tree.unmount());
+  });
+
+  it('has a stale row do what it shows, whatever the field holds by then', async () => {
+    const tree = await open();
+    await typeQuery(tree, 'lum');
+    await advance(PAUSE);
+    suggestSearch.mockReturnValueOnce(deferred<SearchSuggestResponse>().promise);
+    await typeQuery(tree, 'lumi');
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: true });
+    await press(pressableLabelled(tree, 'Search for lumen glow'));
+    expect(searchInput(tree).props.value).toBe('lumen glow');
+    await advance(0);
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'lumen glow', type: 'top' });
+    expect(list(tree)).toBeNull();
+
+    // And a stale creator opens that creator.
+    await typeQuery(tree, 'lum');
+    await advance(PAUSE);
+    suggestSearch.mockReturnValueOnce(deferred<SearchSuggestResponse>().promise);
+    await typeQuery(tree, 'lumx');
+    await press(pressableLabelled(tree, '@lumen. Open profile'));
+    expect(mocks.router.push).toHaveBeenCalledWith('/creators/lumen');
+    await act(async () => tree.unmount());
+  });
+
+  it('takes the list of the text before away at once when the field is emptied, and when this text has nothing', async () => {
+    const tree = await open();
+    await typeQuery(tree, 'lum');
+    await advance(PAUSE);
+    expect(list(tree)).not.toBeNull();
+    await typeQuery(tree, '');
+    expect(list(tree)).toBeNull();
+    // What is typed next starts from nothing, not from the list of "lum".
+    suggestSearch.mockResolvedValueOnce(suggestions({ creators: [], entities: [], completions: [{ text: 'veo' }] }));
+    await typeQuery(tree, 'v');
+    expect(list(tree)).toBeNull();
+    await advance(PAUSE);
+    expect(rowLabels(tree)).toEqual(['Search for veo']);
+    // Stale on the next letter, then gone when that letter's own answer is empty.
+    suggestSearch.mockResolvedValueOnce(suggestions({ creators: [], entities: [], completions: [] }));
+    await typeQuery(tree, 'vq');
+    expect(rowLabels(tree)).toEqual(['Search for veo']);
+    await advance(PAUSE);
+    expect(list(tree)).toBeNull();
+    await act(async () => tree.unmount());
+  });
+
+  it('keeps an answer for a letter deleted, while the field keeps the focus and for half a minute at most', async () => {
+    const tree = await open();
+    await typeQuery(tree, 'lum');
+    await advance(PAUSE);
+    await typeQuery(tree, 'lumi');
+    await advance(PAUSE);
+    expect(asked()).toEqual(['lum', 'lumi']);
+    // Drawn at once from what was kept, not busy, and not asked again.
+    await typeQuery(tree, 'lum');
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
+    await advance(PAUSE);
+    expect(asked()).toEqual(['lum', 'lumi']);
+    // Past half a minute the kept answer is not drawn again: the text is asked about.
+    await advance(SEARCH_TYPEAHEAD_KEPT_ANSWER_MS);
+    await typeQuery(tree, 'lumi');
+    await advance(PAUSE);
+    expect(asked()).toEqual(['lum', 'lumi', 'lumi']);
+    await act(async () => tree.unmount());
+  });
+
+  it('brings the list into view whenever it is shown: the results may have been scrolled', async () => {
+    const tree = await open();
+    expect(mocks.scrollTo).not.toHaveBeenCalled();
+    await typeQuery(tree, 'lum');
+    await advance(PAUSE);
+    expect(mocks.scrollTo.mock.calls).toEqual([[{ y: 0, animated: false }]]);
+    // The scroll view moved is the one the list is first in.
+    // The keyboard goes (a drag on the results), the results are scrolled, the field is focused again.
+    await blurField(tree);
+    await focusField(tree);
+    expect(mocks.scrollTo).toHaveBeenCalledTimes(1);
+    await advance(PAUSE);
+    expect(list(tree)).not.toBeNull();
+    expect(mocks.scrollTo).toHaveBeenCalledTimes(2);
+    // Not at every letter while it stays shown: the person may be reading it.
+    suggestSearch.mockReturnValueOnce(deferred<SearchSuggestResponse>().promise);
+    await typeQuery(tree, 'lumi');
+    await advance(PAUSE);
+    expect(mocks.scrollTo).toHaveBeenCalledTimes(2);
+    await act(async () => tree.unmount());
+  });
+
+  it('never draws the answer of a request the next letter ended', async () => {
     const early = deferred<SearchSuggestResponse>();
     suggestSearch.mockReturnValueOnce(early.promise);
     suggestSearch.mockResolvedValueOnce(suggestions({ creators: [], entities: [], completions: [{ text: 'lumina' }] }));

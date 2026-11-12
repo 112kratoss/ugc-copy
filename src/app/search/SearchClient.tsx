@@ -682,6 +682,7 @@ export default function SearchClient({
                 listId={typeahead.listId}
                 sections={typeahead.sections}
                 activeIndex={typeahead.activeIndex}
+                stale={typeahead.stale}
                 onPick={(row) => runTypeaheadAction(typeahead.pick(row))}
                 onHighlight={typeahead.highlightRow}
                 // Under the box, over the tabs and the results while the person
@@ -718,8 +719,13 @@ export default function SearchClient({
         </div>
 
         {/* Announce a settled summary rather than making the whole result grid
-            a live region, which would re-read every card on each change. */}
-        <p role="status" className="sr-only">{statusMessage}</p>
+            a live region, which would re-read every card on each change.
+            Silent while the typeahead's list is open: the box is still being
+            typed into, the list's own region says its count, and two polite
+            regions changing at each pause would talk over each other. It
+            speaks when the list closes (Enter, a row, Escape, the focus
+            leaving) and whenever there is no list. */}
+        <p role="status" className="sr-only">{typeahead.shown ? '' : statusMessage}</p>
 
         {recentsShown ? (
           <div

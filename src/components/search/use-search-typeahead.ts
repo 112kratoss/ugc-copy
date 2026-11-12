@@ -4,23 +4,23 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 
 
 import {
+  SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS,
   SEARCH_TYPEAHEAD_DEBOUNCE_MS,
+  SEARCH_TYPEAHEAD_KEPT_ANSWERS,
+  SEARCH_TYPEAHEAD_KEPT_ANSWER_MS,
   isSearchTypeaheadShown,
   moveSearchTypeaheadHighlight,
   parseSearchSuggestResponse,
   searchTypeaheadAction,
+  searchTypeaheadDrawn,
   searchTypeaheadQuery,
   searchTypeaheadRows,
-  searchTypeaheadSections,
   searchTypeaheadStatus,
   type SearchSuggestResponse,
   type SearchTypeaheadAction,
+  type SearchTypeaheadAnswer,
   type SearchTypeaheadRow,
 } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
-
-// What a request found for a query: null for one that failed, was refused or
-// could not be read, which is drawn as nothing.
-type TypeaheadAnswer = { query: string; response: SearchSuggestResponse | null };
 
 // The browser's Supabase client, loaded when a request first needs the
 // session, as the shell's other readers load it (AuthProvider,
@@ -28,14 +28,17 @@ type TypeaheadAnswer = { query: string; response: SearchSuggestResponse | null }
 // static import would put the client in every page's first bundle.
 const loadSupabase = () => import('@/lib/supabase').then((module) => module.supabase);
 
-// Answers kept while the box is on the page, so deleting a letter redraws the
-// list it had without asking again. Only real answers are kept: a failure is
-// asked about again the next time its text is typed.
-const KEPT_ANSWERS = 30;
+// An answer kept so that deleting a letter redraws the list it had without
+// asking again. Only real answers are kept (a failure is asked about again the
+// next time its text is typed), only while the box keeps the focus, and none
+// is drawn again once it is older than SEARCH_TYPEAHEAD_KEPT_ANSWER_MS: an
+// answer says whom the viewer follows and leaves out whom they are blocked
+// with, and both change on other pages.
+type KeptAnswer = { response: SearchSuggestResponse; at: number };
 
 /**
- * The typeahead of a search box: what to ask and when, which answer may be
- * drawn, where the highlight is, and what each key does. The rules are the
+ * The typeahead of a search box: what to ask and when, what is drawn while
+ * an answer is on its way, where the highlight is, and what each key does. The rules are the
  * search clients' shared ones (`ugc-mobile/lib/public-search-policy/
  * search-typeahead.ts`); this is the web's timer, request and key handling
  * around them. The box keeps the focus throughout: rows are never focused,
@@ -50,39 +53,70 @@ export function useSearchTypeahead({ text, focused }: {
 }) {
   const listId = `${useId()}-search-typeahead`;
   const query = useMemo(() => searchTypeaheadQuery(text), [text]);
-  const [answer, setAnswer] = useState<TypeaheadAnswer | null>(null);
+  const [answer, setAnswer] = useState<SearchTypeaheadAnswer | null>(null);
   // The query the list was closed for (Escape) or committed with (Enter, a row).
   const [closedQuery, setClosedQuery] = useState<string | null>(null);
-  // The highlighted row, for the query it was highlighted under: typing on returns the highlight to the box.
-  const [highlight, setHighlight] = useState<{ query: string; index: number } | null>(null);
-  const kept = useRef(new Map<string, SearchSuggestResponse>());
+  // The highlighted row, by its key and for the query it was highlighted
+  // under: typing on returns the highlight to the box, and a list that
+  // changes under the highlight (a stale one replaced by its answer) keeps it
+  // on that same row or, when the row is gone, returns it to the box. An
+  // index would move it to whatever row took its place.
+  const [highlight, setHighlight] = useState<{ query: string; key: string } | null>(null);
+  const kept = useRef(new Map<string, KeptAnswer>());
   // A 429 names how long the limit lasts: nothing is asked until then.
   const refusedUntil = useRef(0);
-  // Ends the watch on the session, once a request has started one.
+  // Whose answers these are: counted up when the account changes, so an
+  // answer still on its way for the account before is not drawn or kept.
+  const viewerEpoch = useRef(0);
+  // Ends the watch on the session, once a request has started one. The box
+  // can leave the page (the top bar's does, on every route change to Search)
+  // while the first request is still loading the client: a watch started
+  // after that would never be ended.
   const stopWatchingSession = useRef<(() => void) | null>(null);
-  useEffect(() => () => stopWatchingSession.current?.(), []);
+  const unmounted = useRef(false);
+  useEffect(() => {
+    unmounted.current = false;
+    return () => {
+      unmounted.current = true;
+      stopWatchingSession.current?.();
+      stopWatchingSession.current = null;
+    };
+  }, []);
 
   useEffect(() => {
-    if (!focused || query === null) return;
-    const keptAnswer = kept.current.get(query);
-    if (keptAnswer) {
-      setAnswer({ query, response: keptAnswer });
+    if (!focused) {
+      // Kept for one focus of the box: what is typed after coming back is asked again.
+      kept.current.clear();
       return;
     }
-    if (Date.now() < refusedUntil.current) return;
+    if (query === null) return;
+    const keptAnswer = kept.current.get(query);
+    if (keptAnswer && Date.now() - keptAnswer.at < SEARCH_TYPEAHEAD_KEPT_ANSWER_MS) {
+      setAnswer({ query, response: keptAnswer.response });
+      return;
+    }
+    kept.current.delete(query);
+    if (Date.now() < refusedUntil.current) {
+      // Not asked: recorded as an answer with nothing, so the list of the
+      // text before does not stay on show for a text that will get none.
+      setAnswer({ query, response: null });
+      return;
+    }
     // One request in flight at most: the pause before it is cancelled by the
     // next keystroke, and so is the request itself.
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       let response: SearchSuggestResponse | null = null;
+      const epoch = viewerEpoch.current;
       try {
         const supabase = await loadSupabase();
+        if (unmounted.current) return;
         if (!stopWatchingSession.current) {
-          // An answer says whom its viewer follows and leaves out whom they
-          // are blocked with: it is one account's, and goes when the account
-          // does. Watched from the first request on; before it nothing is kept.
+          // An answer is one account's, and goes when the account does.
+          // Watched from the first request on; before it nothing is kept.
           const { data } = supabase.auth.onAuthStateChange((event) => {
             if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT' && event !== 'USER_UPDATED') return;
+            viewerEpoch.current += 1;
             kept.current.clear();
             setAnswer(null);
           });
@@ -104,10 +138,12 @@ export function useSearchTypeahead({ text, focused }: {
         // Offline, aborted, or not JSON: a suggestion is an extra, and its failure is nothing.
         response = null;
       }
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || unmounted.current) return;
+      // Asked as the account before: not this one's answer.
+      if (epoch !== viewerEpoch.current) response = null;
       if (response) {
-        kept.current.set(query, response);
-        if (kept.current.size > KEPT_ANSWERS) {
+        kept.current.set(query, { response, at: Date.now() });
+        if (kept.current.size > SEARCH_TYPEAHEAD_KEPT_ANSWERS) {
           const oldest = kept.current.keys().next().value;
           if (oldest !== undefined) kept.current.delete(oldest);
         }
@@ -120,30 +156,44 @@ export function useSearchTypeahead({ text, focused }: {
     };
   }, [focused, query]);
 
-  // A close belongs to the text it was made on: once the box holds another,
-  // it is forgotten, so the same text typed again later is offered its list.
-  // Adjusted while rendering, as React asks of state that follows a value:
-  // an effect would draw the stale close for a frame first.
-  const [closedCheckedFor, setClosedCheckedFor] = useState(query);
-  if (closedCheckedFor !== query) {
-    setClosedCheckedFor(query);
+  // State that follows the box, adjusted while rendering, as React asks of
+  // state that follows a value (an effect would draw the stale state for a
+  // frame first):
+  //   - a close belongs to the text it was made on: once the box holds
+  //     another, it is forgotten, so the same text typed again later is
+  //     offered its list;
+  //   - an answer is kept on show for the text typed after it only (the
+  //     shared rule, searchTypeaheadDrawn): it goes when the box is emptied,
+  //     and when the focus leaves, so coming back never draws what was asked
+  //     before.
+  const [checkedFor, setCheckedFor] = useState({ focused, query });
+  if (checkedFor.focused !== focused || checkedFor.query !== query) {
+    setCheckedFor({ focused, query });
     if (closedQuery !== null && closedQuery !== query) setClosedQuery(null);
+    if ((!focused || query === null) && answer !== null) setAnswer(null);
   }
 
-  // An answer is drawn only for the text the box holds now: one for an earlier text is nothing.
-  const currentResponse = answer !== null && answer.query === query ? answer.response : null;
-  const sections = useMemo(() => searchTypeaheadSections(currentResponse, query), [currentResponse, query]);
+  // This text's answer, or until it arrives the one before it, marked stale.
+  const { sections, stale } = useMemo(() => searchTypeaheadDrawn(answer, query), [answer, query]);
   const rows = useMemo(() => searchTypeaheadRows(sections), [sections]);
-  const shown = isSearchTypeaheadShown({
-    focused,
-    query,
-    answerQuery: answer?.query ?? null,
-    closedQuery,
-    rowCount: rows.length,
-  });
-  const activeIndex = shown && highlight !== null && highlight.query === query && highlight.index < rows.length
-    ? highlight.index
-    : null;
+  const shown = isSearchTypeaheadShown({ focused, query, closedQuery, rowCount: rows.length });
+  const highlightedAt = shown && highlight !== null && highlight.query === query
+    ? rows.findIndex((row) => row.key === highlight.key)
+    : -1;
+  const activeIndex = highlightedAt >= 0 ? highlightedAt : null;
+
+  // What the live region says: the count of this text's own list, once it has
+  // stood for a pause in typing. A stale list changes nothing (the words it
+  // had stay, and a polite region given the same words says nothing), so the
+  // count is said when it changes and at most once per pause.
+  const [status, setStatus] = useState('');
+  const rowCount = rows.length;
+  useEffect(() => {
+    if (shown && stale) return;
+    const next = shown ? searchTypeaheadStatus(rowCount) : '';
+    const timer = window.setTimeout(() => setStatus(next), SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS);
+    return () => window.clearTimeout(timer);
+  }, [rowCount, shown, stale]);
 
   const close = useCallback(() => {
     setClosedQuery(query);
@@ -165,7 +215,9 @@ export function useSearchTypeahead({ text, focused }: {
    */
   const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>): SearchTypeaheadAction | null => {
     // A key that only confirms an input method's composition is not a choice.
-    if (event.nativeEvent.isComposing) return null;
+    // Safari sends the Enter that ends a composition after `compositionend`,
+    // so it no longer says it is composing: its key code, 229, still does.
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return null;
     const { key } = event;
     if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Home' || key === 'End') {
       if (query === null || rows.length === 0) return null;
@@ -175,7 +227,7 @@ export function useSearchTypeahead({ text, focused }: {
       // An arrow opens a list that was closed for this text.
       if (closedQuery === query) setClosedQuery(null);
       const next = moveSearchTypeaheadHighlight(shown ? activeIndex : null, key, rows.length);
-      setHighlight(next === null ? null : { query, index: next });
+      setHighlight(next === null ? null : { query, key: rows[next].key });
       return null;
     }
     if (key === 'Escape') {
@@ -197,19 +249,22 @@ export function useSearchTypeahead({ text, focused }: {
   }, [activeIndex, close, closedQuery, pick, query, rows, shown]);
 
   const highlightRow = useCallback((index: number) => {
-    if (query !== null) setHighlight({ query, index });
-  }, [query]);
+    const row = rows[index];
+    if (query !== null && row) setHighlight({ query, key: row.key });
+  }, [query, rows]);
 
   return {
     listId,
     /** The list is drawn. */
     shown,
+    /** What is drawn is the answer to the text before this one: this text's is on its way. */
+    stale: shown && stale,
     sections,
     rows,
     activeIndex,
     activeOptionId: activeIndex === null ? undefined : searchTypeaheadOptionId(listId, activeIndex),
-    /** For a polite live region: "5 suggestions" while the list is drawn, nothing otherwise. */
-    status: shown ? searchTypeaheadStatus(rows.length) : '',
+    /** For a polite live region: "5 suggestions" once this text's list has stood for a pause, nothing once it is gone. */
+    status,
     onKeyDown,
     pick,
     highlightRow,

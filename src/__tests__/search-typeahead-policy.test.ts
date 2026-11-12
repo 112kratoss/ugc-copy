@@ -6,8 +6,11 @@ import { searchSuggestQuery } from '@/lib/search-suggest';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
+  SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS,
   SEARCH_TYPEAHEAD_DEBOUNCE_MS,
   SEARCH_TYPEAHEAD_HEADINGS,
+  SEARCH_TYPEAHEAD_KEPT_ANSWERS,
+  SEARCH_TYPEAHEAD_KEPT_ANSWER_MS,
   SEARCH_TYPEAHEAD_MAX_COMPLETIONS,
   SEARCH_TYPEAHEAD_MAX_CREATORS,
   SEARCH_TYPEAHEAD_MAX_ENTITIES,
@@ -16,6 +19,7 @@ import {
   moveSearchTypeaheadHighlight,
   parseSearchSuggestResponse,
   searchTypeaheadAction,
+  searchTypeaheadDrawn,
   searchTypeaheadQuery,
   searchTypeaheadRowLabel,
   searchTypeaheadRows,
@@ -182,27 +186,84 @@ describe('search typeahead: what is drawn', () => {
   });
 });
 
-describe('search typeahead: when the list is shown', () => {
-  const shown = { focused: true, query: 'lum', answerQuery: 'lum', closedQuery: null, rowCount: 3 };
+describe('search typeahead: what is drawn while an answer is on its way', () => {
+  const kinds = (sections: ReturnType<typeof searchTypeaheadSections>) => (
+    searchTypeaheadRows(sections).map((row) => row.key)
+  );
 
-  it('is shown for an answer to what the box holds now, while the box has the focus', () => {
+  it('draws this text’s own answer as it is, not stale', () => {
+    expect(searchTypeaheadDrawn({ query: 'lum', response: answer }, 'lum'))
+      .toEqual({ sections: searchTypeaheadSections(answer, 'lum'), stale: false });
+  });
+
+  it('keeps the answer to the text before on show, stale, until this text’s arrives', () => {
+    // "lum" then "luma": the list does not go and come back at the letter.
+    const drawn = searchTypeaheadDrawn({ query: 'lum', response: answer }, 'luma');
+    expect(drawn.stale).toBe(true);
+    expect(kinds(drawn.sections)).toEqual([
+      'creator:c1', 'creator:c2', 'entity:model:luma-ray-2', 'completion:luminous', 'completion:lumen glow',
+    ]);
+    // And for a letter deleted, which no kept answer covers.
+    expect(searchTypeaheadDrawn({ query: 'lum', response: answer }, 'lu').stale).toBe(true);
+  });
+
+  it('keeps a stale creator and completion as they are, and an entity only while the text still names it', () => {
+    // A creator opens that creator and a completion searches its own words,
+    // whatever the box holds; an entity narrows a search for the box's text.
+    const typedOn = searchTypeaheadDrawn({ query: 'lum', response: answer }, 'lumi');
+    expect(kinds(typedOn.sections)).toEqual(['creator:c1', 'creator:c2', 'completion:luminous', 'completion:lumen glow']);
+    // Every word typed begins a word of its name or key, in any order.
+    expect(kinds(searchTypeaheadDrawn({ query: 'lum', response: answer }, 'luma ra').sections)).toContain('entity:model:luma-ray-2');
+    expect(kinds(searchTypeaheadDrawn({ query: 'lum', response: answer }, 'ray lum').sections)).toContain('entity:model:luma-ray-2');
+    expect(kinds(searchTypeaheadDrawn({ query: 'lum', response: answer }, 'luma x').sections)).not.toContain('entity:model:luma-ray-2');
+    // The rules of any drawn answer still hold for a stale one: nothing but
+    // creators for a handle, no entity under three characters, no completion
+    // that is what the box already holds.
+    expect(kinds(searchTypeaheadDrawn({ query: 'lum', response: answer }, '@lum').sections)).toEqual(['creator:c1', 'creator:c2']);
+    expect(kinds(searchTypeaheadDrawn({ query: 'lum', response: answer }, 'lu').sections)).not.toContain('entity:model:luma-ray-2');
+    expect(kinds(searchTypeaheadDrawn({ query: 'lum', response: answer }, 'luminous').sections)).not.toContain('completion:luminous');
+  });
+
+  it('draws nothing for an emptied box, no answer, or an answer that failed', () => {
+    const nothing = { sections: [], stale: false };
+    expect(searchTypeaheadDrawn({ query: 'lum', response: answer }, null)).toEqual(nothing);
+    expect(searchTypeaheadDrawn(null, 'lum')).toEqual(nothing);
+    // This text's own answer says there is nothing: the list before it goes.
+    expect(searchTypeaheadDrawn({ query: 'lum', response: null }, 'lum')).toEqual(nothing);
+    expect(searchTypeaheadDrawn({ query: 'lum', response: { ...answer, creators: [], entities: [], completions: [] } }, 'lum'))
+      .toEqual(nothing);
+    // A failure for the text before is not kept on show either.
+    expect(searchTypeaheadDrawn({ query: 'lum', response: null }, 'lumi')).toEqual(nothing);
+    // A stale answer with no row left for this text is nothing, and not busy.
+    expect(searchTypeaheadDrawn({ query: 'lum', response: { ...answer, creators: [], completions: [] } }, 'lumi')).toEqual(nothing);
+  });
+
+  it('keeps an answer to draw again for half a minute at most, and says a count once per pause', () => {
+    expect(SEARCH_TYPEAHEAD_KEPT_ANSWER_MS).toBe(30_000);
+    expect(SEARCH_TYPEAHEAD_KEPT_ANSWERS).toBe(30);
+    // Longer than the pause a request waits for: a count is not said at every letter.
+    expect(SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS).toBeGreaterThan(SEARCH_TYPEAHEAD_DEBOUNCE_MS);
+  });
+});
+
+describe('search typeahead: when the list is shown', () => {
+  const shown = { focused: true, query: 'lum', closedQuery: null, rowCount: 3 };
+
+  it('is shown for rows to draw, while the box has the focus', () => {
     expect(isSearchTypeaheadShown(shown)).toBe(true);
   });
 
-  it('is nothing for a stale answer, an empty one, an empty box or a box without the focus', () => {
-    // The answer in hand is for what was typed before: not this text's.
-    expect(isSearchTypeaheadShown({ ...shown, query: 'lumi' })).toBe(false);
-    expect(isSearchTypeaheadShown({ ...shown, answerQuery: null })).toBe(false);
+  it('is nothing with no row, an empty box or a box without the focus', () => {
     // A failed, rate-limited or switched-off request leaves no row.
     expect(isSearchTypeaheadShown({ ...shown, rowCount: 0 })).toBe(false);
-    expect(isSearchTypeaheadShown({ ...shown, query: null, answerQuery: null })).toBe(false);
+    expect(isSearchTypeaheadShown({ ...shown, query: null })).toBe(false);
     expect(isSearchTypeaheadShown({ ...shown, focused: false })).toBe(false);
   });
 
   it('stays closed once closed or committed for this text, and opens again when the text changes', () => {
     expect(isSearchTypeaheadShown({ ...shown, closedQuery: 'lum' })).toBe(false);
     // The person typed on: the close was for the earlier text.
-    expect(isSearchTypeaheadShown({ ...shown, query: 'lumi', answerQuery: 'lumi', closedQuery: 'lum' })).toBe(true);
+    expect(isSearchTypeaheadShown({ ...shown, query: 'lumi', closedQuery: 'lum' })).toBe(true);
   });
 });
 
