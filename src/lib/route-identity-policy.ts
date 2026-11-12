@@ -299,6 +299,7 @@ const SERVICE_ROUTES = [
   '/api/cron/recipe-copy-sweep',
   '/api/cron/referral-rewards',
   '/api/cron/search-dictionary',
+  '/api/cron/search-embeddings',
   // A manual trigger, no scheduled job: the moderation CLI refreshes the feed's cached pages.
   '/api/cron/showcase-feed-invalidate',
   '/api/cron/showcase-media-revocations',

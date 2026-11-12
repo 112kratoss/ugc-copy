@@ -250,6 +250,37 @@ describe('runBackendJobsSchedulerForRoute', () => {
     });
   });
 
+  it('dispatches search embeddings like every other logical job', async () => {
+    const runSearchEmbeddingsBackendJob = vi.fn(async () => succeededResult('search-embeddings'));
+
+    const result = await runBackendJobsSchedulerForRoute({
+      request: new Request('http://localhost/api/cron/backend-jobs', {
+        headers: { 'x-vercel-id': 'bom1::scheduler-46' },
+      }),
+      dependencies: {
+        now: () => Date.parse('2026-11-12T06:00:00.000Z'),
+        createServiceClient,
+        getDueBackendJobs: () => [backendJob('search-embeddings')],
+        runSearchEmbeddingsBackendJob,
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        success: true,
+        dueJobs: ['search-embeddings'],
+        results: [expect.objectContaining({ job: 'search-embeddings', status: 'succeeded' })],
+      },
+    });
+    expect(runSearchEmbeddingsBackendJob).toHaveBeenCalledWith({
+      requestId: 'bom1::scheduler-46:search-embeddings',
+      startedAtMs: Date.parse('2026-11-12T06:00:00.000Z'),
+      serviceClient,
+      triggerRoute: '/api/cron/backend-jobs',
+    });
+  });
+
   it('skips without creating a Supabase client when no logical job is due', async () => {
     const result = await runBackendJobsSchedulerForRoute({
       request: new Request('http://localhost/api/cron/backend-jobs'),

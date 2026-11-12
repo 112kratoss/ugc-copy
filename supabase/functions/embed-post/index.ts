@@ -30,10 +30,36 @@
 // one was: the rest come back untouched under deferred, still pending, for
 // the next run.
 //
+// Two more modes, for search (20261112215420_search_semantic_related_posts.sql),
+// under the same bearer check. A request with no "mode" key is the feed's, read
+// and answered exactly as above; any other "mode" value is a 400.
+//
+//   POST { "mode": "search", "postIds": ["<uuid>", ...] }      1 to 25 ids
+//   200 { "mode": "search", "embedded": n, "skipped": n,
+//         "skipped_unsearchable": ["<uuid>", ...], "deferred": ["<uuid>", ...],
+//         "failed": [{ "postId": "<uuid>", "error": "..." }] }
+//
+// embeds each post's PUBLIC search text into post_search_embeddings. The text
+// is read here, server-side, from post_search_embedding_texts: the first 2,000
+// characters of post_search_documents.search_text, the projection search
+// itself shows, never a column of posts. A post that function leaves out
+// (not public, labelled, hidden, archived, deleted, no text) has nothing to
+// embed and is reported under skipped_unsearchable; one whose stored vector
+// is already of that text is skipped; the same 1.2 s budget defers the rest.
+// store_post_search_embeddings keeps a vector only while the post still shows
+// the text it was made from, and a post it did not keep is deferred too.
+//
+//   POST { "mode": "query", "query": "<text>" }
+//   200 { "mode": "query", "model": "gte-small", "dimensions": 384,
+//         "embedding": [n, ...] }
+//
+// embeds one search query, trimmed and cut to 200 characters, and returns the
+// vector. Nothing is read or stored, and the query is never logged or echoed.
+//
 // No imports: posts and embeddings go through PostgREST with the service-role
 // key, so src/__tests__/embed-post-function.test.ts can load this module under
-// Node with stand-ins for Deno, Supabase.ai and fetch. The key and the post
-// text are never logged or echoed.
+// Node with stand-ins for Deno, Supabase.ai and fetch. The key, the post text
+// and the query are never logged or echoed.
 
 export const EMBEDDING_MODEL = 'gte-small';
 export const EMBEDDING_DIMENSIONS = 384;
@@ -41,6 +67,9 @@ export const MAX_POST_IDS = 25;
 export const MAX_EMBEDDING_TEXT_CHARS = 2_000;
 /** No post is started once this much time has passed since the first one was. */
 export const EMBEDDING_TIME_BUDGET_MS = 1_200;
+
+/** A search query is cut to this many characters before it is embedded. */
+export const MAX_QUERY_TEXT_CHARS = 200;
 
 const MAX_REQUEST_BYTES = 16 * 1024;
 const POSTGREST_TIMEOUT_MS = 10_000;
@@ -86,6 +115,31 @@ export type EmbedPostStore = {
   markChecked(postId: string, updatedAt: string): Promise<void>;
 };
 
+/** A post's public search text, as post_search_embedding_texts returns it. */
+export type SearchEmbeddingText = {
+  post_id: string;
+  /** The first 2,000 characters of post_search_documents.search_text. */
+  embedding_text: string;
+  /** sha256 of the whole search text, worked out by the database. */
+  content_hash: string;
+  /** The stored vector is already of this text and model. */
+  unchanged: boolean;
+};
+
+export type SearchEmbeddingStoreRow = {
+  post_id: string;
+  content_hash: string;
+  /** pgvector text. */
+  embedding: string;
+};
+
+/** The search modes' store: two database functions, nothing read from posts. */
+export type SearchEmbeddingStore = {
+  loadSearchTexts(postIds: string[]): Promise<SearchEmbeddingText[]>;
+  /** The ids of the posts whose vector was kept. */
+  storeSearchEmbeddings(rows: SearchEmbeddingStoreRow[]): Promise<string[]>;
+};
+
 export type EmbedPostFailure = { postId: string; error: string };
 
 export type EmbedPostResult = {
@@ -94,6 +148,17 @@ export type EmbedPostResult = {
   /** Posts with no title, description, body or prompt: recorded without a vector. */
   skipped_empty: string[];
   /** Posts not started within the time budget: untouched, still pending. */
+  deferred: string[];
+  failed: EmbedPostFailure[];
+};
+
+export type EmbedSearchResult = {
+  mode: 'search';
+  embedded: number;
+  skipped: number;
+  /** Posts search cannot return, or with no public text: nothing to embed. */
+  skipped_unsearchable: string[];
+  /** Posts not started within the time budget, or whose text changed meanwhile: still pending. */
   deferred: string[];
   failed: EmbedPostFailure[];
 };
@@ -110,6 +175,8 @@ export type EmbedPostDependencies = {
    */
   authorize?: (bearer: string) => Promise<boolean>;
   store: EmbedPostStore | null;
+  /** The search mode's store; without one that mode answers 500. */
+  searchStore?: SearchEmbeddingStore | null;
   embed: (text: string) => Promise<ArrayLike<number>>;
   now?: () => Date;
   /** Milliseconds, for the time budget; performance.now by default. */
@@ -221,11 +288,146 @@ export function toVectorLiteral(values: ArrayLike<number>): string | null {
   return `[${numbers.join(',')}]`;
 }
 
+/**
+ * The request's mode: `feed` when the payload has no "mode" key (the request
+ * shape the feed has always sent), `search` or `query` when it names one, and
+ * null for any other value.
+ */
+export function parseEmbedMode(payload: unknown): 'feed' | 'search' | 'query' | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !('mode' in payload)) return 'feed';
+  const mode = (payload as { mode?: unknown }).mode;
+  return mode === 'search' || mode === 'query' ? mode : null;
+}
+
+/** A query as it is embedded: trimmed, cut to 200 characters (code points); null when nothing is left. */
+export function parseQueryText(payload: unknown): string | null {
+  const query = (payload as { query?: unknown }).query;
+  if (typeof query !== 'string') return null;
+  const characters = Array.from(query.trim());
+  if (characters.length === 0) return null;
+  return characters.length > MAX_QUERY_TEXT_CHARS
+    ? characters.slice(0, MAX_QUERY_TEXT_CHARS).join('').trim()
+    : characters.join('');
+}
+
+/** A vector as an answer carries it: 384 finite numbers at six decimals, or null. */
+export function toEmbeddingArray(values: ArrayLike<number>): number[] | null {
+  const numbers = Array.from(values, Number);
+  if (numbers.length !== EMBEDDING_DIMENSIONS || !numbers.every(Number.isFinite)) return null;
+  return numbers.map((value) => Math.round(value * 1e6) / 1e6);
+}
+
 async function readBoundedBody(request: Request): Promise<string | null> {
   const declaredLength = Number(request.headers.get('content-length'));
   if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) return null;
   const body = await request.text();
   return new TextEncoder().encode(body).byteLength > MAX_REQUEST_BYTES ? null : body;
+}
+
+/** mode "query": one search query's vector. Reads and stores nothing. */
+async function handleQueryEmbedding(payload: unknown, dependencies: EmbedPostDependencies): Promise<Response> {
+  const query = parseQueryText(payload);
+  if (!query) {
+    return jsonResponse({ error: 'query must be a non-empty string' }, 400);
+  }
+  let embedding: number[] | null = null;
+  try {
+    embedding = toEmbeddingArray(await dependencies.embed(query));
+  } catch {
+    embedding = null;
+  }
+  if (!embedding) {
+    return jsonResponse({ error: 'Embedding failed' }, 502);
+  }
+  return jsonResponse({
+    mode: 'query',
+    model: EMBEDDING_MODEL,
+    dimensions: EMBEDDING_DIMENSIONS,
+    embedding,
+  }, 200);
+}
+
+/** mode "search": the given posts' public search text into post_search_embeddings. */
+async function handleSearchEmbeddings(
+  payload: unknown,
+  dependencies: EmbedPostDependencies,
+  clock: () => number,
+): Promise<Response> {
+  const searchStore = dependencies.searchStore;
+  if (!searchStore) {
+    return jsonResponse({ error: 'Supabase URL is not configured' }, 500);
+  }
+  const parsed = parsePostIds(payload);
+  if (!parsed.ok) {
+    return jsonResponse({ error: parsed.error }, 400);
+  }
+
+  let texts: SearchEmbeddingText[];
+  try {
+    texts = await searchStore.loadSearchTexts(parsed.postIds);
+  } catch {
+    return jsonResponse({ error: 'Failed to read posts' }, 502);
+  }
+
+  const textsById = new Map(texts.map((row) => [row.post_id.toLowerCase(), row]));
+  const result: EmbedSearchResult = {
+    mode: 'search',
+    embedded: 0,
+    skipped: 0,
+    skipped_unsearchable: [],
+    deferred: [],
+    failed: [],
+  };
+  const rows: SearchEmbeddingStoreRow[] = [];
+
+  // One at a time, inside the same budget as the feed's posts.
+  const startedAt = clock();
+  for (let index = 0; index < parsed.postIds.length; index += 1) {
+    const postId = parsed.postIds[index];
+    if (index > 0 && clock() - startedAt > EMBEDDING_TIME_BUDGET_MS) {
+      result.deferred = parsed.postIds.slice(index);
+      break;
+    }
+
+    const text = textsById.get(postId);
+    if (!text || !text.embedding_text.trim()) {
+      result.skipped_unsearchable.push(postId);
+      continue;
+    }
+    if (text.unchanged) {
+      result.skipped += 1;
+      continue;
+    }
+
+    let embedding: string | null = null;
+    try {
+      embedding = toVectorLiteral(await dependencies.embed(text.embedding_text));
+    } catch {
+      embedding = null;
+    }
+    if (!embedding) {
+      result.failed.push({ postId, error: 'Embedding failed' });
+      continue;
+    }
+    rows.push({ post_id: postId, content_hash: text.content_hash, embedding });
+  }
+
+  if (rows.length > 0) {
+    try {
+      const stored = new Set((await searchStore.storeSearchEmbeddings(rows)).map((id) => id.toLowerCase()));
+      for (const row of rows) {
+        if (stored.has(row.post_id)) result.embedded += 1;
+        // Its text changed, or it left search, while it was being embedded.
+        else result.deferred.push(row.post_id);
+      }
+    } catch {
+      for (const row of rows) {
+        result.failed.push({ postId: row.post_id, error: 'Failed to store the embedding' });
+      }
+    }
+  }
+
+  return jsonResponse(result, 200);
 }
 
 export function createEmbedPostHandler(dependencies: EmbedPostDependencies) {
@@ -270,6 +472,17 @@ export function createEmbedPostHandler(dependencies: EmbedPostDependencies) {
       payload = JSON.parse(body);
     } catch {
       return jsonResponse({ error: 'Invalid JSON payload' }, 400);
+    }
+
+    const mode = parseEmbedMode(payload);
+    if (mode === null) {
+      return jsonResponse({ error: 'mode must be search or query' }, 400);
+    }
+    if (mode === 'query') {
+      return await handleQueryEmbedding(payload, dependencies);
+    }
+    if (mode === 'search') {
+      return await handleSearchEmbeddings(payload, dependencies, clock);
     }
 
     const parsed = parsePostIds(payload);
@@ -485,6 +698,65 @@ export function createPostgrestStore(input: {
   };
 }
 
+/** The search modes' store: two service-role RPCs over PostgREST. */
+export function createPostgrestSearchStore(input: {
+  supabaseUrl: string;
+  serviceRoleKey: string;
+  fetch: typeof fetch;
+}): SearchEmbeddingStore {
+  const rpcUrl = `${input.supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc`;
+
+  async function rpc(name: string, body: Record<string, unknown>): Promise<unknown> {
+    const response = await input.fetch(`${rpcUrl}/${name}`, {
+      method: 'POST',
+      headers: {
+        apikey: input.serviceRoleKey,
+        Authorization: `Bearer ${input.serviceRoleKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(POSTGREST_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      throw new Error(`PostgREST responded ${response.status}`);
+    }
+    return await response.json();
+  }
+
+  return {
+    async loadSearchTexts(postIds) {
+      const rows = await rpc('post_search_embedding_texts', {
+        p_post_ids: postIds,
+        p_embedding_model: EMBEDDING_MODEL,
+      });
+      return (Array.isArray(rows) ? rows : []).flatMap((row) => {
+        const record = row && typeof row === 'object' ? row as Record<string, unknown> : {};
+        return typeof record.post_id === 'string'
+          && typeof record.embedding_text === 'string'
+          && typeof record.content_hash === 'string'
+          ? [{
+            post_id: record.post_id,
+            embedding_text: record.embedding_text,
+            content_hash: record.content_hash,
+            unchanged: record.unchanged === true,
+          }]
+          : [];
+      });
+    },
+    async storeSearchEmbeddings(rows) {
+      const stored = await rpc('store_post_search_embeddings', {
+        p_rows: rows,
+        p_embedding_model: EMBEDDING_MODEL,
+      });
+      return (Array.isArray(stored) ? stored : []).flatMap((row) => {
+        const id = row && typeof row === 'object' ? (row as Record<string, unknown>).stored_post_id : null;
+        return typeof id === 'string' ? [id] : [];
+      });
+    },
+  };
+}
+
 /** gte-small through Supabase.ai, one session per isolate, created on first use. */
 export function createSupabaseAiEmbedder(runtime: SupabaseRuntime) {
   let session: AiSession | null = null;
@@ -512,6 +784,9 @@ if (deno && typeof deno.serve === 'function') {
     authorize: supabaseUrl ? createPostgrestAuthorizer({ supabaseUrl, fetch }) : undefined,
     store: serviceRoleKey && supabaseUrl
       ? createPostgrestStore({ supabaseUrl, serviceRoleKey, fetch })
+      : null,
+    searchStore: serviceRoleKey && supabaseUrl
+      ? createPostgrestSearchStore({ supabaseUrl, serviceRoleKey, fetch })
       : null,
     embed: supabase ? createSupabaseAiEmbedder(supabase) : embeddingRuntimeMissing,
   }));
