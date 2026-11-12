@@ -1025,6 +1025,7 @@
         "query": "Neon product",
         "normalizedQuery": "Neon product",
         "type": "top",
+        "sort": "top",
         "creators": {
           "items": [
             {
@@ -1082,6 +1083,126 @@
             }
           ],
           "nextCursor": null
+        }
+      },
+      "responseVariants": {
+        "latestPosts": {
+          "query": {
+            "q": "Neon product",
+            "type": "posts",
+            "sort": "latest"
+          },
+          "response": {
+            "query": "Neon product",
+            "normalizedQuery": "Neon product",
+            "type": "posts",
+            "sort": "latest",
+            "creators": {
+              "items": [],
+              "nextCursor": null
+            },
+            "posts": {
+              "items": [],
+              "nextCursor": "eyJ2IjoxLCJ0IjoicG9zdHMiLCJyIjoibGF0ZXN0IiwiaSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImMiOiIyMDI2LTA4LTEyVDAwOjAwOjAwLjEyMzQ1NiswMDowMCJ9"
+            },
+            "recipes": {
+              "items": [],
+              "nextCursor": null
+            }
+          }
+        },
+        "latestPostsNextPage": {
+          "query": {
+            "q": "Neon product",
+            "type": "posts",
+            "sort": "latest",
+            "cursor": "eyJ2IjoxLCJ0IjoicG9zdHMiLCJyIjoibGF0ZXN0IiwiaSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImMiOiIyMDI2LTA4LTEyVDAwOjAwOjAwLjEyMzQ1NiswMDowMCJ9"
+          },
+          "response": {
+            "query": "Neon product",
+            "normalizedQuery": "Neon product",
+            "type": "posts",
+            "sort": "latest",
+            "creators": {
+              "items": [],
+              "nextCursor": null
+            },
+            "posts": {
+              "items": [],
+              "nextCursor": null
+            },
+            "recipes": {
+              "items": [],
+              "nextCursor": null
+            }
+          }
+        },
+        "beforeSorts": {
+          "query": {
+            "q": "Neon product",
+            "type": "posts"
+          },
+          "response": {
+            "query": "Neon product",
+            "normalizedQuery": "Neon product",
+            "type": "posts",
+            "creators": {
+              "items": [],
+              "nextCursor": null
+            },
+            "posts": {
+              "items": [],
+              "nextCursor": "eyJ2IjoxLCJ0IjoicG9zdHMiLCJzIjo4LjI1LCJpIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIn0"
+            },
+            "recipes": {
+              "items": [],
+              "nextCursor": null
+            }
+          }
+        }
+      },
+      "cursors": {
+        "latestPosts": {
+          "encoded": "eyJ2IjoxLCJ0IjoicG9zdHMiLCJyIjoibGF0ZXN0IiwiaSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImMiOiIyMDI2LTA4LTEyVDAwOjAwOjAwLjEyMzQ1NiswMDowMCJ9",
+          "decoded": {
+            "version": 1,
+            "type": "posts",
+            "sort": "latest",
+            "createdAt": "2026-08-12T00:00:00.123456+00:00",
+            "id": "11111111-1111-4111-8111-111111111111"
+          }
+        },
+        "topPosts": {
+          "encoded": "eyJ2IjoxLCJ0IjoicG9zdHMiLCJzIjoyMy41OSwiaSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImEiOjE3ODY0OTI4MDAwMDB9",
+          "decoded": {
+            "version": 1,
+            "type": "posts",
+            "score": 23.59,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "asOf": 1786492800000
+          }
+        },
+        "topPostsBeforeInstants": {
+          "encoded": "eyJ2IjoxLCJ0IjoicG9zdHMiLCJzIjo4LjI1LCJpIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIn0",
+          "decoded": {
+            "version": 1,
+            "type": "posts",
+            "score": 8.25,
+            "id": "11111111-1111-4111-8111-111111111111"
+          }
+        }
+      },
+      "errors": {
+        "unknownSort": {
+          "query": {
+            "q": "Neon product",
+            "type": "posts",
+            "sort": "oldest"
+          },
+          "status": 400,
+          "response": {
+            "error": "sort must be top or latest."
+          }
         }
       }
     },

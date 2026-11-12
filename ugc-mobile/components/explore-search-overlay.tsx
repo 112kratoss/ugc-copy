@@ -16,7 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
-import { CreatorAvatar, SecondaryButton, StatusBlock } from '@/components/ui';
+import { CreatorAvatar, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
 import { MotionView, useOverlayPresence } from '@/lib/motion';
 import { BackGlyph } from '@/lib/platform-glyphs';
 import { creatorProfilePress } from '@/lib/creator-profile-opening';
@@ -36,6 +36,7 @@ import { useAppTheme } from '@/lib/theme-context';
 import type {
   CreatorSearchResult,
   PublicSearchResponse,
+  PublicSearchSort,
   PublicSearchType,
   RecipeSearchResult,
   ShowcaseFeedItem,
@@ -55,10 +56,16 @@ const SEARCH_TYPES: Array<{ id: PublicSearchType; label: string }> = [
 // creators from two characters, posts and recipes from three.
 const MIN_CREATOR_QUERY_LENGTH = 2;
 const MIN_CONTENT_QUERY_LENGTH = 3;
+// The order of a Posts or Recipes search, as the web's search page offers it.
+const SEARCH_SORTS: Array<{ value: PublicSearchSort; label: string }> = [
+  { value: 'top', label: 'Top' },
+  { value: 'latest', label: 'Latest' },
+];
 const SEARCH_DEBOUNCE_MS = 300;
 const SEARCH_LENGTH_HINT = 'Search creators from two characters, or use three characters to discover posts and recipes.';
 
-type SearchAnswer = { key: string; response: PublicSearchResponse };
+// `scope` is the query and tab an answer was asked for, whatever the order.
+type SearchAnswer = { key: string; scope: string; response: PublicSearchResponse };
 type SearchFailure = { key: string; message: string; retryAfterSeconds: number | null };
 
 function isContentType(type: PublicSearchType) {
@@ -67,7 +74,11 @@ function isContentType(type: PublicSearchType) {
 
 // An answer or a failure is drawn only under the query and tab it was asked
 // for, so a new query or tab shows the spinner until its own answer lands.
-function searchKey(query: string, type: PublicSearchType) {
+function searchKey(query: string, type: PublicSearchType, sort: PublicSearchSort) {
+  return `${type}:${sort}:${query}`;
+}
+
+function searchScope(query: string, type: PublicSearchType) {
   return `${type}:${query}`;
 }
 
@@ -145,6 +156,37 @@ function SearchTab({
         {label}
       </Text>
     </Pressable>
+  );
+}
+
+// A kind's heading and, on its own tab, the order its results are in. The
+// control is the app's segmented control as tabs, each order sized to its
+// word, as the comment order is beside its sheet's title.
+function ResultsHeading({
+  title,
+  sort,
+  onSortChange,
+}: {
+  title: 'Creators' | 'Posts' | 'Recipes';
+  /** Null where the results have one order, or the server has not said it reads another. */
+  sort: PublicSearchSort | null;
+  onSortChange: (sort: PublicSearchSort) => void;
+}) {
+  const theme = useAppTheme();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+      <Text accessibilityRole="header" style={{ flexShrink: 1, color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>{title}</Text>
+      {sort ? (
+        <SegmentedControl
+          role="tab"
+          fill={false}
+          accessibilityLabel={`Sort ${title.toLowerCase()}`}
+          options={SEARCH_SORTS}
+          value={sort}
+          onChange={onSortChange}
+        />
+      ) : null}
+    </View>
   );
 }
 
@@ -346,6 +388,8 @@ export function ExploreSearchOverlay({
   // The tab the person picked. A query long enough for creators but not for
   // posts and recipes runs, and shows, as Creators; the pick comes back after.
   const [pickedType, setPickedType] = useState<PublicSearchType>('top');
+  // The order picked for Posts and Recipes, kept across the two tabs.
+  const [pickedSort, setPickedSort] = useState<PublicSearchSort>('top');
   const [answer, setAnswer] = useState<SearchAnswer | null>(null);
   const [failure, setFailure] = useState<SearchFailure | null>(null);
   const [history, setHistory] = useState<string[]>([]);
@@ -354,11 +398,23 @@ export function ExploreSearchOverlay({
   const countedLength = searchQueryLength(normalizeCreatorSearchQuery(normalizedQuery));
   const creatorsOnly = countedLength >= MIN_CREATOR_QUERY_LENGTH && countedLength < MIN_CONTENT_QUERY_LENGTH;
   const type: PublicSearchType = creatorsOnly && isContentType(pickedType) ? 'creators' : pickedType;
+  // The Top tab and Creators have one order, whatever was picked on another tab.
+  const sort: PublicSearchSort = isContentType(type) ? pickedSort : 'top';
   // From the creator minimum on, the tab in effect always meets its own.
-  const requestKey = countedLength >= MIN_CREATOR_QUERY_LENGTH ? searchKey(normalizedQuery, type) : null;
+  const requestKey = countedLength >= MIN_CREATOR_QUERY_LENGTH ? searchKey(normalizedQuery, type, sort) : null;
   const response = answer && answer.key === requestKey ? answer.response : null;
+  // While the other order of the same search loads, its cards stay up, dimmed,
+  // with the control on them: the two orders hold the same results, and a
+  // spinner in their place would take the control from under the finger.
+  const reordering = !response && requestKey !== null && answer !== null
+    && answer.scope === searchScope(normalizedQuery, type);
+  const shownResponse = response ?? (reordering && answer ? answer.response : null);
   const shownFailure = failure && failure.key === requestKey ? failure : null;
-  const resultCount = response ? shownResultCount(response, type) : 0;
+  const resultCount = shownResponse ? shownResultCount(shownResponse, type) : 0;
+  // Latest is offered once an answer says which order it is in. A server from
+  // before sorts says nothing and reads every search ranked, so there the
+  // control would change nothing and is not drawn.
+  const shownSort = isContentType(type) && shownResponse?.sort !== undefined ? sort : null;
   const retryBlocked = Boolean(shownFailure?.retryAfterSeconds);
   const nextCursor = !response
     ? null
@@ -378,12 +434,12 @@ export function ExploreSearchOverlay({
   const requestClose = useCallback(() => {
     // Leaving with results on screen keeps the query; one that found nothing,
     // or is still unanswered, is not kept.
-    if (response && resultCount > 0) rememberQuery(normalizedQuery);
+    if (shownResponse && resultCount > 0) rememberQuery(normalizedQuery);
     // Dismissing the keyboard alongside the fade keeps close reading as one
     // gesture instead of two staggered ones.
     Keyboard.dismiss();
     onClose();
-  }, [normalizedQuery, onClose, rememberQuery, response, resultCount]);
+  }, [normalizedQuery, onClose, rememberQuery, resultCount, shownResponse]);
 
   // Android's back key closes the search only while this screen is the one
   // showing. A result tap pushes the post over the tabs with the search still
@@ -405,6 +461,7 @@ export function ExploreSearchOverlay({
   const runSearch = useCallback(async (cursor: string | null = null) => {
     if (!requestKey) return;
     const key = requestKey;
+    const scope = searchScope(normalizedQuery, type);
     const sequence = ++requestSequence.current;
     requestController.current?.abort();
     const controller = new AbortController();
@@ -412,11 +469,12 @@ export function ExploreSearchOverlay({
     if (cursor) setLoadingMore(true);
     setFailure(null);
     try {
-      const next = await api.searchPublicContent({ query: normalizedQuery, type, cursor }, controller.signal);
+      const next = await api.searchPublicContent({ query: normalizedQuery, type, sort, cursor }, controller.signal);
       if (sequence !== requestSequence.current) return;
       if (cursor) {
         setAnswer((current) => current?.key === key ? {
           key,
+          scope,
           response: {
             ...next,
             creators: type === 'creators' ? { ...next.creators, items: [...current.response.creators.items, ...next.creators.items] } : next.creators,
@@ -426,7 +484,7 @@ export function ExploreSearchOverlay({
         } : current);
         return;
       }
-      setAnswer({ key, response: next });
+      setAnswer({ key, scope, response: next });
       if (rememberOnAnswer.current === key) {
         rememberOnAnswer.current = null;
         if (shownResultCount(next, type) > 0) rememberQuery(normalizedQuery);
@@ -437,7 +495,7 @@ export function ExploreSearchOverlay({
     } finally {
       if (sequence === requestSequence.current) setLoadingMore(false);
     }
-  }, [api, normalizedQuery, rememberQuery, requestKey, type]);
+  }, [api, normalizedQuery, rememberQuery, requestKey, sort, type]);
 
   useEffect(() => () => requestController.current?.abort(), []);
 
@@ -588,26 +646,31 @@ export function ExploreSearchOverlay({
           ) : (
             <StatusBlock title="Find your next idea" body={SEARCH_LENGTH_HINT} />
           )
-        ) : response && resultCount > 0 ? (
+        ) : shownResponse && resultCount > 0 ? (
           <View style={{ gap: 25 }}>
-            {(type === 'top' || type === 'creators') && response.creators.items.length ? (
+            {(type === 'top' || type === 'creators') && shownResponse.creators.items.length ? (
               <View style={{ gap: 10 }}>
-                <Text accessibilityRole="header" style={{ color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>Creators</Text>
-                {response.creators.items.map((creator) => <CreatorRow key={creator.id} creator={creator} onOpen={openResult} />)}
+                <ResultsHeading title="Creators" sort={null} onSortChange={setPickedSort} />
+                {shownResponse.creators.items.map((creator) => <CreatorRow key={creator.id} creator={creator} onOpen={openResult} />)}
               </View>
             ) : null}
-            {(type === 'top' || type === 'posts') && response.posts.items.length ? (
+            {(type === 'top' || type === 'posts') && shownResponse.posts.items.length ? (
               <View style={{ gap: 10 }}>
-                <Text accessibilityRole="header" style={{ color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>Posts</Text>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-                  {response.posts.items.map((post) => <View key={post.id} style={{ width: '48%' }}><PostRow item={post} onOpen={openResult} /></View>)}
+                <ResultsHeading title="Posts" sort={type === 'posts' ? shownSort : null} onSortChange={setPickedSort} />
+                <View
+                  accessibilityState={{ busy: reordering }}
+                  style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, opacity: reordering ? appTheme.opacity.disabled : 1 }}
+                >
+                  {shownResponse.posts.items.map((post) => <View key={post.id} style={{ width: '48%' }}><PostRow item={post} onOpen={openResult} /></View>)}
                 </View>
               </View>
             ) : null}
-            {(type === 'top' || type === 'recipes') && response.recipes.items.length ? (
+            {(type === 'top' || type === 'recipes') && shownResponse.recipes.items.length ? (
               <View style={{ gap: 10 }}>
-                <Text accessibilityRole="header" style={{ color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>Recipes</Text>
-                {response.recipes.items.map((recipe) => <RecipeRow key={recipe.id} recipe={recipe} onOpen={openResult} />)}
+                <ResultsHeading title="Recipes" sort={type === 'recipes' ? shownSort : null} onSortChange={setPickedSort} />
+                <View accessibilityState={{ busy: reordering }} style={{ gap: 10, opacity: reordering ? appTheme.opacity.disabled : 1 }}>
+                  {shownResponse.recipes.items.map((recipe) => <RecipeRow key={recipe.id} recipe={recipe} onOpen={openResult} />)}
+                </View>
               </View>
             ) : null}
             {nextCursor ? <SecondaryButton disabled={loadingMore || retryBlocked} label={loadingMore ? 'Loading…' : 'Show more'} onPress={() => void runSearch(nextCursor)} /> : null}

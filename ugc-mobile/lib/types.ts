@@ -1154,6 +1154,13 @@ export interface ShowcaseFeedReadAheadResponse {
 
 export type PublicSearchType = 'top' | 'creators' | 'posts' | 'recipes';
 
+/**
+ * The order of a Posts or Recipes search (the web's `PublicSearchSort`,
+ * `src/lib/public-search.ts`): `top` is the ranked one, `latest` the same
+ * matches newest first. The Top tab and Creators have one order.
+ */
+export type PublicSearchSort = 'top' | 'latest';
+
 export interface CreatorSearchResult {
   id: string;
   username: string;
@@ -1204,6 +1211,12 @@ export interface PublicSearchResponse {
   query: string;
   normalizedQuery: string;
   type: PublicSearchType;
+  /**
+   * The order the answer is in. A server from before sorts (2026-11-12) sends
+   * none and reads every search ranked, whatever a request names: the app
+   * offers Latest only once an answer has said which order it is in.
+   */
+  sort?: PublicSearchSort;
   creators: PublicSearchPage<CreatorSearchResult>;
   posts: PublicSearchPage<ShowcaseFeedItem>;
   recipes: PublicSearchPage<RecipeSearchResult>;

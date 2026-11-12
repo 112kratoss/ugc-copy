@@ -335,6 +335,26 @@ describe('mobile api client caching', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it('names the order of a search only when it is Latest', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({}));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await api.searchPublicContent({ query: 'portrait', type: 'posts', sort: 'latest', cursor: 'page-2' });
+    await api.searchPublicContent({ query: 'portrait', type: 'posts', sort: 'top' });
+    await api.searchPublicContent({ query: 'portrait', type: 'posts' });
+
+    // Top is what the server reads without one, today's and one from before sorts.
+    expect((fetcher.mock.calls as unknown as Array<[string]>).map(([url]) => new URL(String(url)).search)).toEqual([
+      '?q=portrait&type=posts&sort=latest&cursor=page-2',
+      '?q=portrait&type=posts',
+      '?q=portrait&type=posts',
+    ]);
+  });
+
   it('sends a request id with backend calls', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ credits: 10 }));
     const api = createApiClient({

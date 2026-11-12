@@ -9,6 +9,7 @@ import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../li
 import type {
   CreatorSearchResult,
   PublicSearchResponse,
+  PublicSearchSort,
   PublicSearchType,
   RecipeSearchResult,
   ShowcaseFeedItem,
@@ -104,6 +105,7 @@ vi.mock('@/components/keyboard-aware', () => ({
 vi.mock('@/components/ui', () => ({
   CreatorAvatar: (props: MockProps) => React.createElement('creator-avatar', props),
   SecondaryButton: (props: MockProps) => React.createElement('secondary-button', props),
+  SegmentedControl: (props: MockProps) => React.createElement('segmented-control', props),
   StatusBlock: (props: MockProps) => React.createElement('status-block', props),
 }));
 
@@ -347,14 +349,23 @@ function recipe(id: string, access: { accessMode: 'free' | 'paid'; priceUsdCents
 function searchAnswer(
   query: string,
   type: PublicSearchType = 'top',
-  kinds: { creators?: CreatorSearchResult[]; posts?: ShowcaseFeedItem[]; recipes?: RecipeSearchResult[]; creatorsCursor?: string } = {},
+  kinds: {
+    creators?: CreatorSearchResult[];
+    posts?: ShowcaseFeedItem[];
+    recipes?: RecipeSearchResult[];
+    creatorsCursor?: string;
+    postsCursor?: string;
+    /** The order the server says the answer is in; a server from before sorts says none. */
+    sort?: PublicSearchSort;
+  } = {},
 ): PublicSearchResponse {
   return {
     query,
     normalizedQuery: query.replace(/^@+/, ''),
     type,
+    ...(kinds.sort ? { sort: kinds.sort } : {}),
     creators: { items: kinds.creators ?? [], nextCursor: kinds.creatorsCursor ?? null },
-    posts: { items: kinds.posts ?? [], nextCursor: null },
+    posts: { items: kinds.posts ?? [], nextCursor: kinds.postsCursor ?? null },
     recipes: { items: kinds.recipes ?? [], nextCursor: null },
   };
 }
@@ -656,7 +667,7 @@ describe('ExploreSearchOverlay search', () => {
 
     searchPublicContent.mockRejectedValueOnce(new ApiError('Too many requests.', 429, { retryAfterSeconds: 10 }));
     await press(showMoreButton(tree));
-    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toEqual({ query: 'jan', type: 'creators', cursor: 'page-2' });
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toEqual({ query: 'jan', type: 'creators', sort: 'top', cursor: 'page-2' });
     // The first page stays up, with the reason under it.
     expect(() => pressableLabelled(tree, "Open Creator jane's profile")).not.toThrow();
     expect(shownTexts(tree)).toContain('Search is busy. Try again in 10 s.');
@@ -806,5 +817,173 @@ describe('ExploreSearchOverlay search', () => {
     expect(JSON.stringify(mocks.router.push.mock.calls)).not.toContain('marketplace');
 
     await act(async () => tree.unmount());
+  });
+
+  describe('Top and Latest', () => {
+    function sortControls(tree: Tree) {
+      return hostNodes(tree, 'segmented-control');
+    }
+
+    function postTitles(tree: Tree) {
+      return hostNodes(tree, 'pressable')
+        .map((node) => node.props.accessibilityLabel as string | undefined)
+        .filter((label): label is string => Boolean(label?.startsWith('Open post ')))
+        .map((label) => label.replace('Open post Post ', ''));
+    }
+
+    async function pickSort(tree: Tree, sort: PublicSearchSort) {
+      await act(async () => {
+        sortControls(tree)[0].props.onChange(sort);
+      });
+    }
+
+    function asked() {
+      return searchPublicContent.mock.calls.map(([params]) => ({
+        type: params.type, sort: params.sort, cursor: params.cursor ?? null,
+      }));
+    }
+
+    it('offers the two orders beside Posts, as tabs sized to their words, once the server says which it reads', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, {
+        sort: 'top', posts: [post('saved'), post('new')],
+      }));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+
+      expect(sortControls(tree)).toHaveLength(1);
+      expect(sortControls(tree)[0].props).toMatchObject({
+        role: 'tab',
+        fill: false,
+        accessibilityLabel: 'Sort posts',
+        options: [{ value: 'top', label: 'Top' }, { value: 'latest', label: 'Latest' }],
+        value: 'top',
+      });
+      expect(asked()).toEqual([{ type: 'posts', sort: 'top', cursor: null }]);
+
+      await act(async () => tree.unmount());
+    });
+
+    it('asks for Latest at once and keeps the cards up, dimmed, under the control until it answers', async () => {
+      searchPublicContent.mockResolvedValueOnce(searchAnswer('portrait', 'posts', { sort: 'top', posts: [post('saved'), post('new')] }));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+      expect(postTitles(tree)).toEqual(['saved', 'new']);
+
+      const pending = deferred<PublicSearchResponse>();
+      searchPublicContent.mockReturnValueOnce(pending.promise);
+      await pickSort(tree, 'latest');
+      // The query has not changed, so there is no pause before the request.
+      await advance(1);
+
+      expect(asked().at(-1)).toEqual({ type: 'posts', sort: 'latest', cursor: null });
+      // No spinner in the cards' place: the control stays where the finger is.
+      expect(isSearching(tree)).toBe(false);
+      expect(sortControls(tree)[0].props.value).toBe('latest');
+      expect(postTitles(tree)).toEqual(['saved', 'new']);
+      const dimmed = tree.root.findAll((node) => node.type === 'view' && node.props.accessibilityState?.busy === true);
+      expect(dimmed).toHaveLength(1);
+      expect(dimmed[0].props.style).toMatchObject({ opacity: 0.5 });
+      // A page of the other order is not offered while this one loads.
+      expect(() => showMoreButton(tree)).toThrow();
+
+      await act(async () => pending.resolve(searchAnswer('portrait', 'posts', { sort: 'latest', posts: [post('new'), post('saved')] })));
+      expect(postTitles(tree)).toEqual(['new', 'saved']);
+      expect(tree.root.findAll((node) => node.type === 'view' && node.props.accessibilityState?.busy === true)).toHaveLength(0);
+
+      await act(async () => tree.unmount());
+    });
+
+    it('pages Latest with the order and its cursor', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type, sort, cursor }) => searchAnswer(query, type, {
+        sort: sort ?? 'top',
+        posts: cursor ? [post('older')] : [post('new')],
+        postsCursor: cursor ? undefined : `${sort}-page-2`,
+      }));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+      await pickSort(tree, 'latest');
+      await advance(1);
+
+      await press(showMoreButton(tree));
+      expect(asked().at(-1)).toEqual({ type: 'posts', sort: 'latest', cursor: 'latest-page-2' });
+      expect(postTitles(tree)).toEqual(['new', 'older']);
+
+      await act(async () => tree.unmount());
+    });
+
+    it('gives Recipes the same control and keeps the choice across the two tabs', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type, sort }) => searchAnswer(query, type, {
+        sort: type === 'posts' || type === 'recipes' ? sort ?? 'top' : 'top',
+        posts: [post('p1')],
+        recipes: [recipe('r1', { accessMode: 'free', priceUsdCents: 0 }, 'Noor')],
+      }));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Recipes'));
+      await typeQuery(tree, 'lighting');
+      await advance(300);
+
+      expect(sortControls(tree)[0].props).toMatchObject({ accessibilityLabel: 'Sort recipes', value: 'top' });
+      await pickSort(tree, 'latest');
+      await advance(1);
+      expect(asked().at(-1)).toEqual({ type: 'recipes', sort: 'latest', cursor: null });
+
+      await press(tab(tree, 'Posts'));
+      await advance(1);
+      expect(asked().at(-1)).toEqual({ type: 'posts', sort: 'latest', cursor: null });
+      expect(sortControls(tree)[0].props).toMatchObject({ accessibilityLabel: 'Sort posts', value: 'latest' });
+
+      await act(async () => tree.unmount());
+    });
+
+    it('has one order on Top and Creators: no control, and the ranked order asked for', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type, sort }) => searchAnswer(query, type, {
+        sort: type === 'posts' ? sort ?? 'top' : 'top',
+        creators: [creator('jane')],
+        posts: [post('p1')],
+        recipes: [recipe('r1', { accessMode: 'free', priceUsdCents: 0 }, 'Noor')],
+      }));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+      await pickSort(tree, 'latest');
+      await advance(1);
+
+      for (const label of ['Top', 'Creators'] as const) {
+        await press(tab(tree, label));
+        await advance(1);
+        expect(sortControls(tree), label).toHaveLength(0);
+        expect(asked().at(-1)?.sort, label).toBe('top');
+      }
+
+      await act(async () => tree.unmount());
+    });
+
+    it('draws no control against a server from before sorts, which says no order', async () => {
+      // Its answers carry no `sort`, and it would read `sort=latest` as Top.
+      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, {
+        posts: [post('p1')],
+        recipes: [recipe('r1', { accessMode: 'free', priceUsdCents: 0 }, 'Noor')],
+      }));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+
+      for (const label of ['Posts', 'Recipes'] as const) {
+        await press(tab(tree, label));
+        await advance(1);
+        expect(sortControls(tree), label).toHaveLength(0);
+        expect(asked().at(-1)?.sort, label).toBe('top');
+      }
+      expect(() => pressableLabelled(tree, 'Open recipe Recipe r1')).not.toThrow();
+
+      await act(async () => tree.unmount());
+    });
   });
 });

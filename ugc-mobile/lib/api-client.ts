@@ -80,6 +80,7 @@ import type {
   GenerationShareSourceSurface,
   ProfileShareSourceSurface,
   PublicSearchResponse,
+  PublicSearchSort,
   PublicSearchType,
   ShareChannel,
   UndoFeedFeedbackRequest,
@@ -1391,11 +1392,14 @@ export function createApiClient({
     searchPublicContent: (params: {
       query: string;
       type?: PublicSearchType;
+      /** Posts and Recipes only; the ranked order is the server's default and is not named. */
+      sort?: PublicSearchSort;
       cursor?: string | null;
       limit?: number;
     }, signal?: AbortSignal) => request<PublicSearchResponse>('/api/search' + buildQuery({
       q: params.query,
       type: params.type ?? 'top',
+      sort: params.sort === 'latest' ? params.sort : undefined,
       cursor: params.cursor,
       limit: params.limit,
     }), { signal }, { auth: true }),
