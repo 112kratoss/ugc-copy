@@ -1959,8 +1959,40 @@ describe('ShowcaseReelViewer pagination', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Remix: get the free recipe for Campaign Frame and remix it' }));
 
-      expect((await screen.findAllByText('Too many recipes. Try again shortly.')).length).toBeGreaterThan(0);
+      // Beside Remix's own errors: the unlock panel that also holds it is not an alert.
+      expect(await screen.findByRole('alert')).toHaveTextContent('Too many recipes. Try again shortly.');
       expect(onRemix).not.toHaveBeenCalled();
+    });
+
+    // Moving between posts re-enables Remix, and the claim is still on its way.
+    it('opens no remix for a post the reader has left while its free recipe was on its way', async () => {
+      authState.session = { access_token: 'token-1' };
+      let answerClaim: (response: Response) => void = () => {};
+      stubRequests({
+        '/api/posts/post-1/resource-bundle/unlock-free': () => new Promise<Response>((resolve) => {
+          answerClaim = resolve;
+        }),
+      });
+      const onRemix = vi.fn();
+      const items = [lockedRemix(freeAsset), createShowcaseItem({ id: 'post-2', title: 'Second Frame', canRemix: true })];
+      const { rerender } = render(<ShowcaseReelViewer {...reelProps({ items, onRemix })} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remix: get the free recipe for Campaign Frame and remix it' }));
+      rerender(<ShowcaseReelViewer {...reelProps({ items, onRemix, selectedItemId: 'post-2' })} />);
+      // A tap on the next post's Remix waits for the claim too: one remix, never two.
+      fireEvent.click(await screen.findByRole('button', { name: 'Remix' }));
+      expect(onRemix).not.toHaveBeenCalled();
+
+      await act(async () => {
+        answerClaim(new Response(JSON.stringify({ success: true })));
+      });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Remix' })).toBeEnabled());
+
+      expect(onRemix).not.toHaveBeenCalled();
+      // With the claim settled, Remix on the post in view works again.
+      fireEvent.click(screen.getByRole('button', { name: 'Remix' }));
+      expect(onRemix).toHaveBeenCalledTimes(1);
+      expect(onRemix).toHaveBeenCalledWith('post-2');
     });
 
     it('sends a signed-out reader to sign in before taking a free recipe', () => {
@@ -1971,6 +2003,7 @@ describe('ShowcaseReelViewer pagination', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Remix: get the free recipe for Campaign Frame and remix it' }));
 
+      expect(mockPush).toHaveBeenCalledWith(expect.stringMatching(/^\/login\?returnUrl=/));
       expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/unlock-free'))).toBe(false);
       expect(onRemix).not.toHaveBeenCalled();
     });

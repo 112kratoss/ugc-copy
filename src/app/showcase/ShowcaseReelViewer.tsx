@@ -349,6 +349,9 @@ export default function ShowcaseReelViewer({
     sessionTokenRef.current = session?.access_token ?? null;
   }, [accessToken, feedSessionId, item, selectedIndex, session?.access_token]);
   const stopBundlePollRef = useRef<(() => void) | null>(null);
+  // Remix is taking a free recipe on its way: a second tap waits for it, on
+  // this post or another, since moving between posts re-enables the button.
+  const freeRemixClaimInFlightRef = useRef(false);
   // A verify can finish after the reel's page has gone; no wait starts then.
   const unmountedRef = useRef(false);
   useEffect(() => {
@@ -1873,7 +1876,7 @@ export default function ShowcaseReelViewer({
                   openRecipe();
                   return;
                 }
-                if (remixWorkingItemId) return;
+                if (remixWorkingItemId || freeRemixClaimInFlightRef.current) return;
                 setRemixError(null);
                 const startRemix = () => {
                   setRemixWorkingItemId(item.id);
@@ -1892,7 +1895,15 @@ export default function ShowcaseReelViewer({
                   return;
                 }
                 reportResourceOpen();
+                freeRemixClaimInFlightRef.current = true;
                 void openFreeUnlock().then((claim) => {
+                  freeRemixClaimInFlightRef.current = false;
+                  // The reader moved to another post or closed the reel while
+                  // the recipe was on its way: it is theirs, and no remix they
+                  // are no longer looking at opens under them (nor its error
+                  // under another post's Remix), as a paid recipe opens only
+                  // on the post it was bought for (`showPaidRecipe`).
+                  if (unmountedRef.current || feedEventItemRef.current?.id !== item.id) return;
                   if (claim.taken) startRemix();
                   // The unlock panel, where the claim's own error is drawn, is
                   // closed on this path: Remix says why beside its own errors.
