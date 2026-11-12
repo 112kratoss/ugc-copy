@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(77);
+select plan(95);
 
 -- 5e3a…01 creates most posts; …02 is another creator (a template's author, and
 -- the one a viewer blocks); …03 is the viewer; …04 blocked the viewer.
@@ -47,7 +47,11 @@ values
 --   …16 a template's result                   …18 sold: setup caption + prompt
 --   …19 private   …20 hidden by review   …21 archived
 --   …22 free recipe over a stored prompt      …23 a caption past 2,000 characters
---   …24 the creator who blocked the viewer    …25 no words of its own (blank title)
+--   …24 the creator who blocked the viewer    …25 no words at all (blank title)
+-- and posts whose public text is their tool and model names and little else:
+--   …26 a placeholder title, no caption       …27 a placeholder title, a caption
+--   …28 a placeholder title under a sold recipe whose setup caption is hidden
+--   …29 the same under a free recipe, whose setup caption is public
 insert into public.posts (
   id, user_id, visibility, category, source_kind, post_format, review_status,
   title, body, prompt, source_tool, source_tool_slug, generation_id, showcase_asset_path,
@@ -89,7 +93,15 @@ from (values
   ('24', '4', 'public', 'external', 'visible', 'Cliffs in mist', 'From the creator who blocked the viewer', null,
    'Midjourney', null, false, null),
   ('25', '1', 'public', 'external', 'visible', '', null, null,
-   '', null, false, null)
+   '', null, false, null),
+  ('26', '1', 'public', 'external', 'visible', 'Untitled', null, null,
+   'Midjourney', null, false, null),
+  ('27', '1', 'public', 'external', 'visible', 'Test video', 'Kelp forest in green light', null,
+   'Midjourney', null, false, null),
+  ('28', '1', 'public', 'external', 'visible', 'My test render', E'Saved generation setup\nGrade: mossgrade', 'pikaprompt for buyers',
+   'Midjourney', null, false, null),
+  ('29', '1', 'public', 'external', 'visible', 'Sample', E'Saved generation setup\nGrade: ferngrade', null,
+   'Midjourney', null, false, null)
 ) as fixture(suffix, creator, visibility, source_kind, review_status, title, body, prompt, tool, generation_id, is_nsfw, archived_at);
 
 insert into public.post_resource_bundles (
@@ -105,6 +117,22 @@ insert into public.post_resource_bundles (
                                        'textContent', 'The prompt a buyer unlocks for this picture')),
   '[]'::jsonb, 300, 0, 0, now(), now()
 );
+
+insert into public.post_resource_bundles (
+  id, post_id, owner_user_id, access_mode, status, title, summary, preview_text,
+  attachments, allow_remix, resource_items, resource_sections,
+  price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at
+)
+select
+  ('5e3a5000-0000-4000-8000-0000000000' || recipe.suffix)::uuid,
+  ('5e3a2000-0000-4000-8000-0000000000' || recipe.suffix)::uuid,
+  '5e3a0000-0000-4000-8000-000000000001'::uuid, recipe.access_mode, 'published', 'Grade recipe ' || recipe.suffix,
+  'Three steps to the finished picture', 'A preview long enough to pass the marketplace quality gate.',
+  '[]'::jsonb, false,
+  jsonb_build_array(jsonb_build_object('id', 'item-1', 'type', 'prompt', 'title', 'Prompt',
+                                       'textContent', 'The prompt a buyer unlocks for this picture')),
+  '[]'::jsonb, case recipe.access_mode when 'paid' then 300 else 0 end, 0, 0, now(), now()
+from (values ('28', 'paid'), ('29', 'free')) as recipe(suffix, access_mode);
 
 insert into public.user_blocks (blocker_user_id, blocked_user_id)
 values
@@ -202,13 +230,63 @@ select is(pg_temp.embedding_text('19'), null, 'nor a private one');
 select is(pg_temp.embedding_text('20'), null, 'nor one hidden by review');
 select is(pg_temp.embedding_text('21'), null, 'nor an archived one');
 select is(pg_temp.embedding_text('25'), null, 'nor one with no words to show');
+
+-- ─── A post with no words of its own is not embedded ────────────────────────
+
+select is(
+  (select search_text from public.post_search_documents where post_id = pg_temp.post('26')),
+  'untitled midjourney midjourney',
+  'a post with a placeholder title and no caption shows a visitor a stand-in word and its tool'
+);
+select is(pg_temp.embedding_text('26'), null, 'and is given no text to embed');
+select ok(
+  pg_temp.embedding_text('27') like 'test video kelp forest in green light%',
+  'a caption is words of its own, whatever the title'
+);
+select ok(
+  (select search_text not like '%mossgrade%' and search_text not like '%pikaprompt%'
+   from public.post_search_documents where post_id = pg_temp.post('28')),
+  'a sold recipe''s post with a placeholder title shows neither its setup caption nor its prompt'
+);
+select is(
+  pg_temp.embedding_text('28'), null,
+  'so it has no words of its own: the hidden caption is not a caption here'
+);
+select ok(
+  pg_temp.embedding_text('29') like '%ferngrade%',
+  'the same post under a free recipe shows its caption, and is embedded'
+);
+select is(
+  (select array_agg(public.post_search_document_has_own_words(title, vector) order by position)
+   from (values
+     (1, 'sea after sunset', ''::tsvector),
+     (2, 'untitled', ''::tsvector),
+     (3, '', ''::tsvector),
+     (4, 'my test render', setweight('kling:1'::tsvector, 'A') || setweight('midjourney:2'::tsvector, 'C')),
+     (5, 'untitled', setweight('waves:1'::tsvector, 'B')),
+     (6, null, null)
+   ) as documents(position, title, vector)),
+  array[true, false, false, false, true, false],
+  'the rule: a title that is not a placeholder, or a word of caption or prompt; model and tool names are neither'
+);
+select is(
+  (select count(*)::integer from public.store_post_search_embeddings(
+    jsonb_build_array(jsonb_build_object(
+      'post_id', pg_temp.post('26'),
+      'content_hash', (select encode(sha256(convert_to(search_text, 'UTF8')), 'hex')
+                       from public.post_search_documents where post_id = pg_temp.post('26')),
+      'embedding', pg_temp.vec(0.99)::text
+    )), 'gte-small')),
+  0,
+  'a vector for such a post is not stored, whatever its hash'
+);
 select ok(
   not exists (
     select 1
     from public.post_search_embedding_texts(
       array(select id from public.posts where id::text like '5e3a2000-%'), 'gte-small'
     )
-    where embedding_text ~ 'velvetmoth|fernhollow|ashgrove|saltmarsh|tarnwhistle|quokkaprompt'
+    where embedding_text ~ 'velvetmoth|fernhollow|ashgrove|saltmarsh|tarnwhistle|quokkaprompt|mossgrade|pikaprompt'
   ),
   'no text handed to the embedder holds a word only a labelled, private, hidden, archived or sold post has'
 );
@@ -225,8 +303,8 @@ select is(
 );
 select is(
   pg_temp.pending(),
-  array['11', '12', '13', '16', '18', '22', '23', '24'],
-  'the posts waiting for an embedding are the ones search could return'
+  array['11', '12', '13', '16', '18', '22', '23', '24', '27', '29'],
+  'the posts waiting for an embedding are the ones search could return whose text has words of its own'
 );
 select is(
   (select array_agg(right(post_id::text, 2)) from (
@@ -265,6 +343,8 @@ select is(
   0,
   'nor one for a labelled post, whatever its hash'
 );
+select is(pg_temp.embed('27', 0.60), 1, 'the captioned post with a placeholder title');
+select is(pg_temp.embed('29', 0.61), 1, 'the free recipe''s');
 select is(pg_temp.pending(), array['23'], 'a stored post is no longer waiting');
 select ok(
   (select unchanged from public.post_search_embedding_texts(array[pg_temp.post('11')], 'gte-small'))
@@ -408,8 +488,26 @@ select is(
 select is(
   (select array_agg(right(post_id::text, 2) order by post_id) from public.post_search_embeddings
    where post_id::text like '5e3a2000-%'),
-  array['11', '13', '22'],
+  array['11', '13', '22', '27', '29'],
   'and leaves the rest, a vector waiting to be re-made included'
+);
+
+-- A post whose text loses its own words: the caption goes, the title is a stand-in.
+update public.posts set body = null where id = pg_temp.post('27');
+select ok(
+  not ('27' = any (pg_temp.pending()))
+    and (select prunable from public.search_embedding_backlog('gte-small')),
+  'a post left with no words of its own is not embedded again, and its old vector is to be pruned'
+);
+select is(
+  (select post_embeddings_deleted from public.prune_search_embeddings(1000)),
+  1,
+  'the prune deletes it'
+);
+select ok(
+  exists (select 1 from public.post_search_embeddings where post_id = pg_temp.post('22'))
+    and '22' = any (pg_temp.pending()),
+  'and leaves the vector of a post whose text changed and still has words: that one is re-made'
 );
 delete from public.posts where id = pg_temp.post('13');
 select ok(
@@ -461,64 +559,73 @@ select is(
 -- ─── Query vectors: a cache and a daily count ───────────────────────────────
 
 select is(
-  (select row(embedding is null, reserved)::text
-   from public.search_query_embedding_lookup(repeat('a', 64), 'gte-small', 2)),
-  '(t,t)',
-  'a query never embedded is a miss, and may be embedded'
+  public.search_query_embedding(repeat('a', 64), 'gte-small'),
+  null,
+  'a query never embedded is a miss'
 );
 select is(
-  (select reserved from public.search_query_embedding_lookup(repeat('b', 64), 'gte-small', 2)),
-  true,
-  'a second one too'
+  (select count(*)::integer from public.search_query_embedding_days),
+  0,
+  'and reading the cache counts nothing'
 );
-select is(
-  (select reserved from public.search_query_embedding_lookup(repeat('c', 64), 'gte-small', 2)),
-  false,
-  'past the day''s cap a miss may not be embedded'
-);
+select ok(public.reserve_search_query_embedding(2), 'a new query may be embedded');
+select ok(public.reserve_search_query_embedding(2), 'a second one too');
+select ok(not public.reserve_search_query_embedding(2), 'past the day''s cap a new query may not be embedded');
 select is(
   (select requested from public.search_query_embedding_days where day = (now() at time zone 'UTC')::date),
   2,
   'and the day''s count stops at the cap'
 );
-select is(
-  (select reserved from public.search_query_embedding_lookup(repeat('c', 64), 'gte-small', 1000000)),
-  true,
-  'a higher cap lets one more through'
-);
+select ok(public.reserve_search_query_embedding(1000000), 'a higher cap lets one more through');
 update public.search_query_embedding_days set requested = 5000 where day = (now() at time zone 'UTC')::date;
-select is(
-  (select reserved from public.search_query_embedding_lookup(repeat('d', 64), 'gte-small', 1000000)),
-  false,
+select ok(
+  not public.reserve_search_query_embedding(1000000),
   'but never past 5,000 a day, whatever cap is asked for'
+);
+select ok(
+  not public.reserve_search_query_embedding(0) and not public.reserve_search_query_embedding(null),
+  'and a cap of nothing lets nothing through'
 );
 select lives_ok(
   $$select public.store_search_query_embedding(repeat('a', 64), 'gte-small', pg_temp.vec(0.5))$$,
   'a query''s vector is kept under its hash'
 );
-update public.search_query_embedding_days set requested = 0 where day = (now() at time zone 'UTC')::date;
-select is(
-  (select row(embedding = pg_temp.vec(0.5), reserved)::text
-   from public.search_query_embedding_lookup(repeat('a', 64), 'gte-small', 2)),
-  '(t,f)',
-  'the next search for it reads the vector and asks for nothing'
+select ok(
+  public.search_query_embedding(repeat('a', 64), 'gte-small') = pg_temp.vec(0.5),
+  'the next search for it reads the vector'
 );
 select is(
-  (select requested from public.search_query_embedding_days where day = (now() at time zone 'UTC')::date),
-  0,
-  'and is not counted'
+  public.search_query_embedding(repeat('a', 64), 'another-model'),
+  null,
+  'another model''s search does not'
 );
-update public.search_query_embeddings set created_at = now() - interval '31 days' where query_hash = repeat('a', 64);
+update public.search_query_embeddings set created_at = now() - interval '8 days' where query_hash = repeat('a', 64);
 select is(
-  (select embedding is null from public.search_query_embedding_lookup(repeat('a', 64), 'gte-small', 0)),
-  true,
-  'a vector older than 30 days is not read'
+  public.search_query_embedding(repeat('a', 64), 'gte-small'),
+  null,
+  'a vector older than 7 days is not read'
 );
 insert into public.search_query_embedding_days (day, requested) values ((now() at time zone 'UTC')::date - 8, 5);
 select is(
   (select row(query_embeddings_deleted, query_days_deleted)::text from public.prune_search_embeddings(1000)),
   '(1,1)',
   'the prune deletes it, and a daily count older than a week'
+);
+
+-- ─── No vector index, and the growth accounting ─────────────────────────────
+
+select is(
+  (select array_agg(indexname::text order by indexname) from pg_indexes
+   where schemaname = 'public' and tablename = 'post_search_embeddings'),
+  array['post_search_embeddings_pkey'],
+  'the vectors have no index but their key: the read measures every one'
+);
+select is(
+  (select array_agg(growth.table_name order by growth.table_name)
+   from public.get_operational_table_growth() as growth
+   where growth.table_name in ('post_search_embeddings', 'search_query_embeddings', 'search_query_embedding_days')),
+  array['post_search_embeddings', 'search_query_embeddings'],
+  'the growth accounting counts the vectors of posts and of queries'
 );
 
 -- ─── Who may call what ──────────────────────────────────────────────────────
@@ -535,7 +642,9 @@ select ok(
       'public.list_posts_pending_search_embedding(text,integer)',
       'public.post_search_embedding_texts(uuid[],text)',
       'public.store_post_search_embeddings(jsonb,text)',
-      'public.search_query_embedding_lookup(text,text,integer)',
+      'public.search_query_embedding(text,text)',
+      'public.reserve_search_query_embedding(integer)',
+      'public.post_search_document_has_own_words(text,tsvector)',
       'public.store_search_query_embedding(text,text,extensions.vector)',
       'public.prune_search_embeddings(integer)',
       'public.search_embedding_backlog(text)'

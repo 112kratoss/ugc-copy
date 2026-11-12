@@ -22,7 +22,8 @@
 --      embedding_model  'gte-small' today
 --      content_hash     sha256 (hex) of the WHOLE search_text the vector was
 --                       made from
---      embedding        384 dimensions, cosine, HNSW
+--      embedding        384 dimensions; compared by cosine distance. No
+--                       index: 4 says why
 --      embedded_at, updated_at
 --    A ROW IS READ ONLY WHILE IT IS TRUE. search_related_posts joins it to
 --    the post's document as it is at that instant and requires content_hash
@@ -36,28 +37,54 @@
 --    search-embeddings backend job re-makes the vector later
 --    (list_posts_pending_search_embedding) and deletes the rows of posts that
 --    left search (prune_search_embeddings).
+--    A POST IS EMBEDDED ONLY IF ITS PUBLIC TEXT HAS WORDS OF ITS OWN
+--    (post_search_document_has_own_words): a title that is not a placeholder
+--    (marketplace_text_is_placeholder, the product's own rule: 'Untitled',
+--    'Test video', nothing at all), or a word of public caption or public
+--    prompt (a B lexeme of the document's search_vector). A post with
+--    neither shows a visitor only its tool and model names, 'magicbooklet
+--    magicbooklet kling 2.6 kling 2 6 kling26': every such post has the same
+--    text, so their vectors are one point that a query naming a tool sits
+--    next to, and nothing about any of them. The feed's embedder leaves such
+--    posts out for the same reason. Both inputs are columns of the search
+--    document, so the rule reads nothing a visitor cannot: a paid recipe's
+--    hidden caption is not a caption here.
+--    THE JOB'S READ (search_embedding_backlog, list_posts_pending_…) hashes
+--    every document's text to find the ones whose vector is missing or out
+--    of date: 8 ms at 5,200 documents on a laptop, so about 0.15 s at
+--    100,000. That is the point to keep the hash beside the document
+--    instead.
 --
 -- 2. What the embed-post Edge Function calls, in its 'search' mode:
 --      post_search_embedding_texts(ids, model)   the text to embed for each
---        post search could return (unlabelled, with a document, text not
---        blank): the first 2,000 characters of search_text, the hash of the
---        whole of it, and whether the stored vector is already of that hash.
---        A post it does not return has no public text to embed.
+--        post search could return (unlabelled, with a document whose text
+--        has words of its own): the first 2,000 characters of search_text,
+--        the hash of the whole of it, and whether the stored vector is
+--        already of that hash. A post it does not return has no public text
+--        to embed.
 --      store_post_search_embeddings(rows, model)  stores a vector only while
 --        the document still has the hash the vector was made from, and says
 --        which posts it stored.
 --
 -- 3. public.search_query_embeddings: the vector of a query, kept so the same
 --    words are embedded once. Keyed by sha256 of the model and the normalised
---    query (the service's hash; the text itself is never stored), read for 30
---    days, deleted by the job after that. public.search_query_embedding_days
---    counts the new query embeddings asked for on a UTC day.
---      search_query_embedding_lookup(hash, model, cap)  the cached vector, or,
---        on a miss, whether one more embedding may be asked for today: the
---        count goes up by one, atomically, while it is under the cap, and the
---        cap is never above c_daily_cap_ceiling (5,000) whatever a caller
---        sends. Past it the answer is "no", and search goes without related
---        posts until the next UTC day.
+--    query (the service's hash; the text itself is never stored), read for 7
+--    days, deleted by the job after that: a week keeps what people search for
+--    again and lets a burst of made-up queries go. At the service's cap of
+--    2,000 new queries a day the table holds 14,000 rows at most (35,000 at
+--    this file's own ceiling). public.search_query_embedding_days counts the
+--    new query embeddings asked for on a UTC day.
+--      search_query_embedding(hash, model)   the cached vector, or NULL. Reads
+--        only: a cache hit costs nobody anything.
+--      reserve_search_query_embedding(cap)   on a miss, whether one more
+--        embedding may be asked for today: the count goes up by one,
+--        atomically, while it is under the cap, and the cap is never above
+--        c_daily_cap_ceiling (5,000) whatever a caller sends. Past it the
+--        answer is "no", and search goes without related posts until the
+--        next UTC day. The service asks only after the viewer's own daily
+--        allowance let it (check_backend_rate_limit, scope
+--        public-search:related-embedding), so one viewer cannot spend the
+--        day for everyone.
 --      store_search_query_embedding(hash, model, vector)
 --
 -- 4. public.search_related_posts(p_query_embedding, p_viewer_user_id,
@@ -88,7 +115,7 @@
 --      by review), a labelled post, both sides of a block with the viewer, a
 --      post whose vector is not of its current text or of the asked model, and
 --      the posts the caller already shows (p_exclude_post_ids).
---      THE READ IS EXACT, AND THE INDEX IS NOT USED BY IT. Every vector of
+--      THE READ IS EXACT, AND THE TABLE HAS NO VECTOR INDEX. Every vector of
 --      the asked model is measured against the query; the ones inside the bar
 --      are then held to the rules above, and the nearest p_limit of what is
 --      left are returned. So the answer is a function of the rows this viewer
@@ -102,15 +129,19 @@
 --      vacuum brought them back. A vector superseded by an edit leaves such
 --      an entry behind until the next vacuum. Measured exactly, 5,000 vectors
 --      take about 1 ms, 20,000 about 4 ms and 50,000 about 8 ms, before the
---      rules, which are read only for the rows inside the bar.
---      post_search_embeddings_embedding_hnsw_idx is built all the same, as
---      the feed's table has one, so that the day the table outgrows an exact
---      read a later migration changes this function and waits for no index
---      build. Until then nothing reads it.
+--      rules, which are read only for the rows inside the bar. So no index is
+--      built: nothing would read it, and every re-embed would pay to keep it.
+--      An index-backed read is worth designing when the table nears 250,000
+--      vectors (about 50 ms a read at 1 ms per 5,000), and it will have to
+--      apply these rules inside the scan, not after it.
 --
 -- 5. search_query_events gains related_count: how many related posts a
 --    first-page answer held, NULL when none were looked for and for every row
 --    written before this file. search_query_report does not read it.
+--
+-- 6. get_operational_table_growth reports post_search_embeddings and
+--    search_query_embeddings beside the 27 tables it reported
+--    (20261112084002); its definition is otherwise that file's.
 --
 -- THE RELEASE WINDOW. Migrations apply, then the Edge Functions deploy, then
 -- the app is promoted. Nothing live calls anything in this file until the new
@@ -129,8 +160,8 @@
 -- locked. No trigger is added to any table.
 --
 -- search_public_posts, search_public_creators, search_public_entities,
--- search_post_score, search_terms, the documents' projection and
--- post_content_embeddings are untouched.
+-- search_post_score, search_terms, the documents' projection,
+-- marketplace_text_is_placeholder and post_content_embeddings are untouched.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
@@ -155,9 +186,6 @@ CREATE TABLE public.post_search_embeddings (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX post_search_embeddings_embedding_hnsw_idx
-  ON public.post_search_embeddings USING hnsw (embedding extensions.vector_cosine_ops);
-
 ALTER TABLE public.post_search_embeddings ENABLE ROW LEVEL SECURITY;
 
 -- No policy: the Data API roles see and write nothing. The service role reads;
@@ -169,6 +197,29 @@ COMMENT ON TABLE public.post_search_embeddings IS
   'Backend-owned gte-small embedding of a post''s public search text (post_search_documents.search_text), for search_related_posts. Never the feed''s post_content_embeddings, which hold hidden text. A row is read only while content_hash is the sha256 of the post''s current search_text. Service role only.';
 COMMENT ON COLUMN public.post_search_embeddings.content_hash IS
   'sha256 (hex) of the whole post_search_documents.search_text the vector was made from. A row whose hash is not the current text''s is never read and is re-made by the search-embeddings job.';
+
+-- A document's text has words of its own: the title is not a placeholder, or
+-- the public caption or public prompt holds a word. Both are read from the
+-- search document, the public projection: its title, and the B lexemes of its
+-- search_vector (20261111224010 weights the caption as public reads show it
+-- and the prompt no recipe covers as B, the title and model names as A, the
+-- tool names as C).
+CREATE FUNCTION public.post_search_document_has_own_words(
+  p_title_normalized text,
+  p_search_vector tsvector
+)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+SET search_path = ''
+AS $function$
+  SELECT coalesce(length(ts_filter(p_search_vector, '{b}')) > 0, false)
+    OR NOT public.marketplace_text_is_placeholder(p_title_normalized);
+$function$;
+
+COMMENT ON FUNCTION public.post_search_document_has_own_words(text, tsvector) IS
+  'Whether a search document says something of its post beyond tool and model names: a title that is not a placeholder (marketplace_text_is_placeholder), or a word of public caption or public prompt (a B lexeme). Only such posts are embedded for search_related_posts. Service role only.';
 
 -- ─── 2. What the embed-post Edge Function reads and writes ──────────────────
 
@@ -191,26 +242,32 @@ BEGIN
   END IF;
 
   -- The posts search could return whose vector is missing, of another model,
-  -- or of a text the post no longer shows. Newest first.
+  -- or of a text the post no longer shows; of those, the ones with words of
+  -- their own, newest first. The rule is asked of the few candidates only
+  -- (the materialised step), never of every document.
   RETURN QUERY
-  SELECT documents.post_id
-  FROM public.post_search_documents AS documents
-  JOIN public.posts AS posts ON posts.id = documents.post_id
-  LEFT JOIN public.post_search_embeddings AS embeddings ON embeddings.post_id = documents.post_id
-  WHERE posts.is_nsfw = false
-    AND btrim(documents.search_text) <> ''
-    AND (
-      embeddings.post_id IS NULL
-      OR embeddings.embedding_model <> p_embedding_model
-      OR embeddings.content_hash <> encode(sha256(convert_to(documents.search_text, 'UTF8')), 'hex')
-    )
-  ORDER BY documents.created_at DESC, documents.post_id ASC
+  WITH candidates AS MATERIALIZED (
+    SELECT documents.post_id, documents.created_at, documents.title_normalized, documents.search_vector
+    FROM public.post_search_documents AS documents
+    JOIN public.posts AS posts ON posts.id = documents.post_id
+    LEFT JOIN public.post_search_embeddings AS embeddings ON embeddings.post_id = documents.post_id
+    WHERE posts.is_nsfw = false
+      AND (
+        embeddings.post_id IS NULL
+        OR embeddings.embedding_model <> p_embedding_model
+        OR embeddings.content_hash <> encode(sha256(convert_to(documents.search_text, 'UTF8')), 'hex')
+      )
+  )
+  SELECT candidates.post_id
+  FROM candidates
+  WHERE public.post_search_document_has_own_words(candidates.title_normalized, candidates.search_vector)
+  ORDER BY candidates.created_at DESC, candidates.post_id ASC
   LIMIT p_limit;
 END;
 $function$;
 
 COMMENT ON FUNCTION public.list_posts_pending_search_embedding(text, integer) IS
-  'The posts search could return (a document, unlabelled, text not blank) whose public-text embedding is missing, of another model, or of a text the post no longer shows; newest first. Read by the search-embeddings job. Service role only.';
+  'The posts search could return (a document, unlabelled) whose public text has words of its own and whose embedding is missing, of another model, or of a text the post no longer shows; newest first. Read by the search-embeddings job. Service role only.';
 
 CREATE FUNCTION public.post_search_embedding_texts(
   p_post_ids uuid[],
@@ -246,12 +303,12 @@ BEGIN
   LEFT JOIN public.post_search_embeddings AS embeddings ON embeddings.post_id = documents.post_id
   WHERE documents.post_id = ANY (p_post_ids)
     AND posts.is_nsfw = false
-    AND btrim(documents.search_text) <> '';
+    AND public.post_search_document_has_own_words(documents.title_normalized, documents.search_vector);
 END;
 $function$;
 
 COMMENT ON FUNCTION public.post_search_embedding_texts(uuid[], text) IS
-  'For each given post search could return: the first 2,000 characters of its public search text (what embed-post embeds), the sha256 of the whole text, and whether the stored vector is already of that text and model. A post it leaves out has no public text to embed. Service role only.';
+  'For each given post search could return whose public text has words of its own: the first 2,000 characters of its search text (what embed-post embeds), the sha256 of the whole text, and whether the stored vector is already of that text and model. A post it leaves out has no public text to embed. Service role only.';
 
 CREATE FUNCTION public.store_post_search_embeddings(
   p_rows jsonb,
@@ -293,6 +350,7 @@ BEGIN
   JOIN public.posts AS posts ON posts.id = documents.post_id
   WHERE posts.is_nsfw = false
     AND incoming.content_hash = encode(sha256(convert_to(documents.search_text, 'UTF8')), 'hex')
+    AND public.post_search_document_has_own_words(documents.title_normalized, documents.search_vector)
   ORDER BY documents.post_id
   ON CONFLICT ON CONSTRAINT post_search_embeddings_pkey DO UPDATE
     SET embedding_model = EXCLUDED.embedding_model,
@@ -305,7 +363,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.store_post_search_embeddings(jsonb, text) IS
-  'Stores public-text embeddings ([{post_id, content_hash, embedding}], 1 to 25) for posts whose current search text still has that hash and that search could return, and returns the posts stored. Called by embed-post. Service role only.';
+  'Stores public-text embeddings ([{post_id, content_hash, embedding}], 1 to 25) for posts search could return whose current search text still has that hash and has words of its own, and returns the posts stored. Called by embed-post. Service role only.';
 
 -- ─── 3. Query vectors: a cache and a daily count ────────────────────────────
 
@@ -325,7 +383,7 @@ REVOKE ALL ON TABLE public.search_query_embeddings FROM PUBLIC, anon, authentica
 GRANT SELECT ON TABLE public.search_query_embeddings TO service_role;
 
 COMMENT ON TABLE public.search_query_embeddings IS
-  'Cache of search query vectors, keyed by sha256 of the embedding model and the normalised query (never the query text). Read for 30 days, then deleted by the search-embeddings job. Service role only.';
+  'Cache of search query vectors, keyed by sha256 of the embedding model and the normalised query (never the query text). Read for 7 days, then deleted by the search-embeddings job. Service role only.';
 
 CREATE TABLE public.search_query_embedding_days (
   day date PRIMARY KEY,
@@ -337,27 +395,22 @@ REVOKE ALL ON TABLE public.search_query_embedding_days FROM PUBLIC, anon, authen
 GRANT SELECT ON TABLE public.search_query_embedding_days TO service_role;
 
 COMMENT ON TABLE public.search_query_embedding_days IS
-  'How many new query embeddings search asked the embed-post function for on a UTC day (search_query_embedding_lookup counts one per cache miss it allows). The daily cap is read against it. Service role only.';
+  'How many new query embeddings search asked the embed-post function for on a UTC day (reserve_search_query_embedding counts one per cache miss it allows). The daily cap is read against it. Service role only.';
 
-CREATE FUNCTION public.search_query_embedding_lookup(
+CREATE FUNCTION public.search_query_embedding(
   p_query_hash text,
-  p_embedding_model text,
-  p_daily_cap integer
+  p_embedding_model text
 )
-RETURNS TABLE(embedding extensions.vector, reserved boolean)
+RETURNS extensions.vector
 LANGUAGE plpgsql
-VOLATILE
+STABLE
 SECURITY DEFINER
 SET search_path = ''
 AS $function$
 DECLARE
-  -- However many a caller asks for, never more new query embeddings a day.
-  c_daily_cap_ceiling CONSTANT integer := 5000;
   -- How long a cached vector is read; prune_search_embeddings deletes by the same age.
-  c_retention CONSTANT interval := interval '30 days';
-  v_cap integer := least(greatest(coalesce(p_daily_cap, 0), 0), c_daily_cap_ceiling);
+  c_retention CONSTANT interval := interval '7 days';
   v_embedding extensions.vector;
-  v_reserved boolean := false;
 BEGIN
   IF p_query_hash IS NULL OR p_query_hash !~ '^[0-9a-f]{64}$' THEN
     RAISE EXCEPTION 'Search query hash must be 64 lowercase hex characters';
@@ -373,22 +426,41 @@ BEGIN
     AND cached.embedding_model = p_embedding_model
     AND cached.created_at > now() - c_retention;
 
-  IF v_embedding IS NULL AND v_cap > 0 THEN
-    -- One statement: two misses at once cannot both take the last place.
-    INSERT INTO public.search_query_embedding_days AS days (day, requested)
-    VALUES ((now() AT TIME ZONE 'UTC')::date, 1)
-    ON CONFLICT ON CONSTRAINT search_query_embedding_days_pkey DO UPDATE
-      SET requested = days.requested + 1
-      WHERE days.requested < v_cap;
-    v_reserved := FOUND;
-  END IF;
-
-  RETURN QUERY SELECT v_embedding, v_reserved;
+  RETURN v_embedding;
 END;
 $function$;
 
-COMMENT ON FUNCTION public.search_query_embedding_lookup(text, text, integer) IS
-  'The cached vector of a query hash (read for 30 days), or on a miss whether one more query embedding may be asked for on this UTC day: reserved is true and the day''s count goes up by one while it is under p_daily_cap, itself never above 5,000. Service role only.';
+COMMENT ON FUNCTION public.search_query_embedding(text, text) IS
+  'The cached vector of a query hash, read for 7 days, or NULL. Reads only: nothing is counted. Service role only.';
+
+CREATE FUNCTION public.reserve_search_query_embedding(p_daily_cap integer)
+RETURNS boolean
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = ''
+AS $function$
+DECLARE
+  -- However many a caller asks for, never more new query embeddings a day.
+  c_daily_cap_ceiling CONSTANT integer := 5000;
+  v_cap integer := least(greatest(coalesce(p_daily_cap, 0), 0), c_daily_cap_ceiling);
+BEGIN
+  IF v_cap < 1 THEN
+    RETURN false;
+  END IF;
+
+  -- One statement: two misses at once cannot both take the last place.
+  INSERT INTO public.search_query_embedding_days AS days (day, requested)
+  VALUES ((now() AT TIME ZONE 'UTC')::date, 1)
+  ON CONFLICT ON CONSTRAINT search_query_embedding_days_pkey DO UPDATE
+    SET requested = days.requested + 1
+    WHERE days.requested < v_cap;
+  RETURN FOUND;
+END;
+$function$;
+
+COMMENT ON FUNCTION public.reserve_search_query_embedding(integer) IS
+  'Whether one more new query embedding may be asked for on this UTC day: true, and the day''s count goes up by one, while it is under p_daily_cap, itself never above 5,000. Service role only.';
 
 CREATE FUNCTION public.store_search_query_embedding(
   p_query_hash text,
@@ -422,7 +494,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.store_search_query_embedding(text, text, extensions.vector) IS
-  'Keeps a query''s vector under its hash for search_query_embedding_lookup. Service role only.';
+  'Keeps a query''s vector under its hash for search_query_embedding. Service role only.';
 
 -- ─── The job's housekeeping ─────────────────────────────────────────────────
 
@@ -434,8 +506,8 @@ SECURITY DEFINER
 SET search_path = ''
 AS $function$
 DECLARE
-  -- As search_query_embedding_lookup reads them.
-  c_retention CONSTANT interval := interval '30 days';
+  -- As search_query_embedding reads them.
+  c_retention CONSTANT interval := interval '7 days';
   -- The daily counts are kept a week, for the runbook's look at use.
   c_day_retention CONSTANT integer := 7;
   v_posts integer;
@@ -447,7 +519,10 @@ BEGIN
   END IF;
 
   -- The vectors of posts search can no longer return: no document (private,
-  -- archived, hidden by review) or labelled. They were already unread.
+  -- archived, hidden by review) or labelled; and of posts whose text changed
+  -- into one with no words of its own, which will not be embedded again.
+  -- They were already unread. (A vector of a text that changed and still has
+  -- words of its own stays: the job re-makes it.)
   WITH gone AS (
     SELECT embeddings.post_id
     FROM public.post_search_embeddings AS embeddings
@@ -457,6 +532,10 @@ BEGIN
       JOIN public.posts AS posts ON posts.id = documents.post_id
       WHERE documents.post_id = embeddings.post_id
         AND posts.is_nsfw = false
+        AND (
+          embeddings.content_hash = encode(sha256(convert_to(documents.search_text, 'UTF8')), 'hex')
+          OR public.post_search_document_has_own_words(documents.title_normalized, documents.search_vector)
+        )
     )
     LIMIT p_limit
   ),
@@ -494,7 +573,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.prune_search_embeddings(integer) IS
-  'Deletes, at most p_limit of each: the embeddings of posts search can no longer return, and cached query vectors older than 30 days; and the daily counts older than a week. Run by the search-embeddings job. Service role only.';
+  'Deletes, at most p_limit of each: the embeddings of posts search can no longer return or whose text no longer has words of its own, and cached query vectors older than 7 days; and the daily counts older than a week. Run by the search-embeddings job. Service role only.';
 
 CREATE FUNCTION public.search_embedding_backlog(p_embedding_model text)
 RETURNS TABLE(pending boolean, prunable boolean)
@@ -504,7 +583,7 @@ SECURITY DEFINER
 SET search_path = ''
 AS $function$
 DECLARE
-  c_retention CONSTANT interval := interval '30 days';
+  c_retention CONSTANT interval := interval '7 days';
   c_day_retention CONSTANT integer := 7;
 BEGIN
   RETURN QUERY
@@ -519,6 +598,10 @@ BEGIN
         JOIN public.posts AS posts ON posts.id = documents.post_id
         WHERE documents.post_id = embeddings.post_id
           AND posts.is_nsfw = false
+          AND (
+            embeddings.content_hash = encode(sha256(convert_to(documents.search_text, 'UTF8')), 'hex')
+            OR public.post_search_document_has_own_words(documents.title_normalized, documents.search_vector)
+          )
       )
     )
     OR EXISTS (
@@ -576,10 +659,11 @@ BEGIN
   END IF;
 
   RETURN QUERY
-  -- Every vector of the model, measured: the ones inside the bar. A distance
-  -- in a WHERE clause, with no ORDER BY beside it, is nothing the HNSW index
-  -- can answer, and the materialised step keeps the order below away from it,
-  -- so this is a read of the whole table and its answer is exact.
+  -- Every vector of the model, measured: the ones inside the bar. The table
+  -- has no vector index, and this step would use none: a distance in a WHERE
+  -- clause, with no ORDER BY beside it, is nothing an HNSW index answers, and
+  -- the materialised step keeps the order below apart from it. A read of the
+  -- whole table, and its answer is exact.
   WITH near AS MATERIALIZED (
     SELECT
       embeddings.post_id,
@@ -625,7 +709,9 @@ COMMENT ON FUNCTION public.search_related_posts(extensions.vector, uuid, uuid[],
 REVOKE ALL ON FUNCTION public.list_posts_pending_search_embedding(text, integer) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.post_search_embedding_texts(uuid[], text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_post_search_embeddings(jsonb, text) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.search_query_embedding_lookup(text, text, integer) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.post_search_document_has_own_words(text, tsvector) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.search_query_embedding(text, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.reserve_search_query_embedding(integer) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_search_query_embedding(text, text, extensions.vector) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.prune_search_embeddings(integer) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.search_embedding_backlog(text) FROM PUBLIC, anon, authenticated;
@@ -633,11 +719,103 @@ REVOKE ALL ON FUNCTION public.search_related_posts(extensions.vector, uuid, uuid
 GRANT EXECUTE ON FUNCTION public.list_posts_pending_search_embedding(text, integer) TO service_role;
 GRANT EXECUTE ON FUNCTION public.post_search_embedding_texts(uuid[], text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.store_post_search_embeddings(jsonb, text) TO service_role;
-GRANT EXECUTE ON FUNCTION public.search_query_embedding_lookup(text, text, integer) TO service_role;
+GRANT EXECUTE ON FUNCTION public.post_search_document_has_own_words(text, tsvector) TO service_role;
+GRANT EXECUTE ON FUNCTION public.search_query_embedding(text, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.reserve_search_query_embedding(integer) TO service_role;
 GRANT EXECUTE ON FUNCTION public.store_search_query_embedding(text, text, extensions.vector) TO service_role;
 GRANT EXECUTE ON FUNCTION public.prune_search_embeddings(integer) TO service_role;
 GRANT EXECUTE ON FUNCTION public.search_embedding_backlog(text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.search_related_posts(extensions.vector, uuid, uuid[], integer, text) TO service_role;
+
+-- ─── 6. Growth accounting counts the two tables that grow ───────────────────
+--
+-- The definition of 20261112084002 with post_search_embeddings (a row per
+-- searchable post with words of its own) and search_query_embeddings (a row
+-- per distinct query of the last week) added. search_query_embedding_days is
+-- a row a day, kept a week, and is not counted.
+CREATE OR REPLACE FUNCTION public.get_operational_table_growth()
+RETURNS TABLE (
+  table_name text,
+  live_rows bigint,
+  total_bytes bigint
+)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_catalog, pg_temp
+AS $function$
+  SELECT growth.table_name, growth.live_rows, growth.total_bytes
+  FROM (
+    SELECT
+      stats.relname::text AS table_name,
+      stats.n_live_tup AS live_rows,
+      pg_catalog.pg_total_relation_size(stats.relid) AS total_bytes
+    FROM pg_catalog.pg_stat_user_tables AS stats
+    WHERE stats.schemaname = 'public'
+      AND stats.relname = ANY (ARRAY[
+        'account_merge_tickets',
+        'ai_usage_events',
+        'backend_job_locks',
+        'backend_job_runs',
+        'backend_rate_limits',
+        'feed_delivery_facts',
+        'feed_events',
+        'feed_session_items',
+        'feed_sessions',
+        'feed_viewer_daily',
+        'generation_completion_jobs',
+        'generation_model_provider_checks',
+        'mobile_notifications',
+        'mobile_push_deliveries',
+        'onboarding_events',
+        'playback_metrics',
+        'playback_metrics_daily_rollup',
+        'post_search_embeddings',
+        'provider_dependency_events',
+        'search_query_embeddings',
+        'search_query_events',
+        'template_run_steps',
+        'template_runs',
+        'upload_byte_reservations',
+        'upload_byte_user_counters',
+        'upload_path_tombstones',
+        'workflow_canvas_run_steps',
+        'workflow_canvas_runs',
+        'workflow_run_step_jobs'
+      ])
+
+    UNION ALL
+
+    SELECT
+      'auth.users',
+      stats.n_live_tup,
+      pg_catalog.pg_total_relation_size(stats.relid)
+    FROM pg_catalog.pg_stat_user_tables AS stats
+    WHERE stats.schemaname = 'auth'
+      AND stats.relname = 'users'
+
+    UNION ALL
+
+    SELECT
+      'guest_identities',
+      (
+        SELECT count(*)
+        FROM auth.users AS guest
+        WHERE guest.is_anonymous
+          AND guest.deleted_at IS NULL
+      ),
+      0::bigint
+  ) AS growth
+  ORDER BY growth.total_bytes DESC, growth.table_name;
+$function$;
+
+REVOKE ALL ON FUNCTION public.get_operational_table_growth()
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_operational_table_growth()
+  TO service_role;
+
+COMMENT ON FUNCTION public.get_operational_table_growth() IS
+  'Row counts and byte sizes for churn-prone operational state, append-only telemetry with retention, the vectors search keeps of posts and of queries, permanent security ledgers, user-owned workflow history, auth.users and the exact count of live guest identities (bytes 0: part of auth.users). Service role only.';
 
 -- ─── 5. The search log says whether related posts were returned ─────────────
 --

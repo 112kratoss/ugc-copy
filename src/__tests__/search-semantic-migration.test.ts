@@ -2,6 +2,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { OPERATIONAL_TABLE_ROW_BUDGETS } from '@/lib/operational-table-growth';
+
 // What the migration does to real rows is held by
 // supabase/tests/database/search_related_posts.test.sql: the text that is
 // embedded, who is left out, the cache and its daily count. This file holds
@@ -9,7 +11,8 @@ import { describe, expect, it } from 'vitest';
 // the embedded text is the search document's and nothing else, a vector is
 // read only against the hash of the text the post shows now, the rules are
 // search_public_posts's own, the read never goes through the HNSW index, no
-// post save writes here, and everything stays the service role's.
+// post save writes here, a post with no words of its own gets no vector, the
+// growth accounting counts the tables, and everything stays the service role's.
 
 const migrationsDirectory = join(process.cwd(), 'supabase/migrations');
 const migrationNames = readdirSync(migrationsDirectory).filter((name) => name.endsWith('.sql')).sort();
@@ -24,7 +27,9 @@ const FUNCTIONS = [
   'public.list_posts_pending_search_embedding(text, integer)',
   'public.post_search_embedding_texts(uuid[], text)',
   'public.store_post_search_embeddings(jsonb, text)',
-  'public.search_query_embedding_lookup(text, text, integer)',
+  'public.post_search_document_has_own_words(text, tsvector)',
+  'public.search_query_embedding(text, text)',
+  'public.reserve_search_query_embedding(integer)',
   'public.store_search_query_embedding(text, text, extensions.vector)',
   'public.prune_search_embeddings(integer)',
   'public.search_embedding_backlog(text)',
@@ -86,7 +91,7 @@ describe('semantic search migration', () => {
       'search_public_posts', 'search_public_creators', 'search_public_entities', 'search_post_score',
       'search_creator_score', 'search_corrected_query', 'refresh_post_search_documents', 'rebuild_search_terms',
       'match_post_content_embeddings', 'list_posts_pending_embedding', 'search_query_report',
-      'prune_operational_backend_data',
+      'prune_operational_backend_data', 'marketplace_text_is_placeholder', 'recipe_post_public_body',
     ]) {
       expect(statements, notThisFiles).not.toMatch(new RegExp(`FUNCTION public\\.${notThisFiles}\\(`));
     }
@@ -95,7 +100,7 @@ describe('semantic search migration', () => {
     expect(statements).not.toContain('public.search_terms');
   });
 
-  it('declares the vector as the feed does: 384 dimensions in the extensions schema, cosine HNSW', () => {
+  it('declares the vector as the feed does, 384 dimensions in the extensions schema, and builds no index nothing would read', () => {
     expect(statements).toContain("IF to_regtype('extensions.vector') IS NULL THEN");
     expect(collapse(statements)).toContain(collapse(`
       CREATE TABLE public.post_search_embeddings (
@@ -106,8 +111,12 @@ describe('semantic search migration', () => {
         embedded_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       );`));
+    // The read measures every vector (below), so an HNSW index would only be
+    // paid for on every re-embed. The one index of the file is the cache's age.
+    expect(statements).not.toMatch(/USING\s+(?:hnsw|ivfflat)/i);
+    expect(statements.match(/CREATE (?:UNIQUE )?INDEX/g)).toHaveLength(1);
     expect(collapse(statements)).toContain(
-      'CREATE INDEX post_search_embeddings_embedding_hnsw_idx ON public.post_search_embeddings USING hnsw (embedding extensions.vector_cosine_ops);',
+      'CREATE INDEX search_query_embeddings_created_at_idx ON public.search_query_embeddings (created_at);',
     );
     // The query cache is keyed by a hash, and holds no column a query's text could sit in.
     expect(collapse(statements)).toContain(collapse(`
@@ -132,10 +141,12 @@ describe('semantic search migration', () => {
       expect(statements).toContain(`REVOKE ALL ON FUNCTION ${signature} FROM PUBLIC, anon, authenticated;`);
       expect(statements).toContain(`GRANT EXECUTE ON FUNCTION ${signature} TO service_role;`);
     }
-    // Every function: a definer with an empty search path, every name qualified.
+    // Every function of its own: an empty search path, every name qualified;
+    // a definer but for the rule, which reads only what it is handed.
     const created = statements.match(/CREATE FUNCTION public\.\w+\(/g) ?? [];
     expect(created).toHaveLength(FUNCTIONS.length);
-    expect(statements.match(/SECURITY DEFINER\s+SET search_path = ''\s+AS \$function\$/g)).toHaveLength(FUNCTIONS.length);
+    expect(statements.match(/SET search_path = ''\s+AS \$function\$/g)).toHaveLength(FUNCTIONS.length);
+    expect(statements.match(/SECURITY DEFINER\s+SET search_path = ''\s+AS \$function\$/g)).toHaveLength(FUNCTIONS.length - 1);
     expect(statements).not.toMatch(/SET search_path TO/);
     expect(statements).not.toContain('hnsw.');
   });
@@ -153,6 +164,8 @@ describe('semantic search migration', () => {
     expect(Array.from(definition.matchAll(/\bposts\.(\w+)/g), (match) => match[1]).sort()).toEqual(['id', 'is_nsfw']);
     expect(definition).toContain('posts.is_nsfw = false');
     expect(definition).not.toMatch(/\b(?:prompt|body|title|description)\b/);
+    // And only for a post whose public text has words of its own.
+    expect(definition).toContain('public.post_search_document_has_own_words(documents.title_normalized, documents.search_vector)');
     expect(definition).not.toContain('post_resource_bundles');
     expect(definition).not.toContain('generations');
   });
@@ -164,7 +177,12 @@ describe('semantic search migration', () => {
     ]);
     expect(pending).toContain('posts.is_nsfw = false');
     expect(pending).toContain(`embeddings.content_hash <> ${HASH_OF_DOCUMENT}`);
-    expect(pending).toContain('ORDER BY documents.created_at DESC, documents.post_id ASC');
+    // The rule is asked of the candidates, a materialised few, never of every document.
+    expect(pending).toContain('WITH candidates AS MATERIALIZED (');
+    expect(pending.slice(pending.indexOf('FROM candidates'))).toContain(
+      'public.post_search_document_has_own_words(candidates.title_normalized, candidates.search_vector)',
+    );
+    expect(pending).toContain('ORDER BY candidates.created_at DESC, candidates.post_id ASC');
 
     const store = newestDefinition('store_post_search_embeddings').definition;
     expect(relationsOf(store)).toEqual([
@@ -172,7 +190,34 @@ describe('semantic search migration', () => {
     ]);
     expect(store).toContain('posts.is_nsfw = false');
     expect(store).toContain(`incoming.content_hash = ${HASH_OF_DOCUMENT}`);
+    expect(store).toContain('public.post_search_document_has_own_words(documents.title_normalized, documents.search_vector)');
     expect(store).toContain('incoming.embedding::extensions.vector(384)');
+  });
+
+  it('says a post has words of its own from its search document alone: its title, or a word of public caption or prompt', () => {
+    const { file, definition } = newestDefinition('post_search_document_has_own_words');
+    expect(file).toBe(MIGRATION);
+    // Two columns of the public projection are its whole input: no table is
+    // read, so a paid recipe's hidden caption cannot count as a caption.
+    expect(definition).toContain('p_title_normalized text,');
+    expect(definition).toContain('p_search_vector tsvector');
+    expect(relationsOf(definition)).toEqual([]);
+    expect(collapse(definition)).toContain(collapse(`
+      SELECT coalesce(length(ts_filter(p_search_vector, '{b}')) > 0, false)
+        OR NOT public.marketplace_text_is_placeholder(p_title_normalized);`));
+    // B is the caption as public reads show it and the prompt no recipe covers
+    // (20261111224010); the title and model names are A, the tool names C.
+    const projection = newestDefinition('refresh_post_search_documents').definition;
+    expect(projection).toContain(
+      "setweight(to_tsvector('pg_catalog.simple', coalesce(public.recipe_post_public_body(posts.body, bundles.access_mode), '')), 'B')",
+    );
+    expect(projection).toContain(
+      "setweight(to_tsvector('pg_catalog.simple', coalesce(CASE WHEN bundles.id IS NULL THEN posts.prompt END, '')), 'B')",
+    );
+    expect(Array.from(projection.matchAll(/'([ABCD])'\)?,?\s*$/gm), (match) => match[1]).filter((weight) => weight === 'B'))
+      .toHaveLength(4);
+    // The placeholder rule is the product's own, held to its word lists elsewhere.
+    expect(newestDefinition('marketplace_text_is_placeholder').file).toBe('20261025094552_marketplace_placeholder_text_all_words.sql');
   });
 
   it('reads a related post by search_public_posts’s rules, before the limit, on a vector of its current text', () => {
@@ -232,11 +277,15 @@ describe('semantic search migration', () => {
     expect(definition).not.toMatch(/set_config|iterative_scan|ef_search/);
   });
 
-  it('counts a new query embedding in one statement, under a ceiling no caller can raise', () => {
-    const { definition } = newestDefinition('search_query_embedding_lookup');
-    expect(relationsOf(definition)).toEqual([
-      'public.search_query_embedding_days', 'public.search_query_embeddings',
-    ]);
+  it('reads the cache without counting, and counts a new query embedding in one statement under a ceiling no caller can raise', () => {
+    const cache = newestDefinition('search_query_embedding').definition;
+    expect(relationsOf(cache)).toEqual(['public.search_query_embeddings']);
+    // Reads only: a cache hit spends nothing, of the day or of anybody's allowance.
+    expect(cache).toMatch(/LANGUAGE plpgsql\s+STABLE/);
+    expect(cache).not.toMatch(/\b(?:INSERT|UPDATE|DELETE)\b/);
+
+    const { definition } = newestDefinition('reserve_search_query_embedding');
+    expect(relationsOf(definition)).toEqual(['public.search_query_embedding_days']);
     expect(definition).toContain('c_daily_cap_ceiling CONSTANT integer := 5000;');
     expect(definition).toContain('v_cap integer := least(greatest(coalesce(p_daily_cap, 0), 0), c_daily_cap_ceiling);');
     expect(collapse(definition)).toContain(collapse(`
@@ -245,20 +294,21 @@ describe('semantic search migration', () => {
       ON CONFLICT ON CONSTRAINT search_query_embedding_days_pkey DO UPDATE
         SET requested = days.requested + 1
         WHERE days.requested < v_cap;
-      v_reserved := FOUND;`));
-    // The lookup and the prune agree on how long a cached vector lives.
+      RETURN FOUND;`));
+    // The cache and the prune agree on how long a vector lives: a week.
     const prune = newestDefinition('prune_search_embeddings').definition;
     const backlog = newestDefinition('search_embedding_backlog').definition;
-    for (const body of [definition, prune, backlog]) {
-      expect(body).toContain("c_retention CONSTANT interval := interval '30 days';");
+    for (const body of [cache, prune, backlog]) {
+      expect(body).toContain("c_retention CONSTANT interval := interval '7 days';");
     }
-    expect(definition).toContain('cached.created_at > now() - c_retention');
+    expect(statements).not.toContain("interval '30 days'");
+    expect(cache).toContain('cached.created_at > now() - c_retention');
     expect(prune).toContain('cached.created_at <= now() - c_retention');
   });
 
-  it('prunes only the vectors of posts search can no longer return', () => {
+  it('prunes only the vectors of posts search can no longer return, or whose text lost its own words', () => {
     const { definition } = newestDefinition('prune_search_embeddings');
-    expect(collapse(definition)).toContain(collapse(`
+    const gone = collapse(`
       FROM public.post_search_embeddings AS embeddings
       WHERE NOT EXISTS (
         SELECT 1
@@ -266,8 +316,38 @@ describe('semantic search migration', () => {
         JOIN public.posts AS posts ON posts.id = documents.post_id
         WHERE documents.post_id = embeddings.post_id
           AND posts.is_nsfw = false
-      )
-      LIMIT p_limit`));
+          AND (
+            embeddings.content_hash = ${HASH_OF_DOCUMENT}
+            OR public.post_search_document_has_own_words(documents.title_normalized, documents.search_vector)
+          )
+      )`);
+    expect(collapse(definition)).toContain(`${gone} LIMIT p_limit`);
+    // The job is told of the same rows.
+    expect(collapse(newestDefinition('search_embedding_backlog').definition)).toContain(gone);
+  });
+
+  it('adds the two tables that grow to the growth accounting, each with a budget, and drops none it counted', () => {
+    const { file, definition } = newestDefinition('get_operational_table_growth');
+    expect(file).toBe(MIGRATION);
+    const before = withoutComments(readFileSync(join(migrationsDirectory, '20261112084002_search_query_events.sql'), 'utf8'));
+    const previous = before.slice(before.search(/CREATE OR REPLACE FUNCTION public\.get_operational_table_growth\(/));
+    const tablesOf = (sql: string) => Array.from(
+      sql.slice(sql.indexOf('ANY (ARRAY['), sql.indexOf('])')).matchAll(/'(\w+)'/g), (match) => match[1],
+    );
+    const added = ['post_search_embeddings', 'search_query_embeddings'];
+    expect(tablesOf(definition)).toEqual([...tablesOf(previous), ...added].sort());
+    expect(tablesOf(previous)).toHaveLength(27);
+    // But for those two lines the definition is the one it replaces.
+    const withoutAdded = definition.replace(/\n\s+'(?:post_search_embeddings|search_query_embeddings)',/g, '');
+    expect(collapse(withoutAdded)).toBe(collapse(previous.slice(0, previous.search(/\n\$function\$;/))));
+    for (const table of added) {
+      expect(OPERATIONAL_TABLE_ROW_BUDGETS[table], table).toBeDefined();
+    }
+    // The cache's budget sits between what the code's cap and the database's ceiling allow in a week.
+    expect(OPERATIONAL_TABLE_ROW_BUDGETS.search_query_embeddings.warning).toBeGreaterThanOrEqual(2_000 * 7);
+    expect(OPERATIONAL_TABLE_ROW_BUDGETS.search_query_embeddings.degraded).toBeGreaterThanOrEqual(5_000 * 7);
+    expect(statements).toContain('REVOKE ALL ON FUNCTION public.get_operational_table_growth()\n  FROM PUBLIC, anon, authenticated;');
+    expect(statements).toContain('GRANT EXECUTE ON FUNCTION public.get_operational_table_growth()\n  TO service_role;');
   });
 
   it('adds one nullable column to the search log and leaves its report alone', () => {

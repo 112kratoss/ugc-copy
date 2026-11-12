@@ -91,6 +91,14 @@ export const OPERATIONAL_TABLE_ROW_BUDGETS: Record<string, { warning: number; de
   // The anonymous search log: one row per first-page search answer, kept 90 days. A backstop
   // against a runaway client, not a traffic measure: typing steps log one row each.
   search_query_events: { warning: 500_000, degraded: 2_000_000 },
+  // Search by meaning. A vector per searchable post with words of its own, read whole on every
+  // related-posts lookup (about 1 ms per 5,000): the warning is where that read nears 50 ms and
+  // an index-backed one is worth designing (migration 20261112215420), not a retention lag.
+  post_search_embeddings: { warning: 250_000, degraded: 1_000_000 },
+  // The cache of query vectors: 2,000 new queries a day at most, kept 7 days, so 14,000 rows at
+  // the code's cap and 35,000 at the database's ceiling. Past the warning the cap or the prune
+  // is not holding.
+  search_query_embeddings: { warning: 20_000, degraded: 40_000 },
 };
 
 const DEFAULT_BUDGET = { warning: 100_000, degraded: 500_000 };
