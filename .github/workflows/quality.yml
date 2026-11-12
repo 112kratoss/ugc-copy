@@ -91,7 +91,11 @@ jobs:
   e2e:
     name: E2E smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The suite takes 26 to 28 minutes. At a 30-minute limit the run on main
+    # for #776 was cancelled at the limit and its production release skipped
+    # (2026-11-12), as two pull-request runs were that day; 45 leaves room
+    # without hiding a real hang for long.
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
