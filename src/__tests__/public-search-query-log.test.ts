@@ -22,6 +22,10 @@ function answer(counts: { creators?: number; posts?: number; recipes?: number } 
     normalizedQuery: 'Port',
     type: 'top',
     sort: 'top',
+    entities: [],
+    filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false },
+    correctedQuery: { posts: null, recipes: null },
+    exact: false,
     creators: items(counts.creators),
     posts: items(counts.posts),
     recipes: items(counts.recipes),
@@ -74,7 +78,39 @@ describe('buildSearchQueryEventRow', () => {
       post_count: 2,
       recipe_count: 1,
       sort: null,
+      // Top is not narrowed; its posts and recipes were found on the query as typed.
+      made_with: null,
+      media_kind: null,
+      has_recipe: null,
+      followed_only: null,
+      corrected: false,
     });
+  });
+
+  it('says what narrowed a Posts search, and nothing of filters for any other type', () => {
+    const filters = { madeWith: 'model:kling-2.6', mediaKind: 'video' as const, hasRecipe: true, following: true };
+    expect(buildSearchQueryEventRow({ ...input, type: 'posts', filters }, DAY_KEY)).toMatchObject({
+      made_with: 'model:kling-2.6', media_kind: 'video', has_recipe: true, followed_only: true,
+    });
+    // A filter that is off is null, never false: the column says a search was narrowed.
+    expect(buildSearchQueryEventRow({
+      ...input, type: 'posts', filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false },
+    }, DAY_KEY)).toMatchObject({ made_with: null, media_kind: null, has_recipe: null, followed_only: null });
+    for (const type of ['top', 'creators', 'recipes'] as const) {
+      expect(buildSearchQueryEventRow({ ...input, type, filters }, DAY_KEY), type).toMatchObject({
+        made_with: null, media_kind: null, has_recipe: null, followed_only: null,
+      });
+    }
+  });
+
+  it('says whether the posts or recipes were found on a corrected reading; a Creators search has none', () => {
+    const read = (correctedQuery: PublicSearchResponse['correctedQuery'], type: PublicSearchResponse['type'] = 'top') => (
+      buildSearchQueryEventRow({ ...input, type, response: { ...answer({ posts: 2 }), correctedQuery } }, DAY_KEY)?.corrected
+    );
+    expect(read({ posts: null, recipes: null })).toBe(false);
+    expect(read({ posts: 'portrait', recipes: null })).toBe(true);
+    expect(read({ posts: null, recipes: 'portrait' }, 'recipes')).toBe(true);
+    expect(read({ posts: 'portrait', recipes: null }, 'creators')).toBeNull();
   });
 
   it('says which order a Posts or Recipes search was read in, and nothing for Top and Creators', () => {
@@ -149,6 +185,12 @@ describe('recordSearchAnswer', () => {
     expect(from).toHaveBeenCalledWith(SEARCH_QUERY_EVENTS_TABLE);
     expect(insert).toHaveBeenCalledTimes(1);
     expect(insert.mock.calls[0]).toEqual([expect.objectContaining({ query: 'port', post_count: 2 })]);
+  });
+
+  it('writes nothing for a search asked to read the query as typed: it re-asks one already counted', async () => {
+    const { deps, tasks } = setup();
+    recordSearchAnswer(deps, { ...input, exact: true });
+    expect(tasks).toHaveLength(0);
   });
 
   it('reads the day key once per instance and day, and hashes under it', async () => {

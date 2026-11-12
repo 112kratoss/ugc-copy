@@ -61,9 +61,14 @@ describe('search ranking migration', () => {
     expect(MIGRATION > '20261112084002').toBe(true);
     expect(statements.trim().startsWith("BEGIN;\nSET LOCAL lock_timeout = '5s';")).toBe(true);
     expect(statements.trim().endsWith('COMMIT;')).toBe(true);
-    for (const name of ['search_post_score', 'search_creator_score', 'search_public_posts', 'search_public_creators']) {
+    for (const name of ['search_post_score', 'search_creator_score', 'search_public_creators']) {
       expect(newestDefiner(name), name).toBe(MIGRATION);
     }
+    // Post search was re-created since, for its filters and its corrected
+    // reading (20261112143757). What this file holds of it below is this
+    // migration's definition; search-entities-filters-migration.test.ts holds
+    // the same rules to the newest one.
+    expect(newestDefiner('search_public_posts')).toBe('20261112143757_search_entities_filters_corrected_reading.sql');
   });
 
   it('holds the post score in one function whose parts cannot cross a tier', () => {
@@ -214,10 +219,11 @@ describe('search ranking migration', () => {
       /CREATE OR REPLACE FUNCTION public\.search_public_creators\(\s+p_query text,\s+p_viewer_user_id uuid DEFAULT NULL,\s+p_after_score double precision DEFAULT NULL,\s+p_after_id uuid DEFAULT NULL,\s+p_limit integer DEFAULT 20\s+\)/,
     );
     expect(statements).not.toContain('DROP FUNCTION public.search_public_creators');
-    // What the app sends now.
+    // What the app sends now: these eight first, as this migration took
+    // them, then the filters and the reading 20261112143757 added.
     const service = readFileSync(join(process.cwd(), 'src/lib/public-search-service.ts'), 'utf8');
     expect(service).toMatch(
-      /rpc\('search_public_posts', \{\s+p_query: query,\s+p_viewer_user_id: viewerUserId,\s+p_after_score: after\?\.score \?\? null,\s+p_after_id: after\?\.id \?\? null,\s+p_limit: limit,\s+p_as_of: asOf\.toISOString\(\),\s+p_sort: sort,\s+p_after_created_at: after\?\.createdAt \?\? null,\s+\}\)/,
+      /rpc\('search_public_posts', \{\s+p_query: query,\s+p_viewer_user_id: viewerUserId,\s+p_after_score: after\?\.score \?\? null,\s+p_after_id: after\?\.id \?\? null,\s+p_limit: limit,\s+p_as_of: asOf\.toISOString\(\),\s+p_sort: sort,\s+p_after_created_at: after\?\.createdAt \?\? null,\s+p_made_with: /,
     );
   });
 

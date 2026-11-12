@@ -7,7 +7,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendEvent } from '@/lib/backend-logger';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import {
+  publicSearchTypeHasFilters,
   publicSearchTypeHasSorts,
+  type PublicSearchFilters,
   type PublicSearchResponse,
   type PublicSearchSort,
   type PublicSearchType,
@@ -22,7 +24,14 @@ import {
  * A row holds the lowercased query (control characters removed, at most 100 characters), the
  * search type, whether a registered account was presented, a per-day visitor hash, how many
  * creators, posts and recipes the answer held, the order a Posts or Recipes search asked for
- * (null for Top and Creators, which have one), and when the request arrived.
+ * (null for Top and Creators, which have one), what narrowed a Posts search (the made-with
+ * entity, the media kind, "has a recipe", "from creators I follow": each null when off, and
+ * the last says only that the filter was on, never who is followed), whether the answer's posts
+ * or recipes were found on a corrected reading of the query, and when the request arrived.
+ *
+ * A search asked to read the query as typed ("search instead for") writes no row: it is the
+ * second asking of a search already counted, and by its nature finds no post or recipe, so it
+ * would count as a failed search in the report.
  *
  * The visitor hash is HMAC-SHA256 of the viewer's rate-limit key (a user id or the hashed network
  * address, never stored) under a random key made for that UTC day alone (`search_visitor_day_keys`).
@@ -49,6 +58,16 @@ export type SearchQueryEventRow = {
   recipe_count: number;
   /** The order a Posts or Recipes search was read in; null for Top and Creators. */
   sort: PublicSearchSort | null;
+  /** A Posts search's made-with filter (`model:kling-2.6`); null without one. */
+  made_with: string | null;
+  /** A Posts search's media filter; null without one. */
+  media_kind: 'image' | 'video' | null;
+  /** True when a Posts search asked only for posts with a recipe; null otherwise. */
+  has_recipe: true | null;
+  /** True when a Posts search asked only for posts by creators the viewer follows; null otherwise. */
+  followed_only: true | null;
+  /** Whether the answer's posts or recipes were found on a corrected reading; null for Creators. */
+  corrected: boolean | null;
 };
 
 export type SearchAnswerLogInput = {
@@ -58,6 +77,10 @@ export type SearchAnswerLogInput = {
   type: PublicSearchType;
   /** The order the search was read in (the applied one). */
   sort: PublicSearchSort;
+  /** What narrowed the search (the applied filters); none when left out. */
+  filters?: PublicSearchFilters;
+  /** The search was asked to read the query as typed: it writes no row. */
+  exact?: boolean;
   /** The rate-limit key the adapter computed: the user id, or the hashed network address. */
   viewerKey: string;
   /** A registered (non-guest) account was presented. */
@@ -99,11 +122,14 @@ export function sanitizeSearchQuery(normalizedQuery: string): string {
  * request's UTC day key; null (it could not be read) gives a random visitor value.
  */
 export function buildSearchQueryEventRow(
-  input: Omit<SearchAnswerLogInput, 'hasCursor'>,
+  input: Omit<SearchAnswerLogInput, 'hasCursor' | 'exact'>,
   dayKey: string | null,
 ): SearchQueryEventRow | null {
   const query = sanitizeSearchQuery(input.normalizedQuery);
   if (!query) return null;
+  const filters = publicSearchTypeHasFilters(input.type) ? input.filters : undefined;
+  // An answer from before the reading was reported says nothing of it.
+  const corrected = input.response.correctedQuery;
   return {
     created_at: input.requestedAt.toISOString(),
     query,
@@ -116,6 +142,13 @@ export function buildSearchQueryEventRow(
     post_count: input.response.posts.items.length,
     recipe_count: input.response.recipes.items.length,
     sort: publicSearchTypeHasSorts(input.type) ? input.sort : null,
+    made_with: filters?.madeWith ?? null,
+    media_kind: filters?.mediaKind ?? null,
+    has_recipe: filters?.hasRecipe ? true : null,
+    followed_only: filters?.following ? true : null,
+    corrected: input.type === 'creators' || !corrected
+      ? null
+      : corrected.posts !== null || corrected.recipes !== null,
   };
 }
 
@@ -158,7 +191,7 @@ export function recordSearchAnswer(
     logEvent('warn', 'search_query_log_failed', { error });
   };
   try {
-    if (input.hasCursor || isSearchQueryLogDisabled(dependencies.env)) return;
+    if (input.hasCursor || input.exact || isSearchQueryLogDisabled(dependencies.env)) return;
     if (!sanitizeSearchQuery(input.normalizedQuery)) return;
     dependencies.runAfterResponse(async () => {
       try {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { decodePublicSearchCursor } from '@/lib/public-search';
+import { decodePublicSearchCursor, publicSearchCursorFilterMark } from '@/lib/public-search';
 import { searchPublicContent } from '@/lib/public-search-service';
 
 const SEARCH_BEGAN = new Date('2026-11-12T10:00:00.000Z');
@@ -48,8 +48,18 @@ describe('public search service', () => {
       p_as_of: '2026-11-12T10:00:00.000Z',
       p_sort: 'top',
       p_after_created_at: null,
+      // Nothing narrows it, and a misspelling may be corrected.
+      p_made_with: null,
+      p_media_kind: null,
+      p_has_recipe: false,
+      p_followed_only: false,
+      p_correct: true,
     });
     expect(result.sort).toBe('top');
+    expect(result.filters).toEqual({ madeWith: null, mediaKind: null, hasRecipe: false, following: false });
+    expect(result.correctedQuery).toEqual({ posts: null, recipes: null });
+    expect(result.exact).toBe(false);
+    expect(result.entities).toEqual([]);
     expect(getShowcaseFeedItemsByPostIds).toHaveBeenCalledWith({
       postIds: ['11111111-1111-4111-8111-111111111111'],
       viewerUserId: 'viewer-1',
@@ -174,8 +184,10 @@ describe('public search service', () => {
   it('searches only creators on Top for a query of two characters, two emoji included', async () => {
     // Two emoji are four UTF-16 units; search_public_posts counts two
     // characters and raises, which failed the whole Top answer.
+    // Creators and entities are searched from two characters; posts and
+    // recipes, and the recipes' reading, from three.
     const rpc = vi.fn(async (name: string) => {
-      if (name !== 'search_public_creators') throw new Error(`Unexpected RPC ${name}`);
+      if (name !== 'search_public_creators' && name !== 'search_public_entities') throw new Error(`Unexpected RPC ${name}`);
       return { data: [], error: null };
     });
     const getMarketplaceResourceList = vi.fn();
@@ -195,7 +207,7 @@ describe('public search service', () => {
       loadBlockedCreatorIds: vi.fn(async () => new Set()) as never,
     });
 
-    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc.mock.calls.map(([name]) => name).sort()).toEqual(['search_public_creators', 'search_public_entities']);
     expect(getMarketplaceResourceList).not.toHaveBeenCalled();
     expect(result.posts.items).toEqual([]);
     expect(result.recipes.items).toEqual([]);
@@ -213,7 +225,8 @@ describe('public search service', () => {
     ];
     const [mediaPost, labelledPost, textPost, laterPost] = rows.map((row) => row.post_id);
     const rpc = vi.fn(async (name: string, args: { p_limit: number }) => {
-      if (name === 'search_public_creators') return { data: [], error: null };
+      if (name === 'search_public_creators' || name === 'search_public_entities') return { data: [], error: null };
+      if (name === 'search_recipes_corrected_query') return { data: null, error: null };
       if (name !== 'search_public_posts') throw new Error(`Unexpected RPC ${name}`);
       return { data: rows.slice(0, args.p_limit), error: null };
     });
@@ -469,4 +482,215 @@ describe('public search service', () => {
 
     expect(result.recipes.items).toEqual([expect.objectContaining({ salesCount: 1, freeUnlockCount: 12 })]);
   });
+
+  describe('entities, filters and the reading', () => {
+    const POST = '11111111-1111-4111-8111-111111111111';
+    const OTHER = '22222222-2222-4222-8222-222222222222';
+    const NONE = { madeWith: null, mediaKind: null, hasRecipe: false, following: false };
+    const recipe = (id: string) => ({
+      id, postId: `post-${id}`, title: 'Portrait recipe', summary: '', previewText: '', accessMode: 'free',
+      priceUsdCents: 0, salesCount: 0, freeUnlockCount: 0, allowRemix: false, resourceKinds: [],
+      createdAt: '2026-11-12T00:00:00.000Z', seller: { id: 'seller-1', username: 'seller', name: 'Seller', avatar: null },
+      post: null, priceQuote: { formatted: 'Free', currency: 'USD', amountSubunits: 0 },
+    });
+    function harness({
+      posts = [{ post_id: POST, creator_user_id: 'creator-1', search_score: 9, created_at: '2026-11-12T09:00:00+00:00', corrected_query: null as string | null }],
+      entities = [] as Array<Record<string, unknown>>,
+      recipesReadAs = null as string | null | Error,
+      recipes = [] as Array<ReturnType<typeof recipe>>,
+      hydrated = (ids: string[]) => ids.map((id) => ({ id })),
+    } = {}) {
+      const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+        if (name === 'search_public_creators') return { data: [], error: null };
+        if (name === 'search_public_posts') return { data: posts.slice(0, Number(args.p_limit)), error: null };
+        if (name === 'search_public_entities') return { data: entities, error: null };
+        if (name === 'search_recipes_corrected_query') {
+          return recipesReadAs instanceof Error ? { data: null, error: recipesReadAs } : { data: recipesReadAs, error: null };
+        }
+        throw new Error(`Unexpected RPC ${name}`);
+      });
+      const getMarketplaceResourceList = vi.fn(async () => ({
+        items: recipes,
+        pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 6 },
+      }));
+      const logEvent = vi.fn();
+      const search = (options: Partial<Parameters<typeof searchPublicContent>[0]>) => searchPublicContent({
+        query: 'portriat',
+        normalizedQuery: 'portriat',
+        type: 'top',
+        cursor: null,
+        limit: 20,
+        viewerUserId: 'viewer-1',
+        countryCode: null,
+        ...options,
+      }, {
+        createServiceClient: vi.fn(() => ({ rpc }) as unknown as SupabaseClient),
+        getShowcaseFeedItemsByPostIds: vi.fn(async ({ postIds }: { postIds: string[] }) => hydrated(postIds)) as never,
+        getMarketplaceResourceList: getMarketplaceResourceList as never,
+        loadBlockedCreatorIds: vi.fn(async () => new Set()) as never,
+        logEvent,
+        now,
+      });
+      const argsOf = (name: string) => rpc.mock.calls.filter(([called]) => called === name).map(([, args]) => args);
+      return { search, argsOf, getMarketplaceResourceList, logEvent };
+    }
+
+    it('offers the Top tab the models and tools the query names, for this viewer, by the name posts print', async () => {
+      const { search, argsOf } = harness({
+        entities: [
+          // Seen by the database under its bare key: named as posts name the model.
+          { kind: 'model', key: 'kling-2.6', label: 'kling-2.6', post_count: 14, post_count_capped: false },
+          { kind: 'tool', key: 'klingon-fx', label: 'Klingon FX', post_count: 1000, post_count_capped: true },
+          // A model this app does not make keeps the name its posts gave it.
+          { kind: 'model', key: 'niji-6', label: 'Niji 6', post_count: 2, post_count_capped: false },
+        ],
+      });
+      const result = await search({ query: 'kling', normalizedQuery: 'kling' });
+      expect(argsOf('search_public_entities')).toEqual([
+        { p_query: 'kling', p_viewer_user_id: 'viewer-1', p_limit: 5, p_made_with: null },
+      ]);
+      expect(result.entities).toEqual([
+        { kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', postCount: 14, postCountCapped: false },
+        { kind: 'tool', key: 'klingon-fx', label: 'Klingon FX', postCount: 1000, postCountCapped: true },
+        { kind: 'model', key: 'niji-6', label: 'Niji 6', postCount: 2, postCountCapped: false },
+      ]);
+    });
+
+    it('offers entities on Top only: a Posts, Creators or Recipes search asks for none', async () => {
+      for (const type of ['posts', 'creators', 'recipes'] as const) {
+        const { search, argsOf } = harness();
+        const result = await search({ type, query: 'kling', normalizedQuery: 'kling' });
+        expect(argsOf('search_public_entities'), type).toEqual([]);
+        expect(result.entities, type).toEqual([]);
+      }
+    });
+
+    it('narrows a Posts search in the database and says what it applied, the entity by its name', async () => {
+      const filters = { madeWith: 'model:kling-2.6', mediaKind: 'video' as const, hasRecipe: true, following: true };
+      const { search, argsOf } = harness({
+        entities: [{ kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', post_count: 14, post_count_capped: false }],
+      });
+      const result = await search({ type: 'posts', sort: 'latest', filters });
+      expect(argsOf('search_public_posts')[0]).toMatchObject({
+        p_sort: 'latest', p_made_with: 'model:kling-2.6', p_media_kind: 'video', p_has_recipe: true,
+        p_followed_only: true, p_correct: true,
+      });
+      // The filter's own entity, whatever the query, for the name it is shown under.
+      expect(argsOf('search_public_entities')).toEqual([
+        { p_query: null, p_viewer_user_id: 'viewer-1', p_limit: 1, p_made_with: 'model:kling-2.6' },
+      ]);
+      expect(result.filters).toEqual({
+        madeWith: { kind: 'model', key: 'kling-2.6', label: 'Kling 2.6' },
+        mediaKind: 'video', hasRecipe: true, following: true,
+      });
+      // The filter's entity is not an offer of entities.
+      expect(result.entities).toEqual([]);
+    });
+
+    it('names a made-with entity no post shows this viewer by its key, never by a name they could not see', async () => {
+      const { search } = harness({ entities: [], posts: [] });
+      const result = await search({ type: 'posts', filters: { ...NONE, madeWith: 'tool:secretool' } });
+      expect(result.filters.madeWith).toEqual({ kind: 'tool', key: 'secretool', label: 'secretool' });
+      expect(result.posts.items).toEqual([]);
+    });
+
+    it('leaves the Top tab unnarrowed whatever filters a request names', async () => {
+      const { search, argsOf } = harness();
+      const result = await search({
+        type: 'top',
+        filters: { madeWith: 'model:kling-2.6', mediaKind: 'video', hasRecipe: true, following: true },
+      });
+      expect(argsOf('search_public_posts')[0]).toMatchObject({
+        p_made_with: null, p_media_kind: null, p_has_recipe: false, p_followed_only: false,
+      });
+      expect(result.filters).toEqual(NONE);
+    });
+
+    it('marks a filtered search’s cursor with its filters, and an unfiltered one with nothing', async () => {
+      const rows = [
+        { post_id: POST, creator_user_id: 'creator-1', search_score: 9, created_at: '2026-11-12T09:00:00+00:00', corrected_query: null },
+        { post_id: OTHER, creator_user_id: 'creator-2', search_score: 8, created_at: '2026-11-11T09:00:00+00:00', corrected_query: null },
+      ];
+      const video = { ...NONE, mediaKind: 'video' as const };
+      const filtered = await harness({ posts: rows }).search({ type: 'posts', limit: 1, filters: video });
+      const plain = await harness({ posts: rows }).search({ type: 'posts', limit: 1 });
+      const exact = await harness({ posts: rows }).search({ type: 'posts', limit: 1, exact: true });
+
+      const mark = (cursor: string | null) => decodePublicSearchCursor(cursor, 'posts')?.filters;
+      expect(mark(filtered.posts.nextCursor)).toBe(publicSearchCursorFilterMark(video, false));
+      expect(mark(filtered.posts.nextCursor)).toMatch(/^[0-9a-f]{8}$/);
+      // As every cursor issued before filters: it still pages an unfiltered search.
+      expect(mark(plain.posts.nextCursor)).toBeUndefined();
+      // The reading is part of the search a cursor pages.
+      expect(mark(exact.posts.nextCursor)).toBe(publicSearchCursorFilterMark(NONE, true));
+      expect(mark(exact.posts.nextCursor)).not.toBe(mark(filtered.posts.nextCursor));
+    });
+
+    it('says how the posts and the recipes were read, each beside results it explains', async () => {
+      const corrected = [{ post_id: POST, creator_user_id: 'creator-1', search_score: 9, created_at: '2026-11-12T09:00:00+00:00', corrected_query: 'portrait' }];
+      const both = await harness({ posts: corrected, recipesReadAs: 'portraits', recipes: [recipe('r1')] }).search({});
+      expect(both.correctedQuery).toEqual({ posts: 'portrait', recipes: 'portraits' });
+      expect(both.exact).toBe(false);
+
+      // Recipes corrected to a word no recipe then shows this viewer: nothing to show results "for".
+      const noRecipes = await harness({ posts: corrected, recipesReadAs: 'portraits', recipes: [] }).search({});
+      expect(noRecipes.correctedQuery).toEqual({ posts: 'portrait', recipes: null });
+
+      // Posts whose every row was dropped after the ranked read (labelled since): no notice for none.
+      const noPosts = await harness({
+        posts: corrected,
+        hydrated: (ids) => ids.map((id) => ({ id, isNsfw: true })),
+      }).search({ type: 'posts' });
+      expect(noPosts.posts.items).toEqual([]);
+      expect(noPosts.correctedQuery).toEqual({ posts: null, recipes: null });
+
+      // A database from before the reading was reported sends no column: read as typed.
+      const before = await harness({
+        posts: [{ post_id: POST, creator_user_id: 'creator-1', search_score: 9, created_at: '2026-11-12T09:00:00+00:00' } as never],
+      }).search({ type: 'posts' });
+      expect(before.correctedQuery.posts).toBeNull();
+    });
+
+    it('asks for the recipes’ reading only where recipes are searched', async () => {
+      expect((await harness()).argsOf('search_recipes_corrected_query')).toEqual([]);
+      for (const [type, asked] of [['top', 1], ['recipes', 1], ['posts', 0], ['creators', 0]] as const) {
+        const { search, argsOf } = harness();
+        await search({ type });
+        expect(argsOf('search_recipes_corrected_query'), type).toHaveLength(asked);
+      }
+      const { search, argsOf } = harness();
+      await search({ type: 'recipes' });
+      expect(argsOf('search_recipes_corrected_query')).toEqual([{ p_query: 'portriat' }]);
+    });
+
+    it('reads the query as typed when asked: no correction for posts, and no recipes the list would find corrected', async () => {
+      const { search, argsOf, getMarketplaceResourceList } = harness({
+        posts: [], recipesReadAs: 'portrait', recipes: [recipe('r1')],
+      });
+      const result = await search({ exact: true });
+      expect(argsOf('search_public_posts')[0]).toMatchObject({ p_correct: false });
+      // The list corrects only when nothing holds the query as typed, so as typed it is the empty list.
+      expect(getMarketplaceResourceList).not.toHaveBeenCalled();
+      expect(result.recipes).toEqual({ items: [], nextCursor: null });
+      expect(result.correctedQuery).toEqual({ posts: null, recipes: null });
+      expect(result.exact).toBe(true);
+    });
+
+    it('still lists recipes on an exact search the list reads as typed anyway', async () => {
+      const { search, getMarketplaceResourceList } = harness({ recipesReadAs: null, recipes: [recipe('r1')] });
+      const result = await search({ type: 'recipes', exact: true });
+      expect(getMarketplaceResourceList).toHaveBeenCalledTimes(1);
+      expect(result.recipes.items.map((item) => item.id)).toEqual(['r1']);
+    });
+
+    it('keeps the recipes when their reading cannot be read: the notice is lost and the failure logged', async () => {
+      const failure = new Error('function search_recipes_corrected_query does not exist');
+      const { search, logEvent } = harness({ recipesReadAs: failure, recipes: [recipe('r1')] });
+      const result = await search({ type: 'recipes' });
+      expect(result.recipes.items.map((item) => item.id)).toEqual(['r1']);
+      expect(result.correctedQuery.recipes).toBeNull();
+      expect(logEvent).toHaveBeenCalledWith('warn', 'public_search_recipes_reading_failed', { error: failure });
+    });
+  });
+
 });

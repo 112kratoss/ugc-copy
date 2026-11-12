@@ -191,9 +191,11 @@ describe('search recall migration', () => {
 
   it('matches posts on the new query, labelled posts still left out, and corrects a query nothing holds', () => {
     // Re-created since by the ranking migration (20261112103547: tiers, an
-    // instant, Latest, blocks), which must keep every rule below.
+    // instant, Latest, blocks) and by the entities and filters migration
+    // (20261112143757: filters, the corrected reading), which must keep every
+    // rule below.
     const { file, definition } = newestDefinition('search_public_posts');
-    expect(file).toMatch(/_search_ranking_tiers_decay_latest\.sql$/);
+    expect(file).toMatch(/_search_entities_filters_corrected_reading\.sql$/);
     expect(definition).toContain('v_tsquery := public.search_query_tsquery(v_query, true);');
     const match = '    WHERE posts.is_nsfw = false\n'
       + '      AND (\n'
@@ -206,7 +208,11 @@ describe('search recall migration', () => {
     // typed (label included, so a labelled post never decides how a query is
     // read), once to search by score and once to search newest first.
     expect(definition.split(match)).toHaveLength(4);
-    expect(definition.indexOf('IF NOT EXISTS (')).toBeLessThan(definition.indexOf('RETURN QUERY'));
+    // Decided once, ahead of both searches, unless the request reads the query as typed.
+    const decision = definition.indexOf('IF coalesce(p_correct, true) AND NOT EXISTS (');
+    expect(decision).toBeGreaterThan(0);
+    expect(decision).toBeLessThan(definition.indexOf('RETURN QUERY'));
+    expect(definition).not.toMatch(/\bIF NOT EXISTS \(/);
     expect(definition).toContain('v_corrected := public.search_corrected_query(v_query);');
     expect(definition).toContain(
       'IF v_corrected IS NOT NULL AND v_corrected <> v_query AND char_length(v_corrected) BETWEEN 3 AND 100 THEN',

@@ -165,6 +165,7 @@ export const ORPHAN_SCANNED_TABLES: ReadonlyArray<{ table: string; key: readonly
 const TELEMETRY = 'telemetry or counters: no stored paths, and too large to read whole';
 const NO_TEXT = 'no text or JSON column';
 const SEARCH_DICTIONARY = 'single words of letters, held to that by a check: never a path';
+const SEARCH_ENTITIES = 'model and tool names and their keys, at most 80 characters, copied from Made with: never a stored path';
 const UPLOAD_BOOKKEEPING = 'upload bookkeeping: read for the exclusions, never a reference';
 const RECIPE_SWEEP = "the recipe-copy sweep's own bookkeeping: its folders are excluded";
 const RECIPE_COPY_SOURCES = 'where passed-on recipe copies came from: it names only copies, whose folders are excluded';
@@ -204,6 +205,8 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   post_media_object_cleanup: UPLOAD_BOOKKEEPING,
   post_save_events: TELEMETRY,
   post_saves: NO_TEXT,
+  // Search's models and tools: which a post has, and each one's name.
+  post_search_entities: SEARCH_ENTITIES,
   post_share_events: TELEMETRY,
   profile_share_events: TELEMETRY,
   provider_admission_buckets: TELEMETRY,
@@ -218,6 +221,7 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   referral_account_devices: TELEMETRY,
   referral_purchase_reconciliation_retries: NO_TEXT,
   referral_visits: TELEMETRY,
+  search_entity_labels: SEARCH_ENTITIES,
   // The anonymous search log: a short query, a hash and three counts per row.
   search_query_events: TELEMETRY,
   search_visitor_day_keys: TELEMETRY,

@@ -87,7 +87,15 @@ removed, at most 100 characters), the search type, whether a registered account
 (not a guest session) was presented, how many creators, posts and recipes were
 returned, the order a Posts or Recipes search asked for (`sort`: `top` or
 `latest`; empty for Top and Creators searches, which have one order, and for
-rows from before 2026-11-12), when the request arrived, and `visitor_day`. That is an HMAC of the
+rows from before 2026-11-12), what narrowed a Posts search (`made_with`, an
+entity id such as `model:kling-2.6`; `media_kind`, `image` or `video`;
+`has_recipe` and `followed_only`, true when on: each empty when off, and
+`followed_only` says only that the filter was on, never who is followed),
+whether the answer's posts or recipes were found on a corrected reading of the
+query (`corrected`; empty for a Creators search), when the request arrived, and
+`visitor_day`. A search asked to read the query as typed ("search instead for",
+`exact=1`) writes no row: it re-asks a search already counted and by its nature
+finds no post or recipe. `visitor_day` is an HMAC of the
 viewer's rate-limit key (user id or hashed network address, never stored) under a
 random key made for that UTC day alone (`search_visitor_day_keys`). The sweep
 deletes a key once its day is more than 48 hours old, so `visitor_day` is
@@ -106,6 +114,20 @@ After a code-only rollback to an app from before that migration, search keeps
 working against it: Top is scored at the start of the UTC day, a Latest posts
 cursor still open in a browser is a 400 ("Show more" fails once, a new search is
 fine), and a Latest recipes cursor is read as an offset into the relevance order.
+
+Search also offers the models and tools posts are made with ("Kling 2.6, 14
+posts") and narrows Posts by them, by media kind, by "has a recipe" and by
+"from creators I follow" (`20261112143757`). `post_search_entities` holds which
+entities each post with a search document has and `search_entity_labels` each
+entity's name; both are written only by a trigger on `post_search_documents`,
+so they follow a post's document. `search_public_entities` is the one source of
+which entities exist and how many posts each has: the count is live, per
+viewer (unlabelled public posts, both sides of a block left out) and stops at
+1,000. A label row is never removed when its last post goes; it is offered only
+while a post the viewer may see has it. After a code-only rollback to an app
+from before that migration, search keeps working against it: that app's call
+names none of the new parameters, so nothing is narrowed, and a cursor issued
+under filters by the newer app pages the unfiltered search from its place.
 
 ```bash
 npm run ops:search-report -- --days 7 [--limit 50] [--json]

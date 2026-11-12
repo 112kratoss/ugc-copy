@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
-import { encodePublicSearchCursor } from '@/lib/public-search';
+import { encodePublicSearchCursor, publicSearchCursorFilterMark } from '@/lib/public-search';
 import type { PublicSearchOptions } from '@/lib/public-search-service';
 import { getPublicSearchRouteResponse } from '@/lib/public-search-route-adapter-service';
 import type { PublicSearchResponse } from '@/lib/public-search';
@@ -13,6 +13,10 @@ function emptyResponse(query: string, type: PublicSearchResponse['type']): Publi
     normalizedQuery: query.toLocaleLowerCase(),
     type,
     sort: 'top',
+    entities: [],
+    filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false },
+    correctedQuery: { posts: null, recipes: null },
+    exact: false,
     creators: { items: [], nextCursor: null },
     posts: { items: [], nextCursor: null },
     recipes: { items: [], nextCursor: null },
@@ -63,10 +67,147 @@ describe('public search route adapter service', () => {
       normalizedQuery: 'Product reveal',
       type: 'posts',
       sort: 'top',
+      filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false },
+      exact: false,
       cursor: null,
       limit: 12,
       viewerUserId: null,
       countryCode: 'IN',
+    });
+  });
+
+  describe('filters and the exact reading', () => {
+    const POST_ID = '11111111-1111-4111-8111-111111111111';
+    const NONE = { madeWith: null, mediaKind: null, hasRecipe: false, following: false };
+    async function ask(url: string, viewer: 'visitor' | 'guest' | 'account' = 'visitor') {
+      const searchPublicContent = vi.fn(async (options: PublicSearchOptions) => emptyResponse(options.query, options.type));
+      const response = await getPublicSearchRouteResponse({
+        request: new Request(url, { headers: viewer === 'visitor' ? {} : { Authorization: 'Bearer token' } }),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          createUserClient: vi.fn(() => ({
+            auth: {
+              getUser: vi.fn(async () => ({
+                data: { user: { id: 'viewer-1', is_anonymous: viewer === 'guest' } },
+                error: null,
+              })),
+            },
+          }) as unknown as SupabaseClient),
+          enforceBackendRateLimit: vi.fn(allowedRateLimit),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
+          searchPublicContent,
+          runAfterResponse: () => {},
+          withProviderFetchRequestId: requestIdBoundary,
+        },
+      });
+      return { response, options: searchPublicContent.mock.calls[0]?.[0] ?? null };
+    }
+    const base = 'http://localhost/api/search?q=portrait&type=posts';
+
+    it('reads a Posts search with the filters its request names', async () => {
+      const { response, options } = await ask(`${base}&madeWith=model:kling-2.6&kind=video&recipe=1&sort=latest`);
+      expect(response.status).toBe(200);
+      expect(options).toMatchObject({
+        sort: 'latest',
+        filters: { madeWith: 'model:kling-2.6', mediaKind: 'video', hasRecipe: true, following: false },
+        exact: false,
+      });
+    });
+
+    it('accepts filters on every type and narrows only Posts, as a sort is read', async () => {
+      for (const type of ['top', 'creators', 'recipes']) {
+        const { response, options } = await ask(
+          `http://localhost/api/search?q=portrait&type=${type}&madeWith=tool:midjourney&kind=image&recipe=1&following=1`,
+          'account',
+        );
+        expect(response.status, type).toBe(200);
+        expect(options?.filters, type).toEqual(NONE);
+      }
+    });
+
+    it('applies "from creators I follow" for an account, and leaves it out for a visitor or a guest session', async () => {
+      expect((await ask(`${base}&following=1`, 'account')).options?.filters.following).toBe(true);
+      const visitor = await ask(`${base}&following=1&kind=image`);
+      expect(visitor.response.status).toBe(200);
+      expect(visitor.options?.filters).toEqual({ ...NONE, mediaKind: 'image' });
+      const guest = await ask(`${base}&following=1`, 'guest');
+      expect(guest.response.status).toBe(200);
+      expect(guest.options?.filters.following).toBe(false);
+    });
+
+    it('passes on the exact reading, for every type that reads posts or recipes', async () => {
+      expect((await ask(`${base}&exact=1`)).options?.exact).toBe(true);
+      expect((await ask('http://localhost/api/search?q=portrait&exact=1')).options?.exact).toBe(true);
+      expect((await ask(base)).options?.exact).toBe(false);
+    });
+
+    it.each([
+      [`${base}&kind=audio`, 'kind must be image or video.'],
+      [`${base}&kind=`, 'kind must be image or video.'],
+      [`${base}&madeWith=kling-2.6`, 'madeWith must be model:<key> or tool:<key>.'],
+      [`${base}&madeWith=model:`, 'madeWith must be model:<key> or tool:<key>.'],
+      [`${base}&madeWith=model:Kling-2.6`, 'madeWith must be model:<key> or tool:<key>.'],
+      [`${base}&madeWith=creator:luna`, 'madeWith must be model:<key> or tool:<key>.'],
+      [`${base}&madeWith=model:${'k'.repeat(81)}`, 'madeWith must be model:<key> or tool:<key>.'],
+      [`${base}&recipe=0`, 'recipe must be 1.'],
+      [`${base}&recipe=true`, 'recipe must be 1.'],
+      [`${base}&following=yes`, 'following must be 1.'],
+      [`${base}&exact=0`, 'exact must be 1.'],
+      // Whatever the type: an unknown value is never read as off.
+      ['http://localhost/api/search?q=portrait&kind=gif', 'kind must be image or video.'],
+      ['http://localhost/api/search?q=portrait&type=creators&madeWith=x', 'madeWith must be model:<key> or tool:<key>.'],
+    ])('refuses a filter value it does not know: %s', async (url, message) => {
+      const { response, options } = await ask(url);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: message });
+      expect(options).toBeNull();
+    });
+
+    it('pages a cursor only under the filters and the reading it was issued for', async () => {
+      const video = { ...NONE, mediaKind: 'video' as const };
+      const cursorFor = (filters: typeof NONE | typeof video, exact = false) => encodePublicSearchCursor({
+        version: 1, type: 'posts', score: 12.5, id: POST_ID, asOf: Date.parse('2026-11-12T10:00:00.000Z'),
+        ...(publicSearchCursorFilterMark(filters, exact) ? { filters: publicSearchCursorFilterMark(filters, exact) } : {}),
+      });
+      const refused = { error: 'cursor is invalid for these filters.' };
+
+      // Its own filters: paged.
+      const own = await ask(`${base}&kind=video&cursor=${cursorFor(video)}`);
+      expect(own.response.status).toBe(200);
+      expect(own.options?.cursor).toMatchObject({ score: 12.5, id: POST_ID });
+      // An unfiltered cursor under a filter, a filtered one with the filter gone, another filter's.
+      for (const url of [
+        `${base}&kind=video&cursor=${cursorFor(NONE)}`,
+        `${base}&cursor=${cursorFor(video)}`,
+        `${base}&kind=image&cursor=${cursorFor(video)}`,
+        `${base}&kind=video&recipe=1&cursor=${cursorFor(video)}`,
+        // The reading is part of what a cursor pages.
+        `${base}&kind=video&exact=1&cursor=${cursorFor(video)}`,
+        `${base}&kind=video&cursor=${cursorFor(video, true)}`,
+      ]) {
+        const { response, options } = await ask(url);
+        expect(response.status, url).toBe(400);
+        await expect(response.json()).resolves.toEqual(refused);
+        expect(options, url).toBeNull();
+      }
+    });
+
+    it('holds a cursor to the filters applied, not the ones asked for: a visitor’s "following" is left out of both', async () => {
+      // Issued to a visitor who asked for following=1: the filter was not applied, so the cursor has no mark.
+      const unmarked = encodePublicSearchCursor({ version: 1, type: 'posts', score: 12.5, id: POST_ID });
+      expect((await ask(`${base}&following=1&cursor=${unmarked}`)).response.status).toBe(200);
+      // The same address signed in is another search: the cursor does not page it.
+      expect((await ask(`${base}&following=1&cursor=${unmarked}`, 'account')).response.status).toBe(400);
+    });
+
+    it('refuses a cursor carrying a mark where nothing is filtered, or a mark that is not one', async () => {
+      const marked = (type: 'creators' | 'recipes') => Buffer.from(JSON.stringify(
+        type === 'recipes' ? { v: 1, t: type, o: 24, f: 'deadbeef' } : { v: 1, t: type, s: 4.5, i: POST_ID, f: 'deadbeef' },
+      ), 'utf8').toString('base64url');
+      expect((await ask(`http://localhost/api/search?q=portrait&type=creators&cursor=${marked('creators')}`)).response.status).toBe(400);
+      expect((await ask(`http://localhost/api/search?q=portrait&type=recipes&cursor=${marked('recipes')}`)).response.status).toBe(400);
+      const notAMark = Buffer.from(JSON.stringify({ v: 1, t: 'posts', s: 4.5, i: POST_ID, f: 'kind=video' }), 'utf8').toString('base64url');
+      expect((await ask(`${base}&kind=video&cursor=${notAMark}`)).response.status).toBe(400);
     });
   });
 
@@ -209,6 +350,32 @@ describe('public search route adapter service', () => {
     expect(searchPublicContent).toHaveBeenCalledTimes(2);
   });
 
+  it('counts the maximum the same way: a hundred emoji are searched whole, a hundred and one refused', async () => {
+    const searchPublicContent = vi.fn(async (options: PublicSearchOptions) => emptyResponse(options.query, options.type));
+    const ask = (query: string) => getPublicSearchRouteResponse({
+      request: new Request(`http://localhost/api/search?q=${encodeURIComponent(query)}&type=posts`),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        enforceBackendRateLimit: vi.fn(allowedRateLimit),
+        getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
+        searchPublicContent,
+        runAfterResponse: () => {},
+        withProviderFetchRequestId: requestIdBoundary,
+      },
+    });
+    const emoji = '\u{1F600}';
+
+    // 200 UTF-16 units, 100 characters to the database: within the limit.
+    expect((await ask(emoji.repeat(100))).status).toBe(200);
+    expect(searchPublicContent.mock.calls[0][0].normalizedQuery).toBe(emoji.repeat(100));
+    expect((await ask(emoji.repeat(51))).status).toBe(200);
+
+    const refused = await ask(emoji.repeat(101));
+    expect(refused.status).toBe(400);
+    await expect(refused.json()).resolves.toEqual({ error: 'q must be at most 100 characters.' });
+    expect(searchPublicContent).toHaveBeenCalledTimes(2);
+  });
+
   it('uses verified optional auth for personalized filtering', async () => {
     const searchPublicContent = vi.fn(async () => emptyResponse('@luna', 'creators'));
     const response = await getPublicSearchRouteResponse({
@@ -327,13 +494,38 @@ describe('public search route adapter service', () => {
       const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
       expect(row).toMatchObject({
         query: 'port', search_type: 'top', signed_in: false, creator_count: 0, post_count: 0, recipe_count: 0,
-        sort: null,
+        sort: null, made_with: null, media_kind: null, has_recipe: null, followed_only: null, corrected: false,
       });
       expect(Object.keys(row).sort()).toEqual([
-        'created_at', 'creator_count', 'post_count', 'query', 'recipe_count', 'search_type', 'signed_in', 'sort',
-        'visitor_day',
+        'corrected', 'created_at', 'creator_count', 'followed_only', 'has_recipe', 'made_with', 'media_kind',
+        'post_count', 'query', 'recipe_count', 'search_type', 'signed_in', 'sort', 'visitor_day',
       ]);
       expect(JSON.stringify(row)).not.toContain('network-key');
+    });
+
+    it('logs what narrowed a Posts search, the filters applied and nothing of who is followed', async () => {
+      const { ask, insert, tasks } = logHarness();
+      await ask('http://localhost/api/search?q=Port&type=posts&madeWith=model:kling-2.6&kind=video&recipe=1&following=1', {
+        headers: { Authorization: 'Bearer token' },
+        searchPublicContent: vi.fn(async () => ({
+          ...emptyResponse('Port', 'posts'),
+          correctedQuery: { posts: 'portrait', recipes: null },
+        })),
+      });
+      await tasks[0]();
+      const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
+      expect(row).toMatchObject({
+        search_type: 'posts', made_with: 'model:kling-2.6', media_kind: 'video', has_recipe: true,
+        followed_only: true, corrected: true,
+      });
+      expect(JSON.stringify(row)).not.toContain('viewer-1');
+    });
+
+    it('writes nothing for a search asked to read the query as typed', async () => {
+      const { ask, tasks } = logHarness();
+      const response = await ask('http://localhost/api/search?q=Port&exact=1');
+      expect(response.status).toBe(200);
+      expect(tasks).toHaveLength(0);
     });
 
     it('logs the order a Posts search asked for', async () => {

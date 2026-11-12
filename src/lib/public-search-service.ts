@@ -2,24 +2,34 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logBackendEvent } from '@/lib/backend-logger';
 import { loadBlockedCreatorIds } from '@/lib/moderation-service';
+import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
 import {
   getMarketplaceResourceList,
   type MarketplaceResourceListItem,
 } from '@/lib/post-resource-bundles-server';
 import {
+  NO_PUBLIC_SEARCH_APPLIED_FILTERS,
+  NO_PUBLIC_SEARCH_FILTERS,
+  PUBLIC_SEARCH_ENTITY_LIMIT,
   PUBLIC_SEARCH_MAX_RECIPE_OFFSET,
   PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
   appliedPublicSearchSort,
   emptyPublicSearchPage,
   encodePublicSearchCursor,
+  publicSearchCursorFilterMark,
   publicSearchQueryLength,
+  publicSearchTypeHasFilters,
   type CreatorSearchResult,
+  type PublicSearchAppliedFilters,
   type PublicSearchCursor,
+  type PublicSearchFilters,
   type PublicSearchResponse,
   type PublicSearchSort,
   type PublicSearchType,
   type RecipeSearchResult,
+  type SearchEntityResult,
 } from '@/lib/public-search';
 import { createServiceClient } from '@/lib/server-helpers';
 import { getShowcaseFeedItemsByPostIds } from '@/lib/showcase-feed';
@@ -41,6 +51,19 @@ type PostSearchRpcRow = {
   search_score: number;
   /** As the database wrote it, microseconds kept: a Latest cursor carries it back unchanged. */
   created_at: string;
+  /**
+   * The query as the spelling correction read it, on every row; null when it
+   * was read as typed. Absent from a database before 20261112143757.
+   */
+  corrected_query?: string | null;
+};
+
+type EntitySearchRpcRow = {
+  kind: 'model' | 'tool';
+  key: string;
+  label: string;
+  post_count: number;
+  post_count_capped: boolean;
 };
 
 type PublicSearchServiceDependencies = {
@@ -48,6 +71,8 @@ type PublicSearchServiceDependencies = {
   getMarketplaceResourceList?: typeof getMarketplaceResourceList;
   getShowcaseFeedItemsByPostIds?: typeof getShowcaseFeedItemsByPostIds;
   loadBlockedCreatorIds?: typeof loadBlockedCreatorIds;
+  /** Where a failed read of the recipes' reading is noted. */
+  logEvent?: typeof logBackendEvent;
   /** The clock a new search's instant is read from. */
   now?: () => Date;
 };
@@ -62,6 +87,14 @@ export type PublicSearchOptions = {
    * kind, and creators have one order.
    */
   sort?: PublicSearchSort;
+  /**
+   * What narrows a Posts search; none when left out. The caller sends the
+   * applied ones (appliedPublicSearchFilters): no `following` for a viewer
+   * with no registered account. Only a Posts search is read with them.
+   */
+  filters?: PublicSearchFilters;
+  /** Read the query as typed: no spelling correction, for posts or recipes. */
+  exact?: boolean;
   cursor: PublicSearchCursor | null;
   limit: number;
   viewerUserId: string | null;
@@ -75,6 +108,7 @@ function resolveDependencies(dependencies?: PublicSearchServiceDependencies) {
     getShowcaseFeedItemsByPostIds:
       dependencies?.getShowcaseFeedItemsByPostIds ?? getShowcaseFeedItemsByPostIds,
     loadBlockedCreatorIds: dependencies?.loadBlockedCreatorIds ?? loadBlockedCreatorIds,
+    logEvent: dependencies?.logEvent ?? logBackendEvent,
     now: dependencies?.now ?? (() => new Date()),
   };
 }
@@ -88,6 +122,22 @@ function creatorResult(row: CreatorSearchRpcRow): CreatorSearchResult {
     avatarUrl: row.avatar_url,
     publicPostCount: Math.max(0, row.public_post_count ?? 0),
     isFollowing: Boolean(row.is_following),
+  };
+}
+
+/**
+ * An entity as an answer names it. A model made here is named as posts name
+ * it (getPostModelDisplayName), whatever name the database first saw it
+ * under: a creation stored without a Made with row is known there by its
+ * key alone.
+ */
+function entityResult(row: EntitySearchRpcRow): SearchEntityResult {
+  return {
+    kind: row.kind,
+    key: row.key,
+    label: (row.kind === 'model' ? getPostModelDisplayName(row.key) : null) ?? row.label,
+    postCount: Math.max(0, row.post_count ?? 0),
+    postCountCapped: Boolean(row.post_count_capped),
   };
 }
 
@@ -148,6 +198,8 @@ async function searchPosts({
   adminSupabase,
   after,
   asOf,
+  exact,
+  filters,
   limit,
   query,
   sort,
@@ -157,6 +209,9 @@ async function searchPosts({
   after: PublicSearchCursor | null;
   /** The instant a Top search is scored at: the same for every page of it. */
   asOf: Date;
+  /** Read the query as typed. */
+  exact: boolean;
+  filters: PublicSearchFilters;
   limit: number;
   query: string;
   sort: PublicSearchSort;
@@ -171,9 +226,87 @@ async function searchPosts({
     p_as_of: asOf.toISOString(),
     p_sort: sort,
     p_after_created_at: after?.createdAt ?? null,
+    p_made_with: filters.madeWith,
+    p_media_kind: filters.mediaKind,
+    p_has_recipe: filters.hasRecipe,
+    p_followed_only: filters.following,
+    p_correct: !exact,
   });
   if (error) throw error;
   return (data ?? []) as PostSearchRpcRow[];
+}
+
+/**
+ * The models and tools a search offers (search_public_entities, the one
+ * source of which exist and how many posts each has for this viewer): those
+ * whose name holds the query, or the one a made-with filter names.
+ */
+async function searchEntities({
+  adminSupabase,
+  limit,
+  madeWith,
+  query,
+  viewerUserId,
+}: {
+  adminSupabase: SupabaseClient;
+  limit: number;
+  /** An entity id: that entity alone, whatever the query. */
+  madeWith?: string;
+  query: string | null;
+  viewerUserId: string | null;
+}) {
+  const { data, error } = await adminSupabase.rpc('search_public_entities', {
+    p_query: query,
+    p_viewer_user_id: viewerUserId,
+    p_limit: limit,
+    p_made_with: madeWith ?? null,
+  });
+  if (error) throw error;
+  return ((data ?? []) as EntitySearchRpcRow[]).map(entityResult);
+}
+
+/**
+ * How the recipes list reads the query (search_recipes_corrected_query): the
+ * corrected reading it will search on, or null when it reads it as typed. A
+ * read that fails says null, with a line in the log: the notice is lost, the
+ * recipes are not.
+ */
+async function recipesCorrectedQuery({
+  adminSupabase,
+  logEvent,
+  query,
+}: {
+  adminSupabase: SupabaseClient;
+  logEvent: typeof logBackendEvent;
+  query: string;
+}): Promise<string | null> {
+  try {
+    const { data, error } = await adminSupabase.rpc('search_recipes_corrected_query', { p_query: query });
+    if (error) throw error;
+    return typeof data === 'string' && data ? data : null;
+  } catch (error) {
+    logEvent('warn', 'public_search_recipes_reading_failed', { error });
+    return null;
+  }
+}
+
+/** The filters as an answer states them: the made-with entity by its name. */
+function appliedFilters(filters: PublicSearchFilters, madeWithEntity: SearchEntityResult | null): PublicSearchAppliedFilters {
+  const separator = filters.madeWith?.indexOf(':') ?? -1;
+  return {
+    madeWith: filters.madeWith && separator > 0
+      ? {
+        kind: filters.madeWith.slice(0, separator) as SearchEntityResult['kind'],
+        key: filters.madeWith.slice(separator + 1),
+        // No post this viewer may see has the entity: it is named by its key,
+        // never by a name read from somewhere they cannot see.
+        label: madeWithEntity?.label ?? filters.madeWith.slice(separator + 1),
+      }
+      : null,
+    mediaKind: filters.mediaKind,
+    hasRecipe: filters.hasRecipe,
+    following: filters.following,
+  };
 }
 
 async function blockedCreatorIds({
@@ -203,6 +336,11 @@ export async function searchPublicContent(
   const adminSupabase = dependencies.createServiceClient();
   const isTop = options.type === 'top';
   const sort = appliedPublicSearchSort(options.type, options.sort ?? 'top');
+  // Only a Posts search is narrowed: the Top tab is the best of each kind.
+  const filters = publicSearchTypeHasFilters(options.type)
+    ? options.filters ?? NO_PUBLIC_SEARCH_FILTERS
+    : NO_PUBLIC_SEARCH_FILTERS;
+  const exact = options.exact ?? false;
   // A Top posts search is scored at the instant it began, which its cursor
   // carries from page to page: the score depends on the clock, and a page
   // scored later than the one before it could repeat or skip a post. A cursor
@@ -232,31 +370,64 @@ export async function searchPublicContent(
       adminSupabase,
       after: options.type === 'posts' ? options.cursor : null,
       asOf: postsAsOf,
+      exact,
+      filters,
       limit: postTake,
       query: options.normalizedQuery,
       sort,
       viewerUserId: options.viewerUserId,
     })
     : Promise.resolve([] as PostSearchRpcRow[]);
-  const recipesPromise = contentQueryAllowed && (options.type === 'top' || options.type === 'recipes')
-    ? dependencies.getMarketplaceResourceList({
-      q: options.normalizedQuery,
-      // The best matches first, as posts and creators are ordered; Latest
-      // is the list's own newest-first order.
-      sort: sort === 'latest' ? 'recent' : 'relevance',
-      offset: options.type === 'recipes' ? options.cursor?.offset ?? 0 : 0,
-      limit: recipeTake,
-      countryCode: options.countryCode,
+  // The Top tab offers the models and tools the query names. A Posts search
+  // narrowed to one reads that one, for the name its filter is shown under.
+  const entitiesPromise = isTop
+    ? searchEntities({
+      adminSupabase,
+      limit: PUBLIC_SEARCH_ENTITY_LIMIT,
+      query: options.normalizedQuery,
+      viewerUserId: options.viewerUserId,
     })
-    : Promise.resolve({
-      items: [] as MarketplaceResourceListItem[],
-      pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: recipeTake },
-    });
+    : filters.madeWith
+      ? searchEntities({
+        adminSupabase,
+        limit: 1,
+        madeWith: filters.madeWith,
+        query: null,
+        viewerUserId: options.viewerUserId,
+      })
+      : Promise.resolve([] as SearchEntityResult[]);
+  const recipesSearched = contentQueryAllowed && (options.type === 'top' || options.type === 'recipes');
+  const emptyRecipePage = {
+    items: [] as MarketplaceResourceListItem[],
+    pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: recipeTake },
+  };
+  const listRecipes = () => dependencies.getMarketplaceResourceList({
+    q: options.normalizedQuery,
+    // The best matches first, as posts and creators are ordered; Latest
+    // is the list's own newest-first order.
+    sort: sort === 'latest' ? 'recent' : 'relevance',
+    offset: options.type === 'recipes' ? options.cursor?.offset ?? 0 : 0,
+    limit: recipeTake,
+    countryCode: options.countryCode,
+  });
+  const recipesReadingPromise = recipesSearched
+    ? recipesCorrectedQuery({ adminSupabase, logEvent: dependencies.logEvent, query: options.normalizedQuery })
+    : Promise.resolve(null);
+  // The list corrects a query only when no recipe holds it as typed, so read
+  // as typed such a search is the empty list: it is answered without the
+  // call, which would search on the corrected words.
+  const recipesPromise = !recipesSearched
+    ? Promise.resolve(emptyRecipePage)
+    : exact
+      ? recipesReadingPromise.then((readAs) => (readAs ? emptyRecipePage : listRecipes()))
+      : listRecipes();
 
-  const [creatorRows, postRows, recipePage] = await Promise.all([
+  const [creatorRows, postRows, recipePage, entities, recipesReadAs] = await Promise.all([
     creatorsPromise,
     postsPromise,
     recipesPromise,
+    entitiesPromise,
+    recipesReadingPromise,
   ]);
   // search_public_creators and search_public_posts leave both sides of a block
   // out before their limit, by the two reads loadBlockedCreatorIds makes, so a
@@ -316,11 +487,25 @@ export async function searchPublicContent(
     .filter((item) => !blockedIds.has(item.seller.id))
     .map(recipeResult);
 
+  // A posts cursor pages the filters and the reading it was issued under.
+  const postCursorFilters = publicSearchCursorFilterMark(filters, exact);
+
   return {
     query: options.query,
     normalizedQuery: options.normalizedQuery,
     type: options.type,
     sort,
+    entities: isTop ? entities : [],
+    filters: publicSearchTypeHasFilters(options.type)
+      ? appliedFilters(filters, entities[0] ?? null)
+      : NO_PUBLIC_SEARCH_APPLIED_FILTERS,
+    // Said only beside results it explains: a corrected search that shows no
+    // post, or no recipe, has nothing to show results "for".
+    correctedQuery: {
+      posts: !exact && shownPosts.length > 0 ? postRows[0]?.corrected_query ?? null : null,
+      recipes: !exact && visibleRecipes.length > 0 ? recipesReadAs : null,
+    },
+    exact,
     creators: options.type === 'top' || options.type === 'creators'
       ? {
         items: visibleCreatorRows.map(creatorResult),
@@ -345,6 +530,7 @@ export async function searchPublicContent(
             ...(sort === 'latest'
               ? { sort, createdAt: postCursorRow.created_at }
               : { score: postCursorRow.search_score, asOf: postsAsOf.getTime() }),
+            ...(postCursorFilters ? { filters: postCursorFilters } : {}),
           })
           : null,
       }

@@ -1,5 +1,33 @@
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
+import {
+  NO_SEARCH_FILTERS,
+  searchFilterKey,
+  type SearchCorrectedQuery,
+  type SearchEntity,
+  type SearchEntityKind,
+  type SearchFilters,
+  type SearchMediaKind,
+} from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
+
+// What a request may name, and the words both clients show, are one copy the
+// web and the app share (ugc-mobile/lib/public-search-policy).
+export {
+  NO_SEARCH_FILTERS as NO_PUBLIC_SEARCH_FILTERS,
+  hasSearchFilters as hasPublicSearchFilters,
+  readSearchFilterParams as readPublicSearchFilterParams,
+  searchEntityId,
+  searchFilterKey as publicSearchFilterKey,
+  searchFilterParams as publicSearchFilterParams,
+} from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
+export type {
+  SearchCorrectedQuery as PublicSearchCorrectedQuery,
+  SearchEntity as SearchEntityResult,
+  SearchEntityKind as PublicSearchEntityKind,
+  SearchFilters as PublicSearchFilters,
+  SearchMediaKind as PublicSearchMediaKind,
+} from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
+
 export const PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH = 2;
 export const PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH = 3;
 export const PUBLIC_SEARCH_MAX_QUERY_LENGTH = 100;
@@ -35,6 +63,44 @@ export function publicSearchTypeHasSorts(type: PublicSearchType): boolean {
 export function appliedPublicSearchSort(type: PublicSearchType, sort: PublicSearchSort): PublicSearchSort {
   return publicSearchTypeHasSorts(type) ? sort : 'top';
 }
+
+/** How many entities the Top tab offers. */
+export const PUBLIC_SEARCH_ENTITY_LIMIT = 5;
+
+/** Whether a tab's results can be narrowed: only Posts. */
+export function publicSearchTypeHasFilters(type: PublicSearchType): boolean {
+  return type === 'posts';
+}
+
+/**
+ * The filters a search of `type` is read with when a request names
+ * `filters`: its own on Posts, none anywhere else, as a sort is read. A
+ * viewer with no registered account follows nobody, so `following` is left
+ * out for one: the answer says which filters it applied.
+ */
+export function appliedPublicSearchFilters(
+  type: PublicSearchType,
+  filters: SearchFilters,
+  viewerCanFollow: boolean,
+): SearchFilters {
+  if (!publicSearchTypeHasFilters(type)) return NO_SEARCH_FILTERS;
+  return viewerCanFollow ? filters : { ...filters, following: false };
+}
+
+/** The filters an answer was read with: as asked, the made-with entity by its name. */
+export interface PublicSearchAppliedFilters {
+  madeWith: { kind: SearchEntityKind; key: string; label: string } | null;
+  mediaKind: SearchMediaKind | null;
+  hasRecipe: boolean;
+  following: boolean;
+}
+
+export const NO_PUBLIC_SEARCH_APPLIED_FILTERS: PublicSearchAppliedFilters = Object.freeze({
+  madeWith: null,
+  mediaKind: null,
+  hasRecipe: false,
+  following: false,
+});
 
 export interface CreatorSearchResult {
   id: string;
@@ -93,6 +159,21 @@ export interface PublicSearchResponse {
   type: PublicSearchType;
   /** The order the answer is in: `latest` only for a Posts or Recipes search that asked for it. */
   sort: PublicSearchSort;
+  /**
+   * The models and tools whose name holds the query, each with the posts the
+   * viewer may see that are made with it. The Top tab only; empty elsewhere.
+   */
+  entities: SearchEntity[];
+  /** What narrowed the posts: none except on a Posts search. */
+  filters: PublicSearchAppliedFilters;
+  /**
+   * The query as the spelling correction read it for the posts and for the
+   * recipes this answer holds; null where they were found on the query as
+   * typed, or there are none.
+   */
+  correctedQuery: SearchCorrectedQuery;
+  /** The request asked for the query as typed: nothing was corrected. */
+  exact: boolean;
   creators: PublicSearchPage<CreatorSearchResult>;
   posts: PublicSearchPage<ShowcaseFeedItem>;
   recipes: PublicSearchPage<RecipeSearchResult>;
@@ -114,7 +195,32 @@ export type PublicSearchCursor = {
   asOf?: number;
   /** Latest posts: the last row's created_at, as the database wrote it (microseconds kept). */
   createdAt?: string;
+  /**
+   * Posts: a mark of the filters and reading the cursor was issued under
+   * (publicSearchCursorFilterMark). Left out for none, as every cursor issued
+   * before filters is. A cursor pages the search it came from and no other.
+   */
+  filters?: string;
 };
+
+/**
+ * A short mark of a posts search's filters and reading, undefined for none.
+ * Not a secret and not a signature: a cursor holds only a place in a list,
+ * and the filters themselves come with every request. It tells a cursor of
+ * one filter set from a request for another, which would otherwise page a
+ * list the cursor's place means nothing in.
+ */
+export function publicSearchCursorFilterMark(filters: SearchFilters, exact: boolean): string | undefined {
+  const key = searchFilterKey(filters, exact);
+  if (!key) return undefined;
+  // FNV-1a, 32 bits, over the key's UTF-16 units.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < key.length; index += 1) {
+    hash ^= key.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
 
 // A timestamptz as PostgREST writes one: 2026-11-12T10:35:47.123456+00:00.
 const CURSOR_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-](\d{2}):(\d{2}))$/;
@@ -147,12 +253,18 @@ function isCursorTimestamp(value: string): boolean {
   return Number.isFinite(read.getTime()) && read.toISOString().slice(0, 19) === wallClock;
 }
 
+/**
+ * A query as it is searched: NFKC, one space between words, at most 100
+ * characters. The cut counts characters as the database does (char_length),
+ * never UTF-16 units: `.slice(0, 100)` kept fifty emoji of a hundred, and
+ * could leave half of one at the end.
+ */
 export function normalizePublicSearchQuery(value: string | null | undefined): string {
-  return (value ?? '')
-    .normalize('NFKC')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .slice(0, PUBLIC_SEARCH_MAX_QUERY_LENGTH);
+  const normalized = (value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+  // Most queries are short: only one that could be over the limit is counted.
+  return normalized.length <= PUBLIC_SEARCH_MAX_QUERY_LENGTH
+    ? normalized
+    : Array.from(normalized).slice(0, PUBLIC_SEARCH_MAX_QUERY_LENGTH).join('');
 }
 
 export function normalizeCreatorSearchQuery(value: string | null | undefined): string {
@@ -169,9 +281,15 @@ export function publicSearchQueryLength(value: string): number {
   return Array.from(value).length;
 }
 
+/**
+ * Whether a raw query is past the maximum, counted as the minimums are
+ * (publicSearchQueryLength): in characters, as the database's char_length
+ * counts them. Counted in UTF-16 units, 51 to 100 emoji were refused as too
+ * long while the database takes them.
+ */
 export function isPublicSearchQueryTooLong(value: string | null | undefined): boolean {
   if (typeof value !== 'string') return false;
-  return value.normalize('NFKC').trim().replace(/\s+/g, ' ').length > PUBLIC_SEARCH_MAX_QUERY_LENGTH;
+  return publicSearchQueryLength(value.normalize('NFKC').trim().replace(/\s+/g, ' ')) > PUBLIC_SEARCH_MAX_QUERY_LENGTH;
 }
 
 export function parsePublicSearchType(value: string | null | undefined): PublicSearchType | null {
@@ -206,6 +324,7 @@ export function encodePublicSearchCursor(cursor: PublicSearchCursor): string {
     ...(cursor.offset !== undefined ? { o: cursor.offset } : {}),
     ...(cursor.asOf !== undefined ? { a: cursor.asOf } : {}),
     ...(cursor.createdAt ? { c: cursor.createdAt } : {}),
+    ...(cursor.filters ? { f: cursor.filters } : {}),
   }), 'utf8').toString('base64url');
 }
 
@@ -213,7 +332,10 @@ export function encodePublicSearchCursor(cursor: PublicSearchCursor): string {
  * A cursor for a search of `expectedType` read in `expectedSort` (the applied
  * one: `top` for Creators whatever was asked), or null. A cursor pages the
  * order it was issued for and no other: one without a sort is a Top cursor,
- * so a cursor issued before sorts existed still pages.
+ * so a cursor issued before sorts existed still pages. A posts cursor keeps
+ * its filter mark for the caller to hold against the request's
+ * (publicSearchCursorFilterMark): the applied filters are known only once the
+ * viewer is.
  */
 export function decodePublicSearchCursor(
   value: string | null | undefined,
@@ -227,6 +349,12 @@ export function decodePublicSearchCursor(
     const sort = parsed.r === undefined ? 'top' : parsePublicSearchSort(typeof parsed.r === 'string' ? parsed.r : '');
     if (sort !== expectedSort) return null;
     const sortField = sort === 'latest' ? { sort } : {};
+    // Only a posts search is filtered; a mark anywhere else, or one that is
+    // not a mark, is no cursor this server issued.
+    if (parsed.f !== undefined && (expectedType !== 'posts' || typeof parsed.f !== 'string' || !/^[0-9a-f]{8}$/.test(parsed.f))) {
+      return null;
+    }
+    const filtersField = typeof parsed.f === 'string' ? { filters: parsed.f } : {};
     if (expectedType === 'recipes') {
       if (
         !Number.isSafeInteger(parsed.o)
@@ -248,7 +376,7 @@ export function decodePublicSearchCursor(
     if (expectedType === 'posts' && sort === 'latest') {
       // Feeds a timestamptz parameter, so held to a time Postgres takes for the same reason.
       if (typeof parsed.c !== 'string' || !isCursorTimestamp(parsed.c)) return null;
-      return { version: 1, type: expectedType, sort, createdAt: parsed.c, id: parsed.i };
+      return { version: 1, type: expectedType, sort, createdAt: parsed.c, id: parsed.i, ...filtersField };
     }
     if (typeof parsed.s !== 'number' || !Number.isFinite(parsed.s)) return null;
     if (expectedType === 'posts' && parsed.a !== undefined) {
@@ -260,9 +388,9 @@ export function decodePublicSearchCursor(
       ) {
         return null;
       }
-      return { version: 1, type: expectedType, score: parsed.s, id: parsed.i, asOf: Number(parsed.a) };
+      return { version: 1, type: expectedType, score: parsed.s, id: parsed.i, asOf: Number(parsed.a), ...filtersField };
     }
-    return { version: 1, type: expectedType, score: parsed.s, id: parsed.i };
+    return { version: 1, type: expectedType, score: parsed.s, id: parsed.i, ...filtersField };
   } catch {
     return null;
   }
