@@ -89,6 +89,10 @@ describe('search ranking migration', () => {
     // power() raises on underflow and the age comes from a cursor: it is held to a range first.
     expect(definition).toMatch(/v_age_days double precision := least\(\s+greatest\(coalesce\(p_age_seconds, 0\.0\), 0\.0\) \/ 86400\.0,\s+c_max_age_days\s+\);/);
     expect(c.max_age_days / Math.min(c.engagement_half_life_days, c.freshness_half_life_days)).toBeLessThan(1000);
+    // Six decimals: this database writes a double with 15 significant digits, so
+    // an unrounded score did not survive its trip through a cursor and the last
+    // post of a page opened the next one.
+    expect(definition).toMatch(/RETURN round\(\(\s+CASE[\s\S]*\)::numeric, 6\)::double precision;\s+END;$/);
     // The tiers are exclusive: the highest one a post reaches, never a sum of them.
     expect(definition).toMatch(
       /CASE\s+WHEN coalesce\(p_title_is_query, false\) THEN c_tier_title_is_query\s+WHEN coalesce\(p_title_starts_with_query, false\) THEN c_tier_title_starts_with_query\s+WHEN coalesce\(p_headline_holds_query, false\) THEN c_tier_headline_holds_query\s+ELSE 0\.0\s+END/,
@@ -103,11 +107,21 @@ describe('search ranking migration', () => {
     expect(tiers).toEqual([40, 30, 20, 10]);
     const mostInsideATier = c.text_weight + c.similarity_weight + c.audience_weight + c.activity_weight + c.follow_weight;
     expect(mostInsideATier).toBeLessThan(smallestGap(tiers));
+    // Rounded as the post score is, for the same cursor.
+    expect(definition).toMatch(/RETURN round\(\(\s+CASE[\s\S]*\)::numeric, 6\)::double precision;\s+END;$/);
     // The search counts followers no further than where the term is full.
     expect(c.audience_full_followers).toBe(1000);
-    expect(definitionOf('search_public_creators')).toMatch(
+    const search = definitionOf('search_public_creators');
+    expect(search).toMatch(
       /FROM public\.follows AS followers\s+WHERE followers\.following_id = documents\.creator_user_id\s+LIMIT 1000/,
     );
+    // The display-name tiers read the name as the query is read; creator
+    // search has no clock in it, so it takes no instant.
+    expect(search).toMatch(
+      /SELECT CASE\s+WHEN documents\.display_name_normalized ~ ' {2}\|\[\^ -~\]' THEN lower\(btrim\(regexp_replace\(\s+normalize\(documents\.display_name_normalized, NFKC\), '\[\[:space:\]\]\+', ' ', 'g'\s+\)\)\)\s+ELSE documents\.display_name_normalized\s+END AS display_name/,
+    );
+    expect(search).toMatch(/shown\.display_name = v_query,\s+shown\.display_name LIKE v_like \|\| '%'/);
+    expect(search).not.toMatch(/\bnow\(\)/);
   });
 
   it('scores posts by that function, on a normalised rank, at the search’s instant', () => {
@@ -119,10 +133,21 @@ describe('search ranking migration', () => {
     expect(definition).not.toMatch(/ts_rank_cd\(documents\.search_vector, v_tsquery\)/);
     // The title and models (A) and the tool names (C); never the caption or prompt (B).
     expect(definition).toMatch(/documents\.tool_normalized = v_query\s+OR ts_filter\(documents\.search_vector, '\{a,c\}'\) @@ v_tsquery/);
-    expect(definition).toContain('v_as_of timestamptz := coalesce(p_as_of, now());');
+    // A caller that sends no instant (the app live before this migration) is
+    // scored at the start of the UTC day. At now() its second page was scored
+    // later than its first, and scores only fall: the first page's last post
+    // came back under its own cursor on every "Show more".
+    expect(definition).toContain("v_as_of timestamptz := coalesce(p_as_of, date_trunc('day', now(), 'UTC'));");
+    expect(definition).not.toMatch(/coalesce\(p_as_of, now\(\)\)/);
     expect(definition).toContain('extract(epoch FROM (v_as_of - documents.created_at))');
     // The clock is read once, into the instant: nothing else in the search moves with it.
     expect(definition.match(/\bnow\(\)/g)).toHaveLength(1);
+    // The two title tiers read the title as the query is read (NFKC, one
+    // space between words), not as the document stores it.
+    expect(definition).toMatch(
+      /SELECT CASE\s+WHEN documents\.title_normalized ~ ' {2}\|\[\^ -~\]' THEN lower\(btrim\(regexp_replace\(\s+normalize\(documents\.title_normalized, NFKC\), '\[\[:space:\]\]\+', ' ', 'g'\s+\)\)\)\s+ELSE documents\.title_normalized\s+END AS title/,
+    );
+    expect(definition).toMatch(/public\.search_post_score\(\s+shown\.title = v_query,\s+shown\.title LIKE v_like \|\| '%',/);
     expect(definition).toContain('ORDER BY scored.search_score DESC, scored.post_id ASC');
   });
 

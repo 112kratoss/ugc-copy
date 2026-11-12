@@ -141,21 +141,38 @@ describe('public search policy', () => {
     });
 
     it('refuses an instant or a created_at a timestamptz parameter would not take', () => {
-      for (const asOf of [0, -1, 1.5, '1762941600000', 253_402_300_800_000, Number.MAX_SAFE_INTEGER, null]) {
+      for (const asOf of [
+        0, -1, 1.5, '1762941600000', 253_402_300_800_000, Number.MAX_SAFE_INTEGER, null,
+        // Before anything here was made: the year is held as created_at's is.
+        1, Date.UTC(2019, 11, 31, 23, 59, 59, 999),
+      ]) {
         expect(decodePublicSearchCursor(forge({ s: 4.25, i: ID, a: asOf }), 'posts'), String(asOf)).toBeNull();
       }
       expect(decodePublicSearchCursor(forge({ s: 4.25, i: ID, a: 253_402_300_799_999 }), 'posts')).not.toBeNull();
+      expect(decodePublicSearchCursor(forge({ s: 4.25, i: ID, a: Date.UTC(2020, 0, 1) }), 'posts')).not.toBeNull();
       for (const createdAt of [
         '2026-11-12', '2026-11-12 10:00:00+00', 'now()', "2026-11-12T10:00:00Z'; drop table posts; --",
         '2026-13-45T10:00:00Z', 1762941600000, null, undefined,
+        // Each of these V8 parses and Postgres refuses as a timestamptz, which was a 500:
+        // the year 0000; 30 February, which V8 rolls to 2 March; offsets past any real one.
+        '0000-01-01T00:00:00Z', '2026-02-30T00:00:00Z', '2026-11-12T10:00:00+16:00', '2026-11-12T10:00:00+23:59',
+        '2026-11-12T10:00:00-15:00', '2026-11-12T10:00:00+14:60', '2026-04-31T10:00:00.5+00:00',
+        '2026-11-12T24:00:00Z', '2026-11-12T23:59:60Z', '2019-12-31T23:59:59Z', '10000-01-01T00:00:00Z',
       ]) {
         expect(
           decodePublicSearchCursor(forge({ r: 'latest', c: createdAt, i: ID }), 'posts', 'latest'),
           String(createdAt),
         ).toBeNull();
       }
-      expect(decodePublicSearchCursor(forge({ r: 'latest', c: '2026-11-12T10:00:00Z', i: ID }), 'posts', 'latest'))
-        .not.toBeNull();
+      for (const createdAt of [
+        '2026-11-12T10:00:00Z', '2026-11-12T10:00:00.123456+00:00', '2028-02-29T23:59:59.9+05:30',
+        '2026-11-12T10:00:00-08:00', '2026-11-12T10:00:00+14:00', '2020-01-01T00:00:00Z', '9999-12-31T23:59:59Z',
+      ]) {
+        expect(
+          decodePublicSearchCursor(forge({ r: 'latest', c: createdAt, i: ID }), 'posts', 'latest')?.createdAt,
+          createdAt,
+        ).toBe(createdAt);
+      }
       // A Latest cursor needs its id, and an unknown sort is no sort.
       expect(decodePublicSearchCursor(forge({ r: 'latest', c: '2026-11-12T10:00:00Z' }), 'posts', 'latest')).toBeNull();
       expect(decodePublicSearchCursor(forge({ r: 'oldest', s: 4.25, i: ID }), 'posts')).toBeNull();

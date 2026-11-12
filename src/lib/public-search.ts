@@ -117,10 +117,35 @@ export type PublicSearchCursor = {
 };
 
 // A timestamptz as PostgREST writes one: 2026-11-12T10:35:47.123456+00:00.
-const CURSOR_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
-// The last millisecond of the year 9999: past it toISOString writes a signed
-// six-digit year, which a timestamptz parameter refuses.
-const MAX_CURSOR_AS_OF_MS = 253_402_300_799_999;
+const CURSOR_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-](\d{2}):(\d{2}))$/;
+// The years a cursor's time may name. Nothing here was made before 2020, and
+// past 9999 toISOString writes a signed six-digit year: Postgres refuses that,
+// as it refuses the year 0000.
+const MIN_CURSOR_YEAR = 2020;
+const MAX_CURSOR_YEAR = 9999;
+const MIN_CURSOR_AS_OF_MS = Date.UTC(MIN_CURSOR_YEAR, 0, 1);
+const MAX_CURSOR_AS_OF_MS = Date.UTC(MAX_CURSOR_YEAR, 11, 31, 23, 59, 59, 999);
+// The widest offset from UTC any place keeps; Postgres refuses +16:00 and beyond.
+const MAX_CURSOR_OFFSET_HOURS = 14;
+
+/**
+ * Whether a cursor's created_at is a time Postgres takes as a timestamptz.
+ * `Date.parse` is no judge of that: V8 reads 2026-02-30 as 2 March and takes
+ * an offset of +23:59, and Postgres refuses both, which reached the caller as
+ * a 500. So the date and time must come back from a Date as they went in.
+ */
+function isCursorTimestamp(value: string): boolean {
+  const parts = CURSOR_TIMESTAMP_PATTERN.exec(value);
+  if (!parts) return false;
+  const [, year, month, day, hour, minute, second, offsetHours, offsetMinutes] = parts;
+  if (Number(year) < MIN_CURSOR_YEAR || Number(year) > MAX_CURSOR_YEAR) return false;
+  if (offsetHours !== undefined && (Number(offsetHours) > MAX_CURSOR_OFFSET_HOURS || Number(offsetMinutes) > 59)) {
+    return false;
+  }
+  const wallClock = `${year}-${month}-${day}T${hour}:${minute}:${second}`;
+  const read = new Date(`${wallClock}Z`);
+  return Number.isFinite(read.getTime()) && read.toISOString().slice(0, 19) === wallClock;
+}
 
 export function normalizePublicSearchQuery(value: string | null | undefined): string {
   return (value ?? '')
@@ -221,19 +246,18 @@ export function decodePublicSearchCursor(
       return null;
     }
     if (expectedType === 'posts' && sort === 'latest') {
-      // Feeds a timestamptz parameter, so held to that shape for the same reason.
-      if (
-        typeof parsed.c !== 'string'
-        || !CURSOR_TIMESTAMP_PATTERN.test(parsed.c)
-        || !Number.isFinite(Date.parse(parsed.c))
-      ) {
-        return null;
-      }
+      // Feeds a timestamptz parameter, so held to a time Postgres takes for the same reason.
+      if (typeof parsed.c !== 'string' || !isCursorTimestamp(parsed.c)) return null;
       return { version: 1, type: expectedType, sort, createdAt: parsed.c, id: parsed.i };
     }
     if (typeof parsed.s !== 'number' || !Number.isFinite(parsed.s)) return null;
     if (expectedType === 'posts' && parsed.a !== undefined) {
-      if (!Number.isSafeInteger(parsed.a) || Number(parsed.a) <= 0 || Number(parsed.a) > MAX_CURSOR_AS_OF_MS) {
+      // An integer of milliseconds always makes a real date; the years are held as created_at's are.
+      if (
+        !Number.isSafeInteger(parsed.a)
+        || Number(parsed.a) < MIN_CURSOR_AS_OF_MS
+        || Number(parsed.a) > MAX_CURSOR_AS_OF_MS
+      ) {
         return null;
       }
       return { version: 1, type: expectedType, score: parsed.s, id: parsed.i, asOf: Number(parsed.a) };

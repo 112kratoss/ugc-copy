@@ -403,18 +403,23 @@ export function ExploreSearchOverlay({
   // From the creator minimum on, the tab in effect always meets its own.
   const requestKey = countedLength >= MIN_CREATOR_QUERY_LENGTH ? searchKey(normalizedQuery, type, sort) : null;
   const response = answer && answer.key === requestKey ? answer.response : null;
+  const shownFailure = failure && failure.key === requestKey ? failure : null;
+  // The answer on hand for this query and tab in the other order, if any.
+  const otherOrder = !response && requestKey !== null && answer !== null
+    && answer.scope === searchScope(normalizedQuery, type) ? answer.response : null;
   // While the other order of the same search loads, its cards stay up, dimmed,
   // with the control on them: the two orders hold the same results, and a
-  // spinner in their place would take the control from under the finger.
-  const reordering = !response && requestKey !== null && answer !== null
-    && answer.scope === searchScope(normalizedQuery, type);
-  const shownResponse = response ?? (reordering && answer ? answer.response : null);
-  const shownFailure = failure && failure.key === requestKey ? failure : null;
+  // spinner in their place would take the control from under the finger. A
+  // request that failed is no longer loading: the cards go, and the failed
+  // search is drawn as any other is, with Retry.
+  const reordering = otherOrder !== null && !shownFailure;
+  const shownResponse = response ?? (reordering ? otherOrder : null);
   const resultCount = shownResponse ? shownResultCount(shownResponse, type) : 0;
   // Latest is offered once an answer says which order it is in. A server from
   // before sorts says nothing and reads every search ranked, so there the
   // control would change nothing and is not drawn.
-  const shownSort = isContentType(type) && shownResponse?.sort !== undefined ? sort : null;
+  const sortOffered = isContentType(type) && (shownResponse ?? otherOrder)?.sort !== undefined;
+  const shownSort = sortOffered ? sort : null;
   const retryBlocked = Boolean(shownFailure?.retryAfterSeconds);
   const nextCursor = !response
     ? null
@@ -678,6 +683,11 @@ export function ExploreSearchOverlay({
           </View>
         ) : shownFailure ? (
           <View style={{ gap: 12 }}>
+            {/* The order that failed keeps its control, so the other one, whose
+                results were on screen a moment ago, is one press away. */}
+            {shownSort && (type === 'posts' || type === 'recipes') ? (
+              <ResultsHeading title={type === 'posts' ? 'Posts' : 'Recipes'} sort={shownSort} onSortChange={setPickedSort} />
+            ) : null}
             <StatusBlock tone="danger" title="Search did not load" body={shownFailure.message} />
             <SecondaryButton disabled={retryBlocked} label="Retry search" onPress={() => void runSearch()} />
           </View>

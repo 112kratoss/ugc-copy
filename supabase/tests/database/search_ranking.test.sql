@@ -14,13 +14,15 @@ select no_plan();
 -- …01 is the viewer. …02 and …03 create posts; the viewer follows …03.
 -- The viewer has blocked …04, and …05 has blocked the viewer.
 -- …11 to …17 are the creators creator search ranks; …21 to …23 follow …12,
--- and the viewer follows …17.
+-- and the viewer follows …17. …18's display name is written with a
+-- full-width letter and three spaces; …19's starts with the same words, and
+-- …21 and …22 follow …19.
 insert into auth.users (id, email, aud, role, created_at, raw_app_meta_data, raw_user_meta_data)
 select
   ('5c000000-0000-4000-8000-0000000000' || suffix)::uuid,
   'search-ranking-' || suffix || '@example.invalid',
   'authenticated', 'authenticated', now() - interval '200 days', '{}'::jsonb, '{}'::jsonb
-from unnest(array['01', '02', '03', '04', '05', '11', '12', '13', '14', '15', '16', '17', '21', '22', '23']) as suffix;
+from unnest(array['01', '02', '03', '04', '05', '11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '23']) as suffix;
 
 update public.profiles as profiles
 set username = named.username, display_name = named.display_name, bio = named.bio
@@ -36,7 +38,9 @@ from (values
   ('14', 'atelier-nine', 'Solenne Dupont', null),
   ('15', 'brightfield', 'Brightfield', 'Lighting notes after solenne and other painters'),
   ('16', 'solenne-labs', 'Labs Account', null),
-  ('17', 'solenne-works', 'Works Account', null)
+  ('17', 'solenne-works', 'Works Account', null),
+  ('18', 'pim-harrow', 'Ｏrla   Venn', null),
+  ('19', 'dax-oriel', 'Orla Venn Studio', null)
 ) as named(suffix, username, display_name, bio)
 where profiles.id = ('5c000000-0000-4000-8000-0000000000' || named.suffix)::uuid;
 
@@ -44,7 +48,8 @@ insert into public.follows (follower_id, following_id)
 select
   ('5c000000-0000-4000-8000-0000000000' || pairs.follower)::uuid,
   ('5c000000-0000-4000-8000-0000000000' || pairs.following)::uuid
-from (values ('01', '03'), ('21', '12'), ('22', '12'), ('23', '12'), ('01', '17')) as pairs(follower, following);
+from (values ('01', '03'), ('21', '12'), ('22', '12'), ('23', '12'), ('01', '17'), ('21', '19'), ('22', '19'))
+  as pairs(follower, following);
 
 insert into public.user_blocks (blocker_user_id, blocked_user_id)
 values
@@ -91,6 +96,11 @@ select pg_temp.post('51', '02', 'Pellwick study', 'A quiet frame', interval '1 d
 select pg_temp.post('52', '03', 'Pellwick study', 'A quiet frame', interval '1 day');
 -- A word only a blocked creator's post holds.
 select pg_temp.post('61', '04', 'Zorblatt study', 'A quiet frame', interval '0');
+-- A title that is the query once it is read as the query is, on 'mossgate
+-- ridge': a full-width letter, a line break and a double space. …72's title
+-- only starts with the query, and has the saves.
+select pg_temp.post('71', '02', E'Ｍossgate \n ridge', 'A quiet frame', interval '0');
+select pg_temp.post('72', '02', 'Mossgate ridge at dawn', 'A quiet frame', interval '0', 500);
 
 select public.rebuild_search_terms();
 
@@ -168,6 +178,12 @@ select lives_ok(
   $$select public.search_post_score(null, null, null, null, null, null, null, null, 1e18, null),
            public.search_post_score(true, true, true, 5, 5, -4, -4, -4, -1e18, true)$$,
   'the score answers nulls, negative counts and an age of any size'
+);
+
+select is(
+  pg_temp.posts_found('mossgate ridge'),
+  array['71', '72'],
+  'a title written with a full-width letter, a line break and a double space is the query once read as the query is, and leads a title that only starts with it'
 );
 
 -- ─── Engagement, decayed by age ──────────────────────────────────────────────
@@ -254,10 +270,89 @@ select isnt(
   'the score moves with the instant, which is why a cursor carries it'
 );
 
+-- now() does not move inside this transaction, so the repeat itself is shown
+-- by two separate calls (the evidence script of 2026-11-12); what holds here
+-- is the instant a call without one is given.
+select is(
+  (select array_agg(row(s.post_id, s.search_score)::text order by s.search_score desc, s.post_id)
+   from public.search_public_posts('lantern glow', null, null, null, 25) as s),
+  (select array_agg(row(s.post_id, s.search_score)::text order by s.search_score desc, s.post_id)
+   from public.search_public_posts('lantern glow', null, null, null, 25, date_trunc('day', now(), 'UTC')) as s),
+  'without an instant a search is scored at the start of the UTC day, the same for every call that day, never at now()'
+);
+
 select is(
   (select s.search_score from public.search_public_posts('ostrander', null, null, null, 1) as s),
-  (select s.search_score from public.search_public_posts('ostrander', null, null, null, 1, now()) as s),
-  'without an instant a search is scored at now()'
+  (select s.search_score from public.search_public_posts('ostrander', null, null, null, 1,
+     (select created_at from public.posts where id = pg_temp.post_id('42'))) as s),
+  'a post made after that instant scores as one made at it: its age is zero, never negative'
+);
+
+-- ─── A cursor's score goes through text ──────────────────────────────────────
+
+-- The Data API writes a double as this database does, with 15 significant
+-- digits (extra_float_digits = 0 in its configuration; set here so the cases
+-- say what they depend on), and the app hands that text back as the cursor.
+select set_config('extra_float_digits', '0', true);
+
+select isnt(
+  (24.581481013499234::double precision::text)::double precision,
+  24.581481013499234::double precision,
+  'a double written with 15 digits is not always the double it was: an unrounded score did not survive its cursor'
+);
+
+select is(
+  (select count(*)::integer
+   from public.search_public_posts('lantern glow', null, null, null, 25, now()) as s
+   where (s.search_score::text)::double precision <> s.search_score
+      or s.search_score <> round(s.search_score::numeric, 6)::double precision),
+  0,
+  'every post score has six decimals at most and reads back from text as itself'
+);
+select is(
+  (select count(*)::integer
+   from public.search_public_creators('solenne', null, null, null, 25) as s
+   where (s.search_score::text)::double precision <> s.search_score
+      or s.search_score <> round(s.search_score::numeric, 6)::double precision),
+  0,
+  'and every creator score'
+);
+
+select is(
+  (select count(*)::integer
+   from generate_series(1, 6) as cut(size)
+   cross join lateral (
+     select s.post_id, s.search_score::text as score_text
+     from public.search_public_posts('lantern glow', null, null, null, cut.size) as s
+     order by s.search_score, s.post_id desc
+     limit 1
+   ) as last_row
+   cross join lateral public.search_public_posts(
+     p_query => 'lantern glow',
+     p_viewer_user_id => null,
+     p_after_score => last_row.score_text::double precision,
+     p_after_id => last_row.post_id,
+     p_limit => 25
+   ) as next_page
+   where next_page.post_id = last_row.post_id),
+  0,
+  'wherever a page of posts is cut, the cursor read back from text opens the next page after its own row, for the call that sends no instant too'
+);
+select is(
+  (select count(*)::integer
+   from generate_series(1, 6) as cut(size)
+   cross join lateral (
+     select s.creator_user_id, s.search_score::text as score_text
+     from public.search_public_creators('solenne', null, null, null, cut.size) as s
+     order by s.search_score, s.creator_user_id desc
+     limit 1
+   ) as last_row
+   cross join lateral public.search_public_creators(
+     'solenne', null, last_row.score_text::double precision, last_row.creator_user_id, 25
+   ) as next_page
+   where next_page.creator_user_id = last_row.creator_user_id),
+  0,
+  'and wherever a page of creators is cut'
 );
 
 -- ─── The call of the app live during the release ─────────────────────────────
@@ -432,6 +527,11 @@ select is(
   pg_temp.creators_found('solenne', pg_temp.user_id('01')),
   array['solenne', 'solenne-works', 'solenne-studio', 'solenne-labs', 'marek-ives', 'atelier-nine', 'brightfield'],
   'for a viewer who follows one of the handles starting with it, that one leads its tier and no further'
+);
+select is(
+  pg_temp.creators_found('orla venn'),
+  array['pim-harrow', 'dax-oriel'],
+  'a display name written with a full-width letter and three spaces is the query once read as the query is, and leads a followed creator whose name only starts with it'
 );
 select cmp_ok(
   public.search_creator_score(false, true, false, false, 1, 1, 2147483647, 2147483647, true),

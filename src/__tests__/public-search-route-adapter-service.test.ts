@@ -144,6 +144,33 @@ describe('public search route adapter service', () => {
       }
     });
 
+    // V8 reads each of these as a date; Postgres refuses each as a timestamptz,
+    // and the refusal used to reach the caller as a 500 from the RPC.
+    it.each([
+      '0000-01-01T00:00:00Z',
+      '2026-02-30T00:00:00Z',
+      '2026-11-12T10:00:00+16:00',
+      '2026-11-12T10:00:00+23:59',
+    ])('answers 400 to a forged Latest cursor whose time Postgres would refuse, without searching: %s', async (createdAt) => {
+      const forged = Buffer.from(JSON.stringify({ v: 1, t: 'posts', r: 'latest', i: POST_ID, c: createdAt }), 'utf8')
+        .toString('base64url');
+      const { response, options } = await ask(`http://localhost/api/search?q=portrait&type=posts&sort=latest&cursor=${forged}`);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: 'cursor is invalid for this search type and sort.' });
+      // The service was never called, so no RPC was.
+      expect(options).toBeNull();
+    });
+
+    it('answers 400 to a forged Top cursor whose instant is outside any real one', async () => {
+      for (const asOf of [1, -62_167_219_200_000, 253_402_300_800_000]) {
+        const forged = Buffer.from(JSON.stringify({ v: 1, t: 'posts', s: 8.25, i: POST_ID, a: asOf }), 'utf8')
+          .toString('base64url');
+        const { response, options } = await ask(`http://localhost/api/search?q=portrait&type=posts&cursor=${forged}`);
+        expect(response.status, String(asOf)).toBe(400);
+        expect(options, String(asOf)).toBeNull();
+      }
+    });
+
     it('still pages a cursor issued before sorts and instants existed', async () => {
       // What the app live before 2026-11-12 handed out: a score and an id.
       const legacy = Buffer.from(JSON.stringify({ v: 1, t: 'posts', s: 8.25, i: POST_ID }), 'utf8').toString('base64url');

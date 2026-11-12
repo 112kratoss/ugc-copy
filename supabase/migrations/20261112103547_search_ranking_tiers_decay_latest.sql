@@ -73,23 +73,67 @@
 --   (followers counted up to 1,000, where the term is full), activity
 --   1.0 * min(1, ln(1 + public posts) / ln(101)), and 1.0 for a creator the
 --   viewer follows: at most 8.5.
+--   A KNOWN COST: no table holds a maintained follower count, so the search
+--   counts follows for every creator a query matches, on every page and
+--   before the cursor is applied: up to 1,000 index entries each. On 3,000
+--   creators a query matching all of them took 29 ms where it took 13 (local
+--   replay, 2026-11-12). It grows with the creators a query matches; a
+--   counter kept on creator_search_documents should replace the count before
+--   creators number in the tens of thousands.
+--
+-- TITLES AND NAMES AS THE QUERY IS READ. The route hands the query over
+-- NFKC-normalised with its whitespace collapsed, while a document holds its
+-- title lowercased and trimmed only, so a title with a double space, a line
+-- break or a full-width letter was never "the query" and fell to the third
+-- tier. The two title tiers, and the two display-name tiers of creators,
+-- compare against the title or name normalised and collapsed here, row by
+-- row; the documents and their projection are untouched.
 --
 -- PAGES. The post score depends on the clock, so search_public_posts takes
 -- the instant a search began (p_as_of) and scores every page of it at that
--- instant; without one it scores at now(). p_sort = 'latest' orders the same
--- matches newest first, keyset on (created_at DESC, post_id) through
--- p_after_created_at. The function now returns each row's created_at for
--- that cursor.
+-- instant. Without one it scores at the start of the UTC day, never at
+-- now(): scores only fall as the clock moves, so a second page scored two
+-- seconds after the first found the first page's last post under its own
+-- cursor again (23.5293940, then 23.5293891) and repeated it, on every
+-- "Show more". A post made after the instant has an age of zero.
+-- p_sort = 'latest' orders the same matches newest first, keyset on
+-- (created_at DESC, post_id) through p_after_created_at. The function now
+-- returns each row's created_at for that cursor.
+--
+-- SCORES TRAVEL AS TEXT. This database writes a double with 15 significant
+-- digits (extra_float_digits = 0 in its postgresql.conf), so a score read
+-- through the Data API and handed back as a cursor was not the number the
+-- row holds: 24.5814810134992 came back for a score a hair under it, the
+-- row then passed "score < cursor", and the last post or creator of a page
+-- opened the next one. On five cursors of a six-post search that happened
+-- three times with the functions of 20261111224010 (local replay,
+-- 2026-11-12, each page its own call). Both score functions now round to six
+-- decimals, at most
+-- eight significant digits here, which 15 digits write exactly; scores
+-- closer than that tie and the id orders them, as it orders every tie.
 --
 -- THE RELEASE WINDOW. Migrations apply before the new app is promoted, and
 -- the app live meanwhile calls search_public_posts by name with p_query,
 -- p_viewer_user_id, p_after_score, p_after_id and p_limit. The function is
 -- dropped and re-created in this transaction with the three new parameters
--- last, each with a default, so that call resolves to it and reads Top at
--- now(); PostgREST sees one function of that name, never two. A cursor issued
--- before this file carries a score on the old scale: its next page is read
--- without error from that score on the new scale, and may repeat or skip
--- posts once. search_public_creators keeps its signature.
+-- last, each with a default, so that call resolves to it; PostgREST sees one
+-- function of that name, never two. search_public_creators keeps its
+-- signature. What that app, or the same app after a code-only rollback, then
+-- sees:
+--   - It sends no instant, so it reads Top scored at the start of the UTC
+--     day and, its cursor's score now exact, pages cleanly within that day,
+--     as it never quite did. A search paged across midnight
+--     UTC is scored at two instants and can repeat or skip a post, once.
+--   - A cursor issued before this file carries a score on the old scale,
+--     for posts and for creators (a creator's was 10 to 21 for a handle
+--     match and is now up to 48.5). Its next page is read without error
+--     from that score on the new scale, which skips every result of a tier
+--     above it: once, for a search open while the migration applied.
+--   - After a code-only rollback, a cursor the new app issued goes to old
+--     code: a Top posts or creators cursor pages as before (the instant it
+--     carries is ignored), a Latest posts cursor is refused (400, it holds
+--     no score), and a Latest recipes cursor is read as an offset into the
+--     relevance order.
 --
 -- BLOCKS. Both searches leave out, before LIMIT, every creator the viewer has
 -- blocked and every creator who has blocked the viewer: the two user_blocks
@@ -167,7 +211,8 @@ DECLARE
     + c_comment_points * greatest(coalesce(p_comment_count, 0), 0)
     + c_remix_points * greatest(coalesce(p_remix_count, 0), 0);
 BEGIN
-  RETURN
+  -- Six decimals: see SCORES TRAVEL AS TEXT above.
+  RETURN round((
     CASE
       WHEN coalesce(p_title_is_query, false) THEN c_tier_title_is_query
       WHEN coalesce(p_title_starts_with_query, false) THEN c_tier_title_starts_with_query
@@ -183,7 +228,8 @@ BEGIN
         + (1.0 - c_engagement_floor) * power(0.5::double precision, v_age_days / c_engagement_half_life_days)
       )
     + c_freshness_weight * power(0.5::double precision, v_age_days / c_freshness_half_life_days)
-    + CASE WHEN coalesce(p_viewer_follows_creator, false) THEN c_follow_weight ELSE 0.0 END;
+    + CASE WHEN coalesce(p_viewer_follows_creator, false) THEN c_follow_weight ELSE 0.0 END
+  )::numeric, 6)::double precision;
 END;
 $function$;
 
@@ -224,7 +270,8 @@ DECLARE
   c_audience_full_followers CONSTANT double precision := 1000.0;
   c_activity_full_posts CONSTANT double precision := 100.0;
 BEGIN
-  RETURN
+  -- Six decimals: see SCORES TRAVEL AS TEXT above.
+  RETURN round((
     CASE
       WHEN coalesce(p_handle_is_query, false) THEN c_tier_handle_is_query
       WHEN coalesce(p_handle_starts_with_query, false) THEN c_tier_handle_starts_with_query
@@ -242,7 +289,8 @@ BEGIN
       1.0,
       ln(1.0 + greatest(coalesce(p_public_post_count, 0), 0)) / ln(1.0 + c_activity_full_posts)
     )
-    + CASE WHEN coalesce(p_viewer_follows_creator, false) THEN c_follow_weight ELSE 0.0 END;
+    + CASE WHEN coalesce(p_viewer_follows_creator, false) THEN c_follow_weight ELSE 0.0 END
+  )::numeric, 6)::double precision;
 END;
 $function$;
 
@@ -318,8 +366,8 @@ BEGIN
       public.search_creator_score(
         documents.username_normalized = v_query,
         documents.username_normalized LIKE v_like || '%',
-        documents.display_name_normalized = v_query,
-        documents.display_name_normalized LIKE v_like || '%'
+        shown.display_name = v_query,
+        shown.display_name LIKE v_like || '%'
           -- The handle and the name are the vector's A lexemes; the bio is C.
           OR ts_filter(documents.search_vector, '{a}') @@ v_tsquery,
         ts_rank_cd(documents.search_vector, v_tsquery, 1 | 32),
@@ -334,6 +382,18 @@ BEGIN
         viewer.is_following
       ) AS search_score
     FROM public.creator_search_documents AS documents
+    CROSS JOIN LATERAL (
+      -- The name as the query is read: NFKC and one space between words. A
+      -- handle holds neither a space nor a letter NFKC changes.
+      -- Worked out only for a name that reading can change, as a post's
+      -- title is.
+      SELECT CASE
+        WHEN documents.display_name_normalized ~ '  |[^ -~]' THEN lower(btrim(regexp_replace(
+          normalize(documents.display_name_normalized, NFKC), '[[:space:]]+', ' ', 'g'
+        )))
+        ELSE documents.display_name_normalized
+      END AS display_name
+    ) AS shown
     CROSS JOIN LATERAL (
       SELECT EXISTS (
         SELECT 1
@@ -438,8 +498,11 @@ DECLARE
   v_tsquery tsquery;
   v_corrected text;
   v_sort text := coalesce(p_sort, 'top');
-  -- The instant every page of one search is scored at.
-  v_as_of timestamptz := coalesce(p_as_of, now());
+  -- The instant every page of one search is scored at. A caller that sends
+  -- none (the app live before this file) gets the start of the UTC day, so
+  -- its pages agree with each other; at now() each page was scored later
+  -- than the one before and repeated its last post.
+  v_as_of timestamptz := coalesce(p_as_of, date_trunc('day', now(), 'UTC'));
 BEGIN
   -- As creator search: outside the limits a query finds nothing.
   IF char_length(v_query) < 3 OR char_length(v_query) > 100 THEN
@@ -539,8 +602,8 @@ BEGIN
       documents.post_id,
       documents.creator_user_id,
       public.search_post_score(
-        documents.title_normalized = v_query,
-        documents.title_normalized LIKE v_like || '%',
+        shown.title = v_query,
+        shown.title LIKE v_like || '%',
         -- The title and the models are the vector's A lexemes, the tool
         -- names its C; the caption and the prompt are B and do not count.
         documents.tool_normalized = v_query
@@ -564,6 +627,18 @@ BEGIN
       documents.created_at
     FROM public.post_search_documents AS documents
     JOIN public.posts AS posts ON posts.id = documents.post_id
+    CROSS JOIN LATERAL (
+      -- The title as the query is read: NFKC and one space between words.
+      -- Worked out only for a title that reading can change, one holding two
+      -- spaces together or a character outside printable ASCII (a line break,
+      -- a full-width letter): on 2,250 matches the rest saved 15 ms.
+      SELECT CASE
+        WHEN documents.title_normalized ~ '  |[^ -~]' THEN lower(btrim(regexp_replace(
+          normalize(documents.title_normalized, NFKC), '[[:space:]]+', ' ', 'g'
+        )))
+        ELSE documents.title_normalized
+      END AS title
+    ) AS shown
     WHERE posts.is_nsfw = false
       AND (
         documents.search_vector @@ v_tsquery
@@ -595,7 +670,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.search_public_posts(text, uuid, double precision, uuid, integer, timestamptz, text, timestamptz) IS
-  'Public post search. p_sort top: by search_post_score at p_as_of (now() without one), keyset on (search_score DESC, post_id). p_sort latest: the same matches newest first, keyset on (created_at DESC, post_id) through p_after_created_at. Labelled posts and both sides of a block are left out before the limit. Service role only.';
+  'Public post search. p_sort top: by search_post_score at p_as_of (the start of the UTC day without one), keyset on (search_score DESC, post_id). p_sort latest: the same matches newest first, keyset on (created_at DESC, post_id) through p_after_created_at. Labelled posts and both sides of a block are left out before the limit. Service role only.';
 
 REVOKE ALL ON FUNCTION public.search_public_posts(text, uuid, double precision, uuid, integer, timestamptz, text, timestamptz)
   FROM PUBLIC, anon, authenticated;

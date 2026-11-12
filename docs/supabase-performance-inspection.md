@@ -100,6 +100,13 @@ reports `search_query_events_deleted` and `search_visitor_day_keys_deleted`) and
 `search_query_events` is watched by `get_operational_table_growth` (warning at
 500,000 rows).
 
+Search results are ranked in the database by `search_post_score` and
+`search_creator_score` (`20261112103547`); retuning is a re-create of one of them.
+After a code-only rollback to an app from before that migration, search keeps
+working against it: Top is scored at the start of the UTC day, a Latest posts
+cursor still open in a browser is a 400 ("Show more" fails once, a new search is
+fine), and a Latest recipes cursor is read as an offset into the relevance order.
+
 ```bash
 npm run ops:search-report -- --days 7 [--limit 50] [--json]
 ```

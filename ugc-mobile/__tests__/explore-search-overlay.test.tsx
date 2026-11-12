@@ -897,6 +897,51 @@ describe('ExploreSearchOverlay search', () => {
       await act(async () => tree.unmount());
     });
 
+    it('draws a failed switch to Latest as a failed search, with Retry and the control, never as cards left loading', async () => {
+      searchPublicContent.mockResolvedValueOnce(searchAnswer('portrait', 'posts', { sort: 'top', posts: [post('saved'), post('new')] }));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+
+      searchPublicContent.mockRejectedValueOnce(new ApiError('Failed to search public content.', 500));
+      await pickSort(tree, 'latest');
+      await advance(1);
+
+      const busyViews = () => tree.root.findAll((node) => node.type === 'view' && node.props.accessibilityState?.busy === true);
+      // Nothing is loading any more: no dimmed cards of the other order, no spinner.
+      expect(busyViews()).toHaveLength(0);
+      expect(postTitles(tree)).toEqual([]);
+      expect(isSearching(tree)).toBe(false);
+      // The failed search, as every failed search is drawn.
+      expect(statusTitles(tree)).toEqual(['Search did not load']);
+      expect(statusBodies(tree)).toEqual(['Search could not be loaded. Check your connection and try again.']);
+      expect(retryButton(tree).props.disabled).toBe(false);
+      // The control stays, on the order that was asked for.
+      expect(sortControls(tree)).toHaveLength(1);
+      expect(sortControls(tree)[0].props).toMatchObject({ accessibilityLabel: 'Sort posts', value: 'latest' });
+
+      // Retry asks for Latest again.
+      searchPublicContent.mockResolvedValueOnce(searchAnswer('portrait', 'posts', { sort: 'latest', posts: [post('new'), post('saved')] }));
+      await press(retryButton(tree));
+      expect(asked().at(-1)).toEqual({ type: 'posts', sort: 'latest', cursor: null });
+      expect(postTitles(tree)).toEqual(['new', 'saved']);
+      expect(statusTitles(tree)).toEqual([]);
+
+      // And from a failure, the other order is one press away.
+      searchPublicContent.mockRejectedValueOnce(new ApiError('Too many requests.', 429, { retryAfterSeconds: 10 }));
+      await pickSort(tree, 'top');
+      await advance(1);
+      expect(busyViews()).toHaveLength(0);
+      expect(retryButton(tree).props.disabled).toBe(true);
+      searchPublicContent.mockResolvedValueOnce(searchAnswer('portrait', 'posts', { sort: 'latest', posts: [post('new'), post('saved')] }));
+      await pickSort(tree, 'latest');
+      await advance(1);
+      expect(postTitles(tree)).toEqual(['new', 'saved']);
+
+      await act(async () => tree.unmount());
+    });
+
     it('pages Latest with the order and its cursor', async () => {
       searchPublicContent.mockImplementation(async ({ query, type, sort, cursor }) => searchAnswer(query, type, {
         sort: sort ?? 'top',
