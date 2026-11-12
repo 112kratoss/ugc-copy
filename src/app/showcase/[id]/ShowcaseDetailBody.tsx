@@ -26,6 +26,7 @@ import RemixCreditLine from '@/app/showcase/RemixCreditLine';
 import PostGenerationSetupLine from './PostGenerationSetupLine';
 import PostRelativeTime from './PostRelativeTime';
 import PostResourceBundlePanel from './PostResourceBundlePanel';
+import { showRecipeJump } from './recipe-jump';
 import { buildRecipePanelProps, getRecipeRemixOffer } from './recipe-panel-props';
 import ReportPostButton from './ReportPostButton';
 import ShowcaseDetailActions from './ShowcaseDetailActions';
@@ -438,6 +439,7 @@ export default function ShowcaseDetailBody({
                 <Link
                   data-testid="recipe-jump-link"
                   href="#recipe"
+                  onClick={() => showRecipeJump()}
                   className="flex items-center justify-between gap-3 border-b border-white/8 px-5 py-3.5 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/[0.06] sm:px-6"
                 >
                   <span className="inline-flex min-w-0 items-center gap-2">
@@ -511,6 +513,7 @@ export default function ShowcaseDetailBody({
         // bottom edge below 768px (z-60) and was drawn over the whole CTA there.
         <Link
           href="#recipe"
+          onClick={() => showRecipeJump()}
           className="canonical-post-mobile-cta fixed inset-x-3 bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)] z-40 flex items-center justify-between gap-3 rounded-full border border-emerald-300/25 bg-emerald-300 px-4 py-3 text-slate-950 shadow-[0_18px_60px_rgba(0,0,0,0.45)]"
         >
           <span>

@@ -14,7 +14,9 @@
 // published nothing: the profiles row in fixtures/creator-profile.json, which the specs read too. And
 // two post pages': a text post with a free recipe, by a creator of its own
 // (fixtures/post-with-recipe.json), and an image post made from a creation, with no recipe, by
-// another creator of its own (fixtures/creation-post.json). And one post editor's: an image post of
+// another creator of its own (fixtures/creation-post.json), and an image post made from a creation
+// whose free recipe brings its Remix, by a third creator (fixtures/creation-post-free-recipe.json).
+// And one post editor's: an image post of
 // the E2E user's with one picture and no recipe (fixtures/post-composer-saved-twice.json). And
 // Pricing's referral terms: no active program, which Pricing drew from the failed read too. And the
 // E2E user's recipe sales page, /marketplace/sell: two free recipes on text posts of theirs
@@ -44,6 +46,10 @@ const ownPost = require('../fixtures/post-composer-saved-twice.json');
 // shows under Made with (getPublicPostDetail, src/lib/public-posts.ts).
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const creationPost = require('../fixtures/creation-post.json');
+// An image post made from a creation, with a published free recipe that comes with its Remix, by a
+// creator of its own: the post page draws "Remix · Free" for a viewer who has not taken the recipe.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const freeRemixPost = require('../fixtures/creation-post-free-recipe.json');
 // The E2E user's two free recipes, each on a text post of theirs: the older one unlocked five times,
 // the newer one never. Recipe sales, /marketplace/sell, reads them in
 // getSellerPostResourceBundleDashboard (src/lib/post-resource-bundles-server.ts).
@@ -164,6 +170,55 @@ const READS = [
     path: '/rest/v1/generations',
     filters: { id: `eq.${creationPost.post.generation_id}` },
     answer: ({ wantsObject }) => json(wantsObject ? creationPost.generation : [creationPost.generation], { 'content-range': '0-0/1' }),
+  },
+  {
+    // fetchPublicPostRow: the creation post with a free recipe, by id.
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: `eq.${freeRemixPost.post.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? freeRemixPost.post : [freeRemixPost.post], { 'content-range': '0-0/1' }),
+  },
+  {
+    // loadPostMediaItemsMap: its one picture, in the public bucket.
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: `in.(${freeRemixPost.post.id})` },
+    answer: () => json(freeRemixPost.media, { 'content-range': `0-${freeRemixPost.media.length - 1}/${freeRemixPost.media.length}` }),
+  },
+  {
+    // loadPublicPostCreator.
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `eq.${freeRemixPost.creator.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? freeRemixPost.creator : [freeRemixPost.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // getPostResourceBundleDetailByPostId: its free recipe.
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { post_id: `eq.${freeRemixPost.post.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? freeRemixPost.bundle : [freeRemixPost.bundle], { 'content-range': '0-0/1' }),
+  },
+  {
+    // hydrateBundleRows: the recipe's seller (loadProfileMap)...
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `in.(${freeRemixPost.creator.id})` },
+    answer: () => json([freeRemixPost.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // ...and the post it belongs to (loadLinkedPostMap).
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: `in.(${freeRemixPost.post.id})` },
+    answer: () => json([freeRemixPost.post], { 'content-range': '0-0/1' }),
+  },
+  {
+    // loadPublicPostGeneration: the creation's model and settings.
+    methods: ['GET'],
+    path: '/rest/v1/generations',
+    filters: { id: `eq.${freeRemixPost.post.generation_id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? freeRemixPost.generation : [freeRemixPost.generation], { 'content-range': '0-0/1' }),
   },
   {
     // fetchOwnerPostRow: the post by id and owner. maybeSingle() asks for a list.

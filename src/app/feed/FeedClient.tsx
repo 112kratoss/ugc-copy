@@ -22,7 +22,7 @@ import {
     type FeedSafetyOutcome,
 } from '@/lib/feed-safety-actions';
 import { createPostFeedCardBuilder, type PostFeedCard } from '@/lib/post-feed-presentation';
-import { trackProductEvent } from '@/lib/product-analytics';
+import { claimFreeRecipe } from '@/lib/free-recipe-claim-client';
 import {
     FEED_REMOVAL_UNDO_MS,
     FEED_UNDO_FAILED_MESSAGE,
@@ -168,25 +168,6 @@ function withLaneInReturnTo(context: FeedDetailContext, laneId: FeedChipId): Fee
     if (laneId === 'for-you') url.searchParams.delete('chip'); else url.searchParams.set('chip', laneId);
     const returnTo = `${url.pathname}${url.search}${url.hash}`;
     return returnTo === context.returnTo ? context : { ...context, returnTo };
-}
-
-/**
- * Takes a post's free recipe for the viewer, as the post page's recipe panel
- * and the reel do, with their funnel events: a recipe got from a Home card
- * counts as one got there.
- */
-async function claimFreeRecipe(postId: string, accessToken: string) {
-    trackProductEvent('recipe_unlock_started', { method: 'free', post_id: postId });
-    const response = await fetch(`/api/posts/${postId}/resource-bundle/unlock-free`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${accessToken}` },
-    }).catch(() => null);
-    if (!response?.ok) {
-        const data = await response?.json().catch(() => null) as { error?: unknown } | null | undefined;
-        trackProductEvent('recipe_unlock_failed', { method: 'free', post_id: postId });
-        throw new Error(typeof data?.error === 'string' && data.error ? data.error : 'Failed to get the free recipe.');
-    }
-    trackProductEvent('recipe_unlock_succeeded', { method: 'free', post_id: postId });
 }
 
 /**
