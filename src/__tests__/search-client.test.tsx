@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -482,6 +482,142 @@ describe('SearchClient', () => {
       const creditsOnly = screen.getByRole('link', { name: /Moonlit grade/ });
       expect(creditsOnly).toHaveTextContent('50 credits');
       expect(creditsOnly).not.toHaveTextContent('₹42');
+    });
+
+    describe('Top and Latest', () => {
+      const postsAnswer = (sort: 'top' | 'latest', titles: string[], nextCursor: string | null = null) => jsonResponse(
+        searchResponse({
+          type: 'posts',
+          sort,
+          // One id per title: a card drawn in both orders is the same post.
+          posts: { items: titles.map((title, index) => post(`post-${title}`, title, index)), nextCursor },
+        }),
+      );
+      const address = () => `${window.location.pathname}${window.location.search}`;
+
+      it('offers the two orders on Posts, Top chosen, and asks for Latest when it is picked', async () => {
+        fetchMock.mockResolvedValueOnce(postsAnswer('top', ['Most saved portrait', 'Older portrait']));
+        render(<SearchClient initialQuery="portrait" initialType="posts" />);
+        await settle();
+
+        const sorts = screen.getByRole('radiogroup', { name: 'Sort posts' });
+        expect(Array.from(sorts.querySelectorAll('[role="radio"]')).map((radio) => radio.textContent)).toEqual(['Top', 'Latest']);
+        expect(screen.getByRole('radio', { name: 'Top' })).toBeChecked();
+        // The ranked order is the address's default and the request's.
+        expect(requestedUrls()).toEqual(['/api/search?q=portrait&type=posts']);
+        expect(address()).toBe('/search?q=portrait&type=posts');
+
+        const answer = deferred<ReturnType<typeof jsonResponse>>();
+        fetchMock.mockReturnValueOnce(answer.promise);
+        fireEvent.click(screen.getByRole('radio', { name: 'Latest' }));
+        // No pause: the query has not changed.
+        await settle();
+
+        expect(requestedUrls()[1]).toBe('/api/search?q=portrait&type=posts&sort=latest');
+        expect(address()).toBe('/search?q=portrait&type=posts&sort=latest');
+        expect(screen.getByRole('radio', { name: 'Latest' })).toBeChecked();
+        // The other order's cards stay up, marked as loading: the same results, reordered.
+        expect(screen.getByText('Most saved portrait')).toBeInTheDocument();
+        // Once for a screen reader, once on the page.
+        expect(screen.getAllByText('Searching…')).toHaveLength(2);
+
+        answer.resolve(postsAnswer('latest', ['Newest portrait', 'Most saved portrait']));
+        await settle();
+        expect(screen.getAllByRole('link').map((link) => link.textContent)).toEqual([
+          expect.stringContaining('Newest portrait'),
+          expect.stringContaining('Most saved portrait'),
+        ]);
+        expect(screen.queryByText('Searching…')).not.toBeInTheDocument();
+      });
+
+      it('opens a shared Latest link on Latest, and a post opened from it comes back to it', async () => {
+        fetchMock.mockResolvedValueOnce(postsAnswer('latest', ['Newest portrait']));
+        render(<SearchClient initialQuery="portrait" initialType="posts" initialSort="latest" />);
+        await settle();
+
+        expect(requestedUrls()).toEqual(['/api/search?q=portrait&type=posts&sort=latest']);
+        expect(screen.getByRole('radio', { name: 'Latest' })).toBeChecked();
+        const href = screen.getByRole('link', { name: /Newest portrait/ }).getAttribute('href') ?? '';
+        expect(new URL(href, 'http://localhost').searchParams.get('returnTo'))
+          .toBe('/search?q=portrait&type=posts&sort=latest');
+      });
+
+      it('pages Latest with its own cursor and never draws an answer for the other order', async () => {
+        fetchMock.mockResolvedValueOnce(postsAnswer('latest', ['Newest portrait'], 'latest-cursor-2'));
+        render(<SearchClient initialQuery="portrait" initialType="posts" initialSort="latest" />);
+        await settle();
+
+        fetchMock.mockResolvedValueOnce(postsAnswer('latest', ['Older portrait'], 'latest-cursor-3'));
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+        await settle();
+        expect(requestedUrls()[1]).toBe('/api/search?q=portrait&type=posts&sort=latest&cursor=latest-cursor-2');
+        expect(screen.getByText('Newest portrait')).toBeInTheDocument();
+        expect(screen.getByText('Older portrait')).toBeInTheDocument();
+
+        // A next page still on its way when the order changes is dropped, not appended.
+        const late = deferred<ReturnType<typeof jsonResponse>>();
+        fetchMock.mockReturnValueOnce(late.promise);
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+        fetchMock.mockResolvedValueOnce(postsAnswer('top', ['Most saved portrait']));
+        fireEvent.click(screen.getByRole('radio', { name: 'Top' }));
+        await settle();
+        late.resolve(postsAnswer('latest', ['Stray portrait']));
+        await settle();
+        expect(requestedUrls()[3]).toBe('/api/search?q=portrait&type=posts');
+        expect(screen.getByText('Most saved portrait')).toBeInTheDocument();
+        expect(screen.queryByText('Stray portrait')).not.toBeInTheDocument();
+        expect(screen.queryByText('Newest portrait')).not.toBeInTheDocument();
+      });
+
+      it('gives Recipes the same two orders and keeps the choice across the two tabs', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse(searchResponse({
+          type: 'recipes',
+          recipes: { items: [recipe('recipe-1', 'Moonlit lighting', 'Luna Studio')], nextCursor: null },
+        })));
+        render(<SearchClient initialQuery="moonlit" initialType="recipes" />);
+        await settle();
+
+        fetchMock.mockResolvedValueOnce(jsonResponse(searchResponse({
+          type: 'recipes',
+          sort: 'latest',
+          recipes: { items: [recipe('recipe-1', 'Moonlit lighting', 'Luna Studio')], nextCursor: null },
+        })));
+        fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Sort recipes' })).getByRole('radio', { name: 'Latest' }));
+        await settle();
+        expect(requestedUrls()[1]).toBe('/api/search?q=moonlit&type=recipes&sort=latest');
+
+        fetchMock.mockResolvedValueOnce(postsAnswer('latest', ['Moonlit portrait']));
+        fireEvent.click(screen.getByRole('tab', { name: 'Posts' }));
+        await settle();
+        expect(requestedUrls()[2]).toBe('/api/search?q=moonlit&type=posts&sort=latest');
+        expect(within(screen.getByRole('radiogroup', { name: 'Sort posts' })).getByRole('radio', { name: 'Latest' })).toBeChecked();
+      });
+
+      it('has one order on Top and Creators: no control, and no sort in the request or the address', async () => {
+        fetchMock.mockResolvedValue(jsonResponse(searchResponse({
+          creators: { items: [creator('Luna Studio')], nextCursor: null },
+          posts: { items: [post('post-1', 'Moonlit portrait', 4)], nextCursor: null },
+          recipes: { items: [recipe('recipe-1', 'Moonlit lighting', 'Luna Studio')], nextCursor: null },
+        })));
+        // A link that names Latest on the Top tab: the choice waits for a tab that has it.
+        render(<SearchClient initialQuery="luna" initialType="top" initialSort="latest" />);
+        await settle();
+
+        expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+        expect(requestedUrls()).toEqual(['/api/search?q=luna&type=top']);
+        expect(address()).toBe('/search?q=luna');
+
+        fireEvent.click(screen.getByRole('tab', { name: 'Creators' }));
+        await settle();
+        expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+        expect(requestedUrls()[1]).toBe('/api/search?q=luna&type=creators');
+        expect(address()).toBe('/search?q=luna&type=creators');
+
+        fireEvent.click(screen.getByRole('tab', { name: 'Posts' }));
+        await settle();
+        expect(requestedUrls()[2]).toBe('/api/search?q=luna&type=posts&sort=latest');
+        expect(address()).toBe('/search?q=luna&type=posts&sort=latest');
+      });
     });
   });
 });

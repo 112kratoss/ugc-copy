@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, LoaderCircle, MessageCircle, RefreshCcw, Sparkles } from 'lucide-react';
 
+import { SegmentedControl } from '@/components/DesignSystem';
 import { CreatorSearchResult } from '@/components/search/CreatorSearchResult';
 import { SearchField } from '@/components/search/SearchField';
 import { SearchStateBlock } from '@/components/search/SearchStateBlock';
@@ -13,7 +14,9 @@ import {
   normalizeCreatorSearchQuery,
   normalizePublicSearchQuery,
   publicSearchQueryLength,
+  publicSearchTypeHasSorts,
   type PublicSearchResponse,
+  type PublicSearchSort,
   type PublicSearchType,
   type RecipeSearchResult,
 } from '@/lib/public-search';
@@ -29,13 +32,19 @@ const SEARCH_TABS: Array<{ id: PublicSearchType; label: string }> = [
   { id: 'recipes', label: 'Recipes' },
 ];
 
+// The order of a Posts or Recipes search. The Top tab and Creators have one.
+const SEARCH_SORTS: Array<{ value: PublicSearchSort; label: string }> = [
+  { value: 'top', label: 'Top' },
+  { value: 'latest', label: 'Latest' },
+];
+
 const SEARCH_DEBOUNCE_MS = 300;
 const SEARCH_FAILED_MESSAGE = 'Search could not be loaded.';
 const SEARCH_OFFLINE_MESSAGE = 'Search could not be loaded. Check your connection and try again.';
 
 // What a request asked for. Its answer or error is drawn only while the page
 // still asks the same thing, so a change never reads as the old outcome.
-type SearchRequest = { query: string; type: PublicSearchType };
+type SearchRequest = { query: string; type: PublicSearchType; sort: PublicSearchSort };
 type SearchAnswer = SearchRequest & { result: PublicSearchResponse };
 type SearchFailure = SearchRequest & { message: string };
 
@@ -65,8 +74,8 @@ function isContentType(type: PublicSearchType) {
   return type === 'posts' || type === 'recipes';
 }
 
-function isSameRequest(entry: SearchRequest | null, query: string, type: PublicSearchType) {
-  return entry !== null && entry.query === query && entry.type === type;
+function isSameRequest(entry: SearchRequest | null, query: string, type: PublicSearchType, sort: PublicSearchSort) {
+  return entry !== null && entry.query === query && entry.type === type && entry.sort === sort;
 }
 
 // Only the active tab's kinds are drawn, so only they count as results.
@@ -76,11 +85,36 @@ function shownResultCount(result: PublicSearchResponse, type: PublicSearchType) 
     + (type === 'top' || type === 'recipes' ? result.recipes.items.length : 0);
 }
 
-function searchPath(query: string, type: PublicSearchType) {
+// The page's address: the query, the tab and, where it is not the ranked
+// one, the order, so a search can be shared and a post opened from it comes
+// back to the same results.
+function searchPath(query: string, type: PublicSearchType, sort: PublicSearchSort) {
   const params = new URLSearchParams();
   if (query) params.set('q', query);
   if (type !== 'top') params.set('type', type);
+  if (sort !== 'top') params.set('sort', sort);
   return `/search${params.size ? `?${params.toString()}` : ''}`;
+}
+
+function SearchSortControl({
+  kind,
+  sort,
+  onChange,
+}: {
+  kind: 'posts' | 'recipes';
+  sort: PublicSearchSort;
+  onChange: (sort: PublicSearchSort) => void;
+}) {
+  return (
+    <SegmentedControl
+      ariaLabel={`Sort ${kind}`}
+      options={SEARCH_SORTS}
+      value={sort}
+      onChange={onChange}
+      fill={false}
+      size="compact"
+    />
+  );
 }
 
 function PostSearchCard({ item, returnTo }: { item: ShowcaseFeedItem; returnTo: string }) {
@@ -147,14 +181,19 @@ function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; re
 export default function SearchClient({
   initialQuery,
   initialType,
+  initialSort = 'top',
 }: {
   initialQuery: string;
   initialType: PublicSearchType;
+  initialSort?: PublicSearchSort;
 }) {
   const [query, setQuery] = useState(initialQuery);
   // The tab the user chose. Below three characters only creators can be
   // searched, so a content tab shows as Creators and comes back at three.
   const [pickedType, setPickedType] = useState(initialType);
+  // The order the user chose for Posts and Recipes. It is kept across tabs,
+  // and read only on the two that have another order than the ranked one.
+  const [pickedSort, setPickedSort] = useState(initialSort);
   const [answer, setAnswer] = useState<SearchAnswer | null>(null);
   const [failure, setFailure] = useState<SearchFailure | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -174,7 +213,8 @@ export default function SearchClient({
   const canSearch = gatedQueryLength >= PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH;
   const contentTabsDisabled = canSearch && gatedQueryLength < PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH;
   const activeType: PublicSearchType = contentTabsDisabled && isContentType(pickedType) ? 'creators' : pickedType;
-  const returnTo = searchPath(normalizedQuery, activeType);
+  const activeSort: PublicSearchSort = publicSearchTypeHasSorts(activeType) ? pickedSort : 'top';
+  const returnTo = searchPath(normalizedQuery, activeType, activeSort);
 
   const onTabListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
@@ -188,7 +228,7 @@ export default function SearchClient({
   };
 
   const requestSearch = useCallback(async ({ append = false, cursor = null }: { append?: boolean; cursor?: string | null } = {}) => {
-    const request: SearchRequest = { query: normalizedQuery, type: activeType };
+    const request: SearchRequest = { query: normalizedQuery, type: activeType, sort: activeSort };
     const sequence = ++requestSequence.current;
     requestController.current?.abort();
     const controller = new AbortController();
@@ -197,6 +237,8 @@ export default function SearchClient({
     setFailure(null);
     try {
       const params = new URLSearchParams({ q: request.query, type: request.type });
+      // A cursor pages the order it was issued for, so a later page names it too.
+      if (request.sort !== 'top') params.set('sort', request.sort);
       if (cursor) params.set('cursor', cursor);
       const { data: { session } } = await supabase.auth.getSession();
       const response = await fetch(`/api/search?${params.toString()}`, {
@@ -216,7 +258,7 @@ export default function SearchClient({
       setRetryBlocked(false);
       setAnswer((current) => {
         if (!append) return { ...request, result: next };
-        if (!current || !isSameRequest(current, request.query, request.type)) return current;
+        if (!current || !isSameRequest(current, request.query, request.type, request.sort)) return current;
         return {
           ...current,
           result: {
@@ -243,7 +285,7 @@ export default function SearchClient({
     } finally {
       if (sequence === requestSequence.current) setLoadingMore(false);
     }
-  }, [activeType, normalizedQuery]);
+  }, [activeSort, activeType, normalizedQuery]);
 
   useEffect(() => () => {
     requestController.current?.abort();
@@ -265,7 +307,7 @@ export default function SearchClient({
     // stands for the new query during the pause.
     setFailure(null);
     const search = () => {
-      window.history.replaceState(null, '', searchPath(normalizedQuery, activeType));
+      window.history.replaceState(null, '', searchPath(normalizedQuery, activeType, activeSort));
       void requestSearch();
     };
     const waitForPause = scheduledQuery.current !== normalizedQuery;
@@ -276,13 +318,15 @@ export default function SearchClient({
     }
     const timer = window.setTimeout(search, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [activeType, canSearch, normalizedQuery, requestSearch]);
+  }, [activeSort, activeType, canSearch, normalizedQuery, requestSearch]);
 
-  const currentAnswer = isSameRequest(answer, normalizedQuery, activeType) ? answer : null;
-  const currentFailure = isSameRequest(failure, normalizedQuery, activeType) ? failure : null;
+  const currentAnswer = isSameRequest(answer, normalizedQuery, activeType, activeSort) ? answer : null;
+  const currentFailure = isSameRequest(failure, normalizedQuery, activeType, activeSort) ? failure : null;
   const pending = canSearch && !currentAnswer && !currentFailure;
   // While the next query on the same tab loads, the previous cards stay up,
-  // dimmed. Another tab's answer holds other kinds, so it is not drawn.
+  // dimmed, and so do the cards of the other order while Top or Latest loads:
+  // the two hold the same results. Another tab's answer holds other kinds, so
+  // it is not drawn.
   const shownAnswer = currentAnswer ?? (pending && answer?.type === activeType ? answer : null);
   const resultCount = shownAnswer ? shownResultCount(shownAnswer.result, activeType) : 0;
   const staleResultsShown = pending && resultCount > 0;
@@ -384,7 +428,9 @@ export default function SearchClient({
                 <section aria-labelledby="search-posts-heading">
                   <div className="mb-4 flex items-center justify-between">
                     <h2 id="search-posts-heading" className="text-xl font-semibold text-white">Posts</h2>
-                    {activeType === 'top' ? <button type="button" onClick={() => setPickedType('posts')} className="ui-focus-ring rounded-full px-3 py-2 text-sm text-zinc-400 hover:text-white">See all</button> : null}
+                    {activeType === 'top'
+                      ? <button type="button" onClick={() => setPickedType('posts')} className="ui-focus-ring rounded-full px-3 py-2 text-sm text-zinc-400 hover:text-white">See all</button>
+                      : <SearchSortControl kind="posts" sort={activeSort} onChange={setPickedSort} />}
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{shownAnswer.result.posts.items.map((item) => <PostSearchCard key={item.id} item={item} returnTo={returnTo} />)}</div>
                 </section>
@@ -394,7 +440,9 @@ export default function SearchClient({
                 <section aria-labelledby="search-recipes-heading">
                   <div className="mb-4 flex items-center justify-between">
                     <h2 id="search-recipes-heading" className="text-xl font-semibold text-white">Recipes</h2>
-                    {activeType === 'top' ? <button type="button" onClick={() => setPickedType('recipes')} className="ui-focus-ring rounded-full px-3 py-2 text-sm text-zinc-400 hover:text-white">See all</button> : null}
+                    {activeType === 'top'
+                      ? <button type="button" onClick={() => setPickedType('recipes')} className="ui-focus-ring rounded-full px-3 py-2 text-sm text-zinc-400 hover:text-white">See all</button>
+                      : <SearchSortControl kind="recipes" sort={activeSort} onChange={setPickedSort} />}
                   </div>
                   <div className="grid gap-4 lg:grid-cols-2">{shownAnswer.result.recipes.items.map((recipe) => <RecipeSearchCard key={recipe.id} recipe={recipe} returnTo={returnTo} />)}</div>
                 </section>
