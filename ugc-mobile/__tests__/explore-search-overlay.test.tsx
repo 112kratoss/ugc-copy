@@ -467,6 +467,45 @@ describe('ExploreSearchOverlay search', () => {
       await act(async () => tree.unmount());
     });
 
+    it('opens exactly the posts an entity’s row counted: a switch left on from an earlier look at Posts is cleared', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => answerOf(
+        query, type, type === 'posts' ? { posts: [post('clip')] } : { creators: [creator('kling-fan')] },
+        type === 'top' ? { entities: [kling] } : {},
+      ));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'kling');
+      await advance(300);
+      await press(chip(tree, 'Videos'));
+      await press(chip(tree, 'Has recipe'));
+      await advance(0);
+
+      await press(tab(tree, 'Top'));
+      await advance(0);
+      await press(pressableLabelled(tree, 'Kling 2.6, model, 14 posts. Show posts made with it'));
+      await advance(0);
+      expect(asked().at(-1)).toMatchObject({ type: 'posts', filters: { ...NONE, madeWith: 'model:kling-2.6' } });
+      expect(chips(tree).every((node) => node.props.active === false)).toBe(true);
+      await act(async () => tree.unmount());
+    });
+
+    it('draws no entity for a two-character query, whatever an answer carries: there is no Posts search to open', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => answerOf(
+        query, type, { creators: [creator('klara')] }, { entities: [kling] },
+      ));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'kl');
+      await advance(300);
+      expect(shownTexts(tree)).not.toContain('Models and tools');
+      expect(shownTexts(tree)).not.toContain('Kling 2.6');
+
+      // With a third character the entity is drawn.
+      await typeQuery(tree, 'kli');
+      await advance(300);
+      expect(shownTexts(tree)).toContain('Models and tools');
+      await act(async () => tree.unmount());
+    });
+
     it('draws an answer that holds nothing but an entity as a result, never as "No results"', async () => {
       searchPublicContent.mockImplementation(async ({ query, type }) => answerOf(query, type, {}, { entities: [kling] }));
       const tree = await render({ visible: true, onClose: vi.fn() });

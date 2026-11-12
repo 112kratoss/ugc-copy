@@ -112,10 +112,18 @@ function searchScope(query: string, type: PublicSearchType) {
   return `${type}:${query}`;
 }
 
+// The models and tools an answer offers: on Top, and only for a query Posts
+// is searched for (three characters), since pressing one opens Posts.
+function offeredEntities(response: PublicSearchResponse, type: PublicSearchType, query: string) {
+  if (type !== 'top') return [];
+  if (searchQueryLength(normalizeCreatorSearchQuery(query)) < MIN_CONTENT_QUERY_LENGTH) return [];
+  return response.entities ?? [];
+}
+
 // Top draws every kind, the models and tools the query names among them; a
 // kind's tab draws only its own.
-function shownResultCount(response: PublicSearchResponse, type: PublicSearchType) {
-  return (type === 'top' ? response.entities?.length ?? 0 : 0)
+function shownResultCount(response: PublicSearchResponse, type: PublicSearchType, query: string) {
+  return offeredEntities(response, type, query).length
     + (type === 'top' || type === 'creators' ? response.creators.items.length : 0)
     + (type === 'top' || type === 'posts' ? response.posts.items.length : 0)
     + (type === 'top' || type === 'recipes' ? response.recipes.items.length : 0);
@@ -618,7 +626,7 @@ export function ExploreSearchOverlay({
   // with Retry.
   const reordering = otherOrder !== null && !shownFailure;
   const shownResponse = response ?? (reordering ? otherOrder : null);
-  const resultCount = shownResponse ? shownResultCount(shownResponse, type) : 0;
+  const resultCount = shownResponse ? shownResultCount(shownResponse, type, normalizedQuery) : 0;
   // Latest is offered once an answer says which order it is in. A server from
   // before sorts says nothing and reads every search ranked, so there the
   // control would change nothing and is not drawn.
@@ -636,7 +644,7 @@ export function ExploreSearchOverlay({
       ?? entityLabels[filters.madeWith]
       ?? parseSearchEntityId(filters.madeWith)?.key
       ?? null);
-  const entities = type === 'top' && shownResponse ? shownResponse.entities ?? [] : [];
+  const entities = shownResponse ? offeredEntities(shownResponse, type, normalizedQuery) : [];
   const nextCursor = !response
     ? null
     : type === 'creators'
@@ -717,7 +725,7 @@ export function ExploreSearchOverlay({
       setAnswer({ key, scope, response: next });
       if (rememberOnAnswer.current === key) {
         rememberOnAnswer.current = null;
-        if (shownResultCount(next, type) > 0) rememberQuery(normalizedQuery);
+        if (shownResultCount(next, type, normalizedQuery) > 0) rememberQuery(normalizedQuery);
       }
     } catch (requestError) {
       if (controller.signal.aborted || (requestError instanceof Error && requestError.name === 'AbortError')) return;
@@ -770,10 +778,13 @@ export function ExploreSearchOverlay({
 
   const openResult = () => rememberQuery(normalizedQuery);
 
-  // An entity pressed among the results: Posts, narrowed to it, named at once.
+  // An entity pressed among the results: Posts, narrowed to it and to nothing
+  // else, named at once. Its count is of the posts this query finds with it,
+  // so a switch left on from an earlier look at Posts would open fewer than
+  // the row said.
   const pickEntity = (entity: SearchEntity) => {
     setEntityLabels((current) => ({ ...current, [searchEntityId(entity)]: entity.label }));
-    setPickedFilters((current) => ({ ...current, madeWith: searchEntityId(entity) }));
+    setPickedFilters({ ...NO_SEARCH_FILTERS, madeWith: searchEntityId(entity) });
     setPickedType('posts');
   };
 
