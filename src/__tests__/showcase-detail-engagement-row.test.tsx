@@ -9,6 +9,7 @@ import ShowcaseDetailEngagementRow from '@/app/showcase/[id]/ShowcaseDetailEngag
 import NsfwPostReveal from '@/components/NsfwPostReveal';
 import { dismissToast, readFeedbackSnapshot, resetFeedbackState, subscribeToFeedback } from '@/components/feedback-state';
 import { SAVER_NOTICE_MESSAGE, resetSaverNoticeForTests } from '@/components/saver-notice';
+import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 
 const routerMock = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 const pushMock = routerMock.push;
@@ -189,13 +190,91 @@ describe('ShowcaseDetailEngagementRow', () => {
     expect(screen.queryByRole('button', { name: 'Remix' })).toBeNull();
   });
 
-  it('says a free recipe brings the remix with it', () => {
-    render(<ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } })} />);
+  // The recipe is often on screen already, right under the pill, and the jump
+  // then moved nothing (owner, 2026-11-12): the click rings the recipe.
+  it('rings the recipe section when the locked Remix is pressed', () => {
+    const animate = vi.fn();
+    render(
+      <>
+        <ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'paid', priceLabel: '900 credits' } })} />
+        <section id="recipe" ref={(node) => { if (node) node.animate = animate; }} />
+      </>,
+    );
 
-    const remix = screen.getByRole('link', { name: 'Get the free recipe to remix Shared creation' });
-    expect(remix).toHaveAttribute('href', '#recipe');
+    fireEvent.click(screen.getByRole('link', { name: 'Unlock the recipe to remix Shared creation, 900 credits' }));
+
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect(animate.mock.calls[0][1]).toMatchObject({ id: 'recipe-jump' });
+    // No credit is spent and no remix asked for by this click.
+    expect(requestShowcaseRemix).not.toHaveBeenCalled();
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(expect.stringContaining('/resource-bundle/'), expect.anything());
+  });
+
+  // "Remix · Free" was a link to the recipe a few pixels below it, so the click
+  // looked dead (owner, 2026-11-12). It takes the free recipe on its way and
+  // opens the remix, as the feed card's and the app's Remix do.
+  it('takes a free recipe on the way and opens the remix in one click', async () => {
+    const freeRow = rowProps({ canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } });
+    render(<ShowcaseDetailEngagementRow {...freeRow} />);
+
+    const remix = screen.getByRole('button', { name: 'Get the free recipe and remix Shared creation' });
     expect(remix).toHaveTextContent('Remix · Free');
     expect(remix.querySelector('[data-remix-lock]')).toBeNull();
+    expect(screen.queryByRole('link', { name: /remix/i })).toBeNull();
+
+    fireEvent.click(remix);
+
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/create-image?remix=1'));
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-free', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer token-1' },
+    });
+    // The recipe is taken before the remix is asked for: the remix endpoint
+    // refuses a post whose recipe the viewer does not hold.
+    const claimOrder = vi.mocked(fetch).mock.invocationCallOrder[
+      vi.mocked(fetch).mock.calls.findIndex(([input]) => String(input).endsWith('/unlock-free'))
+    ];
+    expect(claimOrder).toBeLessThan(vi.mocked(requestShowcaseRemix).mock.invocationCallOrder[0]);
+    expect(requestShowcaseRemix).toHaveBeenCalledWith({ accessToken: 'token-1', postId: 'post-1' });
+  });
+
+  it('says why when the free recipe cannot be taken, and starts no remix', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/unlock-free')) {
+        return { ok: false, status: 429, json: async () => ({ error: 'Too many recipes. Try again shortly.' }) } as Response;
+      }
+      return { ok: true, json: async () => [] } as Response;
+    }));
+    render(<ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get the free recipe and remix Shared creation' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Too many recipes. Try again shortly.');
+    expect(requestShowcaseRemix).not.toHaveBeenCalled();
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  // The recipe is the viewer's once the claim lands, whatever the remix then
+  // answers: the page is re-read so its Remix and recipe panel say so.
+  it('re-reads the page when the recipe was taken but the remix did not start', async () => {
+    vi.mocked(requestShowcaseRemix).mockRejectedValueOnce(new Error('Too many remixes. Try again shortly.'));
+    render(<ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get the free recipe and remix Shared creation' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Too many remixes. Try again shortly.');
+    expect(routerMock.refresh).toHaveBeenCalledTimes(1);
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it('sends a signed-out viewer to login before taking a free recipe', () => {
+    useAuthMock.mockReturnValue({ user: null, session: null });
+    render(<ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get the free recipe and remix Shared creation' }));
+
+    expect(pushMock).toHaveBeenCalledWith(expect.stringMatching(/^\/login\?returnUrl=/));
+    expect(vi.mocked(fetch)).not.toHaveBeenCalledWith(expect.stringContaining('/unlock-free'), expect.anything());
   });
 
   it('keeps the open Remix for a viewer who may remix', () => {

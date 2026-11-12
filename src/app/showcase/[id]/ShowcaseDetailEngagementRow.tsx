@@ -8,11 +8,13 @@ import { useAuth } from '@/components/AuthProvider';
 import { useNsfwPostRevealed } from '@/components/NsfwPostReveal';
 import PublicShareButton from '@/components/PublicShareButton';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
+import { claimFreeRecipe } from '@/lib/free-recipe-claim-client';
 import { formatCompactCount } from '@/lib/post-feed-presentation';
 import { getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 
 import PostRemixes from './PostRemixes';
+import { showRecipeJump } from './recipe-jump';
 import { useShowcaseDetailCommentCount } from './ShowcaseDetailCommentCount';
 
 /**
@@ -49,9 +51,10 @@ export default function ShowcaseDetailEngagementRow({
   showComments: boolean;
   /**
    * The post's Remix comes with its recipe and this viewer has not got it
-   * (S1): Remix is drawn locked, with the recipe's price, and leads to the
-   * recipe, as the feed's locked Remix does (B-F3). Null when Remix is open
-   * or there is none.
+   * (S1): Remix is drawn with the recipe's price, as the feed's is (B-F3). A
+   * paid one is locked and leads to the recipe; a free one takes the recipe
+   * and opens the remix in the one click. Null when Remix is open or there
+   * is none.
    */
   recipeRemix?: { access: 'paid' | 'free'; priceLabel: string } | null;
 }) {
@@ -92,7 +95,11 @@ export default function ShowcaseDetailEngagementRow({
   const isSaved = savedItemIds.has(postId);
   const liveSaveCount = items[0]?.saveCount ?? saveCount;
 
-  const handleRemix = async () => {
+  // `takeFreeRecipe`: the Remix comes with a recipe that costs nothing and the
+  // viewer has not got it, so the click takes it on its way, as the feed
+  // card's and the app's Remix do (owner, 2026-11-12). A paid recipe is never
+  // taken by this click: its Remix is the link to the recipe.
+  const handleRemix = async ({ takeFreeRecipe = false }: { takeFreeRecipe?: boolean } = {}) => {
     if (!user || !session?.access_token) {
       router.push(loginHref());
       return;
@@ -101,7 +108,12 @@ export default function ShowcaseDetailEngagementRow({
     setRemixError(null);
     setIsRemixing(true);
 
+    let recipeTaken = false;
     try {
+      if (takeFreeRecipe) {
+        await claimFreeRecipe(postId, session.access_token);
+        recipeTaken = true;
+      }
       const { redirectTo } = await requestShowcaseRemix({
         accessToken: session.access_token,
         postId,
@@ -114,32 +126,44 @@ export default function ShowcaseDetailEngagementRow({
           ? error.message
           : 'Could not start the remix. Please try again.',
       );
+      // The recipe is the viewer's now though the remix did not start: the
+      // page is read again, so its Remix is the open one and its panel shows
+      // the recipe, as after the panel's own unlock.
+      if (recipeTaken) router.refresh();
     } finally {
       setIsRemixing(false);
     }
   };
 
+  const lockedRemix = !canRemix && recipeRemix && nsfwRevealed !== false ? recipeRemix : null;
+
   return (
     <div className="mt-6 border-y border-white/8 py-1 text-xs font-semibold text-zinc-400">
       <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
-        {/* The pill leads to the recipe, which under an NSFW gate is on the page only after the reveal. */}
-        {!canRemix && recipeRemix && nsfwRevealed !== false ? (
+        {/* A paid recipe's pill leads to the recipe (and rings it, so the click shows), which under an NSFW gate is on the page only after the reveal. */}
+        {lockedRemix?.access === 'paid' ? (
           <a
             href="#recipe"
-            aria-label={recipeRemix.access === 'paid'
-              ? `Unlock the recipe to remix ${title}, ${recipeRemix.priceLabel}`
-              : `Get the free recipe to remix ${title}`}
-            className={`ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full px-4 text-xs font-extrabold transition ${
-              recipeRemix.access === 'paid'
-                ? 'border border-amber-300/20 bg-amber-400/[0.08] text-amber-100 hover:border-amber-300/35'
-                : 'border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 text-[var(--ui-primary)] hover:bg-[var(--ui-primary)]/20'
-            }`}
+            onClick={() => showRecipeJump()}
+            aria-label={`Unlock the recipe to remix ${title}, ${lockedRemix.priceLabel}`}
+            className="ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/[0.08] px-4 text-xs font-extrabold text-amber-100 transition hover:border-amber-300/35"
           >
-            {recipeRemix.access === 'paid'
-              ? <LockKeyhole className="h-4 w-4" aria-hidden="true" data-remix-lock />
-              : <Repeat2 className="h-4 w-4" aria-hidden="true" />}
-            {`Remix · ${recipeRemix.priceLabel}`}
+            <LockKeyhole className="h-4 w-4" aria-hidden="true" data-remix-lock />
+            {`Remix · ${lockedRemix.priceLabel}`}
           </a>
+        ) : null}
+        {/* A free recipe's pill takes the recipe and opens the remix: one click, nothing to pay for. */}
+        {lockedRemix?.access === 'free' ? (
+          <button
+            type="button"
+            onClick={() => void handleRemix({ takeFreeRecipe: true })}
+            disabled={isRemixing}
+            aria-label={`Get the free recipe and remix ${title}`}
+            className="ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 px-4 text-xs font-extrabold text-[var(--ui-primary)] transition hover:bg-[var(--ui-primary)]/20 disabled:opacity-60"
+          >
+            {isRemixing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Repeat2 className="h-4 w-4" aria-hidden="true" />}
+            {`Remix · ${lockedRemix.priceLabel}`}
+          </button>
         ) : null}
         {canRemix ? (
           <button

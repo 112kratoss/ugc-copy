@@ -938,6 +938,8 @@ export default function ShowcaseReelViewer({
     && item.remixTarget !== 'text_template'
     && Boolean(item.asset?.allowRemix);
   const remixIsLocked = remixNeedsUnlock && !hasReelUnlockAccess;
+  // Nothing to pay for: Remix takes the recipe itself and carries on.
+  const remixTakesFreeRecipe = remixIsLocked && isFreeUnlock;
   // Unlisted posts take no comments (the server reads public posts only).
   const canComment = item.visibility !== 'unlisted';
   const commentsAreOpen = canComment && commentsItemId === item.id;
@@ -1039,9 +1041,14 @@ export default function ShowcaseReelViewer({
     fallbackPosition: selectedIndex,
   });
 
-  const openFreeUnlock = async () => {
+  /**
+   * Takes the free recipe for the reader. Answers whether it is theirs now, and
+   * if not, why (null for a reader sent to sign in), for a caller that says it
+   * somewhere other than the unlock panel.
+   */
+  const openFreeUnlock = async (): Promise<{ taken: true } | { taken: false; message: string | null }> => {
     if (!ensureAuthenticated()) {
-      return;
+      return { taken: false, message: null };
     }
 
     try {
@@ -1064,9 +1071,14 @@ export default function ShowcaseReelViewer({
 
       await finishReelUnlock();
       trackProductEvent('recipe_unlock_succeeded', { method: 'free', post_id: item.id });
+      return { taken: true };
     } catch (unlockError) {
       trackProductEvent('recipe_unlock_failed', { method: 'free', post_id: item.id });
-      setUnlockError(unlockError instanceof Error ? unlockError.message : 'Failed to get the free recipe.');
+      const message = unlockError instanceof Error && unlockError.message
+        ? unlockError.message
+        : 'Failed to get the free recipe.';
+      setUnlockError(message);
+      return { taken: false, message };
     } finally {
       setUnlockWorkingAction(null);
     }
@@ -1847,33 +1859,52 @@ export default function ShowcaseReelViewer({
           {item.canRemix || remixNeedsUnlock ? (
             <button
               type="button"
-              // Until the reader has the recipe, the tap gets it (free) or
-              // opens its checkout; with it, the tap remixes.
-              aria-label={remixIsLocked ? `Remix: unlock the recipe for ${item.title} first` : undefined}
+              // Until the reader has the recipe: a paid one opens its checkout
+              // and the tap ends there, since no tap in a reel spends credits;
+              // a free one is taken on the way and the remix starts, in the one
+              // tap, as the feed card's and the app's Remix do (owner, 2026-11-12).
+              aria-label={remixIsLocked
+                ? remixTakesFreeRecipe
+                  ? `Remix: get the free recipe for ${item.title} and remix it`
+                  : `Remix: unlock the recipe for ${item.title} first`
+                : undefined}
               onClick={() => {
-                if (remixIsLocked) {
+                if (remixIsLocked && !remixTakesFreeRecipe) {
                   openRecipe();
                   return;
                 }
                 if (remixWorkingItemId) return;
                 setRemixError(null);
-                setRemixWorkingItemId(item.id);
-                void Promise.resolve(onRemix(item.id))
-                  .catch((error: unknown) => {
-                    setRemixError(
-                      error instanceof Error && error.message
-                        ? error.message
-                        : 'Could not start the remix. Please try again.',
-                    );
-                  })
-                  .finally(() => setRemixWorkingItemId(null));
+                const startRemix = () => {
+                  setRemixWorkingItemId(item.id);
+                  void Promise.resolve(onRemix(item.id))
+                    .catch((error: unknown) => {
+                      setRemixError(
+                        error instanceof Error && error.message
+                          ? error.message
+                          : 'Could not start the remix. Please try again.',
+                      );
+                    })
+                    .finally(() => setRemixWorkingItemId(null));
+                };
+                if (!remixTakesFreeRecipe) {
+                  startRemix();
+                  return;
+                }
+                reportResourceOpen();
+                void openFreeUnlock().then((claim) => {
+                  if (claim.taken) startRemix();
+                  // The unlock panel, where the claim's own error is drawn, is
+                  // closed on this path: Remix says why beside its own errors.
+                  else if (claim.message) setRemixError(claim.message);
+                });
               }}
               disabled={remixWorkingItemId !== null || (remixIsLocked && unlockWorkingAction !== null)}
               className="ui-focus-ring inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary)] text-xs font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-60 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
             >
               {remixWorkingItemId === item.id
                 ? <Loader2 size={20} className="h-5 w-5 shrink-0 animate-spin" />
-                : remixIsLocked
+                : remixIsLocked && !remixTakesFreeRecipe
                   ? <LockKeyhole size={20} className="h-5 w-5 shrink-0" />
                   : <Wand2 size={20} className="h-5 w-5 shrink-0" />}
               <span>{remixWorkingItemId === item.id ? 'Starting…' : 'Remix'}</span>

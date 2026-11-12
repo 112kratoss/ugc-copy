@@ -1916,7 +1916,10 @@ describe('ShowcaseReelViewer pagination', () => {
       expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeInTheDocument();
     });
 
-    it('gets a free recipe that includes remix on the first tap, and remixes on the next', async () => {
+    // The first tap only took the recipe and a second was needed to remix (owner,
+    // 2026-11-12: "it should get the recipe automatically and go to the remix
+    // page automatically"). One tap does both, as the feed card's and the app's do.
+    it('takes a free recipe that includes remix and remixes, in the one tap', async () => {
       authState.session = { access_token: 'token-1' };
       let unlocked = false;
       const fetchMock = stubRequests({
@@ -1928,19 +1931,48 @@ describe('ShowcaseReelViewer pagination', () => {
           ? accessAnswer()
           : new Response(JSON.stringify({ bundle: { viewerCanAccess: false, viewerIsOwner: false, resources: null } })),
       });
-      const onRemix = vi.fn();
+      // The remix is asked for only once the recipe is the reader's.
+      const onRemix = vi.fn(() => {
+        expect(unlocked).toBe(true);
+      });
       render(<ShowcaseReelViewer {...reelProps({ items: [lockedRemix(freeAsset)], onRemix })} />);
 
-      fireEvent.click(screen.getByRole('button', { name: /remix: unlock the recipe/i }));
+      const remix = screen.getByRole('button', { name: 'Remix: get the free recipe for Campaign Frame and remix it' });
+      // Nothing to pay for, so no lock on it.
+      expect(remix.querySelector('.lucide-lock-keyhole')).toBeNull();
+      fireEvent.click(remix);
 
-      expect(await screen.findByText('Recipe unlocked')).toBeInTheDocument();
+      await waitFor(() => expect(onRemix).toHaveBeenCalledWith('post-1'));
+      expect(onRemix).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-free', expect.objectContaining({
         method: 'POST',
       }));
-      expect(onRemix).not.toHaveBeenCalled();
+    });
 
-      fireEvent.click(screen.getByRole('button', { name: 'Remix' }));
-      expect(onRemix).toHaveBeenCalledWith('post-1');
+    it('starts no remix when the free recipe cannot be taken, and says why', async () => {
+      authState.session = { access_token: 'token-1' };
+      stubRequests({
+        '/api/posts/post-1/resource-bundle/unlock-free': () => new Response(JSON.stringify({ error: 'Too many recipes. Try again shortly.' }), { status: 429 }),
+      });
+      const onRemix = vi.fn();
+      render(<ShowcaseReelViewer {...reelProps({ items: [lockedRemix(freeAsset)], onRemix })} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remix: get the free recipe for Campaign Frame and remix it' }));
+
+      expect((await screen.findAllByText('Too many recipes. Try again shortly.')).length).toBeGreaterThan(0);
+      expect(onRemix).not.toHaveBeenCalled();
+    });
+
+    it('sends a signed-out reader to sign in before taking a free recipe', () => {
+      authState.session = null;
+      const fetchMock = stubRequests();
+      const onRemix = vi.fn();
+      render(<ShowcaseReelViewer {...reelProps({ items: [lockedRemix(freeAsset)], onRemix })} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remix: get the free recipe for Campaign Frame and remix it' }));
+
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/unlock-free'))).toBe(false);
+      expect(onRemix).not.toHaveBeenCalled();
     });
 
     it('remixes at once for a reader who already has the recipe', async () => {
