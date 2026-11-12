@@ -16,10 +16,10 @@ const contract = mobileApiContract.searchSuggest;
 
 describe('search suggest query', () => {
   it('reads a query as search reads it: trimmed, NFKC, one space between words', () => {
-    expect(searchSuggestQuery('  Lu  ')).toEqual({ ok: true, normalizedQuery: 'Lu', handlesOnly: false });
-    expect(searchSuggestQuery('cinematic \t  po')).toEqual({ ok: true, normalizedQuery: 'cinematic po', handlesOnly: false });
-    // Full-width letters are the letters they stand for.
-    expect(searchSuggestQuery('Ｌｕ')).toEqual({ ok: true, normalizedQuery: 'Lu', handlesOnly: false });
+    expect(searchSuggestQuery('  Lu  ')).toEqual({ ok: true, query: 'Lu', normalizedQuery: 'Lu', handlesOnly: false });
+    expect(searchSuggestQuery('cinematic \t  po')).toMatchObject({ ok: true, normalizedQuery: 'cinematic po', handlesOnly: false });
+    // Full-width letters are the letters they stand for; `query` echoes what was sent.
+    expect(searchSuggestQuery('Ｌｕ')).toEqual({ ok: true, query: 'Ｌｕ', normalizedQuery: 'Lu', handlesOnly: false });
     // By search's own normaliser, not a copy of it.
     for (const typed of ['  Lu  ', '@@luna', 'Ｌｕ　ｎａ', 'ça va', '🔥 po']) {
       const read = searchSuggestQuery(typed);
@@ -28,12 +28,48 @@ describe('search suggest query', () => {
   });
 
   it('reads a leading @ as asking for handles, and takes it off', () => {
-    expect(searchSuggestQuery('@lu')).toEqual({ ok: true, normalizedQuery: 'lu', handlesOnly: true });
-    expect(searchSuggestQuery('  @@Lu')).toEqual({ ok: true, normalizedQuery: 'Lu', handlesOnly: true });
+    expect(searchSuggestQuery('@lu')).toEqual({ ok: true, query: '@lu', normalizedQuery: 'lu', handlesOnly: true });
+    expect(searchSuggestQuery('  @@Lu')).toEqual({ ok: true, query: '@@Lu', normalizedQuery: 'Lu', handlesOnly: true });
     // Full-width @ is NFKC's @.
-    expect(searchSuggestQuery('＠lu')).toEqual({ ok: true, normalizedQuery: 'lu', handlesOnly: true });
+    expect(searchSuggestQuery('＠lu')).toMatchObject({ ok: true, normalizedQuery: 'lu', handlesOnly: true });
     // Only at the start: an @ inside is a character of the query.
-    expect(searchSuggestQuery('lu@na')).toEqual({ ok: true, normalizedQuery: 'lu@na', handlesOnly: false });
+    expect(searchSuggestQuery('lu@na')).toMatchObject({ ok: true, normalizedQuery: 'lu@na', handlesOnly: false });
+  });
+
+  it('leaves no space where the @ was', () => {
+    // The normaliser trims before it takes the @ off, which left ` lu`: a query
+    // the database reads as `lu` and a client compares with its box as ` lu`.
+    expect(searchSuggestQuery('@ lu')).toEqual({ ok: true, query: '@ lu', normalizedQuery: 'lu', handlesOnly: true });
+    expect(searchSuggestQuery(' @@  Lu na ')).toEqual({ ok: true, query: '@@  Lu na', normalizedQuery: 'Lu na', handlesOnly: true });
+    expect(searchSuggestQuery('@ ')).toEqual({ ok: false, error: 'q must contain at least 1 character.' });
+  });
+
+  it('takes control characters out before anything else reads the query', () => {
+    // Postgres refuses a text that holds U+0000: `q=a%00` was a 500.
+    expect(searchSuggestQuery('a\u0000')).toEqual({ ok: true, query: 'a', normalizedQuery: 'a', handlesOnly: false });
+    expect(searchSuggestQuery('\u0000lu\u0000na\u0000')).toEqual({ ok: true, query: 'luna', normalizedQuery: 'luna', handlesOnly: false });
+    expect(searchSuggestQuery('\u0000@lu')).toMatchObject({ ok: true, normalizedQuery: 'lu', handlesOnly: true });
+    // Every C0 and C1 control and DEL, not NUL alone.
+    for (const control of ['\u0001', '\u0008', '\u001b', '\u001f', '\u007f', '\u0085', '\u009f']) {
+      expect(searchSuggestQuery(`po${control}rt`), JSON.stringify(control)).toMatchObject({ ok: true, normalizedQuery: 'port' });
+    }
+    // A tab or a line break is a space between words, as search reads one.
+    expect(searchSuggestQuery('cinematic\tpo')).toMatchObject({ ok: true, normalizedQuery: 'cinematic po' });
+    expect(searchSuggestQuery('cinematic\r\npo')).toMatchObject({ ok: true, normalizedQuery: 'cinematic po' });
+    // Nothing left is nothing typed.
+    for (const empty of ['\u0000', '\u0000\u0000', ' \u0000 ', '@\u0000', '\u001b\u007f']) {
+      expect(searchSuggestQuery(empty), JSON.stringify(empty)).toEqual({
+        ok: false,
+        error: 'q must contain at least 1 character.',
+      });
+    }
+    // Control characters are not length: a hundred letters among them still pass.
+    expect(searchSuggestQuery(`\u0000${'a'.repeat(PUBLIC_SEARCH_MAX_QUERY_LENGTH)}\u0000`).ok).toBe(true);
+    // No normalised query ever holds one.
+    for (const typed of ['a\u0000b', '\u0000', 'x\u009fy', '@\u0000 lu']) {
+      const read = searchSuggestQuery(typed);
+      if (read.ok) expect(read.normalizedQuery).not.toMatch(/\p{Cc}/u);
+    }
   });
 
   it('answers from one character, counted as the database counts them', () => {
@@ -62,7 +98,7 @@ describe('search suggest query', () => {
 
   it('passes quotes, wildcards, backslashes and tsquery syntax through as the characters they are', () => {
     for (const odd of ['\'', '"', '%', '_', '\\', 'ar%', 'ar_a', 'a & b', 'a | !b', 'quil:*', '(a', '<->', '🔥🔥', '日本語']) {
-      expect(searchSuggestQuery(odd), odd).toEqual({ ok: true, normalizedQuery: odd, handlesOnly: false });
+      expect(searchSuggestQuery(odd), odd).toEqual({ ok: true, query: odd, normalizedQuery: odd, handlesOnly: false });
     }
   });
 });

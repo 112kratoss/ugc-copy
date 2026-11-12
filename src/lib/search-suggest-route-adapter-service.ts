@@ -29,7 +29,22 @@ type SearchSuggestRouteDependencies = {
   suggestSearch?: typeof suggestSearch;
   logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
+  /** Where the kill switch is read from; `process.env` by default. */
+  env?: Environment;
 };
+
+type Environment = Record<string, string | undefined>;
+
+/**
+ * `SEARCH_SUGGEST_DISABLED=1` (or `true`) is the kill switch: the route then
+ * offers nobody and nothing, with no database call, and the search box works
+ * as it did before suggestions (docs/production-deployment-runbook.md,
+ * "Search Suggestions"). Read per request.
+ */
+export function isSearchSuggestDisabled(env: Environment = process.env): boolean {
+  const value = env.SEARCH_SUGGEST_DISABLED?.trim().toLowerCase();
+  return value === '1' || value === 'true';
+}
 
 function resolveDependencies(dependencies?: SearchSuggestRouteDependencies) {
   return {
@@ -40,6 +55,7 @@ function resolveDependencies(dependencies?: SearchSuggestRouteDependencies) {
     suggestSearch: dependencies?.suggestSearch ?? suggestSearch,
     logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
+    env: dependencies?.env ?? process.env,
   };
 }
 
@@ -83,6 +99,16 @@ async function handleSearchSuggestGET(
       );
     }
 
+    // Switched off: the answer a query with no match gets, for everyone, before
+    // a token is verified or a row is read. Never the edge's to keep, so the
+    // switch is felt the moment it is thrown and gone the moment it is lifted.
+    if (isSearchSuggestDisabled(dependencies.env)) {
+      return NextResponse.json(
+        { query: query.query, normalizedQuery: query.normalizedQuery, creators: [], completions: [] },
+        { headers: createPrivateNoStoreApiResponseHeaders(request) },
+      );
+    }
+
     const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
     const actor = await resolveViewerUserId(request, dependencies);
     if (!actor.ok) {
@@ -113,7 +139,7 @@ async function handleSearchSuggestGET(
     }
 
     const responseBody = await dependencies.suggestSearch({
-      query: rawQuery?.trim() ?? query.normalizedQuery,
+      query: query.query,
       normalizedQuery: query.normalizedQuery,
       handlesOnly: query.handlesOnly,
       viewerUserId: actor.viewerUserId,

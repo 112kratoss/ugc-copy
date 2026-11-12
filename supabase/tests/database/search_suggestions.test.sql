@@ -4,14 +4,16 @@
 -- or either side of a block; and completions of the word being typed, only
 -- words that unlabelled public posts of two different creators write, never
 -- a word that only a labelled post, a private or hidden post, a paid
--- recipe's caption, prompt or items, or a tool's name holds.
+-- recipe's caption, prompt or items, or a tool's name holds, and never a word
+-- an operator has withdrawn (search_suggestion_denylist). A template
+-- result's hidden model changes nothing a visitor can see.
 
 begin;
 
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(84);
+select plan(114);
 
 create function pg_temp.uid(p_suffix text)
 returns uuid
@@ -60,7 +62,8 @@ $$;
 --   quillonitem    those recipes' items
 --   quillontool    the tool's name on posts of …01 and …02, and …03's caption
 --   glassharbor    with quillonbright in one post each of …01 and …02
---   amberline      with quillonbright in a post of …01 only; alone in a post of …02
+--   amberline      with quillonbright in a post of …01 only; alone in a post of …02;
+--                  and with it in …02's labelled post, which counts for nothing
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at, is_anonymous, banned_until)
 select pg_temp.uid(people.suffix), 'e5d7-' || people.suffix || '@example.invalid', 'authenticated', 'authenticated',
@@ -116,7 +119,7 @@ from (
     ('14', '01', 'public', 'visible', false, false, 'Second solo', 'More quillonsolo.', null, 'Midjourney'),
     ('15', '01', 'public', 'visible', false, false, 'Third solo', 'Quillonsolo once more.', null, 'Midjourney'),
     ('16', '01', 'public', 'visible', true, false, 'Labelled one', 'A quillonlabel picture.', null, 'Midjourney'),
-    ('17', '02', 'public', 'visible', true, false, 'Labelled two', 'Another quillonlabel picture.', null, 'Midjourney'),
+    ('17', '02', 'public', 'visible', true, false, 'Labelled two', 'Another quillonlabel picture, amberline under quillonbright.', null, 'Midjourney'),
     ('18', '01', 'private', 'visible', false, false, 'Draft one', 'A quillondraft idea.', null, 'Midjourney'),
     ('19', '02', 'private', 'visible', false, false, 'Draft two', 'Another quillondraft idea.', null, 'Midjourney'),
     ('1a', '01', 'public', 'hidden', false, false, 'Hidden one', 'A quillonhidden post.', null, 'Midjourney'),
@@ -264,7 +267,7 @@ select is(pg_temp.completions('glassharbor quil'), array['glassharbor quillonbri
 select is(pg_temp.completions('Glassharbor   QUIL'), array['glassharbor quillonbright'],
   'read lower-cased with one space between words');
 select is(pg_temp.completions('amberline quil'), '{}'::text[],
-  'a phrase only one creator''s post holds is not offered, though two creators write each word');
+  'a phrase only one creator''s post holds is not offered, though two creators write each word and another creator''s labelled post holds the phrase');
 select is(pg_temp.completions('nowhereword quil'), '{}'::text[],
   'nor a phrase no post holds: a completion never leads to an empty search');
 select is(pg_temp.completions('glassharbor q'), '{}'::text[], 'the last word needs two letters');
@@ -272,6 +275,140 @@ select ok(
   (select count(*) > 0 from public.search_public_posts('glassharbor quillonbright')),
   'the phrase offered is one post search finds a post for'
 );
+
+-- ─── A withdrawn word ───────────────────────────────────────────────────────
+
+select is(pg_temp.completions('quillonbright gla'), array['quillonbright glassharbor'],
+  'before anything is withdrawn, a phrase may begin with the word');
+insert into public.search_suggestion_denylist (term, note) values ('quillonbright', 'planted by two accounts of one person');
+select ok(not 'quillonbright' = any (pg_temp.completions('quil')),
+  'a withdrawn word is not offered alone, at once and with no rebuild');
+select is(pg_temp.completions('glassharbor quil'), '{}'::text[], 'nor as the word that completes a phrase');
+select is(pg_temp.completions('quillonbright gla'), '{}'::text[], 'nor is any phrase offered to a query that holds it');
+select is(pg_temp.completions('Quillonbright, gla'), '{}'::text[], 'however the query writes it');
+select is(pg_temp.completions('glass'), array['glassharbor'], 'other words are offered as before');
+select is(public.search_corrected_query('quillonbrigt'), 'quillonbright',
+  'spelling correction does not read the list: search still finds the word');
+select ok((select count(*) > 0 from public.search_public_posts('quillonbright')),
+  'and search itself still finds its posts');
+insert into public.search_suggestion_denylist (term) values ('aria');
+select is(pg_temp.handles('aria'), array['aria', 'aria-fennick', 'brisa-tolland'],
+  'a creator''s handle is not a word: creators are offered as before');
+select throws_ok(
+  $$ insert into public.search_suggestion_denylist (term) values ('Quillon') $$,
+  '23514', null, 'a withdrawn word is stored lower-cased, as the dictionary holds words'
+);
+select throws_ok(
+  $$ insert into public.search_suggestion_denylist (term) values ('two words') $$,
+  '23514', null, 'and is one word'
+);
+delete from public.search_suggestion_denylist;
+select is(pg_temp.completions('glassharbor quil'), array['glassharbor quillonbright'],
+  'a word taken off the list is offered again at once');
+select ok(
+  (select relrowsecurity from pg_class where oid = 'public.search_suggestion_denylist'::regclass)
+  and not has_table_privilege('anon', 'public.search_suggestion_denylist', 'SELECT')
+  and not has_table_privilege('authenticated', 'public.search_suggestion_denylist', 'SELECT')
+  and not has_table_privilege('authenticated', 'public.search_suggestion_denylist', 'INSERT')
+  and has_table_privilege('service_role', 'public.search_suggestion_denylist', 'SELECT')
+  and has_table_privilege('service_role', 'public.search_suggestion_denylist', 'INSERT')
+  and has_table_privilege('service_role', 'public.search_suggestion_denylist', 'DELETE'),
+  'the list is row-secured with no policy: the service role''s alone'
+);
+
+-- ─── A template result's hidden model ───────────────────────────────────────
+--
+-- Post …27 is a template's result by …01 whose caption says zorblax; post …28
+-- by …02 says it too. The result's real model is the template author's, shown
+-- nowhere: every public read, and the post's document, says
+-- 'template-workflow'. Whether the result counts toward zorblax must not
+-- follow that model's name, or a word being offered would give it away.
+
+insert into public.templates (id, name, creator_user_id, status, is_active)
+values (pg_temp.uid('41'), 'Suggestions fixture', pg_temp.uid('02'), 'draft', true);
+insert into public.template_runs (
+  id, template_id, user_id, graph_snapshot, graph_hash, input_manifest,
+  input_storage_paths, output_node_id, output_kind, status,
+  estimated_total_credits, estimated_remaining_credits
+) values (
+  pg_temp.uid('42'), pg_temp.uid('41'), pg_temp.uid('01'), '{"version":1,"nodes":[],"edges":[]}'::jsonb,
+  repeat('a', 64), '[]'::jsonb, '{}'::jsonb, 'output', 'image', 'collecting_inputs', 10, 10
+);
+insert into public.generations (id, user_id, model, status, is_public, template_run_id)
+values (pg_temp.uid('43'), pg_temp.uid('01'), 'zorblax-v2', 'succeeded', true, pg_temp.uid('42'));
+insert into public.posts (
+  id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw,
+  title, body, showcase_asset_path, source_tool, source_tool_slug, generation_id, created_at, updated_at
+) values
+  (pg_temp.uid('27'), pg_temp.uid('01'), 'public', 'image', 'magicbooklet', 'media', 'visible', false,
+   'Pier study', 'A zorblax scene.', 'showcase/e5d7-27.png', 'Magicbooklet', 'magicbooklet', pg_temp.uid('43'), now(), now()),
+  (pg_temp.uid('28'), pg_temp.uid('02'), 'public', 'image', 'external', 'media', 'visible', false,
+   'Pier study', 'Zorblax again.', 'showcase/e5d7-28.png', 'Midjourney', 'midjourney', null, now(), now());
+select ok((select added >= 1 from public.rebuild_search_terms()), 'fixture: a rebuild reads the two posts');
+select results_eq(
+  $$ select post_count, creator_count from public.search_terms where term = 'zorblax' $$,
+  $$ values (2, 2) $$,
+  'a template result counts toward a word its caption writes, though its hidden model''s name holds the word'
+);
+select is(pg_temp.completions('zorb'), array['zorblax'], 'so the word is offered');
+update public.generations set model = 'fluxmodel' where id = pg_temp.uid('43');
+select results_eq(
+  $$ select added, removed from public.rebuild_search_terms() $$,
+  $$ values (0, 0) $$,
+  'changing the hidden model changes no word'
+);
+select results_eq(
+  $$ select post_count, creator_count from public.search_terms where term = 'zorblax' $$,
+  $$ values (2, 2) $$,
+  'and no count: the result counts the same whatever its real model is'
+);
+select is(
+  (select count(*) from public.search_terms where term in ('fluxmodel', 'zorblaxv')),
+  0::bigint,
+  'no word of the hidden model is in the dictionary'
+);
+-- The name public reads give that model is a name like any other: the result
+-- is not counted toward its words.
+select results_eq(
+  $$ select post_count, in_posts from public.search_terms where term = 'workflow' $$,
+  $$ values (0, true) $$,
+  'the name shown in the hidden model''s place is a name, not a written word'
+);
+
+-- ─── A phrase's word behind many commoner words ─────────────────────────────
+--
+-- Twenty words starting 'qub', each written in eight posts of two creators:
+-- more than any word starting 'qui'. The phrase is still found, because its
+-- word comes from the posts that hold 'glassharbor', not from a list of the
+-- commonest words starting 'qu'.
+
+insert into public.posts (
+  id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw,
+  title, body, showcase_asset_path, source_tool, source_tool_slug, created_at, updated_at
+)
+select
+  pg_temp.uid('5' || n::text), pg_temp.uid(case when n % 2 = 0 then '01' else '02' end),
+  'public', 'image', 'external', 'media', 'visible', false,
+  'Pier study',
+  (select string_agg('qubla' || chr(96 + letter), ' ') from generate_series(1, 20) as letter),
+  'showcase/e5d7-5' || n::text || '.png', 'Midjourney', 'midjourney', now(), now()
+from generate_series(0, 7) as n;
+select results_eq(
+  $$ select added, removed from public.rebuild_search_terms() $$,
+  $$ values (20, 0) $$,
+  'fixture: twenty commoner words'
+);
+select is(
+  (select count(*) from public.search_terms
+   where term like 'qubla%' and creator_count >= 2
+     and post_count > (select post_count from public.search_terms where term = 'quillonbright')),
+  20::bigint,
+  'fixture: each written by two creators in more posts than the phrase''s word'
+);
+select ok(not 'quillonbright' = any (pg_temp.completions('qu', 10)),
+  'alone, the commoner words fill the list');
+select is(pg_temp.completions('glassharbor qu'), array['glassharbor quillonbright'],
+  'after "glassharbor" the word its posts hold is offered, however many commoner words start the same way');
 
 -- ─── Creators ───────────────────────────────────────────────────────────────
 
@@ -325,6 +462,47 @@ select is(
    where (lower(found.username) like 'ar%' or lower(found.display_name) like 'ar%')
      and found.username not in ('arguest-anon', 'arbanned-one', 'ardeleting-one')),
   'creators come in the order Creators search gives the same people'
+);
+
+-- ─── The cut never loses a follow, and never spends itself on the excluded ──
+--
+-- 'zyx-': 200 guests whose profiles hold a handle, then 3 accounts. 'zqw-':
+-- 203 accounts, then one more, the last by every order the cut uses, whom the
+-- viewer follows. 200 is the number of matches scored.
+
+insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at, is_anonymous)
+select
+  ('0000e5d7-0000-4000-9000-0000001' || crowd.prefix || lpad(n::text, 4, '0'))::uuid,
+  'e5d7-' || crowd.prefix || '-' || n || '@example.invalid', 'authenticated', 'authenticated',
+  '{}'::jsonb, '{}'::jsonb, now() - interval '90 days', crowd.prefix = 'a' and n <= 200
+from (values ('a', 203), ('b', 204)) as crowd(prefix, size)
+cross join lateral generate_series(1, crowd.size) as n;
+
+update public.profiles as profiles
+set username = case when profiles.id::text like '%-0000001a%' then 'zyx-' else 'zqw-' end || right(profiles.id::text, 4),
+    display_name = 'Crowd ' || right(profiles.id::text, 5)
+where profiles.id::text like '0000e5d7-0000-4000-9000-0000001%';
+
+insert into public.follows (follower_id, following_id)
+values (pg_temp.uid('05'), '0000e5d7-0000-4000-9000-0000001b0204'::uuid);
+
+select is(
+  (select count(*) from public.creator_search_documents where username like 'zyx-%'),
+  203::bigint,
+  'fixture: 203 documents start zyx-, 200 of them guests'
+);
+select is(pg_temp.handles('zyx'), array['zyx-0201', 'zyx-0202', 'zyx-0203'],
+  'the guests are left out before the cut, so the three accounts behind them are offered');
+select is(pg_temp.handles('zy', pg_temp.uid('05')), array['zyx-0201', 'zyx-0202', 'zyx-0203'],
+  'for a signed-in viewer too');
+select ok(not 'zqw-0204' = any (pg_temp.handles('zqw')),
+  'fixture: the last of 204 matches is not among the first ten for a visitor');
+select is((pg_temp.handles('zqw', pg_temp.uid('05')))[1], 'zqw-0204',
+  'a creator the viewer follows is offered first in its tier though 203 matches come before it in the cut');
+select is(
+  (select is_following from public.search_suggest_creators('zqw-0204', pg_temp.uid('05'))),
+  true,
+  'and is marked as followed'
 );
 
 -- ─── Odd input ──────────────────────────────────────────────────────────────

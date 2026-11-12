@@ -65,10 +65,13 @@ export interface SearchSuggestResponse {
 }
 
 export type SearchSuggestQuery = {
+  /** What was sent, control characters taken out and trimmed: echoed back as `query`. */
+  query: string;
   /**
-   * Trimmed, NFKC, one space between words, a leading `@` taken off: the
-   * search query's own reading (normalizeCreatorSearchQuery). The database
-   * lower-cases it, as it does a search's.
+   * Trimmed, NFKC, one space between words, a leading `@` taken off (and the
+   * space it leaves, as in `@ lu`): the search query's own reading
+   * (normalizeCreatorSearchQuery). The database lower-cases it, as it does a
+   * search's.
    */
   normalizedQuery: string;
   /** The query was typed as a handle (`@lu`): people by handle, and no words. */
@@ -80,20 +83,34 @@ export type SearchSuggestQueryResult =
   | { ok: false; error: string };
 
 /**
+ * `q` with its control characters taken out, before anything else reads it:
+ * Postgres refuses a text that holds U+0000, so `q=a%00` reached the database
+ * as a 500. A tab or a line break is a space between words, as search's
+ * normaliser reads one; every other control character is nothing a person
+ * typed.
+ */
+function withoutControlCharacters(value: string | null | undefined): string {
+  return (value ?? '').replace(/\s/g, ' ').replace(/\p{Cc}/gu, '');
+}
+
+/**
  * Reads `q` as search reads it, by search's own normaliser and its own count
  * of characters (code points, as the database counts them).
  */
 export function searchSuggestQuery(value: string | null | undefined): SearchSuggestQueryResult {
-  if (isPublicSearchQueryTooLong(value)) {
+  const typed = withoutControlCharacters(value);
+  if (isPublicSearchQueryTooLong(typed)) {
     return { ok: false, error: 'q must be at most 100 characters.' };
   }
-  const normalizedQuery = normalizeCreatorSearchQuery(value);
+  // The normaliser trims before it takes the @ off, so `@ lu` is left ` lu`.
+  const normalizedQuery = normalizeCreatorSearchQuery(typed).trim();
   if (publicSearchQueryLength(normalizedQuery) < SEARCH_SUGGEST_MIN_QUERY_LENGTH) {
     return { ok: false, error: `q must contain at least ${SEARCH_SUGGEST_MIN_QUERY_LENGTH} character.` };
   }
   return {
     ok: true,
+    query: typed.trim(),
     normalizedQuery,
-    handlesOnly: normalizePublicSearchQuery(value).startsWith('@'),
+    handlesOnly: normalizePublicSearchQuery(typed).startsWith('@'),
   };
 }

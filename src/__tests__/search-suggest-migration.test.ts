@@ -117,6 +117,18 @@ describe('search suggestions migration', () => {
     // document leaves out (a paid recipe's caption, a prompt, the items).
     expect(definition).not.toMatch(/posts\.(?:title|body|prompt)\b/);
     expect(definition).not.toMatch(/post_resource_bundles|resource_items|resource_sections|prompt_text|notes_markdown/);
+    // The names are the document's own: a template result's model is the name
+    // public reads give it, never its real one. A count that followed the
+    // hidden model would say, by a word being offered or not, whether that
+    // model's name holds the word.
+    expect(definition).toMatch(
+      /SELECT CASE\s+WHEN generations\.template_run_id IS NOT NULL OR generations\.template_run_step_id IS NOT NULL\s+THEN 'template-workflow'\s+ELSE generations\.model\s+END/,
+    );
+    expect(definition.match(/generations\.model\b/g)).toHaveLength(1);
+    const document = newestDefinition('refresh_post_search_documents').definition;
+    expect(document).toMatch(
+      /WHEN generations\.template_run_id IS NOT NULL OR generations\.template_run_step_id IS NOT NULL\s+THEN 'template-workflow'\s+ELSE lower\(btrim\(generations\.model\)\)/,
+    );
     // The names take a post out of a count and can do nothing else.
     expect(definition).toContain('NOT (words.lexeme = ANY (names.words)) AS written');
     expect(definition.match(/names\.words/g)).toHaveLength(1);
@@ -144,25 +156,32 @@ describe('search suggestions migration', () => {
     const { file, definition } = newestDefinition('search_suggest_completions');
     expect(file).toBe(MIGRATION);
     expect(definition).toContain('c_min_creators CONSTANT integer := 2;');
-    // Both readings of the dictionary, the one word and the candidates for a phrase.
+    // Both readings of the dictionary, the one word and a phrase's word.
     expect(definition.match(/AND terms\.in_posts\s+AND terms\.creator_count >= c_min_creators/g)).toHaveLength(2);
-    expect(definition.match(/\bcreator_count\b/g)).toHaveLength(4);
-    // A phrase by the posts that match all of it: two creators' posts, unlabelled, read as post search reads a query.
-    expect(definition).toContain('WHERE checked.creators >= c_min_creators');
+    expect(definition.match(/\bcreator_count\b/g)).toHaveLength(3);
+    // A phrase's word comes from the unlabelled posts that hold the earlier
+    // words as typed (the simple reading, no stems: that is what makes each
+    // phrase one search finds) and counts only when two creators' posts hold it.
+    expect(definition).toMatch(/WHERE posts\.is_nsfw = false\s+AND documents\.search_vector @@ public\.search_query_tsquery\(v_head \|\| ' ' \|\| v_last, false\)\s+LIMIT c_phrase_posts_read/);
     expect(definition).toContain('count(DISTINCT matched.creator_user_id) AS creators');
-    expect(definition).toMatch(/WHERE posts\.is_nsfw = false\s+AND documents\.search_vector @@ public\.search_query_tsquery\(v_head \|\| ' ' \|\| candidates\.term, true\)/);
+    expect(definition).toMatch(/WHERE found\.creators >= c_min_creators\s+AND terms\.in_posts\s+AND terms\.creator_count >= c_min_creators/);
+    expect(definition).toContain('JOIN public.search_terms AS terms ON terms.term = found.term');
     // A ceiling on what one call reads.
-    expect(definition).toMatch(/c_phrase_candidates CONSTANT integer := \d+;/);
     expect(definition).toMatch(/c_phrase_posts_read CONSTANT integer := \d+;/);
-    expect(definition).toContain('LIMIT c_phrase_candidates');
-    expect(definition).toContain('LIMIT c_phrase_posts_read');
+    // A withdrawn word: not alone, not as a phrase's word, and no phrase for a query that holds it.
+    expect(definition.match(/SELECT 1 FROM public\.search_suggestion_denylist AS denied WHERE denied\.term = (?:terms|found)\.term/g)).toHaveLength(2);
+    expect(definition).toMatch(
+      /IF EXISTS \(\s+SELECT 1\s+FROM public\.search_suggestion_denylist AS denied\s+WHERE denied\.term = ANY \(tsvector_to_array\(\s+to_tsvector\('pg_catalog\.simple', v_head\)\s+\|\| to_tsvector\('pg_catalog\.simple', public\.search_split_terms\(v_head\)\)\s+\)\)\s+\) THEN\s+RETURN;/,
+    );
     expect(definition).toContain('v_limit integer := least(greatest(coalesce(p_limit, 6), 0), 10);');
     // Only letters reach a LIKE, so nothing typed is a wildcard.
     const lettersOnly = definition.indexOf("IF v_last IS NULL OR v_last !~ '^[[:alpha:]]{2,39}$' THEN");
     expect(lettersOnly).toBeGreaterThan(0);
     expect(definition.indexOf('LIKE v_last')).toBeGreaterThan(lettersOnly);
     // It reads the dictionary and the public documents, and nothing else.
-    expect(relationsOf(definition)).toEqual(['public.post_search_documents', 'public.posts', 'public.search_terms']);
+    expect(relationsOf(definition)).toEqual([
+      'public.post_search_documents', 'public.posts', 'public.search_suggestion_denylist', 'public.search_terms',
+    ]);
     // With the caller's rights: the service role's own grants are enough.
     expect(definition).not.toContain('SECURITY DEFINER');
     expect(definition).toContain("SET search_path = ''");
@@ -175,14 +194,17 @@ describe('search suggestions migration', () => {
     expect(definition).toMatch(/RETURNS TABLE\(\s+creator_user_id uuid,\s+username text,\s+display_name text,\s+avatar_url text,\s+is_following boolean\s+\)/);
     // A %, an _ or a \ typed matches itself.
     expect(definition).toContain(String.raw`v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_') || '%';`);
-    expect(definition).toMatch(/WHERE documents\.username_normalized LIKE v_like\s+OR \(NOT v_handles_only AND documents\.display_name_normalized LIKE v_like\)/);
+    expect(definition).toMatch(/WHERE \(\s+documents\.username_normalized LIKE v_like\s+OR \(NOT v_handles_only AND documents\.display_name_normalized LIKE v_like\)\s+\)/);
     // No other way in: not a word inside a name, not a near miss, not the bio.
     expect(definition).not.toMatch(/OPERATOR\(extensions\.<?%\)|search_vector @@|ILIKE/);
     // Search's own score, so the two agree on who comes first.
     expect(definition).toContain('public.search_creator_score(');
     expect(definition).toContain('ORDER BY scored.search_score DESC, scored.creator_user_id ASC');
     expect(definition).toMatch(/c_candidates CONSTANT integer := \d+;/);
-    expect(definition).toContain('LIMIT c_candidates');
+    // Two cuts: the strongest matches, and the matches the viewer follows, so
+    // a follow is never lost to the first.
+    expect(definition.match(/LIMIT c_candidates/g)).toHaveLength(2);
+    expect(definition).toMatch(/LIMIT c_candidates\s+\)\s+UNION\s+\(\s+SELECT eligible\.creator_user_id, eligible\.is_following\s+FROM eligible\s+WHERE eligible\.is_following/);
     expect(definition).toContain('v_limit integer := least(greatest(coalesce(p_limit, 5), 0), 10);');
     // A creator is an account in good standing.
     expect(definition).toContain('JOIN auth.users AS users ON users.id = documents.creator_user_id');
@@ -192,13 +214,35 @@ describe('search suggestions migration', () => {
     // Neither side of a block, before the limit.
     expect(definition).toMatch(/AND NOT EXISTS \(\s+SELECT 1\s+FROM public\.user_blocks AS blocks\s+WHERE blocks\.blocker_user_id = p_viewer_user_id\s+AND blocks\.blocked_user_id = documents\.creator_user_id\s+\)/);
     expect(definition).toMatch(/AND NOT EXISTS \(\s+SELECT 1\s+FROM public\.user_blocks AS blocks\s+WHERE blocks\.blocker_user_id = documents\.creator_user_id\s+AND blocks\.blocked_user_id = p_viewer_user_id\s+\)/);
-    expect(definition.lastIndexOf('public.user_blocks')).toBeLessThan(definition.lastIndexOf('LIMIT v_limit'));
+    // Everyone who may not be offered is left out before either cut, so the
+    // cut is never spent on them.
+    const firstCut = definition.indexOf('LIMIT c_candidates');
+    for (const exclusion of ['users.is_anonymous IS NOT TRUE', 'users.banned_until', "profiles.identity_state = 'active'"]) {
+      expect(definition.indexOf(exclusion), exclusion).toBeGreaterThan(0);
+      expect(definition.indexOf(exclusion), exclusion).toBeLessThan(firstCut);
+    }
+    expect(definition.lastIndexOf('public.user_blocks')).toBeLessThan(firstCut);
     // It reads auth.users, which the service role may not: definer rights, on an empty search path.
     expect(definition).toContain('SECURITY DEFINER');
     expect(definition).toContain("SET search_path = ''");
     expect(relationsOf(definition)).toEqual([
       'auth.users', 'public.creator_search_documents', 'public.follows', 'public.profiles', 'public.user_blocks',
     ]);
+  });
+
+  it('keeps the withdrawn words in a table that is the service role’s alone', () => {
+    expect(statements).toMatch(
+      /CREATE TABLE public\.search_suggestion_denylist \(\s+term text PRIMARY KEY CHECK \(term ~ '\^\[\^\[:space:\]\]\{1,40\}\$' AND term = lower\(term\)\),\s+note text NOT NULL DEFAULT '' CHECK \(char_length\(note\) <= 500\),\s+created_at timestamptz NOT NULL DEFAULT now\(\)\s+\);/,
+    );
+    expect(statements).toContain('ALTER TABLE public.search_suggestion_denylist ENABLE ROW LEVEL SECURITY;');
+    expect(statements).toContain('REVOKE ALL ON TABLE public.search_suggestion_denylist FROM PUBLIC, anon, authenticated, service_role;');
+    expect(statements).toContain('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.search_suggestion_denylist TO service_role;');
+    // No policy: the Data API roles see and write nothing.
+    expect(statements).not.toMatch(/CREATE POLICY/i);
+    // Completions alone read it: search, spelling and creator suggestions do not.
+    for (const reader of ['search_suggest_creators', 'rebuild_search_terms', 'search_suggestions']) {
+      expect(newestDefinition(reader).definition, reader).not.toContain('search_suggestion_denylist');
+    }
   });
 
   it('answers the route in one call, with a marked place for model and tool suggestions', () => {

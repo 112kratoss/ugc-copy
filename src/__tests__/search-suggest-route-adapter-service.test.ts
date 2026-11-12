@@ -11,7 +11,7 @@ import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { routeIdentityPolicy, routeIdentityPolicyForRequest } from '@/lib/route-identity-policy';
 import { usesRouteOwnedIdentityAdmission } from '@/lib/route-owned-identity-admission';
 import type { SearchSuggestResponse } from '@/lib/search-suggest';
-import { getSearchSuggestRouteResponse } from '@/lib/search-suggest-route-adapter-service';
+import { getSearchSuggestRouteResponse, isSearchSuggestDisabled } from '@/lib/search-suggest-route-adapter-service';
 import { suggestSearch, type SearchSuggestOptions } from '@/lib/search-suggest-service';
 import { proxy } from '@/proxy';
 
@@ -47,8 +47,11 @@ async function ask(
     createUserClient = vi.fn(),
     enforceBackendRateLimit = vi.fn(allowedRateLimit),
     suggest = vi.fn(async (options: SearchSuggestOptions) => emptyAnswer(options)),
+    env = {},
   }: {
     headers?: Record<string, string>;
+    /** The environment the kill switch is read from: empty unless a case throws the switch. */
+    env?: Record<string, string | undefined>;
     createUserClient?: ReturnType<typeof vi.fn>;
     enforceBackendRateLimit?: ReturnType<typeof vi.fn>;
     suggest?: ReturnType<typeof vi.fn>;
@@ -65,6 +68,7 @@ async function ask(
       suggestSearch: suggest as never,
       logError,
       withProviderFetchRequestId: requestIdBoundary,
+      env,
     },
   });
   return { response, createUserClient, enforceBackendRateLimit, suggest, logError };
@@ -181,6 +185,78 @@ describe('search suggest route adapter', () => {
     const { response, suggest } = await ask(`http://localhost/api/search/suggest?q=${encodeURIComponent(typed)}`);
     expect(response.status).toBe(200);
     expect(suggest).toHaveBeenCalledWith(expect.objectContaining({ normalizedQuery: typed, handlesOnly: false }));
+  });
+
+  it('takes control characters out of the query, and refuses one made of nothing else', async () => {
+    // `q=a%00` reached Postgres, which refuses U+0000 in a text: a 500.
+    const nul = await ask('http://localhost/api/search/suggest?q=a%00');
+    expect(nul.response.status).toBe(200);
+    expect(nul.suggest).toHaveBeenCalledWith({ query: 'a', normalizedQuery: 'a', handlesOnly: false, viewerUserId: null });
+    await expect(nul.response.json()).resolves.toMatchObject({ query: 'a', normalizedQuery: 'a' });
+
+    const escape = await ask('http://localhost/api/search/suggest?q=%1Bpo%00rt%7F');
+    expect(escape.suggest).toHaveBeenCalledWith(expect.objectContaining({ normalizedQuery: 'port' }));
+
+    for (const only of ['%00', '%00%00', '%20%00%20', '%40%00', '%1B']) {
+      const { response, suggest, enforceBackendRateLimit } = await ask(`http://localhost/api/search/suggest?q=${only}`);
+      expect(response.status, only).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: 'q must contain at least 1 character.' });
+      expect(suggest).not.toHaveBeenCalled();
+      expect(enforceBackendRateLimit).not.toHaveBeenCalled();
+    }
+  });
+
+  it('reads `@ lu` as the handle lu, with no space left where the @ was', async () => {
+    const { suggest } = await ask('http://localhost/api/search/suggest?q=%40%20lu');
+    expect(suggest).toHaveBeenCalledWith({ query: '@ lu', normalizedQuery: 'lu', handlesOnly: true, viewerUserId: null });
+  });
+
+  describe('the kill switch', () => {
+    it.each(['1', 'true', ' TRUE '])('SEARCH_SUGGEST_DISABLED=%j answers empty lists with no lookup of any kind', async (value) => {
+      const { response, createUserClient, enforceBackendRateLimit, suggest } = await ask(
+        'http://localhost/api/search/suggest?q=%20Lu',
+        {
+          headers: { Authorization: 'Bearer token', 'x-request-id': 'suggest-off' },
+          createUserClient: userClient({ id: VIEWER_ID }),
+          env: { SEARCH_SUGGEST_DISABLED: value },
+        },
+      );
+      // The answer a query with no match gets: a client draws nothing and carries on.
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ query: 'Lu', normalizedQuery: 'Lu', creators: [], completions: [] });
+      // No token verified, no rate-limit row, no read.
+      expect(createUserClient).not.toHaveBeenCalled();
+      expect(enforceBackendRateLimit).not.toHaveBeenCalled();
+      expect(suggest).not.toHaveBeenCalled();
+      // Never stored: the switch is felt when thrown and gone when lifted.
+      expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+      expect(response.headers.get('x-request-id')).toBe('suggest-off');
+    });
+
+    it('is private for a visitor too, whose answer the edge would otherwise keep', async () => {
+      const { response, suggest } = await ask('http://localhost/api/search/suggest?q=lu', {
+        env: { SEARCH_SUGGEST_DISABLED: '1' },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+      expect(suggest).not.toHaveBeenCalled();
+    });
+
+    it('still refuses a query it would have refused', async () => {
+      const { response } = await ask('http://localhost/api/search/suggest?q=', { env: { SEARCH_SUGGEST_DISABLED: '1' } });
+      expect(response.status).toBe(400);
+    });
+
+    it.each([undefined, '', '0', 'false', 'off'])('is off for %j: the route answers as usual', async (value) => {
+      expect(isSearchSuggestDisabled({ SEARCH_SUGGEST_DISABLED: value })).toBe(false);
+      const { suggest } = await ask('http://localhost/api/search/suggest?q=lu', { env: { SEARCH_SUGGEST_DISABLED: value } });
+      expect(suggest).toHaveBeenCalledTimes(1);
+    });
+
+    it('is named in .env.example, as every name the app reads is', () => {
+      expect(isSearchSuggestDisabled({ SEARCH_SUGGEST_DISABLED: '1' })).toBe(true);
+      expect(readFileSync(join(process.cwd(), '.env.example'), 'utf8')).toMatch(/^# SEARCH_SUGGEST_DISABLED=1$/m);
+    });
   });
 
   it('keeps a rate-limit refusal private and retryable, and reads nothing for it', async () => {
