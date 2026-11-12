@@ -7,13 +7,18 @@
 -- recipe's caption, prompt or items, or a tool's name holds, and never a word
 -- an operator has withdrawn (search_suggestion_denylist). A template
 -- result's hidden model changes nothing a visitor can see.
+--
+-- Models and tools (20261112192423_search_suggestions_entities.sql) are
+-- search_public_entities' own answer for the query and the viewer, less an
+-- entity only one creator's posts are made with and one whose name holds a
+-- withdrawn word. The call the route made before that file still works.
 
 begin;
 
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(114);
+select plan(147);
 
 create function pg_temp.uid(p_suffix text)
 returns uuid
@@ -546,12 +551,180 @@ select is(
   'a query past 100 characters offers nobody'
 );
 
+-- ─── Models and tools ───────────────────────────────────────────────────────
+--
+-- Made with, so far: Midjourney (posts of …01, …02 and …03), Quillontool
+-- (…01 and …02), Magicbooklet (…01's template result alone). Added here:
+--   Solotool      one post of …03                       (one creator)
+--   Veiltool      …01, and …02's labelled post          (one creator a visitor sees)
+--   Lumen Forge   …01 and …02                           (a name of two words)
+--   Blocktool     …06 and …07: the viewer blocked one, the other blocked the viewer
+--   Triptool A–D  …01 and …02 each                      (four entities for one query)
+--   lumenmodel-2  the model of creations by …01 and …02
+
+create function pg_temp.entities(p_query text, p_viewer uuid default null, p_handles_only boolean default false)
+returns text[]
+language sql
+as $$
+  select coalesce(array_agg(entity ->> 'kind' || ':' || (entity ->> 'key') order by position), '{}')
+  from jsonb_array_elements(public.search_suggestions(p_query, p_viewer, p_handles_only) -> 'entities')
+    with ordinality as offered(entity, position);
+$$;
+
+-- What search itself offers for the query, as kind:key in its order.
+create function pg_temp.search_entities(p_query text, p_viewer uuid default null)
+returns text[]
+language sql
+as $$
+  select coalesce(array_agg(kind || ':' || key order by position), '{}')
+  from public.search_public_entities(p_query, p_viewer, 10, null)
+    with ordinality as found(kind, key, label, post_count, post_count_capped, position);
+$$;
+
+insert into public.generations (id, user_id, model, status, is_public) values
+  (pg_temp.uid('61'), pg_temp.uid('01'), 'lumenmodel-2', 'succeeded', true),
+  (pg_temp.uid('62'), pg_temp.uid('02'), 'lumenmodel-2', 'succeeded', true);
+
+insert into public.posts (
+  id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw,
+  title, body, showcase_asset_path, source_tool, source_tool_slug, generation_id, created_at, updated_at
+)
+select
+  pg_temp.uid(post.suffix), pg_temp.uid(post.owner), 'public', 'image', 'external', 'media', 'visible', post.is_nsfw,
+  'Pier study', 'A plain caption.', 'showcase/e5d7-' || post.suffix || '.png',
+  post.tool, lower(replace(post.tool, ' ', '-')),
+  case when post.generation is not null then pg_temp.uid(post.generation) end, now(), now()
+from (
+  values
+    ('70', '03', false, 'Solotool', null),
+    ('71', '01', false, 'Veiltool', null),
+    ('72', '02', true, 'Veiltool', null),
+    ('73', '01', false, 'Lumen Forge', null),
+    ('74', '02', false, 'Lumen Forge', null),
+    ('75', '06', false, 'Blocktool', null),
+    ('76', '07', false, 'Blocktool', null),
+    ('77', '01', false, 'Triptool A', null), ('78', '02', false, 'Triptool A', null),
+    ('79', '01', false, 'Triptool B', null), ('7a', '02', false, 'Triptool B', null),
+    ('7b', '01', false, 'Triptool C', null), ('7c', '02', false, 'Triptool C', null),
+    ('7d', '01', false, 'Triptool D', null), ('7e', '02', false, 'Triptool D', null),
+    ('7f', '01', false, 'Midjourney', '61'),
+    ('80', '02', false, 'Midjourney', '62')
+) as post(suffix, owner, is_nsfw, tool, generation);
+
+select is(pg_temp.entities('midj'), array['tool:midjourney'],
+  'a tool two creators'' posts are made with is offered for the start of its name');
+select is(
+  public.search_suggestions('midj') -> 'entities' -> 0,
+  (select jsonb_build_object('kind', kind, 'key', key, 'label', label, 'post_count', post_count, 'post_count_capped', post_count_capped)
+   from public.search_public_entities('midj', null, 10, null)),
+  'as search itself offers it: its kind, key, the name its posts print, and the posts the query finds made with it'
+);
+select is(pg_temp.entities('lumenmod'), array['model:lumenmodel-2'], 'a model too, by the creations made with it');
+select is(pg_temp.entities('mi'), '{}'::text[], 'nothing under three characters, where posts are not searched');
+select is(pg_temp.entities('quillonto'), array['tool:quillontool'], 'a tool with no completion of its own is still offered as a tool');
+select is(pg_temp.entities('zzznothing'), '{}'::text[], 'a query that names none offers none');
+
+-- One creator.
+select is(pg_temp.search_entities('solot'), array['tool:solotool'], 'fixture: search offers a tool one creator uses to someone who searched for it');
+select is(pg_temp.entities('solot'), '{}'::text[], 'a suggestion does not: one creator typed that name');
+select is(pg_temp.entities('solotool'), '{}'::text[], 'not even by its whole name');
+select is(pg_temp.search_entities('veilt'), array['tool:veiltool'], 'fixture: a tool one creator''s visible post and another''s labelled post are made with');
+select is(pg_temp.entities('veilt'), '{}'::text[], 'a labelled post is nobody''s second creator');
+insert into public.posts (
+  id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw,
+  title, body, showcase_asset_path, source_tool, source_tool_slug, created_at, updated_at
+) values (pg_temp.uid('81'), pg_temp.uid('02'), 'public', 'image', 'external', 'media', 'visible', false,
+          'Pier study', 'A plain caption.', 'showcase/e5d7-81.png', 'Solotool', 'solotool', now(), now());
+select is(pg_temp.entities('solot'), array['tool:solotool'], 'once a second creator posts with it, it is offered at once: nothing is rebuilt');
+
+-- A template result has no model entity, under its real model's name or the name shown in its place.
+select is(pg_temp.entities('fluxmodel'), '{}'::text[], 'a template result''s hidden model is never offered');
+select is(pg_temp.entities('template'), '{}'::text[], 'nor is the name shown in its place a model');
+
+-- Blocks: search's own answer per viewer.
+select is(pg_temp.entities('blockt'), array['tool:blocktool'], 'a tool two creators use is offered to a visitor');
+select is(pg_temp.entities('blockt', pg_temp.uid('05')), '{}'::text[],
+  'not to a viewer who is blocked with both: no post that viewer may see is made with it');
+
+-- A withdrawn word.
+insert into public.search_suggestion_denylist (term, note) values ('quillontool', 'a planted tool name');
+select is(pg_temp.entities('quillonto'), '{}'::text[], 'an entity whose name is a withdrawn word is not offered');
+select is(pg_temp.search_entities('quillonto'), array['tool:quillontool'], 'search itself still finds it');
+insert into public.search_suggestion_denylist (term) values ('forge');
+select is(pg_temp.search_entities('lumen f'), array['tool:lumen-forge'], 'fixture: a tool named in two words');
+select is(pg_temp.entities('lumen f'), '{}'::text[], 'nor one whose name holds a withdrawn word among others');
+insert into public.search_suggestion_denylist (term) values ('midj');
+select is(pg_temp.entities('midj'), array['tool:midjourney'],
+  'a withdrawn word in what was typed takes no entity out: its row does not repeat the query');
+delete from public.search_suggestion_denylist;
+select is(pg_temp.entities('quillonto'), array['tool:quillontool'], 'taken off the list, it is offered again at once');
+select is(pg_temp.entities('lumen f'), array['tool:lumen-forge'], 'and so is the other');
+
+-- At most three, search's first three that pass.
+select is(cardinality(pg_temp.search_entities('triptool')), 4, 'fixture: four tools start the same way');
+select is(pg_temp.entities('triptool'), (pg_temp.search_entities('triptool'))[1:3], 'three are offered, in search''s order');
+
+-- Handles only.
+select is(pg_temp.entities('midj', null, true), '{}'::text[], 'a query typed as a handle is offered no models or tools');
+
+-- Pressing an entity opens Posts for the query narrowed to it: never an empty list.
+select is(
+  (select count(*)
+   from unnest(array['midj', 'midjourney', 'lumenmod', 'quillonto', 'solot', 'lumen f', 'triptool', 'blockt', 'pier', 'plain caption']) as asked(query)
+   cross join lateral jsonb_array_elements(public.search_suggestions(asked.query) -> 'entities') as offered(entity)
+   where not exists (
+     select 1 from public.search_public_posts(
+       p_query => asked.query,
+       p_made_with => (offered.entity ->> 'kind') || ':' || (offered.entity ->> 'key')
+     )
+   )),
+  0::bigint,
+  'every entity offered, for ten queries, opens at least one post when pressed'
+);
+select ok(
+  (select count(*) >= 8
+   from unnest(array['midj', 'midjourney', 'lumenmod', 'quillonto', 'solot', 'lumen f', 'triptool', 'blockt', 'pier', 'plain caption']) as asked(query)
+   cross join lateral jsonb_array_elements(public.search_suggestions(asked.query) -> 'entities') as offered(entity)),
+  'and those queries do offer entities'
+);
+
+-- The lookup's plan is held to nested loops (the migration's header says why).
+select ok(
+  (select proconfig @> array['enable_hashjoin=off', 'enable_mergejoin=off']
+   from pg_proc where oid = 'public.search_public_entities(text, uuid, integer, text)'::regprocedure),
+  'search_public_entities runs with hash and merge joins off'
+);
+
 -- ─── The one call ───────────────────────────────────────────────────────────
 
 select is(
   (select array_agg(key order by key) from jsonb_object_keys(public.search_suggestions('ar')) as key),
-  array['completions', 'creators'],
-  'the answer holds creators and completions, and nothing else yet'
+  array['completions', 'creators', 'entities'],
+  'the answer holds creators, entities and completions'
+);
+-- The route live before 20261112192423 calls with these five names and reads
+-- `creators` and `completions`: both are what they were.
+select is(
+  (select array_agg(key order by key)
+   from jsonb_object_keys(public.search_suggestions(
+     p_query => 'aria', p_viewer_user_id => pg_temp.uid('05'), p_handles_only => false,
+     p_creator_limit => 5, p_completion_limit => 6
+   ) -> 'creators' -> 0) as key),
+  array['avatar_url', 'display_name', 'id', 'is_following', 'username'],
+  'the earlier call still answers, a creator under the same five names'
+);
+select is(
+  public.search_suggestions(
+    p_query => 'quil', p_viewer_user_id => null, p_handles_only => false,
+    p_creator_limit => 5, p_completion_limit => 6
+  ) -> 'completions',
+  '[{"text": "quillonbright"}]'::jsonb,
+  'and a completion as its text'
+);
+select is(
+  (select count(*) from pg_proc where proname = 'search_suggestions' and pronamespace = 'public'::regnamespace),
+  1::bigint,
+  'there is one search_suggestions, under the five parameters it had'
 );
 select is(
   public.search_suggestions('aria', null, false, 1, 6) -> 'creators',
@@ -603,6 +776,11 @@ select is(
   (select public.search_suggestions('glassharbor quil') -> 'completions' -> 0 ->> 'text'),
   'glassharbor quillonbright',
   'and completions, the phrase check included'
+);
+select is(
+  (select public.search_suggestions('midj') -> 'entities' -> 0 ->> 'key'),
+  'midjourney',
+  'and models and tools, the two-creator and withdrawn-word checks included'
 );
 reset role;
 

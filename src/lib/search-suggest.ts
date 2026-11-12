@@ -5,22 +5,38 @@ import {
   publicSearchQueryLength,
 } from '@/lib/public-search';
 
+import {
+  SEARCH_TYPEAHEAD_MAX_COMPLETIONS,
+  SEARCH_TYPEAHEAD_MAX_CREATORS,
+  SEARCH_TYPEAHEAD_MAX_ENTITIES,
+} from '../../ugc-mobile/lib/public-search-policy/search-typeahead';
+
+export type {
+  SearchSuggestCompletion,
+  SearchSuggestCreator,
+  SearchSuggestResponse,
+} from '../../ugc-mobile/lib/public-search-policy/search-typeahead';
+
 /**
  * Typeahead: what a search box shows while a person types, before they commit
- * a search. `GET /api/search/suggest?q=…` answers two short lists from one
- * database call (`search_suggestions`, migration
- * `20261112144018_search_suggestions_typeahead.sql`): creators whose handle or
- * name starts with the query, and words that complete the one being typed.
- * No page, no cursor, no row in the search log.
+ * a search. `GET /api/search/suggest?q=…` answers three short lists from one
+ * database call (`search_suggestions`, migrations
+ * `20261112144018_search_suggestions_typeahead.sql` and
+ * `20261112192423_search_suggestions_entities.sql`): creators whose handle or
+ * name starts with the query, the models and tools it names, and words that
+ * complete the one being typed. No page, no cursor, no row in the search log.
  *
- * This module is client-safe: the types and limits both clients share.
+ * The answer's shape and its caps are the search clients' shared rules
+ * (`ugc-mobile/lib/public-search-policy/search-typeahead.ts`), which both
+ * search boxes draw by; this module is the server's reading of a request.
  */
 
-/** One character is enough to offer handles; a completion needs two letters of its word. */
+/** One character is enough to offer handles; a completion needs two letters of its word, an entity three characters. */
 export const SEARCH_SUGGEST_MIN_QUERY_LENGTH = 1;
 /** The most the answer ever holds, whatever the database returns. */
-export const SEARCH_SUGGEST_MAX_CREATORS = 5;
-export const SEARCH_SUGGEST_MAX_COMPLETIONS = 6;
+export const SEARCH_SUGGEST_MAX_CREATORS = SEARCH_TYPEAHEAD_MAX_CREATORS;
+export const SEARCH_SUGGEST_MAX_ENTITIES = SEARCH_TYPEAHEAD_MAX_ENTITIES;
+export const SEARCH_SUGGEST_MAX_COMPLETIONS = SEARCH_TYPEAHEAD_MAX_COMPLETIONS;
 
 /**
  * Sized for typing, and apart from full search's `public-search:read`
@@ -36,34 +52,6 @@ export const SEARCH_SUGGEST_RATE_LIMIT = {
   windowSeconds: 60,
 } as const;
 
-/** What a creator row draws. A subset of search's `CreatorSearchResult`, under the same names. */
-export interface SearchSuggestCreator {
-  id: string;
-  username: string;
-  displayName: string;
-  avatarUrl: string | null;
-  isFollowing: boolean;
-}
-
-/** A query to search for: what was typed, with its last word completed. */
-export interface SearchSuggestCompletion {
-  text: string;
-}
-
-export interface SearchSuggestResponse {
-  /** The query as it was sent, trimmed. */
-  query: string;
-  /** The query as it was read (searchSuggestQuery): a client drops an answer that is not for what its box holds now. */
-  normalizedQuery: string;
-  /** In the order to show them: at most SEARCH_SUGGEST_MAX_CREATORS. */
-  creators: SearchSuggestCreator[];
-  /** In the order to show them: at most SEARCH_SUGGEST_MAX_COMPLETIONS. Empty for a query typed as a handle. */
-  completions: SearchSuggestCompletion[];
-  // SEAM (model and tool suggestions): `entities: SearchSuggestEntity[]` joins
-  // here as a third list, from the single source of entities, without changing
-  // the two above. The SQL marks the same place in search_suggestions.
-}
-
 export type SearchSuggestQuery = {
   /** What was sent, control characters taken out and trimmed: echoed back as `query`. */
   query: string;
@@ -74,7 +62,7 @@ export type SearchSuggestQuery = {
    * search's.
    */
   normalizedQuery: string;
-  /** The query was typed as a handle (`@lu`): people by handle, and no words. */
+  /** The query was typed as a handle (`@lu`): people by handle, and no models, tools or words. */
   handlesOnly: boolean;
 };
 

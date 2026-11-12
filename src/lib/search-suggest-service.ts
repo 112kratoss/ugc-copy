@@ -1,8 +1,11 @@
 import 'server-only';
 
+import type { SearchEntityResult } from '@/lib/public-search';
+import { entityResult } from '@/lib/public-search-service';
 import {
   SEARCH_SUGGEST_MAX_COMPLETIONS,
   SEARCH_SUGGEST_MAX_CREATORS,
+  SEARCH_SUGGEST_MAX_ENTITIES,
   type SearchSuggestCompletion,
   type SearchSuggestCreator,
   type SearchSuggestResponse,
@@ -58,6 +61,32 @@ function creatorFromRow(row: unknown): SearchSuggestCreator {
   };
 }
 
+/**
+ * A model or tool, named as full search names it (entityResult: a model made
+ * here by its catalog name, anything else by the name its posts print), so a
+ * row in the box and the result it opens read the same.
+ */
+function entityFromRow(row: unknown): SearchEntityResult {
+  if (
+    !isRecord(row)
+    || !(row.kind === 'model' || row.kind === 'tool')
+    || !isText(row.key)
+    || !isText(row.label)
+    || typeof row.post_count !== 'number'
+    || !Number.isFinite(row.post_count)
+    || typeof row.post_count_capped !== 'boolean'
+  ) {
+    throw new Error(UNEXPECTED_ANSWER);
+  }
+  return entityResult({
+    kind: row.kind,
+    key: row.key,
+    label: row.label,
+    post_count: row.post_count,
+    post_count_capped: row.post_count_capped,
+  });
+}
+
 function completionFromRow(row: unknown): SearchSuggestCompletion {
   if (!isRecord(row) || !isText(row.text)) throw new Error(UNEXPECTED_ANSWER);
   return { text: row.text };
@@ -68,7 +97,8 @@ function completionFromRow(row: unknown): SearchSuggestCompletion {
  * the database and before its limits, everyone and everything a suggestion
  * must never show (a guest, a suspended or deleting account, either side of a
  * block with the viewer; a word fewer than two creators write, or one only a
- * labelled, private or hidden post or a paid recipe's locked text holds).
+ * labelled, private or hidden post or a paid recipe's locked text holds; a
+ * model or tool no post the viewer may see names, or only one creator uses).
  *
  * Unlike searchPublicContent this makes no second pass over blocks: the
  * function reads them in the statement that picks the creators, and a block
@@ -90,6 +120,10 @@ export async function suggestSearch(
   if (!isRecord(data) || !Array.isArray(data.creators) || !Array.isArray(data.completions)) {
     throw new Error(UNEXPECTED_ANSWER);
   }
+  // A database from before 20261112192423 answers no `entities`: none are
+  // offered. One that answers them answers a list.
+  if (data.entities !== undefined && !Array.isArray(data.entities)) throw new Error(UNEXPECTED_ANSWER);
+  const entityRows = (data.entities ?? []) as unknown[];
 
   return {
     query: options.query,
@@ -97,7 +131,7 @@ export async function suggestSearch(
     // The caps are the database's too; held here so the answer's size never
     // rests on one side alone.
     creators: data.creators.slice(0, SEARCH_SUGGEST_MAX_CREATORS).map(creatorFromRow),
+    entities: entityRows.slice(0, SEARCH_SUGGEST_MAX_ENTITIES).map(entityFromRow),
     completions: data.completions.slice(0, SEARCH_SUGGEST_MAX_COMPLETIONS).map(completionFromRow),
-    // SEAM (model and tool suggestions): `entities` is read from data.entities here.
   };
 }

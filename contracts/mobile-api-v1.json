@@ -1497,6 +1497,155 @@
         }
       }
     },
+    "suggestSearch": {
+      "method": "GET",
+      "path": "/api/search/suggest",
+      "auth": "optional",
+      "query": {
+        "q": "Lum"
+      },
+      "cacheControl": "private, no-store",
+      "cacheControlWithoutToken": "public, s-maxage=60, stale-while-revalidate=300",
+      "vary": "Authorization",
+      "limits": {
+        "minQueryLength": 1,
+        "maxQueryLength": 100,
+        "maxCreators": 5,
+        "maxEntities": 3,
+        "maxCompletions": 6,
+        "minEntityQueryLength": 3
+      },
+      "rateLimit": {
+        "scope": "public-search:suggest",
+        "limit": 120,
+        "windowSeconds": 60
+      },
+      "response": {
+        "query": "Lum",
+        "normalizedQuery": "Lum",
+        "creators": [
+          {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "username": "luna-studio",
+            "displayName": "Luna Studio",
+            "avatarUrl": "https://cdn.example.test/avatars/luna.png",
+            "isFollowing": true
+          },
+          {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "username": "lucent",
+            "displayName": "lucent",
+            "avatarUrl": null,
+            "isFollowing": false
+          }
+        ],
+        "entities": [
+          {
+            "kind": "model",
+            "key": "luma-ray-2",
+            "label": "Luma Ray 2",
+            "postCount": 14,
+            "postCountCapped": false
+          }
+        ],
+        "completions": [
+          {
+            "text": "luminous"
+          },
+          {
+            "text": "lunar"
+          }
+        ]
+      },
+      "responseVariants": {
+        "lastWordOfSeveral": {
+          "query": {
+            "q": "cinematic po"
+          },
+          "response": {
+            "query": "cinematic po",
+            "normalizedQuery": "cinematic po",
+            "creators": [],
+            "entities": [],
+            "completions": [
+              {
+                "text": "cinematic portrait"
+              }
+            ]
+          }
+        },
+        "typedAsHandle": {
+          "query": {
+            "q": "@lu"
+          },
+          "response": {
+            "query": "@lu",
+            "normalizedQuery": "lu",
+            "creators": [
+              {
+                "id": "11111111-1111-4111-8111-111111111111",
+                "username": "luna-studio",
+                "displayName": "Luna Studio",
+                "avatarUrl": "https://cdn.example.test/avatars/luna.png",
+                "isFollowing": false
+              }
+            ],
+            "entities": [],
+            "completions": []
+          }
+        },
+        "switchedOff": {
+          "query": {
+            "q": "Lum"
+          },
+          "response": {
+            "query": "Lum",
+            "normalizedQuery": "Lum",
+            "creators": [],
+            "entities": [],
+            "completions": []
+          }
+        },
+        "beforeEntities": {
+          "query": {
+            "q": "Lum"
+          },
+          "response": {
+            "query": "Lum",
+            "normalizedQuery": "Lum",
+            "creators": [],
+            "completions": [
+              {
+                "text": "luminous"
+              }
+            ]
+          }
+        }
+      },
+      "errors": {
+        "emptyQuery": {
+          "query": {
+            "q": " "
+          },
+          "status": 400,
+          "response": {
+            "error": "q must contain at least 1 character."
+          }
+        },
+        "queryTooLong": {
+          "status": 400,
+          "response": {
+            "error": "q must be at most 100 characters."
+          }
+        },
+        "rateLimited": {
+          "status": 429,
+          "response": {
+            "code": "RATE_LIMITED"
+          }
+        }
+      }
+    },
     "getSavedMedia": {
       "method": "GET",
       "path": "/api/showcase/saved-media",
@@ -4407,117 +4556,6 @@
     "status": 413,
     "response": {
       "error": "Profile request is too large."
-    }
-  },
-  "searchSuggest": {
-    "method": "GET",
-    "path": "/api/search/suggest",
-    "auth": "optional",
-    "query": {
-      "q": "Lu"
-    },
-    "cacheControl": {
-      "withToken": "private, no-store",
-      "withoutToken": "public, s-maxage=60, stale-while-revalidate=300"
-    },
-    "vary": "Authorization",
-    "limits": {
-      "minQueryLength": 1,
-      "maxQueryLength": 100,
-      "maxCreators": 5,
-      "maxCompletions": 6
-    },
-    "rateLimit": {
-      "scope": "public-search:suggest",
-      "limit": 120,
-      "windowSeconds": 60
-    },
-    "response": {
-      "query": "Lu",
-      "normalizedQuery": "Lu",
-      "creators": [
-        {
-          "id": "11111111-1111-4111-8111-111111111111",
-          "username": "luna-studio",
-          "displayName": "Luna Studio",
-          "avatarUrl": "https://cdn.example.test/avatars/luna.png",
-          "isFollowing": true
-        },
-        {
-          "id": "22222222-2222-4222-8222-222222222222",
-          "username": "lucent",
-          "displayName": "lucent",
-          "avatarUrl": null,
-          "isFollowing": false
-        }
-      ],
-      "completions": [
-        {
-          "text": "luminous"
-        },
-        {
-          "text": "lunar"
-        }
-      ]
-    },
-    "responseVariants": {
-      "lastWordOfSeveral": {
-        "query": {
-          "q": "cinematic po"
-        },
-        "response": {
-          "query": "cinematic po",
-          "normalizedQuery": "cinematic po",
-          "creators": [],
-          "completions": [
-            {
-              "text": "cinematic portrait"
-            }
-          ]
-        }
-      },
-      "typedAsHandle": {
-        "query": {
-          "q": "@lu"
-        },
-        "response": {
-          "query": "@lu",
-          "normalizedQuery": "lu",
-          "creators": [
-            {
-              "id": "11111111-1111-4111-8111-111111111111",
-              "username": "luna-studio",
-              "displayName": "Luna Studio",
-              "avatarUrl": "https://cdn.example.test/avatars/luna.png",
-              "isFollowing": false
-            }
-          ],
-          "completions": []
-        }
-      }
-    },
-    "errors": {
-      "emptyQuery": {
-        "query": {
-          "q": " "
-        },
-        "status": 400,
-        "response": {
-          "error": "q must contain at least 1 character."
-        }
-      },
-      "queryTooLong": {
-        "status": 400,
-        "response": {
-          "error": "q must be at most 100 characters."
-        }
-      },
-      "rateLimited": {
-        "status": 429,
-        "response": {
-          "code": "RATE_LIMITED"
-        }
-      }
     }
   }
 }

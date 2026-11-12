@@ -104,7 +104,7 @@ async function handleSearchSuggestGET(
     // switch is felt the moment it is thrown and gone the moment it is lifted.
     if (isSearchSuggestDisabled(dependencies.env)) {
       return NextResponse.json(
-        { query: query.query, normalizedQuery: query.normalizedQuery, creators: [], completions: [] },
+        { query: query.query, normalizedQuery: query.normalizedQuery, creators: [], entities: [], completions: [] },
         { headers: createPrivateNoStoreApiResponseHeaders(request) },
       );
     }

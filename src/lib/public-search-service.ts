@@ -58,7 +58,7 @@ type PostSearchRpcRow = {
   corrected_query?: string | null;
 };
 
-type EntitySearchRpcRow = {
+export type EntitySearchRpcRow = {
   kind: 'model' | 'tool';
   key: string;
   label: string;
@@ -131,7 +131,7 @@ function creatorResult(row: CreatorSearchRpcRow): CreatorSearchResult {
  * under: a creation stored without a Made with row is known there by its
  * key alone.
  */
-function entityResult(row: EntitySearchRpcRow): SearchEntityResult {
+export function entityResult(row: EntitySearchRpcRow): SearchEntityResult {
   return {
     kind: row.kind,
     key: row.key,

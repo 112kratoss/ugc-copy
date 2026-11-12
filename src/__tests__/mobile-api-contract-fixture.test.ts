@@ -200,6 +200,7 @@ const expectedEndpointKeys = [
   'recordShowcaseFeedEvents',
   'undoFeedFeedback',
   'searchPublicContent',
+  'suggestSearch',
   'getSavedMedia',
   'getShowcasePost',
   'resolveShowcasePost',
