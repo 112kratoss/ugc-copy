@@ -54,6 +54,7 @@ import { env } from '@/lib/env';
 import { TopScrim } from '@/components/top-scrim';
 import { ViewerTopControl } from '@/components/viewer-top-control';
 import { IconShadow, ReelSlideChrome } from '@/components/reel-chrome';
+import { ReelNotesSlide } from '@/components/reel-notes-slide';
 import { ZoomPostChrome } from '@/components/zoom-post-chrome';
 import {
   getImmersiveInitialIndex,
@@ -173,6 +174,7 @@ import { useScreenReturn } from '@/lib/use-screen-return';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
 import { useStableSignedUrl } from '@/lib/use-stable-signed-url';
 import { verticalHitSlop } from '@/lib/hit-target';
+import { clubReelNotes, frontNoteOfSet } from '@/lib/reel-note-sets';
 import { changeViewerPage, initialViewerPosition, isDetailsPageCovering, pickViewerItemAfterRemoval, resolveViewerPosition, settleViewerItem, slidePageKey, type ViewerPosition } from '@/lib/viewer-position';
 
 type ViewerParams = {
@@ -513,7 +515,23 @@ function ImmersivePreviewViewer() {
         : sourceItems,
     });
   }
-  const items = sessionItems.ordered;
+  // Notes near each other in a lane share one page, as a row of cards
+  // (lib/reel-note-sets.ts). The page is held in this list by the note in front,
+  // carrying its set: every index below stays one page, one item, and the
+  // reel's current post on that page is the card the reader is looking at, so
+  // its impression, save and comments are that note's own. Owned libraries are
+  // left alone: a text creation there is a slide of its own.
+  const clubsNotes = source === 'showcase-feed' || source === 'creator-profile';
+  const [frontNoteIds, setFrontNoteIds] = useState<Record<string, string>>({});
+  const items = useMemo(() => {
+    const ordered = sessionItems.ordered;
+    if (!clubsNotes) return ordered;
+    const pages = clubReelNotes(ordered, { isNote: isReelNote, anchorId: initialId });
+    if (!pages.some((page) => page.kind === 'notes')) return ordered;
+    return pages.map((page) => (page.kind === 'post'
+      ? page.item
+      : { ...frontNoteOfSet(page.set, frontNoteIds[page.set.key]), noteSet: page.set }));
+  }, [clubsNotes, frontNoteIds, initialId, sessionItems.ordered]);
   // The item the route named did not load: deleted, archived elsewhere, or no
   // longer the reader's. Shown as that, never replaced by the first item (C1).
   const selectionMissing = grid
@@ -556,6 +574,13 @@ function ImmersivePreviewViewer() {
       return target ? settleViewerItem(current, target) : current;
     });
   }, [items, initialId, initialPage]);
+  // A sideways swipe on a page of notes: the card that landed becomes the page's
+  // item and the reel's current post, in one commit, so the position never
+  // names a note the list no longer holds.
+  const showFrontNote = useCallback((setKey: string, note: ImmersivePreviewItem) => {
+    setFrontNoteIds((current) => (current[setKey] === note.id ? current : { ...current, [setKey]: note.id }));
+    setSavedPosition((saved) => settleViewerItem(saved, note));
+  }, []);
   const changePage = useCallback((itemId: string, pageKey: string) => {
     setSavedPosition((saved) => {
       const current = resolveViewerPosition(items, saved, initialId, initialPage);
@@ -1594,7 +1619,8 @@ function ImmersivePreviewViewer() {
         initialNumToRender={IMMERSIVE_VERTICAL_LIST_TUNING.initialNumToRender}
         initialScrollIndex={initialIndex}
         contentOffset={initialContentOffset ?? undefined}
-        keyExtractor={(item) => `${item.source}-${item.id}`}
+        // A page of notes keeps its row mounted as the card in front changes.
+        keyExtractor={(item) => `${item.source}-${item.noteSet?.key ?? item.id}`}
         maxToRenderPerBatch={IMMERSIVE_VERTICAL_LIST_TUNING.maxToRenderPerBatch}
         onMomentumScrollEnd={(event) => {
           const nextIndex = Math.round(event.nativeEvent.contentOffset.y / height);
@@ -1692,7 +1718,28 @@ function ImmersivePreviewViewer() {
         // Detaching a TextureView discards the frame we prepared offscreen.
         // Virtualization still bounds mounted rows through windowSize.
         removeClippedSubviews={false}
-        renderItem={({ item, index }) => (
+        renderItem={({ item, index }) => (item.noteSet ? (
+          <ReelNotesSlide
+            active={index === activeIndex}
+            setKey={item.noteSet.key}
+            notes={item.noteSet.notes}
+            frontNoteId={item.id}
+            label={source === 'creator-profile' ? `Notes by ${item.creatorLabel}` : 'Notes for you'}
+            width={width}
+            height={height}
+            topInset={topInset}
+            bottomInset={bottomInset}
+            savingPostId={saveMutation.isPending ? saveMutation.variables?.postId ?? null : null}
+            onFrontNoteChange={showFrontNote}
+            onSave={slideHandlers.onSave}
+            onComments={slideHandlers.onComments}
+            onShare={slideHandlers.onShare}
+            onCreatorOpen={slideHandlers.onCreatorOpen}
+            onHorizontalScrollToggle={setIsHorizontalScrolling}
+            onLayoutAsNeighbour={index === activeIndex ? undefined : zoom.reportNeighbourDrawn}
+            onChromeLayout={index === activeIndex ? zoom.reportChromeDrawn : undefined}
+          />
+        ) : (
           <ImmersiveSlide
             active={index === activeIndex}
             /* Creating a player is the most expensive thing the reel mounts, so
@@ -1736,7 +1783,7 @@ function ImmersivePreviewViewer() {
             topInset={topInset}
             width={width}
           />
-        )}
+        ))}
         scrollEnabled={!overlayOpenItemId && !isHorizontalScrolling}
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, backgroundColor: ground }}
@@ -1951,6 +1998,11 @@ function ViewerShell({ topInset, bottomInset, preview = null, video = null, post
       {children}
     </View>
   );
+}
+
+/** A post of writing in someone's lane or grid: what a page of notes gathers. */
+function isReelNote(item: ImmersivePreviewItem) {
+  return item.previewKind === 'text' && item.sourceType === 'showcase' && Boolean(item.showcasePostId);
 }
 
 function leaveViewer() {
