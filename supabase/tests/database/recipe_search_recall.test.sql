@@ -11,7 +11,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(69);
+select plan(70);
 
 create function pg_temp.page(p_query text, p_sort text, p_offset integer, p_limit integer)
 returns uuid[]
@@ -55,7 +55,9 @@ as $$ select ('0000e5c1-0000-4000-9000-0000000000' || p_suffix)::uuid; $$;
 --       quorvantel, so the word is in the dictionary;
 --   …28 free: titled exactly "Lantern glow";
 --   …29 free: a newer street study whose caption repeats "lantern glow"
---       thirty times, to stuff the rank.
+--       thirty times, to stuff the rank;
+--   …2b free: titled "Lantern glow portraits", a title that starts with
+--       the query.
 -- And post …1a with no recipe, the only place the word brindlewick shows.
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at)
@@ -110,7 +112,11 @@ insert into public.posts (
   ('0000e5c1-0000-4000-9000-00000000001a'::uuid, '0000e5c1-0000-4000-9000-000000000001'::uuid,
    'public', 'image', 'external', 'media', 'visible', false,
    'Brindlewick meadow', 'A post with no recipe.',
-   'showcase/e5c1-01a.png', 'Midjourney', 'midjourney', now(), now());
+   'showcase/e5c1-01a.png', 'Midjourney', 'midjourney', now(), now()),
+  ('0000e5c1-0000-4000-9000-00000000001b'::uuid, '0000e5c1-0000-4000-9000-000000000001'::uuid,
+   'public', 'image', 'external', 'media', 'visible', false,
+   'Lantern glow portraits', 'Faces by a paper lamp.',
+   'showcase/e5c1-01b.png', 'Midjourney', 'midjourney', now(), now());
 
 insert into public.post_resource_bundles (
   id, post_id, owner_user_id, access_mode, status, title, summary, preview_text,
@@ -149,7 +155,9 @@ from (
     ('28', '18', 'free', 'published', 'Lantern glow', 'A warm paper lamp, step by step',
      'The prompt a buyer unlocks for this picture', interval '45 minutes'),
     ('29', '19', 'free', 'published', 'Evening street study', 'Streetlights after rain',
-     'The prompt a buyer unlocks for this picture', interval '2 minutes')
+     'The prompt a buyer unlocks for this picture', interval '2 minutes'),
+    ('2b', '1b', 'free', 'published', 'Lantern glow portraits', 'Faces lit by one lamp',
+     'The prompt a buyer unlocks for this picture', interval '30 minutes')
 ) as recipe(bundle_suffix, post_suffix, access_mode, status, title, summary, item_text, age);
 
 -- ─── Listed, so a miss below is the reading under test ──────────────────────
@@ -235,12 +243,15 @@ select is(
   array[pg_temp.bundle('23'), pg_temp.bundle('25'), pg_temp.bundle('27')],
   'every page of a misspelt search reads its corrected query, offset or not'
 );
-select is(pg_temp.page('lantern glow', 'relevance', 0, 100),
-  array[pg_temp.bundle('28'), pg_temp.bundle('29')],
+select is(pg_temp.page('lantern glow', 'relevance', 0, 100) @> array[pg_temp.bundle('28'), pg_temp.bundle('29')]
+            and (pg_temp.page('lantern glow', 'relevance', 0, 100))[1] = pg_temp.bundle('28'), true,
   'a caption repeating the words thirty times does not outrank the recipe titled with them');
+select is(pg_temp.page('lantern glow', 'relevance', 0, 100),
+  array[pg_temp.bundle('28'), pg_temp.bundle('2b'), pg_temp.bundle('29')],
+  'nor one whose title starts with them, which follows the exact title');
 select is(pg_temp.page('lantern glow', 'recent', 0, 100),
-  array[pg_temp.bundle('29'), pg_temp.bundle('28')],
-  'fixture: the repetitive recipe is the newer one');
+  array[pg_temp.bundle('29'), pg_temp.bundle('2b'), pg_temp.bundle('28')],
+  'fixture: the repetitive recipe is the newest');
 
 -- ─── The document's vector ──────────────────────────────────────────────────
 
@@ -364,7 +375,8 @@ select is(
        resource_sections, resource_items, price_usd_cents, sales_count, free_unlock_count,
        earnings_usd_cents, created_at, updated_at, position
      )),
-  array['0000e5c1-0000-4000-9000-000000000028'::uuid, '0000e5c1-0000-4000-9000-000000000029'::uuid],
+  array['0000e5c1-0000-4000-9000-000000000028'::uuid, '0000e5c1-0000-4000-9000-00000000002b'::uuid,
+        '0000e5c1-0000-4000-9000-000000000029'::uuid],
   'and the list by relevance'
 );
 select ok(

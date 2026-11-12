@@ -30,9 +30,10 @@
 --    it does not know still reads as 'recent'.
 -- 3. A new sort, 'relevance', used by unified search: the text's rank
 --    (ts_rank_cd, damped by length and held below 1, so repeating words in a
---    caption gains almost nothing), plus a lift when the recipe's title as its card shows it is
---    the query or starts with it, then the recency tie-break and bundle_id as
---    'recent' orders them. Without a query it reads as 'recent'.
+--    caption gains almost nothing), plus 2 when the recipe's title as its card
+--    shows it is the query or 1 when it starts with it, so any title match
+--    outranks any match in the text alone; then the recency tie-break and
+--    bundle_id as 'recent' orders them. Without a query it reads as 'recent'.
 -- 4. marketplace_search_texts_match is the app's recheck
 --    (getMarketplaceResourceListBase, src/lib/post-resource-bundles-server.ts):
 --    given the text the app shows a visitor for each listed recipe, it says
@@ -407,21 +408,23 @@ BEGIN
   v_title_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_') || '%';
 
   IF p_sort = 'relevance' AND v_searching THEN
-    -- The text's rank, lifted when the title the card shows is the query or
-    -- starts with it; then as 'recent' orders. The rank is damped by the
-    -- text's length (1) and held below 1 (32), so a caption repeating the
-    -- query, read four ways in the vector, can never outrank a title lift.
+    -- The text's rank, lifted by 2 when the title the card shows is the
+    -- query and by 1 when it starts with it; then as 'recent' orders. The
+    -- rank is damped by the text's length (1) and held below 1 (32), so a
+    -- caption repeating the query, read four ways in the vector, never
+    -- outranks a title that starts with it, and that title never outranks
+    -- one that is the query.
     v_order := $order$
       ts_rank_cd(search.search_vector, $7, 1 | 32)
         + CASE
           WHEN lower(CASE
             WHEN lower(btrim(coalesce(bundles.title, ''))) IN ('', 'attached unlock') THEN 'Recipe'
             ELSE btrim(bundles.title)
-          END) = $9 THEN 1.0
+          END) = $9 THEN 2.0
           WHEN lower(CASE
             WHEN lower(btrim(coalesce(bundles.title, ''))) IN ('', 'attached unlock') THEN 'Recipe'
             ELSE btrim(bundles.title)
-          END) LIKE $10 THEN 0.5
+          END) LIKE $10 THEN 1.0
           ELSE 0.0
         END DESC,
       listings.created_at DESC, listings.bundle_id DESC$order$;

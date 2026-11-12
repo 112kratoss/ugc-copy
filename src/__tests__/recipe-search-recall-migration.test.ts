@@ -92,6 +92,8 @@ describe('recipe search recall migration', () => {
     const { definition } = newestDefinition('list_marketplace_resource_bundles');
     expect(definition).toMatch(/IF p_sort = 'relevance' AND v_searching THEN\s+[\s\S]*?ts_rank_cd\(search\.search_vector, \$7, 1 \| 32\)/);
     expect(definition).toMatch(/END DESC,\s+listings\.created_at DESC, listings\.bundle_id DESC\$order\$;/);
+    // A title lift outweighs any rank, which 1 | 32 holds below 1.
+    expect(definition).toMatch(/END\) = \$9 THEN 2\.0\s+WHEN[\s\S]*?END\) LIKE \$10 THEN 1\.0\s+ELSE 0\.0/);
     for (const order of [
       "WHEN 'top-sales' THEN 'listings.sales_count DESC NULLS LAST, listings.created_at DESC, listings.bundle_id DESC'",
       "WHEN 'price-low' THEN 'listings.price_usd_cents ASC NULLS LAST, listings.created_at DESC, listings.bundle_id DESC'",
