@@ -64,6 +64,14 @@ export function appliedPublicSearchSort(type: PublicSearchType, sort: PublicSear
   return publicSearchTypeHasSorts(type) ? sort : 'top';
 }
 
+/**
+ * The request parameter a client asks for related posts with: `related=1`,
+ * sent with a search a person settled on (Enter, a suggestion pressed, a
+ * pause long enough to read results) by a client that draws them. Any other
+ * value is refused. Without it the server looks for none.
+ */
+export const PUBLIC_SEARCH_RELATED_PARAM = 'related';
+
 /** How many entities the Top tab offers. */
 export const PUBLIC_SEARCH_ENTITY_LIMIT = 5;
 
@@ -180,12 +188,13 @@ export interface PublicSearchResponse {
   /**
    * Posts that mean what the query says without holding its words, nearest
    * first, none of them in `posts`: at most eight, cards like any other.
-   * Present only where they were looked for, which is the first page of a
-   * Top or Posts search in the ranked order, with no filter and not read as
-   * typed, whose own posts are few; `posts` may then be empty. Left out
-   * everywhere else, when the lookup is switched off or could not be made,
-   * and by a server from before it: a client draws nothing for an answer
-   * without it. `posts` is never reordered or shortened for it.
+   * Present only where they were looked for, which is a request that asked
+   * (`related=1`) for the first page of a Top or Posts search in the ranked
+   * order, with no filter and not read as typed, whose own posts are few;
+   * `posts` may then be empty. Left out everywhere else, when the lookup is
+   * switched off or could not be made, and by a server from before it: a
+   * client draws nothing for an answer without it. `posts` is never
+   * reordered or shortened for it.
    */
   related?: PublicSearchRelated;
 }

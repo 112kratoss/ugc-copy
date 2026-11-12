@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
+import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import {
   SEARCH_EMBEDDING_BATCH_SIZE,
   SEARCH_EMBEDDING_MODEL,
@@ -12,6 +13,7 @@ import {
   SEARCH_EMBEDDING_REQUEST_BUDGET_MS,
   SEARCH_QUERY_EMBEDDING_DAILY_CAP,
   SEARCH_QUERY_EMBEDDING_TIMEOUT_MS,
+  SEARCH_QUERY_EMBEDDING_VIEWER_DAILY_LIMIT,
   SEARCH_RELATED_MAX_POSTS,
   SEARCH_RELATED_THIN_POST_COUNT,
   findRelatedPostRows,
@@ -86,6 +88,10 @@ describe('search semantic constants', () => {
     // The database never allows more than 5,000 a day whatever is sent.
     expect(SEARCH_QUERY_EMBEDDING_DAILY_CAP).toBe(2_000);
     expect(SEARCH_QUERY_EMBEDDING_DAILY_CAP).toBeLessThanOrEqual(5_000);
+    // One viewer's share of the day: a UTC day's window, its own scope.
+    expect(SEARCH_QUERY_EMBEDDING_VIEWER_DAILY_LIMIT).toEqual({
+      scope: 'public-search:related-embedding', limit: 40, windowSeconds: 86_400,
+    });
   });
 
   it('reads the kill switch on every use', () => {
@@ -289,34 +295,44 @@ describe('findRelatedPostRows', () => {
     { post_id: postId(22), creator_user_id: postId(902), similarity: 0.87 },
   ];
   const viewer = postId(700);
+  const VIEWER_KEY = 'viewer-key-1';
+  const allowed = () => vi.fn(async () => ({
+    allowed: true, limit: 40, remaining: 39, retryAfterSeconds: 0, resetAt: '2026-11-14T00:00:00.000Z',
+  }));
+  const refused = () => vi.fn(async () => {
+    throw new BackendRateLimitError({
+      allowed: false, limit: 40, remaining: 0, retryAfterSeconds: 3_600, resetAt: '2026-11-14T00:00:00.000Z',
+    });
+  });
+  const newVector = () => jsonFetch(() => ({ body: { mode: 'query', model: 'gte-small', dimensions: 384, embedding: VECTOR } }));
+  const ask = { query: 'ocean at dusk', viewerUserId: null, viewerKey: VIEWER_KEY, excludePostIds: [] as string[] };
 
   function logCalls(logEvent: ReturnType<typeof vi.fn>) {
     return logEvent.mock.calls.map(([level, event, fields]) => ({ level, event, reason: (fields as { reason?: string })?.reason }));
   }
 
-  it('reads a cached vector and asks the function for nothing', async () => {
+  it('reads a cached vector: nothing is counted, reserved or asked of the function', async () => {
     const { client, calls } = clientWith({
-      search_query_embedding_lookup: () => ({ data: [{ embedding: VECTOR_TEXT, reserved: false }] }),
+      search_query_embedding: () => ({ data: VECTOR_TEXT }),
       search_related_posts: () => ({ data: related }),
     });
     const fetchImpl = jsonFetch(() => ({ body: {} }));
+    const enforce = allowed();
     const logEvent = vi.fn();
     const rows = await findRelatedPostRows(
       client,
-      { query: 'Ocean  at Dusk', viewerUserId: viewer, excludePostIds: [postId(1), 'not-a-uuid'] },
-      { env: ENV, fetchImpl, logEvent },
+      { query: 'Ocean  at Dusk', viewerUserId: viewer, viewerKey: VIEWER_KEY, excludePostIds: [postId(1), 'not-a-uuid'] },
+      { env: ENV, fetchImpl, logEvent, enforceBackendRateLimit: enforce },
     );
     expect(rows).toEqual(related);
     expect(fetchImpl).not.toHaveBeenCalled();
+    // A cache hit is free: it spends none of the viewer's allowance.
+    expect(enforce).not.toHaveBeenCalled();
     expect(logEvent).not.toHaveBeenCalled();
     expect(calls).toEqual([
       {
-        name: 'search_query_embedding_lookup',
-        args: {
-          p_query_hash: searchQueryEmbeddingHash('ocean at dusk'),
-          p_embedding_model: 'gte-small',
-          p_daily_cap: SEARCH_QUERY_EMBEDDING_DAILY_CAP,
-        },
+        name: 'search_query_embedding',
+        args: { p_query_hash: searchQueryEmbeddingHash('ocean at dusk'), p_embedding_model: 'gte-small' },
       },
       {
         name: 'search_related_posts',
@@ -334,50 +350,135 @@ describe('findRelatedPostRows', () => {
     expect(JSON.stringify(calls)).not.toMatch(/ocean|dusk/i);
   });
 
-  it('embeds a new query once the day’s count let it, and keeps the vector behind the answer', async () => {
+  it('embeds a new query in this order: the cache, the viewer’s allowance, the day’s cap, the function', async () => {
+    const order: string[] = [];
     const { client, calls } = clientWith({
-      search_query_embedding_lookup: () => ({ data: [{ embedding: null, reserved: true }] }),
+      search_query_embedding: () => { order.push('cache'); return { data: null }; },
+      reserve_search_query_embedding: () => { order.push('day'); return { data: true }; },
+      store_search_query_embedding: () => { order.push('store'); return { data: null }; },
+      search_related_posts: () => { order.push('related'); return { data: related }; },
+    });
+    const enforce = vi.fn(async () => {
+      order.push('viewer');
+      return { allowed: true, limit: 40, remaining: 39, retryAfterSeconds: 0, resetAt: '2026-11-14T00:00:00.000Z' };
+    });
+    const fetchImpl = jsonFetch(() => {
+      order.push('function');
+      return { body: { mode: 'query', model: 'gte-small', dimensions: 384, embedding: VECTOR } };
+    });
+    const scheduler = heldScheduler();
+    const rows = await findRelatedPostRows(client, ask, {
+      env: ENV, fetchImpl, logEvent: vi.fn(), enforceBackendRateLimit: enforce, runAfterResponse: scheduler.runAfterResponse,
+    });
+    await scheduler.runAll();
+    expect(rows).toEqual(related);
+    expect(order.slice(0, 4)).toEqual(['cache', 'viewer', 'day', 'function']);
+    expect([...order].sort()).toEqual(['cache', 'day', 'function', 'related', 'store', 'viewer']);
+    expect(enforce).toHaveBeenCalledExactlyOnceWith(client, {
+      scope: 'public-search:related-embedding', limit: 40, windowSeconds: 86_400, key: VIEWER_KEY,
+    });
+    expect(calls.find((call) => call.name === 'reserve_search_query_embedding')?.args)
+      .toEqual({ p_daily_cap: SEARCH_QUERY_EMBEDDING_DAILY_CAP });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).toEqual({ mode: 'query', query: 'ocean at dusk' });
+    expect(calls.find((call) => call.name === 'store_search_query_embedding')?.args).toEqual({
+      p_query_hash: searchQueryEmbeddingHash('ocean at dusk'),
+      p_embedding_model: 'gte-small',
+      p_embedding: VECTOR_TEXT,
+    });
+  });
+
+  it('counts the allowance through the repo’s own rate limit, against the viewer’s key', async () => {
+    const { client, calls } = clientWith({
+      search_query_embedding: () => ({ data: null }),
+      check_backend_rate_limit: () => ({
+        data: { allowed: true, limit: 40, remaining: 39, retryAfterSeconds: 0, resetAt: '2026-11-14T00:00:00.000Z' },
+      }),
+      reserve_search_query_embedding: () => ({ data: true }),
       store_search_query_embedding: () => ({ data: null }),
       search_related_posts: () => ({ data: related }),
     });
-    const fetchImpl = jsonFetch(() => ({ body: { mode: 'query', model: 'gte-small', dimensions: 384, embedding: VECTOR } }));
-    const scheduler = heldScheduler();
-    const rows = await findRelatedPostRows(
-      client,
-      { query: 'ocean at dusk', viewerUserId: null, excludePostIds: [] },
-      { env: ENV, fetchImpl, logEvent: vi.fn(), runAfterResponse: scheduler.runAfterResponse },
-    );
-    expect(rows).toEqual(related);
-    expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).toEqual({ mode: 'query', query: 'ocean at dusk' });
-    // Nothing is written in front of the answer.
-    expect(calls.map((call) => call.name)).toEqual(['search_query_embedding_lookup', 'search_related_posts']);
-    await scheduler.runAll();
-    expect(calls.at(-1)).toEqual({
-      name: 'store_search_query_embedding',
-      args: {
-        p_query_hash: searchQueryEmbeddingHash('ocean at dusk'),
-        p_embedding_model: 'gte-small',
-        p_embedding: VECTOR_TEXT,
-      },
+    expect(await findRelatedPostRows(client, ask, { env: ENV, fetchImpl: newVector(), logEvent: vi.fn() })).toEqual(related);
+    expect(calls.find((call) => call.name === 'check_backend_rate_limit')?.args).toEqual({
+      p_scope: 'public-search:related-embedding',
+      p_subject_key: VIEWER_KEY,
+      p_limit: 40,
+      p_window_seconds: 86_400,
     });
+  });
+
+  it('goes without past the viewer’s allowance: nothing of the shared day is reserved and the function is not called', async () => {
+    const { client, calls } = clientWith({
+      search_query_embedding: () => ({ data: null }),
+      reserve_search_query_embedding: () => ({ data: true }),
+    });
+    const fetchImpl = newVector();
+    const logEvent = vi.fn();
+    expect(await findRelatedPostRows(client, ask, {
+      env: ENV, fetchImpl, logEvent, enforceBackendRateLimit: refused(),
+    })).toBeNull();
+    expect(calls.map((call) => call.name)).toEqual(['search_query_embedding']);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // The allowance working is not a fault: an info line, not a warning.
+    expect(logCalls(logEvent)).toEqual([{ level: 'info', event: 'public_search_related_skipped', reason: 'viewer_cap_reached' }]);
+  });
+
+  it('still reads the cache for a viewer past their allowance', async () => {
+    const { client } = clientWith({
+      search_query_embedding: () => ({ data: VECTOR_TEXT }),
+      search_related_posts: () => ({ data: related }),
+    });
+    const enforce = refused();
+    expect(await findRelatedPostRows(client, ask, { env: ENV, logEvent: vi.fn(), enforceBackendRateLimit: enforce }))
+      .toEqual(related);
+    expect(enforce).not.toHaveBeenCalled();
   });
 
   it('goes without past the day’s cap, asking the function for nothing', async () => {
     const { client, calls } = clientWith({
-      search_query_embedding_lookup: () => ({ data: [{ embedding: null, reserved: false }] }),
+      search_query_embedding: () => ({ data: null }),
+      reserve_search_query_embedding: () => ({ data: false }),
     });
-    const fetchImpl = jsonFetch(() => ({ body: {} }));
+    const fetchImpl = newVector();
     const logEvent = vi.fn();
-    expect(await findRelatedPostRows(client, { query: 'ocean', viewerUserId: null, excludePostIds: [] }, { env: ENV, fetchImpl, logEvent }))
+    expect(await findRelatedPostRows(client, ask, { env: ENV, fetchImpl, logEvent, enforceBackendRateLimit: allowed() }))
       .toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(calls.map((call) => call.name)).toEqual(['search_query_embedding_lookup']);
+    expect(calls.map((call) => call.name)).toEqual(['search_query_embedding', 'reserve_search_query_embedding']);
     expect(logCalls(logEvent)).toEqual([{ level: 'warn', event: 'public_search_related_skipped', reason: 'daily_cap_reached' }]);
   });
 
-  it('gives up on a slow function after the short wait, and keeps its vector for the next search when it comes', async () => {
+  it('goes without when the allowance cannot be read: no reservation, no call', async () => {
     const { client, calls } = clientWith({
-      search_query_embedding_lookup: () => ({ data: [{ embedding: null, reserved: true }] }),
+      search_query_embedding: () => ({ data: null }),
+      reserve_search_query_embedding: () => ({ data: true }),
+    });
+    const fetchImpl = newVector();
+    const logEvent = vi.fn();
+    const failing = vi.fn(async () => { throw new Error('statement timeout'); });
+    expect(await findRelatedPostRows(client, ask, { env: ENV, fetchImpl, logEvent, enforceBackendRateLimit: failing as never }))
+      .toBeNull();
+    expect(calls.map((call) => call.name)).toEqual(['search_query_embedding']);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(logCalls(logEvent)).toEqual([{ level: 'warn', event: 'public_search_related_skipped', reason: 'lookup_failed' }]);
+  });
+
+  it('hands the keep-alive to the scheduler when the read starts, before anything has answered', async () => {
+    const { client } = clientWith({ search_query_embedding: () => new Promise<RpcAnswer>(() => undefined) });
+    const scheduler = heldScheduler();
+    const reading = findRelatedPostRows(client, ask, {
+      env: ENV, logEvent: vi.fn(), enforceBackendRateLimit: allowed(), runAfterResponse: scheduler.runAfterResponse, totalTimeoutMs: 20,
+    });
+    // Registered in the same tick as the call: the request is certainly open.
+    expect(scheduler.tasks).toHaveLength(1);
+    expect(await reading).toBeNull();
+    // And never again: nothing is registered once the answer may have gone.
+    expect(scheduler.tasks).toHaveLength(1);
+  });
+
+  it('gives up on a slow function after the short wait, and its vector is kept when it comes', async () => {
+    const { client, calls } = clientWith({
+      search_query_embedding: () => ({ data: null }),
+      reserve_search_query_embedding: () => ({ data: true }),
       store_search_query_embedding: () => ({ data: null }),
       search_related_posts: () => ({ data: related }),
     });
@@ -385,44 +486,74 @@ describe('findRelatedPostRows', () => {
     const fetchImpl = vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; }));
     const scheduler = heldScheduler();
     const logEvent = vi.fn();
-    const rows = await findRelatedPostRows(
-      client,
-      { query: 'ocean at dusk', viewerUserId: null, excludePostIds: [] },
-      { env: ENV, fetchImpl, logEvent, runAfterResponse: scheduler.runAfterResponse, queryEmbeddingTimeoutMs: 5 },
-    );
+    const rows = await findRelatedPostRows(client, ask, {
+      env: ENV, fetchImpl, logEvent, enforceBackendRateLimit: allowed(),
+      runAfterResponse: scheduler.runAfterResponse, queryEmbeddingTimeoutMs: 5,
+    });
     expect(rows).toBeNull();
-    expect(calls.map((call) => call.name)).toEqual(['search_query_embedding_lookup']);
+    expect(calls.map((call) => call.name)).toEqual(['search_query_embedding', 'reserve_search_query_embedding']);
     expect(logCalls(logEvent)).toEqual([{ level: 'warn', event: 'public_search_related_skipped', reason: 'embedding_timeout' }]);
-    // Behind the answer the request is still out; when it lands its vector is kept.
+    // The keep-alive was handed over at the start; it now waits for the late vector and its write.
     expect(scheduler.tasks).toHaveLength(1);
+    const kept = scheduler.runAll();
     answer(new Response(JSON.stringify({ mode: 'query', model: 'gte-small', dimensions: 384, embedding: VECTOR })));
-    await scheduler.runAll();
+    await kept;
     expect(calls.at(-1)?.name).toBe('store_search_query_embedding');
+    // Nobody is waiting for the posts any more: they are not read.
+    expect(calls.map((call) => call.name)).not.toContain('search_related_posts');
+  });
+
+  it('keeps a late vector when the whole read timed out before the function was even called', async () => {
+    let release: (answer: RpcAnswer) => void = () => undefined;
+    const { client, calls } = clientWith({
+      search_query_embedding: () => new Promise<RpcAnswer>((resolve) => { release = resolve; }),
+      reserve_search_query_embedding: () => ({ data: true }),
+      store_search_query_embedding: () => ({ data: null }),
+      search_related_posts: () => ({ data: related }),
+    });
+    const scheduler = heldScheduler();
+    const logEvent = vi.fn();
+    const rows = await findRelatedPostRows(client, ask, {
+      env: ENV, fetchImpl: newVector(), logEvent, enforceBackendRateLimit: allowed(),
+      runAfterResponse: scheduler.runAfterResponse, totalTimeoutMs: 5,
+    });
+    expect(rows).toBeNull();
+    expect(logCalls(logEvent)).toEqual([{ level: 'warn', event: 'public_search_related_skipped', reason: 'timeout' }]);
+    // The one task registered at the start covers everything that follows.
+    expect(scheduler.tasks).toHaveLength(1);
+    const kept = scheduler.runAll();
+    release({ data: null });
+    await kept;
+    expect(calls.map((call) => call.name)).toEqual([
+      'search_query_embedding', 'reserve_search_query_embedding', 'store_search_query_embedding',
+    ]);
   });
 
   it.each([
     ['the kill switch', { env: { ...ENV, SEARCH_SEMANTIC_DISABLED: '1' } }, {}, []],
     ['no function address', { env: {} }, {}, ['not_configured']],
     ['a database from before the migration', { env: ENV }, {}, ['lookup_failed']],
+    ['a reservation that fails', { env: ENV },
+      { search_query_embedding: () => ({ data: null }), reserve_search_query_embedding: () => ({ error: { message: 'deadlock' } }) }, ['lookup_failed']],
     ['a function from before the modes', { env: ENV, fetchImpl: jsonFetch(() => ({ status: 400, body: { error: 'postIds must be an array' } })) },
-      { search_query_embedding_lookup: () => ({ data: [{ embedding: null, reserved: true }] }) }, ['embedding_failed']],
+      { search_query_embedding: () => ({ data: null }), reserve_search_query_embedding: () => ({ data: true }) }, ['embedding_failed']],
     ['a function that is down', { env: ENV, fetchImpl: vi.fn(async () => { throw new Error('connect ECONNREFUSED'); }) },
-      { search_query_embedding_lookup: () => ({ data: [{ embedding: null, reserved: true }] }) }, ['embedding_failed']],
+      { search_query_embedding: () => ({ data: null }), reserve_search_query_embedding: () => ({ data: true }) }, ['embedding_failed']],
     ['a related read that fails', { env: ENV },
       {
-        search_query_embedding_lookup: () => ({ data: [{ embedding: VECTOR_TEXT, reserved: false }] }),
+        search_query_embedding: () => ({ data: VECTOR_TEXT }),
         search_related_posts: () => ({ error: { message: 'statement timeout' } }),
       }, ['related_failed']],
     ['a client that throws', { env: ENV },
-      { search_query_embedding_lookup: () => { throw new Error('socket closed'); } }, ['related_failed']],
+      { search_query_embedding: () => { throw new Error('socket closed'); } }, ['related_failed']],
   ] as Array<[string, Record<string, unknown>, RpcHandlers, string[]]>)('answers null and never throws under %s', async (_label, dependencies, handlers, reasons) => {
     const { client } = clientWith(handlers);
     const logEvent = vi.fn();
     const secret = 'a query nobody else should read';
     const rows = await findRelatedPostRows(
       client,
-      { query: secret, viewerUserId: viewer, excludePostIds: [] },
-      { logEvent, ...dependencies },
+      { query: secret, viewerUserId: viewer, viewerKey: VIEWER_KEY, excludePostIds: [] },
+      { logEvent, enforceBackendRateLimit: allowed(), ...dependencies },
     );
     expect(rows).toBeNull();
     expect(logCalls(logEvent).map((call) => call.reason)).toEqual(reasons);
@@ -431,21 +562,19 @@ describe('findRelatedPostRows', () => {
   });
 
   it('does not wait on a database that hangs', async () => {
-    const { client } = clientWith({ search_query_embedding_lookup: () => new Promise<RpcAnswer>(() => undefined) });
+    const { client } = clientWith({ search_query_embedding: () => new Promise<RpcAnswer>(() => undefined) });
     const logEvent = vi.fn();
-    const rows = await findRelatedPostRows(
-      client,
-      { query: 'ocean', viewerUserId: null, excludePostIds: [] },
-      { env: ENV, logEvent, totalTimeoutMs: 5 },
-    );
+    const rows = await findRelatedPostRows(client, ask, { env: ENV, logEvent, totalTimeoutMs: 5 });
     expect(rows).toBeNull();
     expect(logCalls(logEvent)).toEqual([{ level: 'warn', event: 'public_search_related_skipped', reason: 'timeout' }]);
   });
 
-  it('looks for nothing on a blank query', async () => {
+  it('looks for nothing on a blank query or without a viewer key', async () => {
     const { client, calls } = clientWith({});
-    expect(await findRelatedPostRows(client, { query: '   ', viewerUserId: null, excludePostIds: [] }, { env: ENV, logEvent: vi.fn() }))
-      .toBeNull();
+    const logEvent = vi.fn();
+    expect(await findRelatedPostRows(client, { ...ask, query: '   ' }, { env: ENV, logEvent })).toBeNull();
+    expect(await findRelatedPostRows(client, { ...ask, viewerKey: ' ' }, { env: ENV, logEvent })).toBeNull();
     expect(calls).toEqual([]);
+    expect(logCalls(logEvent)).toEqual([{ level: 'warn', event: 'public_search_related_skipped', reason: 'no_viewer_key' }]);
   });
 });

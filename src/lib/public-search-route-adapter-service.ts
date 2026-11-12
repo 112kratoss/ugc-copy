@@ -22,6 +22,7 @@ import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
 import {
   PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
   PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH,
+  PUBLIC_SEARCH_RELATED_PARAM,
   appliedPublicSearchFilters,
   decodePublicSearchCursor,
   isPublicSearchQueryTooLong,
@@ -160,6 +161,15 @@ async function handlePublicSearchGET(
     const filterParams = readPublicSearchFilterParams((name) => url.searchParams.get(name));
     if (!filterParams.ok) return badRequest(request, FILTER_PARAMETER_ERRORS[filterParams.parameter]);
 
+    // Related posts (search by meaning) are looked for only for a client that
+    // asks: it draws them, and asks for a query a person settled on, never a
+    // step of typing. Taken as the filters are: any request may name it, any
+    // other value is refused whatever the type, and it changes nothing where
+    // related posts do not apply (another tab, a later page, Latest, a filter,
+    // the query read as typed).
+    const rawRelated = url.searchParams.get(PUBLIC_SEARCH_RELATED_PARAM);
+    if (rawRelated !== null && rawRelated !== '1') return badRequest(request, 'related must be 1.');
+
     const limit = parsePublicSearchLimit(url.searchParams.get('limit'));
     if (!limit) return badRequest(request, 'limit must be an integer between 1 and 24.');
 
@@ -220,6 +230,9 @@ async function handlePublicSearchGET(
       sort,
       filters,
       exact: filterParams.exact,
+      related: rawRelated === '1',
+      // A new query's vector is counted against the same key as the request.
+      viewerKey,
       cursor,
       limit,
       viewerUserId: actor.viewerUserId,

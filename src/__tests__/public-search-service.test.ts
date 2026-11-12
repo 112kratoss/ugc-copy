@@ -773,7 +773,7 @@ describe('public search service', () => {
       const client = { rpc } as unknown as SupabaseClient;
       const findRelatedPostRows = vi.fn<(
         client: SupabaseClient,
-        options: { query: string; viewerUserId: string | null; excludePostIds: readonly string[]; limit?: number },
+        options: { query: string; viewerUserId: string | null; viewerKey: string; excludePostIds: readonly string[]; limit?: number },
         dependencies?: unknown,
       ) => Promise<typeof relatedRows | null>>(async () => {
         if (related instanceof Error) throw related;
@@ -795,6 +795,9 @@ describe('public search service', () => {
         limit: 20,
         viewerUserId: 'viewer-1',
         countryCode: 'IN',
+        // The client asked for related posts, and the route says who is asking.
+        related: true,
+        viewerKey: 'viewer-1',
         ...options,
       }, {
         createServiceClient: vi.fn(() => client),
@@ -820,6 +823,8 @@ describe('public search service', () => {
         {
           query: 'Ocean at dusk',
           viewerUserId: 'viewer-1',
+          // A new query is counted against the key the request is counted against.
+          viewerKey: 'viewer-1',
           // The posts the search itself returned never come back as related.
           excludePostIds: [post(1), post(2)],
           limit: 8,
@@ -857,6 +862,46 @@ describe('public search service', () => {
       expect(findRelatedPostRows.mock.calls[0][1]).toMatchObject({ query: 'ocean at dusk' });
     });
 
+    it('looks for none unless the client asked: no read, no reservation, no call', async () => {
+      for (const options of [{ related: false }, { related: undefined }]) {
+        const { search, findRelatedPostRows, client } = harness();
+        const result = await search(options);
+        expect(findRelatedPostRows).not.toHaveBeenCalled();
+        expect(result).not.toHaveProperty('related');
+        // Nothing of search by meaning touched the database either.
+        const rpcNames = (client.rpc as unknown as { mock: { calls: Array<[string]> } }).mock.calls.map(([name]) => name);
+        expect(rpcNames.filter((name) => /embedding|related/.test(name))).toEqual([]);
+      }
+      // Asked, with nobody to count a new query against: none either.
+      for (const viewerKey of [undefined, '', '  ']) {
+        const { search, findRelatedPostRows } = harness();
+        expect(await search({ viewerKey })).not.toHaveProperty('related');
+        expect(findRelatedPostRows).not.toHaveBeenCalled();
+      }
+    });
+
+    it('starts the lookup while the search’s own posts are being hydrated, not after', async () => {
+      const { search, findRelatedPostRows, getShowcaseFeedItemsByPostIds } = harness();
+      let finishHydration: () => void = () => undefined;
+      const hydrating = new Promise<void>((resolve) => { finishHydration = resolve; });
+      let lookupStartedDuringHydration = false;
+      getShowcaseFeedItemsByPostIds.mockImplementationOnce(async ({ postIds }: { postIds: string[] }) => {
+        // Give the event loop a turn: a lookup started beside this has been called by now.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        lookupStartedDuringHydration = findRelatedPostRows.mock.calls.length === 1;
+        await hydrating;
+        return postIds.map((id) => ({ id, isNsfw: false }));
+      });
+      const answering = search();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(findRelatedPostRows).toHaveBeenCalledTimes(1);
+      finishHydration();
+      const result = await answering;
+      expect(lookupStartedDuringHydration).toBe(true);
+      expect(result.posts.items).toHaveLength(2);
+      expect(result.related?.posts).toHaveLength(3);
+    });
+
     it.each([
       ['six posts of its own', { lexical: lexicalRows(6) }, {}],
       ['a Posts page with more behind it', { lexical: lexicalRows(3) }, { type: 'posts' as const, limit: 2 }],
@@ -878,8 +923,14 @@ describe('public search service', () => {
     });
 
     it('counts the posts it shows: five shown of six ranked, one labelled meanwhile, is a thin answer', async () => {
-      const { search, findRelatedPostRows } = harness({ lexical: lexicalRows(6), nsfw: [post(3)] });
+      const { search, findRelatedPostRows, getShowcaseFeedItemsByPostIds } = harness({ lexical: lexicalRows(6), nsfw: [post(3)] });
+      // Six rows were ranked, so nothing is started beside the hydration...
+      getShowcaseFeedItemsByPostIds.mockImplementationOnce(async ({ postIds }: { postIds: string[] }) => {
+        expect(findRelatedPostRows).not.toHaveBeenCalled();
+        return postIds.map((id) => ({ id, isNsfw: id === post(3) }));
+      });
       const result = await search();
+      // ...and once five are shown, the lookup runs after all.
       expect(result.posts.items).toHaveLength(5);
       expect(findRelatedPostRows).toHaveBeenCalledTimes(1);
       // The labelled one is excluded all the same: it was in the ranked read.

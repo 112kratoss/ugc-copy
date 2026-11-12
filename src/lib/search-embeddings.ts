@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendEvent, logBackendWarning } from '@/lib/backend-logger';
+import { BackendRateLimitError, enforceBackendRateLimit } from '@/lib/backend-rate-limit';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   getEmbedPostFunctionConfig,
@@ -27,14 +28,15 @@ import {
  * - the `search-embeddings` backend job (`runSearchEmbeddingJob`), which sends
  *   the posts whose vector is missing or out of date to the function, a
  *   bounded batch a run, and prunes what search can no longer return;
- * - the read (`findRelatedPostRows`), which `/api/search` calls when a search's
- *   own answer is thin: the query's vector from the cache or, under a daily
+ * - the read (`findRelatedPostRows`), which `/api/search` calls when a client
+ *   asked for related posts and the search's own answer is thin: the query's
+ *   vector from the cache or, under the viewer's daily allowance, the day's
  *   cap and a short timeout, from the function, then `search_related_posts`.
  *
- * The read can only add to a search. Disabled, not configured, past the cap,
- * slow, refused by a function from before these modes, or run against a
- * database from before the migration, it answers `null` and says why in the
- * log, never with the query's text.
+ * The read can only add to a search. Disabled, not configured, past the
+ * viewer's allowance or the day's cap, slow, refused by a function from
+ * before these modes, or run against a database from before the migration,
+ * it answers `null` and says why in the log, never with the query's text.
  */
 
 export const SEARCH_EMBEDDING_MODEL = 'gte-small';
@@ -67,14 +69,30 @@ export const SEARCH_QUERY_EMBEDDING_TIMEOUT_MS = 1_200;
  */
 export const SEARCH_QUERY_EMBEDDING_BACKGROUND_TIMEOUT_MS = 10_000;
 /**
- * New query embeddings asked of the edge function per UTC day, counted in the
- * database (`search_query_embedding_lookup`, which never allows more than
- * 5,000 whatever is sent). Past it searches go without related posts until
- * the next day.
+ * New query embeddings asked of the edge function per UTC day by everyone,
+ * counted in the database (`reserve_search_query_embedding`, which never
+ * allows more than 5,000 whatever is sent). Past it searches go without
+ * related posts until the next day.
  */
 export const SEARCH_QUERY_EMBEDDING_DAILY_CAP = 2_000;
+/**
+ * New query embeddings one viewer may cause per UTC day: the account, or the
+ * network of a visitor, by the key search's own rate limit counts. Checked
+ * before the day's cap, so one client cannot spend it for everyone: twelve
+ * guest sessions at search's own 180 requests per ten minutes would spend
+ * 2,000 in ten minutes. A query already in the cache is free and uncounted.
+ * Past it that viewer's searches go without related posts until the next
+ * UTC day (the window is the rate limit's own, aligned to the day).
+ */
+export const SEARCH_QUERY_EMBEDDING_VIEWER_DAILY_LIMIT = {
+  scope: 'public-search:related-embedding',
+  limit: 40,
+  windowSeconds: 86_400,
+} as const;
 /** The whole read, cache to nearest posts: past this the search answers without it. */
 export const SEARCH_RELATED_TOTAL_TIMEOUT_MS = 2_500;
+/** How long the work behind an answer (a late vector, its write to the cache) is kept alive. */
+const SEARCH_RELATED_KEEP_ALIVE_MS = SEARCH_RELATED_TOTAL_TIMEOUT_MS + SEARCH_QUERY_EMBEDDING_BACKGROUND_TIMEOUT_MS + 2_000;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -342,7 +360,9 @@ export type RelatedPostRow = {
 export type RelatedPostsSkipReason =
   | 'disabled'
   | 'not_configured'
+  | 'no_viewer_key'
   | 'lookup_failed'
+  | 'viewer_cap_reached'
   | 'daily_cap_reached'
   | 'embedding_timeout'
   | 'embedding_failed'
@@ -353,7 +373,13 @@ export type RelatedPostsDependencies = {
   env?: Environment;
   fetchImpl?: FetchImpl;
   logEvent?: typeof logBackendEvent;
-  /** Where a slow embedding is finished and a new vector is kept; Next's `after` at the route. */
+  /** The viewer's allowance of new query embeddings; the repo's rate limit by default. */
+  enforceBackendRateLimit?: typeof enforceBackendRateLimit;
+  /**
+   * Keeps the invocation alive behind the answer, for a vector that arrives
+   * late and its write to the cache; Next's `after` at the route. It is handed
+   * its task when the read starts, while the request is certainly open.
+   */
   runAfterResponse?: RunAfterResponse;
   /** The timers, for tests. */
   queryEmbeddingTimeoutMs?: number;
@@ -429,7 +455,7 @@ async function storeQueryEmbedding(
   }
 }
 
-/** Runs a task behind the answer where a scheduler takes it, else at once without waiting on it. */
+/** Hands a task to the scheduler, or where there is none (or it refuses) runs it at once without waiting on it. */
 function runBehindAnswer(runAfterResponse: RunAfterResponse | undefined, task: () => Promise<unknown>) {
   try {
     if (runAfterResponse) {
@@ -456,44 +482,69 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | typ
   });
 }
 
-/** The query's vector: cached, or newly embedded under the day's cap and the short wait. */
+type QueryEmbeddingDependencies = {
+  env: Environment;
+  fetchImpl: FetchImpl;
+  logEvent: typeof logBackendEvent;
+  enforceBackendRateLimit: typeof enforceBackendRateLimit;
+  queryEmbeddingTimeoutMs: number;
+  /** Work that goes on behind the answer; the caller keeps the invocation alive for it. */
+  background: Promise<unknown>[];
+};
+
+/**
+ * The query's vector. In order: the cache, which costs and counts nothing;
+ * then, for a query not in it, the viewer's own daily allowance, the day's
+ * cap for everyone, and the function, waited on for a short while.
+ */
 async function queryEmbedding(
   client: SupabaseClient,
   embeddedQuery: string,
-  dependencies: Required<Pick<RelatedPostsDependencies, 'env' | 'fetchImpl' | 'logEvent' | 'queryEmbeddingTimeoutMs'>>
-    & Pick<RelatedPostsDependencies, 'runAfterResponse'>,
+  viewerKey: string,
+  dependencies: QueryEmbeddingDependencies,
 ): Promise<{ ok: true; embedding: number[] } | { ok: false; reason: RelatedPostsSkipReason; error?: unknown }> {
   const config = getEmbedPostFunctionConfig(dependencies.env);
   if (!config) return { ok: false, reason: 'not_configured' };
 
   const queryHash = searchQueryEmbeddingHash(embeddedQuery);
-  const { data, error } = await client.rpc('search_query_embedding_lookup', {
+  const cache = await client.rpc('search_query_embedding', {
     p_query_hash: queryHash,
     p_embedding_model: SEARCH_EMBEDDING_MODEL,
-    p_daily_cap: SEARCH_QUERY_EMBEDDING_DAILY_CAP,
   });
   // A database from before the migration answers "no such function".
-  if (error) return { ok: false, reason: 'lookup_failed', error };
-  const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null | undefined;
-  const cached = parseEmbeddingVector(row?.embedding);
+  if (cache.error) return { ok: false, reason: 'lookup_failed', error: cache.error };
+  const cached = parseEmbeddingVector(cache.data);
   if (cached) return { ok: true, embedding: cached };
-  if (row?.reserved !== true) return { ok: false, reason: 'daily_cap_reached' };
+
+  // A new query. The viewer's allowance first: past it nothing is reserved
+  // of the day everyone shares, and the function is not called.
+  try {
+    await dependencies.enforceBackendRateLimit(client, {
+      ...SEARCH_QUERY_EMBEDDING_VIEWER_DAILY_LIMIT,
+      key: viewerKey,
+    });
+  } catch (error) {
+    return error instanceof BackendRateLimitError
+      ? { ok: false, reason: 'viewer_cap_reached' }
+      : { ok: false, reason: 'lookup_failed', error };
+  }
+
+  const reservation = await client.rpc('reserve_search_query_embedding', {
+    p_daily_cap: SEARCH_QUERY_EMBEDDING_DAILY_CAP,
+  });
+  if (reservation.error) return { ok: false, reason: 'lookup_failed', error: reservation.error };
+  if (reservation.data !== true) return { ok: false, reason: 'daily_cap_reached' };
 
   // The day's count is already one higher: this request is made whatever the
-  // search does next, and its vector kept, so the place is not spent for nothing.
+  // search does next, and its vector kept, so the place is not spent for
+  // nothing. The write to the cache waits on nobody's answer.
   const request = requestQueryEmbedding(embeddedQuery, { config, fetchImpl: dependencies.fetchImpl });
+  dependencies.background.push(request.then(async (answer) => {
+    if (answer.ok) await storeQueryEmbedding(client, queryHash, answer.embedding, dependencies.logEvent);
+  }));
   const answer = await withTimeout(request, dependencies.queryEmbeddingTimeoutMs);
-  if (answer === TIMED_OUT) {
-    runBehindAnswer(dependencies.runAfterResponse, async () => {
-      const late = await request;
-      if (late.ok) await storeQueryEmbedding(client, queryHash, late.embedding, dependencies.logEvent);
-    });
-    return { ok: false, reason: 'embedding_timeout' };
-  }
+  if (answer === TIMED_OUT) return { ok: false, reason: 'embedding_timeout' };
   if (!answer.ok) return { ok: false, reason: 'embedding_failed', error: answer.error };
-  runBehindAnswer(dependencies.runAfterResponse, () => (
-    storeQueryEmbedding(client, queryHash, answer.embedding, dependencies.logEvent)
-  ));
   return { ok: true, embedding: answer.embedding };
 }
 
@@ -502,8 +553,8 @@ async function queryEmbedding(
  * does not already show, nearest first (`search_related_posts`: labelled
  * posts and both sides of a block left out in SQL, before its limit), or
  * `null` when they could not be looked for. Never throws and never waits past
- * `SEARCH_RELATED_TOTAL_TIMEOUT_MS`; a skip is one warning in the log, with
- * its reason and without the query.
+ * `SEARCH_RELATED_TOTAL_TIMEOUT_MS`; a skip is one line in the log, with its
+ * reason and without the query.
  */
 export async function findRelatedPostRows(
   client: SupabaseClient,
@@ -511,6 +562,11 @@ export async function findRelatedPostRows(
     /** The query as the search read it (the corrected reading where there was one). */
     query: string;
     viewerUserId: string | null;
+    /**
+     * Who the new-query allowance is counted against: the key search's own
+     * rate limit uses (the account, or the hashed network of a visitor).
+     */
+    viewerKey: string;
     excludePostIds: readonly string[];
     limit?: number;
   },
@@ -518,8 +574,11 @@ export async function findRelatedPostRows(
 ): Promise<RelatedPostRow[] | null> {
   const logEvent = dependencyOverrides.logEvent ?? logBackendEvent;
   const skipped = (reason: RelatedPostsSkipReason, error?: unknown) => {
-    // The switch is a decision, not a fault: nothing to report on every search.
-    if (reason !== 'disabled') {
+    // The switch is a decision and a viewer past their allowance is the
+    // allowance working: neither is a fault to warn of on every search.
+    if (reason === 'viewer_cap_reached') {
+      logEvent('info', 'public_search_related_skipped', { reason });
+    } else if (reason !== 'disabled') {
       logEvent('warn', 'public_search_related_skipped', { reason, ...(error === undefined ? {} : { error }) });
     }
     return null;
@@ -530,16 +589,24 @@ export async function findRelatedPostRows(
     if (isSearchSemanticDisabled(env)) return skipped('disabled');
     const embeddedQuery = normalizeSearchQueryForEmbedding(options.query);
     if (!embeddedQuery) return null;
+    const viewerKey = options.viewerKey.trim();
+    if (!viewerKey) return skipped('no_viewer_key');
 
+    // Set when the search stopped waiting: what is in flight finishes, and
+    // nothing more is started for an answer nobody will read.
+    let abandoned = false;
+    const background: Promise<unknown>[] = [];
     const read = (async (): Promise<RelatedPostRow[] | null> => {
-      const vector = await queryEmbedding(client, embeddedQuery, {
+      const vector = await queryEmbedding(client, embeddedQuery, viewerKey, {
         env,
         fetchImpl: dependencyOverrides.fetchImpl ?? fetch,
         logEvent,
+        enforceBackendRateLimit: dependencyOverrides.enforceBackendRateLimit ?? enforceBackendRateLimit,
         queryEmbeddingTimeoutMs: dependencyOverrides.queryEmbeddingTimeoutMs ?? SEARCH_QUERY_EMBEDDING_TIMEOUT_MS,
-        runAfterResponse: dependencyOverrides.runAfterResponse,
+        background,
       });
       if (!vector.ok) return skipped(vector.reason, vector.error);
+      if (abandoned) return null;
 
       const { data, error } = await client.rpc('search_related_posts', {
         p_query_embedding: toVectorLiteral(vector.embedding),
@@ -555,11 +622,25 @@ export async function findRelatedPostRows(
           : []
       ));
     })();
+    // The read itself never rejects into nothing.
+    const settled = read.catch(() => null);
+
+    // Handed over now, while the request is open: a scheduler such as Next's
+    // `after` takes a task only then, and one registered once the answer had
+    // gone (after the timeout below) kept nothing alive, so a vector that
+    // arrived late was never written to the cache. The task waits for the
+    // read and for whatever it left running behind it, no longer than their
+    // own bounds.
+    runBehindAnswer(dependencyOverrides.runAfterResponse, async () => {
+      await withTimeout((async () => {
+        await settled;
+        await Promise.allSettled(background);
+      })(), SEARCH_RELATED_KEEP_ALIVE_MS);
+    });
 
     const answer = await withTimeout(read, dependencyOverrides.totalTimeoutMs ?? SEARCH_RELATED_TOTAL_TIMEOUT_MS);
     if (answer === TIMED_OUT) {
-      // Whatever the read still does, nobody waits on it.
-      void read.catch(() => undefined);
+      abandoned = true;
       return skipped('timeout');
     }
     return answer;

@@ -1028,6 +1028,7 @@
         "following": "following",
         "exact": "exact"
       },
+      "relatedParameter": "related",
       "response": {
         "query": "Neon product",
         "normalizedQuery": "Neon product",
@@ -1400,7 +1401,8 @@
         "relatedPosts": {
           "query": {
             "q": "ocean at dusk",
-            "type": "top"
+            "type": "top",
+            "related": "1"
           },
           "response": {
             "query": "ocean at dusk",
@@ -1578,6 +1580,16 @@
           "status": 400,
           "response": {
             "error": "cursor is invalid for these filters."
+          }
+        },
+        "unknownRelated": {
+          "query": {
+            "q": "Neon product",
+            "related": "yes"
+          },
+          "status": 400,
+          "response": {
+            "error": "related must be 1."
           }
         }
       }

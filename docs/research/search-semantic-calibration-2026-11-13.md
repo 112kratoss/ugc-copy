@@ -87,6 +87,58 @@ It was not taken: `search_text` is the one projection of a post that is already 
 visitor may see (a paid recipe's caption and prompt left out, a template result's model hidden),
 and a second projection for embedding would be a second place for that rule to be got wrong.
 
+### Posts with no words of their own
+
+Some posts show a visitor nothing but names: a stand-in title ("Untitled", "Test video", none at
+all) and no public caption or prompt, so `search_text` is the stand-in word and the tool and model
+names, `untitled magicbooklet magicbooklet … kling 2.6 kling 2 6 kling26`. A paid recipe's post
+under such a title is one of them: its setup caption and prompt are hidden, and nothing else is
+left. They are not embedded (`post_search_document_has_own_words`: a title that is not a
+placeholder by `marketplace_text_is_placeholder`, or a word of public caption or public prompt),
+as the feed's embedder leaves out a post with no text of its own. Twelve of them were measured:
+
+| # | Title | Made with | Why nothing else is public |
+|---|---|---|---|
+| 1 | Untitled | Magicbooklet, Kling 2.6 | no caption |
+| 2 | Test | Magicbooklet, Veo 3.1 | no caption |
+| 3 | Demo video | Magicbooklet, Nano Banana Pro | no caption |
+| 4 | (none) | Magicbooklet, Seedream 4.5 | no caption |
+| 5 | Sample | Midjourney | no caption |
+| 6 | My test render | Flux, Flux 1.1 Pro | no caption |
+| 7 | Draft | Magicbooklet, Kling 2.6 | no caption |
+| 8 | Untitled 2 | Magicbooklet, Nano Banana Pro | no caption |
+| 9 | Untitled | Midjourney | paid recipe: setup caption and prompt hidden |
+| 10 | Demo | Magicbooklet, Veo 3.1 | paid recipe: setup caption and prompt hidden |
+| 11 | Test video | Magicbooklet, Kling 2.6 | no caption |
+| 12 | Example | Flux, Flux 1.1 Pro | no caption |
+
+**Through the real pipeline** (inserted as public posts beside the 204, then sent to `embed-post`
+in its `search` mode): `post_search_embedding_texts` returned none of the 12, the function answered
+`skipped_unsearchable: 12, embedded: 0`, no vector was stored, none is listed as pending, and the
+job has no work for them. They match nothing, because they have nothing to match with.
+
+**Had they been embedded** (their `search_text` put through the `query` mode, for this measure
+only), against the bar of 0.84:
+
+| Against | Pairs | At or above the bar | Highest |
+|---|---|---|---|
+| the 40 queries above | 480 | 0 | 0.822 |
+| the 25 one-word queries | 300 | 0 | 0.818 |
+| 12 queries naming a tool, a model or a stand-in word ("kling 2.6", "kling", "veo 3.1", "nano banana pro", "seedream", "midjourney", "flux", "magicbooklet", "untitled", "test video", "made with kling", "ai video model") | 144 | 31 | 0.964 |
+| each other | 66 | 31 | 0.968 |
+
+So an ordinary query would not have found them either way. A query that names a tool or a model
+would: "magicbooklet" sits at or above the bar with 8 of the 12, "untitled" and "test video" with
+3 each, and nearly half of all pairs of them are within the bar of each other. That is the cluster the
+rule keeps out: posts returned for sharing a tool with the query, with nothing to say they are
+about what was asked. With the rule, the same 12 name queries return related posts only from the
+204 that have words of their own (0 text-poor posts in every answer).
+
+A post with words of its own still carries its tool and model names, so a query that is only a
+model's name finds posts made with it ("flux" and "midjourney" return 12 each). Such a query is
+answered by words and by the models and tools search already offers; related posts are added only
+where that answer is thin.
+
 ## Limits
 
 - 204 hand-written posts and 60 queries. Real posts are messier (long prompts, few words, other
@@ -100,7 +152,8 @@ and a second projection for embedding would be a second place for that rule to b
 After a change of model or of what `search_text` holds, on a local stack with the edge runtime:
 
 1. Insert the posts below as public posts (title, caption in `body`, prompt, a tool, and a Made with
-   row for the model) and let the triggers write their documents.
+   row for the model) and let the triggers write their documents. Add the twelve text-poor posts
+   above: the function must answer `skipped_unsearchable` for each.
 2. Embed them: `POST /functions/v1/embed-post` with `{"mode":"search","postIds":[…]}`, eight ids
    a request, until `list_posts_pending_search_embedding('gte-small', 96)` returns none.
 3. Embed each query with `{"mode":"query","query":"…"}` and keep the vectors in a scratch table.

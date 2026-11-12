@@ -29,6 +29,7 @@ import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-serve
 import { createPostResourceFileReadUrlForRoute } from '@/lib/post-resource-file-url-service';
 import { sanitizeProfileRecord } from '@/lib/profile';
 import {
+  PUBLIC_SEARCH_RELATED_PARAM,
   decodePublicSearchCursor,
   encodePublicSearchCursor,
   publicSearchCursorFilterMark,
@@ -131,6 +132,8 @@ type MobileApiContractFixture = {
     mobileNotifications: MobileApiContractEndpoint<MobileNotificationsResponse>;
     searchPublicContent: MobileApiContractEndpoint<PublicSearchResponse> & {
       filterParameters: Record<'madeWith' | 'mediaKind' | 'hasRecipe' | 'following' | 'exact', string>;
+      /** The parameter a client asks for related posts with. */
+      relatedParameter: string;
       responseVariants: Record<
         | 'latestPosts' | 'latestPostsNextPage' | 'beforeSorts'
         | 'filteredPosts' | 'filteredPostsNextPage' | 'correctedPosts' | 'exactPosts' | 'beforeFilters'
@@ -143,7 +146,7 @@ type MobileApiContractFixture = {
         /** The filters and reading a marked cursor was issued under. */
         issuedFor?: { filters: PublicSearchFilters; exact: boolean };
       }>;
-      errors: Record<'unknownSort' | 'unknownMediaKind' | 'unknownMadeWith' | 'cursorOfOtherFilters', {
+      errors: Record<'unknownSort' | 'unknownMediaKind' | 'unknownMadeWith' | 'cursorOfOtherFilters' | 'unknownRelated', {
         query: Record<string, string>; status: number; response: { error: string };
       }>;
     };
@@ -680,10 +683,18 @@ describe('shared mobile API v1 contract fixture', () => {
       const { relatedPosts } = endpoint.responseVariants;
       const pinned = relatedPosts.response as unknown as WebPublicSearchResponse;
 
+      // The client asks with the parameter the server reads, and only then are they looked for.
+      expect(endpoint.relatedParameter).toBe(PUBLIC_SEARCH_RELATED_PARAM);
+      expect(relatedPosts.query).toEqual({ q: 'ocean at dusk', type: 'top', [endpoint.relatedParameter]: '1' });
+
       // The route sends the service's answer as it is: nothing added, nothing dropped.
       const { response, options } = await ask(relatedPosts.query, 'visitor', pinned);
       expect(response.status).toBe(200);
-      expect(options).toMatchObject({ type: 'top', sort: 'top', exact: false, cursor: null });
+      expect(options).toMatchObject({ type: 'top', sort: 'top', exact: false, cursor: null, related: true, viewerKey: 'network-key' });
+      // The same search without the parameter asks the service for none.
+      const withoutParameter = { ...relatedPosts.query };
+      delete withoutParameter[endpoint.relatedParameter];
+      expect((await ask(withoutParameter)).options).toMatchObject({ related: false });
       await expect(response.json()).resolves.toEqual(relatedPosts.response);
 
       // A related post is a feed card: the keys Home's cards have, no others.
@@ -702,6 +713,8 @@ describe('shared mobile API v1 contract fixture', () => {
         limit: 20,
         viewerUserId: null,
         countryCode: null,
+        related: true,
+        viewerKey: 'network-key',
       }, {
         createServiceClient: vi.fn(() => ({ rpc: vi.fn(async () => ({ data: [], error: null })) }) as unknown as SupabaseClient),
         findRelatedPostRows: vi.fn(async () => [
@@ -716,6 +729,14 @@ describe('shared mobile API v1 contract fixture', () => {
         runAfterResponse: () => {},
       });
       expect(built).toEqual(pinned);
+    });
+
+    it('refuses another value of the related parameter with the words the fixture pins', async () => {
+      const refusal = endpoint.errors.unknownRelated;
+      const { response, options } = await ask(refusal.query);
+      expect(response.status).toBe(refusal.status);
+      await expect(response.json()).resolves.toEqual(refusal.response);
+      expect(options).toBeNull();
     });
 
     it('pins no related field on any other answer: where none were looked for there is nothing to draw', () => {
