@@ -51,9 +51,9 @@
 --    hidden caption is not a caption here.
 --    THE JOB'S READ (search_embedding_backlog, list_posts_pending_…) hashes
 --    every document's text to find the ones whose vector is missing or out
---    of date: 8 ms at 5,200 documents on a laptop, so about 0.15 s at
---    100,000. That is the point to keep the hash beside the document
---    instead.
+--    of date: 15 ms at 5,200 documents on a laptop when nothing is waiting,
+--    so about 0.3 s at 100,000, every ten minutes. That is the point to keep
+--    the hash beside the document instead.
 --
 -- 2. What the embed-post Edge Function calls, in its 'search' mode:
 --      post_search_embedding_texts(ids, model)   the text to embed for each
