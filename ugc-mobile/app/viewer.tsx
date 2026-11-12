@@ -174,7 +174,7 @@ import { useScreenReturn } from '@/lib/use-screen-return';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
 import { useStableSignedUrl } from '@/lib/use-stable-signed-url';
 import { verticalHitSlop } from '@/lib/hit-target';
-import { clubReelNotes, frontNoteOfSet } from '@/lib/reel-note-sets';
+import { buildReelList, closeReachedNoteSets } from '@/lib/reel-note-sets';
 import { changeViewerPage, initialViewerPosition, isDetailsPageCovering, pickViewerItemAfterRemoval, resolveViewerPosition, settleViewerItem, slidePageKey, type ViewerPosition } from '@/lib/viewer-position';
 
 type ViewerParams = {
@@ -523,15 +523,25 @@ function ImmersivePreviewViewer() {
   // left alone: a text creation there is a slide of its own.
   const clubsNotes = source === 'showcase-feed' || source === 'creator-profile';
   const [frontNoteIds, setFrontNoteIds] = useState<Record<string, string>>({});
+  // The sets the reader has reached: closed to newcomers, so a note from the
+  // lane's next page gets a page ahead, not a card behind.
+  const [closedNoteGroups, setClosedNoteGroups] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const currentItemId = savedPosition?.itemId ?? null;
   const items = useMemo(() => {
     const ordered = sessionItems.ordered;
     if (!clubsNotes) return ordered;
-    const pages = clubReelNotes(ordered, { isNote: isReelNote, anchorId: initialId });
-    if (!pages.some((page) => page.kind === 'notes')) return ordered;
-    return pages.map((page) => (page.kind === 'post'
-      ? page.item
-      : { ...frontNoteOfSet(page.set, frontNoteIds[page.set.key]), noteSet: page.set }));
-  }, [clubsNotes, frontNoteIds, initialId, sessionItems.ordered]);
+    const list = buildReelList(ordered, {
+      isNote: isReelNote,
+      anchorId: initialId,
+      // A recipe opened from search lands on its post's Details page, which a
+      // row of cards does not have: that note keeps a slide of its own.
+      soloId: initialPage === 'details' ? initialId : null,
+      closedGroups: closedNoteGroups,
+      currentId: currentItemId,
+      frontNoteIds,
+    });
+    return list.some((entry) => entry.noteSet) ? list : ordered;
+  }, [closedNoteGroups, clubsNotes, currentItemId, frontNoteIds, initialId, initialPage, sessionItems.ordered]);
   // The item the route named did not load: deleted, archived elsewhere, or no
   // longer the reader's. Shown as that, never replaced by the first item (C1).
   const selectionMissing = grid
@@ -560,6 +570,11 @@ function ImmersivePreviewViewer() {
     [items, savedPosition, initialId, initialPage]
   );
   const activeIndex = Math.max(0, items.findIndex((item) => item.id === position?.itemId));
+  useEffect(() => {
+    if (!clubsNotes) return;
+    // The same map comes back when nothing new was reached, and React keeps the state.
+    setClosedNoteGroups((current) => closeReachedNoteSets(current, items, activeIndex));
+  }, [activeIndex, clubsNotes, items]);
   // ExoPlayer creation can block Android's handoff commit for hundreds of ms.
   // First activate the already-prepared player; refresh the neighbouring player
   // range in a lower-priority render. iOS keeps its existing preparation timing.
@@ -1735,6 +1750,7 @@ function ImmersivePreviewViewer() {
             onComments={slideHandlers.onComments}
             onShare={slideHandlers.onShare}
             onCreatorOpen={slideHandlers.onCreatorOpen}
+            onActionsOpen={slideHandlers.onActionsOpen}
             onHorizontalScrollToggle={setIsHorizontalScrolling}
             onLayoutAsNeighbour={index === activeIndex ? undefined : zoom.reportNeighbourDrawn}
             onChromeLayout={index === activeIndex ? zoom.reportChromeDrawn : undefined}

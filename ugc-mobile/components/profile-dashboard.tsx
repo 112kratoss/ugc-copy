@@ -1832,8 +1832,10 @@ function ProfileMediaTile({
       >
         <ProfileGalleryPreview item={item} height={height} watchdog={mediaWatchdog} />
         {/* The shade keeps the corner marks legible over a picture. An audio
-            or text plate has no picture, and under the shade its own words went grey. */}
-        {item.previewKind === 'audio' || item.previewKind === 'text' ? null : (
+            or text plate has no picture, and under the shade its own words went
+            grey. A Saved tile keeps it: its like count is plain type over the
+            tile, with no chip of its own, and was white on a white plate. */}
+        {item.previewKind === 'audio' || (item.previewKind === 'text' && !isSavedTile) ? null : (
           <LinearGradient
             colors={[hexWithAlpha(mediaColors.mediaGround, 0), hexWithAlpha(mediaColors.mediaGround, 0.16), mediaColors.mediaScrimStrong]}
             locations={[0, 0.48, 1]}

@@ -292,7 +292,7 @@ function PostRow({ item, onOpen }: { item: ShowcaseFeedItem; onOpen: () => void 
             // The title is the caption's first line, just under the frame.
             content={textPostPlateUnderCaption(buildTextPostPlate(item))}
             size="feature"
-            // A 48% column at 1.15 is at least 140pt tall on a 375pt phone: five 20pt lines and the padding.
+            // Until the plate has been laid out and counts its own lines.
             bodyLines={5}
           />
         </View>
