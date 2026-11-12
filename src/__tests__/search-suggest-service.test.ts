@@ -129,6 +129,22 @@ describe('search suggest service', () => {
       .toContain("import { entityResult } from '@/lib/public-search-service';");
   });
 
+  it('names a motion creation’s model by the catalog, not by the provider’s id it is stored under', async () => {
+    // Live on 2026-11-12: "kling" offered an entity that read "kling-2.6/motion-control".
+    const { createServiceClient } = clientAnswering({
+      data: {
+        creators: [],
+        entities: [{ kind: 'model', key: 'kling-2.6-motion-control', label: 'kling-2.6/motion-control', post_count: 31, post_count_capped: false }],
+        completions: [],
+      },
+      error: null,
+    });
+    const answer = await suggestSearch(options, { createServiceClient });
+    expect(answer.entities).toEqual([
+      { kind: 'model', key: 'kling-2.6-motion-control', label: 'Kling 2.6', postCount: 31, postCountCapped: false },
+    ]);
+  });
+
   it('offers no entities from a database that answers none, as before 20261112192423', async () => {
     const { createServiceClient } = clientAnswering({
       data: { creators: [creatorRow(1)], completions: [{ text: 'lunar' }] },
