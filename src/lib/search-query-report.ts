@@ -46,6 +46,11 @@ export async function fetchSearchQueryReport(
   return normalizeSearchQueryReportRows(data);
 }
 
+/** A query as printed: control characters (ESC, BEL...) shown as \xNN, so a logged one cannot drive an operator's terminal. */
+export function escapeForTerminal(text: string): string {
+  return text.replace(/\p{Cc}/gu, (char) => `\\x${char.codePointAt(0)!.toString(16).padStart(2, '0')}`);
+}
+
 /** The table the CLI prints: a summary line, then one line per query, zero-result searches first. */
 export function formatSearchQueryReport(rows: SearchQueryReportRow[], { days }: { days: number }): string {
   if (rows.length === 0) return `No searches logged in the last ${days} day(s).`;
@@ -56,7 +61,7 @@ export function formatSearchQueryReport(rows: SearchQueryReportRow[], { days }: 
       + `${totalZeroResultSearches} with no results in any kind (${rate}%).`,
     '',
     `${'zero'.padStart(6)} ${'searches'.padStart(9)}  query`,
-    ...rows.map((row) => `${String(row.zeroResultSearches).padStart(6)} ${String(row.searches).padStart(9)}  ${row.query}`),
+    ...rows.map((row) => `${String(row.zeroResultSearches).padStart(6)} ${String(row.searches).padStart(9)}  ${escapeForTerminal(row.query)}`),
   ];
   return lines.join('\n');
 }

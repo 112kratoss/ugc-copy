@@ -6,14 +6,19 @@
 -- What a row holds, and nothing else about the person:
 --   * the normalized query the search ran on, lowercased, at most 100 characters;
 --   * the search type (top, creators, posts, recipes);
---   * whether a session was presented (a guest session counts as one);
---   * visitor_day: sha256 over (a salt, the viewer's rate-limit key, the UTC
---     date). The key is the user id or the hashed network address, and it is
---     never stored; the date is inside the hash, so a visitor cannot be joined
---     across days, or back to an account, from this table. It only lets the
---     report treat "po" -> "por" -> "port" from one visitor as one search;
+--   * whether a registered (non-guest) account was presented;
+--   * visitor_day: HMAC-SHA256 of the viewer's rate-limit key (the user id or
+--     the hashed network address, never stored) under a random key made for
+--     that UTC day alone (search_visitor_day_keys, below). The key is deleted by
+--     the retention sweep once the day is more than 48 hours old, after which
+--     nobody, operators included, can recompute a visitor_day from an account or
+--     an address. Until then the hash is pseudonymous to whoever holds the
+--     service role, and no more. It lets the report treat "po" -> "por" ->
+--     "port" from one visitor as one search, and a visitor is never joined
+--     across days;
 --   * how many creators, posts and recipes the answer held;
---   * created_at, the server's clock.
+--   * created_at, when the request arrived (the adapter's clock, so a slow
+--     answer logged late still sorts where it was asked).
 --
 -- Append-only: the service role may SELECT and INSERT and nothing else (a new
 -- table is born with the full service_role grant set, cut here). Retention
@@ -33,7 +38,7 @@ CREATE TABLE public.search_query_events (
 );
 
 COMMENT ON TABLE public.search_query_events IS
-  'Anonymous log of first-page /api/search answers: normalized query, type, signed-in flag, a per-day visitor hash and result counts. Written by the service role, kept 90 days, read by search_query_report.';
+  'Anonymous log of first-page /api/search answers: normalized query, type, registered-account flag, a per-day visitor hash and result counts. Written by the service role, kept 90 days, read by search_query_report.';
 
 -- The report's window and the retention sweep both read by created_at.
 CREATE INDEX search_query_events_created_at_idx
@@ -45,16 +50,63 @@ ALTER TABLE public.search_query_events ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.search_query_events FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT, INSERT ON TABLE public.search_query_events TO service_role;
 
+-- ─── The day keys ───────────────────────────────────────────────────────────
+--
+-- One random key per UTC day, the HMAC key of that day's visitor_day values. The
+-- logger reads it through search_visitor_day_key, which makes it on first use:
+-- ON CONFLICT DO NOTHING, so concurrent instances all get the one that won.
+-- The sweep deletes a key once its day started more than 48 hours ago.
+
+CREATE TABLE public.search_visitor_day_keys (
+  day date PRIMARY KEY,
+  key text NOT NULL CHECK (key ~ '^[0-9a-f]{64}$'),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE public.search_visitor_day_keys IS
+  'One random HMAC key per UTC day for search_query_events.visitor_day. Deleted by the retention sweep after 48 hours, which makes the day''s visitor hashes unrecomputable. Service role only.';
+
+ALTER TABLE public.search_visitor_day_keys ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE public.search_visitor_day_keys FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT, INSERT ON TABLE public.search_visitor_day_keys TO service_role;
+
+CREATE FUNCTION public.search_visitor_day_key(p_day date)
+RETURNS text
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_key text;
+BEGIN
+  INSERT INTO public.search_visitor_day_keys (day, key)
+  VALUES (p_day, replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''))
+  ON CONFLICT (day) DO NOTHING;
+
+  SELECT k.key INTO v_key FROM public.search_visitor_day_keys AS k WHERE k.day = p_day;
+  RETURN v_key;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.search_visitor_day_key(date) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.search_visitor_day_key(date) TO service_role;
+
+COMMENT ON FUNCTION public.search_visitor_day_key(date) IS
+  'The HMAC key of a UTC day''s search visitor hashes, made on first call. Service role only.';
+
 -- ─── The report ─────────────────────────────────────────────────────────────
 --
--- A "final query" is a row that no later row of the same visitor_day extends
--- within 15 seconds: the later query starts with this one (an equal query is
--- its own prefix, so Top then Posts for the same words is one search). Typing
--- steps collapse into the search they led to, chains included, since each step
--- only has to be within 15 seconds of the next. A visitor-day that ends up on
--- the same final query twice counts once, as zero-result only if every one of
--- its final rows was. Every row also carries the window's totals, computed
--- before the limit, so a zero-result rate is one division.
+-- A visitor-day's rows, in arrival order, split into chains: a row is a typing
+-- step when the next row is within 15 seconds and starts with it (an equal query
+-- is its own prefix, so a tab switch is a step); the row that is no step ends its
+-- chain and names it. Each step only has to be within 15 seconds of the next, so
+-- "po" -> "por" -> "port" is one search, "port". Within a chain, the rows with the
+-- final query's text are one search, zero-result only if every one of them found
+-- nothing: Top finding posts and Creators finding none is not a failed search.
+-- A visitor-day on the same final query twice counts once. Each row is compared
+-- with the next one only (lead()), so the cost is a sort, not a self-join. Every
+-- row also carries the window's totals, computed before the limit, so a
+-- zero-result rate is one division.
 
 CREATE FUNCTION public.search_query_report(
   p_days integer DEFAULT 7,
@@ -86,22 +138,36 @@ BEGIN
     FROM public.search_query_events AS e
     WHERE e.created_at >= now() - make_interval(days => p_days)
   ),
-  final_rows AS (
-    SELECT w.*
+  stepped AS (
+    SELECT w.*,
+           coalesce(
+             lead(w.created_at) OVER visitor <= w.created_at + interval '15 seconds'
+             AND starts_with(lead(w.query) OVER visitor, w.query),
+             false
+           ) AS is_step
     FROM windowed AS w
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM windowed AS later
-      WHERE later.visitor_day = w.visitor_day
-        AND (later.created_at, later.id) > (w.created_at, w.id)
-        AND later.created_at <= w.created_at + interval '15 seconds'
-        AND starts_with(later.query, w.query)
-    )
+    WINDOW visitor AS (PARTITION BY w.visitor_day ORDER BY w.created_at, w.id)
+  ),
+  chained AS (
+    SELECT s.*,
+           coalesce(
+             sum((NOT s.is_step)::integer) OVER (
+               PARTITION BY s.visitor_day ORDER BY s.created_at, s.id
+               ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+             ), 0
+           ) AS chain_no
+    FROM stepped AS s
+  ),
+  named AS (
+    SELECT c.*,
+           max(c.query) FILTER (WHERE NOT c.is_step) OVER (PARTITION BY c.visitor_day, c.chain_no) AS final_query
+    FROM chained AS c
   ),
   per_visitor AS (
-    SELECT f.query, f.visitor_day, bool_and(f.is_zero) AS is_zero
-    FROM final_rows AS f
-    GROUP BY f.query, f.visitor_day
+    SELECT n.query, n.visitor_day, bool_and(n.is_zero) AS is_zero
+    FROM named AS n
+    WHERE n.query = n.final_query
+    GROUP BY n.query, n.visitor_day
   ),
   per_query AS (
     SELECT p.query,
@@ -126,7 +192,7 @@ REVOKE ALL ON FUNCTION public.search_query_report(integer, integer)
 GRANT EXECUTE ON FUNCTION public.search_query_report(integer, integer) TO service_role;
 
 COMMENT ON FUNCTION public.search_query_report(integer, integer) IS
-  'Per final query over the last p_days: distinct visitor-days that searched it and how many of those got zero results in every kind, zero-result searches first, with the window totals on every row. Service role only.';
+  'Per final query over the last p_days: distinct visitor-days that searched it and how many of those got zero results in every kind and every tab, zero-result searches first, with the window totals on every row. Service role only.';
 
 -- ─── Retention: the sweep gains one phase ───────────────────────────────────
 --
@@ -167,9 +233,13 @@ DECLARE
   v_unread_notifications_deleted integer := 0;
   v_expired_job_locks_deleted integer := 0;
   v_search_query_events_deleted integer := 0;
+  v_search_visitor_day_keys_deleted integer := 0;
   -- The search log's window. A constant, not a parameter: the sweep's signature is pinned by its
   -- callers and tests, and a new window changes it by a migration either way.
   v_search_query_retention_days CONSTANT integer := 90;
+  -- A day's visitor-hash key lives 48 hours from the day's start; deleting it is what
+  -- makes that day's visitor_day values unrecomputable.
+  v_search_day_key_retention CONSTANT interval := interval '48 hours';
   -- The sweep's clock: the caller's, never later than the database's own. A
   -- caller's clock ahead of it cannot make any row expire sooner: not delete a
   -- lock still held, nor roll up a day still taking rows, nor prune a day early.
@@ -447,6 +517,11 @@ BEGIN
   WHERE events.id = prunable.id;
   GET DIAGNOSTICS v_search_query_events_deleted = ROW_COUNT;
 
+  -- The day keys: a handful of rows, so one plain delete.
+  DELETE FROM public.search_visitor_day_keys AS keys
+  WHERE keys.day::timestamp AT TIME ZONE 'UTC' < v_now - v_search_day_key_retention;
+  GET DIAGNOSTICS v_search_visitor_day_keys_deleted = ROW_COUNT;
+
   RETURN jsonb_build_object(
     'job_runs_deleted', v_job_runs_deleted,
     'rate_limits_deleted', v_rate_limits_deleted,
@@ -460,6 +535,7 @@ BEGIN
     'unread_notifications_deleted', v_unread_notifications_deleted,
     'expired_job_locks_deleted', v_expired_job_locks_deleted,
     'search_query_events_deleted', v_search_query_events_deleted,
+    'search_visitor_day_keys_deleted', v_search_visitor_day_keys_deleted,
     'total_deleted', v_job_runs_deleted
       + v_rate_limits_deleted
       + v_completion_jobs_deleted
@@ -469,7 +545,8 @@ BEGIN
       + v_onboarding_events_deleted
       + v_unread_notifications_deleted
       + v_expired_job_locks_deleted
-      + v_search_query_events_deleted,
+      + v_search_query_events_deleted
+      + v_search_visitor_day_keys_deleted,
     'batch_limit_reached', (
       v_job_runs_deleted >= v_max_deletes
       OR v_rate_limits_deleted >= v_max_deletes
@@ -500,7 +577,7 @@ GRANT EXECUTE ON FUNCTION public.prune_operational_backend_data(
 COMMENT ON FUNCTION public.prune_operational_backend_data(
   timestamptz, integer, integer, integer, integer, integer, integer, integer,
   integer, integer, integer, integer, integer
-) IS 'Bounded retention sweep, one batch per table per call: job runs, rate limits, completion jobs, provider telemetry and checks, playback metrics (rolled up by UTC day first), onboarding events, settled AI usage payloads (cleared, never the accounting), unread alerts, expired job locks and search log rows older than 90 days. Windows are parameter defaults, the search log''s a constant. Never touches creator content or feed analytics.';
+) IS 'Bounded retention sweep, one batch per table per call: job runs, rate limits, completion jobs, provider telemetry and checks, playback metrics (rolled up by UTC day first), onboarding events, settled AI usage payloads (cleared, never the accounting), unread alerts, expired job locks, search log rows older than 90 days and search day keys older than 48 hours. Windows are parameter defaults, the search log''s and the keys'' constants. Never touches creator content or feed analytics.';
 
 -- ─── Growth accounting ──────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.get_operational_table_growth()

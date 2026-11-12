@@ -37,6 +37,15 @@ describe('search report', () => {
     expect(formatSearchQueryReport([], { days: 7 })).toBe('No searches logged in the last 7 day(s).');
   });
 
+  it('prints a logged control character as text, so a planted escape cannot drive the terminal', () => {
+    const planted = normalizeSearchQueryReportRows([
+      { query: 'x\u001b]0;pwned\u0007\u001b[2J', searches: 1, zero_result_searches: 1, total_searches: 1, total_zero_result_searches: 1 },
+    ]);
+    const text = formatSearchQueryReport(planted, { days: 7 });
+    expect(text).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f]/u);
+    expect(text).toContain('x\\x1b]0;pwned\\x07\\x1b[2J');
+  });
+
   it('parses and bounds the CLI flags', () => {
     expect(parseSearchReportArguments([])).toEqual({ days: 7, limit: 50, json: false, help: false });
     expect(parseSearchReportArguments(['--days', '30', '--limit', '5', '--json'])).toMatchObject({ days: 30, limit: 5, json: true });

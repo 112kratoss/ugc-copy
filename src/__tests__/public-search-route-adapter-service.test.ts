@@ -42,7 +42,8 @@ describe('public search route adapter service', () => {
         enforceBackendRateLimit,
         getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
         searchPublicContent,
-        withProviderFetchRequestId: requestIdBoundary,
+        runAfterResponse: () => {},
+      withProviderFetchRequestId: requestIdBoundary,
       },
     });
 
@@ -78,7 +79,8 @@ describe('public search route adapter service', () => {
         enforceBackendRateLimit: vi.fn(allowedRateLimit),
         getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
         searchPublicContent,
-        withProviderFetchRequestId: requestIdBoundary,
+        runAfterResponse: () => {},
+      withProviderFetchRequestId: requestIdBoundary,
       },
     });
     const emoji = encodeURIComponent('\u{1F600}');
@@ -107,7 +109,8 @@ describe('public search route adapter service', () => {
         enforceBackendRateLimit: vi.fn(allowedRateLimit),
         getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
         searchPublicContent,
-        withProviderFetchRequestId: requestIdBoundary,
+        runAfterResponse: () => {},
+      withProviderFetchRequestId: requestIdBoundary,
       },
     });
 
@@ -130,7 +133,8 @@ describe('public search route adapter service', () => {
       request: new Request(url),
       dependencies: {
         searchPublicContent,
-        withProviderFetchRequestId: requestIdBoundary,
+        runAfterResponse: () => {},
+      withProviderFetchRequestId: requestIdBoundary,
       },
     });
     expect(response.status).toBe(400);
@@ -153,7 +157,8 @@ describe('public search route adapter service', () => {
           });
         }),
         getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
-        withProviderFetchRequestId: requestIdBoundary,
+        runAfterResponse: () => {},
+      withProviderFetchRequestId: requestIdBoundary,
       },
     });
 
@@ -166,12 +171,13 @@ describe('public search route adapter service', () => {
     function logHarness(options: { insert?: () => Promise<{ error: unknown }> } = {}) {
       const insert = vi.fn(options.insert ?? (async () => ({ error: null })));
       const from = vi.fn(() => ({ insert }));
+      const rpc = vi.fn(async () => ({ data: 'e'.repeat(64), error: null }));
       const tasks: Array<() => Promise<unknown>> = [];
       const logEvent = vi.fn();
       const ask = (url: string, extra: Record<string, unknown> = {}) => getPublicSearchRouteResponse({
         request: new Request(url, { headers: (extra.headers as Record<string, string>) ?? {} }),
         dependencies: {
-          createServiceClient: vi.fn(() => ({ from }) as unknown as SupabaseClient),
+          createServiceClient: vi.fn(() => ({ from, rpc }) as unknown as SupabaseClient),
           createUserClient: vi.fn(() => ({
             auth: { getUser: vi.fn(async () => ({ data: { user: { id: 'viewer-1' } }, error: null })) },
           }) as unknown as SupabaseClient),
@@ -184,7 +190,7 @@ describe('public search route adapter service', () => {
           ...extra,
         },
       });
-      return { ask, insert, from, tasks, logEvent };
+      return { ask, insert, from, rpc, tasks, logEvent };
     }
 
     it('returns the answer without awaiting the write', async () => {
@@ -195,6 +201,7 @@ describe('public search route adapter service', () => {
       expect(insert).not.toHaveBeenCalled();
       // The write never settles; the answer already has.
       void tasks[0]();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       expect(insert).toHaveBeenCalledTimes(1);
     });
 
@@ -208,7 +215,7 @@ describe('public search route adapter service', () => {
         query: 'port', search_type: 'top', signed_in: false, creator_count: 0, post_count: 0, recipe_count: 0,
       });
       expect(Object.keys(row).sort()).toEqual([
-        'creator_count', 'post_count', 'query', 'recipe_count', 'search_type', 'signed_in', 'visitor_day',
+        'created_at', 'creator_count', 'post_count', 'query', 'recipe_count', 'search_type', 'signed_in', 'visitor_day',
       ]);
       expect(JSON.stringify(row)).not.toContain('network-key');
     });
@@ -220,6 +227,33 @@ describe('public search route adapter service', () => {
       const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
       expect(row.signed_in).toBe(true);
       expect(JSON.stringify(row)).not.toContain('viewer-1');
+    });
+
+    it('stamps the row with the time the request arrived, not the time the write runs', async () => {
+      const { ask, insert, tasks } = logHarness();
+      const before = Date.now();
+      await ask('http://localhost/api/search?q=Port');
+      const after = Date.now();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await tasks[0]();
+      const [row] = insert.mock.calls[0] as unknown as [{ created_at: string }];
+      const stamped = Date.parse(row.created_at);
+      expect(stamped).toBeGreaterThanOrEqual(before);
+      expect(stamped).toBeLessThanOrEqual(after);
+    });
+
+    it('does not call a guest session signed in', async () => {
+      const { ask, insert, tasks } = logHarness();
+      await ask('http://localhost/api/search?q=Port', {
+        headers: { Authorization: 'Bearer guest' },
+        createUserClient: vi.fn(() => ({
+          auth: { getUser: vi.fn(async () => ({ data: { user: { id: 'guest-1', is_anonymous: true } }, error: null })) },
+        }) as unknown as SupabaseClient),
+      });
+      await tasks[0]();
+      const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
+      expect(row.signed_in).toBe(false);
+      expect(JSON.stringify(row)).not.toContain('guest-1');
     });
 
     it('writes nothing for a request with a cursor', async () => {

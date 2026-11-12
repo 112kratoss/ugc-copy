@@ -1,3 +1,5 @@
+import { createHmac } from 'node:crypto';
+
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -25,19 +27,26 @@ function answer(counts: { creators?: number; posts?: number; recipes?: number } 
   };
 }
 
-function setup(overrides: { insert?: () => Promise<{ error: unknown }>; env?: Record<string, string | undefined>; now?: Date } = {}) {
+const DAY_KEY = 'c'.repeat(64);
+
+function setup(overrides: {
+  insert?: () => Promise<{ error: unknown }>;
+  rpc?: () => Promise<{ data: unknown; error: unknown }>;
+  env?: Record<string, string | undefined>;
+} = {}) {
   const insert = vi.fn(overrides.insert ?? (async () => ({ error: null })));
   const from = vi.fn(() => ({ insert }));
+  const rpc = vi.fn(overrides.rpc ?? (async () => ({ data: DAY_KEY, error: null })));
   const tasks: Array<() => Promise<unknown>> = [];
   const logEvent = vi.fn();
   const deps = {
-    createClient: () => ({ from }) as unknown as SupabaseClient,
+    createClient: () => ({ from, rpc }) as unknown as SupabaseClient,
     runAfterResponse: (task: () => Promise<unknown>) => { tasks.push(task); },
     logEvent,
     env: overrides.env ?? {},
-    now: () => overrides.now ?? NOW,
+    keyCache: new Map(),
   };
-  return { deps, insert, from, tasks, logEvent };
+  return { deps, insert, from, rpc, tasks, logEvent };
 }
 
 const input = {
@@ -46,13 +55,15 @@ const input = {
   type: 'top' as const,
   viewerKey: RAW_NETWORK_KEY,
   signedIn: false,
+  requestedAt: NOW,
   response: answer({ posts: 2, recipes: 1 }),
 };
 
 describe('buildSearchQueryEventRow', () => {
-  it('holds the lowercased query, type, signed-in flag, counts and a visitor-day hash, and nothing else', () => {
-    const row = buildSearchQueryEventRow(input, NOW);
+  it('holds the lowercased query, type, flag, counts, arrival time and a visitor-day hash, and nothing else', () => {
+    const row = buildSearchQueryEventRow(input, DAY_KEY);
     expect(row).toEqual({
+      created_at: '2026-11-12T10:30:00.000Z',
       query: 'port',
       search_type: 'top',
       signed_in: false,
@@ -65,25 +76,42 @@ describe('buildSearchQueryEventRow', () => {
 
   it('never carries the raw viewer key, the user id or the network key', () => {
     for (const viewerKey of [RAW_KEY, RAW_NETWORK_KEY]) {
-      const row = buildSearchQueryEventRow({ ...input, viewerKey }, NOW);
+      const row = buildSearchQueryEventRow({ ...input, viewerKey }, DAY_KEY);
       expect(JSON.stringify(row)).not.toContain(viewerKey);
     }
   });
 
-  it('gives one visitor the same value all day and a different one on another day', () => {
-    const morning = buildSearchQueryEventRow(input, new Date('2026-11-12T00:00:01.000Z'));
-    const evening = buildSearchQueryEventRow(input, new Date('2026-11-12T23:59:59.000Z'));
-    const nextDay = buildSearchQueryEventRow(input, new Date('2026-11-13T00:00:01.000Z'));
-    const otherVisitor = buildSearchQueryEventRow({ ...input, viewerKey: 'someone-else' }, NOW);
-    expect(morning?.visitor_day).toBe(evening?.visitor_day);
-    expect(nextDay?.visitor_day).not.toBe(morning?.visitor_day);
-    expect(otherVisitor?.visitor_day).not.toBe(morning?.visitor_day);
+  it('is an HMAC under the day key: one visitor, one value per key; another key, another value', () => {
+    const first = buildSearchQueryEventRow(input, DAY_KEY);
+    const again = buildSearchQueryEventRow({ ...input, requestedAt: new Date('2026-11-12T23:59:59.000Z') }, DAY_KEY);
+    const nextDay = buildSearchQueryEventRow(input, 'd'.repeat(64));
+    const otherVisitor = buildSearchQueryEventRow({ ...input, viewerKey: 'someone-else' }, DAY_KEY);
+    expect(again?.visitor_day).toBe(first?.visitor_day);
+    expect(nextDay?.visitor_day).not.toBe(first?.visitor_day);
+    expect(otherVisitor?.visitor_day).not.toBe(first?.visitor_day);
+    expect(first?.visitor_day).toBe(createHmac('sha256', DAY_KEY).update(RAW_NETWORK_KEY).digest('hex'));
+  });
+
+  it('writes a fresh random value, never a hash under another secret, when the day key is unknown', () => {
+    const first = buildSearchQueryEventRow(input, null);
+    const second = buildSearchQueryEventRow(input, null);
+    expect(first?.visitor_day).toMatch(/^[0-9a-f]{64}$/);
+    expect(first?.visitor_day).not.toBe(second?.visitor_day);
   });
 
   it('caps the query at 100 characters by code point and drops a blank one', () => {
-    const long = buildSearchQueryEventRow({ ...input, normalizedQuery: '😀'.repeat(150) }, NOW);
+    const long = buildSearchQueryEventRow({ ...input, normalizedQuery: '😀'.repeat(150) }, DAY_KEY);
     expect(Array.from(long?.query ?? '')).toHaveLength(100);
-    expect(buildSearchQueryEventRow({ ...input, normalizedQuery: '   ' }, NOW)).toBeNull();
+    expect(buildSearchQueryEventRow({ ...input, normalizedQuery: '   ' }, DAY_KEY)).toBeNull();
+  });
+
+  it('strips control characters before the cap: an ANSI or OSC sequence cannot reach the log', () => {
+    const row = buildSearchQueryEventRow({ ...input, normalizedQuery: 'po\u001b[31mrt\u0007\u001b]0;pwned\u0007' }, DAY_KEY);
+    expect(row?.query).toBe('po[31mrt]0;pwned');
+    expect(row?.query).not.toMatch(/\p{Cc}/u);
+    expect(buildSearchQueryEventRow({ ...input, normalizedQuery: '\u001b\u0007 ' }, DAY_KEY)).toBeNull();
+    const padded = buildSearchQueryEventRow({ ...input, normalizedQuery: `${'\u0007'.repeat(200)}port` }, DAY_KEY);
+    expect(padded?.query).toBe('port');
   });
 });
 
@@ -106,6 +134,49 @@ describe('recordSearchAnswer', () => {
     expect(from).toHaveBeenCalledWith(SEARCH_QUERY_EVENTS_TABLE);
     expect(insert).toHaveBeenCalledTimes(1);
     expect(insert.mock.calls[0]).toEqual([expect.objectContaining({ query: 'port', post_count: 2 })]);
+  });
+
+  it('reads the day key once per instance and day, and hashes under it', async () => {
+    const { deps, rpc, insert, tasks } = setup();
+    recordSearchAnswer(deps, input);
+    recordSearchAnswer(deps, { ...input, normalizedQuery: 'Portr' });
+    recordSearchAnswer(deps, { ...input, normalizedQuery: 'Portra' });
+    await Promise.all(tasks.map((task) => task()));
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith('search_visitor_day_key', { p_day: '2026-11-12' });
+    const hashes = (insert.mock.calls as unknown as Array<[{ visitor_day: string }]>).map(([row]) => row.visitor_day);
+    expect(new Set(hashes).size).toBe(1);
+    expect(hashes[0]).toBe(createHmac('sha256', DAY_KEY).update(RAW_NETWORK_KEY).digest('hex'));
+
+    recordSearchAnswer(deps, { ...input, requestedAt: new Date('2026-11-13T00:00:05.000Z') });
+    await tasks[3]();
+    expect(rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs the row with a random visitor value, not the feed salt, when the key cannot be read, and retries next time', async () => {
+    const { deps, rpc, insert, tasks } = setup({ rpc: async () => ({ data: null, error: { message: 'down' } }) });
+    recordSearchAnswer(deps, input);
+    recordSearchAnswer(deps, input);
+    await tasks[0]();
+    await tasks[1]();
+    expect(insert).toHaveBeenCalledTimes(2);
+    const [a, b] = (insert.mock.calls as unknown as Array<[{ visitor_day: string }]>).map(([row]) => row.visitor_day);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).not.toBe(b);
+    expect(rpc).toHaveBeenCalledTimes(2);
+
+    const throwing = setup({ rpc: async () => { throw new Error('network down'); } });
+    recordSearchAnswer(throwing.deps, input);
+    await expect(throwing.tasks[0]()).resolves.toBeUndefined();
+    expect(throwing.insert).toHaveBeenCalledTimes(1);
+  });
+
+  it('stamps the row with the request time, not the time the insert runs', async () => {
+    const { deps, insert, tasks } = setup();
+    recordSearchAnswer(deps, input);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await tasks[0]();
+    expect((insert.mock.calls as unknown as Array<[{ created_at: string }]>)[0][0].created_at).toBe('2026-11-12T10:30:00.000Z');
   });
 
   it('writes nothing for a request with a cursor (a later page)', () => {

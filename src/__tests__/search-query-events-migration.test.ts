@@ -44,6 +44,25 @@ describe('search_query_events migration', () => {
     expect(code).not.toMatch(/GRANT [^;]*(UPDATE|DELETE|TRUNCATE)[^;]*search_query_events/iu);
   });
 
+  it('keeps the visitor hash key per UTC day, service-role only, and deletes it after 48 hours', () => {
+    expect(code).toContain('CREATE TABLE public.search_visitor_day_keys');
+    expect(code).toContain('day date PRIMARY KEY');
+    expect(code).toContain("key text NOT NULL CHECK (key ~ '^[0-9a-f]{64}$')");
+    expect(code).toContain('ALTER TABLE public.search_visitor_day_keys ENABLE ROW LEVEL SECURITY');
+    expect(code).toContain('REVOKE ALL ON TABLE public.search_visitor_day_keys FROM PUBLIC, anon, authenticated, service_role');
+    expect(code).toContain('GRANT SELECT, INSERT ON TABLE public.search_visitor_day_keys TO service_role');
+    expect(code).toContain('ON CONFLICT (day) DO NOTHING');
+    expect(code).toContain("v_search_day_key_retention CONSTANT interval := interval '48 hours'");
+    expect(code).toContain("'search_visitor_day_keys_deleted', v_search_visitor_day_keys_deleted");
+    expect(ORPHAN_SKIPPED_TABLES.search_visitor_day_keys).toBeDefined();
+  });
+
+  it('compares each row with the next only: no self-join in the report', () => {
+    const report = code.slice(code.indexOf('CREATE FUNCTION public.search_query_report('), code.indexOf('REVOKE ALL ON FUNCTION public.search_query_report'));
+    expect(report).toContain('lead(w.created_at) OVER visitor');
+    expect(report).not.toMatch(/NOT EXISTS/iu);
+  });
+
   it('keeps the report service-role only', () => {
     expect(code).toContain('REVOKE ALL ON FUNCTION public.search_query_report(integer, integer) FROM PUBLIC, anon, authenticated');
     expect(code).toContain('GRANT EXECUTE ON FUNCTION public.search_query_report(integer, integer) TO service_role');

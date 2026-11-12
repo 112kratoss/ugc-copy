@@ -78,6 +78,58 @@ select throws_ok(
   '23514', null, 'a visitor-day that is not a 64-character hash is refused, so a raw key or id cannot be stored'
 );
 
+-- ─── The day keys ────────────────────────────────────────────────────────────
+
+select has_table('public', 'search_visitor_day_keys', 'the day-key table exists');
+select columns_are('public', 'search_visitor_day_keys', array['day', 'key', 'created_at'], 'a day and its key');
+select ok(
+  (select relrowsecurity from pg_class where oid = 'public.search_visitor_day_keys'::regclass)
+  and not has_table_privilege('anon', 'public.search_visitor_day_keys', 'SELECT')
+  and not has_table_privilege('authenticated', 'public.search_visitor_day_keys', 'SELECT')
+  and has_table_privilege('service_role', 'public.search_visitor_day_keys', 'SELECT')
+  and has_table_privilege('service_role', 'public.search_visitor_day_keys', 'INSERT')
+  and not has_table_privilege('service_role', 'public.search_visitor_day_keys', 'UPDATE')
+  and not has_table_privilege('service_role', 'public.search_visitor_day_keys', 'DELETE'),
+  'RLS on; only the service role reads or appends; nobody updates or deletes but the sweep'
+);
+select ok(
+  not has_function_privilege('anon', 'public.search_visitor_day_key(date)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.search_visitor_day_key(date)', 'EXECUTE')
+  and has_function_privilege('service_role', 'public.search_visitor_day_key(date)', 'EXECUTE'),
+  'only the service role asks for a day key'
+);
+select matches(
+  public.search_visitor_day_key(date '2026-11-12'),
+  '^[0-9a-f]{64}$',
+  'the first call makes a 64-hex key'
+);
+select is(
+  public.search_visitor_day_key(date '2026-11-12'),
+  (select key from public.search_visitor_day_keys where day = date '2026-11-12'),
+  'a second call returns the same key, so concurrent instances agree'
+);
+select isnt(
+  public.search_visitor_day_key(date '2026-11-13'),
+  public.search_visitor_day_key(date '2026-11-12'),
+  'another day, another key'
+);
+delete from public.search_visitor_day_keys;
+insert into public.search_visitor_day_keys (day, key)
+values
+  ((now() at time zone 'utc')::date - 3, repeat('a', 64)),
+  ((now() at time zone 'utc')::date - 2, repeat('b', 64)),
+  ((now() at time zone 'utc')::date,     repeat('c', 64));
+select is(
+  (public.prune_operational_backend_data() ->> 'search_visitor_day_keys_deleted')::integer,
+  2,
+  'the sweep deletes a key whose day started more than 48 hours ago, and reports it'
+);
+select is(
+  (select array_agg(key order by key) from public.search_visitor_day_keys),
+  array[repeat('c', 64)],
+  'today''s key stays'
+);
+
 -- ─── Retention and growth accounting ─────────────────────────────────────────
 
 delete from public.search_query_events;
@@ -109,8 +161,9 @@ delete from public.search_query_events;
 -- Visitor-day 2 and 3 type port; 2 finds posts, 3 finds nothing.
 -- Visitor-day 4 types "cat" then, unrelated, "dog": two searches.
 -- Visitor-day 5 types "ab" then "abc" 20 seconds later: past the 15 seconds, both are final.
--- Visitor-day 6 asks "dress" on Top and again on Posts within seconds: one search (an equal query
---   is its own prefix), and the later answer is the one that counts.
+-- Visitor-day 6 asks "dress" on Top (4 posts) and 3 seconds later on Creators (none): a tab switch,
+--   one search, and not a zero-result one, since only the rows of the same text that all found
+--   nothing count as zero.
 -- Visitor-day 7 searched "port" ten days ago: outside a 7-day window.
 -- Visitor-day 8 types "ca" then "cat" in a second: only "cat" is final, and it found a creator.
 insert into public.search_query_events (created_at, query, search_type, signed_in, visitor_day, creator_count, post_count, recipe_count)
@@ -125,7 +178,7 @@ values
   (now() - interval '500 seconds', 'ab',   'top',   false, repeat('5', 64), 0, 0, 0),
   (now() - interval '480 seconds', 'abc',  'top',   false, repeat('5', 64), 0, 0, 0),
   (now() - interval '300 seconds', 'dress', 'top',  false, repeat('6', 64), 0, 4, 0),
-  (now() - interval '297 seconds', 'dress', 'posts', false, repeat('6', 64), 0, 0, 0),
+  (now() - interval '297 seconds', 'dress', 'creators', false, repeat('6', 64), 0, 0, 0),
   (now() - interval '10 days',     'port', 'top',   false, repeat('7', 64), 0, 0, 0),
   (now() - interval '700 seconds', 'ca',   'top',   false, repeat('8', 64), 0, 0, 0),
   (now() - interval '699 seconds', 'cat',  'top',   false, repeat('8', 64), 1, 0, 0);
@@ -138,9 +191,9 @@ select results_eq(
        ('ab'::text,   1::bigint, 1::bigint),
        ('abc'::text,  1::bigint, 1::bigint),
        ('dog'::text,  1::bigint, 1::bigint),
-       ('dress'::text, 1::bigint, 1::bigint),
-       ('cat'::text,  2::bigint, 0::bigint) $$,
-  'typing steps collapse into their final query; the zero-result count is per visitor-day; zero-result searches come first'
+       ('cat'::text,  2::bigint, 0::bigint),
+       ('dress'::text, 1::bigint, 0::bigint) $$,
+  'typing steps collapse into their final query; a tab switch is one search that found something; the zero-result count is per visitor-day; zero-result searches come first'
 );
 select is(
   (select count(*)::integer from public.search_query_report(7, 50) where query in ('po', 'por', 'ca')),
@@ -149,7 +202,7 @@ select is(
 );
 select results_eq(
   $$ select distinct total_searches, total_zero_result_searches from public.search_query_report(7, 50) $$,
-  $$ values (9::bigint, 6::bigint) $$,
+  $$ values (9::bigint, 5::bigint) $$,
   'every row carries the window totals, so a zero-result rate is one division'
 );
 select is(
@@ -186,6 +239,25 @@ select ok(
   has_function_privilege('service_role', 'public.search_query_report(integer, integer)', 'EXECUTE'),
   'the service role can'
 );
+
+-- ─── The report stays linear per visitor-day ─────────────────────────────────
+--
+-- 25,920 rows from one key (a bot, or one hour of searching every 100 ms) took 99 seconds when
+-- each row was compared with every later row of its visitor-day. Compared with the next row
+-- only, it is a sort. The statement timeout turns a regression into a failure, not a hang.
+
+delete from public.search_query_events;
+insert into public.search_query_events (created_at, query, search_type, signed_in, visitor_day, creator_count, post_count, recipe_count)
+select now() - interval '1 hour' + (n * interval '100 milliseconds'),
+       'q' || (n % 7), 'top', false, repeat('9', 64), 0, n % 3, 0
+from generate_series(1, 25920) as n;
+
+set local statement_timeout = '10s';
+select lives_ok(
+  $$ select count(*) from public.search_query_report(1, 50) $$,
+  'the report of 25,920 rows from one visitor-day runs within 10 seconds'
+);
+set local statement_timeout = 0;
 
 select * from finish();
 rollback;

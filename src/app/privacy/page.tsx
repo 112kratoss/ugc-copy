@@ -102,6 +102,9 @@ export default function PrivacyPolicy() {
                             Raw onboarding interaction events use a pseudonymous installation identifier and are retained for up to 90 days. They do not include your prompts, uploaded media, email address, or arbitrary profile content; longer-term reporting uses aggregated results.
                         </p>
                         <p className="mt-4">
+                            Search terms you enter are logged without your account identifier or network address, under a pseudonymous code that changes every day and cannot be recomputed after 48 hours, and are deleted after 90 days.
+                        </p>
+                        <p className="mt-4">
                             One-time and new-account promotions (such as the welcome bonus and Invite &amp; Earn) are checked against a one-way cryptographic digest of your sign-in identifiers so each is granted once per person. The digest cannot be reversed into your email address or identity, contains no profile content, and is retained after account deletion solely to prevent repeat claims through re-registration.
                         </p>
                     </section>

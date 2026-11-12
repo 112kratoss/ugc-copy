@@ -123,6 +123,8 @@ describe('operational data retention', () => {
       aiUsagePayloadsCleared: 0,
       unreadNotificationsDeleted: 0,
       expiredJobLocksDeleted: 0,
+      searchQueryEventsDeleted: 0,
+      searchVisitorDayKeysDeleted: 0,
       totalDeleted: 4312,
       pruneBatches: 1,
       batchLimitReached: false,

@@ -16,6 +16,7 @@ import {
 } from '@/lib/backend-rate-limit';
 import { logBackendEvent, logBackendRouteError } from '@/lib/backend-logger';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
+import { isGuestUser } from '@/lib/account-identity';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
 import {
@@ -78,16 +79,16 @@ async function resolveViewerUserId(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   if (!request.headers.get('Authorization')) {
-    return { ok: true as const, viewerUserId: null };
+    return { ok: true as const, viewerUserId: null, isGuest: false };
   }
 
   try {
     const client = dependencies.createUserClient(request);
     const { data: { user }, error } = await getVerifiedAuthUserResult(client);
-    if (error || !user?.id) return { ok: false as const, viewerUserId: null };
-    return { ok: true as const, viewerUserId: user.id };
+    if (error || !user?.id) return { ok: false as const, viewerUserId: null, isGuest: false };
+    return { ok: true as const, viewerUserId: user.id, isGuest: isGuestUser(user) };
   } catch {
-    return { ok: false as const, viewerUserId: null };
+    return { ok: false as const, viewerUserId: null, isGuest: false };
   }
 }
 
@@ -103,6 +104,7 @@ async function handlePublicSearchGET(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   const startedAt = performance.now();
+  const requestedAt = new Date();
   try {
     const url = new URL(request.url);
     const rawQuery = url.searchParams.get('q');
@@ -192,7 +194,9 @@ async function handlePublicSearchGET(
       normalizedQuery,
       type,
       viewerKey,
-      signedIn: actor.viewerUserId !== null,
+      // A registered account: most sessions here are guests, which the log does not call signed in.
+      signedIn: actor.viewerUserId !== null && !actor.isGuest,
+      requestedAt,
       response: responseBody,
     });
     if (process.env.SCALING_CERTIFICATION_TIMINGS === '1') {
