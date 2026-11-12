@@ -384,3 +384,37 @@ export function getHomeFeedMediaHeight(card: HomeFeedCard, contentWidth: number)
     Math.min(contentWidth * MAX_MEDIA_HEIGHT_RATIO, contentWidth / aspectRatio)
   ));
 }
+
+export interface HomeFeedEmptyState {
+  title: string;
+  body: string;
+  /** The button under it, which opens the composer. */
+  actionLabel: string;
+}
+
+/**
+ * What an empty lane says. A ranked lane leaves out the viewer's own posts, so
+ * a creator whose notes were the only ones in the community was told "Nothing
+ * here yet" and invited to "Share the first post" they had already shared. The
+ * Notes lane now says whose notes it shows and where their own are.
+ */
+export function homeFeedEmptyState(chipId: HomeFeedChipId, hasAccount: boolean): HomeFeedEmptyState {
+  if (chipId === 'notes') {
+    return hasAccount
+      ? {
+          title: 'No notes from other creators yet',
+          body: 'Notes that others publish show up here. Your own are on your profile.',
+          actionLabel: 'Write a note',
+        }
+      : {
+          title: 'No notes yet',
+          body: 'Posts with writing will appear here as creators publish them.',
+          actionLabel: 'Write the first note',
+        };
+  }
+  return {
+    title: 'Nothing here yet',
+    body: 'New community posts will appear here as creators publish them.',
+    actionLabel: 'Share the first post',
+  };
+}

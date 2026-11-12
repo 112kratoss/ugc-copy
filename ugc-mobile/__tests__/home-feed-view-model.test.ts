@@ -10,6 +10,7 @@ vi.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
 import feedRecipeChipContract from '../../contracts/feed-recipe-chip-v1.json';
 import {
   HOME_FEED_CHIPS,
+  homeFeedEmptyState,
   buildHomeFeedCards,
   canExpandHomeFeedBody,
   estimateWrappedLineCount,
@@ -545,5 +546,30 @@ describe("a Home card's recipe chip", () => {
     expect(card).not.toContain('asset?.title');
     expect(card).not.toContain('cardUnlock');
     expect(shell).not.toMatch(/\bunlock\b/);
+  });
+});
+
+describe('an empty Home lane', () => {
+  it('tells a creator the Notes lane holds other people\'s notes, not that there are none', () => {
+    const state = homeFeedEmptyState('notes', true);
+    expect(state.title).toBe('No notes from other creators yet');
+    expect(state.body).toContain('Your own are on your profile');
+    // Never "the first": theirs may already be out.
+    expect(state.actionLabel).toBe('Write a note');
+  });
+
+  it('invites a guest to write the first note', () => {
+    expect(homeFeedEmptyState('notes', false)).toEqual({
+      title: 'No notes yet',
+      body: 'Posts with writing will appear here as creators publish them.',
+      actionLabel: 'Write the first note',
+    });
+  });
+
+  it('keeps the other lanes\' words', () => {
+    for (const chip of ['for-you', 'recent', 'unlocks'] as const) {
+      expect(homeFeedEmptyState(chip, true).title).toBe('Nothing here yet');
+      expect(homeFeedEmptyState(chip, true).actionLabel).toBe('Share the first post');
+    }
   });
 });

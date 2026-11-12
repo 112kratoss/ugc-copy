@@ -10,6 +10,7 @@ import {
   ChevronRight,
   CircleAlert,
   Crown,
+  FileText,
   Gift,
   Globe,
   Heart,
@@ -35,6 +36,8 @@ import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { PushOfferCard } from '@/components/push-offer-card';
 import { Reveal } from '@/components/reveal';
 import { ProfileGridSkeleton } from '@/components/skeleton';
+import { TEXT_POST_PLATE_BODY_LINE_HEIGHT, TEXT_POST_PLATE_TITLE_HEIGHT, TextPostPlate } from '@/components/text-post-plate';
+import { buildTextPostPlate, textPostPlateBodyLines } from '@/lib/text-post-plate-view-model';
 import { TopScrim } from '@/components/top-scrim';
 import { AppText, IconButton, PrimaryButton, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
 import { loadActiveGenerationRecord } from '@/lib/active-generation-record';
@@ -1829,8 +1832,8 @@ function ProfileMediaTile({
       >
         <ProfileGalleryPreview item={item} height={height} watchdog={mediaWatchdog} />
         {/* The shade keeps the corner marks legible over a picture. An audio
-            plate has no picture, and under the shade its own words went grey. */}
-        {item.previewKind === 'audio' ? null : (
+            or text plate has no picture, and under the shade its own words went grey. */}
+        {item.previewKind === 'audio' || item.previewKind === 'text' ? null : (
           <LinearGradient
             colors={[hexWithAlpha(mediaColors.mediaGround, 0), hexWithAlpha(mediaColors.mediaGround, 0.16), mediaColors.mediaScrimStrong]}
             locations={[0, 0.48, 1]}
@@ -1987,7 +1990,10 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
     ? <Sparkles size={appTheme.icon.xs} color={accent} />
     : item.mediaKind === 'video'
       ? <Play size={appTheme.icon.xs} color={accent} fill={accent} />
-      : <ImageIcon size={appTheme.icon.xs} color={accent} />;
+      // A post of writing wore the picture mark, over a tile with no picture.
+      : item.previewKind === 'text'
+        ? <FileText size={appTheme.icon.xs} color={accent} />
+        : <ImageIcon size={appTheme.icon.xs} color={accent} />;
   const state = getProfileTileState(item);
   const StateGlyph = state.glyph === 'globe'
     ? Globe
@@ -2187,33 +2193,36 @@ function ProfileAudioPreview({ item, height }: { item: ProfileMediaCard; height:
   );
 }
 
+/** Clear of the type mark in the top corner and the state mark in the bottom one. */
+const PROFILE_TEXT_PLATE_TOP = 46;
+const PROFILE_TEXT_PLATE_BOTTOM = 38;
+
+/**
+ * A text post or text creation in the grid: its name, then as many whole lines
+ * of its writing as fit between the corner marks. It used to centre five lines
+ * under a "Text post" pill, and the last of them ran under the state mark; the
+ * type mark in the corner says what the pill said.
+ */
 function ProfileTextPreview({ item, height }: { item: ProfileMediaCard; height: number }) {
   const theme = useAppTheme();
-  const accent = item.label === 'Creation' ? theme.colors.motion : theme.colors.info;
-  const label = item.label === 'Creation' ? 'Text creation' : 'Text post';
+  const content = buildTextPostPlate({ title: item.title, body: item.previewText });
 
   return (
-    <View testID="profile-text-preview" style={{ height, overflow: 'hidden', backgroundColor: theme.colors.surfaceInset }}>
-      <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 12, paddingTop: 46, paddingBottom: 14 }}>
-        <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, backgroundColor: accent }} />
-        <View
-          style={{
-            alignSelf: 'flex-start',
-            borderRadius: appTheme.radii.pill,
-            backgroundColor: `${accent}1f`,
-            borderWidth: 1,
-            borderColor: `${accent}66`,
-            paddingHorizontal: 8,
-            paddingVertical: 4,
-            marginBottom: 8,
-          }}
-        >
-          <Text numberOfLines={1} style={{ color: accent, fontSize: 11, fontWeight: '800' }}>{label}</Text>
-        </View>
-        <Text numberOfLines={5} style={{ color: theme.colors.text, fontSize: 13, lineHeight: 16, fontWeight: '800' }}>
-          {item.previewText || item.title}
-        </Text>
-      </View>
+    <View testID="profile-text-preview" style={{ height }}>
+      <TextPostPlate
+        content={content}
+        // A creation keeps the creators' colour; a post takes the reel slide's coral.
+        accent={item.label === 'Creation' ? theme.colors.motion : undefined}
+        paddingTop={PROFILE_TEXT_PLATE_TOP}
+        paddingBottom={PROFILE_TEXT_PLATE_BOTTOM}
+        bodyLines={textPostPlateBodyLines({
+          height,
+          paddingTop: PROFILE_TEXT_PLATE_TOP,
+          paddingBottom: PROFILE_TEXT_PLATE_BOTTOM,
+          titleHeight: content.title && content.body ? TEXT_POST_PLATE_TITLE_HEIGHT : 0,
+          lineHeight: TEXT_POST_PLATE_BODY_LINE_HEIGHT,
+        })}
+      />
     </View>
   );
 }

@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
+import { TextPostPlate } from '@/components/text-post-plate';
 import { CreatorAvatar, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
 import { MotionView, useOverlayPresence } from '@/lib/motion';
 import { BackGlyph } from '@/lib/platform-glyphs';
@@ -30,7 +31,9 @@ import {
   rememberSearchQuery,
   searchQueryLength,
 } from '@/lib/search-history';
+import { isTextOnlyShowcasePost } from '@/lib/showcase-display';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
+import { buildTextPostPlate, textPostPlateUnderCaption } from '@/lib/text-post-plate-view-model';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type {
@@ -280,6 +283,19 @@ function PostRow({ item, onOpen }: { item: ShowcaseFeedItem; onOpen: () => void 
     >
       {preview ? (
         <Image source={{ uri: preview }} contentFit="cover" style={{ width: '100%', aspectRatio: 1.15 }} />
+      ) : isTextOnlyShowcasePost(item) ? (
+        // A post with no picture has its writing to show. The frame used to
+        // hold a magnifier, which read as a result that had failed to load.
+        <View style={{ width: '100%', aspectRatio: 1.15 }}>
+          <TextPostPlate
+            testID="search-text-post-plate"
+            // The title is the caption's first line, just under the frame.
+            content={textPostPlateUnderCaption(buildTextPostPlate(item))}
+            size="feature"
+            // A 48% column at 1.15 is at least 140pt tall on a 375pt phone: five 20pt lines and the padding.
+            bodyLines={5}
+          />
+        </View>
       ) : (
         <View style={{ width: '100%', aspectRatio: 1.15, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panel }}>
           <Search size={appTheme.icon.feature} color={theme.colors.primary} />

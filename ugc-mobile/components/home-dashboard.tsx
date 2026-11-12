@@ -34,6 +34,7 @@ import { feedWindowPaginationPosition } from '@/lib/feed-page-window';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import {
   HOME_FEED_CHIPS,
+  homeFeedEmptyState,
   buildHomeFeedCards,
   getHomeFeedCardOpenTarget,
   type HomeFeedCard,
@@ -264,6 +265,7 @@ export function HomeDashboard() {
   const [undoNotice, setUndoNotice] = useState<FeedUndoNoticeModel | null>(null);
 
   const activeChip = HOME_FEED_CHIPS.find((chip) => chip.id === activeChipId) ?? HOME_FEED_CHIPS[0];
+  const emptyState = homeFeedEmptyState(activeChip.id, Boolean(user));
   // The reel a card opens reads and pages these very pages (`lane` below).
   const laneQueryOptions = useMemo(
     () => showcaseFeedLaneQueryOptions(api, activeChip.filters, identityUserId),
@@ -1194,11 +1196,11 @@ export function HomeDashboard() {
               <View style={{ gap: 12 }}>
                 <StatusBlock
                   tone="info"
-                  title="Nothing here yet"
-                  body="New community posts will appear here as creators publish them."
+                  title={emptyState.title}
+                  body={emptyState.body}
                 />
                 <SecondaryButton
-                  label="Share the first post"
+                  label={emptyState.actionLabel}
                   onPress={() => router.push('/post/new' as never)}
                 />
               </View>

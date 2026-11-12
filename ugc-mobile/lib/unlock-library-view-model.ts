@@ -144,6 +144,17 @@ export function getUnlockThumbnailUrl(item: Pick<ViewerUnlockItem, 'post'>): str
   return post.previewUrl ?? (post.mediaKind === 'image' ? post.mediaUrl : null) ?? null;
 }
 
+/**
+ * True when the recipe hangs off a post of writing: there will never be a
+ * still to draw, so its row shows the text mark and not the empty-box one a
+ * picture's row shows while its still loads.
+ */
+export function isUnlockOfTextPost(item: Pick<ViewerUnlockItem, 'post'>): boolean {
+  const post = item.post;
+  if (!post) return false;
+  return (post.postFormat === 'text' || post.category === 'text') && !post.mediaUrl && !post.previewUrl;
+}
+
 export type UnlockCover =
   | { kind: 'none' }
   | { kind: 'image'; stillUrl: string }

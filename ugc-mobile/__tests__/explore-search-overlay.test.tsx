@@ -772,6 +772,29 @@ describe('ExploreSearchOverlay search', () => {
     await act(async () => tree.unmount());
   });
 
+  // 2026-11-12: a post of writing has no picture, and its card drew a magnifier
+  // in the empty frame, which read as a result that had not loaded.
+  it('draws a text post as its writing, where a picture post has its picture', async () => {
+    const note = {
+      ...post('n1'),
+      title: 'Creative Idea',
+      category: 'text',
+      postFormat: 'text',
+      mediaKind: null,
+      body: 'Exploring the app\nfeatures.',
+      prompt: '',
+    } as unknown as ShowcaseFeedItem;
+    searchPublicContent.mockResolvedValueOnce(searchAnswer('creative', 'top', { posts: [note] }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'creative');
+    await advance(300);
+
+    // The writing in the frame, on one run of lines; the title once, in the caption under it.
+    expect(cardTexts(tree, 'Open post Creative Idea')).toEqual(['Exploring the app features.', 'Creative Idea', 'Ana', '0 saves', '0']);
+
+    await act(async () => tree.unmount());
+  });
+
   it('names who sells a recipe on its price line', async () => {
     searchPublicContent.mockResolvedValueOnce(searchAnswer('lighting', 'top', {
       recipes: [
