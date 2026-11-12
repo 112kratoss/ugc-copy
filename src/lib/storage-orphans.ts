@@ -218,6 +218,9 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   referral_account_devices: TELEMETRY,
   referral_purchase_reconciliation_retries: NO_TEXT,
   referral_visits: TELEMETRY,
+  // The anonymous search log: a short query, a hash and three counts per row.
+  search_query_events: TELEMETRY,
+  search_visitor_day_keys: TELEMETRY,
   // Search's spelling dictionary: one lowercase word of letters per row.
   search_terms: SEARCH_DICTIONARY,
   showcase_media_revocations: UPLOAD_BOOKKEEPING,

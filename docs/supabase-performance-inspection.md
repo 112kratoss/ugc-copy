@@ -73,3 +73,44 @@ claim.
 - Reset `pg_stat_statements` only at a declared workload boundary and record the
   reset in the artifact; never reset production statistics merely to tidy the
   report.
+
+## Search query log
+
+`public.search_query_events` records one row per first-page `/api/search` answer
+(none for a later page or a 400, 401, 429 or 500), so search ranking can be tuned
+against what people actually type and miss. The insert runs behind the response
+(Next's `after`) and a failure is logged and dropped, never shown to the caller.
+`SEARCH_QUERY_LOG_DISABLED=1` stops the writes.
+
+A row holds no account id or address: the lowercased query (control characters
+removed, at most 100 characters), the search type, whether a registered account
+(not a guest session) was presented, how many creators, posts and recipes were
+returned, when the request arrived, and `visitor_day`. That is an HMAC of the
+viewer's rate-limit key (user id or hashed network address, never stored) under a
+random key made for that UTC day alone (`search_visitor_day_keys`). The sweep
+deletes a key once its day is more than 48 hours old, so `visitor_day` is
+pseudonymous for 48 hours to whoever holds the service role and cannot be
+recomputed from an account or an address by anyone after that (operators
+included); a visitor is never joined across days. If the key cannot be read the
+row gets a random value instead and the answer is unaffected. Rows are kept 90
+days by the operational retention sweep (`prune_operational_backend_data`, which
+reports `search_query_events_deleted` and `search_visitor_day_keys_deleted`) and
+`search_query_events` is watched by `get_operational_table_growth` (warning at
+500,000 rows).
+
+```bash
+npm run ops:search-report -- --days 7 [--limit 50] [--json]
+```
+
+Read-only, service role. It prints, per final query, how many distinct
+visitor-days searched it and how many of those found nothing in any kind, zero
+results first, under a line with the window's totals and zero-result rate. A
+"final query" is one that no later query of the same visitor-day extends within
+15 seconds, so "po" → "por" → "port" is the single search "port". The same words
+asked on several tabs within that window are one search, and a zero-result one
+only if every tab found nothing. Control characters in a query print as `\xNN`. The same data
+is `select * from public.search_query_report(7, 50)`.
+
+Caveats: a search typed across UTC midnight counts twice; the first-page
+requests of a person who never stops typing are still one per pause, so the
+counts are searches, not people.

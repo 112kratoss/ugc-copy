@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
+import { encodePublicSearchCursor } from '@/lib/public-search';
 import { getPublicSearchRouteResponse } from '@/lib/public-search-route-adapter-service';
 import type { PublicSearchResponse } from '@/lib/public-search';
 
@@ -41,7 +42,8 @@ describe('public search route adapter service', () => {
         enforceBackendRateLimit,
         getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
         searchPublicContent,
-        withProviderFetchRequestId: requestIdBoundary,
+        runAfterResponse: () => {},
+      withProviderFetchRequestId: requestIdBoundary,
       },
     });
 
@@ -77,7 +79,8 @@ describe('public search route adapter service', () => {
         enforceBackendRateLimit: vi.fn(allowedRateLimit),
         getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
         searchPublicContent,
-        withProviderFetchRequestId: requestIdBoundary,
+        runAfterResponse: () => {},
+      withProviderFetchRequestId: requestIdBoundary,
       },
     });
     const emoji = encodeURIComponent('\u{1F600}');
@@ -106,7 +109,8 @@ describe('public search route adapter service', () => {
         enforceBackendRateLimit: vi.fn(allowedRateLimit),
         getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
         searchPublicContent,
-        withProviderFetchRequestId: requestIdBoundary,
+        runAfterResponse: () => {},
+      withProviderFetchRequestId: requestIdBoundary,
       },
     });
 
@@ -129,7 +133,8 @@ describe('public search route adapter service', () => {
       request: new Request(url),
       dependencies: {
         searchPublicContent,
-        withProviderFetchRequestId: requestIdBoundary,
+        runAfterResponse: () => {},
+      withProviderFetchRequestId: requestIdBoundary,
       },
     });
     expect(response.status).toBe(400);
@@ -152,12 +157,159 @@ describe('public search route adapter service', () => {
           });
         }),
         getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
-        withProviderFetchRequestId: requestIdBoundary,
+        runAfterResponse: () => {},
+      withProviderFetchRequestId: requestIdBoundary,
       },
     });
 
     expect(response.status).toBe(429);
     expect(response.headers.get('Retry-After')).toBe('9');
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  });
+
+  describe('the anonymous search log', () => {
+    function logHarness(options: { insert?: () => Promise<{ error: unknown }> } = {}) {
+      const insert = vi.fn(options.insert ?? (async () => ({ error: null })));
+      const from = vi.fn(() => ({ insert }));
+      const rpc = vi.fn(async () => ({ data: 'e'.repeat(64), error: null }));
+      const tasks: Array<() => Promise<unknown>> = [];
+      const logEvent = vi.fn();
+      const ask = (url: string, extra: Record<string, unknown> = {}) => getPublicSearchRouteResponse({
+        request: new Request(url, { headers: (extra.headers as Record<string, string>) ?? {} }),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({ from, rpc }) as unknown as SupabaseClient),
+          createUserClient: vi.fn(() => ({
+            auth: { getUser: vi.fn(async () => ({ data: { user: { id: 'viewer-1' } }, error: null })) },
+          }) as unknown as SupabaseClient),
+          enforceBackendRateLimit: vi.fn(allowedRateLimit),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
+          searchPublicContent: vi.fn(async () => emptyResponse('Port', 'top')),
+          logEvent,
+          runAfterResponse: (task) => { tasks.push(task); },
+          withProviderFetchRequestId: requestIdBoundary,
+          ...extra,
+        },
+      });
+      return { ask, insert, from, rpc, tasks, logEvent };
+    }
+
+    it('returns the answer without awaiting the write', async () => {
+      const { ask, insert, tasks } = logHarness({ insert: () => new Promise(() => {}) });
+      const response = await ask('http://localhost/api/search?q=Port');
+      expect(response.status).toBe(200);
+      expect(tasks).toHaveLength(1);
+      expect(insert).not.toHaveBeenCalled();
+      // The write never settles; the answer already has.
+      void tasks[0]();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(insert).toHaveBeenCalledTimes(1);
+    });
+
+    it('logs one anonymous row for a first page: the query lowercased, never the key', async () => {
+      const { ask, insert, from, tasks } = logHarness();
+      await ask('http://localhost/api/search?q=Port&type=top');
+      await tasks[0]();
+      expect(from).toHaveBeenCalledWith('search_query_events');
+      const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
+      expect(row).toMatchObject({
+        query: 'port', search_type: 'top', signed_in: false, creator_count: 0, post_count: 0, recipe_count: 0,
+      });
+      expect(Object.keys(row).sort()).toEqual([
+        'created_at', 'creator_count', 'post_count', 'query', 'recipe_count', 'search_type', 'signed_in', 'visitor_day',
+      ]);
+      expect(JSON.stringify(row)).not.toContain('network-key');
+    });
+
+    it('marks a signed-in search and keys it on the user without storing the id', async () => {
+      const { ask, insert, tasks } = logHarness();
+      await ask('http://localhost/api/search?q=Port', { headers: { Authorization: 'Bearer token' } });
+      await tasks[0]();
+      const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
+      expect(row.signed_in).toBe(true);
+      expect(JSON.stringify(row)).not.toContain('viewer-1');
+    });
+
+    it('stamps the row with the time the request arrived, not the time the write runs', async () => {
+      const { ask, insert, tasks } = logHarness();
+      const before = Date.now();
+      await ask('http://localhost/api/search?q=Port');
+      const after = Date.now();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await tasks[0]();
+      const [row] = insert.mock.calls[0] as unknown as [{ created_at: string }];
+      const stamped = Date.parse(row.created_at);
+      expect(stamped).toBeGreaterThanOrEqual(before);
+      expect(stamped).toBeLessThanOrEqual(after);
+    });
+
+    it('does not call a guest session signed in', async () => {
+      const { ask, insert, tasks } = logHarness();
+      await ask('http://localhost/api/search?q=Port', {
+        headers: { Authorization: 'Bearer guest' },
+        createUserClient: vi.fn(() => ({
+          auth: { getUser: vi.fn(async () => ({ data: { user: { id: 'guest-1', is_anonymous: true } }, error: null })) },
+        }) as unknown as SupabaseClient),
+      });
+      await tasks[0]();
+      const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
+      expect(row.signed_in).toBe(false);
+      expect(JSON.stringify(row)).not.toContain('guest-1');
+    });
+
+    it('writes nothing for a request with a cursor', async () => {
+      const { ask, tasks } = logHarness();
+      const cursor = encodePublicSearchCursor({ version: 1, type: 'recipes', offset: 12 });
+      const response = await ask(`http://localhost/api/search?q=portrait&type=recipes&cursor=${cursor}`);
+      expect(response.status).toBe(200);
+      expect(tasks).toHaveLength(0);
+    });
+
+    it.each([
+      ['a 400', 'http://localhost/api/search?q=a', {}],
+      ['a 401', 'http://localhost/api/search?q=Port', {
+        headers: { Authorization: 'Bearer bad' },
+        createUserClient: vi.fn(() => ({
+          auth: { getUser: vi.fn(async () => ({ data: { user: null }, error: { message: 'bad' } })) },
+        }) as unknown as SupabaseClient),
+      }],
+      ['a 429', 'http://localhost/api/search?q=Port', {
+        enforceBackendRateLimit: vi.fn(async () => {
+          throw new BackendRateLimitError({
+            allowed: false, limit: 180, remaining: 0, retryAfterSeconds: 9, resetAt: '2026-08-27T12:00:00.000Z',
+          });
+        }),
+      }],
+      ['a 500', 'http://localhost/api/search?q=Port', {
+        searchPublicContent: vi.fn(async () => { throw new Error('search failed'); }),
+        logError: vi.fn(),
+      }],
+    ])('writes nothing for %s', async (_label, url, extra) => {
+      const { ask, tasks } = logHarness();
+      const response = await ask(url, extra);
+      expect(response.status).not.toBe(200);
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('answers 200 even when the insert fails, the scheduler throws, or the switch is off', async () => {
+      const failing = logHarness({ insert: async () => ({ error: { message: 'boom' } }) });
+      expect((await failing.ask('http://localhost/api/search?q=Port')).status).toBe(200);
+      await failing.tasks[0]();
+      expect(failing.logEvent).toHaveBeenCalledWith('warn', 'search_query_log_failed', expect.anything());
+
+      const noScheduler = logHarness();
+      const response = await noScheduler.ask('http://localhost/api/search?q=Port', {
+        runAfterResponse: () => { throw new Error('outside a request'); },
+      });
+      expect(response.status).toBe(200);
+
+      vi.stubEnv('SEARCH_QUERY_LOG_DISABLED', '1');
+      try {
+        const off = logHarness();
+        expect((await off.ask('http://localhost/api/search?q=Port')).status).toBe(200);
+        expect(off.tasks).toHaveLength(0);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
   });
 });
