@@ -126,13 +126,13 @@ describe('public search route adapter service', () => {
     });
 
     it('applies "from creators I follow" for an account, and leaves it out for a visitor or a guest session', async () => {
-      expect((await ask(`${base}&following=1`, 'account')).options?.filters.following).toBe(true);
+      expect((await ask(`${base}&following=1`, 'account')).options?.filters?.following).toBe(true);
       const visitor = await ask(`${base}&following=1&kind=image`);
       expect(visitor.response.status).toBe(200);
       expect(visitor.options?.filters).toEqual({ ...NONE, mediaKind: 'image' });
       const guest = await ask(`${base}&following=1`, 'guest');
       expect(guest.response.status).toBe(200);
-      expect(guest.options?.filters.following).toBe(false);
+      expect(guest.options?.filters?.following).toBe(false);
     });
 
     it('passes on the exact reading, for every type that reads posts or recipes', async () => {

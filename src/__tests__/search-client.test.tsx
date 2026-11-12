@@ -34,6 +34,10 @@ function searchResponse(overrides: Partial<PublicSearchResponse> = {}): PublicSe
     normalizedQuery: 'luna',
     type: 'top',
     sort: 'top',
+    entities: [],
+    filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false },
+    correctedQuery: { posts: null, recipes: null },
+    exact: false,
     creators: { items: [], nextCursor: null },
     posts: { items: [], nextCursor: null },
     recipes: { items: [], nextCursor: null },
@@ -116,6 +120,8 @@ describe('SearchClient', () => {
     getSessionMock.mockResolvedValue({ data: { session: null } });
     fetchMock.mockResolvedValue(jsonResponse(searchResponse()));
     vi.stubGlobal('fetch', fetchMock);
+    window.localStorage.clear();
+    window.history.replaceState(null, '', '/search');
   });
 
   it('renders the initial guidance state until two characters are typed', () => {
@@ -617,6 +623,362 @@ describe('SearchClient', () => {
         await settle();
         expect(requestedUrls()[2]).toBe('/api/search?q=luna&type=posts&sort=latest');
         expect(address()).toBe('/search?q=luna&type=posts&sort=latest');
+      });
+    });
+
+    describe('entities, filters, the corrected reading and recent searches', () => {
+      const HISTORY_KEY = 'magicbooklet:public-search-history:v1';
+      const address = () => `${window.location.pathname}${window.location.search}`;
+      const kling = { kind: 'model' as const, key: 'kling-2.6', label: 'Kling 2.6', postCount: 14, postCountCapped: false };
+      const postsAnswer = (overrides: Partial<PublicSearchResponse> = {}) => jsonResponse(searchResponse({
+        type: 'posts',
+        posts: { items: [post('post-1', 'Kling portrait', 2)], nextCursor: null },
+        ...overrides,
+      }));
+      const chip = (name: string) => within(screen.getByRole('group', { name: 'Filter posts' })).getByRole('button', { name });
+
+      it('offers the models and tools a query names on Top, and opens the posts made with one', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse(searchResponse({
+          query: 'kling',
+          normalizedQuery: 'kling',
+          entities: [kling, { kind: 'tool', key: 'klingon-fx', label: 'Klingon FX', postCount: 1000, postCountCapped: true }],
+          creators: { items: [creator('Kling Fan')], nextCursor: null },
+        })));
+        render(<SearchClient initialQuery="kling" initialType="top" />);
+        await settle();
+
+        const list = screen.getByRole('region', { name: 'Models and tools' });
+        expect(within(list).getAllByRole('button').map((button) => button.textContent)).toEqual([
+          'Kling 2.6Model · 14 posts',
+          'Klingon FXTool · 1,000+ posts',
+        ]);
+        // Entities are results: they count.
+        expect(screen.getByRole('status')).toHaveTextContent('1 result for kling');
+
+        fetchMock.mockResolvedValueOnce(postsAnswer({
+          filters: { madeWith: { kind: 'model', key: 'kling-2.6', label: 'Kling 2.6' }, mediaKind: null, hasRecipe: false, following: false },
+        }));
+        fireEvent.click(within(list).getByRole('button', { name: 'Kling 2.6, model, 14 posts. Show posts made with it' }));
+        // The filter is named at once, from the result pressed, before its answer.
+        expect(screen.getByRole('tab', { name: 'Posts' })).toHaveAttribute('aria-selected', 'true');
+        await settle();
+
+        expect(requestedUrls()[1]).toBe('/api/search?q=kling&type=posts&madeWith=model%3Akling-2.6');
+        expect(address()).toBe('/search?q=kling&type=posts&madeWith=model%3Akling-2.6');
+        expect(chip('Remove filter: made with Kling 2.6')).toHaveAttribute('aria-pressed', 'true');
+        expect(chip('Remove filter: made with Kling 2.6')).toHaveTextContent('Made with Kling 2.6');
+
+        // The chip removes it: the search is asked again unfiltered, and the address follows.
+        fetchMock.mockResolvedValueOnce(postsAnswer());
+        fireEvent.click(chip('Remove filter: made with Kling 2.6'));
+        await settle();
+        expect(requestedUrls()[2]).toBe('/api/search?q=kling&type=posts');
+        expect(address()).toBe('/search?q=kling&type=posts');
+        expect(within(screen.getByRole('group', { name: 'Filter posts' })).queryByRole('button', { name: /made with/i })).not.toBeInTheDocument();
+      });
+
+      it('draws no entity section for an answer that carries none, as an older server sends', async () => {
+        const answer = searchResponse({ creators: { items: [creator('Luna Studio')], nextCursor: null } });
+        const older: Partial<PublicSearchResponse> = { ...answer };
+        delete older.entities;
+        delete older.filters;
+        delete older.correctedQuery;
+        delete older.exact;
+        fetchMock.mockResolvedValueOnce(jsonResponse(older as PublicSearchResponse));
+        render(<SearchClient initialQuery="luna" initialType="top" />);
+        await settle();
+        expect(screen.getByText('Luna Studio')).toBeInTheDocument();
+        expect(screen.queryByRole('region', { name: 'Models and tools' })).not.toBeInTheDocument();
+        expect(screen.queryByText(/Showing results for/)).not.toBeInTheDocument();
+      });
+
+      it('narrows Posts with toggle buttons that say whether they are pressed, and keeps the choice in the address', async () => {
+        fetchMock.mockResolvedValue(postsAnswer());
+        render(<SearchClient initialQuery="portrait" initialType="posts" />);
+        await settle();
+
+        const group = screen.getByRole('group', { name: 'Filter posts' });
+        // A visitor follows nobody: no "Following".
+        expect(within(group).getAllByRole('button').map((button) => button.textContent)).toEqual(['Images', 'Videos', 'Has recipe']);
+        for (const name of ['Images', 'Videos', 'Has recipe']) expect(chip(name)).toHaveAttribute('aria-pressed', 'false');
+
+        fireEvent.click(chip('Videos'));
+        await settle();
+        expect(chip('Videos')).toHaveAttribute('aria-pressed', 'true');
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=portrait&type=posts&kind=video');
+        expect(address()).toBe('/search?q=portrait&type=posts&kind=video');
+
+        // Images and Videos are one choice.
+        fireEvent.click(chip('Images'));
+        await settle();
+        expect(chip('Images')).toHaveAttribute('aria-pressed', 'true');
+        expect(chip('Videos')).toHaveAttribute('aria-pressed', 'false');
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=portrait&type=posts&kind=image');
+
+        // Filters combine with each other and with the order.
+        fireEvent.click(chip('Has recipe'));
+        fireEvent.click(screen.getByRole('radio', { name: 'Latest' }));
+        await settle();
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=portrait&type=posts&sort=latest&kind=image&recipe=1');
+        expect(address()).toBe('/search?q=portrait&type=posts&sort=latest&kind=image&recipe=1');
+
+        // Pressed again a switch is off; Clear filters turns the rest off.
+        fireEvent.click(chip('Has recipe'));
+        await settle();
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=portrait&type=posts&sort=latest&kind=image');
+        fireEvent.click(chip('Clear filters'));
+        await settle();
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=portrait&type=posts&sort=latest');
+        expect(within(group).queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+      });
+
+      it('offers "Following" to an account, and never to a visitor or a guest session', async () => {
+        getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-1', user: { id: 'viewer-1', is_anonymous: false } } } });
+        fetchMock.mockResolvedValue(postsAnswer());
+        const { unmount } = render(<SearchClient initialQuery="portrait" initialType="posts" />);
+        await settle();
+        fireEvent.click(chip('Following'));
+        await settle();
+        expect(chip('Following')).toHaveAttribute('aria-pressed', 'true');
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=portrait&type=posts&following=1');
+        unmount();
+
+        getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-2', user: { id: 'guest-1', is_anonymous: true } } } });
+        render(<SearchClient initialQuery="portrait" initialType="posts" />);
+        await settle();
+        expect(within(screen.getByRole('group', { name: 'Filter posts' })).queryByRole('button', { name: 'Following' })).not.toBeInTheDocument();
+      });
+
+      it('opens a shared filtered link filtered, pages it with its filters, and sends a post back to it', async () => {
+        fetchMock.mockResolvedValueOnce(postsAnswer({
+          filters: { madeWith: { kind: 'model', key: 'kling-2.6', label: 'Kling 2.6' }, mediaKind: 'video', hasRecipe: false, following: false },
+          posts: { items: [post('post-1', 'Kling portrait', 2)], nextCursor: 'page-2' },
+        }));
+        render(
+          <SearchClient
+            initialQuery="portrait"
+            initialType="posts"
+            initialFilters={{ madeWith: 'model:kling-2.6', mediaKind: 'video', hasRecipe: false, following: false }}
+          />,
+        );
+        // Before any answer the filter is named by its key: the address holds no name.
+        expect(chip('Remove filter: made with kling-2.6')).toBeInTheDocument();
+        await settle();
+        expect(requestedUrls()[0]).toBe('/api/search?q=portrait&type=posts&madeWith=model%3Akling-2.6&kind=video');
+        expect(chip('Remove filter: made with Kling 2.6')).toBeInTheDocument();
+        expect(chip('Videos')).toHaveAttribute('aria-pressed', 'true');
+        const opened = new URL(screen.getByRole('link', { name: /Kling portrait/ }).getAttribute('href') ?? '', 'http://localhost');
+        expect(opened.searchParams.get('returnTo')).toBe('/search?q=portrait&type=posts&madeWith=model%3Akling-2.6&kind=video');
+
+        fetchMock.mockResolvedValueOnce(postsAnswer({ posts: { items: [post('post-2', 'Older Kling portrait', 0)], nextCursor: null } }));
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+        await settle();
+        expect(requestedUrls()[1]).toBe('/api/search?q=portrait&type=posts&madeWith=model%3Akling-2.6&kind=video&cursor=page-2');
+        expect(screen.getByText('Older Kling portrait')).toBeInTheDocument();
+      });
+
+      it('keeps the filter switches up over a filtered search that found nothing, and says to remove one', async () => {
+        fetchMock.mockResolvedValue(postsAnswer({ posts: { items: [], nextCursor: null } }));
+        render(
+          <SearchClient
+            initialQuery="portrait"
+            initialType="posts"
+            initialFilters={{ madeWith: null, mediaKind: 'video', hasRecipe: true, following: false }}
+          />,
+        );
+        await settle();
+        expect(screen.getByText('No results for “portrait”')).toBeInTheDocument();
+        expect(screen.getByText('No post matches these filters. Remove one, or clear them all.')).toBeInTheDocument();
+        expect(chip('Videos')).toHaveAttribute('aria-pressed', 'true');
+        expect(chip('Clear filters')).toBeInTheDocument();
+      });
+
+      it('leaves the Top tab unfiltered and its address clean, and brings the filters back on Posts', async () => {
+        fetchMock.mockResolvedValue(jsonResponse(searchResponse({ creators: { items: [creator('Luna Studio')], nextCursor: null } })));
+        render(
+          <SearchClient
+            initialQuery="luna"
+            initialType="top"
+            initialFilters={{ madeWith: null, mediaKind: 'image', hasRecipe: false, following: false }}
+          />,
+        );
+        await settle();
+        expect(screen.queryByRole('group', { name: 'Filter posts' })).not.toBeInTheDocument();
+        expect(requestedUrls()).toEqual(['/api/search?q=luna&type=top']);
+        expect(address()).toBe('/search?q=luna');
+
+        fireEvent.click(screen.getByRole('tab', { name: 'Posts' }));
+        await settle();
+        expect(requestedUrls()[1]).toBe('/api/search?q=luna&type=posts&kind=image');
+        expect(chip('Images')).toHaveAttribute('aria-pressed', 'true');
+      });
+
+      it('says when it read the query as something else, announces it, and searches for it as typed on request', async () => {
+        fetchMock.mockResolvedValueOnce(postsAnswer({
+          query: 'portriat',
+          normalizedQuery: 'portriat',
+          correctedQuery: { posts: 'portrait', recipes: null },
+        }));
+        render(<SearchClient initialQuery="portriat" initialType="posts" />);
+        await settle();
+
+        expect(screen.getByText('Showing results for “portrait”')).toBeInTheDocument();
+        // One live region, the reading first.
+        expect(screen.getByRole('status')).toHaveTextContent('Showing results for “portrait”. 1 result for portriat');
+
+        fetchMock.mockResolvedValueOnce(postsAnswer({
+          query: 'portriat', normalizedQuery: 'portriat', exact: true, posts: { items: [], nextCursor: null },
+        }));
+        fireEvent.click(screen.getByRole('button', { name: 'Search instead for “portriat”' }));
+        await settle();
+        expect(requestedUrls()[1]).toBe('/api/search?q=portriat&type=posts&exact=1');
+        expect(address()).toBe('/search?q=portriat&type=posts&exact=1');
+        expect(screen.getByText('Showing results for “portriat” as typed')).toBeInTheDocument();
+        expect(screen.getByText('No results for “portriat”')).toBeInTheDocument();
+        expect(screen.queryByText('Showing results for “portrait”')).not.toBeInTheDocument();
+
+        // And back.
+        fetchMock.mockResolvedValueOnce(postsAnswer({
+          query: 'portriat', normalizedQuery: 'portriat', correctedQuery: { posts: 'portrait', recipes: null },
+        }));
+        fireEvent.click(screen.getByRole('button', { name: 'Use suggested spelling' }));
+        await settle();
+        expect(requestedUrls()[2]).toBe('/api/search?q=portriat&type=posts');
+        expect(screen.getByText('Showing results for “portrait”')).toBeInTheDocument();
+      });
+
+      it('reads a new query corrected again: the exact reading belongs to the query it was asked for', async () => {
+        fetchMock.mockResolvedValue(postsAnswer({ exact: true }));
+        render(<SearchClient initialQuery="portriat" initialType="posts" initialExact />);
+        await settle();
+        expect(requestedUrls()[0]).toBe('/api/search?q=portriat&type=posts&exact=1');
+
+        typeQuery('lanten');
+        await settle(300);
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=lanten&type=posts');
+        expect(address()).toBe('/search?q=lanten&type=posts');
+      });
+
+      it('names both readings on Top when posts and recipes were read differently, and none for Creators', async () => {
+        const top = searchResponse({
+          query: 'portriat',
+          normalizedQuery: 'portriat',
+          correctedQuery: { posts: 'portrait', recipes: 'portraits' },
+          creators: { items: [creator('Portia')], nextCursor: null },
+          posts: { items: [post('post-1', 'Portrait', 1)], nextCursor: null },
+          recipes: { items: [recipe('recipe-1', 'Portraits', 'Luna Studio')], nextCursor: null },
+        });
+        fetchMock.mockResolvedValue(jsonResponse(top));
+        render(<SearchClient initialQuery="portriat" initialType="top" />);
+        await settle();
+        expect(screen.getByText('Showing posts for “portrait” and recipes for “portraits”')).toBeInTheDocument();
+
+        fetchMock.mockResolvedValue(jsonResponse({ ...top, type: 'creators' }));
+        fireEvent.click(screen.getByRole('tab', { name: 'Creators' }));
+        await settle();
+        expect(screen.queryByText(/Showing (results|posts) for/)).not.toBeInTheDocument();
+        // Creators are never corrected, so the exact reading is not asked of them either.
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=portriat&type=creators');
+      });
+
+      it('shows recent searches while the empty box has the focus, each removable, with Clear all', async () => {
+        window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['kling portrait', 'neon harbor']));
+        render(<SearchClient initialQuery="" initialType="top" />);
+        await settle();
+        // Not focused yet in this DOM: the guidance, and no list.
+        const field = screen.getByRole('searchbox');
+        fireEvent.focus(field);
+
+        const recents = screen.getByRole('list', { name: 'Recent searches' });
+        expect(within(recents).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['kling portrait', 'neon harbor']);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Remove neon harbor from recent searches' }));
+        expect(within(recents).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['kling portrait']);
+        expect(JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]')).toEqual(['kling portrait']);
+
+        // A recent search runs again at once: it was typed already.
+        fetchMock.mockResolvedValue(jsonResponse(searchResponse({ creators: { items: [creator('Kling Fan')], nextCursor: null } })));
+        fireEvent.click(screen.getByRole('button', { name: 'Search again for kling portrait' }));
+        await settle(300);
+        expect(field).toHaveValue('kling portrait');
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=kling+portrait&type=top');
+        expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
+
+        // Cleared, the box shows them again; Clear all empties the list and the store.
+        fireEvent.keyDown(field, { key: 'Escape' });
+        fireEvent.focus(field);
+        fireEvent.click(screen.getByRole('button', { name: 'Clear all' }));
+        expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
+        expect(window.localStorage.getItem(HISTORY_KEY)).toBeNull();
+      });
+
+      it('offers recent searches on arrival when the empty box already has the focus, with no focus event to hear', async () => {
+        window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['kling portrait']));
+        // An empty search autofocuses its box, and the browser focuses it before this script runs.
+        render(<SearchClient initialQuery="" initialType="top" />);
+        expect(screen.getByRole('searchbox')).toHaveFocus();
+        await settle();
+        expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
+      });
+
+      it('hides recent searches once the focus leaves the box and the list', async () => {
+        window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['kling portrait']));
+        render(<SearchClient initialQuery="" initialType="top" />);
+        await settle();
+        const field = screen.getByRole('searchbox');
+        fireEvent.focus(field);
+        expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
+        // Into the list: still open.
+        fireEvent.blur(field, { relatedTarget: screen.getByRole('button', { name: 'Search again for kling portrait' }) });
+        expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
+        // Out of both: closed.
+        fireEvent.blur(field, { relatedTarget: screen.getByRole('tab', { name: 'Top' }) });
+        expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
+      });
+
+      it('keeps a search committed with Enter or opened from, never each pause in typing', async () => {
+        fetchMock.mockResolvedValue(jsonResponse(searchResponse({ creators: { items: [creator('Luna Studio')], nextCursor: null } })));
+        render(<SearchClient initialQuery="" initialType="top" />);
+        const field = screen.getByRole('searchbox');
+        typeQuery('lu');
+        await settle(300);
+        typeQuery('luna');
+        await settle(300);
+        // Answered twice, nothing kept: nobody acted on either.
+        expect(window.localStorage.getItem(HISTORY_KEY)).toBeNull();
+
+        fireEvent.submit(field.closest('form') as HTMLFormElement);
+        expect(JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]')).toEqual(['luna']);
+
+        // A longer query a result is opened from replaces the step on the way to it.
+        typeQuery('luna studio');
+        await settle(300);
+        fireEvent.click(screen.getByRole('link', { name: /Luna Studio/ }));
+        expect(JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]')).toEqual(['luna studio']);
+      });
+
+      it('keeps a search committed before its answer only once that answer finds something', async () => {
+        const answer = deferred<ReturnType<typeof jsonResponse>>();
+        fetchMock.mockReturnValueOnce(answer.promise);
+        render(<SearchClient initialQuery="zzzznope" initialType="top" />);
+        await settle();
+        fireEvent.submit(screen.getByRole('searchbox').closest('form') as HTMLFormElement);
+        answer.resolve(jsonResponse(searchResponse()));
+        await settle();
+        expect(screen.getByText('No results for “zzzznope”')).toBeInTheDocument();
+        expect(window.localStorage.getItem(HISTORY_KEY)).toBeNull();
+      });
+
+      it('searches the same with storage that throws, as a private window can', async () => {
+        const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('denied'); });
+        const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('denied'); });
+        fetchMock.mockResolvedValue(jsonResponse(searchResponse({ creators: { items: [creator('Luna Studio')], nextCursor: null } })));
+        render(<SearchClient initialQuery="luna" initialType="top" />);
+        await settle();
+        fireEvent.submit(screen.getByRole('searchbox').closest('form') as HTMLFormElement);
+        expect(screen.getByText('Luna Studio')).toBeInTheDocument();
+        getItem.mockRestore();
+        setItem.mockRestore();
       });
     });
   });

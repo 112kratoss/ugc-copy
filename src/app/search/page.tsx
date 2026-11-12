@@ -1,7 +1,13 @@
 import type { Metadata } from 'next';
 
 import { createMetadata } from '@/lib/seo';
-import { normalizePublicSearchQuery, parsePublicSearchSort, parsePublicSearchType } from '@/lib/public-search';
+import {
+  NO_PUBLIC_SEARCH_FILTERS,
+  normalizePublicSearchQuery,
+  parsePublicSearchSort,
+  parsePublicSearchType,
+  readPublicSearchFilterParams,
+} from '@/lib/public-search';
 import SearchClient from './SearchClient';
 
 type SearchPageProps = {
@@ -26,5 +32,16 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   // A shared link's order; one it does not name, or names wrongly, is the ranked one.
   const initialSort = parsePublicSearchSort(first(resolved.sort)) ?? 'top';
 
-  return <SearchClient initialQuery={initialQuery} initialType={initialType} initialSort={initialSort} />;
+  // A shared link's filters and reading; an address that names one wrongly opens unfiltered.
+  const narrowing = readPublicSearchFilterParams((name) => first(resolved[name]) ?? null);
+
+  return (
+    <SearchClient
+      initialQuery={initialQuery}
+      initialType={initialType}
+      initialSort={initialSort}
+      initialFilters={narrowing.ok ? narrowing.filters : NO_PUBLIC_SEARCH_FILTERS}
+      initialExact={narrowing.ok ? narrowing.exact : false}
+    />
+  );
 }
