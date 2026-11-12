@@ -943,6 +943,14 @@ describe('SearchClient', () => {
         // Out of both: closed.
         fireEvent.blur(field, { relatedTarget: screen.getByRole('tab', { name: 'Top' }) });
         expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
+
+        // From a row of the list back to the box it stays open; from a row to anywhere else it closes.
+        fireEvent.focus(field);
+        const row = screen.getByRole('button', { name: 'Search again for kling portrait' });
+        fireEvent.blur(row, { relatedTarget: field });
+        expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
+        fireEvent.blur(row, { relatedTarget: screen.getByRole('tab', { name: 'Top' }) });
+        expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
       });
 
       it('keeps a search committed with Enter or opened from, never each pause in typing', async () => {

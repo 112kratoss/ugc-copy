@@ -637,8 +637,14 @@ export default function SearchClient({
             // the list would close under the pointer before the press lands.
             onMouseDown={(event) => event.preventDefault()}
             onBlur={(event) => {
+              // Open while the focus is in the list or back in the box, closed once it is anywhere else.
               const next = event.relatedTarget;
-              if (!(next instanceof Node) || !event.currentTarget.parentElement?.contains(next)) setRecentsOpen(false);
+              if (
+                !(next instanceof Node)
+                || !(event.currentTarget.contains(next) || searchFormRef.current?.contains(next))
+              ) {
+                setRecentsOpen(false);
+              }
             }}
           >
             <div className="flex items-center justify-between gap-3">
