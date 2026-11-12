@@ -10,12 +10,14 @@ import {
 import {
   PUBLIC_SEARCH_MAX_RECIPE_OFFSET,
   PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
+  appliedPublicSearchSort,
   emptyPublicSearchPage,
   encodePublicSearchCursor,
   publicSearchQueryLength,
   type CreatorSearchResult,
   type PublicSearchCursor,
   type PublicSearchResponse,
+  type PublicSearchSort,
   type PublicSearchType,
   type RecipeSearchResult,
 } from '@/lib/public-search';
@@ -37,6 +39,8 @@ type PostSearchRpcRow = {
   post_id: string;
   creator_user_id: string;
   search_score: number;
+  /** As the database wrote it, microseconds kept: a Latest cursor carries it back unchanged. */
+  created_at: string;
 };
 
 type PublicSearchServiceDependencies = {
@@ -44,12 +48,20 @@ type PublicSearchServiceDependencies = {
   getMarketplaceResourceList?: typeof getMarketplaceResourceList;
   getShowcaseFeedItemsByPostIds?: typeof getShowcaseFeedItemsByPostIds;
   loadBlockedCreatorIds?: typeof loadBlockedCreatorIds;
+  /** The clock a new search's instant is read from. */
+  now?: () => Date;
 };
 
 export type PublicSearchOptions = {
   query: string;
   normalizedQuery: string;
   type: PublicSearchType;
+  /**
+   * The order asked for; `top` when left out. Only a Posts or Recipes search
+   * is read in it (appliedPublicSearchSort): the Top tab is the best of each
+   * kind, and creators have one order.
+   */
+  sort?: PublicSearchSort;
   cursor: PublicSearchCursor | null;
   limit: number;
   viewerUserId: string | null;
@@ -63,6 +75,7 @@ function resolveDependencies(dependencies?: PublicSearchServiceDependencies) {
     getShowcaseFeedItemsByPostIds:
       dependencies?.getShowcaseFeedItemsByPostIds ?? getShowcaseFeedItemsByPostIds,
     loadBlockedCreatorIds: dependencies?.loadBlockedCreatorIds ?? loadBlockedCreatorIds,
+    now: dependencies?.now ?? (() => new Date()),
   };
 }
 
@@ -134,14 +147,19 @@ async function searchCreators({
 async function searchPosts({
   adminSupabase,
   after,
+  asOf,
   limit,
   query,
+  sort,
   viewerUserId,
 }: {
   adminSupabase: SupabaseClient;
   after: PublicSearchCursor | null;
+  /** The instant a Top search is scored at: the same for every page of it. */
+  asOf: Date;
   limit: number;
   query: string;
+  sort: PublicSearchSort;
   viewerUserId: string | null;
 }) {
   const { data, error } = await adminSupabase.rpc('search_public_posts', {
@@ -150,6 +168,9 @@ async function searchPosts({
     p_after_score: after?.score ?? null,
     p_after_id: after?.id ?? null,
     p_limit: limit,
+    p_as_of: asOf.toISOString(),
+    p_sort: sort,
+    p_after_created_at: after?.createdAt ?? null,
   });
   if (error) throw error;
   return (data ?? []) as PostSearchRpcRow[];
@@ -181,6 +202,15 @@ export async function searchPublicContent(
   const dependencies = resolveDependencies(dependencyOverrides);
   const adminSupabase = dependencies.createServiceClient();
   const isTop = options.type === 'top';
+  const sort = appliedPublicSearchSort(options.type, options.sort ?? 'top');
+  // A Top posts search is scored at the instant it began, which its cursor
+  // carries from page to page: the score depends on the clock, and a page
+  // scored later than the one before it could repeat or skip a post. A cursor
+  // issued before 2026-11-12 carries none, so its page is scored now and the
+  // cursor after it carries that.
+  const postsAsOf = options.type === 'posts' && options.cursor?.asOf !== undefined
+    ? new Date(options.cursor.asOf)
+    : dependencies.now();
   const contentQueryAllowed = publicSearchQueryLength(options.normalizedQuery) >= PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH;
   const creatorTake = isTop ? 5 : options.limit + 1;
   const postTake = isTop ? 12 : options.limit + 1;
@@ -201,16 +231,19 @@ export async function searchPublicContent(
     ? searchPosts({
       adminSupabase,
       after: options.type === 'posts' ? options.cursor : null,
+      asOf: postsAsOf,
       limit: postTake,
       query: options.normalizedQuery,
+      sort,
       viewerUserId: options.viewerUserId,
     })
     : Promise.resolve([] as PostSearchRpcRow[]);
   const recipesPromise = contentQueryAllowed && (options.type === 'top' || options.type === 'recipes')
     ? dependencies.getMarketplaceResourceList({
       q: options.normalizedQuery,
-      // The best matches first, as posts and creators are ordered.
-      sort: 'relevance',
+      // The best matches first, as posts and creators are ordered; Latest
+      // is the list's own newest-first order.
+      sort: sort === 'latest' ? 'recent' : 'relevance',
       offset: options.type === 'recipes' ? options.cursor?.offset ?? 0 : 0,
       limit: recipeTake,
       countryCode: options.countryCode,
@@ -225,6 +258,13 @@ export async function searchPublicContent(
     postsPromise,
     recipesPromise,
   ]);
+  // search_public_creators and search_public_posts leave both sides of a block
+  // out before their limit, by the two reads loadBlockedCreatorIds makes, so a
+  // page of creators or posts is short only when the results are. This pass
+  // stays for what they cannot cover: a block made between the ranked read and
+  // this line, and recipes, whose list takes no viewer; a blocked seller's
+  // recipe is dropped here, after the cut, and that page comes back short
+  // while its cursor still reaches the rest.
   const blockedIds = await blockedCreatorIds({
     adminSupabase,
     creatorIds: [
@@ -280,6 +320,7 @@ export async function searchPublicContent(
     query: options.query,
     normalizedQuery: options.normalizedQuery,
     type: options.type,
+    sort,
     creators: options.type === 'top' || options.type === 'creators'
       ? {
         items: visibleCreatorRows.map(creatorResult),
@@ -300,8 +341,10 @@ export async function searchPublicContent(
           ? encodePublicSearchCursor({
             version: 1,
             type: 'posts',
-            score: postCursorRow.search_score,
             id: postCursorRow.post_id,
+            ...(sort === 'latest'
+              ? { sort, createdAt: postCursorRow.created_at }
+              : { score: postCursorRow.search_score, asOf: postsAsOf.getTime() }),
           })
           : null,
       }
@@ -313,6 +356,7 @@ export async function searchPublicContent(
           ? encodePublicSearchCursor({
             version: 1,
             type: 'recipes',
+            ...(sort === 'latest' ? { sort } : {}),
             offset: recipeNextOffset,
           })
           : null,

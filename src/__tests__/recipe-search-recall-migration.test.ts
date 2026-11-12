@@ -104,7 +104,8 @@ describe('recipe search recall migration', () => {
     }
     // The marketplace page keeps its own sorts; only unified search asks for relevance.
     expect(normalizeMarketplaceResourceSort('relevance')).toBe('recent');
-    expect(searchServiceSource).toMatch(/getMarketplaceResourceList\(\{\s+q: options\.normalizedQuery,[\s\S]*?sort: 'relevance',/);
+    // Latest (2026-11-12) is the list's own newest-first order.
+    expect(searchServiceSource).toMatch(/getMarketplaceResourceList\(\{\s+q: options\.normalizedQuery,[\s\S]*?sort: sort === 'latest' \? 'recent' : 'relevance',/);
   });
 
   it('rechecks with the list’s own reading of the query', () => {
@@ -174,7 +175,7 @@ describe('recipe search recall migration', () => {
     expect(oneArgument?.[0]).toMatch(/AS \$function\$\s+SELECT public\.search_corrected_query\(p_query, false\);\s+\$function\$;$/);
     expect(newestDefinition('search_corrected_query').file).toBe(MIGRATION);
     const posts = newestDefinition('search_public_posts');
-    expect(posts.file).toBe('20261111224010_search_recall_models_prefixes_stems_typos.sql');
+    expect(posts.file).toBe('20261112103547_search_ranking_tiers_decay_latest.sql');
     expect(posts.definition).toContain('v_corrected := public.search_corrected_query(v_query);');
     // Recipe search, in the list and the recheck, reads recipes' words.
     for (const name of ['list_marketplace_resource_bundles', 'marketplace_search_texts_match']) {

@@ -1071,6 +1071,59 @@ describe('mobile shared API v1 contract fixture', () => {
     ]);
   });
 
+  // Search's order (2026-11-12): Latest is named in the request, the ranked
+  // order is not, and a cursor goes back as it came, with the order it pages.
+  describe('search sort', () => {
+    const search = mobileApiContract.endpoints.searchPublicContent;
+    function clientAnswering(body: unknown, status = 200) {
+      const asked: URL[] = [];
+      const api = createApiClient({
+        baseUrl: 'https://magicbooklet.test',
+        getAccessToken: async () => 'token-1',
+        fetcher: vi.fn(async (input: RequestInfo | URL) => {
+          asked.push(new URL(String(input)));
+          return jsonResponse(body, status);
+        }) as unknown as typeof fetch,
+      });
+      return { api, asked };
+    }
+
+    it('asks for Latest posts and their next page as the contract pins, and reads the order back', async () => {
+      const { latestPosts, latestPostsNextPage } = search.responseVariants;
+
+      const first = clientAnswering(latestPosts.response);
+      const page = await first.api.searchPublicContent({ query: latestPosts.query.q, type: 'posts', sort: 'latest' });
+      expect(first.asked[0].pathname).toBe(search.path);
+      expect(Object.fromEntries(first.asked[0].searchParams)).toEqual(latestPosts.query);
+      expect(page).toEqual(latestPosts.response);
+      expect(page.sort).toBe('latest');
+
+      const next = clientAnswering(latestPostsNextPage.response);
+      await next.api.searchPublicContent({
+        query: latestPosts.query.q, type: 'posts', sort: 'latest', cursor: page.posts.nextCursor,
+      });
+      expect(Object.fromEntries(next.asked[0].searchParams)).toEqual(latestPostsNextPage.query);
+    });
+
+    it('names no order for the ranked one, so a server from before sorts reads the same request', async () => {
+      const { beforeSorts } = search.responseVariants;
+      const { api, asked } = clientAnswering(beforeSorts.response);
+
+      const page = await api.searchPublicContent({ query: beforeSorts.query.q, type: 'posts', sort: 'top' });
+      expect(Object.fromEntries(asked[0].searchParams)).toEqual(beforeSorts.query);
+      // Such a server says no order: the app offers Latest only once one is said.
+      expect(page.sort).toBeUndefined();
+      expect(mobileApiContract.endpoints.searchPublicContent.response.sort).toBe('top');
+    });
+
+    it('reads a refused sort as a typed API error with the server\'s words', async () => {
+      const refusal = search.errors.unknownSort;
+      const { api } = clientAnswering(refusal.response, refusal.status);
+      await expect(api.searchPublicContent({ query: refusal.query.q, type: 'posts', sort: 'latest' }))
+        .rejects.toMatchObject({ name: 'ApiError', status: 400, message: refusal.response.error });
+    });
+  });
+
   // The "New posts" probe is public and cacheable; the undo deletes the caller's own row (D2, D7).
   it('asks the newest probe without a token and sends an undo with one, in the shared shapes', async () => {
     const newest = mobileApiContract.endpoints.getShowcaseFeedNewest;

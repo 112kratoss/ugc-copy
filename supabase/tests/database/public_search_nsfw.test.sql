@@ -122,13 +122,13 @@ select is(
 );
 
 select ok(
-  not has_function_privilege('anon', 'public.search_public_posts(text,uuid,double precision,uuid,integer)', 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.search_public_posts(text,uuid,double precision,uuid,integer)', 'EXECUTE'),
+  not has_function_privilege('anon', 'public.search_public_posts(text,uuid,double precision,uuid,integer,timestamptz,text,timestamptz)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.search_public_posts(text,uuid,double precision,uuid,integer,timestamptz,text,timestamptz)', 'EXECUTE'),
   'client roles still cannot call post search directly'
 );
 
 select ok(
-  has_function_privilege('service_role', 'public.search_public_posts(text,uuid,double precision,uuid,integer)', 'EXECUTE'),
+  has_function_privilege('service_role', 'public.search_public_posts(text,uuid,double precision,uuid,integer,timestamptz,text,timestamptz)', 'EXECUTE'),
   'the service role still calls post search'
 );
 
@@ -139,7 +139,7 @@ select ok(
        where entry like 'search_path=%public%pg_temp%'
      )
    from pg_proc as fn
-   where fn.oid = 'public.search_public_posts(text,uuid,double precision,uuid,integer)'::regprocedure),
+   where fn.oid = 'public.search_public_posts(text,uuid,double precision,uuid,integer,timestamptz,text,timestamptz)'::regprocedure),
   'post search keeps definer rights and its pinned search path'
 );
 

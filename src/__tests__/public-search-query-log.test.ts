@@ -21,6 +21,7 @@ function answer(counts: { creators?: number; posts?: number; recipes?: number } 
     query: 'Port',
     normalizedQuery: 'Port',
     type: 'top',
+    sort: 'top',
     creators: items(counts.creators),
     posts: items(counts.posts),
     recipes: items(counts.recipes),
@@ -53,6 +54,7 @@ const input = {
   hasCursor: false,
   normalizedQuery: 'Port',
   type: 'top' as const,
+  sort: 'top' as const,
   viewerKey: RAW_NETWORK_KEY,
   signedIn: false,
   requestedAt: NOW,
@@ -71,7 +73,20 @@ describe('buildSearchQueryEventRow', () => {
       creator_count: 0,
       post_count: 2,
       recipe_count: 1,
+      sort: null,
     });
+  });
+
+  it('says which order a Posts or Recipes search was read in, and nothing for Top and Creators', () => {
+    const sortOf = (type: 'top' | 'creators' | 'posts' | 'recipes', sort: 'top' | 'latest') => (
+      buildSearchQueryEventRow({ ...input, type, sort }, DAY_KEY)?.sort
+    );
+    expect(sortOf('posts', 'latest')).toBe('latest');
+    expect(sortOf('posts', 'top')).toBe('top');
+    expect(sortOf('recipes', 'latest')).toBe('latest');
+    // One order each: the column stays empty whatever the request named.
+    expect(sortOf('top', 'latest')).toBeNull();
+    expect(sortOf('creators', 'latest')).toBeNull();
   });
 
   it('never carries the raw viewer key, the user id or the network key', () => {

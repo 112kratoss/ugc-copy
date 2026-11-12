@@ -28,6 +28,14 @@ import { POST_RESOURCE_FILE_URL_BATCH_LIMIT } from '@/lib/post-resource-bundles'
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { createPostResourceFileReadUrlForRoute } from '@/lib/post-resource-file-url-service';
 import { sanitizeProfileRecord } from '@/lib/profile';
+import {
+  decodePublicSearchCursor,
+  encodePublicSearchCursor,
+  type PublicSearchCursor,
+  type PublicSearchResponse as WebPublicSearchResponse,
+} from '@/lib/public-search';
+import { getPublicSearchRouteResponse } from '@/lib/public-search-route-adapter-service';
+import type { PublicSearchOptions } from '@/lib/public-search-service';
 import { getProfileRouteResult } from '@/lib/profile-route-adapter-service';
 import { normalizeShowcaseCategory } from '@/lib/showcase';
 import {
@@ -114,7 +122,17 @@ type MobileApiContractFixture = {
       entitlements: MobileCommerceSyncResponse[];
     }>;
     mobileNotifications: MobileApiContractEndpoint<MobileNotificationsResponse>;
-    searchPublicContent: MobileApiContractEndpoint<PublicSearchResponse>;
+    searchPublicContent: MobileApiContractEndpoint<PublicSearchResponse> & {
+      responseVariants: Record<'latestPosts' | 'latestPostsNextPage' | 'beforeSorts', {
+        query: Record<string, string>;
+        response: PublicSearchResponse;
+      }>;
+      cursors: Record<'latestPosts' | 'topPosts' | 'topPostsBeforeInstants', {
+        encoded: string;
+        decoded: PublicSearchCursor;
+      }>;
+      errors: { unknownSort: { query: Record<string, string>; status: number; response: { error: string } } };
+    };
     recordShowcaseFeedEvents: MobileApiContractEndpoint<ShowcaseFeedEventBatchResponse> & {
       request: { events: Array<ShowcaseFeedEventRequest & { occurredAt: string }> };
     };
@@ -555,6 +573,84 @@ describe('shared mobile API v1 contract fixture', () => {
     await expect(probe({ id: String(endpoint.response.newestPostId), created_at: '2026-10-14T05:30:00+00:00' }))
       .resolves.toEqual(endpoint.response);
     await expect(probe(null)).resolves.toEqual(endpoint.responseVariants.emptyLane);
+  });
+
+  // Search's order (2026-11-12): the request names Latest, the answer says which
+  // order it is in, and a cursor pages the order it was issued for. The app
+  // hands a cursor back as it came; the server alone reads it.
+  describe('search sort and cursors', () => {
+    const endpoint = contract.endpoints.searchPublicContent;
+    async function ask(query: Record<string, string>) {
+      const searchPublicContent = vi.fn(async (options: PublicSearchOptions): Promise<WebPublicSearchResponse> => ({
+        query: options.query,
+        normalizedQuery: options.normalizedQuery,
+        type: options.type,
+        sort: options.sort ?? 'top',
+        creators: { items: [], nextCursor: null },
+        posts: { items: [], nextCursor: null },
+        recipes: { items: [], nextCursor: null },
+      }));
+      const response = await getPublicSearchRouteResponse({
+        request: new Request(`http://localhost${endpoint.path}?${new URLSearchParams(query)}`),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          enforceBackendRateLimit: vi.fn(async () => ({
+            allowed: true, limit: 180, remaining: 179, retryAfterSeconds: 0, resetAt: '2026-11-12T12:00:00.000Z',
+          })),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
+          searchPublicContent,
+          runAfterResponse: () => {},
+          withProviderFetchRequestId: (_requestId, callback) => callback(),
+        },
+      });
+      return { response, options: searchPublicContent.mock.calls[0]?.[0] ?? null };
+    }
+
+    it('says which order the answer is in, and reads the request the app sends for Latest', async () => {
+      expect(endpoint.response.sort).toBe('top');
+      const { latestPosts, latestPostsNextPage } = endpoint.responseVariants;
+
+      const first = await ask(latestPosts.query);
+      expect(first.response.status).toBe(200);
+      expect(first.response.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+      expect(first.options).toMatchObject({ type: 'posts', sort: 'latest', cursor: null });
+      await expect(first.response.json()).resolves.toMatchObject({ type: 'posts', sort: latestPosts.response.sort });
+
+      // The next page is asked for with the cursor the first answer gave.
+      expect(latestPostsNextPage.query.cursor).toBe(latestPosts.response.posts.nextCursor);
+      const next = await ask(latestPostsNextPage.query);
+      expect(next.response.status).toBe(200);
+      expect(next.options).toMatchObject({ type: 'posts', sort: 'latest', cursor: endpoint.cursors.latestPosts.decoded });
+    });
+
+    it('writes and reads the cursors the fixture pins, each for its own order alone', () => {
+      for (const [name, cursor] of Object.entries(endpoint.cursors)) {
+        const sort = cursor.decoded.sort ?? 'top';
+        expect(encodePublicSearchCursor(cursor.decoded), name).toBe(cursor.encoded);
+        expect(decodePublicSearchCursor(cursor.encoded, 'posts', sort), name).toEqual(cursor.decoded);
+        expect(decodePublicSearchCursor(cursor.encoded, 'posts', sort === 'top' ? 'latest' : 'top'), name).toBeNull();
+        expect(decodePublicSearchCursor(cursor.encoded, 'creators'), name).toBeNull();
+      }
+    });
+
+    it('still pages the cursor an app holds from before sorts and instants', async () => {
+      // What `beforeSorts` stands for: an answer of the server live before
+      // 2026-11-12, whose cursor an open search may hand to this one.
+      const { beforeSorts } = endpoint.responseVariants;
+      expect(beforeSorts.response.sort).toBeUndefined();
+      expect(beforeSorts.response.posts.nextCursor).toBe(endpoint.cursors.topPostsBeforeInstants.encoded);
+      const { response, options } = await ask({ ...beforeSorts.query, cursor: beforeSorts.response.posts.nextCursor ?? '' });
+      expect(response.status).toBe(200);
+      expect(options).toMatchObject({ sort: 'top', cursor: endpoint.cursors.topPostsBeforeInstants.decoded });
+    });
+
+    it('refuses an unknown sort with the words the fixture pins', async () => {
+      const refusal = endpoint.errors.unknownSort;
+      const { response, options } = await ask(refusal.query);
+      expect(response.status).toBe(refusal.status);
+      await expect(response.json()).resolves.toEqual(refusal.response);
+      expect(options).toBeNull();
+    });
   });
 
   // The shelf answers a visitor with no token the creations alone, shared at the

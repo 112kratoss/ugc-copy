@@ -79,6 +79,119 @@ test.describe('public search', () => {
     await expect(page.getByText('Start with a creator or idea')).toBeVisible();
   });
 
+  test('reads Posts as Top or Latest, keeps the choice in the address, and pages the order it shows', async ({ page }) => {
+    const post = (id: string, title: string) => ({
+      id,
+      title,
+      saveCount: 0,
+      commentCount: 0,
+      creator: { name: 'Luna Studio' },
+      mediaItems: [],
+      mediaKind: null,
+      mediaUrl: null,
+    });
+    const top = [post('post-saved', 'Most saved portrait'), post('post-new', 'Newest portrait')];
+    const latest = [post('post-new', 'Newest portrait'), post('post-saved', 'Most saved portrait')];
+    const requests: string[] = [];
+    await page.route('**/api/search**', async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url.search);
+      const sort = url.searchParams.get('sort') ?? 'top';
+      const cursor = url.searchParams.get('cursor');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...searchResponse(url.searchParams.get('q') ?? '', 'posts'),
+          sort,
+          creators: emptyPage,
+          posts: cursor
+            ? { items: [post('post-old', 'Oldest portrait')], nextCursor: null }
+            : { items: sort === 'latest' ? latest : top, nextCursor: sort === 'latest' ? 'latest-page-2' : null },
+        }),
+      });
+    });
+    const cardTitles = () => page.locator('a[href*="/showcase/"] .font-semibold').allTextContents();
+
+    await page.goto('/search?q=portrait&type=posts');
+
+    // Top is the order a search opens in, and the address does not name it.
+    const sorts = page.getByRole('radiogroup', { name: 'Sort posts' });
+    await expect(sorts.getByRole('radio', { name: 'Top' })).toBeChecked();
+    await expect.poll(cardTitles).toEqual(['Most saved portrait', 'Newest portrait']);
+    expect(requests[0]).not.toContain('sort=');
+
+    // Latest asks again, reorders the cards and moves into the address.
+    await sorts.getByRole('radio', { name: 'Latest' }).click();
+    await expect(sorts.getByRole('radio', { name: 'Latest' })).toBeChecked();
+    await expect.poll(cardTitles).toEqual(['Newest portrait', 'Most saved portrait']);
+    await expect(page).toHaveURL(/[?&]type=posts&sort=latest$/);
+    expect(requests.at(-1)).toContain('sort=latest');
+
+    // The next page is asked for in the order on screen.
+    await page.getByRole('button', { name: 'Show more' }).click();
+    await expect.poll(cardTitles).toEqual(['Newest portrait', 'Most saved portrait', 'Oldest portrait']);
+    expect(requests.at(-1)).toContain('sort=latest');
+    expect(requests.at(-1)).toContain('cursor=latest-page-2');
+
+    // A post opened from here is told where to come back to, order included.
+    const firstCard = page.locator('a[href*="/showcase/"]').first();
+    const returnTo = new URL((await firstCard.getAttribute('href')) ?? '', 'http://127.0.0.1:3100').searchParams.get('returnTo');
+    expect(returnTo).toBe('/search?q=portrait&type=posts&sort=latest');
+
+    // The keyboard moves the choice, as in every radio group; back on Top the address drops it.
+    await sorts.getByRole('radio', { name: 'Latest' }).focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect(sorts.getByRole('radio', { name: 'Top' })).toBeChecked();
+    await expect(sorts.getByRole('radio', { name: 'Top' })).toBeFocused();
+    await expect.poll(cardTitles).toEqual(['Most saved portrait', 'Newest portrait']);
+    await expect(page).toHaveURL(/[?&]type=posts$/);
+
+    // Creators have one order: no control, and nothing about it in the request.
+    await page.getByRole('tab', { name: 'Creators' }).click();
+    await expect(page).toHaveURL(/type=creators$/);
+    await expect(page.getByRole('radiogroup')).toHaveCount(0);
+    expect(requests.at(-1)).not.toContain('sort=');
+  });
+
+  test('opens a shared Latest link on Latest and comes back to it', async ({ page }) => {
+    const requests: string[] = [];
+    await page.route('**/api/search**', async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url.search);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...searchResponse(url.searchParams.get('q') ?? '', 'posts'),
+          sort: url.searchParams.get('sort') ?? 'top',
+          creators: emptyPage,
+          posts: {
+            items: [{
+              id: 'post-new', title: 'Newest portrait', saveCount: 0, commentCount: 0,
+              creator: { name: 'Luna Studio' }, mediaItems: [], mediaKind: null, mediaUrl: null,
+            }],
+            nextCursor: null,
+          },
+        }),
+      });
+    });
+
+    await page.goto('/search?q=portrait&type=posts&sort=latest');
+    const latest = page.getByRole('radiogroup', { name: 'Sort posts' }).getByRole('radio', { name: 'Latest' });
+    await expect(latest).toBeChecked();
+    await expect(page.getByText('Newest portrait')).toBeVisible();
+    expect(requests[0]).toContain('sort=latest');
+
+    // Leaving and pressing Back lands on the same search in the same order.
+    await page.goto('/pricing');
+    await page.goBack();
+    await expect(page).toHaveURL(/[?&]type=posts&sort=latest$/);
+    await expect(latest).toBeChecked();
+    await expect(page.getByText('Newest portrait')).toBeVisible();
+    expect(requests.at(-1)).toContain('sort=latest');
+  });
+
   test('keeps two-character queries on creator search only', async ({ page }) => {
     const requests: string[] = [];
     await page.route('**/api/search**', async (route) => {

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 
 import { createMetadata } from '@/lib/seo';
-import { normalizePublicSearchQuery, parsePublicSearchType } from '@/lib/public-search';
+import { normalizePublicSearchQuery, parsePublicSearchSort, parsePublicSearchType } from '@/lib/public-search';
 import SearchClient from './SearchClient';
 
 type SearchPageProps = {
@@ -23,6 +23,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const resolved = searchParams ? await searchParams : {};
   const initialQuery = normalizePublicSearchQuery(first(resolved.q));
   const initialType = parsePublicSearchType(first(resolved.type)) ?? 'top';
+  // A shared link's order; one it does not name, or names wrongly, is the ranked one.
+  const initialSort = parsePublicSearchSort(first(resolved.sort)) ?? 'top';
 
-  return <SearchClient initialQuery={initialQuery} initialType={initialType} />;
+  return <SearchClient initialQuery={initialQuery} initialType={initialType} initialSort={initialSort} />;
 }

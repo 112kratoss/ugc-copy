@@ -85,7 +85,9 @@ against what people actually type and miss. The insert runs behind the response
 A row holds no account id or address: the lowercased query (control characters
 removed, at most 100 characters), the search type, whether a registered account
 (not a guest session) was presented, how many creators, posts and recipes were
-returned, when the request arrived, and `visitor_day`. That is an HMAC of the
+returned, the order a Posts or Recipes search asked for (`sort`: `top` or
+`latest`; empty for Top and Creators searches, which have one order, and for
+rows from before 2026-11-12), when the request arrived, and `visitor_day`. That is an HMAC of the
 viewer's rate-limit key (user id or hashed network address, never stored) under a
 random key made for that UTC day alone (`search_visitor_day_keys`). The sweep
 deletes a key once its day is more than 48 hours old, so `visitor_day` is
@@ -97,6 +99,13 @@ days by the operational retention sweep (`prune_operational_backend_data`, which
 reports `search_query_events_deleted` and `search_visitor_day_keys_deleted`) and
 `search_query_events` is watched by `get_operational_table_growth` (warning at
 500,000 rows).
+
+Search results are ranked in the database by `search_post_score` and
+`search_creator_score` (`20261112103547`); retuning is a re-create of one of them.
+After a code-only rollback to an app from before that migration, search keeps
+working against it: Top is scored at the start of the UTC day, a Latest posts
+cursor still open in a browser is a 400 ("Show more" fails once, a new search is
+fine), and a Latest recipes cursor is read as an offset into the relevance order.
 
 ```bash
 npm run ops:search-report -- --days 7 [--limit 50] [--json]

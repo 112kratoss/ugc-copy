@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { encodePublicSearchCursor } from '@/lib/public-search';
+import type { PublicSearchOptions } from '@/lib/public-search-service';
 import { getPublicSearchRouteResponse } from '@/lib/public-search-route-adapter-service';
 import type { PublicSearchResponse } from '@/lib/public-search';
 
@@ -11,6 +12,7 @@ function emptyResponse(query: string, type: PublicSearchResponse['type']): Publi
     query,
     normalizedQuery: query.toLocaleLowerCase(),
     type,
+    sort: 'top',
     creators: { items: [], nextCursor: null },
     posts: { items: [], nextCursor: null },
     recipes: { items: [], nextCursor: null },
@@ -60,10 +62,122 @@ describe('public search route adapter service', () => {
       query: 'Product reveal',
       normalizedQuery: 'Product reveal',
       type: 'posts',
+      sort: 'top',
       cursor: null,
       limit: 12,
       viewerUserId: null,
       countryCode: 'IN',
+    });
+  });
+
+  describe('sort', () => {
+    const POST_ID = '11111111-1111-4111-8111-111111111111';
+    async function ask(url: string) {
+      const searchPublicContent = vi.fn(async (options: PublicSearchOptions) => emptyResponse(options.query, options.type));
+      const response = await getPublicSearchRouteResponse({
+        request: new Request(url),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          enforceBackendRateLimit: vi.fn(allowedRateLimit),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
+          searchPublicContent,
+          runAfterResponse: () => {},
+          withProviderFetchRequestId: requestIdBoundary,
+        },
+      });
+      return { response, options: searchPublicContent.mock.calls[0]?.[0] ?? null };
+    }
+
+    it('reads Posts and Recipes in the order asked for', async () => {
+      expect((await ask('http://localhost/api/search?q=portrait&type=posts&sort=latest')).options?.sort).toBe('latest');
+      expect((await ask('http://localhost/api/search?q=portrait&type=recipes&sort=latest')).options?.sort).toBe('latest');
+      expect((await ask('http://localhost/api/search?q=portrait&type=posts&sort=top')).options?.sort).toBe('top');
+      expect((await ask('http://localhost/api/search?q=portrait&type=posts')).options?.sort).toBe('top');
+    });
+
+    it('accepts a sort on Top and Creators and reads them ranked: they have one order', async () => {
+      const top = await ask('http://localhost/api/search?q=portrait&sort=latest');
+      const creators = await ask('http://localhost/api/search?q=portrait&type=creators&sort=latest');
+      expect(top.response.status).toBe(200);
+      expect(top.options?.sort).toBe('top');
+      expect(creators.response.status).toBe(200);
+      expect(creators.options?.sort).toBe('top');
+    });
+
+    it.each([
+      'http://localhost/api/search?q=portrait&type=posts&sort=oldest',
+      'http://localhost/api/search?q=portrait&type=posts&sort=',
+      'http://localhost/api/search?q=portrait&sort=LATEST',
+      'http://localhost/api/search?q=portrait&type=creators&sort=newest',
+    ])('refuses an unknown sort, whatever the type: %s', async (url) => {
+      const { response, options } = await ask(url);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: 'sort must be top or latest.' });
+      expect(options).toBeNull();
+    });
+
+    it('pages a cursor only in the order it was issued for', async () => {
+      const topCursor = encodePublicSearchCursor({
+        version: 1, type: 'posts', score: 12.5, id: POST_ID, asOf: Date.parse('2026-11-12T10:00:00.000Z'),
+      });
+      const latestCursor = encodePublicSearchCursor({
+        version: 1, type: 'posts', sort: 'latest', createdAt: '2026-11-12T10:00:00.123456+00:00', id: POST_ID,
+      });
+      const base = 'http://localhost/api/search?q=portrait&type=posts';
+
+      const top = await ask(`${base}&cursor=${topCursor}`);
+      expect(top.options?.cursor).toEqual({
+        version: 1, type: 'posts', score: 12.5, id: POST_ID, asOf: Date.parse('2026-11-12T10:00:00.000Z'),
+      });
+      const latest = await ask(`${base}&sort=latest&cursor=${latestCursor}`);
+      expect(latest.options?.cursor).toEqual({
+        version: 1, type: 'posts', sort: 'latest', createdAt: '2026-11-12T10:00:00.123456+00:00', id: POST_ID,
+      });
+
+      for (const url of [`${base}&sort=latest&cursor=${topCursor}`, `${base}&cursor=${latestCursor}`]) {
+        const crossed = await ask(url);
+        expect(crossed.response.status).toBe(400);
+        await expect(crossed.response.json()).resolves.toEqual({
+          error: 'cursor is invalid for this search type and sort.',
+        });
+        expect(crossed.options).toBeNull();
+      }
+    });
+
+    // V8 reads each of these as a date; Postgres refuses each as a timestamptz,
+    // and the refusal used to reach the caller as a 500 from the RPC.
+    it.each([
+      '0000-01-01T00:00:00Z',
+      '2026-02-30T00:00:00Z',
+      '2026-11-12T10:00:00+16:00',
+      '2026-11-12T10:00:00+23:59',
+    ])('answers 400 to a forged Latest cursor whose time Postgres would refuse, without searching: %s', async (createdAt) => {
+      const forged = Buffer.from(JSON.stringify({ v: 1, t: 'posts', r: 'latest', i: POST_ID, c: createdAt }), 'utf8')
+        .toString('base64url');
+      const { response, options } = await ask(`http://localhost/api/search?q=portrait&type=posts&sort=latest&cursor=${forged}`);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: 'cursor is invalid for this search type and sort.' });
+      // The service was never called, so no RPC was.
+      expect(options).toBeNull();
+    });
+
+    it('answers 400 to a forged Top cursor whose instant is outside any real one', async () => {
+      for (const asOf of [1, -62_167_219_200_000, 253_402_300_800_000]) {
+        const forged = Buffer.from(JSON.stringify({ v: 1, t: 'posts', s: 8.25, i: POST_ID, a: asOf }), 'utf8')
+          .toString('base64url');
+        const { response, options } = await ask(`http://localhost/api/search?q=portrait&type=posts&cursor=${forged}`);
+        expect(response.status, String(asOf)).toBe(400);
+        expect(options, String(asOf)).toBeNull();
+      }
+    });
+
+    it('still pages a cursor issued before sorts and instants existed', async () => {
+      // What the app live before 2026-11-12 handed out: a score and an id.
+      const legacy = Buffer.from(JSON.stringify({ v: 1, t: 'posts', s: 8.25, i: POST_ID }), 'utf8').toString('base64url');
+      const { response, options } = await ask(`http://localhost/api/search?q=portrait&type=posts&cursor=${legacy}`);
+      expect(response.status).toBe(200);
+      expect(options?.sort).toBe('top');
+      expect(options?.cursor).toEqual({ version: 1, type: 'posts', score: 8.25, id: POST_ID });
     });
   });
 
@@ -213,11 +327,23 @@ describe('public search route adapter service', () => {
       const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
       expect(row).toMatchObject({
         query: 'port', search_type: 'top', signed_in: false, creator_count: 0, post_count: 0, recipe_count: 0,
+        sort: null,
       });
       expect(Object.keys(row).sort()).toEqual([
-        'created_at', 'creator_count', 'post_count', 'query', 'recipe_count', 'search_type', 'signed_in', 'visitor_day',
+        'created_at', 'creator_count', 'post_count', 'query', 'recipe_count', 'search_type', 'signed_in', 'sort',
+        'visitor_day',
       ]);
       expect(JSON.stringify(row)).not.toContain('network-key');
+    });
+
+    it('logs the order a Posts search asked for', async () => {
+      const { ask, insert, tasks } = logHarness();
+      await ask('http://localhost/api/search?q=Port&type=posts&sort=latest', {
+        searchPublicContent: vi.fn(async () => emptyResponse('Port', 'posts')),
+      });
+      await tasks[0]();
+      const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
+      expect(row).toMatchObject({ search_type: 'posts', sort: 'latest' });
     });
 
     it('marks a signed-in search and keys it on the user without storing the id', async () => {
