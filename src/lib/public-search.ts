@@ -177,6 +177,21 @@ export interface PublicSearchResponse {
   creators: PublicSearchPage<CreatorSearchResult>;
   posts: PublicSearchPage<ShowcaseFeedItem>;
   recipes: PublicSearchPage<RecipeSearchResult>;
+  /**
+   * Posts that mean what the query says without holding its words, nearest
+   * first, none of them in `posts`: at most eight, cards like any other.
+   * Present only where they were looked for, which is the first page of a
+   * Top or Posts search in the ranked order, with no filter and not read as
+   * typed, whose own posts are few; `posts` may then be empty. Left out
+   * everywhere else, when the lookup is switched off or could not be made,
+   * and by a server from before it: a client draws nothing for an answer
+   * without it. `posts` is never reordered or shortened for it.
+   */
+  related?: PublicSearchRelated;
+}
+
+export interface PublicSearchRelated {
+  posts: ShowcaseFeedItem[];
 }
 
 export type PublicSearchCursor = {

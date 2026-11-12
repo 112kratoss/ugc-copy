@@ -1168,6 +1168,31 @@ describe('mobile shared API v1 contract fixture', () => {
       expect(searchCorrectionNotice(typed.correctedQuery, 'posts')).toBeNull();
     });
 
+    // Related posts (search by meaning, 2026-11-13): a thin answer may carry
+    // posts that mean what the query says, in a field of their own. The app
+    // asks for nothing new; an app from before them reads the answer's own
+    // lists as it always did, and the cards are there for one that draws them.
+    it('reads an answer that carries related posts as one that does not, the related cards beside its own lists', async () => {
+      const { relatedPosts } = search.responseVariants;
+      const { api, asked } = clientAnswering(relatedPosts.response);
+      const answer = await api.searchPublicContent({ query: relatedPosts.query.q });
+      // The request is the Top search it has always been.
+      expect(Object.fromEntries(asked[0].searchParams)).toEqual(relatedPosts.query);
+      expect(answer.posts).toEqual({ items: [], nextCursor: null });
+      expect(answer.creators.items).toEqual([]);
+      expect(answer.recipes.items).toEqual([]);
+      // The field travels as the server wrote it: feed cards, the keys Home's have.
+      const related = (answer as { related?: { posts: Array<Record<string, unknown>> } }).related;
+      expect(related).toEqual(relatedPosts.response.related);
+      const card = mobileApiContract.endpoints.getShowcaseFeed.response.items[0];
+      expect(Object.keys(related!.posts[0]).sort()).toEqual(Object.keys(card).sort());
+      // An answer where none were looked for has no such field: nothing to draw.
+      expect(search.response).not.toHaveProperty('related');
+      for (const [name, variant] of Object.entries(search.responseVariants)) {
+        if (name !== 'relatedPosts') expect(variant.response, name).not.toHaveProperty('related');
+      }
+    });
+
     it('sends nothing new to a server from before filters, whose answer carries none of the new fields', async () => {
       const { beforeFilters } = search.responseVariants;
       const { api, asked } = clientAnswering(beforeFilters.response);

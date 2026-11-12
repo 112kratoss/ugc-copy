@@ -38,7 +38,10 @@ import {
   type PublicSearchResponse as WebPublicSearchResponse,
 } from '@/lib/public-search';
 import { getPublicSearchRouteResponse } from '@/lib/public-search-route-adapter-service';
-import type { PublicSearchOptions } from '@/lib/public-search-service';
+import {
+  searchPublicContent as searchPublicContentService,
+  type PublicSearchOptions,
+} from '@/lib/public-search-service';
 import { getProfileRouteResult } from '@/lib/profile-route-adapter-service';
 import { normalizeShowcaseCategory } from '@/lib/showcase';
 import {
@@ -130,7 +133,8 @@ type MobileApiContractFixture = {
       filterParameters: Record<'madeWith' | 'mediaKind' | 'hasRecipe' | 'following' | 'exact', string>;
       responseVariants: Record<
         | 'latestPosts' | 'latestPostsNextPage' | 'beforeSorts'
-        | 'filteredPosts' | 'filteredPostsNextPage' | 'correctedPosts' | 'exactPosts' | 'beforeFilters',
+        | 'filteredPosts' | 'filteredPostsNextPage' | 'correctedPosts' | 'exactPosts' | 'beforeFilters'
+        | 'relatedPosts',
         { query: Record<string, string>; response: PublicSearchResponse }
       >;
       cursors: Record<'latestPosts' | 'topPosts' | 'topPostsBeforeInstants' | 'filteredTopPosts', {
@@ -590,8 +594,13 @@ describe('shared mobile API v1 contract fixture', () => {
   // hands a cursor back as it came; the server alone reads it.
   describe('search sort and cursors', () => {
     const endpoint = contract.endpoints.searchPublicContent;
-    async function ask(query: Record<string, string>, viewer: 'visitor' | 'account' = 'visitor') {
-      const searchPublicContent = vi.fn(async (options: PublicSearchOptions): Promise<WebPublicSearchResponse> => ({
+    async function ask(
+      query: Record<string, string>,
+      viewer: 'visitor' | 'account' = 'visitor',
+      /** What the service answers; an empty answer of the asked type when left out. */
+      answer?: WebPublicSearchResponse,
+    ) {
+      const searchPublicContent = vi.fn(async (options: PublicSearchOptions): Promise<WebPublicSearchResponse> => answer ?? ({
         query: options.query,
         normalizedQuery: options.normalizedQuery,
         type: options.type,
@@ -661,6 +670,60 @@ describe('shared mobile API v1 contract fixture', () => {
       const { response, options } = await ask({ ...beforeSorts.query, cursor: beforeSorts.response.posts.nextCursor ?? '' });
       expect(response.status).toBe(200);
       expect(options).toMatchObject({ sort: 'top', cursor: endpoint.cursors.topPostsBeforeInstants.decoded });
+    });
+
+    // Related posts (search by meaning, 2026-11-13): beside a thin answer the
+    // server adds the posts that mean what the query says, as cards like any
+    // other, in a field of their own. An answer that carries none has no such
+    // field, and an app from before it draws what it always drew.
+    it('carries related posts in a field of their own, as feed cards, and leaves the answer’s own lists alone', async () => {
+      const { relatedPosts } = endpoint.responseVariants;
+      const pinned = relatedPosts.response as unknown as WebPublicSearchResponse;
+
+      // The route sends the service's answer as it is: nothing added, nothing dropped.
+      const { response, options } = await ask(relatedPosts.query, 'visitor', pinned);
+      expect(response.status).toBe(200);
+      expect(options).toMatchObject({ type: 'top', sort: 'top', exact: false, cursor: null });
+      await expect(response.json()).resolves.toEqual(relatedPosts.response);
+
+      // A related post is a feed card: the keys Home's cards have, no others.
+      const card = (contract.endpoints.getShowcaseFeed.response as { items: Array<Record<string, unknown>> }).items[0];
+      expect(pinned.related?.posts).toHaveLength(1);
+      expect(Object.keys(pinned.related!.posts[0]).sort()).toEqual(Object.keys(card).sort());
+      expect(pinned.posts).toEqual({ items: [], nextCursor: null });
+
+      // The service builds that field from the nearest posts, hydrated as posts are.
+      const relatedCard = pinned.related!.posts[0];
+      const built = await searchPublicContentService({
+        query: relatedPosts.query.q,
+        normalizedQuery: relatedPosts.query.q,
+        type: 'top',
+        cursor: null,
+        limit: 20,
+        viewerUserId: null,
+        countryCode: null,
+      }, {
+        createServiceClient: vi.fn(() => ({ rpc: vi.fn(async () => ({ data: [], error: null })) }) as unknown as SupabaseClient),
+        findRelatedPostRows: vi.fn(async () => [
+          { post_id: relatedCard.id, creator_user_id: relatedCard.creator.id ?? '', similarity: 0.9 },
+        ]),
+        getShowcaseFeedItemsByPostIds: vi.fn(async () => [relatedCard]),
+        getMarketplaceResourceList: vi.fn(async () => ({
+          items: [],
+          pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 6 },
+        })) as never,
+        loadBlockedCreatorIds: vi.fn(async () => new Set<string>()) as never,
+        runAfterResponse: () => {},
+      });
+      expect(built).toEqual(pinned);
+    });
+
+    it('pins no related field on any other answer: where none were looked for there is nothing to draw', () => {
+      expect(endpoint.response).not.toHaveProperty('related');
+      for (const [name, variant] of Object.entries(endpoint.responseVariants)) {
+        if (name === 'relatedPosts') continue;
+        expect(variant.response, name).not.toHaveProperty('related');
+      }
     });
 
     it('refuses an unknown sort with the words the fixture pins', async () => {

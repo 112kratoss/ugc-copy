@@ -495,10 +495,11 @@ describe('public search route adapter service', () => {
       expect(row).toMatchObject({
         query: 'port', search_type: 'top', signed_in: false, creator_count: 0, post_count: 0, recipe_count: 0,
         sort: null, made_with: null, media_kind: null, has_recipe: null, followed_only: null, corrected: false,
+        related_count: null,
       });
       expect(Object.keys(row).sort()).toEqual([
         'corrected', 'created_at', 'creator_count', 'followed_only', 'has_recipe', 'made_with', 'media_kind',
-        'post_count', 'query', 'recipe_count', 'search_type', 'signed_in', 'sort', 'visitor_day',
+        'post_count', 'query', 'recipe_count', 'related_count', 'search_type', 'signed_in', 'sort', 'visitor_day',
       ]);
       expect(JSON.stringify(row)).not.toContain('network-key');
     });
@@ -519,6 +520,18 @@ describe('public search route adapter service', () => {
         followed_only: true, corrected: true,
       });
       expect(JSON.stringify(row)).not.toContain('viewer-1');
+    });
+
+    it('logs how many related posts the answer carried, and sends them to the client as they came', async () => {
+      const related = { posts: [{ id: 'related-1' }, { id: 'related-2' }] };
+      const { ask, insert, tasks } = logHarness();
+      const response = await ask('http://localhost/api/search?q=Port&type=top', {
+        searchPublicContent: vi.fn(async () => ({ ...emptyResponse('Port', 'top'), related })),
+      });
+      expect((await response.json()).related).toEqual(related);
+      await tasks[0]();
+      const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
+      expect(row).toMatchObject({ post_count: 0, related_count: 2 });
     });
 
     it('writes nothing for a search asked to read the query as typed', async () => {

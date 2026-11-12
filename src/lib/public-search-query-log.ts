@@ -27,7 +27,8 @@ import {
  * (null for Top and Creators, which have one), what narrowed a Posts search (the made-with
  * entity, the media kind, "has a recipe", "from creators I follow": each null when off, and
  * the last says only that the filter was on, never who is followed), whether the answer's posts
- * or recipes were found on a corrected reading of the query, and when the request arrived.
+ * or recipes were found on a corrected reading of the query, how many related posts (search by
+ * meaning) the answer added, null when none were looked for, and when the request arrived.
  *
  * A search asked to read the query as typed ("search instead for") writes no row: it is the
  * second asking of a search already counted, and by its nature finds no post or recipe, so it
@@ -68,6 +69,8 @@ export type SearchQueryEventRow = {
   followed_only: true | null;
   /** Whether the answer's posts or recipes were found on a corrected reading; null for Creators. */
   corrected: boolean | null;
+  /** How many related posts the answer held beside its own; null when none were looked for. */
+  related_count: number | null;
 };
 
 export type SearchAnswerLogInput = {
@@ -149,6 +152,7 @@ export function buildSearchQueryEventRow(
     corrected: input.type === 'creators' || !corrected
       ? null
       : corrected.posts !== null || corrected.recipes !== null,
+    related_count: input.response.related ? input.response.related.posts.length : null,
   };
 }
 
