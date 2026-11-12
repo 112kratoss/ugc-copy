@@ -15,6 +15,7 @@ import {
   parseEmbedMode,
   parseQueryText,
   toEmbeddingArray,
+  VERIFIED_BEARER_TTL_MS,
   type EmbedPostStore,
   type SearchEmbeddingStore,
   type SearchEmbeddingStoreRow,
@@ -169,6 +170,90 @@ describe('embed-post mode switch', () => {
     });
     expect((await handle(request({ mode: 'query', query: 'sea' }, 'Bearer another-spelling-of-the-key'))).status).toBe(200);
     expect((await handle(request({ mode: 'query', query: 'sea' }, 'Bearer a-client-key'))).status).toBe(401);
+  });
+});
+
+describe('embed-post remembers a bearer it has verified', () => {
+  // A search waits about a second for a query's vector. When Vercel's spelling
+  // of the service credential is not the runtime's, the capability probe is a
+  // PostgREST round trip, and it must not be paid on every call.
+  const OTHER_SPELLING = 'another-spelling-of-the-key';
+
+  function probing(now: () => number = () => 0) {
+    const authorize = vi.fn(async (bearer: string) => bearer === OTHER_SPELLING);
+    const handle = createEmbedPostHandler({
+      serviceRoleKey: SERVICE_ROLE_KEY,
+      authorize,
+      store: new UntouchedFeedStore(),
+      searchStore: new MemorySearchStore([searchText(1)]),
+      embed: async () => unitVector(),
+      clock: now,
+    });
+    const ask = (bearer: string, body: unknown = { mode: 'query', query: 'sea' }) => handle(request(body, `Bearer ${bearer}`));
+    return { ask, authorize };
+  }
+
+  it('asks PostgREST once for a credential that can do what the service role can, in every mode', async () => {
+    const { ask, authorize } = probing();
+    for (const body of [
+      { mode: 'query', query: 'sea' },
+      { mode: 'query', query: 'sky' },
+      { mode: 'search', postIds: [postId(1)] },
+      { mode: 'query', query: 'sand' },
+    ]) {
+      expect((await ask(OTHER_SPELLING, body)).status).toBe(200);
+    }
+    expect(authorize).toHaveBeenCalledExactlyOnceWith(OTHER_SPELLING);
+  });
+
+  it('asks every time for a credential that cannot, and refuses it every time', async () => {
+    const { ask, authorize } = probing();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await ask('a-client-key');
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ error: 'Unauthorized' });
+    }
+    expect(authorize).toHaveBeenCalledTimes(3);
+    // A refused credential beside a remembered one is still refused.
+    expect((await ask(OTHER_SPELLING)).status).toBe(200);
+    expect((await ask('a-client-key')).status).toBe(401);
+    expect((await ask(`${OTHER_SPELLING}x`)).status).toBe(401);
+  });
+
+  it('asks again after ten minutes, so a revoked credential is not taken for longer', async () => {
+    let elapsed = 0;
+    const { ask, authorize } = probing(() => elapsed);
+    expect(VERIFIED_BEARER_TTL_MS).toBe(600_000);
+    expect((await ask(OTHER_SPELLING)).status).toBe(200);
+    elapsed = VERIFIED_BEARER_TTL_MS - 1;
+    expect((await ask(OTHER_SPELLING)).status).toBe(200);
+    expect(authorize).toHaveBeenCalledTimes(1);
+    elapsed = VERIFIED_BEARER_TTL_MS;
+    // Revoked meanwhile: the probe now says no, and the memory does not outvote it.
+    authorize.mockResolvedValueOnce(false);
+    expect((await ask(OTHER_SPELLING)).status).toBe(401);
+    expect(authorize).toHaveBeenCalledTimes(2);
+    expect((await ask(OTHER_SPELLING)).status).toBe(200);
+    expect(authorize).toHaveBeenCalledTimes(3);
+  });
+
+  it('never asks for the runtime’s own key, and remembers a hash, not the credential', async () => {
+    const { ask, authorize } = probing();
+    expect((await ask(SERVICE_ROLE_KEY)).status).toBe(200);
+    expect((await ask(SERVICE_ROLE_KEY)).status).toBe(200);
+    expect(authorize).not.toHaveBeenCalled();
+    expect(functionSource).toContain('const digest = await sha256Hex(bearer);');
+    expect(functionSource).toContain('verifiedBearers.set(digest, clock() + VERIFIED_BEARER_TTL_MS);');
+    expect(functionSource).not.toMatch(/verifiedBearers\.set\(bearer/);
+  });
+
+  it('keeps one memory per handler: a second isolate verifies for itself', async () => {
+    const first = probing();
+    const second = probing();
+    await first.ask(OTHER_SPELLING);
+    await second.ask(OTHER_SPELLING);
+    expect(first.authorize).toHaveBeenCalledTimes(1);
+    expect(second.authorize).toHaveBeenCalledTimes(1);
   });
 });
 

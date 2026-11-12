@@ -7,10 +7,13 @@
 //         "deferred": ["<uuid>", ...], "failed": [{ "postId": "<uuid>", "error": "..." }] }
 //
 // verify_jwt is off for this function (supabase/config.toml), so the bearer
-// check below, in constant time, is the only gate. Each post's title,
-// description, body, prompt, tool and category become one text of at most
-// 2,000 characters; a post whose stored content_hash (sha256 of that text)
-// already matches is skipped, and the rest are embedded here with Supabase.ai's
+// check below, in constant time, is the only gate. A bearer that is not the
+// runtime's own key is verified by what it can do (createPostgrestAuthorizer),
+// and one so verified is taken again for ten minutes without the round trip.
+// Each post's title, description, body, prompt, tool and category become one
+// text of at most 2,000 characters; a post whose stored content_hash (sha256 of
+// that text) already matches is skipped, and the rest are embedded here with
+// Supabase.ai's
 // gte-small (384 dimensions, mean-pooled, normalised) and upserted into
 // post_content_embeddings. The upsert names only its own columns, so a stored
 // cluster or near-duplicate mark survives a re-embed. post_content_embeddings
@@ -70,6 +73,17 @@ export const EMBEDDING_TIME_BUDGET_MS = 1_200;
 
 /** A search query is cut to this many characters before it is embedded. */
 export const MAX_QUERY_TEXT_CHARS = 200;
+/**
+ * How long this isolate takes a bearer it has verified by capability without
+ * asking PostgREST again. A search waits about a second for a query's vector,
+ * and the probe is a network round trip on every call when Vercel's spelling
+ * of the service credential is not the runtime's. Only a bearer the probe
+ * accepted is remembered, by its SHA-256: a wrong one is probed, and refused,
+ * every time. A credential revoked meanwhile is taken for at most this long.
+ */
+export const VERIFIED_BEARER_TTL_MS = 10 * 60_000;
+/** Bearers remembered at once; past it the memory starts again. */
+const VERIFIED_BEARER_LIMIT = 8;
 
 const MAX_REQUEST_BYTES = 16 * 1024;
 const POSTGREST_TIMEOUT_MS = 10_000;
@@ -433,6 +447,8 @@ async function handleSearchEmbeddings(
 export function createEmbedPostHandler(dependencies: EmbedPostDependencies) {
   const now = dependencies.now ?? (() => new Date());
   const clock = dependencies.clock ?? (() => performance.now());
+  // SHA-256 of each bearer the capability probe accepted, and until when.
+  const verifiedBearers = new Map<string, number>();
 
   return async function handleEmbedPost(request: Request): Promise<Response> {
     if (request.method !== 'POST') {
@@ -449,10 +465,21 @@ export function createEmbedPostHandler(dependencies: EmbedPostDependencies) {
       const bearer = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length).trim() : '';
       let capable = false;
       if (bearer && dependencies.authorize) {
-        try {
-          capable = await dependencies.authorize(bearer);
-        } catch {
-          capable = false;
+        const digest = await sha256Hex(bearer);
+        const verifiedUntil = verifiedBearers.get(digest);
+        if (verifiedUntil !== undefined && clock() < verifiedUntil) {
+          capable = true;
+        } else {
+          verifiedBearers.delete(digest);
+          try {
+            capable = await dependencies.authorize(bearer);
+          } catch {
+            capable = false;
+          }
+          if (capable) {
+            if (verifiedBearers.size >= VERIFIED_BEARER_LIMIT) verifiedBearers.clear();
+            verifiedBearers.set(digest, clock() + VERIFIED_BEARER_TTL_MS);
+          }
         }
       }
       if (!capable) return jsonResponse({ error: 'Unauthorized' }, 401);
