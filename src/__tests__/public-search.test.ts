@@ -38,6 +38,31 @@ describe('public search policy', () => {
     expect(isPublicSearchQueryTooLong('x'.repeat(100))).toBe(false);
   });
 
+  it('counts the maximum in characters, as the minimums and the database count: a hundred emoji are not too long', () => {
+    const emoji = '\u{1F600}';
+    // Two UTF-16 units each: counted that way, fifty-one were refused.
+    for (const count of [51, 99, 100]) {
+      expect(emoji.repeat(count).length).toBeGreaterThan(100);
+      expect(isPublicSearchQueryTooLong(emoji.repeat(count)), String(count)).toBe(false);
+    }
+    expect(isPublicSearchQueryTooLong(emoji.repeat(101))).toBe(true);
+    // Counted after the query is normalized, as it is searched: spaces collapse first.
+    expect(isPublicSearchQueryTooLong(`  ${emoji.repeat(50)}     ${emoji.repeat(49)}  `)).toBe(false);
+    expect(isPublicSearchQueryTooLong(null)).toBe(false);
+  });
+
+  it('cuts a query at a hundred characters, never through the middle of one', () => {
+    const emoji = '\u{1F600}';
+    expect(normalizePublicSearchQuery(emoji.repeat(100))).toBe(emoji.repeat(100));
+    const cut = normalizePublicSearchQuery(emoji.repeat(120));
+    expect(publicSearchQueryLength(cut)).toBe(100);
+    expect(cut).toBe(emoji.repeat(100));
+    // An odd place: ninety-nine letters, then emoji. The hundredth character is a whole emoji.
+    const mixed = normalizePublicSearchQuery(`${'x'.repeat(99)}${emoji.repeat(3)}`);
+    expect(mixed).toBe(`${'x'.repeat(99)}${emoji}`);
+    expect(normalizePublicSearchQuery('x'.repeat(140))).toBe('x'.repeat(100));
+  });
+
   it('parses bounded types and limits', () => {
     expect(parsePublicSearchType('posts')).toBe('posts');
     expect(parsePublicSearchType('unknown')).toBeNull();

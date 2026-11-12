@@ -1,11 +1,13 @@
 import { useIsFocused } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { BookOpen, Clock3, MessageCircle, Search, X } from 'lucide-react-native';
+import { BookOpen, Box, Clock3, MessageCircle, Search, Wrench, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Keyboard,
+  Platform,
   Pressable,
   ScrollView,
   Text,
@@ -17,11 +19,37 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { TextPostPlate } from '@/components/text-post-plate';
-import { CreatorAvatar, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
+import { ChoiceChip, CreatorAvatar, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
 import { MotionView, useOverlayPresence } from '@/lib/motion';
 import { BackGlyph } from '@/lib/platform-glyphs';
 import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { ApiError, type MagicbookletApiClient } from '@/lib/api-client';
+import { useAuth } from '@/lib/auth';
+import {
+  NO_SEARCH_FILTERS,
+  SEARCH_CORRECTED_AGAIN_LABEL,
+  SEARCH_ENTITIES_HEADING,
+  SEARCH_FILTERED_EMPTY_BODY,
+  SEARCH_FILTERS_CLEAR_LABEL,
+  SEARCH_FILTERS_GROUP_LABEL,
+  SEARCH_FILTER_SWITCHES,
+  hasSearchFilters,
+  isSearchFilterSwitchOn,
+  parseSearchEntityId,
+  searchCorrectionNotice,
+  searchEntityActionLabel,
+  searchEntityCountLabel,
+  searchEntityId,
+  searchEntityKindLabel,
+  searchExactNotice,
+  searchFilterKey,
+  searchInsteadLabel,
+  searchMadeWithChipLabel,
+  searchMadeWithRemoveLabel,
+  toggleSearchFilterSwitch,
+  type SearchEntity,
+  type SearchFilters,
+} from '@/lib/public-search-policy/public-search-policy';
 import {
   clearSearchHistory,
   forgetSearchQuery,
@@ -77,17 +105,29 @@ function isContentType(type: PublicSearchType) {
 
 // An answer or a failure is drawn only under the query and tab it was asked
 // for, so a new query or tab shows the spinner until its own answer lands.
-function searchKey(query: string, type: PublicSearchType, sort: PublicSearchSort) {
-  return `${type}:${sort}:${query}`;
+// `narrowing` is the filters and the exact reading as one string
+// (searchFilterKey), '' for none.
+function searchKey(query: string, type: PublicSearchType, sort: PublicSearchSort, narrowing: string) {
+  return `${type}:${sort}:${narrowing}:${query}`;
 }
 
 function searchScope(query: string, type: PublicSearchType) {
   return `${type}:${query}`;
 }
 
-// Top draws all three kinds; a kind's tab draws only its own.
-function shownResultCount(response: PublicSearchResponse, type: PublicSearchType) {
-  return (type === 'top' || type === 'creators' ? response.creators.items.length : 0)
+// The models and tools an answer offers: on Top, and only for a query Posts
+// is searched for (three characters), since pressing one opens Posts.
+function offeredEntities(response: PublicSearchResponse, type: PublicSearchType, query: string) {
+  if (type !== 'top') return [];
+  if (searchQueryLength(normalizeCreatorSearchQuery(query)) < MIN_CONTENT_QUERY_LENGTH) return [];
+  return response.entities ?? [];
+}
+
+// Top draws every kind, the models and tools the query names among them; a
+// kind's tab draws only its own.
+function shownResultCount(response: PublicSearchResponse, type: PublicSearchType, query: string) {
+  return offeredEntities(response, type, query).length
+    + (type === 'top' || type === 'creators' ? response.creators.items.length : 0)
     + (type === 'top' || type === 'posts' ? response.posts.items.length : 0)
     + (type === 'top' || type === 'recipes' ? response.recipes.items.length : 0);
 }
@@ -170,7 +210,7 @@ function ResultsHeading({
   sort,
   onSortChange,
 }: {
-  title: 'Creators' | 'Posts' | 'Recipes';
+  title: 'Creators' | 'Posts' | 'Recipes' | typeof SEARCH_ENTITIES_HEADING;
   /** Null where the results have one order, or the server has not said it reads another. */
   sort: PublicSearchSort | null;
   onSortChange: (sort: PublicSearchSort) => void;
@@ -210,6 +250,149 @@ function FollowingChip() {
       }}
     >
       <Text style={{ color: tone.foreground, fontSize: 11, fontWeight: '800' }}>Following</Text>
+    </View>
+  );
+}
+
+// A model or tool as a result: pressing it shows the posts made with it.
+function EntityRow({ entity, onPick }: { entity: SearchEntity; onPick: () => void }) {
+  const theme = useAppTheme();
+  const Icon = entity.kind === 'model' ? Box : Wrench;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={searchEntityActionLabel(entity)}
+      onPress={onPick}
+      style={({ pressed }) => ({
+        minHeight: 60,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 13,
+        borderRadius: appTheme.radii.lg,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderColor: theme.colors.borderSubtle,
+        backgroundColor: theme.colors.surface,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+        paddingHorizontal: 13,
+        paddingVertical: 10,
+      })}
+    >
+      <View
+        style={{
+          width: 40,
+          height: 40,
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: appTheme.radii.pill,
+          backgroundColor: theme.colors.surfaceStrong,
+        }}
+      >
+        <Icon size={appTheme.icon.default} color={theme.colors.primary} />
+      </View>
+      <View style={{ minWidth: 0, flex: 1 }}>
+        <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{entity.label}</Text>
+        <Text numberOfLines={1} style={{ marginTop: 2, color: theme.colors.muted, fontSize: 13 }}>
+          {`${searchEntityKindLabel(entity.kind)} · ${searchEntityCountLabel(entity)}`}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
+// What narrows a Posts search: switches that say whether they are on, and the
+// made-with filter as a chip of its own that removes it. One row that scrolls
+// sideways, under the tabs it belongs to.
+function SearchFilterBar({
+  filters,
+  madeWithLabel,
+  followingOffered,
+  onChange,
+}: {
+  filters: SearchFilters;
+  /** The name of the made-with entity, once known. */
+  madeWithLabel: string | null;
+  /** A visitor or a guest follows nobody: the switch is drawn only for an account. */
+  followingOffered: boolean;
+  onChange: (filters: SearchFilters) => void;
+}) {
+  const theme = useAppTheme();
+  return (
+    <ScrollView
+      horizontal
+      keyboardShouldPersistTaps="handled"
+      showsHorizontalScrollIndicator={false}
+      accessibilityLabel={SEARCH_FILTERS_GROUP_LABEL}
+      style={{ flexGrow: 0, marginHorizontal: -appTheme.spacing.screen }}
+      contentContainerStyle={{ alignItems: 'center', gap: 8, paddingHorizontal: appTheme.spacing.screen }}
+    >
+      {filters.madeWith && madeWithLabel ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={searchMadeWithRemoveLabel(madeWithLabel)}
+          accessibilityState={{ selected: true }}
+          onPress={() => onChange({ ...filters, madeWith: null })}
+          style={({ pressed }) => ({
+            minHeight: appTheme.touch.default,
+            maxWidth: 260,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            borderRadius: appTheme.radii.pill,
+            borderWidth: 1,
+            borderColor: theme.state.selected.border,
+            backgroundColor: theme.state.selected.background,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+            paddingHorizontal: appTheme.spacing.gap,
+          })}
+        >
+          <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>
+            {searchMadeWithChipLabel(madeWithLabel)}
+          </Text>
+          <X size={appTheme.icon.sm} color={theme.colors.text} />
+        </Pressable>
+      ) : null}
+      {SEARCH_FILTER_SWITCHES.filter((item) => item.id !== 'following' || followingOffered).map((item) => (
+        <ChoiceChip
+          key={item.id}
+          compact
+          accent="primary"
+          label={item.label}
+          active={isSearchFilterSwitchOn(filters, item.id)}
+          onPress={() => onChange(toggleSearchFilterSwitch(filters, item.id))}
+        />
+      ))}
+      {hasSearchFilters(filters) ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={SEARCH_FILTERS_CLEAR_LABEL}
+          onPress={() => onChange(NO_SEARCH_FILTERS)}
+          style={{ minHeight: appTheme.touch.default, justifyContent: 'center', paddingHorizontal: 6 }}
+        >
+          <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '700' }}>{SEARCH_FILTERS_CLEAR_LABEL}</Text>
+        </Pressable>
+      ) : null}
+    </ScrollView>
+  );
+}
+
+// How the search read the query, and the way to the other reading.
+function ReadingNotice({ line, actionLabel, onAction }: { line: string; actionLabel: string; onAction: () => void }) {
+  const theme = useAppTheme();
+  return (
+    <View
+      accessibilityLiveRegion="polite"
+      style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 10 }}
+    >
+      <Text style={{ color: theme.colors.textSecondary, fontSize: 14 }}>{line}</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={actionLabel}
+        onPress={onAction}
+        style={{ minHeight: 44, justifyContent: 'center' }}
+      >
+        <Text style={{ color: theme.colors.primary, fontSize: 14, fontWeight: '700' }}>{actionLabel}</Text>
+      </Pressable>
     </View>
   );
 }
@@ -384,6 +567,10 @@ export function ExploreSearchOverlay({
   visible: boolean;
 }) {
   const theme = useAppTheme();
+  // The registered account, null for a visitor and for a guest session: the
+  // only viewer "from creators I follow" means anything for.
+  const { user } = useAuth();
+  const canFollow = Boolean(user);
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const isFocused = useIsFocused();
@@ -406,6 +593,17 @@ export function ExploreSearchOverlay({
   const [pickedType, setPickedType] = useState<PublicSearchType>('top');
   // The order picked for Posts and Recipes, kept across the two tabs.
   const [pickedSort, setPickedSort] = useState<PublicSearchSort>('top');
+  // What narrows Posts, kept across tabs as the order is and read only on Posts.
+  const [pickedFilters, setPickedFilters] = useState<SearchFilters>(NO_SEARCH_FILTERS);
+  // Filters are offered once an answer has said which it applied. A server
+  // from before filters says nothing and narrows nothing, so there the
+  // switches would change nothing and are not drawn.
+  const [filtersOffered, setFiltersOffered] = useState(false);
+  // The query the person asked to have read as typed ("search instead for").
+  // It belongs to that query: another one is corrected again where it needs to be.
+  const [exactQuery, setExactQuery] = useState<string | null>(null);
+  // The name of each entity an answer or a pressed result has given, by its id.
+  const [entityLabels, setEntityLabels] = useState<Record<string, string>>({});
   const [answer, setAnswer] = useState<SearchAnswer | null>(null);
   const [failure, setFailure] = useState<SearchFailure | null>(null);
   const [history, setHistory] = useState<string[]>([]);
@@ -416,27 +614,53 @@ export function ExploreSearchOverlay({
   const type: PublicSearchType = creatorsOnly && isContentType(pickedType) ? 'creators' : pickedType;
   // The Top tab and Creators have one order, whatever was picked on another tab.
   const sort: PublicSearchSort = isContentType(type) ? pickedSort : 'top';
+  // A visitor or a guest follows nobody, and the server would leave the filter
+  // out. One object for as long as nothing it is made of changes: the search
+  // below is asked again whenever it is another.
+  const narrowsPosts = type === 'posts' && filtersOffered;
+  const filters: SearchFilters = useMemo(() => {
+    if (!narrowsPosts) return NO_SEARCH_FILTERS;
+    return canFollow || !pickedFilters.following ? pickedFilters : { ...pickedFilters, following: false };
+  }, [canFollow, narrowsPosts, pickedFilters]);
+  // Creators are never corrected: there the exact reading changes nothing and is not asked for.
+  const exact = type !== 'creators' && exactQuery !== null && exactQuery === normalizedQuery;
+  const narrowing = searchFilterKey(filters, exact);
   // From the creator minimum on, the tab in effect always meets its own.
-  const requestKey = countedLength >= MIN_CREATOR_QUERY_LENGTH ? searchKey(normalizedQuery, type, sort) : null;
+  const requestKey = countedLength >= MIN_CREATOR_QUERY_LENGTH ? searchKey(normalizedQuery, type, sort, narrowing) : null;
   const response = answer && answer.key === requestKey ? answer.response : null;
   const shownFailure = failure && failure.key === requestKey ? failure : null;
-  // The answer on hand for this query and tab in the other order, if any.
+  // The answer on hand for this query and tab in the other order, or under
+  // other filters or the other reading, if any.
   const otherOrder = !response && requestKey !== null && answer !== null
     && answer.scope === searchScope(normalizedQuery, type) ? answer.response : null;
   // While the other order of the same search loads, its cards stay up, dimmed,
   // with the control on them: the two orders hold the same results, and a
-  // spinner in their place would take the control from under the finger. A
-  // request that failed is no longer loading: the cards go, and the failed
-  // search is drawn as any other is, with Retry.
+  // spinner in their place would take the control from under the finger. The
+  // same goes for a filter just switched: the cards it narrows stay under the
+  // switches until its answer lands. A request that failed is no longer
+  // loading: the cards go, and the failed search is drawn as any other is,
+  // with Retry.
   const reordering = otherOrder !== null && !shownFailure;
   const shownResponse = response ?? (reordering ? otherOrder : null);
-  const resultCount = shownResponse ? shownResultCount(shownResponse, type) : 0;
+  const resultCount = shownResponse ? shownResultCount(shownResponse, type, normalizedQuery) : 0;
   // Latest is offered once an answer says which order it is in. A server from
   // before sorts says nothing and reads every search ranked, so there the
   // control would change nothing and is not drawn.
   const sortOffered = isContentType(type) && (shownResponse ?? otherOrder)?.sort !== undefined;
   const shownSort = sortOffered ? sort : null;
   const retryBlocked = Boolean(shownFailure?.retryAfterSeconds);
+  // How this search read the query, said only of its own answer.
+  const correctionNotice = response ? searchCorrectionNotice(response.correctedQuery, type) : null;
+  const exactNotice = response && exact ? searchExactNotice(normalizedQuery) : null;
+  const filtersShown = requestKey !== null && type === 'posts' && filtersOffered;
+  // The made-with filter by the name an answer or a pressed result gave it, by its key until then.
+  const madeWithLabel = !filters.madeWith
+    ? null
+    : (response?.filters?.madeWith?.label
+      ?? entityLabels[filters.madeWith]
+      ?? parseSearchEntityId(filters.madeWith)?.key
+      ?? null);
+  const entities = shownResponse ? offeredEntities(shownResponse, type, normalizedQuery) : [];
   const nextCursor = !response
     ? null
     : type === 'creators'
@@ -490,8 +714,17 @@ export function ExploreSearchOverlay({
     if (cursor) setLoadingMore(true);
     setFailure(null);
     try {
-      const next = await api.searchPublicContent({ query: normalizedQuery, type, sort, cursor }, controller.signal);
+      const next = await api.searchPublicContent({ query: normalizedQuery, type, sort, filters, exact, cursor }, controller.signal);
       if (sequence !== requestSequence.current) return;
+      if (next.filters !== undefined) setFiltersOffered(true);
+      // The names this answer gives: its entities, and the one its filter is read with.
+      const named = [...(next.entities ?? []), ...(next.filters?.madeWith ? [next.filters.madeWith] : [])];
+      if (named.length) {
+        setEntityLabels((current) => ({
+          ...current,
+          ...Object.fromEntries(named.map((entity) => [searchEntityId(entity), entity.label])),
+        }));
+      }
       if (cursor) {
         setAnswer((current) => current?.key === key ? {
           key,
@@ -508,7 +741,7 @@ export function ExploreSearchOverlay({
       setAnswer({ key, scope, response: next });
       if (rememberOnAnswer.current === key) {
         rememberOnAnswer.current = null;
-        if (shownResultCount(next, type) > 0) rememberQuery(normalizedQuery);
+        if (shownResultCount(next, type, normalizedQuery) > 0) rememberQuery(normalizedQuery);
       }
     } catch (requestError) {
       if (controller.signal.aborted || (requestError instanceof Error && requestError.name === 'AbortError')) return;
@@ -516,7 +749,7 @@ export function ExploreSearchOverlay({
     } finally {
       if (sequence === requestSequence.current) setLoadingMore(false);
     }
-  }, [api, normalizedQuery, rememberQuery, requestKey, sort, type]);
+  }, [api, exact, filters, normalizedQuery, rememberQuery, requestKey, sort, type]);
 
   useEffect(() => () => requestController.current?.abort(), []);
 
@@ -560,6 +793,22 @@ export function ExploreSearchOverlay({
   };
 
   const openResult = () => rememberQuery(normalizedQuery);
+
+  // An entity pressed among the results: Posts, narrowed to it and to nothing
+  // else, named at once. Its count is of the posts this query finds with it,
+  // so a switch left on from an earlier look at Posts would open fewer than
+  // the row said.
+  const pickEntity = (entity: SearchEntity) => {
+    setEntityLabels((current) => ({ ...current, [searchEntityId(entity)]: entity.label }));
+    setPickedFilters({ ...NO_SEARCH_FILTERS, madeWith: searchEntityId(entity) });
+    setPickedType('posts');
+  };
+
+  // Android reads the notice from its live region; iOS has none, so the line is announced.
+  const announcedNotice = correctionNotice ?? exactNotice;
+  useEffect(() => {
+    if (announcedNotice && Platform.OS === 'ios') AccessibilityInfo.announceForAccessibility(announcedNotice);
+  }, [announcedNotice]);
 
   if (!mounted) return null;
 
@@ -628,6 +877,23 @@ export function ExploreSearchOverlay({
           paddingBottom: tabBarMetrics.contentBottomOverlapPadding + appTheme.spacing.section,
         }}
       >
+        {filtersShown ? (
+          <SearchFilterBar
+            filters={filters}
+            madeWithLabel={madeWithLabel}
+            followingOffered={canFollow}
+            onChange={setPickedFilters}
+          />
+        ) : null}
+        {correctionNotice ? (
+          <ReadingNotice
+            line={correctionNotice}
+            actionLabel={searchInsteadLabel(normalizedQuery)}
+            onAction={() => setExactQuery(normalizedQuery)}
+          />
+        ) : exactNotice ? (
+          <ReadingNotice line={exactNotice} actionLabel={SEARCH_CORRECTED_AGAIN_LABEL} onAction={() => setExactQuery(null)} />
+        ) : null}
         {!requestKey ? (
           history.length ? (
             <View style={{ gap: 12 }}>
@@ -669,6 +935,14 @@ export function ExploreSearchOverlay({
           )
         ) : shownResponse && resultCount > 0 ? (
           <View style={{ gap: 25 }}>
+            {entities.length ? (
+              <View style={{ gap: 10 }}>
+                <ResultsHeading title={SEARCH_ENTITIES_HEADING} sort={null} onSortChange={setPickedSort} />
+                {entities.map((entity) => (
+                  <EntityRow key={searchEntityId(entity)} entity={entity} onPick={() => pickEntity(entity)} />
+                ))}
+              </View>
+            ) : null}
             {(type === 'top' || type === 'creators') && shownResponse.creators.items.length ? (
               <View style={{ gap: 10 }}>
                 <ResultsHeading title="Creators" sort={null} onSortChange={setPickedSort} />
@@ -708,7 +982,12 @@ export function ExploreSearchOverlay({
             <SecondaryButton disabled={retryBlocked} label="Retry search" onPress={() => void runSearch()} />
           </View>
         ) : response ? (
-          <StatusBlock title={`No results for “${normalizedQuery}”`} body="Try a shorter phrase, check the spelling, or search for a creator handle." />
+          <StatusBlock
+            title={`No results for “${normalizedQuery}”`}
+            body={hasSearchFilters(filters)
+              ? SEARCH_FILTERED_EMPTY_BODY
+              : 'Try a shorter phrase, check the spelling, or search for a creator handle.'}
+          />
         ) : (
           <View style={{ minHeight: 260, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
             <ActivityIndicator color={theme.colors.primary} />

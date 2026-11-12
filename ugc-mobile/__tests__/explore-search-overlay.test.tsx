@@ -42,6 +42,9 @@ const mocks = vi.hoisted(() => {
     }),
     // One router object for the whole file, so every render pushes through the same spy.
     router: { push: vi.fn() },
+    // The registered account, null for a visitor and for a guest session.
+    user: { value: null as { id: string } | null },
+    announce: vi.fn(),
     readSearchHistory: vi.fn(async () => [] as string[]),
     rememberSearchQuery: vi.fn(async (_query: string) => [] as string[]),
   };
@@ -58,7 +61,12 @@ vi.mock('@react-navigation/native', () => ({
   useIsFocused: () => mocks.focused.value,
 }));
 
+vi.mock('@/lib/auth', () => ({
+  useAuth: () => ({ user: mocks.user.value }),
+}));
+
 vi.mock('react-native', () => ({
+  AccessibilityInfo: { announceForAccessibility: mocks.announce },
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   BackHandler: { addEventListener: mocks.addEventListener },
   Keyboard: { dismiss: mocks.keyboardDismiss },
@@ -91,6 +99,8 @@ vi.mock('expo-router', () => ({
 
 vi.mock('lucide-react-native', () => ({
   BookOpen: (props: MockProps) => React.createElement('icon', props),
+  Box: (props: MockProps) => React.createElement('icon', props),
+  Wrench: (props: MockProps) => React.createElement('icon', props),
   Clock3: (props: MockProps) => React.createElement('icon', props),
   MessageCircle: (props: MockProps) => React.createElement('icon', props),
   Search: (props: MockProps) => React.createElement('icon', props),
@@ -103,6 +113,7 @@ vi.mock('@/components/keyboard-aware', () => ({
 }));
 
 vi.mock('@/components/ui', () => ({
+  ChoiceChip: (props: MockProps) => React.createElement('choice-chip', props),
   CreatorAvatar: (props: MockProps) => React.createElement('creator-avatar', props),
   SecondaryButton: (props: MockProps) => React.createElement('secondary-button', props),
   SegmentedControl: (props: MockProps) => React.createElement('segmented-control', props),
@@ -358,6 +369,8 @@ function searchAnswer(
     /** The order the server says the answer is in; a server from before sorts says none. */
     sort?: PublicSearchSort;
   } = {},
+  /** What a server with entities and filters adds; a server from before them adds none. */
+  extra: Pick<PublicSearchResponse, 'entities' | 'filters' | 'correctedQuery' | 'exact'> = {},
 ): PublicSearchResponse {
   return {
     query,
@@ -367,6 +380,7 @@ function searchAnswer(
     creators: { items: kinds.creators ?? [], nextCursor: kinds.creatorsCursor ?? null },
     posts: { items: kinds.posts ?? [], nextCursor: kinds.postsCursor ?? null },
     recipes: { items: kinds.recipes ?? [], nextCursor: null },
+    ...extra,
   };
 }
 
@@ -382,11 +396,328 @@ describe('ExploreSearchOverlay search', () => {
     mocks.router.push.mockClear();
     mocks.readSearchHistory.mockClear();
     mocks.rememberSearchQuery.mockClear();
+    mocks.user.value = null;
+    mocks.announce.mockClear();
     searchPublicContent.mockReset();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  describe('entities, filters and the corrected reading', () => {
+    const NONE = { madeWith: null, mediaKind: null, hasRecipe: false, following: false };
+    const kling = { kind: 'model' as const, key: 'kling-2.6', label: 'Kling 2.6', postCount: 14, postCountCapped: false };
+    // A server with filters says which it applied, on every answer.
+    const answerOf = (
+      query: string,
+      type: PublicSearchType = 'top',
+      kinds: Parameters<typeof searchAnswer>[2] = {},
+      extra: Parameters<typeof searchAnswer>[3] = {},
+    ) => searchAnswer(query, type, { sort: 'top', ...kinds }, { entities: [], filters: NONE, correctedQuery: { posts: null, recipes: null }, exact: false, ...extra });
+
+    function chips(tree: Tree) {
+      return hostNodes(tree, 'choice-chip');
+    }
+    function chip(tree: Tree, label: string) {
+      const match = chips(tree).find((node) => node.props.label === label);
+      if (!match) throw new Error(`No ${label} switch`);
+      return match;
+    }
+    function asked() {
+      return searchPublicContent.mock.calls.map(([params]) => ({
+        type: params.type, filters: params.filters, exact: params.exact, cursor: params.cursor ?? null,
+      }));
+    }
+
+    it('offers the models and tools a query names on Top, and opens the posts made with one', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type, filters }) => answerOf(
+        query,
+        type,
+        type === 'posts' ? { posts: [post('clip')] } : { creators: [creator('kling-fan')] },
+        type === 'top'
+          ? { entities: [kling, { kind: 'tool', key: 'klingon-fx', label: 'Klingon FX', postCount: 1000, postCountCapped: true }] }
+          : { filters: { ...NONE, madeWith: filters?.madeWith ? { kind: 'model', key: 'kling-2.6', label: 'Kling 2.6' } : null } },
+      ));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'kling');
+      await advance(300);
+
+      expect(shownTexts(tree)).toEqual(expect.arrayContaining(['Models and tools', 'Kling 2.6', 'Model · 14 posts', 'Klingon FX', 'Tool · 1,000+ posts']));
+      const row = pressableLabelled(tree, 'Kling 2.6, model, 14 posts. Show posts made with it');
+      // A row a thumb can press: the HIG's 44pt and more.
+      expect(row.props.style.minHeight).toBeGreaterThanOrEqual(44);
+      expect(row.props.accessibilityRole).toBe('button');
+
+      await press(row);
+      await advance(0);
+      expect(tab(tree, 'Posts').props.accessibilityState).toMatchObject({ selected: true });
+      expect(asked().at(-1)).toMatchObject({ type: 'posts', filters: { ...NONE, madeWith: 'model:kling-2.6' }, exact: false });
+      // The filter is a chip of its own, on, named as the result was.
+      const madeWith = pressableLabelled(tree, 'Remove filter: made with Kling 2.6');
+      expect(madeWith.props.accessibilityState).toMatchObject({ selected: true });
+      expect(textOf(madeWith)).toBe('Made with Kling 2.6');
+      expect(madeWith.props.style.minHeight).toBeGreaterThanOrEqual(44);
+
+      await press(madeWith);
+      await advance(0);
+      expect(asked().at(-1)).toMatchObject({ type: 'posts', filters: NONE });
+      expect(hostNodes(tree, 'pressable').some((node) => String(node.props.accessibilityLabel).startsWith('Remove filter'))).toBe(false);
+
+      await act(async () => tree.unmount());
+    });
+
+    it('opens exactly the posts an entity’s row counted: a switch left on from an earlier look at Posts is cleared', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => answerOf(
+        query, type, type === 'posts' ? { posts: [post('clip')] } : { creators: [creator('kling-fan')] },
+        type === 'top' ? { entities: [kling] } : {},
+      ));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'kling');
+      await advance(300);
+      await press(chip(tree, 'Videos'));
+      await press(chip(tree, 'Has recipe'));
+      await advance(0);
+
+      await press(tab(tree, 'Top'));
+      await advance(0);
+      await press(pressableLabelled(tree, 'Kling 2.6, model, 14 posts. Show posts made with it'));
+      await advance(0);
+      expect(asked().at(-1)).toMatchObject({ type: 'posts', filters: { ...NONE, madeWith: 'model:kling-2.6' } });
+      expect(chips(tree).every((node) => node.props.active === false)).toBe(true);
+      await act(async () => tree.unmount());
+    });
+
+    it('draws no entity for a two-character query, whatever an answer carries: there is no Posts search to open', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => answerOf(
+        query, type, { creators: [creator('klara')] }, { entities: [kling] },
+      ));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'kl');
+      await advance(300);
+      expect(shownTexts(tree)).not.toContain('Models and tools');
+      expect(shownTexts(tree)).not.toContain('Kling 2.6');
+
+      // With a third character the entity is drawn.
+      await typeQuery(tree, 'kli');
+      await advance(300);
+      expect(shownTexts(tree)).toContain('Models and tools');
+      await act(async () => tree.unmount());
+    });
+
+    it('draws an answer that holds nothing but an entity as a result, never as "No results"', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => answerOf(query, type, {}, { entities: [kling] }));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'kling');
+      await advance(300);
+      expect(saysNoResults(tree)).toBe(false);
+      expect(shownTexts(tree)).toContain('Kling 2.6');
+      await act(async () => tree.unmount());
+    });
+
+    it('narrows Posts with switches that say whether they are on, Images and Videos one choice', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => answerOf(query, type, { posts: [post('clip'), post('still')] }));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+
+      // A visitor follows nobody: three switches, none on.
+      expect(chips(tree).map((node) => [node.props.label, node.props.active])).toEqual([
+        ['Images', false], ['Videos', false], ['Has recipe', false],
+      ]);
+      expect(asked()).toEqual([{ type: 'posts', filters: NONE, exact: false, cursor: null }]);
+
+      await press(chip(tree, 'Videos'));
+      await advance(0);
+      expect(chip(tree, 'Videos').props.active).toBe(true);
+      expect(asked().at(-1)?.filters).toEqual({ ...NONE, mediaKind: 'video' });
+
+      await press(chip(tree, 'Images'));
+      await press(chip(tree, 'Has recipe'));
+      await advance(0);
+      expect(chips(tree).map((node) => [node.props.label, node.props.active])).toEqual([
+        ['Images', true], ['Videos', false], ['Has recipe', true],
+      ]);
+      expect(asked().at(-1)?.filters).toEqual({ ...NONE, mediaKind: 'image', hasRecipe: true });
+
+      await press(pressableLabelled(tree, 'Clear filters'));
+      await advance(0);
+      expect(asked().at(-1)?.filters).toEqual(NONE);
+      expect(chips(tree).every((node) => node.props.active === false)).toBe(true);
+
+      await act(async () => tree.unmount());
+    });
+
+    it('asks a filtered search once, not again at every render, for a visitor as for an account', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => answerOf(query, type, { posts: [post('clip')] }));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+      await press(chip(tree, 'Videos'));
+      await advance(0);
+      const callsAfterSwitch = searchPublicContent.mock.calls.length;
+      await advance(2_000);
+      expect(searchPublicContent.mock.calls.length).toBe(callsAfterSwitch);
+      await act(async () => tree.unmount());
+    });
+
+    it('offers "Following" to an account and asks for it; a visitor is never offered it', async () => {
+      mocks.user.value = { id: 'viewer-1' };
+      searchPublicContent.mockImplementation(async ({ query, type }) => answerOf(query, type, { posts: [post('clip')] }));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+      expect(chips(tree).map((node) => node.props.label)).toEqual(['Images', 'Videos', 'Has recipe', 'Following']);
+      await press(chip(tree, 'Following'));
+      await advance(0);
+      expect(asked().at(-1)?.filters).toEqual({ ...NONE, following: true });
+
+      // Signed out with the switch on: it is no longer offered, and no longer asked for.
+      mocks.user.value = null;
+      await update(tree, { visible: true, onClose: vi.fn() });
+      await advance(0);
+      expect(chips(tree).map((node) => node.props.label)).toEqual(['Images', 'Videos', 'Has recipe']);
+      expect(asked().at(-1)?.filters).toEqual(NONE);
+
+      await act(async () => tree.unmount());
+    });
+
+    it('keeps the switches over a filtered search that found nothing, and says to remove one', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type, filters }) => answerOf(
+        query, type, { posts: filters?.mediaKind ? [] : [post('clip')] },
+      ));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+      await press(chip(tree, 'Videos'));
+      await advance(0);
+      expect(saysNoResults(tree)).toBe(true);
+      expect(statusBodies(tree)).toEqual(['No post matches these filters. Remove one, or clear them all.']);
+      expect(chip(tree, 'Videos').props.active).toBe(true);
+      await act(async () => tree.unmount());
+    });
+
+    it('pages a filtered search with its filters', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type, cursor }) => answerOf(
+        query, type, cursor ? { posts: [post('older')] } : { posts: [post('clip')], postsCursor: 'page-2' },
+      ));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+      await press(chip(tree, 'Videos'));
+      await advance(0);
+      await press(showMoreButton(tree));
+      await advance(0);
+      expect(asked().at(-1)).toEqual({ type: 'posts', filters: { ...NONE, mediaKind: 'video' }, exact: false, cursor: 'page-2' });
+      await act(async () => tree.unmount());
+    });
+
+    it('keeps filters to Posts: Top and Creators are asked unnarrowed and draw no switches', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => answerOf(
+        query, type, type === 'posts' ? { posts: [post('clip')] } : { creators: [creator('jane')] },
+      ));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+      await press(chip(tree, 'Videos'));
+      await advance(0);
+
+      await press(tab(tree, 'Top'));
+      await advance(0);
+      expect(chips(tree)).toHaveLength(0);
+      expect(asked().at(-1)).toMatchObject({ type: 'top', filters: NONE });
+
+      // Back on Posts the choice is still there.
+      await press(tab(tree, 'Posts'));
+      await advance(0);
+      expect(chip(tree, 'Videos').props.active).toBe(true);
+      expect(asked().at(-1)).toMatchObject({ type: 'posts', filters: { ...NONE, mediaKind: 'video' } });
+      await act(async () => tree.unmount());
+    });
+
+    it('says when it read the query as something else, and searches for it as typed on request', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type, exact }) => answerOf(
+        query,
+        type,
+        { posts: exact ? [] : [post('portrait')] },
+        { correctedQuery: { posts: exact ? null : 'portrait', recipes: null }, exact: Boolean(exact) },
+      ));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'portriat');
+      await advance(300);
+
+      expect(shownTexts(tree)).toContain('Showing results for “portrait”');
+      // Android reads it from a live region.
+      expect(tree.root.findAll((node) => node.props.accessibilityLiveRegion === 'polite').length).toBeGreaterThan(0);
+      const instead = pressableLabelled(tree, 'Search instead for “portriat”');
+      expect(instead.props.style.minHeight).toBeGreaterThanOrEqual(44);
+
+      await press(instead);
+      await advance(0);
+      expect(asked().at(-1)).toMatchObject({ type: 'posts', exact: true });
+      expect(shownTexts(tree)).toContain('Showing results for “portriat” as typed');
+      expect(shownTexts(tree)).not.toContain('Showing results for “portrait”');
+      expect(saysNoResults(tree)).toBe(true);
+
+      await press(pressableLabelled(tree, 'Use suggested spelling'));
+      await advance(0);
+      expect(asked().at(-1)).toMatchObject({ type: 'posts', exact: false });
+      expect(shownTexts(tree)).toContain('Showing results for “portrait”');
+
+      // Another query is a new search, corrected again where it needs to be.
+      await press(pressableLabelled(tree, 'Search instead for “portriat”'));
+      await advance(0);
+      await typeQuery(tree, 'lanten');
+      await advance(300);
+      expect(asked().at(-1)).toMatchObject({ exact: false });
+
+      await act(async () => tree.unmount());
+    });
+
+    it('names both readings on Top when posts and recipes were read differently, and none on Creators', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => answerOf(
+        query,
+        type,
+        { creators: [creator('jane')], posts: [post('portrait')], recipes: [recipe('r1', { accessMode: 'free', priceUsdCents: 0 }, 'Jane')] },
+        { correctedQuery: { posts: 'portrait', recipes: 'portraits' } },
+      ));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'portriat');
+      await advance(300);
+      expect(shownTexts(tree)).toContain('Showing posts for “portrait” and recipes for “portraits”');
+
+      await press(tab(tree, 'Creators'));
+      await advance(0);
+      expect(shownTexts(tree).some((text) => text.startsWith('Showing '))).toBe(false);
+      await act(async () => tree.unmount());
+    });
+
+    it('draws none of it against a server from before entities and filters, and asks it nothing new', async () => {
+      // Today's server: a sort, and none of the new fields.
+      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(
+        query, type, type === 'posts' ? { sort: 'top', posts: [post('clip')] } : { sort: 'top', creators: [creator('jane')] },
+      ));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'kling');
+      await advance(300);
+      expect(shownTexts(tree)).not.toContain('Models and tools');
+
+      await press(tab(tree, 'Posts'));
+      await advance(0);
+      expect(chips(tree)).toHaveLength(0);
+      expect(shownTexts(tree).some((text) => text.startsWith('Showing '))).toBe(false);
+      expect(asked().every((call) => call.exact === false
+        && JSON.stringify(call.filters) === JSON.stringify(NONE))).toBe(true);
+      await act(async () => tree.unmount());
+    });
   });
 
   it('says it is searching, never that nothing matched, until the answer for the query lands', async () => {
@@ -667,7 +998,11 @@ describe('ExploreSearchOverlay search', () => {
 
     searchPublicContent.mockRejectedValueOnce(new ApiError('Too many requests.', 429, { retryAfterSeconds: 10 }));
     await press(showMoreButton(tree));
-    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toEqual({ query: 'jan', type: 'creators', sort: 'top', cursor: 'page-2' });
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toEqual({
+      query: 'jan', type: 'creators', sort: 'top', cursor: 'page-2',
+      // Creators are neither narrowed nor read as typed.
+      filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false }, exact: false,
+    });
     // The first page stays up, with the reason under it.
     expect(() => pressableLabelled(tree, "Open Creator jane's profile")).not.toThrow();
     expect(shownTexts(tree)).toContain('Search is busy. Try again in 10 s.');

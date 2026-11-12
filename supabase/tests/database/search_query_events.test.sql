@@ -15,8 +15,9 @@ select has_table('public', 'search_query_events', 'the search log exists');
 select columns_are(
   'public', 'search_query_events',
   array['id', 'created_at', 'query', 'search_type', 'signed_in', 'visitor_day',
-        'creator_count', 'post_count', 'recipe_count', 'sort'],
-  'a row holds the normalized query, the search type, whether a session was presented, the hashed visitor-day, three counts and the order asked for: nothing else about the person'
+        'creator_count', 'post_count', 'recipe_count', 'sort',
+        'made_with', 'media_kind', 'has_recipe', 'followed_only', 'corrected'],
+  'a row holds the normalized query, the search type, whether a session was presented, the hashed visitor-day, three counts, the order asked for, what narrowed a Posts search and whether the query was read corrected: nothing else about the person'
 );
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.search_query_events'::regclass),

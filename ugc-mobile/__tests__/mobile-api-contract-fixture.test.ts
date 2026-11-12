@@ -11,6 +11,11 @@ import {
 } from '../lib/api-client';
 import { isCreationLibraryMember } from '../lib/creation-library';
 import {
+  SEARCH_FILTER_PARAMS,
+  searchCorrectionNotice,
+  type SearchFilters,
+} from '../lib/public-search-policy/public-search-policy';
+import {
   CREATION_RECIPE_REQUIRED,
   CREATION_RECIPE_REQUIRED_CODE,
   recipeCopyableInputs,
@@ -1115,6 +1120,77 @@ describe('mobile shared API v1 contract fixture', () => {
       expect(page.sort).toBeUndefined();
       expect(mobileApiContract.endpoints.searchPublicContent.response.sort).toBe('top');
     });
+
+    // Entities, filters and the corrected reading (2026-11-12).
+    it('asks for a narrowed Posts search and its next page as the contract pins, and reads what was applied', async () => {
+      const { filteredPosts, filteredPostsNextPage } = search.responseVariants;
+      const { issuedFor } = search.cursors.filteredTopPosts;
+
+      const first = clientAnswering(filteredPosts.response);
+      const page = await first.api.searchPublicContent({
+        query: filteredPosts.query.q, type: 'posts', filters: issuedFor.filters as SearchFilters, exact: issuedFor.exact,
+      });
+      expect(Object.fromEntries(first.asked[0].searchParams)).toEqual(filteredPosts.query);
+      expect(page).toEqual(filteredPosts.response);
+      expect(page.filters).toEqual({
+        madeWith: { kind: 'model', key: 'kling-2.6', label: 'Kling 2.6' }, mediaKind: 'video', hasRecipe: true, following: true,
+      });
+
+      // The cursor goes back as it came, with the filters it pages.
+      const next = clientAnswering(filteredPostsNextPage.response);
+      await next.api.searchPublicContent({
+        query: filteredPosts.query.q, type: 'posts', filters: issuedFor.filters as SearchFilters, cursor: page.posts.nextCursor,
+      });
+      expect(Object.fromEntries(next.asked[0].searchParams)).toEqual(filteredPostsNextPage.query);
+    });
+
+    it('names the filter parameters the shared rules name', () => {
+      expect(search.filterParameters).toEqual(SEARCH_FILTER_PARAMS);
+    });
+
+    it('reads the entities of a Top answer, the corrected reading, and asks for the query as typed', async () => {
+      const top = clientAnswering(search.response);
+      const answer = await top.api.searchPublicContent({ query: 'Neon product' });
+      expect(answer.entities).toEqual([
+        { kind: 'tool', key: 'neon-product-studio', label: 'Neon Product Studio', postCount: 14, postCountCapped: false },
+      ]);
+
+      const { correctedPosts, exactPosts } = search.responseVariants;
+      const corrected = clientAnswering(correctedPosts.response);
+      const read = await corrected.api.searchPublicContent({ query: correctedPosts.query.q, type: 'posts' });
+      expect(Object.fromEntries(corrected.asked[0].searchParams)).toEqual(correctedPosts.query);
+      expect(searchCorrectionNotice(read.correctedQuery, 'posts')).toBe('Showing results for “neon product”');
+
+      const exact = clientAnswering(exactPosts.response);
+      const typed = await exact.api.searchPublicContent({ query: exactPosts.query.q, type: 'posts', exact: true });
+      expect(Object.fromEntries(exact.asked[0].searchParams)).toEqual(exactPosts.query);
+      expect(typed.exact).toBe(true);
+      expect(searchCorrectionNotice(typed.correctedQuery, 'posts')).toBeNull();
+    });
+
+    it('sends nothing new to a server from before filters, whose answer carries none of the new fields', async () => {
+      const { beforeFilters } = search.responseVariants;
+      const { api, asked } = clientAnswering(beforeFilters.response);
+      const page = await api.searchPublicContent({
+        query: beforeFilters.query.q, type: 'posts', sort: 'top',
+        filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false }, exact: false,
+      });
+      expect(Object.fromEntries(asked[0].searchParams)).toEqual(beforeFilters.query);
+      // Nothing to draw entities, switches or a notice from: the app draws none.
+      expect(page.entities).toBeUndefined();
+      expect(page.filters).toBeUndefined();
+      expect(page.correctedQuery).toBeUndefined();
+    });
+
+    it.each(['unknownMediaKind', 'unknownMadeWith', 'cursorOfOtherFilters'] as const)(
+      'reads the refusal %s as a typed API error with the server\'s words',
+      async (name) => {
+        const refusal = search.errors[name];
+        const { api } = clientAnswering(refusal.response, refusal.status);
+        await expect(api.searchPublicContent({ query: refusal.query.q, type: 'posts' }))
+          .rejects.toMatchObject({ name: 'ApiError', status: 400, message: refusal.response.error });
+      },
+    );
 
     it('reads a refused sort as a typed API error with the server\'s words', async () => {
       const refusal = search.errors.unknownSort;

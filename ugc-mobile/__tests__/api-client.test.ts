@@ -355,6 +355,31 @@ describe('mobile api client caching', () => {
     ]);
   });
 
+  it('names what narrows a search and the exact reading only when they are on, before the cursor', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({}));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    const none = { madeWith: null, mediaKind: null, hasRecipe: false, following: false };
+
+    await api.searchPublicContent({
+      query: 'portrait', type: 'posts', sort: 'latest', cursor: 'page-2', exact: true,
+      filters: { madeWith: 'model:kling-2.6', mediaKind: 'video', hasRecipe: true, following: true },
+    });
+    await api.searchPublicContent({ query: 'portrait', type: 'posts', filters: { ...none, mediaKind: 'image' } });
+    await api.searchPublicContent({ query: 'portrait', type: 'posts', filters: none, exact: false });
+
+    // The web page's own parameters (ugc-mobile/lib/public-search-policy). A
+    // server from before filters ignores the ones it does not know.
+    expect((fetcher.mock.calls as unknown as Array<[string]>).map(([url]) => new URL(String(url)).search)).toEqual([
+      '?q=portrait&type=posts&sort=latest&madeWith=model%3Akling-2.6&kind=video&recipe=1&following=1&exact=1&cursor=page-2',
+      '?q=portrait&type=posts&kind=image',
+      '?q=portrait&type=posts',
+    ]);
+  });
+
   it('sends a request id with backend calls', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ credits: 10 }));
     const api = createApiClient({

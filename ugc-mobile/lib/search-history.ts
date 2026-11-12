@@ -1,64 +1,41 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const SEARCH_HISTORY_KEY = 'magicbooklet:public-search-history:v1';
-const SEARCH_HISTORY_LIMIT = 10;
+import {
+  SEARCH_HISTORY_KEY,
+  parseSearchHistory,
+  searchHistoryWith,
+  searchHistoryWithout,
+} from './public-search-policy/public-search-policy';
+
+// The rules (what is kept, how a new search joins the list, how many) are the
+// one copy the web's search page shares: lib/public-search-policy. This file
+// brings the app's storage.
+export {
+  normalizeCreatorSearchQuery,
+  normalizeSearchHistoryQuery,
+  searchQueryLength,
+} from './public-search-policy/public-search-policy';
 
 type SearchHistoryStorage = Pick<typeof AsyncStorage, 'getItem' | 'setItem' | 'removeItem'>;
 
-export function normalizeSearchHistoryQuery(value: string) {
-  return value.normalize('NFKC').trim().replace(/\s+/g, ' ').slice(0, 100);
-}
-
-/**
- * The server's rule of the same name (src/lib/public-search.ts): it strips
- * leading @ before its two- and three-character checks, so "@j" counts as one
- * character. The length gates count what the server counts.
- */
-export function normalizeCreatorSearchQuery(value: string | null | undefined): string {
-  return normalizeSearchHistoryQuery(value ?? '').replace(/^@+/, '');
-}
-
-/**
- * A query's length as the server counts it (publicSearchQueryLength in
- * src/lib/public-search.ts, and the database's char_length behind it): in
- * characters, where `.length` counts an emoji as two.
- */
-export function searchQueryLength(value: string): number {
-  return Array.from(value).length;
-}
-
 export async function readSearchHistory(storage: SearchHistoryStorage = AsyncStorage) {
   try {
-    const raw = await storage.getItem(SEARCH_HISTORY_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((value): value is string => typeof value === 'string')
-      .map(normalizeSearchHistoryQuery)
-      .filter((value) => value.length >= 2)
-      .slice(0, SEARCH_HISTORY_LIMIT);
+    return parseSearchHistory(await storage.getItem(SEARCH_HISTORY_KEY));
   } catch {
     return [];
   }
 }
 
 export async function rememberSearchQuery(query: string, storage: SearchHistoryStorage = AsyncStorage) {
-  const normalized = normalizeSearchHistoryQuery(query);
-  if (normalized.length < 2) return readSearchHistory(storage);
   const current = await readSearchHistory(storage);
-  const lowered = normalized.toLocaleLowerCase();
-  // An entry the new query extends was a step on the way to it ("po" and "por"
-  // before "port"); an exact repeat is its own prefix.
-  const next = [normalized, ...current.filter((item) => !lowered.startsWith(item.toLocaleLowerCase()))]
-    .slice(0, SEARCH_HISTORY_LIMIT);
+  const next = searchHistoryWith(current, query);
+  if (!next) return current;
   await storage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next));
   return next;
 }
 
 export async function forgetSearchQuery(query: string, storage: SearchHistoryStorage = AsyncStorage) {
-  const normalized = normalizeSearchHistoryQuery(query);
-  const current = await readSearchHistory(storage);
-  const next = current.filter((item) => item.toLocaleLowerCase() !== normalized.toLocaleLowerCase());
+  const next = searchHistoryWithout(await readSearchHistory(storage), query);
   await storage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(next));
   return next;
 }
