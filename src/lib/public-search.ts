@@ -74,6 +74,15 @@ export function appliedPublicSearchSort(type: PublicSearchType, sort: PublicSear
  */
 export const PUBLIC_SEARCH_RELATED_PARAM = 'related';
 
+/**
+ * The request parameter a client marks a search with that it asks for itself
+ * and the person never ran: `probe=1` (the web's empty tab asks Top once, to
+ * say what the other tabs hold). Answered and rate-limited as any search, but
+ * not written to the search log, whose rows stand for searches people made.
+ * Any other value is refused.
+ */
+export const PUBLIC_SEARCH_PROBE_PARAM = 'probe';
+
 /** How many entities the Top tab offers. */
 export const PUBLIC_SEARCH_ENTITY_LIMIT = 5;
 

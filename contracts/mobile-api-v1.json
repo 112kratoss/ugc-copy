@@ -1029,6 +1029,7 @@
         "exact": "exact"
       },
       "relatedParameter": "related",
+      "probeParameter": "probe",
       "response": {
         "query": "Neon product",
         "normalizedQuery": "Neon product",

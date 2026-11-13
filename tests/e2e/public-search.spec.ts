@@ -6,6 +6,7 @@ const emptyPage = { items: [], nextCursor: null };
 // apart, with nothing to offer, so each test's `requests` holds the searches and only the searches.
 const SEARCH_API = (url: URL) => url.pathname === '/api/search';
 const SUGGEST_API = (url: URL) => url.pathname === '/api/search/suggest';
+const STARTER_API = (url: URL) => url.pathname === '/api/search/starter';
 const NO_SUGGESTIONS = { query: '', normalizedQuery: '', creators: [], entities: [], completions: [] };
 
 function searchResponse(query: string, type: string) {
@@ -45,6 +46,13 @@ test.describe('public search', () => {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify(NO_SUGGESTIONS),
+    }));
+    // The starter answered as switched off, so the idle invitation these tests
+    // read stays (search-starter-screens.spec.ts draws the starter itself).
+    await page.route(STARTER_API, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ entities: [], creators: [], searches: [] }),
     }));
   });
 
@@ -90,7 +98,7 @@ test.describe('public search', () => {
     // Plain "Search" in every field, the app's included: no product name.
     await expect(field).toHaveAttribute('placeholder', 'Search');
     await field.fill('zzzznope');
-    await expect(page.getByText('No results for “zzzznope”')).toBeVisible();
+    await expect(page.getByText('No creators for “zzzznope”')).toBeVisible();
 
     // Escape clears back to the idle invitation.
     await field.press('Escape');
@@ -548,7 +556,7 @@ test.describe('public search', () => {
     // With only that filter, nothing is left to clear.
     await page.goto('/search?q=portrait&type=posts&following=1');
     await expect(page).toHaveURL(/[?&]type=posts$/);
-    await expect(page.getByText('No results for “portrait”')).toBeVisible();
+    await expect(page.getByText('No posts for “portrait”')).toBeVisible();
     await expect(filters.getByRole('button', { name: 'Clear filters' })).toHaveCount(0);
     await expect(page.getByText('No post matches these filters. Remove one, or clear them all.')).toHaveCount(0);
 
@@ -600,7 +608,7 @@ test.describe('public search', () => {
     await expect(page).toHaveURL(/[?&]type=posts&exact=1$/);
     expect(requests.at(-1)).toContain('exact=1');
     await expect(page.getByText('Showing results for “portriat” as typed', { exact: true })).toBeVisible();
-    await expect(page.getByText('No results for “portriat”')).toBeVisible();
+    await expect(page.getByText('No posts for “portriat”')).toBeVisible();
     await expect(notice).toHaveCount(0);
 
     // And back to the suggested spelling.

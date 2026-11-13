@@ -10,6 +10,7 @@ import { CreatorSearchResult } from '@/components/search/CreatorSearchResult';
 import { SearchField } from '@/components/search/SearchField';
 import { SearchPostWall } from '@/components/search/SearchPostWall';
 import { SearchResultsPlaceholder } from '@/components/search/SearchResultsPlaceholder';
+import { SearchStarter, useSearchStarter } from '@/components/search/SearchStarter';
 import { SearchStateBlock } from '@/components/search/SearchStateBlock';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
 import { clearSearchFieldHandoff, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
@@ -18,6 +19,7 @@ import {
   NO_PUBLIC_SEARCH_FILTERS,
   PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
   PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH,
+  PUBLIC_SEARCH_PROBE_PARAM,
   hasPublicSearchFilters,
   normalizeCreatorSearchQuery,
   normalizePublicSearchQuery,
@@ -82,7 +84,12 @@ import {
   searchInsteadLabel,
   searchMadeWithChipLabel,
   searchMadeWithRemoveLabel,
+  searchEmptyTabPointer,
+  searchEmptyTabPointerLine,
+  searchEmptyTabTitle,
   searchNoResultsTitle,
+  searchSeeTabLabel,
+  type SearchKindTab,
   searchRecentAgainLabel,
   searchRecentRemoveLabel,
   searchRecipeCardLabel,
@@ -98,6 +105,13 @@ import {
   type SearchTopSection,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import { searchTypeaheadOfferForTab, type SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
+import {
+  SEARCH_STARTER_NO_RESULTS_HEADING,
+  searchStarterEntityAction,
+  searchStarterSearchAction,
+  type SearchStarterEntity,
+  type SearchStarterSearch,
+} from '../../../ugc-mobile/lib/public-search-policy/search-starter';
 import {
   SEARCH_PAGE_PATH,
   forgetSearchPageTraversal,
@@ -159,6 +173,11 @@ async function failedResponseError(response: Response): Promise<SearchRequestErr
     ? Math.ceil(body.retryAfterSeconds)
     : null;
   return new SearchRequestError(searchBusyBody(seconds), seconds);
+}
+
+/** Top's answer for a query, as an empty tab of one kind reads it: by the query and whether it was read as typed. */
+function topAnswerKey(query: string, exact: boolean): string {
+  return `${exact ? 'exact' : 'read'}:${query}`;
 }
 
 function requestKey(request: SearchRequest): string {
@@ -465,6 +484,21 @@ export default function SearchClient({
   // A search committed with Enter before its answer landed: kept once it finds something.
   const rememberOnAnswer = useRef<string | null>(null);
   const [answer, setAnswer] = useState<SearchAnswer | null>(() => restored?.answer ?? null);
+  // Top's answers this page has had, by query and reading (topAnswerKey): what
+  // an empty tab of one kind reads to say what the other tabs hold. A few, the
+  // latest kept; one more request at most when none is on hand (below).
+  const [topAnswers, setTopAnswers] = useState<ReadonlyMap<string, PublicSearchResponse>>(() => new Map());
+  const keepTopAnswer = useCallback((key: string, result: PublicSearchResponse) => {
+    setTopAnswers((current) => {
+      const next = new Map(current);
+      next.delete(key);
+      next.set(key, result);
+      while (next.size > 8) next.delete(next.keys().next().value as string);
+      return next;
+    });
+  }, []);
+  // What to start a search from, asked once as the page opens (SearchStarter.tsx).
+  const starter = useSearchStarter();
   // The request the restored answer is, while the page still asks it: the
   // search it would make on mount is not made. Forgotten once the search
   // changes, so coming back to the same text later asks as any search does.
@@ -603,6 +637,9 @@ export default function SearchClient({
           })));
         }
       }
+      if (!append && request.type === 'top' && request.narrowing === publicSearchFilterKey(NO_PUBLIC_SEARCH_FILTERS, activeExact)) {
+        keepTopAnswer(topAnswerKey(request.query, activeExact), next);
+      }
       setAnswer((current) => {
         if (!append) return { ...request, result: next, relatedAsked: askRelated, viewerId };
         if (!current || !isSameRequest(current, request.query, request.type, request.sort, request.narrowing)) return current;
@@ -641,7 +678,7 @@ export default function SearchClient({
     } finally {
       if (sequence === requestSequence.current) setLoadingMore(false);
     }
-  }, [activeExact, activeFilters, activeSort, activeType, narrowing, normalizedQuery, relatedApplies]);
+  }, [activeExact, activeFilters, activeSort, activeType, keepTopAnswer, narrowing, normalizedQuery, relatedApplies]);
 
   // The traversal that brought the page back, if one did, has been read above.
   useEffect(() => forgetSearchPageTraversal(), []);
@@ -963,6 +1000,93 @@ export default function SearchClient({
     settleOn(next);
     setQuery(action.query);
   };
+  // The starter's rows (SearchStarter.tsx). A model or tool: Posts for its
+  // own query (`query`, which need not read like its name), narrowed to it and
+  // to nothing else, asked at once (the shared searchStarterEntityAction): the
+  // search the starter counted, so it opens the posts the row said. A
+  // suggested search: a fresh start on Top with nothing narrowing it (no
+  // filter the person cannot see on the idle page), filled in and committed as
+  // Enter commits.
+  const pickStarterEntity = (entity: SearchStarterEntity) => {
+    const action = searchStarterEntityAction(entity);
+    if (action.type !== 'entity') return;
+    const next = normalizePublicSearchQuery(action.query);
+    setEntityLabels((current) => ({ ...current, [action.madeWith]: entity.label }));
+    setPickedFilters({ ...NO_PUBLIC_SEARCH_FILTERS, madeWith: action.madeWith });
+    setPickedType('posts');
+    scheduledQuery.current = next;
+    setQuery(next);
+  };
+  const pickStarterSearch = (search: SearchStarterSearch) => {
+    const action = searchStarterSearchAction(search);
+    if (action.type !== 'search') return;
+    const next = normalizePublicSearchQuery(action.query);
+    setPickedFilters(NO_PUBLIC_SEARCH_FILTERS);
+    setPickedType('top');
+    scheduledQuery.current = next;
+    rememberOnAnswer.current = `top:top:${publicSearchFilterKey(NO_PUBLIC_SEARCH_FILTERS, false)}:${next}`;
+    settleOn(next);
+    setQuery(action.query);
+  };
+
+  // An empty tab of one kind says what the other tabs hold, from Top's answer
+  // for the same search: the one on hand, or one request for it (and no more)
+  // where there is none. Only for an unfiltered search a tab could hold
+  // posts or recipes for (three characters): a filter narrows Posts alone,
+  // and its own words say to remove one.
+  const readExact = exactQuery !== null && exactQuery === normalizedQuery;
+  const emptyKindTab: SearchKindTab | null = activeType !== 'top'
+    && currentAnswer !== null
+    && resultCount === 0
+    && !hasPublicSearchFilters(activeFilters)
+    && gatedQueryLength >= PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH
+    ? activeType
+    : null;
+  const topForEmptyTab = emptyKindTab ? topAnswers.get(topAnswerKey(normalizedQuery, readExact)) ?? null : null;
+  // Asked once per page opening and search: marked asked while the request
+  // is out and for good once it has settled, so an abort (the person leaves
+  // the tab, StrictMode's re-run in development) leaves it to ask again.
+  const askedTopFor = useRef(new Set<string>());
+  useEffect(() => {
+    if (!emptyKindTab || topForEmptyTab) return;
+    const key = topAnswerKey(normalizedQuery, readExact);
+    const asked = askedTopFor.current;
+    if (asked.has(key)) return;
+    asked.add(key);
+    const controller = new AbortController();
+    let settled = false;
+    void (async () => {
+      try {
+        // Marked as asked by the page, not by the person: answered as any
+        // search, left out of the search log (PUBLIC_SEARCH_PROBE_PARAM).
+        const params = new URLSearchParams({ q: normalizedQuery, type: 'top', [PUBLIC_SEARCH_PROBE_PARAM]: '1' });
+        for (const [name, value] of Object.entries(publicSearchFilterParams(NO_PUBLIC_SEARCH_FILTERS, readExact))) params.set(name, value);
+        const { data: { session } } = await supabase.auth.getSession();
+        const response = await fetch(`/api/search?${params.toString()}`, {
+          cache: 'no-store',
+          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          settled = true;
+          return;
+        }
+        const top = await response.json() as PublicSearchResponse;
+        settled = true;
+        keepTopAnswer(key, top);
+      } catch {
+        // The tab says it found nothing, as it did before: the pointer is an
+        // extra. Settled unless it was the abort below.
+        if (!controller.signal.aborted) settled = true;
+      }
+    })();
+    return () => {
+      controller.abort();
+      if (!settled) asked.delete(key);
+    };
+  }, [emptyKindTab, keepTopAnswer, normalizedQuery, readExact, topForEmptyTab]);
+  const emptyTabPointer = emptyKindTab ? searchEmptyTabPointer(emptyKindTab, topForEmptyTab) : null;
+
   const nextCursor = !currentAnswer
     ? null
     : activeType === 'creators'
@@ -972,6 +1096,19 @@ export default function SearchClient({
         : activeType === 'recipes'
           ? currentAnswer.result.recipes.nextCursor
           : null;
+
+  // Before a search, and for half a word that found no creator: ideas to
+  // start from (the starter), under any recent searches, or the invitation it
+  // stood in for where there are none (the route switched off, or failed).
+  const idleBlock = starter ? (
+    <SearchStarter
+      answer={starter}
+      onEntity={pickStarterEntity}
+      onSearch={pickStarterSearch}
+    />
+  ) : (
+    <SearchStateBlock tone="initial" title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
+  );
 
   return (
     // The field's row, pinned under the top bar: its height is the token the
@@ -1160,7 +1297,7 @@ export default function SearchClient({
             </p>
           ) : null}
           {!canSearch ? (
-            <SearchStateBlock tone="initial" title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
+            idleBlock
           ) : currentFailure && !currentAnswer ? (
             <SearchStateBlock
               tone="error"
@@ -1179,14 +1316,47 @@ export default function SearchClient({
             ) : !searchSaysNoResults(gatedQueryLength) ? (
               // Half a word is no verdict: a two-character search that finds
               // no creator leaves the page as it was before typing.
-              <SearchStateBlock tone="initial" title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
+              idleBlock
             ) : (
               <div className="space-y-10">
-                <SearchStateBlock
-                  title={searchNoResultsTitle(normalizedQuery)}
-                  body={hasPublicSearchFilters(activeFilters) ? SEARCH_FILTERED_EMPTY_BODY : SEARCH_NO_RESULTS_BODY}
-                />
+                {emptyTabPointer ? (
+                  // Another tab found something: say what, and offer it.
+                  <SearchStateBlock
+                    title={searchEmptyTabTitle(emptyKindTab ?? emptyTabPointer.tab, normalizedQuery)}
+                    body={searchEmptyTabPointerLine(emptyTabPointer)}
+                    action={(
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // The count is Top's, unfiltered: Posts opens unfiltered too, as it counted.
+                          if (emptyTabPointer.tab === 'posts') setPickedFilters(NO_PUBLIC_SEARCH_FILTERS);
+                          setPickedType(emptyTabPointer.tab);
+                        }}
+                        className="ui-focus-ring inline-flex min-h-11 items-center rounded-full bg-white px-5 text-sm font-semibold text-black"
+                      >
+                        {searchSeeTabLabel(emptyTabPointer.tab)}
+                      </button>
+                    )}
+                  />
+                ) : (
+                  <SearchStateBlock
+                    title={activeType === 'top' ? searchNoResultsTitle(normalizedQuery) : searchEmptyTabTitle(activeType, normalizedQuery)}
+                    body={hasPublicSearchFilters(activeFilters) ? SEARCH_FILTERED_EMPTY_BODY : SEARCH_NO_RESULTS_BODY}
+                  />
+                )}
                 <RelatedPosts posts={relatedPosts} returnTo={returnTo} viewerId={shownAnswer?.viewerId ?? null} />
+                {/* Nothing anywhere (Top found nothing, or the tab's own search
+                    did and Top's answer says no other tab has anything): ideas
+                    to start again from, under it. */}
+                {starter && !emptyTabPointer && !hasPublicSearchFilters(activeFilters)
+                  && (activeType === 'top' || topForEmptyTab !== null) ? (
+                    <SearchStarter
+                      answer={starter}
+                      heading={SEARCH_STARTER_NO_RESULTS_HEADING}
+                      onEntity={pickStarterEntity}
+                      onSearch={pickStarterSearch}
+                    />
+                  ) : null}
               </div>
             )
           ) : (

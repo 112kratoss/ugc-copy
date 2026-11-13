@@ -8,6 +8,7 @@ import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, Shopping
 import { useAuth } from '@/components/AuthProvider';
 import CreatorIdentity from '@/components/CreatorIdentity';
 import RemixCreditLine from '@/app/showcase/RemixCreditLine';
+import { SearchEntryLink } from '@/components/search/SearchEntryLink';
 import { itemsWithoutBlockedRemixCredits } from '../../../ugc-mobile/lib/remix-credit/remix-credit';
 import NewPostsPill, { newPostsScrollBehavior } from '@/components/NewPostsPill';
 import PublicShareButton from '@/components/PublicShareButton';
@@ -2182,6 +2183,8 @@ export default function ShowcaseClient({
     return (
         <div className="ui-page ui-page-ambient min-h-screen py-5 font-[family-name:var(--font-geist-sans)] sm:py-7">
             <div className="studio-shell relative z-10">
+                {/* Below 1024px the top bar has only a magnifier: Explore opens on a search bar. */}
+                <SearchEntryLink className="mb-5 lg:hidden" />
                 <div className="ui-enter mb-7 flex flex-col gap-5 border-b border-[var(--ui-border-subtle)] pb-7 lg:flex-row lg:items-end lg:justify-between">
                     <div>
                         <div className="mb-3 inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-primary)]">

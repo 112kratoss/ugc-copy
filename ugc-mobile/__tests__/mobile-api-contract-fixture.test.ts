@@ -12,6 +12,7 @@ import {
 import { isCreationLibraryMember } from '../lib/creation-library';
 import {
   SEARCH_FILTER_PARAMS,
+  SEARCH_PROBE_PARAM,
   SEARCH_RELATED_PARAM,
   searchCorrectionNotice,
   type SearchFilters,
@@ -1181,6 +1182,7 @@ describe('mobile shared API v1 contract fixture', () => {
       const { relatedPosts } = search.responseVariants;
       expect(search.relatedParameter).toBe('related');
       expect(SEARCH_RELATED_PARAM).toBe(search.relatedParameter);
+      expect(SEARCH_PROBE_PARAM).toBe((search as { probeParameter?: string }).probeParameter);
       expect(relatedPosts.query).toEqual({ q: 'ocean at dusk', type: 'top', related: '1' });
       const { api, asked } = clientAnswering(relatedPosts.response);
       const answer = await api.searchPublicContent({ query: relatedPosts.query.q, related: true });

@@ -1,4 +1,5 @@
 import TabLoadingShell from '@/components/TabLoadingShell';
+import { SearchEntryLink } from '@/components/search/SearchEntryLink';
 
 /**
  * The `(feed)` group exists so this stays the *tab's* loading state.
@@ -11,5 +12,7 @@ import TabLoadingShell from '@/components/TabLoadingShell';
  * where the top progress bar covers the wait instead.
  */
 export default function ShowcaseLoading() {
-  return <TabLoadingShell title="Explore" eyebrow="Community" accent="blue" />;
+  // Explore opens on its search bar below 1024px: the loading state draws it
+  // too, so the bar does not arrive with the page and push it down.
+  return <TabLoadingShell title="Explore" eyebrow="Community" accent="blue" lead={<SearchEntryLink className="mb-5 lg:hidden" />} />;
 }
