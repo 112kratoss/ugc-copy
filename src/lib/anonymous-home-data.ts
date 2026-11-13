@@ -78,8 +78,9 @@ const readCachedAnonymousHomeFeed = unstable_cache(
 );
 
 const readCachedAnonymousHomeShelf = unstable_cache(
-  // The throwing read, so a failure is never kept for the window.
-  () => built(loadHomeShelfForApi(SIGNED_OUT).then((items): HomeShelfItem[] => (
+  // The throwing read, so a failure is never kept for the window. The web's shelf: with the posts
+  // whose remix comes with a free recipe, which the app's shelf leaves out (`loadHomeShelfForApi`).
+  () => built(loadHomeShelfForApi(SIGNED_OUT, { withFreeRecipePosts: true }).then((items): HomeShelfItem[] => (
     items.map((item) => (item.kind === 'creation' ? withoutPost(item) : item))
   ))),
   ['anonymous-home-shelf-v2', currentDeployment()],

@@ -438,7 +438,7 @@ describe('loadHomeShelf', () => {
       loadBlockedCreatorIdsMock.mockResolvedValue(new Set(['maya']));
       const { loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
 
-      const items = await loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false });
+      const items = await loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false }, { withFreeRecipePosts: false });
       const first = items.find((item) => item.id === 'a') as { post: ShowcaseFeedItem };
 
       expect(loadBlockedCreatorIdsMock).toHaveBeenCalledWith(expect.objectContaining({ viewerUserId: 'user-2', creatorIds: ['maya', 'cora'] }));
@@ -449,7 +449,7 @@ describe('loadHomeShelf', () => {
       loadBlockedCreatorIdsMock.mockRejectedValue(new Error('user_blocks unavailable'));
       const { loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
 
-      const items = await loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false });
+      const items = await loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false }, { withFreeRecipePosts: false });
       const first = items.find((item) => item.id === 'a') as { post: ShowcaseFeedItem };
 
       expect(first.post).not.toHaveProperty('remixCredit');
@@ -535,11 +535,11 @@ describe('loadHomeShelf', () => {
     tableResults.set('posts', { data: [], error: null });
     loadViewerRelationsMock.mockResolvedValue(null);
 
-    await expect(loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false }))
+    await expect(loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false }, { withFreeRecipePosts: false }))
       .rejects.toBeInstanceOf(HomeShelfUnavailableError);
 
     getShowcaseFeedItemsByPostIdsMock.mockRejectedValue(new Error('posts is unavailable'));
-    await expect(loadHomeShelfForApi({ viewerUserId: null, isAnonymous: false }))
+    await expect(loadHomeShelfForApi({ viewerUserId: null, isAnonymous: false }, { withFreeRecipePosts: false }))
       .rejects.toBeInstanceOf(HomeShelfUnavailableError);
   });
 
@@ -589,7 +589,7 @@ describe('loadHomeShelf', () => {
     it('is left off the shelf the app is sent, for a member, a guest and a signed-out reader alike', async () => {
       const { loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
       const creationIds = async (identity: { viewerUserId: string | null; isAnonymous: boolean }) => (
-        (await loadHomeShelfForApi(identity)).filter((item) => item.kind === 'creation').map((item) => item.id)
+        (await loadHomeShelfForApi(identity, { withFreeRecipePosts: false })).filter((item) => item.kind === 'creation').map((item) => item.id)
       );
 
       expect(await creationIds({ viewerUserId: 'user-2', isAnonymous: false })).toEqual(['a', 'b', 'c']);
@@ -597,13 +597,23 @@ describe('loadHomeShelf', () => {
       expect(await creationIds({ viewerUserId: null, isAnonymous: false })).toEqual(['a', 'b', 'c']);
     });
 
+    // The signed-out web page reads through the same throwing read as the app's route, for its
+    // cache's sake, and draws the web's shelf: it was left with the app's (2026-11-13, found live).
+    it('is on the shelf the signed-out web page reads, which says it draws the web’s', async () => {
+      const { loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
+
+      const items = await loadHomeShelfForApi({ viewerUserId: null, isAnonymous: false }, { withFreeRecipePosts: true });
+
+      expect(items.map((item) => item.id)).toEqual(['free', 'a', 'b', 'c']);
+    });
+
     it('does not count toward the app’s shelf: too few other pins and the app draws none', async () => {
       pinsMock.pins = [{ postId: 'free' }, { postId: 'a' }, { postId: 'b' }];
       getShowcaseFeedItemsByPostIdsMock.mockResolvedValue([withFreeRecipe('free'), post('a'), post('b')]);
       const { loadHomeShelf, loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
 
-      expect(await loadHomeShelfForApi({ viewerUserId: null, isAnonymous: false })).toEqual([]);
-      expect(await loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false })).toEqual([]);
+      expect(await loadHomeShelfForApi({ viewerUserId: null, isAnonymous: false }, { withFreeRecipePosts: false })).toEqual([]);
+      expect(await loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false }, { withFreeRecipePosts: false })).toEqual([]);
       expect((await loadHomeShelf()).map((item) => item.id)).toEqual(['free', 'a', 'b']);
     });
   });
@@ -612,7 +622,7 @@ describe('loadHomeShelf', () => {
     const { loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
     tableResults.set('posts', { data: [], error: null });
 
-    const items = await loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false });
+    const items = await loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false }, { withFreeRecipePosts: false });
 
     expect(items.map((item) => (item.kind === 'creation' ? item.post.id : item.id))).toEqual(['a', 'b', 'post', 'c', 'invite']);
   });

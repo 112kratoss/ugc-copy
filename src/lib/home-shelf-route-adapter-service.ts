@@ -99,7 +99,8 @@ async function handleHomeShelfGET(
     const body: HomeShelfRouteResponse = {
       success: true,
       schemaVersion: HOME_SHELF_SCHEMA_VERSION,
-      items: await dependencies.loadHomeShelfForApi(viewer),
+      // The app's shelf: without the posts whose remix comes with a free recipe (`loadHomeShelfForApi`).
+      items: await dependencies.loadHomeShelfForApi(viewer, { withFreeRecipePosts: false }),
     };
 
     // A signed-out answer is the same for everyone and caches at the edge; a

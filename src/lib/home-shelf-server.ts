@@ -440,15 +440,22 @@ export async function loadHomeShelfCreationsWithPosts(identity: HomeShelfIdentit
 }
 
 /**
- * The shelf as `/api/home/shelf` sends it to the app: each creation with its
- * post. Throws `HomeShelfUnavailableError` where the web pages' loader would
- * draw nothing.
+ * The shelf with each creation's post, from the read that throws
+ * `HomeShelfUnavailableError` where the web pages' loader would draw nothing.
+ * It has two readers, and each says which shelf it draws:
+ *
+ * - `/api/home/shelf`, the app's shelf, without the posts whose remix comes
+ *   with a free recipe (owner, 2026-11-13: they are on the web's shelf). An
+ *   installed app's member could take one from the card, but its guest signs
+ *   up and lands in the app's creator, which cannot take the recipe: the card
+ *   stays off the app's shelf until the app asks for it.
+ * - the signed-out web page (`anonymous-home-data.ts`), with them: it reads
+ *   here for the throw, so that its own cache never keeps a failed read, and
+ *   its cards open the web's creators, which take the recipe after sign-in.
  */
-export async function loadHomeShelfForApi(identity: HomeShelfIdentity): Promise<HomeShelfApiItem[]> {
-  // Without the posts whose remix comes with a free recipe (owner, 2026-11-13:
-  // they are on the web's shelf). An installed app's member could take one from
-  // the card, but its guest signs up and lands in the app's creator, which
-  // cannot take the recipe: the card stays off the app's shelf until the app
-  // asks for it.
-  return loadHomeShelfForViewer(identity, 'throw', { withFreeRecipePosts: false });
+export async function loadHomeShelfForApi(
+  identity: HomeShelfIdentity,
+  { withFreeRecipePosts }: { withFreeRecipePosts: boolean },
+): Promise<HomeShelfApiItem[]> {
+  return loadHomeShelfForViewer(identity, 'throw', { withFreeRecipePosts });
 }

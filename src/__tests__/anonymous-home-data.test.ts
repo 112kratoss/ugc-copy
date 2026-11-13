@@ -32,7 +32,7 @@ vi.mock('@/lib/home-dashboard-service', () => ({
 }));
 
 vi.mock('@/lib/home-shelf-server', () => ({
-  loadHomeShelfForApi: (identity: unknown) => loadHomeShelfForApiMock(identity),
+  loadHomeShelfForApi: (identity: unknown, options: unknown) => loadHomeShelfForApiMock(identity, options),
   withoutPost: ({ post, ...creation }: Record<string, unknown>) => {
     void post;
     return creation;
@@ -139,7 +139,8 @@ describe('the signed-out home reads', () => {
       action,
     ]);
 
-    expect(loadHomeShelfForApiMock).toHaveBeenCalledWith({ viewerUserId: null, isAnonymous: false });
+    // The web's shelf, with the posts whose remix comes with a free recipe; the app's leaves them out.
+    expect(loadHomeShelfForApiMock).toHaveBeenCalledWith({ viewerUserId: null, isAnonymous: false }, { withFreeRecipePosts: true });
     expect(cachedRead('anonymous-home-retry-window-v1').calls).toBe(0);
   });
 
