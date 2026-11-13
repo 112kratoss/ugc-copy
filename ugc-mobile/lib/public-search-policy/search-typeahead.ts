@@ -11,12 +11,16 @@
  *     list does not go and come back at every letter; only while the box has
  *     the focus, never once the person has dismissed it or committed the
  *     search), and how long an answer may be kept to draw again;
- *   - the sections and their order: creators, models and tools, completions;
+ *   - the sections and their order: the recent searches the text matches,
+ *     creators, models and tools, completions; and where a box offers only
+ *     what changes the query (the web's search page, whose own results draw
+ *     the creators and the models live);
  *   - what choosing a row does: a creator opens their profile, a model or tool
  *     opens Posts narrowed to it, a completion fills the box and searches;
  *     and when a press on a row counts (not for a moment after the row came
  *     to stand where the press landed: the person aimed at what stood there);
- *   - how the highlight moves under the arrow keys, and the words a screen
+ *   - how the highlight moves under the arrow keys, which part of a row's text
+ *     is drawn heavier (what the person has not typed), and the words a screen
  *     reader is told.
  *
  * Each client brings its own timer, request and drawing. Metro, Next.js and
@@ -27,10 +31,12 @@
 import {
   SEARCH_ENTITIES_HEADING,
   SEARCH_ENTITY_KINDS,
+  SEARCH_RECENTS_HEADING,
   normalizeCreatorSearchQuery,
   normalizeSearchHistoryQuery,
   searchEntityActionLabel,
   searchEntityId,
+  searchRecentAgainLabel,
   searchQueryLength,
   type SearchEntity,
   type SearchEntityKind,
@@ -182,13 +188,18 @@ export function searchTypeaheadQuery(text: string | null | undefined): string | 
 
 // ─── What is drawn ───────────────────────────────────────────────────────────
 
-export const SEARCH_TYPEAHEAD_SECTION_IDS = ['creators', 'entities', 'completions'] as const;
+export const SEARCH_TYPEAHEAD_SECTION_IDS = ['recents', 'creators', 'entities', 'completions'] as const;
 export type SearchTypeaheadSectionId = (typeof SEARCH_TYPEAHEAD_SECTION_IDS)[number];
 
+/**
+ * A row. A recent search is a query to put in the box as a completion is, so
+ * it is a `completion` row marked `recent` (drawn with a clock): every place
+ * that reads a completion's text and action reads a recent search's the same.
+ */
 export type SearchTypeaheadRow =
   | { kind: 'creator'; key: string; creator: SearchSuggestCreator }
   | { kind: 'entity'; key: string; entity: SearchEntity }
-  | { kind: 'completion'; key: string; text: string };
+  | { kind: 'completion'; key: string; text: string; recent?: true };
 
 export interface SearchTypeaheadSection {
   id: SearchTypeaheadSectionId;
@@ -199,28 +210,89 @@ export interface SearchTypeaheadSection {
 /** The name of the list, and of each section in it. */
 export const SEARCH_TYPEAHEAD_LIST_LABEL = 'Search suggestions';
 export const SEARCH_TYPEAHEAD_HEADINGS: Readonly<Record<SearchTypeaheadSectionId, string>> = {
+  recents: SEARCH_RECENTS_HEADING,
   creators: 'Creators',
   entities: SEARCH_ENTITIES_HEADING,
   completions: 'Suggested searches',
 };
 
+/** The most recent searches a list offers for a text. */
+export const SEARCH_TYPEAHEAD_MAX_RECENTS = 3;
+
+/**
+ * What a box offers:
+ *   - `all`: every kind (the top bar's field, the app's search);
+ *   - `query`: only what changes the query, the recent searches the text
+ *     matches and the completions. The web's search page draws its own results
+ *     live under the box, creators and models first, so a creator or a model
+ *     row there would repeat the result drawn under it.
+ */
+export type SearchTypeaheadOffer = 'all' | 'query';
+
+/** What a list is drawn with besides the server's answer. */
+export interface SearchTypeaheadOptions {
+  /** This device's recent searches, most recent first, as the client keeps them. */
+  recents?: readonly string[];
+  offer?: SearchTypeaheadOffer;
+}
+
+/** A query folded as rows are compared: lower case, no leading "@" (searchTypeaheadQuery keeps it). */
+function foldedQuery(query: string): string {
+  return normalizeSearchHistoryQuery(query).toLowerCase();
+}
+
+/**
+ * The recent searches a text matches, in the order to offer them: the ones
+ * that begin with what is typed first, then (from two characters, where one
+ * letter would match nearly every search) the ones that hold it anywhere,
+ * each group most recent first, at most SEARCH_TYPEAHEAD_MAX_RECENTS. A recent
+ * search that is exactly what the box holds is not offered back.
+ */
+export function searchTypeaheadMatchingRecents(recents: readonly string[], query: string | null): string[] {
+  if (query === null) return [];
+  const typed = foldedQuery(query);
+  if (!typed) return [];
+  const beginning: string[] = [];
+  const holding: string[] = [];
+  const seen = new Set<string>([typed]);
+  for (const recent of recents) {
+    const text = normalizeSearchHistoryQuery(recent);
+    const folded = text.toLowerCase();
+    if (!text || seen.has(folded)) continue;
+    seen.add(folded);
+    if (folded.startsWith(typed)) beginning.push(text);
+    else if (searchQueryLength(typed) >= 2 && folded.includes(typed)) holding.push(text);
+  }
+  return [...beginning, ...holding].slice(0, SEARCH_TYPEAHEAD_MAX_RECENTS);
+}
+
 /**
  * The sections an answer is drawn as, in their order, each with at most its
  * cap; a section with no row is left out. `query` is what the box asks about
- * now (searchTypeaheadQuery). Entities are drawn only from three characters
- * and never for a query typed as a handle, whatever an answer carries; a
- * completion that is what the box already holds is not offered back.
+ * now (searchTypeaheadQuery). The recent searches the text matches come first
+ * and need no answer; a completion one of them already offers is not offered
+ * twice. Entities are drawn only from three characters and never for a query
+ * typed as a handle, whatever an answer carries; a completion that is what the
+ * box already holds is not offered back. With `offer: 'query'` only the
+ * recent searches and the completions are drawn.
  */
-export function searchTypeaheadSections(answer: SearchSuggestResponse | null, query: string | null): SearchTypeaheadSection[] {
-  if (!answer || query === null) return [];
+export function searchTypeaheadSections(
+  answer: SearchSuggestResponse | null,
+  query: string | null,
+  { recents = [], offer = 'all' }: SearchTypeaheadOptions = {},
+): SearchTypeaheadSection[] {
+  if (query === null) return [];
   const asHandle = query.startsWith('@');
   const read = normalizeCreatorSearchQuery(query).trim();
   const typed = read.toLowerCase();
-  const entitiesOffered = !asHandle && searchQueryLength(read) >= SEARCH_TYPEAHEAD_MIN_ENTITY_QUERY_LENGTH;
+  const entitiesOffered = offer === 'all' && !asHandle && searchQueryLength(read) >= SEARCH_TYPEAHEAD_MIN_ENTITY_QUERY_LENGTH;
 
-  const seenCompletions = new Set<string>([typed]);
+  const recentRows: SearchTypeaheadRow[] = searchTypeaheadMatchingRecents(recents, query)
+    .map((text) => ({ kind: 'completion' as const, key: `recent:${text.toLowerCase()}`, text, recent: true as const }));
+
+  const seenCompletions = new Set<string>([typed, foldedQuery(query), ...recentRows.map((row) => (row.kind === 'completion' ? row.text.toLowerCase() : ''))]);
   const completions: SearchTypeaheadRow[] = [];
-  for (const completion of asHandle ? [] : answer.completions) {
+  for (const completion of asHandle || !answer ? [] : answer.completions) {
     const text = normalizeSearchHistoryQuery(completion.text);
     const folded = text.toLowerCase();
     if (!text || seenCompletions.has(folded)) continue;
@@ -230,16 +302,17 @@ export function searchTypeaheadSections(answer: SearchSuggestResponse | null, qu
   }
 
   const sections: SearchTypeaheadSection[] = [
+    { id: 'recents', heading: SEARCH_TYPEAHEAD_HEADINGS.recents, rows: recentRows },
     {
       id: 'creators',
       heading: SEARCH_TYPEAHEAD_HEADINGS.creators,
-      rows: answer.creators.slice(0, SEARCH_TYPEAHEAD_MAX_CREATORS)
+      rows: (offer === 'all' && answer ? answer.creators : []).slice(0, SEARCH_TYPEAHEAD_MAX_CREATORS)
         .map((creator) => ({ kind: 'creator' as const, key: `creator:${creator.id}`, creator })),
     },
     {
       id: 'entities',
       heading: SEARCH_TYPEAHEAD_HEADINGS.entities,
-      rows: (entitiesOffered ? answer.entities : []).slice(0, SEARCH_TYPEAHEAD_MAX_ENTITIES)
+      rows: (entitiesOffered && answer ? answer.entities : []).slice(0, SEARCH_TYPEAHEAD_MAX_ENTITIES)
         .map((entity) => ({ kind: 'entity' as const, key: `entity:${searchEntityId(entity)}`, entity })),
     },
     { id: 'completions', heading: SEARCH_TYPEAHEAD_HEADINGS.completions, rows: completions },
@@ -290,18 +363,60 @@ function entityStillNamed(entity: SearchEntity, query: string): boolean {
  * opens that creator and a completion searches its own text, so both are kept
  * as they are; an entity narrows a search for the box's text, so it is kept
  * only while that text still names it. A client marks a stale list busy.
+ *
+ * The recent searches the text matches (`options.recents`) are this device's
+ * own and never stale: they are drawn for the text the box holds now, from the
+ * first letter, with or without an answer. `options.offer` says which kinds
+ * the box offers (SearchTypeaheadOffer); a list whose answer adds nothing the
+ * box offers is not stale.
  */
 export function searchTypeaheadDrawn(
   answer: SearchTypeaheadAnswer | null,
   query: string | null,
+  options: SearchTypeaheadOptions = {},
 ): { sections: SearchTypeaheadSection[]; stale: boolean } {
-  if (!answer || !answer.response || query === null) return { sections: [], stale: false };
-  if (answer.query === query) return { sections: searchTypeaheadSections(answer.response, query), stale: false };
+  if (query === null) return { sections: [], stale: false };
+  const response = answer?.response ?? null;
+  if (!answer || !response || answer.query === query) {
+    return { sections: searchTypeaheadSections(answer?.query === query ? response : null, query, options), stale: false };
+  }
   const sections = searchTypeaheadSections(
-    { ...answer.response, entities: answer.response.entities.filter((entity) => entityStillNamed(entity, query)) },
+    { ...response, entities: response.entities.filter((entity) => entityStillNamed(entity, query)) },
     query,
+    options,
   );
-  return { sections, stale: sections.length > 0 };
+  return { sections, stale: sections.some((section) => section.id !== 'recents') };
+}
+
+// ─── Which part of a row is drawn heavier ────────────────────────────────────
+
+/** A run of a row's text: `typed` is what the person typed, drawn plain; the rest is drawn heavier. */
+export interface SearchTypeaheadTextRun {
+  text: string;
+  typed: boolean;
+}
+
+/**
+ * A completion's or a recent search's text in runs, as Instagram, X and Reddit
+ * draw a suggestion: the part the person typed plain, the part they have not
+ * typed heavier, so the eye goes to what the row adds. The typed text is found
+ * where it first stands in the row, ignoring case; a row that does not hold it
+ * (a completion of another word) is all heavier. The row's accessible name is
+ * its whole text: this is drawing only.
+ */
+export function searchTypeaheadTextRuns(text: string, query: string | null): SearchTypeaheadTextRun[] {
+  if (!text) return [];
+  const typed = query === null ? '' : normalizeSearchHistoryQuery(query).toLowerCase();
+  const folded = text.toLowerCase();
+  // Lower case can change a string's length (a dotted capital I): then the
+  // places found in the folded text are not the text's own, and nothing is marked typed.
+  const at = typed && folded.length === text.length ? folded.indexOf(typed) : -1;
+  if (at < 0) return [{ text, typed: false }];
+  return [
+    { text: text.slice(0, at), typed: false },
+    { text: text.slice(at, at + typed.length), typed: true },
+    { text: text.slice(at + typed.length), typed: false },
+  ].filter((run) => run.text.length > 0);
 }
 
 /**
@@ -456,7 +571,7 @@ export function searchTypeaheadRowLabel(row: SearchTypeaheadRow): string {
     return `${name}${isFollowing ? ', following' : ''}. Open profile`;
   }
   if (row.kind === 'entity') return searchEntityActionLabel(row.entity);
-  return `Search for ${row.text}`;
+  return row.recent ? searchRecentAgainLabel(row.text) : `Search for ${row.text}`;
 }
 
 /**

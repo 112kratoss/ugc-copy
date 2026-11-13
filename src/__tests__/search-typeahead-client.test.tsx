@@ -1,7 +1,9 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SearchClient from '@/app/search/SearchClient';
+import { AppShellSearch } from '@/components/AppShellSearch';
 import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
 import type { PublicSearchResponse } from '@/lib/public-search';
 
@@ -12,9 +14,13 @@ import {
   type SearchSuggestResponse,
 } from '../../ugc-mobile/lib/public-search-policy/search-typeahead';
 
-// The search page's typeahead, drawn by the real page over stubbed requests:
-// when it asks, which answer it draws, the combobox it is to assistive
-// technology, and what each key and press does. Its rules are held by
+// The typeahead, drawn by the real search page and the real top bar over
+// stubbed requests: when it asks, which answer it draws, the combobox it is to
+// assistive technology, and what each key and press does. The search page's
+// box offers only what changes the query (recent searches and completions:
+// its results draw the creators and the models live), so what needs a creator
+// or a model row is held through the top bar's field, which offers every kind
+// with the same hook and list. Its rules are held by
 // search-typeahead-policy.test.ts; a browser's view of it by
 // tests/e2e/search-typeahead.spec.ts.
 
@@ -30,6 +36,13 @@ const searchFetchMock = vi.fn();
 const suggestFetchMock = vi.fn();
 
 vi.mock('next/navigation', () => ({ useRouter: () => routerMock }));
+// The top bar's form: a plain form here (app-shell-search.test.tsx holds its submit).
+vi.mock('next/form', () => ({
+  default: ({ action, children, ...props }: React.ComponentProps<'form'> & { action: string }) => (
+    <form {...props} action={action}>{children}</form>
+  ),
+}));
+vi.mock('@/lib/use-leave-guard', () => ({ holdForLeaveGuard: () => false }));
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
@@ -91,6 +104,12 @@ function searchRequests(): string[] {
 }
 
 const box = () => screen.getByRole('combobox');
+/** The top bar's field, focused: it offers every kind, creators and models included. */
+function renderBar() {
+  const view = render(<AppShellSearch />);
+  fireEvent.focus(box());
+  return view;
+}
 const type = (value: string) => fireEvent.change(box(), { target: { value } });
 const key = (name: string) => fireEvent.keyDown(box(), { key: name });
 const list = () => screen.findByRole('listbox', { name: 'Search suggestions' });
@@ -136,7 +155,7 @@ describe('search page typeahead', () => {
     vi.useRealTimers();
   });
 
-  it('is a combobox that controls a listbox of creators, then models and tools, then completions', async () => {
+  it('is a combobox that controls a listbox of the completions only, never a creator or a model the results draw', async () => {
     render(<SearchClient initialQuery="" initialType="top" />);
     // Closed until there is something to offer, and naming no list that is not drawn.
     expect(box().getAttribute('aria-expanded')).toBe('false');
@@ -151,12 +170,11 @@ describe('search page typeahead', () => {
     expect(box().hasAttribute('aria-activedescendant')).toBe(false);
 
     const groups = within(listbox).getAllByRole('group');
+    // The answer offers two creators and a model too: the results under the
+    // box draw those live, so the list holds only what changes the query.
     expect(groups.map((group) => document.getElementById(group.getAttribute('aria-labelledby') ?? '')?.textContent))
-      .toEqual(['Creators', 'Models and tools', 'Suggested searches']);
+      .toEqual(['Suggested searches']);
     expect(within(listbox).getAllByRole('option').map((option) => option.getAttribute('aria-label'))).toEqual([
-      'Luma Studio, @luma-studio, following. Open profile',
-      '@lumen. Open profile',
-      'Luma Ray 2, model, 14 posts. Show posts made with it',
       'Search for luminous',
       'Search for lumen glow',
     ]);
@@ -167,7 +185,7 @@ describe('search page typeahead', () => {
     expect(listbox.hasAttribute('aria-busy')).toBe(false);
     expect(said()).toBe('');
     await pastTheAnnouncePause();
-    expect(said()).toBe('5 suggestions');
+    expect(said()).toBe('2 suggestions');
     expect(document.querySelector('[data-search-typeahead-status]')?.getAttribute('aria-live')).toBe('polite');
   });
 
@@ -221,7 +239,7 @@ describe('search page typeahead', () => {
 
   it('keeps the list of the text before on show, busy, until this text’s answer lands, and says the count only when it changes', async () => {
     const later = deferred<ReturnType<typeof ok>>();
-    render(<SearchClient initialQuery="" initialType="top" />);
+    renderBar();
     type('lum');
     await list();
     await pastTheAnnouncePause();
@@ -264,7 +282,7 @@ describe('search page typeahead', () => {
 
   it('has a stale row do what it shows, and keeps the highlight on the row it was put on', async () => {
     const later = deferred<ReturnType<typeof ok>>();
-    render(<SearchClient initialQuery="" initialType="top" />);
+    renderBar();
     type('lum');
     await list();
     suggestFetchMock.mockReturnValueOnce(later.promise);
@@ -310,7 +328,7 @@ describe('search page typeahead', () => {
       await later.promise;
     });
     await waitFor(() => expect(options()).toEqual(['Search for lumina', 'Search for lumiere']));
-    // Luma Studio is gone: Enter is the search for what is typed, never another row's.
+    // "luminous" is gone: Enter is the search for what is typed, never another row's.
     expect(box().hasAttribute('aria-activedescendant')).toBe(false);
     key('Enter');
     expect(pushMock).not.toHaveBeenCalled();
@@ -329,7 +347,7 @@ describe('search page typeahead', () => {
 
   it('takes no press on a row that has only just come to stand under the pointer, and takes it once the row has stood', async () => {
     const later = deferred<ReturnType<typeof ok>>();
-    render(<SearchClient initialQuery="" initialType="top" />);
+    renderBar();
     type('lum');
     await list();
     // A list that has just come on show takes a press at once: nothing of it was there to be aimed at.
@@ -361,7 +379,7 @@ describe('search page typeahead', () => {
     fireEvent.click(screen.getByRole('option', { name: /Luma Ray 2/ }));
     fireEvent.click(screen.getByRole('option', { name: 'Search for luminous' }));
     expect((box() as HTMLInputElement).value).toBe('lumi');
-    expect(screen.getByRole('tab', { name: 'Top' }).getAttribute('aria-selected')).toBe('true');
+    expect(pushMock).not.toHaveBeenCalled();
     expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true');
     expect(dimmed()).toEqual(['Luma Ray 2, model, 14 posts. Show posts made with it', 'Search for luminous', 'Search for lumen glow']);
 
@@ -373,7 +391,7 @@ describe('search page typeahead', () => {
   });
 
   it('takes a press at once on a row that stands where it stood, while the rows under another one move', async () => {
-    render(<SearchClient initialQuery="" initialType="top" />);
+    renderBar();
     type('lum');
     await list();
     suggestFetchMock.mockReturnValueOnce(deferred<ReturnType<typeof ok>>().promise);
@@ -411,57 +429,7 @@ describe('search page typeahead', () => {
     expect((box() as HTMLInputElement).value).toBe('luminous');
   });
 
-  it('writes its address when a creator is chosen within the search’s pause, without a word to Next’s router, and still runs the search', async () => {
-    // The page used to write its address a pause after the last letter through
-    // Next's patched history.replaceState, which Next's router reads as a
-    // navigation, and a navigation discards the one still loading (CI, #778:
-    // the press opened nothing). Now the write carries the entry's own state
-    // with Next's mark, which Next hands straight to the browser
-    // (search-address.test.ts), and a press writes it first.
-    vi.useFakeTimers();
-    const written = vi.spyOn(window.history, 'replaceState');
-    const addresses = () => written.mock.calls.map(([, , url]) => String(url));
-    const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
-    const address = () => `${window.location.pathname}${window.location.search}`;
-    render(<SearchClient initialQuery="" initialType="top" />);
-    type('lum');
-    // Past the typeahead's pause, inside the search's: the address still waits.
-    await tick(SEARCH_TYPEAHEAD_DEBOUNCE_MS + 20);
-    expect(address()).toBe('/search');
-    fireEvent.click(screen.getByRole('option', { name: '@lumen. Open profile' }));
-    // The press wrote the search the person is leaving, ahead of the way out.
-    expect(address()).toBe('/search?q=lum');
-    expect(pushMock).toHaveBeenCalledWith('/creators/lumen');
-    expect(written.mock.invocationCallOrder.at(-1)).toBeLessThan(pushMock.mock.invocationCallOrder[0]);
 
-    // The way out never completes (the router here goes nowhere): the pause
-    // passes, the search the page says it is running is asked, and its
-    // outcome is said, never "Searching…" with no request behind it.
-    await tick(2000);
-    expect(searchRequests()).toEqual(['/api/search?q=lum&type=top']);
-    expect(resultsSaid()).toBe('0 results for lum');
-    expect(addresses().filter((path) => path === '/search?q=lum')).toHaveLength(1);
-
-    // Every write the page made carries Next's mark: none is a navigation to its router.
-    type('lumi');
-    await tick(400);
-    expect(address()).toBe('/search?q=lumi');
-    for (const [state] of written.mock.calls) expect(state).toMatchObject({ __NA: true });
-  });
-
-  it('writes its address before opening a creator chosen with Enter, where no press does it', async () => {
-    vi.useFakeTimers();
-    const written = vi.spyOn(window.history, 'replaceState');
-    const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
-    render(<SearchClient initialQuery="" initialType="top" />);
-    type('lum');
-    await tick(SEARCH_TYPEAHEAD_DEBOUNCE_MS + 20);
-    key('ArrowDown');
-    key('Enter');
-    expect(pushMock).toHaveBeenCalledWith('/creators/luma-studio');
-    expect(`${window.location.pathname}${window.location.search}`).toBe('/search?q=lum');
-    expect(written.mock.invocationCallOrder.at(-1)).toBeLessThan(pushMock.mock.invocationCallOrder[0]);
-  });
 
   it('takes the list of the text before away at once when the box is emptied, and when this text has nothing', async () => {
     render(<SearchClient initialQuery="" initialType="top" />);
@@ -496,9 +464,9 @@ describe('search page typeahead', () => {
     });
     render(<SearchClient initialQuery="" initialType="top" />);
     type('lum');
-    await screen.findByText('luminous');
+    await waitFor(() => expect(options()).toEqual(['Search for luminous']));
     type('lumi');
-    await screen.findByText('lumiinous');
+    await waitFor(() => expect(options()).toEqual(['Search for lumiinous']));
     type('lum');
     // At once, from what was kept; busy only for the moment its row needs to have stood.
     expect(options()).toEqual(['Search for luminous']);
@@ -600,7 +568,7 @@ describe('search page typeahead', () => {
   });
 
   it('leaves a key that only confirms an input method’s composition alone', async () => {
-    render(<SearchClient initialQuery="" initialType="top" />);
+    renderBar();
     type('lum');
     await list();
     key('ArrowDown');
@@ -623,7 +591,7 @@ describe('search page typeahead', () => {
     // The page searches as the person types; its outcome is not said over the list's count.
     await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lum&type=top'));
     await pastTheAnnouncePause();
-    expect(said()).toBe('5 suggestions');
+    expect(said()).toBe('2 suggestions');
     expect(resultsSaid()).toBe('');
     // Enter settles the search: the list goes and the results speak.
     key('Enter');
@@ -643,7 +611,7 @@ describe('search page typeahead', () => {
   });
 
   it('moves the highlight with the arrows, Home and End, and back to the box past either end', async () => {
-    render(<SearchClient initialQuery="" initialType="top" />);
+    renderBar();
     type('lum');
     const listbox = await list();
     const options = within(listbox).getAllByRole('option');
@@ -678,7 +646,7 @@ describe('search page typeahead', () => {
   });
 
   it('opens a creator’s profile on Enter', async () => {
-    render(<SearchClient initialQuery="" initialType="top" />);
+    renderBar();
     type('lum');
     await list();
     key('ArrowDown');
@@ -690,17 +658,14 @@ describe('search page typeahead', () => {
   });
 
   it('opens Posts narrowed to a model or tool, as pressing the entity among the results does', async () => {
-    render(<SearchClient initialQuery="" initialType="top" />);
+    renderBar();
     type('lum');
     await list();
     key('ArrowDown');
     key('ArrowDown');
     key('ArrowDown');
     key('Enter');
-    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lum&type=posts&madeWith=model%3Aluma-ray-2'));
-    expect(screen.getByRole('tab', { name: 'Posts' }).getAttribute('aria-selected')).toBe('true');
-    // Named on its chip at once, before the narrowed search answers.
-    expect(screen.getByRole('button', { name: 'Remove filter: made with Luma Ray 2' })).toBeTruthy();
+    expect(pushMock).toHaveBeenCalledWith('/search?q=lum&type=posts&madeWith=model%3Aluma-ray-2');
     expect((box() as HTMLInputElement).value).toBe('lum');
     noList();
   });
@@ -763,10 +728,6 @@ describe('search page typeahead', () => {
     expect((box() as HTMLInputElement).value).toBe('lumen glow');
     await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lumen+glow&type=top&related=1'));
     noList();
-
-    type('lum');
-    fireEvent.click(await screen.findByRole('option', { name: '@lumen. Open profile' }));
-    expect(pushMock).toHaveBeenCalledWith('/creators/lumen');
   });
 
   it('closes when the focus leaves the search form', async () => {
@@ -824,11 +785,92 @@ describe('search page typeahead', () => {
   });
 
   it('draws no model or tool for two characters, whatever an answer carries', async () => {
-    render(<SearchClient initialQuery="" initialType="top" />);
+    renderBar();
     type('lu');
     const listbox = await list();
     expect(within(listbox).queryByText('Models and tools')).toBeNull();
     expect(within(listbox).getAllByRole('option')).toHaveLength(4);
+  });
+
+  it('offers the recent searches the text matches first, with a clock, then the completions, and searches one pressed', async () => {
+    window.localStorage.setItem('magicbooklet:public-search-history:v1', JSON.stringify(['neon harbor', 'luminous', 'glowing lumen', 'portrait']));
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    const listbox = await list();
+    // The recent searches are drawn at once; the completions with the answer.
+    await waitFor(() => expect(options()).toHaveLength(3));
+    const groups = within(listbox).getAllByRole('group');
+    expect(groups.map((group) => document.getElementById(group.getAttribute('aria-labelledby') ?? '')?.textContent))
+      .toEqual(['Recent searches', 'Suggested searches']);
+    // The one that begins with the text, then the one that holds it; the
+    // completion "luminous" a recent search already offers is not offered twice.
+    expect(options()).toEqual([
+      'Search again for luminous',
+      'Search again for glowing lumen',
+      'Search for lumen glow',
+    ]);
+    expect([...listbox.querySelectorAll('[data-typeahead-row]')].map((row) => row.getAttribute('data-typeahead-row')))
+      .toEqual(['recent', 'recent', 'completion']);
+    await settled();
+    fireEvent.click(screen.getByRole('option', { name: 'Search again for glowing lumen' }));
+    expect((box() as HTMLInputElement).value).toBe('glowing lumen');
+    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=glowing+lumen&type=top&related=1'));
+    noList();
+  });
+
+  it('draws the recent searches the text matches at once, before any answer, and keeps them when the answer has nothing', async () => {
+    window.localStorage.setItem('magicbooklet:public-search-history:v1', JSON.stringify(['luminous']));
+    const slow = deferred<ReturnType<typeof ok>>();
+    suggestFetchMock.mockReturnValueOnce(slow.promise);
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lu');
+    // This device's own: no request needed, and never stale.
+    expect(options()).toEqual(['Search again for luminous']);
+    expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false);
+    await act(async () => {
+      slow.resolve(ok(suggestions({ completions: [] })));
+      await slow.promise;
+    });
+    await pastThePause();
+    expect(options()).toEqual(['Search again for luminous']);
+  });
+
+  it('draws no list when the answer offers only creators and models, which the results already draw', async () => {
+    suggestFetchMock.mockResolvedValue(ok(suggestions({ completions: [] })));
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum']));
+    await pastThePause();
+    noList();
+    expect(box().getAttribute('aria-expanded')).toBe('false');
+    expect(said()).toBe('');
+  });
+
+  it('draws what a row adds heavier than what was typed, and keeps the row’s name whole', async () => {
+    window.localStorage.setItem('magicbooklet:public-search-history:v1', JSON.stringify(['Glowing Lumen']));
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('Lum');
+    await screen.findByRole('option', { name: 'Search for luminous' });
+    const runs = (name: string) => [...screen.getByRole('option', { name }).querySelectorAll('span.truncate > span')]
+      .map((run) => [run.textContent, run.classList.contains('font-semibold')]);
+    // Typed plain, the rest heavier; found whatever its case.
+    expect(runs('Search for luminous')).toEqual([['lum', false], ['inous', true]]);
+    expect(runs('Search again for Glowing Lumen')).toEqual([['Glowing ', true], ['Lum', false], ['en', true]]);
+    expect(screen.getByRole('option', { name: 'Search for luminous' }).textContent).toBe('luminous');
+  });
+
+  it('offers the top bar’s recent searches first, then creators, models and tools, and completions', async () => {
+    window.localStorage.setItem('magicbooklet:public-search-history:v1', JSON.stringify(['lumen city', 'neon harbor']));
+    renderBar();
+    type('lum');
+    const listbox = await list();
+    await waitFor(() => expect(options()).toHaveLength(6));
+    expect(within(listbox).getAllByRole('group').map((group) => document.getElementById(group.getAttribute('aria-labelledby') ?? '')?.textContent))
+      .toEqual(['Recent searches', 'Creators', 'Models and tools', 'Suggested searches']);
+    expect(options()[0]).toBe('Search again for lumen city');
+    key('ArrowDown');
+    key('Enter');
+    expect(pushMock).toHaveBeenCalledWith('/search?q=lumen+city');
   });
 
   it('leaves recent searches as they were while the box is empty', async () => {

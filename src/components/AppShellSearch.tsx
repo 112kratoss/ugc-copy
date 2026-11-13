@@ -6,6 +6,7 @@ import { Search, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 
 import { markSearchFieldHandoff } from '@/components/search/search-field-handoff';
+import { readSearchHistory } from '@/components/search/search-history';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
 import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
@@ -24,9 +25,11 @@ import type { SearchTypeaheadAction } from '../../ugc-mobile/lib/public-search-p
 /**
  * The top bar's search field (from 1024px; below it the bar has a link to
  * /search instead). Enter searches what is typed, on the search page, as it
- * always did. While the person types it offers what the search page's own box
- * offers (creators, models and tools, completions: `useSearchTypeahead`), and
- * a row goes where that page would take it.
+ * always did. While the person types it offers the recent searches the text
+ * matches, then creators, models and tools, and completions
+ * (`useSearchTypeahead`): every kind, since no results are drawn under it, where
+ * the search page's own box offers only what changes the query. A row goes
+ * where that page would take it.
  *
  * Every way out of here is the shell's and not a link, so each asks a page's
  * leave guard first (`holdForLeaveGuard`): a page with unsaved work asks its
@@ -40,7 +43,11 @@ export function AppShellSearch() {
   // page's script runs reaches no state: the next render would write over it.
   const fieldRef = useRef<HTMLInputElement>(null);
   useFieldValueBeforeHydration(fieldRef, { drawn: text, onValue: setText });
-  const typeahead = useSearchTypeahead({ text, focused });
+  // This browser's recent searches, read as the field takes the focus (a
+  // search made on another page or tab since is among them): the ones the
+  // text matches are offered first.
+  const [recents, setRecents] = useState<readonly string[]>([]);
+  const typeahead = useSearchTypeahead({ text, focused, recents });
 
   const leaveFor = (path: string) => {
     const leave = () => {
@@ -91,7 +98,10 @@ export function AppShellSearch() {
         // Enter, leaving: the search page takes the focus on in its own field.
         markSearchFieldHandoff();
       }}
-      onFocus={() => setFocused(true)}
+      onFocus={() => {
+        if (!focused) setRecents(readSearchHistory());
+        setFocused(true);
+      }}
       onBlur={(event) => {
         const next = event.relatedTarget;
         if (!(next instanceof Node) || !event.currentTarget.contains(next)) setFocused(false);
@@ -145,6 +155,7 @@ export function AppShellSearch() {
         <SearchTypeaheadList
           listId={typeahead.listId}
           sections={typeahead.sections}
+          query={typeahead.query}
           activeIndex={typeahead.activeIndex}
           stale={typeahead.stale}
           busy={typeahead.busy}

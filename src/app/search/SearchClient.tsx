@@ -1,13 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Box, Clock3, LoaderCircle, MessageCircle, RefreshCcw, Sparkles, Wrench, X } from 'lucide-react';
 
 import { SegmentedControl } from '@/components/DesignSystem';
 import { CreatorSearchResult } from '@/components/search/CreatorSearchResult';
 import { SearchField } from '@/components/search/SearchField';
+import { SearchResultsPlaceholder } from '@/components/search/SearchResultsPlaceholder';
 import { SearchStateBlock } from '@/components/search/SearchStateBlock';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
 import { clearSearchFieldHandoff, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
@@ -103,7 +103,7 @@ import {
   writeSearchPageAddress,
   type SearchPageOpening,
 } from './search-address';
-import { clearSearchHistory, forgetSearchQuery, readSearchHistory, rememberSearchQuery } from './search-history';
+import { clearSearchHistory, forgetSearchQuery, readSearchHistory, rememberSearchQuery } from '@/components/search/search-history';
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -451,7 +451,6 @@ export default function SearchClient({
   // page's field, with the typeahead closed for the text it brought
   // (search-field-handoff.ts). Read without taking it, as a render may run twice.
   const [handedOff] = useState(() => typeof window !== 'undefined' && searchFieldHandoffPending());
-  const router = useRouter();
   const recentsRef = useRef<HTMLDivElement | null>(null);
   const searchFormRef = useRef<HTMLFormElement | null>(null);
   // A search committed with Enter before its answer landed: kept once it finds something.
@@ -812,22 +811,22 @@ export default function SearchClient({
   // Typeahead: what the box offers while the person types, ahead of the
   // results, which load as they did. Its list is drawn only for the text the
   // box holds, and is closed by Escape, by Enter and by choosing a row, so it
-  // never stands over a search the person has committed.
-  const typeahead = useSearchTypeahead({ text: query, focused: fieldFocused, closedFor: handedOff ? opening.query : null });
+  // never stands over a search the person has committed. Here it offers only
+  // what changes the query, the recent searches the text matches and then the
+  // completions: the results under it draw the creators and the models and
+  // tools live, and a row for one would repeat the result drawn under it.
+  const typeahead = useSearchTypeahead({
+    text: query,
+    focused: fieldFocused,
+    closedFor: handedOff ? opening.query : null,
+    recents: history,
+    offer: 'query',
+  });
   const runTypeaheadAction = (action: SearchTypeaheadAction | null) => {
-    if (!action) return;
-    if (action.type === 'creator') {
-      // Chosen with Enter there is no press to write the address first (above).
-      writeSearchPageAddress(address);
-      router.push(`/creators/${encodeURIComponent(action.username)}`);
-      return;
-    }
-    if (action.type === 'entity') {
-      // As pressing the entity among the results does: Posts for what is typed, narrowed to it.
-      pickEntity(action.entity);
-      return;
-    }
-    // A completion fills the box and is searched at once, with no pause for
+    // The box here offers queries only (offer: 'query'): a recent search or a
+    // completion. A creator or a model is pressed among the results.
+    if (action?.type !== 'search') return;
+    // A completion or a recent search fills the box and is searched at once, with no pause for
     // typing, and committed as Enter commits a search: kept among the recent
     // ones once it finds something.
     const next = normalizePublicSearchQuery(action.query);
@@ -891,6 +890,7 @@ export default function SearchClient({
               <SearchTypeaheadList
                 listId={typeahead.listId}
                 sections={typeahead.sections}
+                query={typeahead.query}
                 activeIndex={typeahead.activeIndex}
                 stale={typeahead.stale}
                 busy={typeahead.busy}
@@ -1038,9 +1038,9 @@ export default function SearchClient({
             />
           ) : !shownAnswer || resultCount === 0 ? (
             pending ? (
-              <div className="flex min-h-72 items-center justify-center rounded-3xl border border-white/8 bg-white/[0.025] text-sm text-zinc-400">
-                <LoaderCircle className="mr-2 h-5 w-5 animate-spin" aria-hidden="true" /> {SEARCH_SEARCHING_LABEL}
-              </div>
+              // No earlier cards to keep on show: blocks in the shape of the
+              // tab's results (the status line above says "Searching…").
+              <SearchResultsPlaceholder type={activeType} />
             ) : !searchSaysNoResults(gatedQueryLength) ? (
               // Half a word is no verdict: a two-character search that finds
               // no creator leaves the page as it was before typing.

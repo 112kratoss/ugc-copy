@@ -475,7 +475,13 @@ describe('SearchClient', () => {
 
       expect(requestedUrls()).toEqual(['/api/search?q=luna&type=top', '/api/search?q=luna&type=posts']);
       expect(screen.queryByText('Luna Studio')).not.toBeInTheDocument();
-      expect(screen.getAllByText('Searching…')).toHaveLength(2);
+      // No earlier cards of this tab to keep on show: blocks in the shape of
+      // Posts' results, hidden from assistive technology, and the status line
+      // alone says "Searching…" (no centred card).
+      expect(screen.getAllByText('Searching…')).toEqual([screen.getByRole('status')]);
+      const placeholder = document.querySelector('[data-search-placeholder]');
+      expect(placeholder?.getAttribute('data-search-placeholder')).toBe('posts');
+      expect(placeholder?.getAttribute('aria-hidden')).toBe('true');
 
       answer.resolve(jsonResponse(searchResponse({
         type: 'posts',
@@ -483,6 +489,7 @@ describe('SearchClient', () => {
       })));
       await settle();
       expect(screen.getByText('Moonlit portrait')).toBeInTheDocument();
+      expect(document.querySelector('[data-search-placeholder]')).toBeNull();
     });
 
     it('clears a failed search as soon as the query changes', async () => {

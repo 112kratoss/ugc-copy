@@ -14,6 +14,7 @@ import {
   SEARCH_TYPEAHEAD_MAX_COMPLETIONS,
   SEARCH_TYPEAHEAD_MAX_CREATORS,
   SEARCH_TYPEAHEAD_MAX_ENTITIES,
+  SEARCH_TYPEAHEAD_MAX_RECENTS,
   SEARCH_TYPEAHEAD_PRESS_SETTLE_MS,
   SEARCH_TYPEAHEAD_SECTION_IDS,
   isSearchTypeaheadPressAccepted,
@@ -24,6 +25,8 @@ import {
   searchTypeaheadUnsettledRows,
   searchTypeaheadAction,
   searchTypeaheadDrawn,
+  searchTypeaheadMatchingRecents,
+  searchTypeaheadTextRuns,
   searchTypeaheadQuery,
   searchTypeaheadRowLabel,
   searchTypeaheadRows,
@@ -148,13 +151,15 @@ describe('search typeahead: when to ask', () => {
 
 describe('search typeahead: what is drawn', () => {
   it('draws creators, then models and tools, then completions', () => {
-    expect([...SEARCH_TYPEAHEAD_SECTION_IDS]).toEqual(['creators', 'entities', 'completions']);
+    expect([...SEARCH_TYPEAHEAD_SECTION_IDS]).toEqual(['recents', 'creators', 'entities', 'completions']);
     const sections = searchTypeaheadSections(answer, 'lum');
     expect(sections.map((section) => section.id)).toEqual(['creators', 'entities', 'completions']);
     expect(sections.map((section) => section.heading)).toEqual([
       SEARCH_TYPEAHEAD_HEADINGS.creators, SEARCH_TYPEAHEAD_HEADINGS.entities, SEARCH_TYPEAHEAD_HEADINGS.completions,
     ]);
-    expect(SEARCH_TYPEAHEAD_HEADINGS).toEqual({ creators: 'Creators', entities: 'Models and tools', completions: 'Suggested searches' });
+    expect(SEARCH_TYPEAHEAD_HEADINGS).toEqual({
+      recents: 'Recent searches', creators: 'Creators', entities: 'Models and tools', completions: 'Suggested searches',
+    });
     expect(searchTypeaheadRows(sections).map((row) => row.key)).toEqual([
       'creator:c1', 'creator:c2', 'entity:model:luma-ray-2', 'completion:luminous', 'completion:lumen glow',
     ]);
@@ -432,5 +437,73 @@ describe('search typeahead: the shared module', () => {
     const imports = Array.from(source.matchAll(/from '([^']+)'/g), (match) => match[1]);
     expect(imports).toEqual(['./public-search-policy']);
     expect(source.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '')).not.toMatch(/\\p\{/);
+  });
+});
+
+describe('search typeahead: recent searches, and what a box offers', () => {
+  const history = ['neon harbor', 'Luminous', 'glowing lumen', 'lum', 'portrait', 'lumen city', 'lumberjack', 'a lumen'];
+
+  it('offers the recent searches that begin with the text, then the ones that hold it, most recent first, three at most', () => {
+    expect(SEARCH_TYPEAHEAD_MAX_RECENTS).toBe(3);
+    // "lum" itself is what the box holds: not offered back.
+    expect(searchTypeaheadMatchingRecents(history, 'lum')).toEqual(['Luminous', 'lumen city', 'lumberjack']);
+    expect(searchTypeaheadMatchingRecents(['neon harbor', 'glowing lumen', 'a lumen'], 'lum')).toEqual(['glowing lumen', 'a lumen']);
+    // One letter would match nearly every search: only a beginning counts there.
+    expect(searchTypeaheadMatchingRecents(['neon harbor', 'portrait', 'anime'], 'a')).toEqual(['anime']);
+    expect(searchTypeaheadMatchingRecents(['Neon  Harbor', 'neon harbor'], 'NEON h')).toEqual(['Neon Harbor']);
+    expect(searchTypeaheadMatchingRecents(history, null)).toEqual([]);
+    expect(searchTypeaheadMatchingRecents([], 'lum')).toEqual([]);
+  });
+
+  it('puts the matching recent searches first, as query rows, and does not offer a completion twice', () => {
+    const sections = searchTypeaheadSections(answer, 'lum', { recents: ['luminous', 'portrait'] });
+    expect(sections.map((section) => section.id)).toEqual(['recents', 'creators', 'entities', 'completions']);
+    const rows = searchTypeaheadRows(sections);
+    expect(rows[0]).toEqual({ kind: 'completion', key: 'recent:luminous', text: 'luminous', recent: true });
+    expect(rows.filter((row) => row.kind === 'completion').map((row) => row.key)).toEqual(['recent:luminous', 'completion:lumen glow']);
+    expect(searchTypeaheadAction(rows[0])).toEqual({ type: 'search', query: 'luminous' });
+    expect(searchTypeaheadRowLabel(rows[0])).toBe('Search again for luminous');
+  });
+
+  it('offers only what changes the query where the box is over its own results: recent searches and completions', () => {
+    const sections = searchTypeaheadSections(answer, 'lum', { recents: ['lumen city'], offer: 'query' });
+    expect(sections.map((section) => section.id)).toEqual(['recents', 'completions']);
+    // Nothing left to offer: no section, so no list.
+    expect(searchTypeaheadSections({ ...answer, completions: [] }, 'lum', { offer: 'query' })).toEqual([]);
+  });
+
+  it('draws the matching recent searches with or without an answer, and never as stale', () => {
+    const options = { recents: ['lumen city'] };
+    expect(searchTypeaheadDrawn(null, 'lum', options).sections.map((section) => section.id)).toEqual(['recents']);
+    expect(searchTypeaheadDrawn(null, 'lum', options).stale).toBe(false);
+    expect(searchTypeaheadDrawn({ query: 'lum', response: null }, 'lum', options).sections.map((section) => section.id)).toEqual(['recents']);
+    // An earlier text's answer kept on show is stale; the recent searches beside it are this text's.
+    const typedOn = searchTypeaheadDrawn({ query: 'lum', response: answer }, 'lume', options);
+    expect(typedOn.stale).toBe(true);
+    expect(typedOn.sections[0].id).toBe('recents');
+    // An earlier answer that adds nothing the box offers leaves a list that is not stale.
+    const queryOnly = searchTypeaheadDrawn({ query: 'lum', response: { ...answer, completions: [] } }, 'lume', { ...options, offer: 'query' });
+    expect(queryOnly).toEqual({ sections: [expect.objectContaining({ id: 'recents' })], stale: false });
+    expect(searchTypeaheadDrawn(null, null, options)).toEqual({ sections: [], stale: false });
+  });
+});
+
+describe('search typeahead: which part of a row is drawn heavier', () => {
+  it('draws what was typed plain and what the row adds heavier, ignoring case', () => {
+    expect(searchTypeaheadTextRuns('luminous', 'lum')).toEqual([{ text: 'lum', typed: true }, { text: 'inous', typed: false }]);
+    expect(searchTypeaheadTextRuns('Glowing Lumen', 'lum')).toEqual([
+      { text: 'Glowing ', typed: false }, { text: 'Lum', typed: true }, { text: 'en', typed: false },
+    ]);
+    expect(searchTypeaheadTextRuns('portrait', 'portrait')).toEqual([{ text: 'portrait', typed: true }]);
+    // Typed with spaces as the server reads them.
+    expect(searchTypeaheadTextRuns('neon harbor', '  neon   h')).toEqual([{ text: 'neon h', typed: true }, { text: 'arbor', typed: false }]);
+  });
+
+  it('draws the whole row heavier where it does not hold the text, or where lower case moves its letters', () => {
+    expect(searchTypeaheadTextRuns('portrait', 'lum')).toEqual([{ text: 'portrait', typed: false }]);
+    expect(searchTypeaheadTextRuns('portrait', null)).toEqual([{ text: 'portrait', typed: false }]);
+    // "İ" lower-cases to two characters: the places found would not be the text's own.
+    expect(searchTypeaheadTextRuns('İstanbul night', 'night')).toEqual([{ text: 'İstanbul night', typed: false }]);
+    expect(searchTypeaheadTextRuns('', 'lum')).toEqual([]);
   });
 });

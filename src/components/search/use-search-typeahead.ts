@@ -23,6 +23,7 @@ import {
   type SearchSuggestResponse,
   type SearchTypeaheadAction,
   type SearchTypeaheadAnswer,
+  type SearchTypeaheadOffer,
   type SearchTypeaheadPlacement,
   type SearchTypeaheadRow,
 } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
@@ -53,7 +54,10 @@ type KeptAnswer = { response: SearchSuggestResponse; at: number };
 // No row is settling: one array, so a list that has settled keeps its props.
 const NO_ROWS: readonly string[] = [];
 
-export function useSearchTypeahead({ text, focused, closedFor = null }: {
+// No recent search: one array, so a box without a list keeps its memo.
+const NO_RECENTS: readonly string[] = [];
+
+export function useSearchTypeahead({ text, focused, closedFor = null, recents = NO_RECENTS, offer = 'all' }: {
   /** What the box holds. */
   text: string;
   /** The focus is in the box (or its form). */
@@ -63,6 +67,10 @@ export function useSearchTypeahead({ text, focused, closedFor = null }: {
    * page opened from the top bar's field (search-field-handoff.ts). Read once.
    */
   closedFor?: string | null;
+  /** This browser's recent searches, most recent first: the ones the text matches are offered first. */
+  recents?: readonly string[];
+  /** Which kinds the box offers (the shared SearchTypeaheadOffer): the search page offers only what changes the query. */
+  offer?: SearchTypeaheadOffer;
 }) {
   const listId = `${useId()}-search-typeahead`;
   const query = useMemo(() => searchTypeaheadQuery(text), [text]);
@@ -192,7 +200,10 @@ export function useSearchTypeahead({ text, focused, closedFor = null }: {
   }
 
   // This text's answer, or until it arrives the one before it, marked stale.
-  const { sections, stale } = useMemo(() => searchTypeaheadDrawn(answer, query), [answer, query]);
+  const { sections, stale } = useMemo(
+    () => searchTypeaheadDrawn(answer, query, { recents, offer }),
+    [answer, offer, query, recents],
+  );
   const rows = useMemo(() => searchTypeaheadRows(sections), [sections]);
   const shown = isSearchTypeaheadShown({ focused, query, closedQuery, rowCount: rows.length });
   const highlightedAt = shown && highlight !== null && highlight.query === query
@@ -324,6 +335,8 @@ export function useSearchTypeahead({ text, focused, closedFor = null }: {
 
   return {
     listId,
+    /** What the box asks about (searchTypeaheadQuery of its text), or null. */
+    query,
     /** The list is drawn. */
     shown,
     /** What is drawn is the answer to the text before this one: this text's is on its way. */
