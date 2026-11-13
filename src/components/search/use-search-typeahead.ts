@@ -8,8 +8,10 @@ import {
   SEARCH_TYPEAHEAD_DEBOUNCE_MS,
   SEARCH_TYPEAHEAD_KEPT_ANSWERS,
   SEARCH_TYPEAHEAD_KEPT_ANSWER_MS,
+  SEARCH_TYPEAHEAD_OFFER_ALL,
   SEARCH_TYPEAHEAD_PRESS_SETTLE_MS,
   isSearchTypeaheadPressAccepted,
+  searchTypeaheadAsks,
   isSearchTypeaheadShown,
   moveSearchTypeaheadHighlight,
   parseSearchSuggestResponse,
@@ -23,6 +25,7 @@ import {
   type SearchSuggestResponse,
   type SearchTypeaheadAction,
   type SearchTypeaheadAnswer,
+  type SearchTypeaheadOffer,
   type SearchTypeaheadPlacement,
   type SearchTypeaheadRow,
 } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
@@ -53,7 +56,10 @@ type KeptAnswer = { response: SearchSuggestResponse; at: number };
 // No row is settling: one array, so a list that has settled keeps its props.
 const NO_ROWS: readonly string[] = [];
 
-export function useSearchTypeahead({ text, focused, closedFor = null }: {
+// No recent search: one array, so a box without a list keeps its memo.
+const NO_RECENTS: readonly string[] = [];
+
+export function useSearchTypeahead({ text, focused, closedFor = null, recents = NO_RECENTS, offer = SEARCH_TYPEAHEAD_OFFER_ALL }: {
   /** What the box holds. */
   text: string;
   /** The focus is in the box (or its form). */
@@ -63,9 +69,14 @@ export function useSearchTypeahead({ text, focused, closedFor = null }: {
    * page opened from the top bar's field (search-field-handoff.ts). Read once.
    */
   closedFor?: string | null;
+  /** This browser's recent searches, most recent first: the ones the text matches are offered first. */
+  recents?: readonly string[];
+  /** Which kinds the box offers (the shared SearchTypeaheadOffer): the search page leaves out what its tab's results draw. */
+  offer?: SearchTypeaheadOffer;
 }) {
   const listId = `${useId()}-search-typeahead`;
   const query = useMemo(() => searchTypeaheadQuery(text), [text]);
+  const asks = searchTypeaheadAsks(query, offer);
   const [answer, setAnswer] = useState<SearchTypeaheadAnswer | null>(null);
   // The query the list was closed for (Escape) or committed with (Enter, a row).
   const [closedQuery, setClosedQuery] = useState<string | null>(
@@ -108,6 +119,9 @@ export function useSearchTypeahead({ text, focused, closedFor = null }: {
       return;
     }
     if (query === null) return;
+    // Nothing its answer could hold would be drawn here (a handle on a box
+    // that offers no creators): not asked (and nothing of an answer is drawn, below).
+    if (!asks) return;
     const keptAnswer = kept.current.get(query);
     if (keptAnswer && Date.now() - keptAnswer.at < SEARCH_TYPEAHEAD_KEPT_ANSWER_MS) {
       setAnswer({ query, response: keptAnswer.response });
@@ -172,7 +186,7 @@ export function useSearchTypeahead({ text, focused, closedFor = null }: {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [focused, query]);
+  }, [asks, focused, query]);
 
   // State that follows the box, adjusted while rendering, as React asks of
   // state that follows a value (an effect would draw the stale state for a
@@ -192,7 +206,11 @@ export function useSearchTypeahead({ text, focused, closedFor = null }: {
   }
 
   // This text's answer, or until it arrives the one before it, marked stale.
-  const { sections, stale } = useMemo(() => searchTypeaheadDrawn(answer, query), [answer, query]);
+  const { sections, stale } = useMemo(
+    // A text not asked about draws no answer, not even the one before it.
+    () => searchTypeaheadDrawn(asks ? answer : null, query, { recents, offer }),
+    [answer, asks, offer, query, recents],
+  );
   const rows = useMemo(() => searchTypeaheadRows(sections), [sections]);
   const shown = isSearchTypeaheadShown({ focused, query, closedQuery, rowCount: rows.length });
   const highlightedAt = shown && highlight !== null && highlight.query === query
@@ -324,6 +342,8 @@ export function useSearchTypeahead({ text, focused, closedFor = null }: {
 
   return {
     listId,
+    /** What the box asks about (searchTypeaheadQuery of its text), or null. */
+    query,
     /** The list is drawn. */
     shown,
     /** What is drawn is the answer to the text before this one: this text's is on its way. */
