@@ -199,8 +199,12 @@ test.describe('search typeahead', () => {
     await expect.poll(() => searches.some((search) => search.includes('q=lumen+glow'))).toBe(true);
     await expect(list).toBeHidden();
 
-    // A recent search: the same.
+    // A recent search: the same. The search just pressed joins the recent ones
+    // when its answer lands, which can be after the list for "lum" is drawn:
+    // the rows then move, and a moved row takes no press for a moment.
     await box.fill('lum');
+    await expect(list.getByRole('option')).toHaveText(['lumen glow', 'glowing lumen', 'Lumen city', 'luminous portrait']);
+    await expect(list).not.toHaveAttribute('aria-busy', 'true');
     await list.getByRole('option', { name: 'Search again for glowing lumen' }).click();
     await expect(box).toHaveValue('glowing lumen');
     await expect.poll(() => searches.some((search) => search.includes('q=glowing+lumen'))).toBe(true);
