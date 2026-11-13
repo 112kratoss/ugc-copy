@@ -41,7 +41,6 @@ function SearchPostPinCard({
   const { card, item } = pin;
   const accent = card ? accentColor(card.accent, theme.colors) : theme.colors.primary;
   const open = () => onOpen(item);
-  const detail = [pin.madeWith, pin.date].filter(Boolean).join(' · ');
   return (
     <Pressable
       accessibilityRole="button"
@@ -93,15 +92,20 @@ function SearchPostPinCard({
         {pin.video ? <VideoCornerPlay /> : null}
       </View>
       <View style={{ gap: 2, paddingHorizontal: 2 }}>
+        {/* Who and when on one line, as the feed's cards say it ("@luna · 3d ago"):
+            the handle gives way, the date stays whole. */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
           <CreatorAvatar uri={item.creator.avatar} name={pin.handle} size={22} />
-          <Text numberOfLines={1} style={{ flex: 1, color: theme.colors.muted, ...appTheme.type.caption, fontWeight: '700' }}>
+          <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.muted, ...appTheme.type.caption, fontWeight: '700' }}>
             {pin.handle}
           </Text>
+          <Text numberOfLines={1} style={{ flexShrink: 0, color: theme.colors.faint, ...appTheme.type.caption }}>
+            {`· ${pin.date}`}
+          </Text>
         </View>
-        {detail ? (
+        {pin.madeWith ? (
           <Text numberOfLines={2} style={{ color: theme.colors.faint, ...appTheme.type.caption }}>
-            {detail}
+            {pin.madeWith}
           </Text>
         ) : null}
       </View>

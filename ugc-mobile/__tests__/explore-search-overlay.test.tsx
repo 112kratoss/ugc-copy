@@ -1342,7 +1342,7 @@ describe('ExploreSearchOverlay search', () => {
 
     const label = 'Open post Neon portrait by @luna';
     expect(exactLabel(tree, label)).toBe('Open post Neon portrait by @luna. Free recipe. Video. Made with Nano Banana 2.0. 3d ago');
-    expect(cardTexts(tree, label)).toEqual(['Free recipe', '@luna', 'Made with Nano Banana 2.0 · 3d ago']);
+    expect(cardTexts(tree, label)).toEqual(['Free recipe', '@luna', '· 3d ago', 'Made with Nano Banana 2.0']);
     // Everything the card shows is in its name.
     for (const shown of ['free recipe', '@luna', 'made with nano banana 2.0', '3d ago']) expect(exactLabel(tree, label).toLowerCase()).toContain(shown);
     // The picture at its own shape (9:16), not cut to one frame.
