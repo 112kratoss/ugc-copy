@@ -1016,7 +1016,11 @@ export function ExploreSearchOverlay({
   const startFromCreator = (creator: SearchStarterCreator) => {
     router.push(`/creators/${encodeURIComponent(creator.username)}` as never);
   };
-  const startFromSearch = (search: SearchStarterSearch) => commitSearch(search.text);
+  // A search to try starts afresh: a filter left on from an earlier search would narrow it.
+  const startFromSearch = (search: SearchStarterSearch) => {
+    setPickedFilters(NO_SEARCH_FILTERS);
+    commitSearch(search.text);
+  };
 
   // A search that found nothing on its tab says what another tab holds
   // (finding 8), from Top's answer for the same query: the one on hand, or

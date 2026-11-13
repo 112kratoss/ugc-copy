@@ -2652,3 +2652,145 @@ describe('ExploreSearchOverlay typeahead', () => {
     await act(async () => tree.unmount());
   });
 });
+
+// Search UX audit 2026-11-13, findings 2 and 8: what the screen offers before
+// anything is typed, when nothing is found, and when one tab is empty.
+describe('ExploreSearchOverlay starting and ending screens', () => {
+  const STARTER = {
+    entities: [{ kind: 'model' as const, key: 'nano-banana-pro', label: 'Nano Banana Pro', postCount: 200, postCountCapped: true, query: 'nano-banana-pro' }],
+    creators: [{ id: 'c-luna', username: 'luna', displayName: 'Luna Studio', bio: null, avatarUrl: null, publicPostCount: 42, isFollowing: false }],
+    searches: [{ text: 'portrait' }, { text: 'anime' }],
+  };
+  const full = (query: string, type: PublicSearchType, kinds: Parameters<typeof searchAnswer>[2] = {}) => searchAnswer(query, type, { sort: 'top', ...kinds }, {
+    entities: [], filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false }, correctedQuery: { posts: null, recipes: null }, exact: false,
+  });
+  const searched = () => searchPublicContent.mock.calls.map(([params]) => `${params.query}|${params.type}${params.filters?.madeWith ? `|${params.filters.madeWith}` : ''}`);
+  const headers = (tree: Tree) => hostNodes(tree, 'text').filter((node) => node.props.accessibilityRole === 'header').map(textOf);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.listeners.length = 0;
+    mocks.focused.value = true;
+    mocks.router.push.mockClear();
+    mocks.readSearchHistory.mockReset();
+    mocks.readSearchHistory.mockResolvedValue([]);
+    mocks.rememberSearchQuery.mockReset();
+    mocks.rememberSearchQuery.mockResolvedValue([]);
+    mocks.user.value = null;
+    searchPublicContent.mockReset();
+    suggestSearch.mockReset();
+    suggestSearch.mockResolvedValue({ query: '', normalizedQuery: '', creators: [], entities: [], completions: [] });
+    searchStarter.mockReset();
+    searchStarter.mockResolvedValue(STARTER);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('opens on the recent searches, then popular models and tools, creators to follow and searches to try', async () => {
+    mocks.readSearchHistory.mockResolvedValue(['neon harbor']);
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    expect(headers(tree)).toEqual(['Recent searches', 'Popular models and tools', 'Creators to follow', 'Try searching for']);
+    expect(() => pressableLabelled(tree, 'Nano Banana Pro, model, 200+ posts. Show posts made with it')).not.toThrow();
+    expect(() => pressableLabelled(tree, 'Luna Studio, @luna, 42 posts. Open profile')).not.toThrow();
+    expect(() => pressableLabelled(tree, 'Search for portrait')).not.toThrow();
+    expect(statusTitles(tree)).toEqual([]);
+    expect(searchStarter).toHaveBeenCalledTimes(1);
+    await act(async () => tree.unmount());
+  });
+
+  it('asks once each time the search opens, and draws the invitation for a failure or an empty answer', async () => {
+    searchStarter.mockRejectedValueOnce(new ApiError('Not found', 404));
+    const onClose = vi.fn();
+    const tree = await render({ visible: true, onClose });
+    expect(statusTitles(tree)).toEqual([SEARCH_IDLE_TITLE]);
+    // Typing and committing ask nothing more of it.
+    await typeQuery(tree, 'zzz');
+    await typeQuery(tree, '');
+    expect(searchStarter).toHaveBeenCalledTimes(1);
+
+    // Opened again: asked again. The switch's answer, three empty lists, is the invitation too.
+    searchStarter.mockResolvedValueOnce({ entities: [], creators: [], searches: [] });
+    await update(tree, { visible: false, onClose });
+    await update(tree, { visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(2);
+    expect(statusTitles(tree)).toEqual([SEARCH_IDLE_TITLE]);
+    expect(headers(tree)).not.toContain('Popular models and tools');
+    await act(async () => tree.unmount());
+  });
+
+  it('runs what each starter row offers: Posts made with a model, a creator’s profile, a search', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', { posts: [post('p1')] }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+
+    await press(pressableLabelled(tree, 'Nano Banana Pro, model, 200+ posts. Show posts made with it'));
+    // The search the starter counted: its own query, on Posts, narrowed to it, named on the chip.
+    expect(searched()).toEqual(['nano-banana-pro|posts|model:nano-banana-pro']);
+    expect(searchInput(tree).props.value).toBe('nano-banana-pro');
+    expect(textOf(pressableLabelled(tree, 'Remove filter: made with Nano Banana Pro'))).toBe('Made with Nano Banana Pro');
+
+    await typeQuery(tree, '');
+    await press(pressableLabelled(tree, 'Search for anime'));
+    expect(searchInput(tree).props.value).toBe('anime');
+    expect(searched().at(-1)).toBe('anime|posts');
+
+    await typeQuery(tree, '');
+    await act(async () => { pressableLabelled(tree, 'Luna Studio, @luna, 42 posts. Open profile').props.onPress(); });
+    expect(mocks.router.push).toHaveBeenCalledWith('/creators/luna');
+    await act(async () => tree.unmount());
+  });
+
+  it('shows the starter under "No results" when a search finds nothing anywhere', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top'));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'qwxyz');
+    expect(statusTitles(tree)).toEqual(['No results for “qwxyz”']);
+    expect(shownTexts(tree)).toContain('Try one of these instead');
+    expect(headers(tree)).toContain('Popular models and tools');
+    await act(async () => tree.unmount());
+  });
+
+  it('says on an empty tab what another holds, from the Top answer on hand, with the way there', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => (type === 'recipes'
+      ? full(query, 'recipes')
+      : full(query, type ?? 'top', { posts: Array.from({ length: 12 }, (_, index) => post(`p${index}`)) })));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'nano');
+    await press(tab(tree, 'Recipes'));
+    expect(statusTitles(tree)).toEqual(['No recipes for “nano”']);
+    // Top shows a full section of posts: there are more.
+    expect(statusBodies(tree)).toEqual(['12+ posts match']);
+    // Top's answer was on hand: no request for it.
+    expect(searched()).toEqual(['nano|top', 'nano|recipes']);
+    expect(shownTexts(tree)).not.toContain('Try one of these instead');
+
+    await press(hostNodes(tree, 'secondary-button').find((node) => node.props.label === 'See posts')!);
+    expect(tab(tree, 'Posts').props.accessibilityState).toMatchObject({ selected: true });
+    await act(async () => tree.unmount());
+  });
+
+  it('asks Top once for an empty tab with no Top answer on hand, and says nothing found when no tab holds anything', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => (type === 'top'
+      ? full(query, 'top', { creators: [creator('lake-studio')] })
+      : full(query, type ?? 'top')));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await press(tab(tree, 'Posts'));
+    await typeQuery(tree, 'lake');
+    expect(searched()).toEqual(['lake|posts', 'lake|top']);
+    expect(statusTitles(tree)).toEqual(['No posts for “lake”']);
+    expect(statusBodies(tree)).toEqual(['1 creator matches']);
+    // Back on the tab later: not asked again.
+    await press(tab(tree, 'Recipes'));
+    await press(tab(tree, 'Posts'));
+    expect(searched().filter((line) => line === 'lake|top')).toHaveLength(1);
+
+    // Nothing anywhere: "No results", and the ideas to start from.
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top'));
+    await typeQuery(tree, 'lakes');
+    expect(searched().slice(-2)).toEqual(['lakes|posts', 'lakes|top']);
+    expect(statusTitles(tree)).toEqual(['No results for “lakes”']);
+    expect(shownTexts(tree)).toContain('Try one of these instead');
+    await act(async () => tree.unmount());
+  });
+});
