@@ -187,7 +187,8 @@ test.describe('search typeahead', () => {
 
     // A completion: the box is filled and searched. The rows of "lum" stay on
     // show until the answer for "lumi" lands and puts the model back among
-    // them, moving the rows under the pointer: pressed once that has happened.
+    // them, moving the rows under the pointer. A row that has just moved takes
+    // no press for a moment, and the list says it is busy until it does.
     await box.fill('lumi');
     await expect.poll(() => suggests.at(-1)).toBe('lumi');
     await expect(list.getByRole('option')).toHaveCount(5);
@@ -269,6 +270,123 @@ test.describe('search typeahead', () => {
     await box.press('Enter');
     await expect(list).toBeHidden();
     await expect(resultsSaid).toContainText('1 result for lumi');
+  });
+
+  test('opens a creator pressed inside the search’s pause, however slowly their page answers', async ({ page }) => {
+    // CI, #778: the press on the creator's row opened nothing and the page
+    // stayed on its own address. The search page writes that address a pause
+    // after the last letter; Next's router reads the write as a navigation,
+    // and a navigation discards the one to the creator's page while that is
+    // still loading. The page's clock is the test's here, so the pause passes
+    // exactly while the creator's page is held back.
+    await page.clock.install();
+    let releaseCreator: () => void = () => {};
+    const creatorHeld = new Promise<void>((resolve) => { releaseCreator = resolve; });
+    await openSearch(page, (route, query) => route.fulfill(json(suggestions(query))));
+    // The route is compiled before it is held: the hold is the page's answer, not the compiler's.
+    await page.request.get('/creators/e2e-creator', { timeout: 0 });
+    await page.route((url) => url.pathname === '/creators/e2e-creator', async (route) => {
+      await creatorHeld;
+      await route.continue();
+    });
+    const box = page.getByRole('combobox');
+    const list = page.getByRole('listbox', { name: 'Search suggestions' });
+
+    await box.fill('lum');
+    await expect(list.getByRole('option')).toHaveCount(5);
+    await expect(page).toHaveURL(/[?&]q=lum(&|$)/);
+    await expect.poll(() => searches.filter((search) => /[?&]q=lum(&|$)/.test(search)).length).toBe(1);
+
+    // Time stands still: the next letter's pauses (140 ms for its suggestions,
+    // 300 ms for its search) pass only when the test says so.
+    await page.clock.pauseAt(new Date(Date.now() + 5_000));
+    await box.press('End');
+    await box.press('i');
+    await expect(box).toHaveValue('lumi');
+    // The rows of "lum" are still on show, the creators where they stood.
+    await list.getByRole('option', { name: /E2E Creator/ }).click();
+
+    // The search's pause passes while the creator's page has not answered.
+    await page.clock.runFor(1_000);
+    // The page being left wrote nothing and asked nothing.
+    expect(new URL(page.url()).searchParams.get('q')).toBe('lum');
+    expect(searches.some((search) => search.includes('q=lumi'))).toBe(false);
+
+    releaseCreator();
+    await page.clock.resume();
+    await expect(page).toHaveURL(/\/creators\/e2e-creator$/, { timeout: 30_000 });
+  });
+
+  test('a press an answer re-lays the list under opens the row pressed or nothing, never the row that took its place', async ({ page }) => {
+    await page.clock.install();
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const never = new Promise<void>(() => {});
+    await openSearch(page, async (route, query) => {
+      // "lumi" is answered when the test says; "lumix" not while the test runs.
+      if (query === 'lumi') await held;
+      if (query === 'lumix') await never;
+      await route.fulfill(json(suggestions(query)));
+    });
+    const box = page.getByRole('combobox');
+    const list = page.getByRole('listbox', { name: 'Search suggestions' });
+    const options = list.getByRole('option');
+    const rowUnder = (x: number, y: number) => page.evaluate(
+      ([px, py]) => document.elementFromPoint(px, py)?.closest('[role="option"]')?.getAttribute('aria-label') ?? null,
+      [x, y],
+    );
+    const madeWithFilter = page.getByRole('button', { name: /Remove filter: made with/ });
+
+    await box.fill('lum');
+    await expect(options).toHaveCount(5);
+    // The next letter, its answer held: the model goes, and "luminous portrait" stands where it stood.
+    await box.press('End');
+    await box.press('i');
+    await expect(options).toHaveText([/E2E Creator/, /Lumen Works/, 'luminous portrait', 'lumen glow']);
+
+    // The pointer goes down on "luminous portrait"; the answer lands before it
+    // comes up and puts the model back under it.
+    const frame = (await list.getByRole('option', { name: 'Search for luminous portrait' }).boundingBox())!;
+    const x = frame.x + frame.width / 2;
+    const y = frame.y + frame.height / 2;
+    await page.mouse.move(x, y);
+    expect(await rowUnder(x, y)).toBe('Search for luminous portrait');
+    await page.mouse.down();
+    release();
+    await expect(options).toHaveCount(5);
+    expect(await rowUnder(x, y)).toMatch(/^Luma Ray 2/);
+    await page.mouse.up();
+    // Nothing opened: not the model that took the place, and not a search.
+    await expect(box).toHaveValue('lumi');
+    await expect(list).toBeVisible();
+    await expect(madeWithFilter).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: 'Top' })).toHaveAttribute('aria-selected', 'true');
+    expect(page.url()).not.toContain('madeWith');
+    await page.mouse.move(0, 0);
+
+    // A press that only begins after the rows have moved, before a person
+    // could have seen them move. Time stands still from here, so "just after"
+    // is exact: the letter takes the model away again and "luminous portrait"
+    // moves up into its place, under a pointer aimed at the model.
+    await expect(list).not.toHaveAttribute('aria-busy', 'true');
+    await page.clock.pauseAt(new Date(Date.now() + 5_000));
+    await box.press('End');
+    await box.press('x');
+    await expect(box).toHaveValue('lumix');
+    await expect(options).toHaveText([/E2E Creator/, /Lumen Works/, 'luminous portrait', 'lumen glow']);
+    await list.getByRole('option', { name: 'Search for luminous portrait' }).click();
+    await expect(box).toHaveValue('lumix');
+    await expect(list).toBeVisible();
+    // Once the row has stood a quarter of a second, the press counts and opens that row.
+    await page.clock.runFor(249);
+    await list.getByRole('option', { name: 'Search for luminous portrait' }).click();
+    await expect(box).toHaveValue('lumix');
+    await page.clock.runFor(1);
+    await list.getByRole('option', { name: 'Search for luminous portrait' }).click();
+    await expect(box).toHaveValue('luminous portrait');
+    await page.clock.resume();
+    await expect.poll(() => searches.some((search) => search.includes('q=luminous+portrait'))).toBe(true);
+    await expect(list).toBeHidden();
   });
 
   test('draws nothing for the answer of a request the next letter ended', async ({ page }) => {

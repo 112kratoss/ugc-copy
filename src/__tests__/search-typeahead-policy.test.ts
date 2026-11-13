@@ -14,10 +14,13 @@ import {
   SEARCH_TYPEAHEAD_MAX_COMPLETIONS,
   SEARCH_TYPEAHEAD_MAX_CREATORS,
   SEARCH_TYPEAHEAD_MAX_ENTITIES,
+  SEARCH_TYPEAHEAD_PRESS_SETTLE_MS,
   SEARCH_TYPEAHEAD_SECTION_IDS,
+  isSearchTypeaheadPressAccepted,
   isSearchTypeaheadShown,
   moveSearchTypeaheadHighlight,
   parseSearchSuggestResponse,
+  placeSearchTypeaheadRows,
   searchTypeaheadAction,
   searchTypeaheadDrawn,
   searchTypeaheadQuery,
@@ -264,6 +267,65 @@ describe('search typeahead: when the list is shown', () => {
     expect(isSearchTypeaheadShown({ ...shown, closedQuery: 'lum' })).toBe(false);
     // The person typed on: the close was for the earlier text.
     expect(isSearchTypeaheadShown({ ...shown, query: 'lumi', closedQuery: 'lum' })).toBe(true);
+  });
+});
+
+describe('search typeahead: when a press on a row counts', () => {
+  const T = 1_800_000_000_000;
+  const SETTLE = SEARCH_TYPEAHEAD_PRESS_SETTLE_MS;
+  const rowsOf = (response: SearchSuggestResponse, query: string) => (
+    searchTypeaheadRows(searchTypeaheadDrawn({ query: 'lum', response }, query).sections)
+  );
+  // "lum": two creators, the model, two completions. "lumi", its answer on its way: the model is gone.
+  const before = rowsOf(answer, 'lum');
+  const typedOn = rowsOf(answer, 'lumi');
+
+  it('counts a press on any row of a list that has just come on show: nothing of it was there to be aimed at', () => {
+    const placement = placeSearchTypeaheadRows(null, before, T);
+    for (const row of before) expect(isSearchTypeaheadPressAccepted(placement, row.key, T), row.key).toBe(true);
+  });
+
+  it('does not count a press on a row that has only just come to stand where it is, and counts it once the row has stood', () => {
+    const shown = placeSearchTypeaheadRows(null, before, T);
+    // A letter later the model is taken away, and the completions under it move up into its place.
+    const moved = placeSearchTypeaheadRows(shown, typedOn, T + 1000);
+    // The creators stand where they stood: a press on one counts at once.
+    expect(isSearchTypeaheadPressAccepted(moved, 'creator:c1', T + 1000)).toBe(true);
+    expect(isSearchTypeaheadPressAccepted(moved, 'creator:c2', T + 1001)).toBe(true);
+    // "luminous" now stands where the model stood: a press there was aimed at the model.
+    expect(moved.get('completion:luminous')).toEqual({ index: 2, since: T + 1000 });
+    expect(isSearchTypeaheadPressAccepted(moved, 'completion:luminous', T + 1000)).toBe(false);
+    expect(isSearchTypeaheadPressAccepted(moved, 'completion:luminous', T + 1000 + SETTLE - 1)).toBe(false);
+    expect(isSearchTypeaheadPressAccepted(moved, 'completion:luminous', T + 1000 + SETTLE)).toBe(true);
+    expect(isSearchTypeaheadPressAccepted(moved, 'completion:lumen glow', T + 1000 + SETTLE - 1)).toBe(false);
+  });
+
+  it('does not count a press on a row an answer has just put there, nor on the rows it pushed down', () => {
+    const stale = placeSearchTypeaheadRows(placeSearchTypeaheadRows(null, before, T), typedOn, T + 1000);
+    // The answer lands with the model back above the completions.
+    const landed = placeSearchTypeaheadRows(stale, before, T + 1200);
+    expect(isSearchTypeaheadPressAccepted(landed, 'entity:model:luma-ray-2', T + 1200 + SETTLE - 1)).toBe(false);
+    expect(isSearchTypeaheadPressAccepted(landed, 'completion:luminous', T + 1200 + SETTLE - 1)).toBe(false);
+    expect(isSearchTypeaheadPressAccepted(landed, 'creator:c1', T + 1200)).toBe(true);
+    expect(isSearchTypeaheadPressAccepted(landed, 'entity:model:luma-ray-2', T + 1200 + SETTLE)).toBe(true);
+  });
+
+  it('keeps the time a row has stood through a draw that leaves it in place', () => {
+    const shown = placeSearchTypeaheadRows(null, before, T);
+    const moved = placeSearchTypeaheadRows(shown, typedOn, T + 1000);
+    // The same rows drawn again (this text's answer lands with the rows the list already had).
+    const again = placeSearchTypeaheadRows(moved, typedOn, T + 1100);
+    expect(again.get('completion:luminous')).toEqual({ index: 2, since: T + 1000 });
+    expect(isSearchTypeaheadPressAccepted(again, 'completion:luminous', T + 1000 + SETTLE)).toBe(true);
+  });
+
+  it('counts no press on a row that is not drawn, or with no list', () => {
+    const moved = placeSearchTypeaheadRows(placeSearchTypeaheadRows(null, before, T), typedOn, T + 1000);
+    expect(isSearchTypeaheadPressAccepted(moved, 'entity:model:luma-ray-2', T + 5000)).toBe(false);
+    expect(isSearchTypeaheadPressAccepted(null, 'creator:c1', T + 5000)).toBe(false);
+    // About a person's reaction time: long enough to stop a press on its way, too short to notice.
+    expect(SETTLE).toBeGreaterThanOrEqual(200);
+    expect(SETTLE).toBeLessThanOrEqual(300);
   });
 });
 

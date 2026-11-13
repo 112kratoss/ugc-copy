@@ -114,7 +114,8 @@ export function AppShellSearch() {
           sections={typeahead.sections}
           activeIndex={typeahead.activeIndex}
           stale={typeahead.stale}
-          onPick={(row) => runTypeaheadAction(typeahead.pick(row))}
+          busy={typeahead.busy}
+          onPick={(row) => runTypeaheadAction(typeahead.press(row))}
           onHighlight={typeahead.highlightRow}
           // Under the field, over the page: the bar is the page's top layer.
           className="absolute inset-x-0 top-full mt-2 max-h-[min(26rem,calc(100dvh-6rem))]"

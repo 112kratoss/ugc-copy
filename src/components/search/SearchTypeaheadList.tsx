@@ -76,6 +76,7 @@ export function SearchTypeaheadList({
   sections,
   activeIndex,
   stale = false,
+  busy = stale,
   onPick,
   onHighlight,
   className = '',
@@ -91,6 +92,12 @@ export function SearchTypeaheadList({
    * A row still does what it shows.
    */
   stale?: boolean;
+  /**
+   * The list is changing or has just changed: stale, or a row came to stand
+   * in a new place a moment ago, where a press does not count yet
+   * (`useSearchTypeahead`'s `press`). Said to assistive technology.
+   */
+  busy?: boolean;
   onPick: (row: SearchTypeaheadRow) => void;
   onHighlight: (index: number) => void;
   className?: string;
@@ -104,7 +111,7 @@ export function SearchTypeaheadList({
       id={listId}
       role="listbox"
       aria-label={SEARCH_TYPEAHEAD_LIST_LABEL}
-      aria-busy={stale || undefined}
+      aria-busy={busy || undefined}
       onMouseDown={(event) => event.preventDefault()}
       className={`search-typeahead-list overflow-y-auto overscroll-contain rounded-3xl border border-white/10 bg-[var(--ui-surface-1)] p-2 shadow-[0_24px_80px_-24px_rgba(0,0,0,0.95)] ${stale ? 'opacity-60 transition-opacity delay-300 duration-200' : ''} ${className}`}
     >

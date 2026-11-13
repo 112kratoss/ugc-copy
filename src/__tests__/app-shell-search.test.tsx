@@ -118,15 +118,20 @@ describe('top bar search', () => {
     fireEvent.keyDown(box(), { key: 'Enter' });
     expect(pushMock).toHaveBeenLastCalledWith('/creators/luma-studio');
 
-    // Another text, then this one again: its list is offered anew.
+    // Another text, then this one again: its list is offered anew. The model
+    // went with "lumx" and is back with "lum": a row takes a press once it
+    // has stood where it is for a moment, which the list says by not being busy.
+    const settled = () => waitFor(() => expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false));
     fireEvent.change(box(), { target: { value: 'lumx' } });
     fireEvent.change(box(), { target: { value: 'lum' } });
+    await settled();
     fireEvent.click(await screen.findByRole('option', { name: /Luma Ray 2/ }));
     expect(pushMock).toHaveBeenLastCalledWith('/search?q=lum&type=posts&madeWith=model%3Aluma-ray-2');
 
     // Another text, then this one again: its list is offered anew.
     fireEvent.change(box(), { target: { value: 'lumx' } });
     fireEvent.change(box(), { target: { value: 'lum' } });
+    await settled();
     fireEvent.click(await screen.findByRole('option', { name: 'Search for luminous portrait' }));
     expect(pushMock).toHaveBeenLastCalledWith('/search?q=luminous+portrait');
     // A row is not the form's submit.

@@ -379,6 +379,9 @@ export default function SearchClient({
   // The query of the last scheduled search. A URL query arrives already typed
   // and a tab change keeps the query, so only a new query waits for a pause.
   const scheduledQuery = useRef(initialQuery);
+  // The address the page was at when the person left it for a creator's page
+  // from the typeahead, or null: the search effect does not write it again.
+  const leavingAt = useRef<string | null>(null);
   const tabRefs = useRef<Partial<Record<PublicSearchType, HTMLButtonElement | null>>>({});
   const normalizedQuery = useMemo(() => normalizePublicSearchQuery(query), [query]);
   // The server strips leading "@" (a handle search) before its length checks
@@ -522,14 +525,25 @@ export default function SearchClient({
       setFailure(null);
       // history.replaceState keeps Next's router in step without a server
       // render; this page is dynamic, so router.replace re-rendered it per keystroke.
-      window.history.replaceState(null, '', '/search');
+      // Not once the person has left for a creator's page from here (`leavingAt`).
+      if (leavingAt.current !== '/search') {
+        leavingAt.current = null;
+        window.history.replaceState(null, '', '/search');
+      }
       return;
     }
     // Cleared now rather than when the request starts, so an old error never
     // stands for the new query during the pause.
     setFailure(null);
     const search = () => {
-      window.history.replaceState(null, '', searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact));
+      const path = searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact);
+      // The person has left for a creator's page from the typeahead (below):
+      // the search they left is not run, and above all its address is not
+      // written. A write here is a navigation to Next's router, and a
+      // navigation discards the one still on its way.
+      if (leavingAt.current === path) return;
+      leavingAt.current = null;
+      window.history.replaceState(null, '', path);
       void requestSearch();
     };
     const waitForPause = scheduledQuery.current !== normalizedQuery;
@@ -610,6 +624,15 @@ export default function SearchClient({
   const runTypeaheadAction = (action: SearchTypeaheadAction | null) => {
     if (!action) return;
     if (action.type === 'creator') {
+      // The page writes its address a pause after the last letter
+      // (history.replaceState), and Next's router takes that write for a
+      // navigation, which discards the one to the creator's page while it is
+      // still loading: a creator chosen within the pause opened nothing.
+      // So the page notes the address it is being left at, and does not
+      // write it; a change of the search afterwards writes again.
+      leavingAt.current = canSearch
+        ? searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact)
+        : '/search';
       router.push(`/creators/${encodeURIComponent(action.username)}`);
       return;
     }
@@ -683,7 +706,8 @@ export default function SearchClient({
                 sections={typeahead.sections}
                 activeIndex={typeahead.activeIndex}
                 stale={typeahead.stale}
-                onPick={(row) => runTypeaheadAction(typeahead.pick(row))}
+                busy={typeahead.busy}
+                onPick={(row) => runTypeaheadAction(typeahead.press(row))}
                 onHighlight={typeahead.highlightRow}
                 // Under the box, over the tabs and the results while the person
                 // is still typing; clear of the phone's bottom navigation.

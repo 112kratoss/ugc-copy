@@ -10,6 +10,7 @@ import {
   SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS,
   SEARCH_TYPEAHEAD_DEBOUNCE_MS,
   SEARCH_TYPEAHEAD_KEPT_ANSWER_MS,
+  SEARCH_TYPEAHEAD_PRESS_SETTLE_MS,
   type SearchSuggestResponse,
 } from '../lib/public-search-policy/search-typeahead';
 import type {
@@ -1408,6 +1409,7 @@ describe('ExploreSearchOverlay search', () => {
 describe('ExploreSearchOverlay typeahead', () => {
   const PAUSE = SEARCH_TYPEAHEAD_DEBOUNCE_MS;
   const ANNOUNCE_PAUSE = SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS;
+  const SETTLE = SEARCH_TYPEAHEAD_PRESS_SETTLE_MS;
 
   function suggestions(overrides: Partial<SearchSuggestResponse> = {}): SearchSuggestResponse {
     return {
@@ -1591,9 +1593,12 @@ describe('ExploreSearchOverlay typeahead', () => {
       await later.promise;
     });
     expect(rowLabels(tree)).toEqual(['@lumen. Open profile', 'Search for lumina']);
+    // Its rows have only just taken their places: busy for a moment more, then not.
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: true });
+    await advance(SETTLE);
     expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
     expect(mocks.announce).toHaveBeenCalledTimes(1);
-    await advance(ANNOUNCE_PAUSE);
+    await advance(ANNOUNCE_PAUSE - SETTLE);
     expect(mocks.announce.mock.calls).toEqual([['5 suggestions'], ['2 suggestions']]);
 
     // The same count on the next text is not said again.
@@ -1613,6 +1618,10 @@ describe('ExploreSearchOverlay typeahead', () => {
     suggestSearch.mockReturnValueOnce(deferred<SearchSuggestResponse>().promise);
     await typeQuery(tree, 'lumi');
     expect(list(tree)!.props.accessibilityState).toEqual({ busy: true });
+    // The model went with the letter and the completions moved up: they take
+    // a press once they have stood, still stale.
+    await advance(SETTLE);
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: true });
     await press(pressableLabelled(tree, 'Search for lumen glow'));
     expect(searchInput(tree).props.value).toBe('lumen glow');
     await advance(0);
@@ -1624,6 +1633,60 @@ describe('ExploreSearchOverlay typeahead', () => {
     await advance(PAUSE);
     suggestSearch.mockReturnValueOnce(deferred<SearchSuggestResponse>().promise);
     await typeQuery(tree, 'lumx');
+    await press(pressableLabelled(tree, '@lumen. Open profile'));
+    expect(mocks.router.push).toHaveBeenCalledWith('/creators/lumen');
+    await act(async () => tree.unmount());
+  });
+
+  it('takes no tap on a row that has only just come to stand under the finger, and takes it once the row has stood', async () => {
+    const later = deferred<SearchSuggestResponse>();
+    const tree = await open();
+    await typeQuery(tree, 'lum');
+    await advance(PAUSE);
+    // A list that has just come on show takes a tap at once, and is not busy.
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
+
+    // A letter takes the model away, and "luminous" moves up into its place:
+    // a tap there now was aimed at the model.
+    suggestSearch.mockReturnValueOnce(later.promise);
+    await typeQuery(tree, 'lumi');
+    await press(pressableLabelled(tree, 'Search for luminous'));
+    expect(searchInput(tree).props.value).toBe('lumi');
+    expect(mocks.keyboardDismiss).not.toHaveBeenCalled();
+    expect(list(tree)).not.toBeNull();
+    await advance(PAUSE);
+
+    // The answer lands and puts the model back: it has only just come, and
+    // the rows under it have moved down again.
+    await act(async () => {
+      later.resolve(suggestions());
+      await later.promise;
+    });
+    expect(rowLabels(tree)).toHaveLength(5);
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: true });
+    await press(pressableLabelled(tree, 'Luma Ray 2, model, 14 posts. Show posts made with it'));
+    await press(pressableLabelled(tree, 'Search for luminous'));
+    await advance(SETTLE - 1);
+    await press(pressableLabelled(tree, 'Search for luminous'));
+    expect(searchInput(tree).props.value).toBe('lumi');
+    expect(tab(tree, 'Top').props.accessibilityState).toMatchObject({ selected: true });
+    expect(mocks.keyboardDismiss).not.toHaveBeenCalled();
+
+    // Once the rows have stood, the tap counts, and opens the row it is on.
+    await advance(1);
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
+    await press(pressableLabelled(tree, 'Search for luminous'));
+    expect(searchInput(tree).props.value).toBe('luminous');
+    await act(async () => tree.unmount());
+  });
+
+  it('takes a tap at once on a row that stands where it stood, while the rows under another one move', async () => {
+    const tree = await open();
+    await typeQuery(tree, 'lum');
+    await advance(PAUSE);
+    suggestSearch.mockReturnValueOnce(deferred<SearchSuggestResponse>().promise);
+    await typeQuery(tree, 'lumi');
+    // The creators did not move when the model went.
     await press(pressableLabelled(tree, '@lumen. Open profile'));
     expect(mocks.router.push).toHaveBeenCalledWith('/creators/lumen');
     await act(async () => tree.unmount());
@@ -1658,7 +1721,9 @@ describe('ExploreSearchOverlay typeahead', () => {
     await typeQuery(tree, 'lumi');
     await advance(PAUSE);
     expect(asked()).toEqual(['lum', 'lumi']);
-    // Drawn at once from what was kept, not busy, and not asked again.
+    // The rows of "lumi" have stood. "lum" is drawn at once from what was
+    // kept, with the same rows in the same places: not busy, and not asked again.
+    await advance(SETTLE);
     await typeQuery(tree, 'lum');
     expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
     await advance(PAUSE);

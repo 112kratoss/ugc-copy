@@ -833,7 +833,9 @@ export function ExploreSearchOverlay({
   // in the scroll view below, which hands a tap to what it lands on), and is
   // put away after a choice that leads to results, so they are not under it.
   const pickSuggestion = (row: SearchTypeaheadRow) => {
-    const action = typeahead.pick(row);
+    const action = typeahead.press(row);
+    // A press that does not count: the row had only just come under the finger.
+    if (!action) return;
     if (action.type === 'creator') {
       router.push(`/creators/${encodeURIComponent(action.username)}` as never);
       return;
@@ -952,7 +954,7 @@ export function ExploreSearchOverlay({
         {/* Above everything the search itself draws, in every state of it: the
             person is still typing, and what completes the typing comes first.
             It takes no room once it has nothing to offer or the keyboard is down. */}
-        {typeahead.shown ? <SearchTypeaheadList sections={typeahead.sections} stale={typeahead.stale} onPick={pickSuggestion} /> : null}
+        {typeahead.shown ? <SearchTypeaheadList sections={typeahead.sections} busy={typeahead.busy} onPick={pickSuggestion} /> : null}
         {filtersShown ? (
           <SearchFilterBar
             filters={filters}

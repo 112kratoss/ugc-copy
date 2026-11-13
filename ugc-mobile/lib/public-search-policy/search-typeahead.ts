@@ -14,6 +14,8 @@
  *   - the sections and their order: creators, models and tools, completions;
  *   - what choosing a row does: a creator opens their profile, a model or tool
  *     opens Posts narrowed to it, a completion fills the box and searches;
+ *     and when a press on a row counts (not for a moment after the row came
+ *     to stand where the press landed: the person aimed at what stood there);
  *   - how the highlight moves under the arrow keys, and the words a screen
  *     reader is told.
  *
@@ -338,6 +340,62 @@ export function searchTypeaheadAction(row: SearchTypeaheadRow): SearchTypeaheadA
   if (row.kind === 'creator') return { type: 'creator', username: row.creator.username };
   if (row.kind === 'entity') return { type: 'entity', entity: row.entity, madeWith: searchEntityId(row.entity) };
   return { type: 'search', query: row.text };
+}
+
+// ─── When a press counts ─────────────────────────────────────────────────────
+
+/**
+ * How long a row must have stood in its place before a press on it counts.
+ * About the time a person takes to see a change and stop a press already on
+ * its way: a press that lands sooner was aimed at what stood there before.
+ */
+export const SEARCH_TYPEAHEAD_PRESS_SETTLE_MS = 250;
+
+/** Where each drawn row stands, top to bottom, and since when (a clock's milliseconds). */
+export type SearchTypeaheadPlacement = ReadonlyMap<string, { index: number; since: number }>;
+
+/**
+ * The rows' places after a draw. A list changes under a pointer or a finger
+ * while it is on show: a letter typed takes a model away, an answer lands and
+ * puts rows above the one aimed at. A row that stands where it stood keeps
+ * the time it has stood there; a row that is new, or stands in another place
+ * than it did, has stood there since `now`. `previous` is null for a list
+ * that was not on show: nothing of it was there to be aimed at, so its rows
+ * count at once.
+ *
+ * A row's place is its index: a row moves on screen only when a row above it
+ * comes or goes, a section's heading with it, and that changes its index.
+ */
+export function placeSearchTypeaheadRows(
+  previous: SearchTypeaheadPlacement | null,
+  rows: readonly SearchTypeaheadRow[],
+  now: number,
+): SearchTypeaheadPlacement {
+  const placement = new Map<string, { index: number; since: number }>();
+  rows.forEach((row, index) => {
+    const before = previous?.get(row.key);
+    placement.set(row.key, {
+      index,
+      since: previous === null ? Number.NEGATIVE_INFINITY : before && before.index === index ? before.since : now,
+    });
+  });
+  return placement;
+}
+
+/**
+ * Whether a press on a row counts: the row is drawn and has stood where it is
+ * for SEARCH_TYPEAHEAD_PRESS_SETTLE_MS. A press that does not count does
+ * nothing, so the person presses what they now see: it never opens the row
+ * that took the place of the one they aimed at. For a pointer and a finger
+ * only: the keyboard's highlight is on a row by its key, wherever it stands.
+ */
+export function isSearchTypeaheadPressAccepted(
+  placement: SearchTypeaheadPlacement | null,
+  rowKey: string,
+  now: number,
+): boolean {
+  const place = placement?.get(rowKey);
+  return place !== undefined && now - place.since >= SEARCH_TYPEAHEAD_PRESS_SETTLE_MS;
 }
 
 // ─── The keys ────────────────────────────────────────────────────────────────

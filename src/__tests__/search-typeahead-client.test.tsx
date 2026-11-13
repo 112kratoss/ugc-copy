@@ -104,6 +104,8 @@ const resultsSaid = () => document.querySelector('p.sr-only[role="status"]')?.te
 const pastTheAnnouncePause = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS + 80)); });
 /** The session says something to everyone watching it (the page watches it too). */
 const sessionSays = (event: string) => act(() => { for (const listener of [...sessionListeners]) listener(event); });
+/** The list has stood as it is for the moment a moved row needs before it takes a press. */
+const settled = () => waitFor(() => expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false));
 const options = () => screen.getAllByRole('option').map((option) => option.getAttribute('aria-label'));
 
 describe('search page typeahead', () => {
@@ -248,7 +250,8 @@ describe('search page typeahead', () => {
       await later.promise;
     });
     await waitFor(() => expect(options()).toEqual(['@lumen. Open profile', 'Search for lumina']));
-    expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false);
+    // Its rows have only just taken their places: busy for a moment more, then not.
+    await settled();
     expect(said()).toBe('5 suggestions');
     await pastTheAnnouncePause();
     expect(said()).toBe('2 suggestions');
@@ -319,6 +322,89 @@ describe('search page typeahead', () => {
     noList();
   });
 
+  it('takes no press on a row that has only just come to stand under the pointer, and takes it once the row has stood', async () => {
+    const later = deferred<ReturnType<typeof ok>>();
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    // A list that has just come on show takes a press at once: nothing of it was there to be aimed at.
+    expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false);
+
+    // A letter takes the model away, and "luminous" moves up into its place:
+    // a press there now was aimed at the model.
+    suggestFetchMock.mockReturnValueOnce(later.promise);
+    type('lumi');
+    fireEvent.click(screen.getByRole('option', { name: 'Search for luminous' }));
+    expect((box() as HTMLInputElement).value).toBe('lumi');
+    expect(screen.queryByRole('listbox')).not.toBeNull();
+    expect(pushMock).not.toHaveBeenCalled();
+    // The keys are not held: their highlight is on a row by its key, wherever it stands.
+    key('ArrowDown');
+    expect(box().getAttribute('aria-activedescendant')).toBeTruthy();
+    key('ArrowUp');
+
+    // The answer lands and puts the model back: the rows under it move down
+    // again, and the model itself has only just come.
+    await act(async () => {
+      later.resolve(ok(suggestions()));
+      await later.promise;
+    });
+    await waitFor(() => expect(options()).toHaveLength(5));
+    fireEvent.click(screen.getByRole('option', { name: /Luma Ray 2/ }));
+    fireEvent.click(screen.getByRole('option', { name: 'Search for luminous' }));
+    expect((box() as HTMLInputElement).value).toBe('lumi');
+    expect(screen.getByRole('tab', { name: 'Top' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true');
+
+    // Once the rows have stood, the press counts, and opens the row it is on.
+    await settled();
+    fireEvent.click(screen.getByRole('option', { name: 'Search for luminous' }));
+    expect((box() as HTMLInputElement).value).toBe('luminous');
+  });
+
+  it('takes a press at once on a row that stands where it stood, while the rows under another one move', async () => {
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    suggestFetchMock.mockReturnValueOnce(deferred<ReturnType<typeof ok>>().promise);
+    type('lumi');
+    // The creators did not move when the model went.
+    fireEvent.click(screen.getByRole('option', { name: '@lumen. Open profile' }));
+    expect(pushMock).toHaveBeenCalledWith('/creators/lumen');
+  });
+
+  it('opens a creator chosen within the search’s pause: the page does not write its own address over the way out', async () => {
+    // The page writes its address a pause after the last letter, and Next's
+    // router reads that write as a navigation, which discards the one to the
+    // creator's page while it is still loading (CI, #778: the press opened nothing).
+    vi.useFakeTimers();
+    const written = vi.spyOn(window.history, 'replaceState');
+    const addresses = () => written.mock.calls.map(([, , url]) => String(url));
+    const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    // Past the typeahead's pause, inside the search's.
+    await tick(SEARCH_TYPEAHEAD_DEBOUNCE_MS + 20);
+    expect(addresses()).not.toContain('/search?q=lum');
+    fireEvent.click(screen.getByRole('option', { name: '@lumen. Open profile' }));
+    expect(pushMock).toHaveBeenCalledWith('/creators/lumen');
+
+    // The search's pause passes: nothing is written, and the search left behind is not asked.
+    await tick(2000);
+    expect(addresses()).not.toContain('/search?q=lum');
+    expect(searchRequests()).toEqual([]);
+
+    // The person is still here after all, and types on: the page is itself again.
+    type('lumi');
+    await tick(400);
+    expect(addresses()).toContain('/search?q=lumi');
+    expect(searchRequests()).toEqual(['/api/search?q=lumi&type=top']);
+    // And the text they left at is searched when they come back to it.
+    type('lum');
+    await tick(400);
+    expect(addresses()).toContain('/search?q=lum');
+  });
+
   it('takes the list of the text before away at once when the box is emptied, and when this text has nothing', async () => {
     render(<SearchClient initialQuery="" initialType="top" />);
     type('lum');
@@ -356,9 +442,9 @@ describe('search page typeahead', () => {
     type('lumi');
     await screen.findByText('lumiinous');
     type('lum');
-    // At once, from what was kept, and not marked busy.
+    // At once, from what was kept; busy only for the moment its row needs to have stood.
     expect(options()).toEqual(['Search for luminous']);
-    expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false);
+    await settled();
     await pastThePause();
     expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum', '/api/search/suggest?q=lumi']);
   });
