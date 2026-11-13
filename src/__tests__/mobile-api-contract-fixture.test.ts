@@ -29,6 +29,7 @@ import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-serve
 import { createPostResourceFileReadUrlForRoute } from '@/lib/post-resource-file-url-service';
 import { sanitizeProfileRecord } from '@/lib/profile';
 import {
+  PUBLIC_SEARCH_PROBE_PARAM,
   PUBLIC_SEARCH_RELATED_PARAM,
   decodePublicSearchCursor,
   encodePublicSearchCursor,
@@ -136,6 +137,7 @@ type MobileApiContractFixture = {
       filterParameters: Record<'madeWith' | 'mediaKind' | 'hasRecipe' | 'following' | 'exact', string>;
       /** The parameter a client asks for related posts with. */
       relatedParameter: string;
+      probeParameter: string;
       responseVariants: Record<
         | 'latestPosts' | 'latestPostsNextPage' | 'beforeSorts'
         | 'filteredPosts' | 'filteredPostsNextPage' | 'correctedPosts' | 'exactPosts' | 'beforeFilters'
@@ -695,6 +697,8 @@ describe('shared mobile API v1 contract fixture', () => {
 
       // The client asks with the parameter the server reads, and only then are they looked for.
       expect(endpoint.relatedParameter).toBe(PUBLIC_SEARCH_RELATED_PARAM);
+      // A search a client asks for itself is marked with the parameter the server reads to leave it out of the log.
+      expect(endpoint.probeParameter).toBe(PUBLIC_SEARCH_PROBE_PARAM);
       expect(relatedPosts.query).toEqual({ q: 'ocean at dusk', type: 'top', [endpoint.relatedParameter]: '1' });
 
       // The route sends the service's answer as it is: nothing added, nothing dropped.

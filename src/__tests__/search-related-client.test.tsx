@@ -100,7 +100,10 @@ describe('related posts on the search page', () => {
       json: async () => ({ query: '', normalizedQuery: '', creators: [], entities: [], completions: [] }),
     });
     vi.stubGlobal('fetch', (url: string, init?: RequestInit) => (
-      String(url).startsWith('/api/search/suggest') ? suggestFetchMock(url, init) : fetchMock(url, init)
+      // The starter route is not there in these tests: the page draws no starter.
+      String(url).startsWith('/api/search/starter')
+        ? Promise.resolve({ ok: false, status: 404, json: async () => ({}) })
+        : String(url).startsWith('/api/search/suggest') ? suggestFetchMock(url, init) : fetchMock(url, init)
     ));
   });
 
@@ -210,7 +213,11 @@ describe('related posts on the search page', () => {
     await tick(0);
     enter();
     await tick(SEARCH_RELATED_SETTLE_MS * 2);
-    expect(asked()).toEqual([url]);
+    // The tab's own search, and at most Top's once more for an empty tab to
+    // say what the other tabs hold (never with related posts).
+    expect(asked()[0]).toBe(url);
+    expect(asked().slice(1).every((other) => other === '/api/search?q=ocean+at+dusk&type=top&probe=1')).toBe(true);
+    expect(asked().length).toBeLessThanOrEqual(2);
   });
 
   it('never asks for a handle search, settled or left alone, and asks for the same letters without the "@"', async () => {

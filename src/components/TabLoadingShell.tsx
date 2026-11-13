@@ -4,6 +4,8 @@ interface TabLoadingShellProps {
   title: string;
   eyebrow: string;
   accent?: TabLoadingShellAccent;
+  /** Drawn above the card, as the page draws it above its own header (Explore's search bar). */
+  lead?: React.ReactNode;
 }
 
 const accentClasses: Record<TabLoadingShellAccent, string> = {
@@ -30,6 +32,7 @@ export default function TabLoadingShell({
   title,
   eyebrow,
   accent = 'blue',
+  lead = null,
 }: TabLoadingShellProps) {
   return (
     <div className="min-h-screen bg-black text-white">
@@ -39,6 +42,7 @@ export default function TabLoadingShell({
         aria-label={`Loading ${title}`}
         className="studio-shell py-8 sm:py-10"
       >
+        {lead}
         <div
           className={`rounded-3xl border bg-gradient-to-br ${accentClasses[accent]} p-5 shadow-[0_24px_80px_rgba(0,0,0,0.42)] sm:p-6`}
         >

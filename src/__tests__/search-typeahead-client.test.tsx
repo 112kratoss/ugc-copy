@@ -146,7 +146,10 @@ describe('search page typeahead', () => {
     suggestFetchMock.mockReset();
     suggestFetchMock.mockResolvedValue(ok(suggestions()));
     vi.stubGlobal('fetch', (url: string, init?: RequestInit) => (
-      String(url).startsWith('/api/search/suggest') ? suggestFetchMock(url, init) : searchFetchMock(url, init)
+      // The starter route is not there in these tests: the page draws no starter.
+      String(url).startsWith('/api/search/starter')
+        ? Promise.resolve({ ok: false, status: 404, json: async () => ({}) })
+        : String(url).startsWith('/api/search/suggest') ? suggestFetchMock(url, init) : searchFetchMock(url, init)
     ));
   });
 
@@ -940,7 +943,8 @@ describe('search page typeahead', () => {
     expect(written.mock.invocationCallOrder.at(-1)).toBeLessThan(pushMock.mock.invocationCallOrder[0]);
     // The way out never completes here: the pause passes and the search is asked.
     await tick(2000);
-    expect(searchRequests()).toEqual(['/api/search?q=lum&type=posts']);
+    // The tab's own search (an empty Posts tab also asks Top once, for what the other tabs hold).
+    expect(searchRequests().filter((url) => !url.includes('type=top'))).toEqual(['/api/search?q=lum&type=posts']);
     for (const [state] of written.mock.calls) expect(state).toMatchObject({ __NA: true });
   });
 
