@@ -1,0 +1,119 @@
+import { homeModelLabel } from './home-feed-view-model';
+import { formatRelativeTime } from './home-view-model';
+import {
+  parseSearchEntityId,
+  searchMadeWithChipLabel,
+  searchPostPinLabel,
+} from './public-search-policy/public-search-policy';
+import { isShowcaseVideoPreviewCandidate, isTextOnlyShowcasePost } from './showcase-display';
+import { getShowcaseMediaHeight, showcaseToMasonryCard, type ShowcaseMasonryCard } from './showcase-feed-view-model';
+import type { ShowcaseFeedItem } from './types';
+
+/**
+ * A search post drawn as Explore draws a post (search UX audit 2026-11-13,
+ * finding 3): the picture at its own shape in a two-column masonry, Explore's
+ * badge (free recipe, price, remixable) and video mark, the creator by
+ * @handle, and under it a quiet line that says what the post was made with
+ * and when, so "Latest" can be read off the screen.
+ *
+ * A text post has no picture: it keeps its plate, at a fixed shape.
+ */
+export interface SearchPostPin {
+  id: string;
+  item: ShowcaseFeedItem;
+  /** Explore's card, for the picture, its shape and its badge; null for a text post. */
+  card: ShowcaseMasonryCard | null;
+  /** "@luna", or the display name for a creator with no handle. */
+  handle: string;
+  /** Explore's badge: "Free recipe", "40 credits", "Remixable"; null for none. */
+  badge: string | null;
+  video: boolean;
+  /** "Made with Nano Banana 2.0", or null when the post does not say. */
+  madeWith: string | null;
+  /** "3d ago", "Oct 1": the feed's own words for when it was posted. */
+  date: string;
+  label: string;
+}
+
+/**
+ * What a post was made with, as the reason a search shows it: the model or
+ * tool the search is narrowed to, when the post carries it; else the model the
+ * feed names on its cards (`homeModelLabel`), else an outside tool the creator
+ * named. Never invented: a post that names neither has no line.
+ */
+export function searchPostMadeWithLabel(
+  item: Pick<ShowcaseFeedItem, 'model' | 'sourceTool' | 'sourceToolSlug' | 'sourceTools'>,
+  narrowedTo: { id: string; label: string } | null = null,
+): string | null {
+  const narrowed = narrowedTo ? parseSearchEntityId(narrowedTo.id) : null;
+  if (narrowed && narrowedTo) {
+    const carries = narrowed.kind === 'model'
+      ? item.model === narrowed.key
+      : [item.sourceToolSlug, ...(item.sourceTools ?? []).map((tool) => tool.toolSlug)].includes(narrowed.key);
+    if (carries) return narrowedTo.label;
+  }
+  const model = homeModelLabel(item.model);
+  if (model) return model;
+  const tool = item.sourceTools?.find((entry) => entry.toolLabel?.trim())?.toolLabel.trim() ?? item.sourceTool?.trim();
+  return tool || null;
+}
+
+export function buildSearchPostPin(
+  item: ShowcaseFeedItem,
+  options: { narrowedTo?: { id: string; label: string } | null; now?: Date } = {},
+): SearchPostPin {
+  const card = isTextOnlyShowcasePost(item) ? null : showcaseToMasonryCard(item);
+  const username = item.creator.username?.trim();
+  const handle = username ? `@${username.replace(/^@+/, '')}` : item.creator.name;
+  const badge = card?.unlock?.label ?? null;
+  const video = isShowcaseVideoPreviewCandidate(item);
+  const madeWithLabel = searchPostMadeWithLabel(item, options.narrowedTo ?? null);
+  const madeWith = madeWithLabel ? searchMadeWithChipLabel(madeWithLabel) : null;
+  const date = formatRelativeTime(item.createdAt, options.now);
+  const title = card?.title ?? item.title;
+  return {
+    id: item.id,
+    item,
+    card,
+    handle,
+    badge,
+    video,
+    madeWith,
+    date,
+    label: searchPostPinLabel({ title, creator: handle, badge, video, madeWith, date }),
+  };
+}
+
+/** The shape a text post's plate is drawn at in the masonry: a little taller than wide. */
+export const SEARCH_TEXT_PIN_ASPECT_RATIO = 0.8;
+
+/** The height a pin's picture takes at a column's width. */
+export function searchPostPinMediaHeight(pin: SearchPostPin, columnWidth: number): number {
+  if (!pin.card) return Math.round(columnWidth / SEARCH_TEXT_PIN_ASPECT_RATIO);
+  return getShowcaseMediaHeight(pin.card, columnWidth);
+}
+
+/**
+ * The pins split into `columns` columns, each pin going to the column that is
+ * shortest so far (the first on a tie), as a masonry fills: the order a
+ * person reads across the two columns is the answer's order, so "Latest"
+ * still reads newest first. One column keeps them all in order.
+ */
+export function splitSearchPostColumns<T>(
+  pins: readonly T[],
+  columns: number,
+  heightOf: (pin: T) => number,
+): T[][] {
+  const count = Math.max(1, Math.floor(columns));
+  const split: T[][] = Array.from({ length: count }, () => []);
+  const heights = new Array<number>(count).fill(0);
+  for (const pin of pins) {
+    let shortest = 0;
+    for (let index = 1; index < count; index += 1) {
+      if (heights[index] < heights[shortest]) shortest = index;
+    }
+    split[shortest].push(pin);
+    heights[shortest] += heightOf(pin);
+  }
+  return split;
+}

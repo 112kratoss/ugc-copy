@@ -244,7 +244,8 @@ describe('HIG image views — overlay marks stay legible over the brightest medi
   });
 
   it('draws the pin badge on the type ramp rather than an override', () => {
-    const screen = file('app/(tabs)/showcase.tsx');
+    // Explore's pins and the search's posts draw it from one place.
+    const screen = file('components/showcase-pin-marks.tsx');
     const badge = screen.slice(screen.indexOf('function PinBadge('));
 
     // A line box the size of the glyphs clips descenders on Android; the ramp

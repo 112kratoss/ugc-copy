@@ -28,6 +28,7 @@ import { NativeMenu } from '@/components/native-menu';
 import { NewPostsPill } from '@/components/new-posts-pill';
 import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
+import { PinBadge, VideoCornerPlay } from '@/components/showcase-pin-marks';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { TopScrim } from '@/components/top-scrim';
 import { CreatorAvatar, SecondaryButton, StatusBlock } from '@/components/ui';
@@ -114,8 +115,7 @@ import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { haptic } from '@/lib/haptics';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { MotionView, useOverlayPresence, usePressMotion } from '@/lib/motion';
-import { hexWithAlpha } from '@/lib/eased-fade';
-import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
+import { accentColor, appTheme, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedEventType, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
@@ -1512,51 +1512,6 @@ const MasonryPin = memo(function MasonryPin({
 function formatCreatorLabel(label: string) {
   const clean = label.trim() || 'creator';
   return clean.startsWith('@') ? clean : `@${clean}`;
-}
-
-function PinBadge({ label, accent }: { label: string; accent: string }) {
-  return (
-    <View
-      pointerEvents="none"
-      style={{
-        position: 'absolute',
-        left: 10,
-        top: 10,
-        maxWidth: '82%',
-        borderRadius: appTheme.radii.pill,
-        backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.78),
-        paddingHorizontal: 9,
-        // The caption ramp's own line box is 17pt; the padding is what keeps the
-        // pill the height it has always been rather than an override on the type.
-        paddingVertical: 3,
-      }}
-    >
-      <Text numberOfLines={1} style={{ color: accent, ...appTheme.type.caption, fontWeight: '800' }}>
-        {label}
-      </Text>
-    </View>
-  );
-}
-
-function VideoCornerPlay() {
-  return (
-    <View
-      pointerEvents="none"
-      style={{
-        position: 'absolute',
-        top: 10,
-        right: 10,
-        width: 31,
-        height: 31,
-        borderRadius: appTheme.radii.pill,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.42),
-      }}
-    >
-      <Play size={16} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
-    </View>
-  );
 }
 
 function VisualFallbackPreview({ accent, height, radius }: { accent: string; height: number; radius: number }) {
