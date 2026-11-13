@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import { parseSearchStarterResponse } from '../lib/public-search-policy/search-starter';
 import { parseSearchSuggestResponse } from '../lib/public-search-policy/search-typeahead';
 import {
   ACCOUNT_DELETION_TIMEOUT_MS,
@@ -380,6 +381,29 @@ describe('mobile api client caching', () => {
     expect(parseSearchSuggestResponse(answer)).toEqual(contract.response);
     expect(parseSearchSuggestResponse(contract.responseVariants.beforeEntities.response)?.entities).toEqual([]);
     expect(parseSearchSuggestResponse(contract.responseVariants.switchedOff.response)).toEqual(contract.responseVariants.switchedOff.response);
+  });
+
+  it('asks the starter route with the session’s token and nothing else, and answers what the contract pins', async () => {
+    const contract = mobileApiContract.endpoints.searchStarter;
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(contract.response));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    const caller = new AbortController();
+
+    const answer = await api.searchStarter(caller.signal);
+
+    const asked = new URL(String(fetcher.mock.calls[0][0]));
+    expect(asked.pathname).toBe(contract.path);
+    // No parameter: one answer for every visitor, which the edge may keep.
+    expect(asked.search).toBe('');
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('Authorization')).toBe('Bearer token-1');
+    expect(fetcher.mock.calls[0][1]?.method ?? 'GET').toBe(contract.method);
+    expect(fetcher.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(parseSearchStarterResponse(answer)).toEqual(contract.response);
+    expect(parseSearchStarterResponse(contract.responseVariants.switchedOff.response)).toEqual(contract.responseVariants.switchedOff.response);
   });
 
   it('names what narrows a search and the exact reading only when they are on, before the cursor', async () => {

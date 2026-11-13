@@ -13,6 +13,13 @@ export type {
   SearchSuggestCreator,
   SearchSuggestResponse,
 } from './public-search-policy/search-typeahead';
+// What a search screen shows before anything is typed (GET /api/search/starter).
+export type {
+  SearchStarterCreator,
+  SearchStarterEntity,
+  SearchStarterResponse,
+  SearchStarterSearch,
+} from './public-search-policy/search-starter';
 import type { RemixInputSlot } from './remix-input-slots/remix-input-slots';
 import type { RemixCredit } from './remix-credit/remix-credit';
 
