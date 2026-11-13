@@ -192,7 +192,10 @@ test.describe('search typeahead', () => {
     expect(weights).toEqual([['lum', '400'], ['inous portrait', '600']]);
     await shot(page, 'desktop-recents-and-completions');
 
-    // A completion: the box is filled and searched, the press keeping the focus in the box.
+    // A completion: the box is filled and searched, the press keeping the focus
+    // in the box. The completions came with the answer, under the recent
+    // searches drawn before it: new rows, which take a press once they have stood.
+    await expect(list).not.toHaveAttribute('aria-busy', 'true');
     await list.getByRole('option', { name: 'Search for lumen glow' }).click();
     await expect(box).toHaveValue('lumen glow');
     await expect(box).toBeFocused();
