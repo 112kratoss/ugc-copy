@@ -1131,7 +1131,7 @@ export function ExploreSearchOverlay({
           history.length && body === 'start' ? (
             <View style={{ gap: 12 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                {/* Gives way to "Clear all" at the largest text sizes, which kept it off the screen. */}
+                {/* Gives way to the clear button at the largest text sizes, which it pushed off the screen. */}
                 <Text accessibilityRole="header" style={{ flexShrink: 1, color: theme.colors.text, fontSize: 17, fontWeight: '800' }}>{SEARCH_RECENTS_HEADING}</Text>
                 <Pressable
                   accessibilityRole="button"
