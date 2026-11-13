@@ -201,8 +201,12 @@ export type SearchTypeaheadRow =
   | { kind: 'creator'; key: string; creator: SearchSuggestCreator }
   | { kind: 'entity'; key: string; entity: SearchEntity }
   | { kind: 'completion'; key: string; text: string; recent?: true }
-  /** The text as typed, searched as it stands: "Search for “nano”" (the app's typing list, searchTypingSections). */
-  | { kind: 'search'; key: string; text: string };
+  /**
+   * The text as typed, searched as it stands: "Search for “nano”" (the app's
+   * typing list, searchTypingSections). Never a recent search; `recent` is
+   * declared so a client may read it on any row that carries text.
+   */
+  | { kind: 'search'; key: string; text: string; recent?: never };
 
 export interface SearchTypeaheadSection {
   id: SearchTypeaheadSectionId;
