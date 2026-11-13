@@ -113,6 +113,42 @@ export function searchPostPinMediaHeight(pin: SearchPostPin, columnWidth: number
   return getShowcaseMediaHeight(pin.card, columnWidth);
 }
 
+// The lines under a pin's picture, as `components/search-post-masonry.tsx`
+// draws them: the gap under the picture; the handle and date on one line
+// beside a 22pt avatar; and, when the post says it, the made-with line, a
+// caption of up to two lines. The caption is 12pt on 17pt lines, scaled by
+// the person's text size.
+const PIN_PICTURE_GAP = 6;
+const PIN_LINE_GAP = 2;
+const PIN_AVATAR = 22;
+const CAPTION_SIZE = 12;
+const CAPTION_LINE = 17;
+// A caption's average glyph is about half its size wide: an estimate that
+// errs towards the longer line, so a line that wraps is not counted as one.
+const CAPTION_GLYPH_WIDTH = 0.55;
+
+/**
+ * The height of the lines under a pin's picture, for the shorter-column choice
+ * (review of #793): a pin with no made-with line is shorter than one with a
+ * line that wraps to two, and a fixed allowance let the two columns drift
+ * apart down a long Latest.
+ */
+export function searchPostPinFooterHeight(
+  pin: Pick<SearchPostPin, 'madeWith'>,
+  columnWidth: number,
+  fontScale: number = 1,
+): number {
+  const scale = fontScale > 0 ? fontScale : 1;
+  const line = CAPTION_LINE * scale;
+  let height = PIN_PICTURE_GAP + Math.max(PIN_AVATAR, line);
+  if (pin.madeWith) {
+    const perLine = Math.max(1, Math.floor(columnWidth / (CAPTION_SIZE * scale * CAPTION_GLYPH_WIDTH)));
+    const lines = Math.min(2, Math.ceil(pin.madeWith.length / perLine));
+    height += PIN_LINE_GAP + lines * line;
+  }
+  return Math.round(height);
+}
+
 /**
  * The pins split into `columns` columns, each pin going to the column that is
  * shortest so far (the first on a tie), as a masonry fills: the order a

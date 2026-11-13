@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   SEARCH_TEXT_PIN_ASPECT_RATIO,
   buildSearchPostPin,
+  searchPostPinFooterHeight,
   searchPostMadeWithLabel,
   searchPostPinMediaHeight,
   splitSearchPostColumns,
@@ -131,6 +132,42 @@ describe('the search masonry', () => {
     const heights: Record<string, number> = { a: 300, b: 100, c: 100, d: 100, e: 50 };
     const split = splitSearchPostColumns(['a', 'b', 'c', 'd', 'e'], 2, (pin) => heights[pin]);
     expect(split).toEqual([['a', 'e'], ['b', 'c', 'd']]);
+  });
+
+  it('counts the lines each pin draws under its picture, so the shorter column is the one that is (review of #793)', () => {
+    const none = { madeWith: null };
+    const short = { madeWith: 'Made with Kling' };
+    const long = { madeWith: 'Made with Nano Banana 2.0 and a long outside tool name' };
+    // Gap, the handle line beside its avatar, then the made-with line (one or two).
+    expect(searchPostPinFooterHeight(none, 170)).toBe(28);
+    expect(searchPostPinFooterHeight(short, 170)).toBe(47);
+    expect(searchPostPinFooterHeight(long, 170)).toBe(64);
+    // At a larger text size the lines grow, and a line wraps sooner.
+    expect(searchPostPinFooterHeight(short, 170, 1.35)).toBeGreaterThan(searchPostPinFooterHeight(short, 170));
+    expect(searchPostPinFooterHeight({ madeWith: 'Made with Nano Banana 2.0' }, 170, 1.35))
+      .toBe(searchPostPinFooterHeight({ madeWith: 'Made with Nano Banana 2.0 and more' }, 170, 1.35));
+
+    // Pins of one picture height that differ only in their lines. A fixed
+    // allowance alternates them and the columns end far apart; counted, the
+    // split follows the real heights and the columns end closer.
+    type Pin = { id: string; footer: { madeWith: string | null } };
+    const pins: Pin[] = [
+      { id: 'a', footer: long },
+      { id: 'b', footer: none },
+      { id: 'c', footer: long },
+      { id: 'd', footer: none },
+      { id: 'e', footer: none },
+    ];
+    const real = (pin: Pin) => 200 + searchPostPinFooterHeight(pin.footer, 170);
+    const counted = splitSearchPostColumns(pins, 2, real);
+    const fixed = splitSearchPostColumns(pins, 2, () => 200 + 52);
+    expect(counted.map((column) => column.map((pin) => pin.id))).toEqual([['a', 'd', 'e'], ['b', 'c']]);
+    expect(fixed.map((column) => column.map((pin) => pin.id))).toEqual([['a', 'c', 'e'], ['b', 'd']]);
+    const apart = (split: Pin[][]) => {
+      const [left, right] = split.map((column) => column.reduce((sum, pin) => sum + real(pin), 0));
+      return Math.abs(left - right);
+    };
+    expect(apart(counted)).toBeLessThan(apart(fixed));
   });
 
   it('keeps every pin in order in one column', () => {

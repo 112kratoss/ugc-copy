@@ -8,6 +8,7 @@ import { CreatorAvatar } from '@/components/ui';
 import {
   buildSearchPostPin,
   searchPostPinMediaHeight,
+  searchPostPinFooterHeight,
   splitSearchPostColumns,
   type SearchPostPin,
 } from '@/lib/search-post-masonry';
@@ -21,8 +22,6 @@ import type { ShowcaseFeedItem } from '@/lib/types';
 // the search's results sit inside the screen's margins.
 const COLUMN_GAP = 10;
 const PIN_GAP = 18;
-// The lines under a pin's picture, for the split: the handle and the made-with line.
-const PIN_FOOTER_HEIGHT = 52;
 
 function SearchPostPinCard({
   pin,
@@ -134,7 +133,7 @@ export function SearchPostMasonry({
   onOpen: (item: ShowcaseFeedItem) => void;
   testID?: string;
 }) {
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, fontScale } = useWindowDimensions();
   const count = Math.max(1, columns);
   const columnWidth = (windowWidth - appTheme.spacing.screen * 2 - COLUMN_GAP * (count - 1)) / count;
   const narrowedId = narrowedTo?.id ?? null;
@@ -145,7 +144,8 @@ export function SearchPostMasonry({
     })),
     [items, narrowedId, narrowedLabel],
   );
-  const split = splitSearchPostColumns(pins, count, (pin) => searchPostPinMediaHeight(pin, columnWidth) + PIN_FOOTER_HEIGHT);
+  // Each pin's whole height, its lines as drawn included, so the shorter column is the one that is.
+  const split = splitSearchPostColumns(pins, count, (pin) => searchPostPinMediaHeight(pin, columnWidth) + searchPostPinFooterHeight(pin, columnWidth, fontScale));
   return (
     <View testID={testID} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: COLUMN_GAP }}>
       {split.map((column, index) => (
