@@ -30,6 +30,7 @@ const FUNCTIONS = [
   'public.post_search_document_has_own_words(text, tsvector)',
   'public.search_query_embedding(text, text)',
   'public.reserve_search_query_embedding(integer)',
+  'public.release_search_query_embedding(integer)',
   'public.store_search_query_embedding(text, text, extensions.vector)',
   'public.prune_search_embeddings(integer)',
   'public.search_embedding_backlog(text)',
@@ -295,6 +296,24 @@ describe('semantic search migration', () => {
         SET requested = days.requested + 1
         WHERE days.requested < v_cap;
       RETURN FOUND;`));
+
+    // A place is given back in one statement too: never below zero, and never
+    // more of them a day than the same clamped cap, so a failing function is
+    // asked at most twice the cap of times.
+    const release = newestDefinition('release_search_query_embedding').definition;
+    expect(relationsOf(release)).toEqual(['public.search_query_embedding_days']);
+    expect(release).toContain('c_daily_cap_ceiling CONSTANT integer := 5000;');
+    expect(release).toContain('v_cap integer := least(greatest(coalesce(p_daily_cap, 0), 0), c_daily_cap_ceiling);');
+    expect(collapse(release)).toContain(collapse(`
+      UPDATE public.search_query_embedding_days AS days
+      SET requested = days.requested - 1,
+          released = days.released + 1
+      WHERE days.day = (now() AT TIME ZONE 'UTC')::date
+        AND days.requested > 0
+        AND days.released < v_cap;
+      RETURN FOUND;`));
+    expect(release).not.toMatch(/\b(?:INSERT|DELETE)\b/);
+    expect(statements).toContain('released integer NOT NULL DEFAULT 0 CHECK (released >= 0)');
     // The cache and the prune agree on how long a vector lives: a week.
     const prune = newestDefinition('prune_search_embeddings').definition;
     const backlog = newestDefinition('search_embedding_backlog').definition;

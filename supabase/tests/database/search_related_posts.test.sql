@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(95);
+select plan(105);
 
 -- 5e3a…01 creates most posts; …02 is another creator (a template's author, and
 -- the one a viewer blocks); …03 is the viewer; …04 blocked the viewer.
@@ -568,6 +568,11 @@ select is(
   0,
   'and reading the cache counts nothing'
 );
+select ok(
+  not public.release_search_query_embedding(2)
+  and not exists (select 1 from public.search_query_embedding_days),
+  'a day nothing was asked on has no place to give back, and gains no row for the asking'
+);
 select ok(public.reserve_search_query_embedding(2), 'a new query may be embedded');
 select ok(public.reserve_search_query_embedding(2), 'a second one too');
 select ok(not public.reserve_search_query_embedding(2), 'past the day''s cap a new query may not be embedded');
@@ -576,11 +581,45 @@ select is(
   2,
   'and the day''s count stops at the cap'
 );
+-- A request that brought no vector gives its place back.
+select ok(public.release_search_query_embedding(2), 'a request that brought no vector gives its place back');
+select is(
+  (select array[requested, released] from public.search_query_embedding_days where day = (now() at time zone 'UTC')::date),
+  array[1, 1],
+  'the day''s count is one lower and the giving back is counted'
+);
+select ok(public.reserve_search_query_embedding(2), 'so the place can be taken by the next new query');
+select ok(
+  public.release_search_query_embedding(2) and not public.release_search_query_embedding(2),
+  'no more places are given back on a day than its cap: the function is asked at most twice the cap of times'
+);
+select is(
+  (select array[requested, released] from public.search_query_embedding_days where day = (now() at time zone 'UTC')::date),
+  array[1, 2],
+  'and a refused giving back changes nothing'
+);
+update public.search_query_embedding_days set released = 0 where day = (now() at time zone 'UTC')::date;
+select ok(
+  not public.release_search_query_embedding(0) and not public.release_search_query_embedding(null),
+  'a cap of nothing gives nothing back'
+);
+select ok(public.reserve_search_query_embedding(2), 'the day is back at its cap');
 select ok(public.reserve_search_query_embedding(1000000), 'a higher cap lets one more through');
 update public.search_query_embedding_days set requested = 5000 where day = (now() at time zone 'UTC')::date;
 select ok(
   not public.reserve_search_query_embedding(1000000),
   'but never past 5,000 a day, whatever cap is asked for'
+);
+update public.search_query_embedding_days set released = 4999 where day = (now() at time zone 'UTC')::date;
+select ok(
+  public.release_search_query_embedding(1000000) and not public.release_search_query_embedding(1000000),
+  'and never more than 5,000 given back a day, whatever cap is asked for'
+);
+update public.search_query_embedding_days set requested = 0, released = 0 where day = (now() at time zone 'UTC')::date;
+select ok(
+  not public.release_search_query_embedding(2000)
+  and (select requested = 0 and released = 0 from public.search_query_embedding_days where day = (now() at time zone 'UTC')::date),
+  'a day''s count never goes below zero'
 );
 select ok(
   not public.reserve_search_query_embedding(0) and not public.reserve_search_query_embedding(null),
@@ -644,6 +683,7 @@ select ok(
       'public.store_post_search_embeddings(jsonb,text)',
       'public.search_query_embedding(text,text)',
       'public.reserve_search_query_embedding(integer)',
+      'public.release_search_query_embedding(integer)',
       'public.post_search_document_has_own_words(text,tsvector)',
       'public.store_search_query_embedding(text,text,extensions.vector)',
       'public.prune_search_embeddings(integer)',

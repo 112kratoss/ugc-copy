@@ -73,7 +73,12 @@
 --    again and lets a burst of made-up queries go. At the service's cap of
 --    2,000 new queries a day the table holds 14,000 rows at most (35,000 at
 --    this file's own ceiling). public.search_query_embedding_days counts the
---    new query embeddings asked for on a UTC day.
+--    new query embeddings asked for on a UTC day, and how many places were
+--    given back.
+--    A known property, accepted: whether a query's vector is in the cache
+--    shows in an answer's timing and in whether the viewer's allowance was
+--    spent, so a viewer can learn that somebody searched those exact words in
+--    the last 7 days. Not who, not how often, and nothing a post holds.
 --      search_query_embedding(hash, model)   the cached vector, or NULL. Reads
 --        only: a cache hit costs nobody anything.
 --      reserve_search_query_embedding(cap)   on a miss, whether one more
@@ -83,8 +88,20 @@
 --        answer is "no", and search goes without related posts until the
 --        next UTC day. The service asks only after the viewer's own daily
 --        allowance let it (check_backend_rate_limit, scope
---        public-search:related-embedding), so one viewer cannot spend the
---        day for everyone.
+--        public-search:related-embedding, and for a guest session its
+--        network's, scope public-search:related-embedding-guest-network), so
+--        one viewer cannot spend the day for everyone.
+--      release_search_query_embedding(cap)   gives one place of today back,
+--        for a request that brought no vector (the function refused, did not
+--        answer in time or threw): the count goes down by one, never below
+--        zero, and the day's released count up by one, while that is under
+--        the same clamped cap. So a failing function does not spend the day,
+--        and is still asked at most twice the cap of times a day (4,000 at
+--        the service's cap). It is not idempotent by itself, having no
+--        reservation to name: the service calls it once per place taken, in
+--        the one chain that reads the function's answer. A place taken just
+--        before midnight UTC and given back just after it comes off the new
+--        day, or off nothing if the new day has no count yet.
 --      store_search_query_embedding(hash, model, vector)
 --
 -- 4. public.search_related_posts(p_query_embedding, p_viewer_user_id,
@@ -387,7 +404,8 @@ COMMENT ON TABLE public.search_query_embeddings IS
 
 CREATE TABLE public.search_query_embedding_days (
   day date PRIMARY KEY,
-  requested integer NOT NULL DEFAULT 0 CHECK (requested >= 0)
+  requested integer NOT NULL DEFAULT 0 CHECK (requested >= 0),
+  released integer NOT NULL DEFAULT 0 CHECK (released >= 0)
 );
 
 ALTER TABLE public.search_query_embedding_days ENABLE ROW LEVEL SECURITY;
@@ -395,7 +413,7 @@ REVOKE ALL ON TABLE public.search_query_embedding_days FROM PUBLIC, anon, authen
 GRANT SELECT ON TABLE public.search_query_embedding_days TO service_role;
 
 COMMENT ON TABLE public.search_query_embedding_days IS
-  'How many new query embeddings search asked the embed-post function for on a UTC day (reserve_search_query_embedding counts one per cache miss it allows). The daily cap is read against it. Service role only.';
+  'requested: how many new query embeddings search holds a place for on a UTC day (reserve_search_query_embedding counts one per cache miss it allows; the daily cap is read against it). released: how many places were given back that day for a request that brought no vector (release_search_query_embedding), so the function was asked requested + released times. Service role only.';
 
 CREATE FUNCTION public.search_query_embedding(
   p_query_hash text,
@@ -461,6 +479,34 @@ $function$;
 
 COMMENT ON FUNCTION public.reserve_search_query_embedding(integer) IS
   'Whether one more new query embedding may be asked for on this UTC day: true, and the day''s count goes up by one, while it is under p_daily_cap, itself never above 5,000. Service role only.';
+
+CREATE FUNCTION public.release_search_query_embedding(p_daily_cap integer)
+RETURNS boolean
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = ''
+AS $function$
+DECLARE
+  -- The reservation's own ceiling: never more places given back a day than
+  -- could be taken, so the function is asked at most twice the cap of times.
+  c_daily_cap_ceiling CONSTANT integer := 5000;
+  v_cap integer := least(greatest(coalesce(p_daily_cap, 0), 0), c_daily_cap_ceiling);
+BEGIN
+  -- One statement: the count never goes below zero, and two at once cannot
+  -- both take the last giving back.
+  UPDATE public.search_query_embedding_days AS days
+  SET requested = days.requested - 1,
+      released = days.released + 1
+  WHERE days.day = (now() AT TIME ZONE 'UTC')::date
+    AND days.requested > 0
+    AND days.released < v_cap;
+  RETURN FOUND;
+END;
+$function$;
+
+COMMENT ON FUNCTION public.release_search_query_embedding(integer) IS
+  'Gives one place of this UTC day back, for a new query embedding that was reserved and never arrived: true, the day''s count one lower and its released count one higher, while the count is above zero and released is under p_daily_cap, itself never above 5,000. Called once per failed request by the service. Service role only.';
 
 CREATE FUNCTION public.store_search_query_embedding(
   p_query_hash text,
@@ -712,6 +758,7 @@ REVOKE ALL ON FUNCTION public.store_post_search_embeddings(jsonb, text) FROM PUB
 REVOKE ALL ON FUNCTION public.post_search_document_has_own_words(text, tsvector) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.search_query_embedding(text, text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.reserve_search_query_embedding(integer) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.release_search_query_embedding(integer) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.store_search_query_embedding(text, text, extensions.vector) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.prune_search_embeddings(integer) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.search_embedding_backlog(text) FROM PUBLIC, anon, authenticated;
@@ -722,6 +769,7 @@ GRANT EXECUTE ON FUNCTION public.store_post_search_embeddings(jsonb, text) TO se
 GRANT EXECUTE ON FUNCTION public.post_search_document_has_own_words(text, tsvector) TO service_role;
 GRANT EXECUTE ON FUNCTION public.search_query_embedding(text, text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.reserve_search_query_embedding(integer) TO service_role;
+GRANT EXECUTE ON FUNCTION public.release_search_query_embedding(integer) TO service_role;
 GRANT EXECUTE ON FUNCTION public.store_search_query_embedding(text, text, extensions.vector) TO service_role;
 GRANT EXECUTE ON FUNCTION public.prune_search_embeddings(integer) TO service_role;
 GRANT EXECUTE ON FUNCTION public.search_embedding_backlog(text) TO service_role;
