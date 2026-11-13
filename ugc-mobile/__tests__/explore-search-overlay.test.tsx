@@ -2794,4 +2794,88 @@ describe('ExploreSearchOverlay starting and ending screens', () => {
     expect(shownTexts(tree)).toContain('Try one of these instead');
     await act(async () => tree.unmount());
   });
+
+  // The web review's fixes, taken the same way here (#790's review).
+  it('marks the request an empty tab makes of Top as a probe, never the person\'s own searches', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => (type === 'top'
+      ? full(query, 'top', { creators: [creator('lake-studio')] })
+      : full(query, type ?? 'top')));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await press(tab(tree, 'Posts'));
+    await typeQuery(tree, 'lake');
+    expect(searched()).toEqual(['lake|posts', 'lake|top']);
+    expect(searchPublicContent.mock.calls.map(([params]) => params.probe ?? false)).toEqual([false, true]);
+    await act(async () => tree.unmount());
+  });
+
+  it('asks Top again for a pointer whose request was cut off, and not for one that failed', async () => {
+    const pending: Array<{ resolve: (value: PublicSearchResponse) => void; query: string }> = [];
+    searchPublicContent.mockImplementation(({ query, type }, signal) => {
+      if (type !== 'top') return Promise.resolve(full(query, type ?? 'top'));
+      return new Promise<PublicSearchResponse>((resolve, reject) => {
+        pending.push({ resolve, query });
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      });
+    });
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await press(tab(tree, 'Posts'));
+    await typeQuery(tree, 'lake');
+    expect(searched().filter((line) => line === 'lake|top')).toHaveLength(1);
+    // Back to typing before Top answers: the request is cut off, not settled.
+    await act(async () => { searchInput(tree).props.onFocus(); });
+    await act(async () => { searchInput(tree).props.onSubmitEditing(); });
+    expect(searched().filter((line) => line === 'lake|top')).toHaveLength(2);
+    await act(async () => { pending.at(-1)!.resolve(full('lake', 'top', { creators: [creator('lake-studio')] })); });
+    expect(statusBodies(tree)).toEqual(['1 creator matches']);
+
+    // A request that fails has settled: the tab's own words stand and it is not asked again.
+    searchPublicContent.mockImplementation(async ({ query, type }) => {
+      if (type === 'top') throw new ApiError('Server error', 500);
+      return full(query, type ?? 'top');
+    });
+    await typeQuery(tree, 'pond');
+    expect(searched().filter((line) => line === 'pond|top')).toHaveLength(1);
+    await act(async () => { searchInput(tree).props.onFocus(); });
+    await act(async () => { searchInput(tree).props.onSubmitEditing(); });
+    expect(searched().filter((line) => line === 'pond|top')).toHaveLength(1);
+    expect(statusTitles(tree)).toEqual(['No posts for “pond”']);
+    await act(async () => tree.unmount());
+  });
+
+  it('opens Posts unfiltered from "See posts", so the count it states is what opens', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => (type === 'creators'
+      ? full(query, 'creators')
+      : full(query, type ?? 'top', { posts: [post('p1'), post('p2')] })));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    // Posts narrowed to a model, from a starter row; then Creators finds nobody.
+    await press(pressableLabelled(tree, 'Nano Banana Pro, model, 200+ posts. Show posts made with it'));
+    expect(searched()).toEqual(['nano-banana-pro|posts|model:nano-banana-pro']);
+    await press(tab(tree, 'Creators'));
+    expect(statusBodies(tree)).toEqual(['2 posts match']);
+    await press(hostNodes(tree, 'secondary-button').find((node) => node.props.label === 'See posts')!);
+    expect(tab(tree, 'Posts').props.accessibilityState).toMatchObject({ selected: true });
+    expect(searched().at(-1)).toBe('nano-banana-pro|posts');
+    expect(() => pressableLabelled(tree, 'Remove filter: made with Nano Banana Pro')).toThrow();
+    await act(async () => tree.unmount());
+  });
+
+  it('asks for the starter again when the signed-in account changes, not when its session is renewed', async () => {
+    mocks.user.value = { id: 'account-1' };
+    const onClose = vi.fn();
+    const tree = await render({ visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(1);
+    // The same account with a renewed token: a new user object, the same id.
+    mocks.user.value = { id: 'account-1' };
+    await update(tree, { visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(1);
+    // Another account: its own starter (whom it follows, whom it is blocked with).
+    mocks.user.value = { id: 'account-2' };
+    await update(tree, { visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(2);
+    // Signed out: asked as a visitor.
+    mocks.user.value = null;
+    await update(tree, { visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(3);
+    await act(async () => tree.unmount());
+  });
 });

@@ -1006,7 +1006,7 @@ export function ExploreSearchOverlay({
 
   // Ideas to start from: before anything is typed, and when a search finds
   // nothing. Asked once each time the search opens.
-  const starter = useSearchStarter(api, visible);
+  const starter = useSearchStarter(api, visible, user?.id ?? null);
   const startFromEntity = (entity: SearchStarterEntity) => {
     // The search the starter counted: the entity's own query, on Posts, narrowed to it.
     const action = searchStarterEntityAction(entity);
@@ -1040,14 +1040,25 @@ export function ExploreSearchOverlay({
   const asksTopCounts = emptyTab && shownTab !== null && pointerCounts === null;
   useEffect(() => {
     if (!asksTopCounts || askedTopFor.current === countsKey) return;
-    askedTopFor.current = countsKey;
-    // Not aborted with the screen's next render: its answer is kept by key, so
-    // coming back to the tab finds it.
-    api.searchPublicContent({ query: normalizedQuery, type: 'top', sort: 'top', filters: NO_SEARCH_FILTERS, exact, cursor: null, related: false })
-      .then((next) => setTopCounts({ key: countsKey, top: topSectionsOf(next) }))
+    // A probe: the person never ran this search, so the server leaves it out
+    // of the search log (SEARCH_PROBE_PARAM). Cut off when the screen stops
+    // asking for it (back to typing, another query, a tab that is not empty),
+    // as the search itself is. A query counts as asked only once its request
+    // has settled: one cut off is asked again when an empty tab next needs it,
+    // one that failed is not (the tab's own "No …" stands).
+    const controller = new AbortController();
+    api.searchPublicContent(
+      { query: normalizedQuery, type: 'top', sort: 'top', filters: NO_SEARCH_FILTERS, exact, cursor: null, related: false, probe: true },
+      controller.signal,
+    )
+      .then((next) => {
+        askedTopFor.current = countsKey;
+        setTopCounts({ key: countsKey, top: topSectionsOf(next) });
+      })
       .catch(() => {
-        // The pointer is an extra: the tab's own "No …" stands.
+        if (!controller.signal.aborted) askedTopFor.current = countsKey;
       });
+    return () => controller.abort();
   }, [api, asksTopCounts, countsKey, exact, normalizedQuery]);
   const otherTab = emptyTab && shownTab !== null && pointerCounts ? searchEmptyTabPointer(shownTab, pointerCounts) : null;
   // Nothing anywhere: Top found nothing, or this tab and every other did.
@@ -1296,7 +1307,15 @@ export function ExploreSearchOverlay({
               // This tab is empty, another is not: said, with the way there.
               <View style={{ gap: 12 }}>
                 <StatusBlock title={searchEmptyTabTitle(shownTab, normalizedQuery)} body={searchEmptyTabPointerLine(otherTab)} />
-                <SecondaryButton label={searchSeeTabLabel(otherTab.tab)} onPress={() => setPickedType(otherTab.tab)} />
+                <SecondaryButton
+                  label={searchSeeTabLabel(otherTab.tab)}
+                  onPress={() => {
+                    // The count said is Top's, unfiltered: Posts opens without
+                    // a filter left on from before, so it holds what was said.
+                    if (otherTab.tab === 'posts') setPickedFilters(NO_SEARCH_FILTERS);
+                    setPickedType(otherTab.tab);
+                  }}
+                />
               </View>
             ) : (
               <StatusBlock
