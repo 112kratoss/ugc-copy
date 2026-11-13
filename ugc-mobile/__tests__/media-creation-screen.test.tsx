@@ -5,6 +5,7 @@ import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { dismissRecipeUnlockedNotice, readRecipeUnlockedNotice } from '@/lib/recipe-unlocked-notice';
 // How expo-router reads a path's query into a route's params (`getStateFromPath`).
 import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks';
 
@@ -1909,6 +1910,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
   // recipe lands here on the remix link, with no Remix tap to take the recipe. The read is refused
   // for it; the creator takes the recipe, reads again and restores, as the web's creators do.
   it('takes the free recipe a remix link’s post keeps its remix behind, then restores the remix', async () => {
+    const earlier = readRecipeUnlockedNotice();
+    if (earlier) dismissRecipeUnlockedNotice(earlier.id);
     authState.api.unlockFreeBundle.mockReset();
     authState.api.unlockFreeBundle.mockResolvedValue({ success: true });
     authState.api.getRemixSourceBundle
@@ -1936,6 +1939,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     const promptInput = tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
     expect(promptInput.props.value).toBe('A paper boat drifting on a pond.');
     expect(collectText(tree!.root)).not.toContain('Unlock this post to remix it.');
+    // Taken just now: said as every unlock is.
+    expect(readRecipeUnlockedNotice()).not.toBeNull();
   });
 
   it('shows the restore as in flight and keeps a prompt typed while it was still running', async () => {

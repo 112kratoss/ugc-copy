@@ -89,6 +89,8 @@ import { SEARCH_FILTER_PARAMS } from '../../ugc-mobile/lib/public-search-policy/
 type MobileApiContractEndpoint<Response> = {
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   path: string;
+  /** The query the app's request carries (`getHomeShelf`'s `freeRecipes=1`), where the contract pins one. */
+  query?: Record<string, string>;
   auth: 'required' | 'optional' | 'none';
   cacheControl: string;
   status?: number;

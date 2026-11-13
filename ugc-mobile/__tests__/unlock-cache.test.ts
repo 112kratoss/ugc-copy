@@ -167,6 +167,7 @@ describe('refreshUnlockedBundleCaches', () => {
       JSON.stringify(['viewer-unlocks']),
       JSON.stringify(['showcase-post', 'post-123']),
     ]));
-    expect(keys.some((key) => key.includes('marketplace-resource') || key.includes('undefined'))).toBe(false);
+    // No key with a missing recipe id in it (JSON writes one as null).
+    expect(keys.some((key) => key.includes('marketplace-resource') || key.includes('null'))).toBe(false);
   });
 });

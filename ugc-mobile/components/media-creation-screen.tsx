@@ -1914,10 +1914,13 @@ function IdentityCreationScreen({
     const remixPostId = remixSource?.postId ?? null;
     void (remixLaunch
       ? remixLaunch.readSource()
-      : readRemixSourceTakingFreeRecipe(api, generationId, remixPostId, () => {
-          if (remixPostId) void refreshUnlockedBundleCaches(queryClient, { postId: remixPostId });
-          // The recipe is theirs now, said as every unlock is (B-F9).
-          if (!isCancelled) announceRecipeUnlocked();
+      : readRemixSourceTakingFreeRecipe(api, generationId, remixPostId, {
+          isWanted: () => !isCancelled,
+          onFreeRecipeTaken: () => {
+            if (remixPostId) void refreshUnlockedBundleCaches(queryClient, { postId: remixPostId });
+            // The recipe is theirs now, said as every unlock is (B-F9).
+            if (!isCancelled) announceRecipeUnlocked();
+          },
         }))
       .then(async (bundle) => {
         const modelId = typeof bundle.workflowSettings.model === 'string' ? bundle.workflowSettings.model : bundle.generation.model;
