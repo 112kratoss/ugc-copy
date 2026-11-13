@@ -901,14 +901,18 @@ describe('search page typeahead', () => {
 
   it('asks nothing for a handle on Top, where no creator would be drawn, and asks on Posts', async () => {
     render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    // The list of "lum" does not stay on show for a handle it is not asked about.
     type('@lum');
+    noList();
     await pastThePause();
     await pastThePause();
-    expect(suggestRequests()).toEqual([]);
+    expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum']);
     noList();
     fireEvent.click(screen.getByRole('tab', { name: 'Posts' }));
     fireEvent.focus(box());
-    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=%40lum']));
+    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum', '/api/search/suggest?q=%40lum']));
   });
 
   it('writes its address when a creator is chosen within the search’s pause, without a word to Next’s router, and still runs the search', async () => {

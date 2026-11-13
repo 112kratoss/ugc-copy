@@ -120,11 +120,8 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
     }
     if (query === null) return;
     // Nothing its answer could hold would be drawn here (a handle on a box
-    // that offers no creators): not asked, recorded as an answer with nothing.
-    if (!asks) {
-      setAnswer({ query, response: null });
-      return;
-    }
+    // that offers no creators): not asked (and nothing of an answer is drawn, below).
+    if (!asks) return;
     const keptAnswer = kept.current.get(query);
     if (keptAnswer && Date.now() - keptAnswer.at < SEARCH_TYPEAHEAD_KEPT_ANSWER_MS) {
       setAnswer({ query, response: keptAnswer.response });
@@ -210,8 +207,9 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
 
   // This text's answer, or until it arrives the one before it, marked stale.
   const { sections, stale } = useMemo(
-    () => searchTypeaheadDrawn(answer, query, { recents, offer }),
-    [answer, offer, query, recents],
+    // A text not asked about draws no answer, not even the one before it.
+    () => searchTypeaheadDrawn(asks ? answer : null, query, { recents, offer }),
+    [answer, asks, offer, query, recents],
   );
   const rows = useMemo(() => searchTypeaheadRows(sections), [sections]);
   const shown = isSearchTypeaheadShown({ focused, query, closedQuery, rowCount: rows.length });
