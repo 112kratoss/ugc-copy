@@ -831,11 +831,7 @@ export function ExploreSearchOverlay({
   useEffect(() => {
     // A completion chosen from the typeahead is committed as its search is asked.
     if (committedCompletion.current !== null) {
-      if (committedCompletion.current === normalizedQuery && requestKey) {
-        rememberOnAnswer.current = requestKey;
-        // Its request, made below, asks for related posts with the search.
-        settledQueryAtSend.current = normalizedQuery;
-      }
+      if (committedCompletion.current === normalizedQuery && requestKey) rememberOnAnswer.current = requestKey;
       committedCompletion.current = null;
     }
     // A commit belongs to the query it was made on.
@@ -915,6 +911,9 @@ export function ExploreSearchOverlay({
     const next = normalizeSearchHistoryQuery(action.query);
     scheduledQuery.current = next;
     committedCompletion.current = next;
+    // The person settled on it: its request asks for related posts with the
+    // search, and an answer already on hand for this very text is asked about at once.
+    settleOn(next);
     setQuery(action.query);
   };
 

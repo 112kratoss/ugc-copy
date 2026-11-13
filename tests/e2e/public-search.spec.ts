@@ -523,6 +523,43 @@ test.describe('public search', () => {
     expect(requests.every((search) => search.includes('type=creators'))).toBe(true);
   });
 
+  // The page writes its address behind Next's back (search-address.ts), so
+  // Next holds the address the page was first opened at. A link to the search
+  // page drawn on the search page would therefore do the wrong thing: one to
+  // that first address is, to Next, a press on where it already is. The shell
+  // draws none there today (the bar's search link gives way to the page's own
+  // box, and no group of the side navigation or the drawer lists Search). If
+  // this fails, such a link has been added: make it start the search over in
+  // the page itself before it ships.
+  for (const viewer of ['a visitor', 'an account'] as const) {
+    test(`draws no link to the search page on the search page, for ${viewer}`, async ({ page, context }) => {
+      if (viewer === 'an account') {
+        await context.addCookies([{ name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' }]);
+      }
+      await page.route(SEARCH_API, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(searchResponse('luna', 'top')),
+      }));
+      const linksToSearch = () => page.evaluate(() => Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'))
+        // The skip link is a fragment of the page, not a navigation to it.
+        .filter((link) => new URL(link.href).pathname === '/search' && !link.getAttribute('href')?.startsWith('#'))
+        .map((link) => link.getAttribute('href')));
+      for (const width of [1440, 900, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto('/search?q=luna');
+        await expect(page.getByText('Luna Studio')).toBeVisible();
+        expect(await linksToSearch(), `at ${width}px`).toEqual([]);
+        const menu = page.getByRole('button', { name: /^Open navigation/ });
+        if (await menu.isVisible()) {
+          await menu.click();
+          await expect(page.getByRole('button', { name: 'Close navigation' })).toBeVisible();
+          expect(await linksToSearch(), `at ${width}px, the drawer open`).toEqual([]);
+        }
+      }
+    });
+  }
+
   test('asks for related posts only for a search left alone or settled on, and draws them under its own results', async ({ page }) => {
     // Each new query asked about with related=1 spends one of the viewer's
     // forty a day, so the page never asks at a step of the typing. The page's

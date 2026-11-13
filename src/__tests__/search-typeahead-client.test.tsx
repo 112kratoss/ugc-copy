@@ -115,9 +115,7 @@ const dimmed = () => screen.getAllByRole('option')
 describe('search page typeahead', () => {
   beforeEach(() => {
     window.localStorage.clear();
-    // The address of the page the person comes from: a mount at the search's
-    // own address reads the search from it (search-client.test.tsx).
-    window.history.replaceState(null, '', '/');
+    window.history.replaceState(null, '', '/search');
     pushMock.mockReset();
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });

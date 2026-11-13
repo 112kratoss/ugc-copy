@@ -87,7 +87,7 @@ describe('related posts on the search page', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     window.localStorage.clear();
-    window.history.replaceState(null, '', '/');
+    window.history.replaceState(null, '', '/search');
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
     fetchMock.mockReset();

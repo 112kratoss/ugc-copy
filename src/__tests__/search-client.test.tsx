@@ -149,12 +149,7 @@ describe('SearchClient', () => {
     });
     vi.stubGlobal('fetch', fetchBySurface);
     window.localStorage.clear();
-    // The address of the page the person comes from. A navigation to the
-    // search first renders it while the address is still that page's, and the
-    // props are the server's reading of the new one; a mount at the search's
-    // own address is a return through history, which reads the address
-    // ("reads its own address when history brings it back", below).
-    window.history.replaceState(null, '', '/');
+    window.history.replaceState(null, '', '/search');
     authListeners.length = 0;
   });
 
@@ -201,6 +196,7 @@ describe('SearchClient', () => {
     // kept, whose props are the search the page was first opened with (luna);
     // the address is the search the person left.
     window.history.replaceState({ __NA: true }, '', '/search?q=lumi&type=posts&sort=latest&recipe=1');
+    window.dispatchEvent(new PopStateEvent('popstate'));
     render(<SearchClient initialQuery="luna" initialType="top" />);
 
     expect(screen.getByRole('combobox')).toHaveValue('lumi');
@@ -213,10 +209,53 @@ describe('SearchClient', () => {
     cleanup();
     fetchMock.mockClear();
     window.history.replaceState({ __NA: true }, '', '/search');
+    window.dispatchEvent(new PopStateEvent('popstate'));
     render(<SearchClient initialQuery="luna" initialType="top" />);
     expect(screen.getByRole('combobox')).toHaveValue('');
     expect(screen.getByText('Start with a creator or idea')).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('opens on its props at any mount that is not a return through history, its own address included', async () => {
+    // A navigation to the page first renders it while the address is still the
+    // page before's, and that page can be the search page: a link there to
+    // another search would otherwise open the search being left.
+    window.history.replaceState({ __NA: true }, '', '/search?q=cat');
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveValue('');
+    expect(screen.getByText('Start with a creator or idea')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // A traversal is spent by the mount it brought: the next mount at the same address is not one.
+    cleanup();
+    window.history.replaceState({ __NA: true }, '', '/search?q=cat');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveValue('cat');
+    cleanup();
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveValue('');
+    // And one that landed on another address is not this mount's.
+    cleanup();
+    window.history.replaceState({ __NA: true }, '', '/search?q=dog');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    window.history.replaceState({ __NA: true }, '', '/search?q=cat');
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveValue('');
+  });
+
+  it('writes nothing once the address is another page’s: Back inside the pause leaves that page’s entry alone', async () => {
+    render(<SearchClient initialQuery="" initialType="top" />);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'luna' } });
+    // Back: the browser's address is the page before's at once; Next takes this page away a moment later.
+    window.history.replaceState({ __NA: true }, '', '/creators/lumen');
+    const written = vi.spyOn(window.history, 'replaceState');
+    // The pause's timer fires in that gap, and so does a press.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    fireEvent.click(document.body);
+    expect(written).not.toHaveBeenCalled();
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/creators/lumen');
+    written.mockRestore();
   });
 
   it('writes its address at a press anywhere, ahead of the pause the search waits for, and once', async () => {

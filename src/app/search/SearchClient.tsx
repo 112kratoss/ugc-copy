@@ -65,7 +65,13 @@ import {
   toggleSearchFilterSwitch,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import type { SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
-import { SEARCH_PAGE_PATH, readSearchPageAddress, writeSearchPageAddress, type SearchPageOpening } from './search-address';
+import {
+  SEARCH_PAGE_PATH,
+  forgetSearchPageTraversal,
+  readSearchPageAddress,
+  writeSearchPageAddress,
+  type SearchPageOpening,
+} from './search-address';
 import { clearSearchHistory, forgetSearchQuery, readSearchHistory, rememberSearchQuery } from './search-history';
 
 const SEARCH_TABS: Array<{ id: PublicSearchType; label: string }> = [
@@ -363,9 +369,9 @@ export default function SearchClient({
   /** A shared link asked for the query as typed. */
   initialExact?: boolean;
 }) {
-  // The search the page opens on: the address's own when history brings the
-  // page back (readSearchPageAddress says why), the server's reading of it
-  // otherwise. Read once, as the page mounts.
+  // The search the page opens on: the address's own when Back or Forward has
+  // brought the page back (readSearchPageAddress says why), the server's
+  // reading of it otherwise. Read once, as the page mounts.
   const [opening] = useState<SearchPageOpening>(() => readSearchPageAddress() ?? {
     query: initialQuery,
     type: initialType,
@@ -565,6 +571,9 @@ export default function SearchClient({
       if (sequence === requestSequence.current) setLoadingMore(false);
     }
   }, [activeExact, activeFilters, activeSort, activeType, narrowing, normalizedQuery, relatedApplies]);
+
+  // The traversal that brought the page back, if one did, has been read above.
+  useEffect(() => forgetSearchPageTraversal(), []);
 
   useEffect(() => {
     setHistory(readSearchHistory());

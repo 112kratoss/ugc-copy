@@ -40,24 +40,44 @@ export function readSearchPageOpening(param: (name: string) => string | null): S
   };
 }
 
+const here = () => `${window.location.pathname}${window.location.search}`;
+
+// The address the last Back or Forward landed on, until the page that mounts
+// for it has read it. Noted in the capture phase, so before Next's own
+// popstate listener starts drawing the entry. The module is loaded with the
+// page's first visit, which any return to it within this document follows.
+let traversalAddress: string | null = null;
+if (typeof window !== 'undefined') {
+  window.addEventListener('popstate', () => { traversalAddress = here(); }, { capture: true });
+}
+
 /**
- * The search the browser's address names, when the page is mounting at its
- * own address; null on the server and while the address is another page's.
+ * The search the browser's address names, when Back or Forward has just
+ * brought the page back to it; null on the server and for every other mount.
  *
  * The page writes its address as the search changes (below), and Next never
  * hears of it. So when Back or Forward returns to the page, Next draws the
  * entry from the render it kept, which holds the search the page was first
  * opened with, whatever the address has said since: the box came back with
  * the query of the first load. The address is the search the person left, so
- * a mount at the page's own address reads it. At a first load the two agree
- * (the server read the same address with the same reading); on a navigation
- * here from another page the address is still that page's while this one
- * first renders, and the props are the server's reading of the new one.
+ * a mount that a traversal landed on its own address reads it.
+ *
+ * Only then. At a first load the props are the server's reading of the same
+ * address. On a navigation here the address is still the page before's while
+ * this one first renders, and that page can be the search page itself (a link
+ * to another search, were one drawn on it): read then, the address would open
+ * the search being left in place of the one asked for.
  */
 export function readSearchPageAddress(): SearchPageOpening | null {
   if (typeof window === 'undefined' || window.location.pathname !== SEARCH_PAGE_PATH) return null;
+  if (traversalAddress !== here()) return null;
   const params = new URLSearchParams(window.location.search);
   return readSearchPageOpening((name) => params.get(name));
+}
+
+/** The page has mounted: the traversal that brought it back, if one did, is spent. */
+export function forgetSearchPageTraversal(): void {
+  traversalAddress = null;
 }
 
 /**
@@ -81,9 +101,15 @@ export function readSearchPageAddress(): SearchPageOpening | null {
  *
  * Safari refuses more than 100 history writes in 30 seconds with an exception;
  * the next write says what this one could not.
+ *
+ * Only while the address is the search page's own. Back pressed inside the
+ * pause changes the address before Next takes the page away, and a write in
+ * that gap (the pause's timer) would rename the entry of the page gone back
+ * to.
  */
 export function writeSearchPageAddress(path: string): void {
-  if (`${window.location.pathname}${window.location.search}` === path) return;
+  if (window.location.pathname !== SEARCH_PAGE_PATH) return;
+  if (here() === path) return;
   try {
     window.history.replaceState({ ...window.history.state, __NA: true }, '', path);
   } catch {

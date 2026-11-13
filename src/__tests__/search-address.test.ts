@@ -4,7 +4,12 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { readSearchPageAddress, readSearchPageOpening, writeSearchPageAddress } from '@/app/search/search-address';
+import {
+  forgetSearchPageTraversal,
+  readSearchPageAddress,
+  readSearchPageOpening,
+  writeSearchPageAddress,
+} from '@/app/search/search-address';
 
 // The search page's address: how it is written so that Next's router never
 // takes the write for a navigation, and how the page reads it back.
@@ -109,11 +114,37 @@ describe('the search page’s address', () => {
     });
   });
 
-  it('reads the browser’s address only while it is the search page’s own', () => {
+  it('writes only while the address is the search page’s own', () => {
+    // Back inside the pause: the address is the page before's before Next takes the page away.
+    window.history.replaceState({ __NA: true }, '', '/creators/lumen');
+    const written = vi.spyOn(window.history, 'replaceState');
+    writeSearchPageAddress('/search?q=lumi');
+    expect(written).not.toHaveBeenCalled();
+    expect(address()).toBe('/creators/lumen');
+  });
+
+  it('reads the browser’s address only for the mount Back or Forward has just landed on it', () => {
+    const land = (path: string) => {
+      window.history.replaceState({ __NA: true }, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    };
+    forgetSearchPageTraversal();
+    // No traversal: a first load, or a navigation here (the address may still be the search being left).
     window.history.replaceState({ __NA: true }, '', '/search?q=lumi&type=creators');
-    expect(readSearchPageAddress()).toMatchObject({ query: 'lumi', type: 'creators' });
-    // A navigation here first renders the page while the address is still the page before's.
-    window.history.replaceState({ __NA: true }, '', '/creators/lumen?q=not-a-search');
     expect(readSearchPageAddress()).toBeNull();
+    // A traversal that landed here.
+    land('/search?q=lumi&type=creators');
+    expect(readSearchPageAddress()).toMatchObject({ query: 'lumi', type: 'creators' });
+    // Read as often as the mount renders, until the mount says it is done.
+    expect(readSearchPageAddress()).toMatchObject({ query: 'lumi', type: 'creators' });
+    forgetSearchPageTraversal();
+    expect(readSearchPageAddress()).toBeNull();
+    // A traversal that landed on another page, or on another search than the address now names.
+    land('/creators/lumen?q=not-a-search');
+    expect(readSearchPageAddress()).toBeNull();
+    land('/search?q=dog');
+    window.history.replaceState({ __NA: true }, '', '/search?q=cat');
+    expect(readSearchPageAddress()).toBeNull();
+    forgetSearchPageTraversal();
   });
 });
