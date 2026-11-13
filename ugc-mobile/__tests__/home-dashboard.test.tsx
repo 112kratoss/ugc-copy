@@ -396,6 +396,7 @@ import {
 } from '../lib/showcase-feed-events';
 import { showcaseFeedLaneQueryOptions } from '../lib/showcase-feed-lane';
 import { createShowcaseFeedViewerQueryKey } from '../lib/showcase-feed-query';
+import { searchScreenOpener } from '../lib/open-search-screen';
 
 const T0 = Date.parse('2026-10-14T09:00:00.000Z');
 let now = T0;
@@ -611,6 +612,8 @@ function sentEvents(): SentEvent[] {
 
 describe("Home's read-ahead of Explore", () => {
   beforeEach(() => {
+    // One opener is shared by every entry (lib/open-search-screen.ts): each test opens afresh.
+    searchScreenOpener.reset();
     vi.clearAllMocks();
     navState.focused = true;
     authState.isLoading = false;
@@ -690,6 +693,8 @@ describe("Home's read-ahead of Explore", () => {
 
 describe('Home screen', () => {
   beforeEach(() => {
+    // One opener is shared by every entry (lib/open-search-screen.ts): each test opens afresh.
+    searchScreenOpener.reset();
     vi.clearAllMocks();
     trackers.length = 0;
     now = T0;

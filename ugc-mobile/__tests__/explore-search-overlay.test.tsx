@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => {
   return {
     listeners,
     focused: { value: true },
+    inputFocus: vi.fn(),
     keyboardDismiss: vi.fn(),
     addEventListener: vi.fn((_event: string, listener: () => boolean) => {
       listeners.push(listener);
@@ -104,7 +105,7 @@ vi.mock('react-native', () => ({
   }),
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   TextInput: React.forwardRef((props: MockProps, ref: React.ForwardedRef<{ focus: () => void }>) => {
-    React.useImperativeHandle(ref, () => ({ focus: () => {} }));
+    React.useImperativeHandle(ref, () => ({ focus: mocks.inputFocus }));
     return React.createElement('text-input', props);
   }),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
@@ -2969,8 +2970,59 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
     expect(searchInput(tree!).props.value).toBe('nano');
     expect(tab(tree!, 'Posts').props.accessibilityState).toMatchObject({ selected: true });
     expect(searchPublicContent.mock.calls.map(([params]) => `${params.query}|${params.type}`)).toEqual(['nano|posts']);
-    // Committed: kept among the recent searches once it found something.
+    // A link is not the person's commit (review of #795): nothing is kept,
+    // not when it finds something, and not when the screen leaves.
+    expect(mocks.rememberSearchQuery).not.toHaveBeenCalled();
+    await act(async () => tree!.unmount());
+    expect(mocks.rememberSearchQuery).not.toHaveBeenCalled();
+  });
+
+  async function openOnLink(initialQuery: string, initialType: PublicSearchType | null = null, extra: Record<string, unknown> = {}) {
+    let tree: renderer.ReactTestRenderer | null = null;
+    await act(async () => {
+      tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn(), initialQuery, initialType, ...extra }));
+    });
+    return tree!;
+  }
+
+  it('keeps a link\'s search once the person opens a result from it, or presses Search themselves (review of #795)', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type ?? 'top', { posts: [post('p1')] }));
+    const opened = await openOnLink('nano', 'posts');
+    expect(mocks.rememberSearchQuery).not.toHaveBeenCalled();
+    await press(pressableLabelled(opened, 'Open post Post p1 by Ana'));
     expect(mocks.rememberSearchQuery).toHaveBeenCalledWith('nano');
+    await act(async () => opened.unmount());
+
+    mocks.rememberSearchQuery.mockClear();
+    const committed = await openOnLink('nano', 'posts');
+    await act(async () => { searchInput(committed).props.onFocus(); });
+    await act(async () => { searchInput(committed).props.onSubmitEditing(); });
+    expect(mocks.rememberSearchQuery).toHaveBeenCalledWith('nano');
+    await act(async () => committed.unmount());
+  });
+
+  it('opens a link\'s text the picked tab cannot search as any opening: typing, the keyboard up, nothing asked (review of #795, N4)', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type ?? 'top'));
+    mocks.inputFocus.mockClear();
+    const tree = await openOnLink('ab', 'posts');
+    expect(searchInput(tree).props.value).toBe('ab');
+    await act(async () => { vi.advanceTimersByTime(200); });
+    expect(mocks.inputFocus).toHaveBeenCalled();
+    expect(searchPublicContent).not.toHaveBeenCalled();
+    await act(async () => tree.unmount());
+  });
+
+  it('puts the keyboard up only once the screen says its entrance is over (review of #795, S2)', async () => {
+    searchStarter.mockResolvedValue({ entities: [], creators: [], searches: [] });
+    mocks.inputFocus.mockClear();
+    let tree: renderer.ReactTestRenderer | null = null;
+    const props = { api, visible: true, onClose: vi.fn(), focusReady: false };
+    await act(async () => { tree = renderer.create(React.createElement(ExploreSearchOverlay, props)); });
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(mocks.inputFocus).not.toHaveBeenCalled();
+    await act(async () => { tree!.update(React.createElement(ExploreSearchOverlay, { ...props, focusReady: true })); });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    expect(mocks.inputFocus).toHaveBeenCalledTimes(1);
     await act(async () => tree!.unmount());
   });
 });

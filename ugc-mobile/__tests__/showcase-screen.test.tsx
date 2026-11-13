@@ -253,6 +253,7 @@ import {
 import { getMagicTabBarMetrics } from '../lib/tab-bar-layout';
 import type { CreatorProfileResponse, ShowcaseFeedItem, ShowcaseFeedResponse } from '../lib/types';
 import { NEW_POSTS_PROBE_MIN_LANE_AGE_MS } from '../lib/use-new-posts-probe';
+import { searchScreenOpener } from '../lib/open-search-screen';
 
 function feedItem() {
   return {
@@ -459,6 +460,8 @@ function creatorGrid(creatorId: string): InfiniteData<CreatorProfileResponse> {
 
 describe('Showcase screen', () => {
   beforeEach(() => {
+    // One opener is shared by every entry (lib/open-search-screen.ts): each test opens afresh.
+    searchScreenOpener.reset();
     authState.isLoading = false;
     vi.mocked(Image.loadAsync).mockClear();
     queryClient.getQueriesData.mockReset();

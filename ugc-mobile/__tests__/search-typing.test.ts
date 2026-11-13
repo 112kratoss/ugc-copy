@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   SEARCH_TYPEAHEAD_OFFER_ALL,
@@ -95,6 +95,36 @@ describe('the typing list', () => {
   });
 });
 
+describe('opening the search screen (review of #795, S1)', () => {
+  it('pushes one search screen for a double tap, and none while one is open', async () => {
+    const { createSearchScreenOpener, SEARCH_SCREEN_HREF } = await import('../lib/search-screen-route');
+    let now = 1000;
+    const push = vi.fn();
+    const opener = createSearchScreenOpener({ push, now: () => now });
+    expect(opener.open()).toBe(true);
+    now += 80;
+    expect(opener.open()).toBe(false);
+    expect(push.mock.calls).toEqual([[SEARCH_SCREEN_HREF]]);
+    // The screen is up: Home's and Explore's entries are under it; nothing more is pushed.
+    opener.screenMounted();
+    now += 5000;
+    expect(opener.open()).toBe(false);
+    opener.screenUnmounted();
+    expect(opener.open()).toBe(true);
+    expect(push).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens again once a push that never mounted the screen has had its time', async () => {
+    const { createSearchScreenOpener, SEARCH_SCREEN_OPEN_GUARD_MS } = await import('../lib/search-screen-route');
+    let now = 0;
+    const push = vi.fn();
+    const opener = createSearchScreenOpener({ push, now: () => now });
+    opener.open();
+    now += SEARCH_SCREEN_OPEN_GUARD_MS;
+    expect(opener.open()).toBe(true);
+  });
+});
+
 describe('the search screen\'s two modes', () => {
   it('is typing from a focus or an edit until a commit, and asks for results only then', () => {
     expect(searchModeAfter('typing', 'commit')).toBe('results');
@@ -153,5 +183,7 @@ describe('the search screen\'s address', () => {
     expect(searchScreenParams({ q: ['portrait', 'x'], type: 'reels' })).toEqual({ query: 'portrait', type: null });
     expect(searchScreenParams({})).toEqual({ query: null, type: null });
     expect(searchScreenParams({ q: '   ', type: 'posts' })).toEqual({ query: null, type: null });
+    // Clamped to what the server reads before anything is sent (review of #795).
+    expect(searchScreenParams({ q: 'n'.repeat(300) }).query).toHaveLength(100);
   });
 });

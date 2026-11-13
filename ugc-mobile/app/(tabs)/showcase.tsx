@@ -27,7 +27,7 @@ import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo
 import { NativeMenu } from '@/components/native-menu';
 import { NewPostsPill } from '@/components/new-posts-pill';
 import { SEARCH_FIELD_LABEL, SEARCH_PLACEHOLDER } from '@/lib/public-search-policy/public-search-policy';
-import { SEARCH_SCREEN_HREF } from '@/lib/search-screen-route';
+import { openSearchScreen } from '@/lib/open-search-screen';
 import { PinBadge, VideoCornerPlay, VideoPinPreview, VisualFallbackPreview } from '@/components/showcase-pin-marks';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { TopScrim } from '@/components/top-scrim';
@@ -592,7 +592,7 @@ export default function ShowcaseScreen() {
   }, [cards]);
 
   // Search is a screen of its own, pushed over the tabs (app/search.tsx).
-  const openSearch = () => router.push(SEARCH_SCREEN_HREF);
+  const openSearch = openSearchScreen;
 
   const clearToolFilter = () => {
     setActiveTool(null);

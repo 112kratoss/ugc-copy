@@ -24,7 +24,7 @@ import { HomeFeedSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
-import { SEARCH_SCREEN_HREF } from '@/lib/search-screen-route';
+import { openSearchScreen } from '@/lib/open-search-screen';
 import { useAuth } from '@/lib/auth';
 import { openSignUpSheet, signUpNeededToCreate } from '@/lib/join-navigation';
 import { useAutoplayPolicy } from '@/lib/autoplay-preference';
@@ -1121,7 +1121,7 @@ export function HomeDashboard() {
                 askToSignUp={signUpNeededToCreate({ credits, hasUser: Boolean(user) })}
                 promiseWelcomeCredits={welcomePromise}
                 onMenuPress={sideMenu.open}
-                onSearchPress={() => router.push(SEARCH_SCREEN_HREF)}
+                onSearchPress={openSearchScreen}
               />
               {/* What became of the guest credits a sign-in carried over, under
                   the balance it changed. It showed on Pricing alone, so a

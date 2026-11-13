@@ -582,12 +582,19 @@ export function ExploreSearchOverlay({
   visible,
   initialQuery = null,
   initialType = null,
+  focusReady,
 }: {
   api: MagicbookletApiClient;
   onClose: () => void;
   visible: boolean;
   initialQuery?: string | null;
   initialType?: PublicSearchType | null;
+  /**
+   * Whether the field may take the focus yet. A pushed screen says so once its
+   * entrance is over (app/search.tsx), so the keyboard does not rise while the
+   * screen slides in; left out, the field takes it shortly after opening.
+   */
+  focusReady?: boolean;
 }) {
   const theme = useAppTheme();
   // The registered account, null for a visitor and for a guest session: the
@@ -598,8 +605,15 @@ export function ExploreSearchOverlay({
   const { fontScale } = useWindowDimensions();
   // Two posts across, one at the accessibility text sizes (search-post-grid.ts).
   const postColumns = searchPostGridColumns(fontScale);
-  // Opened on a search (a shared link): committed from the first render.
-  const openedOn = initialQuery ? normalizeSearchHistoryQuery(initialQuery) : '';
+  // Opened on a search (a link's `q`): its results from the first render, when
+  // the tab it names searches a text that long; a shorter one opens as any
+  // opening does, its text in the field and the keyboard up (review of #795).
+  const openedText = initialQuery ? normalizeSearchHistoryQuery(initialQuery) : '';
+  const openedOn = openedText && searchTabRuns(initialType ?? 'top', searchQueryLength(normalizeCreatorSearchQuery(openedText))) ? openedText : '';
+  // A link is not the person's commit (owner's track lead, review of #795): a
+  // search it opens is kept among the recent ones only once the person opens a
+  // result from it or presses Search themselves (searchHistoryQueryFor's rule).
+  const committedByPerson = useRef(!openedOn);
   const inputRef = useRef<TextInput>(null);
   const resultsScrollRef = useRef<ScrollView>(null);
   const requestSequence = useRef(0);
@@ -608,7 +622,7 @@ export function ExploreSearchOverlay({
   // recent searches when that answer finds something.
   const rememberOnAnswer = useRef<string | null>(null);
   // The query just committed: its key is known once it is drawn.
-  const pendingCommit = useRef<string | null>(openedOn || null);
+  const pendingCommit = useRef<string | null>(null);
   // The query the person settled on: every search the app sends is one
   // committed, so it is asked with related posts (public-search-policy.ts,
   // "Related posts").
@@ -620,7 +634,7 @@ export function ExploreSearchOverlay({
     settledQueryAtSend.current = settled;
     setSettledQuery(settled);
   };
-  const [query, setQuery] = useState(openedOn);
+  const [query, setQuery] = useState(openedText);
   // Typing (suggestions in place of results) or results (lib/search-typing-mode.ts).
   const [mode, setMode] = useState<SearchScreenMode>(openedOn ? 'results' : 'typing');
   const moveMode = (event: SearchModeEvent) => setMode((current) => searchModeAfter(current, event));
@@ -761,7 +775,7 @@ export function ExploreSearchOverlay({
   const requestClose = useCallback(() => {
     // Leaving with results on screen keeps the query; one that found nothing,
     // or is still unanswered, is not kept.
-    if (showingResults && shownResponse && resultCount > 0) rememberQuery(historyQuery);
+    if (committedByPerson.current && showingResults && shownResponse && resultCount > 0) rememberQuery(historyQuery);
     keptOnLeave.current = null;
     // Dismissing the keyboard alongside the fade keeps close reading as one
     // gesture instead of two staggered ones.
@@ -773,7 +787,7 @@ export function ExploreSearchOverlay({
   // search on screen as the close button does: read as it leaves.
   const keptOnLeave = useRef<string | null>(null);
   useEffect(() => {
-    keptOnLeave.current = showingResults && shownResponse && resultCount > 0 ? historyQuery : null;
+    keptOnLeave.current = committedByPerson.current && showingResults && shownResponse && resultCount > 0 ? historyQuery : null;
   });
   useEffect(() => () => {
     if (keptOnLeave.current) void rememberSearchQuery(keptOnLeave.current);
@@ -786,11 +800,14 @@ export function ExploreSearchOverlay({
       return;
     }
     void readSearchHistory().then(setHistory);
-    // Opened on a search, it shows the results; else the field is ready to type in.
-    if (openedOn) return;
-    const focusTimer = setTimeout(() => inputRef.current?.focus(), 120);
+  }, [visible]);
+  useEffect(() => {
+    // Opened on a search, it shows the results; else the field is ready to
+    // type in, once the screen that holds it says its entrance is over.
+    if (!visible || openedOn || focusReady === false) return;
+    const focusTimer = setTimeout(() => inputRef.current?.focus(), focusReady === undefined ? 120 : 0);
     return () => clearTimeout(focusTimer);
-  }, [openedOn, visible]);
+  }, [focusReady, openedOn, visible]);
 
   // Related posts can come with the search in front (the first page of it).
   const relatedApplies = requestKey !== null && searchRelatedApplies({
@@ -909,6 +926,7 @@ export function ExploreSearchOverlay({
   const commitSearch = (text: string, onType: PublicSearchType = type) => {
     const next = normalizeSearchHistoryQuery(text);
     if (searchTypeaheadQuery(next) === null || !tabRunsText(next, onType)) return;
+    committedByPerson.current = true;
     pendingCommit.current = next;
     settleOn(next);
     if (text !== query) setQuery(text);
