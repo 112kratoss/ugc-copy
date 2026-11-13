@@ -74,9 +74,11 @@ import {
   searchInsteadLabel,
   searchMadeWithChipLabel,
   searchMadeWithRemoveLabel,
+  searchEmptyTabPointer,
+  searchEmptyTabPointerLine,
   searchEmptyTabTitle,
   searchNoResultsTitle,
-  searchOtherTabPointer,
+  searchSeeTabLabel,
   searchRecentAgainLabel,
   searchRecentRemoveLabel,
   searchRecipeCardLabel,
@@ -166,8 +168,10 @@ function offeredEntities(response: PublicSearchResponse, type: PublicSearchType,
 }
 
 // Top's results by kind, and the query and reading they are for.
-function topCountsOf(response: PublicSearchResponse): Record<SearchTopSection, number> {
-  return { creators: response.creators.items.length, posts: response.posts.items.length, recipes: response.recipes.items.length };
+// What an empty tab reads from Top's answer: each kind's results (searchEmptyTabPointer).
+type TopSections = Pick<PublicSearchResponse, 'creators' | 'posts' | 'recipes'>;
+function topSectionsOf(response: PublicSearchResponse): TopSections {
+  return { creators: response.creators, posts: response.posts, recipes: response.recipes };
 }
 function topCountsKey(query: string, exact: boolean) {
   return `${exact ? 'exact' : 'read'}:${query}`;
@@ -643,9 +647,9 @@ export function ExploreSearchOverlay({
   const [failure, setFailure] = useState<SearchFailure | null>(null);
   const [history, setHistory] = useState<string[]>([]);
   // What Top found for a query, by kind: what an empty tab points to
-  // (searchOtherTabPointer). Kept from the Top answer on hand, or from the
-  // one request an empty tab may make for it (`askedTopFor`).
-  const [topCounts, setTopCounts] = useState<{ key: string; counts: Record<SearchTopSection, number> } | null>(null);
+  // (searchEmptyTabPointer, the web's rule). Kept from the Top answer on hand,
+  // or from the one request an empty tab may make for it (`askedTopFor`).
+  const [topCounts, setTopCounts] = useState<{ key: string; top: TopSections } | null>(null);
   const askedTopFor = useRef<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const normalizedQuery = useMemo(() => normalizeSearchHistoryQuery(query), [query]);
@@ -827,7 +831,7 @@ export function ExploreSearchOverlay({
         return;
       }
       setAnswer({ key, scope, response: next, relatedAsked: askRelated });
-      if (type === 'top') setTopCounts({ key: topCountsKey(normalizedQuery, exact), counts: topCountsOf(next) });
+      if (type === 'top') setTopCounts({ key: topCountsKey(normalizedQuery, exact), top: topSectionsOf(next) });
       if (rememberOnAnswer.current === key) {
         rememberOnAnswer.current = null;
         if (shownResultCount(next, type, normalizedQuery) > 0) {
@@ -1032,7 +1036,7 @@ export function ExploreSearchOverlay({
     && searchSaysNoResults(countedLength)
     && !hasSearchFilters(filters);
   const countsKey = topCountsKey(normalizedQuery, exact);
-  const pointerCounts = topCounts?.key === countsKey ? topCounts.counts : null;
+  const pointerCounts = topCounts?.key === countsKey ? topCounts.top : null;
   const asksTopCounts = emptyTab && shownTab !== null && pointerCounts === null;
   useEffect(() => {
     if (!asksTopCounts || askedTopFor.current === countsKey) return;
@@ -1040,12 +1044,12 @@ export function ExploreSearchOverlay({
     // Not aborted with the screen's next render: its answer is kept by key, so
     // coming back to the tab finds it.
     api.searchPublicContent({ query: normalizedQuery, type: 'top', sort: 'top', filters: NO_SEARCH_FILTERS, exact, cursor: null, related: false })
-      .then((next) => setTopCounts({ key: countsKey, counts: topCountsOf(next) }))
+      .then((next) => setTopCounts({ key: countsKey, top: topSectionsOf(next) }))
       .catch(() => {
         // The pointer is an extra: the tab's own "No …" stands.
       });
   }, [api, asksTopCounts, countsKey, exact, normalizedQuery]);
-  const otherTab = emptyTab && shownTab !== null && pointerCounts ? searchOtherTabPointer(shownTab, pointerCounts) : null;
+  const otherTab = emptyTab && shownTab !== null && pointerCounts ? searchEmptyTabPointer(shownTab, pointerCounts) : null;
   // Nothing anywhere: Top found nothing, or this tab and every other did.
   const nothingFound = emptyTab && (shownTab === null || (pointerCounts !== null && otherTab === null));
 
@@ -1291,8 +1295,8 @@ export function ExploreSearchOverlay({
             {otherTab && shownTab ? (
               // This tab is empty, another is not: said, with the way there.
               <View style={{ gap: 12 }}>
-                <StatusBlock title={searchEmptyTabTitle(shownTab, normalizedQuery)} body={otherTab.line} />
-                <SecondaryButton label={otherTab.label} onPress={() => setPickedType(otherTab.tab)} />
+                <StatusBlock title={searchEmptyTabTitle(shownTab, normalizedQuery)} body={searchEmptyTabPointerLine(otherTab)} />
+                <SecondaryButton label={searchSeeTabLabel(otherTab.tab)} onPress={() => setPickedType(otherTab.tab)} />
               </View>
             ) : (
               <StatusBlock

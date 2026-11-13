@@ -428,6 +428,16 @@ describe('ShowcaseClient save actions', () => {
     expect(screen.getAllByRole('button', { name: 'Share' })).toHaveLength(2);
   });
 
+  it('opens on a search bar below 1024px, above the heading, that links to the search page', () => {
+    renderShowcase(createShowcaseItem());
+    // Explore's way into search where the top bar has only a magnifier (search UX audit 2026-11-13, finding 11).
+    const entry = screen.getByRole('link', { name: 'Search' });
+    expect(entry.getAttribute('href')).toBe('/search');
+    expect(entry.className).toContain('lg:hidden');
+    const heading = screen.getByRole('heading', { level: 1, name: 'Explore' });
+    expect(entry.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('takes over the bootstrap prefix, then fills the rest one card per tick without scrolling', () => {
     vi.useFakeTimers();
     const items = Array.from({ length: SHOWCASE_INITIAL_RENDER_COUNT + 3 }, (_, index) => createShowcaseItem({

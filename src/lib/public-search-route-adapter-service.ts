@@ -22,6 +22,7 @@ import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
 import {
   PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
   PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH,
+  PUBLIC_SEARCH_PROBE_PARAM,
   PUBLIC_SEARCH_RELATED_PARAM,
   appliedPublicSearchFilters,
   decodePublicSearchCursor,
@@ -169,6 +170,10 @@ async function handlePublicSearchGET(
     // the query read as typed).
     const rawRelated = url.searchParams.get(PUBLIC_SEARCH_RELATED_PARAM);
     if (rawRelated !== null && rawRelated !== '1') return badRequest(request, 'related must be 1.');
+    // A search the client asks for itself (PUBLIC_SEARCH_PROBE_PARAM): answered
+    // and limited as any, never written to the search log.
+    const rawProbe = url.searchParams.get(PUBLIC_SEARCH_PROBE_PARAM);
+    if (rawProbe !== null && rawProbe !== '1') return badRequest(request, 'probe must be 1.');
 
     const limit = parsePublicSearchLimit(url.searchParams.get('limit'));
     if (!limit) return badRequest(request, 'limit must be an integer between 1 and 24.');
@@ -246,8 +251,9 @@ async function handlePublicSearchGET(
         vary: ['Authorization', 'x-vercel-ip-country'],
       }),
     });
-    // The anonymous search log: scheduled behind the answer, never awaited, never able to fail it.
-    recordSearchAnswer({
+    // The anonymous search log: scheduled behind the answer, never awaited,
+    // never able to fail it; never for a search the person did not run (a probe).
+    if (rawProbe === null) recordSearchAnswer({
       createClient: dependencies.createServiceClient,
       runAfterResponse: dependencies.runAfterResponse,
       logEvent: dependencies.logEvent,

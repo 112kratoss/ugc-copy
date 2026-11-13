@@ -433,6 +433,70 @@ export function searchNoResultsTitle(query: string): string {
 }
 export const SEARCH_NO_RESULTS_BODY = 'Try a shorter phrase, check the spelling, or search for a creator handle.';
 
+// ─── An empty tab ────────────────────────────────────────────────────────────
+//
+// A tab of one kind that found nothing says so in its own words and, where
+// another kind found something for the same search, says what and offers a
+// button to that tab (search UX audit 2026-11-13, finding 8: Recipes said "No
+// results for “nano”" while Top had thirteen). Read from Top's answer for the
+// same search, which holds each kind's best (SEARCH_TOP_SECTION_SIZES).
+
+/** A tab that holds one kind of result. */
+export type SearchKindTab = Exclude<SearchTabId, 'top'>;
+
+const SEARCH_KIND_WORDS: Readonly<Record<SearchKindTab, { one: string; many: string }>> = {
+  creators: { one: 'creator', many: 'creators' },
+  posts: { one: 'post', many: 'posts' },
+  recipes: { one: 'recipe', many: 'recipes' },
+};
+
+/** The title of an empty tab: "No recipes for “nano”". */
+export function searchEmptyTabTitle(tab: SearchKindTab, query: string): string {
+  return `No ${SEARCH_KIND_WORDS[tab].many} for “${query}”`;
+}
+
+/** Where an empty tab points, and what it says of it. */
+export interface SearchEmptyTabPointer {
+  tab: SearchKindTab;
+  /** How many Top's answer holds of it. */
+  count: number;
+  /** Top showed as many as it shows of that kind: there are likely more. */
+  more: boolean;
+}
+
+/** The order an empty tab looks at the other kinds in (the app track's order too). */
+export const SEARCH_EMPTY_TAB_POINTER_ORDER = ['posts', 'creators', 'recipes'] as const;
+
+/**
+ * Which other tab an empty one points at, from Top's answer for the same
+ * search: the first kind in SEARCH_EMPTY_TAB_POINTER_ORDER that found
+ * something; null when none did (the search found nothing at all).
+ */
+export function searchEmptyTabPointer(
+  tab: SearchKindTab,
+  top: { creators: { items: readonly unknown[] }; posts: { items: readonly unknown[] }; recipes: { items: readonly unknown[] } } | null | undefined,
+): SearchEmptyTabPointer | null {
+  if (!top) return null;
+  for (const other of SEARCH_EMPTY_TAB_POINTER_ORDER) {
+    if (other === tab) continue;
+    const count = top[other].items.length;
+    if (count > 0) return { tab: other, count, more: searchTopSectionHasMore(other, count) };
+  }
+  return null;
+}
+
+/** The line under an empty tab's title: "12 posts match", "12+ posts match", "1 recipe matches". */
+export function searchEmptyTabPointerLine(pointer: SearchEmptyTabPointer): string {
+  const words = SEARCH_KIND_WORDS[pointer.tab];
+  if (pointer.more) return `${pointer.count}+ ${words.many} match`;
+  return pointer.count === 1 ? `1 ${words.one} matches` : `${pointer.count} ${words.many} match`;
+}
+
+/** The button to that tab: "See posts". */
+export function searchSeeTabLabel(tab: SearchKindTab): string {
+  return `See ${SEARCH_KIND_WORDS[tab].many}`;
+}
+
 /** A search that failed: the title says what happened, the body what to do, the button does it. */
 export const SEARCH_FAILED_TITLE = 'Search did not load';
 export const SEARCH_FAILED_BODY = 'Something went wrong.';
@@ -455,45 +519,6 @@ export const SEARCH_SEE_ALL_LABEL = 'See all';
 /** What both "See all" controls of a Top section say: the link by its heading and the button under its last row. */
 export function searchSeeAllLabel(section: SearchTopSection): string {
   return `See all ${section}`;
-}
-
-/**
- * An empty tab says what another tab holds, with a button to it (search UX
- * audit 2026-11-13, finding 8): "No recipes for “nano”", "12 posts match",
- * "See posts". The counts are Top's for the same query, which shows at most
- * a section's size of each kind (SEARCH_TOP_SECTION_SIZES): a full section
- * has more, said as "12+". The other tab is the first of posts, creators and
- * recipes, other than this one, that holds something; none, and the tab says
- * nothing found anywhere (searchNoResultsTitle).
- */
-export function searchEmptyTabTitle(tab: SearchTopSection, query: string): string {
-  return `No ${tab} for “${query}”`;
-}
-
-const SEARCH_TAB_NOUNS: Readonly<Record<SearchTopSection, [string, string]>> = {
-  creators: ['creator', 'creators'],
-  posts: ['post', 'posts'],
-  recipes: ['recipe', 'recipes'],
-};
-
-export function searchOtherTabLine(tab: SearchTopSection, count: number): string {
-  const more = searchTopSectionHasMore(tab, count);
-  const [one, many] = SEARCH_TAB_NOUNS[tab];
-  return more ? `${count}+ ${many} match` : count === 1 ? `1 ${one} matches` : `${count} ${many} match`;
-}
-
-export function searchSeeTabLabel(tab: SearchTopSection): string {
-  return `See ${tab}`;
-}
-
-export const SEARCH_OTHER_TAB_ORDER: readonly SearchTopSection[] = ['posts', 'creators', 'recipes'];
-
-export function searchOtherTabPointer(
-  tab: SearchTopSection,
-  topCounts: Readonly<Record<SearchTopSection, number>>,
-): { tab: SearchTopSection; line: string; label: string } | null {
-  const other = SEARCH_OTHER_TAB_ORDER.find((kind) => kind !== tab && topCounts[kind] > 0);
-  return other ? { tab: other, line: searchOtherTabLine(other, topCounts[other]), label: searchSeeTabLabel(other) } : null;
 }
 
 function countWords(count: number, one: string, many: string): string {
@@ -615,6 +640,13 @@ export function searchMadeWithRemoveLabel(label: string): string {
 
 /** The parameter a client asks for related posts with; its one value is `1`. */
 export const SEARCH_RELATED_PARAM = 'related';
+
+/**
+ * The parameter a client marks a search it asks for itself with (`probe=1`),
+ * one the person never ran: an empty tab asking Top what the other tabs hold.
+ * The server answers it as any search and leaves it out of the search log.
+ */
+export const SEARCH_PROBE_PARAM = 'probe';
 
 /** The heading of the group. */
 export const SEARCH_RELATED_HEADING = 'Related posts';

@@ -9,6 +9,7 @@ import { useAuth } from '@/components/AuthProvider';
 // A type alone: the full client's module is loaded with `import()` below, on demand.
 import type { ShowcaseClientProps } from '@/app/showcase/ShowcaseClient';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
+import { SearchEntryLink } from '@/components/search/SearchEntryLink';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import { pushReelEntry, replaceReelEntry } from '@/lib/reel-history-entry';
 import {
@@ -445,6 +446,8 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
             aria-busy={isActivating || undefined}
         >
             <div className="studio-shell relative z-10">
+                {/* As the full page draws it (ShowcaseClient): the shell hands over without a move. */}
+                <SearchEntryLink className="mb-5 lg:hidden" />
                 <header className="ui-enter mb-7 flex flex-col gap-5 border-b border-[var(--ui-border-subtle)] pb-7 lg:flex-row lg:items-end lg:justify-between">
                     <div>
                         <div className="mb-3 inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-primary)]">

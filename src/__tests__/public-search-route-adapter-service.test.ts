@@ -563,6 +563,17 @@ describe('public search route adapter service', () => {
       expect(insert).toHaveBeenCalledTimes(1);
     });
 
+    it('logs nothing for a search the client asked for itself (probe=1), and still limits and answers it', async () => {
+      const limit = vi.fn(allowedRateLimit);
+      const { ask, tasks } = logHarness();
+      const response = await ask('http://localhost/api/search?q=Port&type=top&probe=1', { enforceBackendRateLimit: limit });
+      expect(response.status).toBe(200);
+      expect(limit).toHaveBeenCalledTimes(1);
+      expect(tasks).toHaveLength(0);
+      // Any other value is refused, as related's is.
+      expect((await ask('http://localhost/api/search?q=Port&probe=yes')).status).toBe(400);
+    });
+
     it('logs one anonymous row for a first page: the query lowercased, never the key', async () => {
       const { ask, insert, from, tasks } = logHarness();
       await ask('http://localhost/api/search?q=Port&type=top');

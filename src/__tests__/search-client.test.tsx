@@ -32,7 +32,13 @@ const fetchMock = vi.fn();
 // (search-typeahead-client.test.tsx holds it). Here it is answered apart, with
 // nothing to offer, so `fetchMock` sees the searches and only the searches.
 const suggestFetchMock = vi.fn();
+// The starter (/api/search/starter, asked once as the page opens) has its own
+// stub, so each test's `fetchMock` holds the searches and only the searches.
+// By default the route is not there yet, as before its release: no starter.
+const starterFetchMock = vi.fn();
+const NO_STARTER_ROUTE = { ok: false, status: 404, json: async () => ({}) };
 function fetchBySurface(url: string, init?: RequestInit) {
+  if (String(url).startsWith('/api/search/starter')) return starterFetchMock(url, init);
   return String(url).startsWith('/api/search/suggest') ? suggestFetchMock(url, init) : fetchMock(url, init);
 }
 // The page's auth listener, kept so a test can say "signed out" as Supabase does.
@@ -151,6 +157,11 @@ function requestedUrls() {
   return fetchMock.mock.calls.map(([url]) => url as string);
 }
 
+/** The tab's own searches: an empty tab of one kind also asks Top once, for what the other tabs hold. */
+function tabRequestedUrls() {
+  return requestedUrls().filter((url) => !/[?&]type=top(&|$)/.test(url));
+}
+
 function typeQuery(value: string) {
   fireEvent.change(screen.getByRole('combobox'), { target: { value } });
 }
@@ -172,6 +183,8 @@ describe('SearchClient', () => {
       status: 200,
       json: async () => ({ query: '', normalizedQuery: '', creators: [], entities: [], completions: [] }),
     });
+    starterFetchMock.mockReset();
+    starterFetchMock.mockResolvedValue(NO_STARTER_ROUTE);
     vi.stubGlobal('fetch', fetchBySurface);
     window.localStorage.clear();
     window.history.replaceState(null, '', '/search');
@@ -697,7 +710,7 @@ describe('SearchClient', () => {
 
       typeQuery('\u{1F600}\u{1F600}\u{1F600}');
       await settle(300);
-      expect(requestedUrls()).toEqual([
+      expect(tabRequestedUrls()).toEqual([
         `/api/search?q=${encodeURIComponent('\u{1F600}\u{1F600}\u{1F600}')}&type=posts`,
       ]);
     });
@@ -712,7 +725,7 @@ describe('SearchClient', () => {
 
       typeQuery('@abc');
       await settle(300);
-      expect(requestedUrls()).toEqual(['/api/search?q=%40abc&type=posts']);
+      expect(tabRequestedUrls()).toEqual(['/api/search?q=%40abc&type=posts']);
     });
 
     it('keeps the chosen tab while a query passes through two characters', async () => {
@@ -1185,7 +1198,7 @@ describe('SearchClient', () => {
         );
         await settle();
         // Never sent: the one request names no filter.
-        expect(requestedUrls()).toEqual(['/api/search?q=portrait&type=posts']);
+        expect(tabRequestedUrls()).toEqual(['/api/search?q=portrait&type=posts']);
         expect(address()).toBe('/search?q=portrait&type=posts');
         const group = screen.getByRole('group', { name: 'Filter posts' });
         expect(within(group).queryByRole('button', { name: 'Following' })).not.toBeInTheDocument();
@@ -1249,7 +1262,7 @@ describe('SearchClient', () => {
           />,
         );
         await settle();
-        expect(screen.getByText('No results for “portrait”')).toBeInTheDocument();
+        expect(screen.getByText('No posts for “portrait”')).toBeInTheDocument();
         expect(screen.getByText('No post matches these filters. Remove one, or clear them all.')).toBeInTheDocument();
         expect(chip('Videos')).toHaveAttribute('aria-pressed', 'true');
         expect(chip('Clear filters')).toBeInTheDocument();
@@ -1296,7 +1309,7 @@ describe('SearchClient', () => {
         expect(requestedUrls()[1]).toBe('/api/search?q=portriat&type=posts&exact=1');
         expect(address()).toBe('/search?q=portriat&type=posts&exact=1');
         expect(screen.getByText('Showing results for “portriat” as typed')).toBeInTheDocument();
-        expect(screen.getByText('No results for “portriat”')).toBeInTheDocument();
+        expect(screen.getByText('No posts for “portriat”')).toBeInTheDocument();
         expect(screen.queryByText('Showing results for “portrait”')).not.toBeInTheDocument();
 
         // And back.
@@ -1305,7 +1318,7 @@ describe('SearchClient', () => {
         }));
         fireEvent.click(screen.getByRole('button', { name: 'Use suggested spelling' }));
         await settle();
-        expect(requestedUrls()[2]).toBe('/api/search?q=portriat&type=posts');
+        expect(tabRequestedUrls()[2]).toBe('/api/search?q=portriat&type=posts');
         expect(screen.getByText('Showing results for “portrait”')).toBeInTheDocument();
       });
 
@@ -1538,6 +1551,8 @@ describe('SearchClient opened from the top bar', () => {
       status: 200,
       json: async () => ({ query: 'luna', normalizedQuery: 'luna', creators: [], entities: [], completions: [{ text: 'luna portrait' }] }),
     });
+    starterFetchMock.mockReset();
+    starterFetchMock.mockResolvedValue(NO_STARTER_ROUTE);
     vi.stubGlobal('fetch', fetchBySurface);
     window.history.replaceState(null, '', '/search');
   });
