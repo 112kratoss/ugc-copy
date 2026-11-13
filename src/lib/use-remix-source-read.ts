@@ -71,13 +71,20 @@ async function remixReaderToken({ formAccount, pageToken }: RemixReader): Promis
 
 /**
  * Takes the post's free recipe for the form's account, under the session its reads go out under
- * (`claimFreeRecipe`, with the funnel events of every free unlock). False where the recipe is not
- * one to take for nothing (paid, retired, withheld from this reader) or the claim could not be made.
+ * (`claimFreeRecipe`, with the funnel events of every free unlock). Answers null once the recipe is
+ * theirs, else why not: the claim's error with its status, where the recipe is not one to take for
+ * nothing (paid, retired, withheld from this reader: a 400 or a 404) or the claim could not be made
+ * (a 429, a 5xx, the network, no session).
  */
-async function takeFreeRecipe(postId: string, reader: RemixReader): Promise<boolean> {
-  const accessToken = await remixReaderToken(reader).catch(() => null);
-  if (!accessToken) return false;
-  return claimFreeRecipe(postId, accessToken).then(() => true, () => false);
+async function takeFreeRecipe(postId: string, reader: RemixReader): Promise<{ error: unknown } | null> {
+  try {
+    const accessToken = await remixReaderToken(reader);
+    if (!accessToken) throw new Error('No session to take the recipe with');
+    await claimFreeRecipe(postId, accessToken);
+    return null;
+  } catch (error) {
+    return { error };
+  }
 }
 
 /**
@@ -116,7 +123,12 @@ export async function readRemixSource(
  *   never fills the form under Strict Mode, which unmounts the first run before the read is back.
  * - **A remix behind a free recipe** (a 403 with `REMIX_UNLOCK_REQUIRED`, for a remix that names its
  *   post) is not a failure yet: the recipe is taken for the form's account and the remix read once
- *   more, the notice's placeholder held throughout. A claim the server refuses leaves the refusal.
+ *   more, the notice's placeholder held throughout. A claim the server refuses leaves the refusal;
+ *   one that could not be made is a failed read with Try again. This makes opening the page the
+ *   act that takes the recipe, as a tap on the feed card's Remix is: a link to a remix, from the
+ *   shelf or from anywhere else, takes its post's free recipe for the signed-in account that opens
+ *   it (2026-11-13 review: accepted; the endpoint's own rules and rate limit still decide, a guest
+ *   and an agent token never reach it, and nothing is given that the post page would not give).
  * - **A failed read** (a 5xx, a 429, the network, a revoked session, or an answer the form could not
  *   take) is final until the creator asks again (`retry`): the token-driven re-read that #664 ended
  *   put the original over their work, up to an hour later. A refusal of the remix itself (a 403, a
@@ -181,10 +193,13 @@ export function useRemixSourceRead<Field extends string>({
           // it and reads once more: opening a remix of a free recipe takes the recipe on the way,
           // from a shelf card as from the feed card's Remix and the post page's (owner, 2026-11-12
           // and 13). The server decides what is free: a paid, retired or withheld recipe refuses
-          // the claim, and the remix stays refused as it was.
+          // the claim, and the remix stays refused as it was, for good. A claim that only failed
+          // to be made (a 429, a 5xx, the network) is said as that failure, so Try again is
+          // offered: its read is refused again and the recipe asked for once more.
           const behindRecipe = (refusal as { code?: unknown } | null)?.code === REMIX_UNLOCK_REQUIRED_CODE;
           if (!remixPostId || !behindRecipe || isGone()) throw refusal;
-          if (!(await takeFreeRecipe(remixPostId, reader))) throw refusal;
+          const notTaken = await takeFreeRecipe(remixPostId, reader);
+          if (notTaken) throw remixReadMaySucceedLater(notTaken.error) ? notTaken.error : refusal;
           if (isGone()) return;
           bundle = await readRemixSource(remix, reader);
         }

@@ -8,7 +8,10 @@ import type { HomeShelfPin } from '@/lib/home-shelf';
  * remix is open to everyone or comes with a free recipe, which the creator
  * page takes as it opens the remix (owner, 2026-11-13; the app's shelf leaves
  * such a pin out until the app can do the same). A paid recipe that sells its
- * remix keeps the post off the shelf, and so does a placeholder title.
+ * remix keeps the post off the shelf, and so does a placeholder title. One
+ * thing the build cannot see: a free recipe on a remix of someone's paid recipe
+ * (published before 2026-11-05) is never given away, so its card would open a
+ * creator with nothing restored. Do not pin a remix of a paid recipe.
  * `toHomeShelfCreation` checks all of it on every build, so a pin that stops
  * qualifying simply drops out.
  *

@@ -477,6 +477,35 @@ describe('useRemixSourceRead, for a remix behind a free recipe', () => {
     ]);
   });
 
+  // The claim itself could not be made: nothing says the recipe cannot be taken, so the failure
+  // is one a later try can get past, as a failed read is (2026-11-13 review).
+  it.each([
+    ['a 429', { status: 429, body: { error: 'Too many recipes. Try again shortly.' } }],
+    ['a 5xx', { status: 500, body: { error: 'Failed to get the free recipe.' } }],
+    ['the network', new TypeError('Failed to fetch')],
+  ])('offers Try again when the claim fails with %s, and takes the recipe on that try', async (_case, failure) => {
+    const fetchMock = stubSourceAndClaim({
+      source: [UNLOCK_REQUIRED, UNLOCK_REQUIRED],
+      claim: [failure as Answer, { status: 200, body: { success: true } }],
+    });
+    const { result, taken } = renderRead();
+
+    await waitFor(() => expect(result.current.failureWarning).toBe(REMIX_RESTORE_WARNING));
+    expect(result.current.canRetry).toBe(true);
+    expect(taken).toEqual([]);
+
+    act(() => result.current.retry());
+    await waitFor(() => expect(taken).toHaveLength(1));
+    expect(requestsOf(fetchMock)).toEqual([
+      'GET /api/remix-source?id=gen-1&postId=post-1',
+      'POST /api/posts/post-1/resource-bundle/unlock-free',
+      'GET /api/remix-source?id=gen-1&postId=post-1',
+      'POST /api/posts/post-1/resource-bundle/unlock-free',
+      'GET /api/remix-source?id=gen-1&postId=post-1',
+    ]);
+    expect(result.current.failureWarning).toBeNull();
+  });
+
   it('takes the recipe once: a second refusal after the claim is final', async () => {
     const fetchMock = stubSourceAndClaim({
       source: [UNLOCK_REQUIRED, UNLOCK_REQUIRED],
