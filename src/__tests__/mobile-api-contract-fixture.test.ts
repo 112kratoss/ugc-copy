@@ -877,18 +877,18 @@ describe('shared mobile API v1 contract fixture', () => {
     const signedOut = await answer(null, endpoint.response.items, null);
     expect(signedOut.response.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
     await expect(signedOut.response.json()).resolves.toEqual(endpoint.response);
-    expect(signedOut.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: null, isAnonymous: false });
+    expect(signedOut.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: null, isAnonymous: false }, { withFreeRecipePosts: false });
 
     for (const variant of ['member', 'memberWhoPosted'] as const) {
       const fixture = endpoint.responseVariants[variant];
       const member = await answer('Bearer token-1', fixture.response.items, { id: 'user-2', is_anonymous: false });
       expect(member.response.headers.get('Cache-Control')).toBe(fixture.cacheControl);
       await expect(member.response.json()).resolves.toEqual(fixture.response);
-      expect(member.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: 'user-2', isAnonymous: false });
+      expect(member.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: 'user-2', isAnonymous: false }, { withFreeRecipePosts: false });
     }
 
     const guest = await answer('Bearer guest-token', endpoint.response.items, { id: 'guest-1', is_anonymous: true });
-    expect(guest.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: 'guest-1', isAnonymous: true });
+    expect(guest.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: 'guest-1', isAnonymous: true }, { withFreeRecipePosts: false });
     expect(guest.response.headers.get('Cache-Control')).toBe(endpoint.responseVariants.member.cacheControl);
     await expect(guest.response.json()).resolves.toEqual(endpoint.response);
   });

@@ -64,10 +64,11 @@ describe('/api/home/shelf', () => {
   it('reads a guest token as a guest, and no token as signed out', async () => {
     const guest = vi.fn(async () => []);
     await call({ lookup: { data: { user: { id: 'guest-1', is_anonymous: true } }, error: null }, loadHomeShelfForApi: guest });
-    expect(guest).toHaveBeenCalledWith({ viewerUserId: 'guest-1', isAnonymous: true });
+    // The app's shelf: without the posts whose remix comes with a free recipe, whoever asks.
+    expect(guest).toHaveBeenCalledWith({ viewerUserId: 'guest-1', isAnonymous: true }, { withFreeRecipePosts: false });
 
     const signedOut = vi.fn(async () => []);
     await call({ authorization: null, loadHomeShelfForApi: signedOut });
-    expect(signedOut).toHaveBeenCalledWith({ viewerUserId: null, isAnonymous: false });
+    expect(signedOut).toHaveBeenCalledWith({ viewerUserId: null, isAnonymous: false }, { withFreeRecipePosts: false });
   });
 });
