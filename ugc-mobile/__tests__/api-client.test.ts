@@ -431,6 +431,21 @@ describe('mobile api client caching', () => {
     ]);
   });
 
+  it('marks a search the client asks for itself as a probe, which the server leaves out of its search log', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({}));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    await api.searchPublicContent({ query: 'lake', type: 'top', probe: true });
+    await api.searchPublicContent({ query: 'lake', type: 'top' });
+    expect((fetcher.mock.calls as unknown as Array<[string]>).map(([url]) => new URL(String(url)).search)).toEqual([
+      '?q=lake&type=top&probe=1',
+      '?q=lake&type=top',
+    ]);
+  });
+
   it('sends a request id with backend calls', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ credits: 10 }));
     const api = createApiClient({

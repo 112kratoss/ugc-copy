@@ -27,6 +27,7 @@ import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo
 import { NativeMenu } from '@/components/native-menu';
 import { NewPostsPill } from '@/components/new-posts-pill';
 import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
+import { SEARCH_FIELD_LABEL, SEARCH_PLACEHOLDER } from '@/lib/public-search-policy/public-search-policy';
 import { PinBadge, VideoCornerPlay, VideoPinPreview, VisualFallbackPreview } from '@/components/showcase-pin-marks';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { TopScrim } from '@/components/top-scrim';
@@ -1001,9 +1002,6 @@ export default function ShowcaseScreen() {
                   Explore
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <IconButton label="Search creators, posts, and recipes" onPress={() => setSearchVisible(true)}>
-                    <Search size={appTheme.icon.default} color={theme.colors.text} />
-                  </IconButton>
                   <IconButton
                     disabled={showcaseQuery.isFetching && !showcaseQuery.isFetchingNextPage}
                     label="Refresh Explore"
@@ -1013,6 +1011,11 @@ export default function ShowcaseScreen() {
                   </IconButton>
                 </View>
               </View>
+
+              {/* Search as a field at the top of Explore, as Instagram, Pinterest and
+                  Reddit put it (search UX audit 2026-11-13, finding 11): it reads
+                  "Search" and opens search. */}
+              <ExploreSearchBar onPress={() => setSearchVisible(true)} />
 
               <ScrollView
                 horizontal
@@ -1198,6 +1201,39 @@ function IconButton({
       })}
     >
       {children}
+    </Pressable>
+  );
+}
+
+/**
+ * Explore's way into search at rest: a bar drawn as the search field is (the
+ * field's capsule, magnifier and placeholder), which opens search. Once the
+ * list header has scrolled away the compact button stands in for it
+ * (`CompactSearchButton`).
+ */
+function ExploreSearchBar({ onPress }: { onPress: () => void }) {
+  const theme = useAppTheme();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={SEARCH_FIELD_LABEL}
+      accessibilityHint="Opens search"
+      onPress={onPress}
+      style={({ pressed }) => ({
+        minHeight: 46,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 9,
+        borderRadius: appTheme.radii.pill,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surfaceInset,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+        paddingHorizontal: 15,
+      })}
+    >
+      <Search size={appTheme.icon.default} color={theme.colors.muted} />
+      <Text numberOfLines={1} style={{ flex: 1, color: theme.colors.faint, fontSize: 15 }}>{SEARCH_PLACEHOLDER}</Text>
     </Pressable>
   );
 }

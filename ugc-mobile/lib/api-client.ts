@@ -90,7 +90,7 @@ import type {
   UndoFeedFeedbackRequest,
   UndoFeedFeedbackResponse,
 } from './types';
-import { NO_SEARCH_FILTERS, SEARCH_RELATED_PARAM, searchFilterParams, type SearchFilters } from './public-search-policy/public-search-policy';
+import { NO_SEARCH_FILTERS, SEARCH_PROBE_PARAM, SEARCH_RELATED_PARAM, searchFilterParams, type SearchFilters } from './public-search-policy/public-search-policy';
 import {
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
   parseGenerationModelCatalog,
@@ -1411,12 +1411,19 @@ export function createApiClient({
        * on (the shared rule: public-search-policy.ts, "Related posts").
        */
       related?: boolean;
+      /**
+       * A search the app asks for itself, one the person never ran (an empty
+       * tab asking Top what the other tabs hold): answered as any search and
+       * left out of the search log (`probe=1`, the contract's probeParameter).
+       */
+      probe?: boolean;
     }, signal?: AbortSignal) => request<PublicSearchResponse>('/api/search' + buildQuery({
       q: params.query,
       type: params.type ?? 'top',
       sort: params.sort === 'latest' ? params.sort : undefined,
       ...searchFilterParams(params.filters ?? NO_SEARCH_FILTERS, params.exact ?? false),
       [SEARCH_RELATED_PARAM]: params.related ? '1' : undefined,
+      [SEARCH_PROBE_PARAM]: params.probe ? '1' : undefined,
       cursor: params.cursor,
       limit: params.limit,
     }), { signal }, { auth: true }),
