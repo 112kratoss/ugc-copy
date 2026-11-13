@@ -67,10 +67,13 @@ describe('search starter shared rules', () => {
   it('leave out a row that is not whole, and cut each list at its cap', () => {
     const parsed = parseSearchStarterResponse({
       entities: [
-        { kind: 'model', key: 'veo-3.1', label: 'Veo 3.1', postCount: 12.7, postCountCapped: 'yes' },
-        { kind: 'person', key: 'x', label: 'X', postCount: 1 },
-        { kind: 'tool', key: '', label: 'Empty', postCount: 1 },
-        ...Array.from({ length: 10 }, (_, index) => ({ kind: 'tool', key: `t-${index}`, label: `T ${index}`, postCount: 1 })),
+        { kind: 'model', key: 'veo-3.1', label: 'Veo 3.1', postCount: 12.7, postCountCapped: 'yes', query: ' veo 3 1 ' },
+        { kind: 'person', key: 'x', label: 'X', postCount: 1, query: 'x' },
+        { kind: 'tool', key: '', label: 'Empty', postCount: 1, query: 'empty' },
+        // No query: nothing to search, so no row (a client never falls back to the name).
+        { kind: 'tool', key: 'no-query', label: 'No query', postCount: 1 },
+        { kind: 'tool', key: 'blank-query', label: 'Blank query', postCount: 1, query: '   ' },
+        ...Array.from({ length: 10 }, (_, index) => ({ kind: 'tool', key: `t-${index}`, label: `T ${index}`, postCount: 1, query: `t ${index}` })),
       ],
       creators: [
         { id: 'c-1', username: 'ada', displayName: 'Ada', bio: '', avatarUrl: '', publicPostCount: -3 },
@@ -79,7 +82,9 @@ describe('search starter shared rules', () => {
       ],
       searches: [{ text: '  anime ' }, { text: '   ' }, { text: 7 }, ...Array.from({ length: 10 }, (_, index) => ({ text: `s ${index}` }))],
     })!;
-    expect(parsed.entities[0]).toEqual({ kind: 'model', key: 'veo-3.1', label: 'Veo 3.1', postCount: 12, postCountCapped: false });
+    expect(parsed.entities[0]).toEqual({ kind: 'model', key: 'veo-3.1', label: 'Veo 3.1', postCount: 12, postCountCapped: false, query: 'veo 3 1' });
+    expect(parsed.entities.map((entity) => entity.key)).not.toContain('no-query');
+    expect(parsed.entities.map((entity) => entity.key)).not.toContain('blank-query');
     expect(parsed.entities).toHaveLength(SEARCH_STARTER_MAX_ENTITIES);
     expect(parsed.creators[0]).toEqual({
       id: 'c-1', username: 'ada', displayName: 'Ada', bio: null, avatarUrl: null, publicPostCount: 0, isFollowing: false,
@@ -111,14 +116,16 @@ describe('search starter shared rules', () => {
     expect(isSearchStarterEmpty(parseSearchStarterResponse(contract.response))).toBe(false);
   });
 
-  it('say what a row does: an entity searches its name on Posts narrowed to it, a creator opens their page, a search searches', () => {
+  it('say what a row does: an entity searches the query it was counted for on Posts narrowed to it, a creator opens their page, a search searches', () => {
     const [entity] = contract.response.entities as Parameters<typeof searchStarterEntityAction>[0][];
     expect(searchStarterEntityAction(entity)).toEqual({
       type: 'entity',
       entity,
-      query: entity.label,
+      query: entity.query,
       madeWith: searchEntityId(entity),
     });
+    // Never its name: "Nano Banana Pro" is drawn, "nano banana pro" is searched.
+    expect(entity.label).not.toBe(entity.query);
     expect(searchStarterEntityAction(entity)).toMatchObject({ madeWith: 'model:nano-banana-pro' });
     const [creator] = parseSearchStarterResponse(contract.response)!.creators;
     expect(searchStarterCreatorAction(creator)).toEqual({ type: 'creator', username: 'luna-studio' });

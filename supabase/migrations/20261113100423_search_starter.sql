@@ -9,7 +9,7 @@
 --
 -- public.search_starter(p_viewer_user_id, p_terms, p_entity_limit,
 --   p_creator_limit, p_search_limit) RETURNS jsonb:
---   {entities: [{kind, key, label, post_count, post_count_capped}],
+--   {entities: [{kind, key, label, post_count, post_count_capped, query}],
 --    creators: [{id, username, display_name, bio, avatar_url,
 --                public_post_count, is_following}],
 --    searches: [{text}]}
@@ -19,9 +19,12 @@
 -- search may show this viewer (c_window): public, visible, unarchived, with a
 -- search document, unlabelled, neither side of a block with the viewer, cut
 -- after those rules, found through posts_public_review_recent_idx in
--- created_at order. Nothing here reads a post outside it, so the cost does
--- not grow with the posts table. While there are fewer than 2,000 such posts
--- the window is all of them.
+-- created_at order. To find them it reads at most the newest 10,000 public,
+-- visible, unarchived posts (c_scan_ceiling): when more of those than 8,000
+-- are labelled, without a document or blocked with the viewer, the window is
+-- the fewer posts that pass, and the lists are read from them (shorter, or
+-- empty). So the window's cost does not grow with the posts table. While
+-- there are fewer than 2,000 such posts the window is all of them.
 --
 -- 1. ENTITIES (Popular models and tools). The models and tools with the most
 --    posts in the window, most first, under the rules a suggestion already
@@ -33,11 +36,19 @@
 --        or key, read as post_search_entities.name_vector reads them;
 --      - a template result has no model (post_search_entities never holds
 --        one for it), so a template's hidden model is never offered.
---    The c_entity_candidates strongest by window count are then counted as
---    search_public_entities counts a made-with filter for this viewer (every
---    post the viewer may see that has it, up to 1,000, and the name most of
---    them print), which is the list pressing the entity opens, and shown by
---    that count, most first. Each such count reads at most 1,001 rows.
+--    Pressing one runs a Posts search for its key's words (search_split_terms:
+--    'qwen3' reads 'qwen 3', 'kling-2.6' 'kling 2 6'), returned as `query`,
+--    narrowed to it with the made-with filter. The c_entity_candidates
+--    strongest by window count are counted for that search as
+--    search_public_entities counts it for this viewer (the posts
+--    search_public_posts returns for the query narrowed to the entity, up to
+--    1,000, under the name most of them print), so the count shown is the
+--    list the press opens; one that search finds nothing for is not offered.
+--    It is shown by that count, most first. Not the name a client draws: a
+--    catalog's name ('Qwen Image 3.0' for qwen3) can hold words its posts do
+--    not, and searched it opened fewer posts than the count, or none
+--    (PR #785 review). Each count reads at most 1,001 rows of each entity
+--    the query names, at most 10.
 --
 -- 2. CREATORS (Creators to follow). Accounts with an unlabelled public post
 --    in the window posted in the last 30 days, ordered by
@@ -65,12 +76,14 @@
 --    (search_starter_term_finds_post): a post search_public_posts finds for
 --    it, so an offer never opens an empty search. At most 20 terms are read.
 --
--- COST. The window is bounded; each entity count reads at most 1,001 rows,
--- for at most 12 entities; followers are counted at most 1,000 per creator,
--- for at most 50; a term's check reads the word index's list for each of its
--- words (0.1 to 3 ms a term, 'portrait' being in 25,000 of 50,000 posts).
--- Local replay 2026-11-13, warm: 14 ms the whole call on 5,000 posts, 33 ms
--- on 50,000 (where every entity count has reached its cap).
+-- COST. The window reads at most 10,000 index entries; each entity count
+-- reads at most 1,001 rows of each entity its query names (at most 10), for
+-- at most 12 entities; followers are counted at most 1,000 per creator, for
+-- at most 50. The searches list is NOT bounded the same way: a term's check
+-- reads the word index's posting list of each of its words, which grows with
+-- the posts that hold the word (about 2.5 ms for 'portrait' in 25,000 of
+-- 50,000 posts, so tens of ms a common word at a million), for at most 20
+-- terms. Timings: docs/production-deployment-runbook.md, "Search Starter".
 --
 -- No search log, and no hidden, private, archived or labelled post, is read
 -- for any list's order or presence; a viewer's blocks and follows only ever
@@ -164,6 +177,8 @@ AS $function$
 DECLARE
   -- The newest posts the entity and creator lists are read from.
   c_window CONSTANT integer := 2000;
+  -- The most index entries read to find them.
+  c_scan_ceiling CONSTANT integer := 10000;
   -- How many entities are counted in full before the list is cut.
   c_entity_candidates CONSTANT integer := 12;
   -- How many of the most active creators have their followers counted.
@@ -188,11 +203,19 @@ BEGIN
   IF v_entity_limit > 0 OR v_creator_limit > 0 THEN
     WITH recent AS MATERIALIZED (
       SELECT posts.id AS post_id, posts.user_id AS creator_user_id, posts.created_at
-      FROM public.posts AS posts
-      WHERE posts.visibility = 'public'
-        AND posts.review_status = 'visible'
-        AND posts.archived_at IS NULL
-        AND posts.is_nsfw = false
+      FROM (
+        -- The newest public posts by the index's own order, cut before any
+        -- other rule is read: however many of them are labelled, without a
+        -- document or blocked, no more than this many are looked at.
+        SELECT scanned.id, scanned.user_id, scanned.created_at, scanned.is_nsfw
+        FROM public.posts AS scanned
+        WHERE scanned.visibility = 'public'
+          AND scanned.review_status = 'visible'
+          AND scanned.archived_at IS NULL
+        ORDER BY scanned.created_at DESC, scanned.id DESC
+        LIMIT c_scan_ceiling
+      ) AS posts
+      WHERE posts.is_nsfw = false
         -- A post search can show: it has a document.
         AND EXISTS (
           SELECT 1
@@ -222,13 +245,15 @@ BEGIN
           'key', offered.key,
           'label', offered.label,
           'post_count', offered.post_count,
-          'post_count_capped', offered.post_count_capped
+          'post_count_capped', offered.post_count_capped,
+          'query', offered.query
         ) ORDER BY offered.post_count DESC, offered.window_posts DESC, offered.kind, offered.key), '[]'::jsonb)
         FROM (
           SELECT
             candidates.kind,
             candidates.key,
             candidates.window_posts,
+            asked.query,
             counted.label,
             counted.post_count,
             counted.post_count_capped
@@ -245,14 +270,25 @@ BEGIN
             ORDER BY count(*) DESC, members.kind, members.key
             LIMIT c_entity_candidates
           ) AS candidates
-          -- Counted as a made-with filter counts it for this viewer: the list
-          -- pressing it opens, and the name most of its posts print.
-          CROSS JOIN LATERAL public.search_public_entities(
-            NULL,
+          -- The search pressing it runs: its key's words, which every post
+          -- that has it holds in its document (a name's variants include its
+          -- split form), narrowed to it by the made-with filter.
+          CROSS JOIN LATERAL (
+            SELECT public.search_split_terms(candidates.key) AS query
+          ) AS asked
+          -- Counted as search counts that search for this viewer (the posts
+          -- search_public_posts returns for the query narrowed to the
+          -- entity, to 1,000), under the name most of them print. An entity
+          -- that search would not offer, or whose search finds nothing, is
+          -- not offered here either.
+          JOIN LATERAL public.search_public_entities(
+            asked.query,
             p_viewer_user_id,
-            1,
-            candidates.kind || ':' || candidates.key
+            10,
+            NULL
           ) AS counted
+            ON counted.kind = candidates.kind
+           AND counted.key = candidates.key
           -- No withdrawn word in its name or key, read as name_vector reads them.
           WHERE NOT EXISTS (
             SELECT 1
@@ -375,7 +411,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.search_starter(uuid, text[], integer, integer, integer) IS
-  'GET /api/search/starter in one call: {entities: [{kind, key, label, post_count, post_count_capped}], creators: [{id, username, display_name, bio, avatar_url, public_post_count, is_following}], searches: [{text}]}, each list in the order to show it. Entities and creators are read from the newest 2,000 posts search may show the viewer: entities two creators use there, counted as a made-with filter counts them, no withdrawn word; creators with a post there in the last 30 days, by posts (up to 10), followers, newest post, never a guest, suspended, deleting, blocked, followed account or the viewer. Searches: p_terms, in order, each holding no withdrawn word and matching at least one post search may show. Service role only.';
+  'GET /api/search/starter in one call: {entities: [{kind, key, label, post_count, post_count_capped, query}], creators: [{id, username, display_name, bio, avatar_url, public_post_count, is_following}], searches: [{text}]}, each list in the order to show it. Entities and creators are read from the newest 2,000 posts search may show the viewer (at most 10,000 read to find them): entities two creators use there, no withdrawn word, each with the query pressing it searches (its key''s words) and the count search gives that query narrowed to it, none whose search finds nothing; creators with a post there in the last 30 days, by posts (up to 10), followers, newest post, never a guest, suspended, deleting, blocked, followed account or the viewer. Searches: p_terms, in order, each holding no withdrawn word and matching at least one post search may show. Service role only.';
 
 REVOKE ALL ON FUNCTION public.search_starter(uuid, text[], integer, integer, integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.search_starter(uuid, text[], integer, integer, integer) TO service_role;

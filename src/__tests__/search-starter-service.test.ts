@@ -10,6 +10,8 @@ import {
 } from '@/lib/search-starter';
 import { getSearchStarter } from '@/lib/search-starter-service';
 
+import { searchStarterEntityAction } from '../../ugc-mobile/lib/public-search-policy/search-starter';
+
 const VIEWER_ID = '33333333-3333-4333-8333-333333333333';
 
 function creatorRow(index: number, overrides: Record<string, unknown> = {}) {
@@ -26,7 +28,10 @@ function creatorRow(index: number, overrides: Record<string, unknown> = {}) {
 }
 
 function entityRow(index: number, overrides: Record<string, unknown> = {}) {
-  return { kind: 'tool', key: `tool-${index}`, label: `Tool ${index}`, post_count: 10 - index, post_count_capped: false, ...overrides };
+  return {
+    kind: 'tool', key: `tool-${index}`, label: `Tool ${index}`, post_count: 10 - index, post_count_capped: false,
+    query: `tool ${index}`, ...overrides,
+  };
 }
 
 function clientAnswering(answer: { data: unknown; error: unknown }) {
@@ -39,7 +44,7 @@ describe('search starter service', () => {
     const { rpc, createServiceClient } = clientAnswering({
       data: {
         entities: [
-          entityRow(1, { label: 'Lumen Forge', key: 'lumen-forge', post_count: 1000, post_count_capped: true }),
+          entityRow(1, { label: 'Lumen Forge', key: 'lumen-forge', post_count: 1000, post_count_capped: true, query: 'lumen forge' }),
           entityRow(2),
         ],
         creators: [
@@ -53,8 +58,8 @@ describe('search starter service', () => {
 
     await expect(getSearchStarter({ viewerUserId: VIEWER_ID }, { createServiceClient })).resolves.toEqual({
       entities: [
-        { kind: 'tool', key: 'lumen-forge', label: 'Lumen Forge', postCount: 1000, postCountCapped: true },
-        { kind: 'tool', key: 'tool-2', label: 'Tool 2', postCount: 8, postCountCapped: false },
+        { kind: 'tool', key: 'lumen-forge', label: 'Lumen Forge', postCount: 1000, postCountCapped: true, query: 'lumen forge' },
+        { kind: 'tool', key: 'tool-2', label: 'Tool 2', postCount: 8, postCountCapped: false, query: 'tool 2' },
       ],
       creators: [
         {
@@ -107,7 +112,7 @@ describe('search starter service', () => {
   it('names a model made here as search names it, so a row and the search it opens read the same', async () => {
     const { createServiceClient } = clientAnswering({
       data: {
-        entities: [{ kind: 'model', key: 'nano-banana-pro', label: 'nano-banana-pro', post_count: 12, post_count_capped: false }],
+        entities: [{ kind: 'model', key: 'nano-banana-pro', label: 'nano-banana-pro', post_count: 12, post_count_capped: false, query: 'nano banana pro' }],
         creators: [],
         searches: [],
       },
@@ -116,6 +121,25 @@ describe('search starter service', () => {
     const answer = await getSearchStarter({ viewerUserId: null }, { createServiceClient });
     expect(answer.entities[0].label).toBe(getPostModelDisplayName('nano-banana-pro'));
     expect(answer.entities[0].label).not.toBe('nano-banana-pro');
+  });
+
+  it('keeps the query the database counted apart from the name drawn: a catalog name can hold words the posts do not', async () => {
+    // PR #785's review: qwen3 is "Qwen Image 3.0" in the catalog, and a post made
+    // with it holds qwen3 / qwen 3, never "image" or "3.0". A row that searched its
+    // name would open none of the posts it counted.
+    const { createServiceClient } = clientAnswering({
+      data: {
+        entities: [{ kind: 'model', key: 'qwen3', label: 'qwen3', post_count: 2, post_count_capped: false, query: 'qwen 3' }],
+        creators: [],
+        searches: [],
+      },
+      error: null,
+    });
+    const [entity] = (await getSearchStarter({ viewerUserId: null }, { createServiceClient })).entities;
+    expect(entity.label).toBe(getPostModelDisplayName('qwen3'));
+    expect(entity.label).not.toBe('qwen 3');
+    expect(entity.query).toBe('qwen 3');
+    expect(searchStarterEntityAction(entity)).toMatchObject({ query: 'qwen 3', madeWith: 'model:qwen3' });
   });
 
   it('never answers more than its caps, whatever the database returns', async () => {
@@ -149,6 +173,8 @@ describe('search starter service', () => {
     ['a creator without a bio field', { entities: [], creators: [{ ...creatorRow(1), bio: undefined }], searches: [] }],
     ['an entity of another kind', { entities: [entityRow(1, { kind: 'creator' })], creators: [], searches: [] }],
     ['an entity without its count flag', { entities: [entityRow(1, { post_count_capped: null })], creators: [], searches: [] }],
+    ['an entity without the query it is counted for', { entities: [entityRow(1, { query: undefined })], creators: [], searches: [] }],
+    ['an entity with an empty query', { entities: [entityRow(1, { query: '  ' })], creators: [], searches: [] }],
     ['an empty search', { entities: [], creators: [], searches: [{ text: '' }] }],
   ])('throws on %s: a migration and this file out of step, never drawn as something', async (_name, data) => {
     const { createServiceClient } = clientAnswering({ data, error: null });

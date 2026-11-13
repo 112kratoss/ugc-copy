@@ -16,6 +16,7 @@ export type {
 // What a search screen shows before anything is typed (GET /api/search/starter).
 export type {
   SearchStarterCreator,
+  SearchStarterEntity,
   SearchStarterResponse,
   SearchStarterSearch,
 } from './public-search-policy/search-starter';

@@ -79,11 +79,14 @@ describe('search starter migration', () => {
   it('reads entities and creators from a bounded window of the newest posts search may show, by the recent-posts index', () => {
     const sql = starter();
     expect(sql).toMatch(/c_window CONSTANT integer := 2000;/);
+    // However many of the newest are labelled or blocked, no more index entries than this are read.
+    expect(sql).toMatch(/c_scan_ceiling CONSTANT integer := 10000;/);
+    expect(sql).toMatch(/FROM public\.posts AS scanned[\s\S]*?ORDER BY scanned\.created_at DESC, scanned\.id DESC\s+LIMIT c_scan_ceiling/);
     const window = sql.slice(sql.indexOf('WITH recent AS MATERIALIZED'), sql.indexOf('LIMIT c_window') + 'LIMIT c_window'.length);
     // posts_public_review_recent_idx: (visibility, review_status, created_at DESC, id DESC) WHERE archived_at IS NULL.
-    expect(window).toMatch(/posts\.visibility = 'public'/);
-    expect(window).toMatch(/posts\.review_status = 'visible'/);
-    expect(window).toMatch(/posts\.archived_at IS NULL/);
+    expect(window).toMatch(/scanned\.visibility = 'public'/);
+    expect(window).toMatch(/scanned\.review_status = 'visible'/);
+    expect(window).toMatch(/scanned\.archived_at IS NULL/);
     expect(window).toMatch(/ORDER BY posts\.created_at DESC, posts\.id DESC\s+LIMIT c_window/);
     // Search's own rules, before the cut: a document, no label, neither side of a block.
     expect(window).toMatch(/posts\.is_nsfw = false/);
@@ -99,7 +102,11 @@ describe('search starter migration', () => {
     expect(sql).toMatch(/HAVING count\(DISTINCT members\.creator_user_id\) >= 2/);
     expect(sql).toMatch(/c_entity_candidates CONSTANT integer := 12;/);
     expect(sql).toMatch(/LIMIT c_entity_candidates/);
-    expect(sql).toMatch(/public\.search_public_entities\(\s*NULL,\s*p_viewer_user_id,\s*1,\s*candidates\.kind \|\| ':' \|\| candidates\.key\s*\)/);
+    // Counted for the search a press runs, its key's words, as search counts it; none it finds nothing for.
+    expect(sql).toMatch(/SELECT public\.search_split_terms\(candidates\.key\) AS query/);
+    expect(sql).toMatch(/JOIN LATERAL public\.search_public_entities\(\s*asked\.query,\s*p_viewer_user_id,\s*10,\s*NULL\s*\) AS counted\s+ON counted\.kind = candidates\.kind\s+AND counted\.key = candidates\.key/);
+    expect(sql).not.toMatch(/CROSS JOIN LATERAL public\.search_public_entities/);
+    expect(sql).toMatch(/'query', offered\.query/);
     expect(sql).toMatch(/FROM public\.search_suggestion_denylist AS denied[\s\S]*?search_term_variants\(counted\.label\)[\s\S]*?search_term_variants\(candidates\.key\)/);
     expect(sql).toMatch(/ORDER BY counted\.post_count DESC/);
   });

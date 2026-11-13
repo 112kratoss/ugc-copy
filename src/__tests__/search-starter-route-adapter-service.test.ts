@@ -235,6 +235,7 @@ describe('search starter route adapter', () => {
         label: entity.label,
         post_count: entity.postCount,
         post_count_capped: entity.postCountCapped,
+        query: entity.query,
       })),
       creators: contract.response.creators.map((creator) => ({
         id: creator.id,

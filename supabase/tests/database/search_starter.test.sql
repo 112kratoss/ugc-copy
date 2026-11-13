@@ -18,7 +18,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(65);
+select plan(74);
 
 create function pg_temp.uid(p_suffix text)
 returns uuid
@@ -73,9 +73,15 @@ $$;
 --   Gammatool    …01, and …02's labelled post   one creator a visitor can see
 --   Deltatool    …01, …02, withdrawn by its name
 --   Blocktool    …06, …07                       two creators, both blocked with the viewer
+--   Blockertool  …07 (who blocked the viewer), …01, 40 days ago
+--   Zq           …03, …04, 40 days ago: a key of two characters, which search cannot search
+-- Models: qwen3, the creation model of posts of …01 and …02, 40 days ago, with
+-- no Made with row; the catalog names it "Qwen Image 3.0", words its posts'
+-- documents do not hold.
 -- A template result's hidden model, zorblax-v2, on posts of …01 and …02.
 -- Words: quillonword (…01), glassword (…01, with quillonword), labelword
--- (…0c's labelled post only), blockword (…06 only), privword (a private post),
+-- (…0c's labelled post only), blockword (…06 only), blockerword (…07 only),
+-- privword (a private post),
 -- deniedword (…01; withdrawn), hiddenword (a hidden post).
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at, is_anonymous, banned_until)
@@ -128,7 +134,9 @@ insert into public.template_runs (
    repeat('b', 64), '[]'::jsonb, '{}'::jsonb, 'output', 'image', 'collecting_inputs', 10, 10);
 insert into public.generations (id, user_id, model, status, is_public, template_run_id) values
   (pg_temp.uid('e3'), pg_temp.uid('01'), 'zorblax-v2', 'succeeded', true, pg_temp.uid('e1')),
-  (pg_temp.uid('e4'), pg_temp.uid('02'), 'zorblax-v2', 'succeeded', true, pg_temp.uid('e2'));
+  (pg_temp.uid('e4'), pg_temp.uid('02'), 'zorblax-v2', 'succeeded', true, pg_temp.uid('e2')),
+  (pg_temp.uid('e5'), pg_temp.uid('01'), 'qwen3', 'succeeded', true, null),
+  (pg_temp.uid('e6'), pg_temp.uid('02'), 'qwen3', 'succeeded', true, null);
 
 insert into public.posts (
   id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw, archived_at,
@@ -172,7 +180,13 @@ from (
     ('29', '0c', 'public', 'visible', true, null, 'a labelword frame', 90, null),
     ('2a', '01', 'private', 'visible', false, null, 'a privword frame', 91, null),
     ('2b', '01', 'public', 'hidden', false, null, 'a hiddenword frame', 92, null),
-    ('2c', '0e', 'public', 'visible', false, null, 'a past ban frame', 93, null)
+    ('2c', '0e', 'public', 'visible', false, null, 'a past ban frame', 93, null),
+    ('2d', '07', 'public', 'visible', false, 'Blockertool', 'a blockerword frame', 40 * 24 * 60, null),
+    ('2e', '01', 'public', 'visible', false, 'Blockertool', 'a plain frame', 40 * 24 * 60 + 1, null),
+    ('2f', '01', 'public', 'visible', false, null, 'a plain frame', 40 * 24 * 60 + 2, 'e5'),
+    ('5a', '02', 'public', 'visible', false, null, 'a plain frame', 40 * 24 * 60 + 3, 'e6'),
+    ('5b', '03', 'public', 'visible', false, 'Zq', 'a plain frame', 40 * 24 * 60 + 4, null),
+    ('5c', '04', 'public', 'visible', false, 'Zq', 'a plain frame', 40 * 24 * 60 + 5, null)
 ) as post(suffix, owner, visibility, review_status, is_nsfw, tool, body, age_minutes, generation);
 
 -- …0d posts twelve times, an hour ago and before.
@@ -235,14 +249,51 @@ select is(
 
 -- ─── Entities ────────────────────────────────────────────────────────────────
 
-select is(pg_temp.entity_ids(), array['tool:epsilontool', 'tool:alphatool', 'tool:blocktool'],
-  'a visitor is offered the tools two creators use, most posts first');
+select is(pg_temp.entity_ids(), array['tool:epsilontool', 'tool:alphatool', 'model:qwen3', 'tool:blockertool', 'tool:blocktool'],
+  'a visitor is offered the models and tools two creators use, most posts first');
 select is(
   public.search_starter(null, '{}', 8, 0, 0) -> 'entities' -> 0,
-  (select jsonb_build_object('kind', kind, 'key', key, 'label', label, 'post_count', post_count, 'post_count_capped', post_count_capped)
-   from public.search_public_entities(null, null, 1, 'tool:epsilontool')),
-  'each as a made-with filter counts it: the posts pressing it opens, under the name they print'
+  (select jsonb_build_object('kind', kind, 'key', key, 'label', label, 'post_count', post_count,
+                             'post_count_capped', post_count_capped, 'query', 'epsilontool')
+   from public.search_public_entities('epsilontool', null, 10, null) where key = 'epsilontool'),
+  'each with the search pressing it runs, counted as search counts that search narrowed to it, under the name its posts print'
 );
+select ok(
+  (select bool_and(
+     (entity ->> 'post_count')::integer = (
+       select count(*)::integer
+       from public.search_public_posts(
+         p_query => entity ->> 'query', p_viewer_user_id => null, p_limit => 25,
+         p_made_with => (entity ->> 'kind') || ':' || (entity ->> 'key'), p_correct => false
+       )
+     ))
+   from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity),
+  'for every row, the count is the posts search returns for its query narrowed to it, read as typed'
+);
+
+-- The PR #785 review's case: a model whose catalog name holds words its posts do not.
+select is((select post_count from public.search_public_entities(null, null, 1, 'model:qwen3')), 2,
+  'fixture: two posts are made with qwen3');
+select ok(not exists (
+    select 1 from public.search_public_entities('qwen image 3.0', null, 10, null) where key = 'qwen3'
+  ),
+  'and searching the catalog''s name for it, "Qwen Image 3.0", finds neither: a row that searched its name would open nothing');
+select is(
+  (select entity from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
+   where entity ->> 'key' = 'qwen3'),
+  '{"kind": "model", "key": "qwen3", "label": "qwen3", "post_count": 2, "post_count_capped": false, "query": "qwen 3"}'::jsonb,
+  'the starter sends its key''s words, which both posts hold'
+);
+select is(
+  (select count(*)::integer from public.search_public_posts(
+     p_query => 'qwen 3', p_viewer_user_id => null, p_limit => 25, p_made_with => 'model:qwen3', p_correct => false)),
+  2,
+  'and that search, narrowed to it, opens both'
+);
+select ok(not (pg_temp.entity_ids() @> array['tool:zq']),
+  'an entity whose search would find nothing (a two-character key, which search does not search) is not offered');
+select ok(not (pg_temp.entity_ids(pg_temp.uid('05')) @> array['tool:blockertool']),
+  'the viewer is not offered a tool whose second creator blocked them');
 select is((public.search_starter(null, '{}', 8, 0, 0) -> 'entities' -> 0 ->> 'post_count')::integer, 4,
   'four posts made with Epsilontool');
 select is(public.search_starter(null, '{}', 8, 0, 0) -> 'entities' -> 0 ->> 'label', 'Epsilontool',
@@ -257,10 +308,10 @@ select ok(not (pg_temp.entity_ids() @> array['tool:deltatool']),
   'a tool whose name is withdrawn is not offered');
 select ok(not exists (
     select 1 from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
-    where entity ->> 'kind' = 'model'
+    where entity ->> 'kind' = 'model' and entity ->> 'key' like 'zorblax%'
   ),
   'a template result''s hidden model is not offered, though two creators'' results have it');
-select is(pg_temp.entity_ids(pg_temp.uid('05')), array['tool:epsilontool', 'tool:alphatool'],
+select is(pg_temp.entity_ids(pg_temp.uid('05')), array['tool:epsilontool', 'tool:alphatool', 'model:qwen3'],
   'the viewer is not offered a tool only creators on either side of a block with them use');
 select is(pg_temp.entity_ids(null, 1), array['tool:epsilontool'], 'the limit cuts the list');
 
@@ -273,10 +324,10 @@ select pg_temp.uid('4' || to_hex(n)), pg_temp.uid('02'), 'public', 'image', 'ext
        'Plain title', 'a plain frame', 'showcase/e5e1-4' || to_hex(n) || '.png', 'Alphatool', 'alphatool',
        now() - make_interval(mins => 300 + n), now()
 from generate_series(0, 1) as n;
-select is(pg_temp.entity_ids(), array['tool:alphatool', 'tool:epsilontool', 'tool:blocktool'],
+select is(pg_temp.entity_ids(), array['tool:alphatool', 'tool:epsilontool', 'model:qwen3', 'tool:blockertool', 'tool:blocktool'],
   'two more Alphatool posts put it first, at once: nothing is rebuilt');
 delete from public.posts where id in (pg_temp.uid('40'), pg_temp.uid('41'));
-select is(pg_temp.entity_ids(), array['tool:epsilontool', 'tool:alphatool', 'tool:blocktool'],
+select is(pg_temp.entity_ids(), array['tool:epsilontool', 'tool:alphatool', 'model:qwen3', 'tool:blockertool', 'tool:blocktool'],
   'and deleting them puts it back');
 
 -- A second creator for Betatool, then that post labelled: it counts only while a visitor can see it.
@@ -285,7 +336,7 @@ insert into public.posts (
   title, body, showcase_asset_path, source_tool, source_tool_slug, created_at, updated_at
 ) values (pg_temp.uid('50'), pg_temp.uid('03'), 'public', 'image', 'external', 'media', 'visible', false,
           'Plain title', 'a plain frame', 'showcase/e5e1-50.png', 'Betatool', 'betatool', now() - interval '5 minutes', now());
-select is(pg_temp.entity_ids(), array['tool:betatool', 'tool:epsilontool', 'tool:alphatool', 'tool:blocktool'],
+select is(pg_temp.entity_ids(), array['tool:betatool', 'tool:epsilontool', 'tool:alphatool', 'model:qwen3', 'tool:blockertool', 'tool:blocktool'],
   'a second creator''s post offers Betatool, with its six posts first');
 update public.posts set visibility = 'private' where id = pg_temp.uid('50');
 select ok(not (pg_temp.entity_ids() @> array['tool:betatool']),
@@ -326,10 +377,10 @@ select is(
    from public.creator_search_documents as documents where documents.creator_user_id = pg_temp.uid('01')),
   'a creator in the shape a creator search result has, from their search document'
 );
-select is((public.search_starter(null, '{}', 0, 1, 0) -> 'creators' -> 0 ->> 'public_post_count')::integer, 11,
+select is((public.search_starter(null, '{}', 0, 1, 0) -> 'creators' -> 0 ->> 'public_post_count')::integer, 13,
   'whose post count is all their public posts, not the ten the order counts');
 
--- ada (eleven recent posts, three followers) and heavy (twelve, none) both count ten.
+-- ada (eleven recent posts of thirteen, three followers) and heavy (twelve, none) both count ten.
 select ok(array_position(pg_temp.handles(), 'ada-quill') < array_position(pg_temp.handles(), 'heavy-poster'),
   'posts count to ten: past that, followers decide');
 select ok(array_position(pg_temp.handles(), 'heavy-poster') < array_position(pg_temp.handles(), 'bea-quill'),
@@ -355,7 +406,10 @@ select is(pg_temp.searches(array['deniedword']), '{}'::text[], 'nor a withdrawn 
 select is(pg_temp.searches(array['quillonword deniedword']), '{}'::text[], 'nor a term holding one');
 select is(pg_temp.searches(array['blockword']), array['blockword'], 'a visitor is offered a word only one creator''s post holds');
 select is(pg_temp.searches(array['blockword'], pg_temp.uid('05')), '{}'::text[],
-  'the viewer is not, when that creator is on the other side of a block with them');
+  'the viewer is not, when they blocked that creator');
+select is(pg_temp.searches(array['blockerword']), array['blockerword'], 'fixture: a visitor is offered a word only …07''s post holds');
+select is(pg_temp.searches(array['blockerword'], pg_temp.uid('05')), '{}'::text[],
+  'the viewer is not, when that creator blocked them');
 select is(pg_temp.searches(array['ab', '  ', null, 'quillonword']), array['quillonword'],
   'a term under three characters, or of nothing, is passed over');
 select is(pg_temp.searches(array['quillonword', 'QUILLONWORD', ' quillonword ']), array['quillonword'],

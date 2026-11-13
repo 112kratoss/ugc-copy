@@ -32,6 +32,17 @@ export const SEARCH_STARTER_MAX_ENTITIES = 8;
 export const SEARCH_STARTER_MAX_CREATORS = 6;
 export const SEARCH_STARTER_MAX_SEARCHES = 8;
 
+/**
+ * A model or tool, as a search result names it, with the search pressing it
+ * runs: `query`, its key's words (`qwen 3` for `qwen3`), narrowed to it by the
+ * made-with filter. `postCount` is what that search finds, so a row never
+ * opens fewer posts than it says. Not the name drawn (`label`): a catalog's
+ * name ("Qwen Image 3.0") can hold words the posts do not.
+ */
+export interface SearchStarterEntity extends SearchEntity {
+  query: string;
+}
+
 /** A creator, in the shape a search's creator result has. */
 export interface SearchStarterCreator {
   id: string;
@@ -52,7 +63,7 @@ export interface SearchStarterSearch {
 
 export interface SearchStarterResponse {
   /** Models and tools, as a search result names them, most posts first. */
-  entities: SearchEntity[];
+  entities: SearchStarterEntity[];
   /** In the order to show them. */
   creators: SearchStarterCreator[];
   /** In the order to show them. */
@@ -74,9 +85,11 @@ function isText(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
-function readEntity(value: unknown): SearchEntity | null {
+function readEntity(value: unknown): SearchStarterEntity | null {
   if (
     !isRecord(value)
+    || !isText(value.query)
+    || !value.query.trim()
     || !SEARCH_ENTITY_KINDS.includes(value.kind as SearchEntityKind)
     || !isText(value.key)
     || !isText(value.label)
@@ -91,6 +104,7 @@ function readEntity(value: unknown): SearchEntity | null {
     label: value.label,
     postCount: Math.max(0, Math.floor(value.postCount)),
     postCountCapped: value.postCountCapped === true,
+    query: value.query.trim(),
   };
 }
 
@@ -163,7 +177,7 @@ export const SEARCH_STARTER_LABEL = 'Ideas to start a search';
 export const SEARCH_STARTER_NO_RESULTS_HEADING = 'Try one of these instead';
 
 export type SearchStarterSection =
-  | { id: 'entities'; heading: string; entities: SearchEntity[] }
+  | { id: 'entities'; heading: string; entities: SearchStarterEntity[] }
   | { id: 'creators'; heading: string; creators: SearchStarterCreator[] }
   | { id: 'searches'; heading: string; searches: SearchStarterSearch[] };
 
@@ -183,16 +197,16 @@ export type SearchStarterAction =
   /** Open the creator's profile. */
   | { type: 'creator'; username: string }
   /**
-   * Search the entity's name on Posts, narrowed to it (`madeWith`): every
-   * post the entity's count counted, since a post's document holds the
-   * names it is made with.
+   * Search the entity's own query on Posts (the type Posts), narrowed to it
+   * by `madeWith`: the search the server counted, so it opens `postCount`
+   * posts. Draw the entity's `label`; send its `query`.
    */
-  | { type: 'entity'; entity: SearchEntity; query: string; madeWith: string }
+  | { type: 'entity'; entity: SearchStarterEntity; query: string; madeWith: string }
   /** Put the text in the box and search for it. */
   | { type: 'search'; query: string };
 
-export function searchStarterEntityAction(entity: SearchEntity): SearchStarterAction {
-  return { type: 'entity', entity, query: entity.label, madeWith: searchEntityId(entity) };
+export function searchStarterEntityAction(entity: SearchStarterEntity): SearchStarterAction {
+  return { type: 'entity', entity, query: entity.query, madeWith: searchEntityId(entity) };
 }
 
 export function searchStarterCreatorAction(creator: SearchStarterCreator): SearchStarterAction {

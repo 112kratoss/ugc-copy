@@ -9,6 +9,7 @@ export { SEARCH_STARTER_EMPTY_RESPONSE };
 
 export type {
   SearchStarterCreator,
+  SearchStarterEntity,
   SearchStarterResponse,
   SearchStarterSearch,
 } from '../../ugc-mobile/lib/public-search-policy/search-starter';

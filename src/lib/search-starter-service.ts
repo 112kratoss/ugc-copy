@@ -1,6 +1,5 @@
 import 'server-only';
 
-import type { SearchEntityResult } from '@/lib/public-search';
 import { entityResult } from '@/lib/public-search-service';
 import {
   SEARCH_STARTER_CREATOR_LIMIT,
@@ -9,6 +8,7 @@ import {
   SEARCH_STARTER_SEARCH_LIMIT,
   SEARCH_STARTER_SUGGESTED_SEARCHES,
   type SearchStarterCreator,
+  type SearchStarterEntity,
   type SearchStarterResponse,
   type SearchStarterSearch,
 } from '@/lib/search-starter';
@@ -40,9 +40,11 @@ function isText(value: unknown): value is string {
  * migration and this file out of step, which must be seen as a failure, not
  * drawn as a creator with no handle or served as an empty list.
  */
-function entityFromRow(row: unknown): SearchEntityResult {
+function entityFromRow(row: unknown): SearchStarterEntity {
   if (
     !isRecord(row)
+    || !isText(row.query)
+    || !row.query.trim()
     || !(row.kind === 'model' || row.kind === 'tool')
     || !isText(row.key)
     || !isText(row.label)
@@ -53,14 +55,18 @@ function entityFromRow(row: unknown): SearchEntityResult {
     throw new Error(UNEXPECTED_ANSWER);
   }
   // Named as full search names it (a model made here by its catalog name),
-  // so the row and the search it opens read the same.
-  return entityResult({
-    kind: row.kind,
-    key: row.key,
-    label: row.label,
-    post_count: row.post_count,
-    post_count_capped: row.post_count_capped,
-  });
+  // and searched by the query the database counted, which can differ from
+  // that name: the name is drawn, the query is sent.
+  return {
+    ...entityResult({
+      kind: row.kind,
+      key: row.key,
+      label: row.label,
+      post_count: row.post_count,
+      post_count_capped: row.post_count_capped,
+    }),
+    query: row.query,
+  };
 }
 
 function creatorFromRow(row: unknown): SearchStarterCreator {
