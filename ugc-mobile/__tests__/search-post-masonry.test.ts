@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { searchPostPinLabel } from '../lib/public-search-policy/public-search-policy';
 import {
   SEARCH_TEXT_PIN_ASPECT_RATIO,
   buildSearchPostPin,
@@ -45,7 +44,7 @@ describe('a search post drawn as a feed pin', () => {
     expect(pin.date).toBe('3d ago');
     expect(pin.badge).toBeNull();
     expect(pin.video).toBe(false);
-    expect(pin.label).toBe('Open post Neon portrait by @luna. Made with Nano Banana 2.0. 3d ago');
+    expect(pin.label).toBe('Open post Neon portrait by @luna, made with Nano Banana 2.0, 3d ago, 0 saves, 0 comments');
   });
 
   it('wears Explore\'s badge and the video mark, and says them', () => {
@@ -56,7 +55,7 @@ describe('a search post drawn as a feed pin', () => {
     }), { now: NOW });
     expect(pin.video).toBe(true);
     expect(pin.badge).toMatch(/credits?$/);
-    expect(pin.label).toBe(`Open post Neon portrait by @luna. ${pin.badge}. Video. Made with Nano Banana 2.0. 3d ago`);
+    expect(pin.label).toBe(`Open post Neon portrait by @luna, video, made with Nano Banana 2.0, ${pin.badge}, 3d ago, 0 saves, 0 comments`);
   });
 
   it('falls back to the display name for a creator with no handle', () => {
@@ -89,10 +88,12 @@ describe('a search post drawn as a feed pin', () => {
     expect(searchPostPinMediaHeight(note, 180)).toBe(Math.round(180 / SEARCH_TEXT_PIN_ASPECT_RATIO));
   });
 
-  it('labels hold every part given, and only those', () => {
-    expect(searchPostPinLabel({ title: 'A', creator: '@b' })).toBe('Open post A by @b');
-    expect(searchPostPinLabel({ title: 'A', creator: '@b', badge: 'Free recipe', video: true, madeWith: 'Made with X', date: 'Oct 1' }))
-      .toBe('Open post A by @b. Free recipe. Video. Made with X. Oct 1');
+  it('names a pin with the web\'s card words: everything it shows, its saves and comments', () => {
+    const pin = buildSearchPostPin(item({ saveCount: 1, commentCount: 4 }), { now: NOW });
+    expect(pin.label).toMatch(/^Open post .+ by @.+, .*1 save, 4 comments$/);
+    expect(pin.label).toContain(pin.date);
+    if (pin.madeWith) expect(pin.label).toContain(`made with ${pin.madeWith.replace(/^Made with /, '')}`);
+    if (pin.badge) expect(pin.label).toContain(pin.badge);
   });
 });
 

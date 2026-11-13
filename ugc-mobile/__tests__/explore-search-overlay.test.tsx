@@ -1341,7 +1341,7 @@ describe('ExploreSearchOverlay search', () => {
     await typeQuery(tree, 'portrait');
 
     const label = 'Open post Neon portrait by @luna';
-    expect(exactLabel(tree, label)).toBe('Open post Neon portrait by @luna. Free recipe. Video. Made with Nano Banana 2.0. 3d ago');
+    expect(exactLabel(tree, label)).toBe('Open post Neon portrait by @luna, video, made with Nano Banana 2.0, Free recipe, 3d ago, 0 saves, 0 comments');
     expect(cardTexts(tree, label)).toEqual(['Free recipe', '@luna', '· 3d ago', 'Made with Nano Banana 2.0']);
     // Everything the card shows is in its name.
     for (const shown of ['free recipe', '@luna', 'made with nano banana 2.0', '3d ago']) expect(exactLabel(tree, label).toLowerCase()).toContain(shown);
@@ -1350,7 +1350,7 @@ describe('ExploreSearchOverlay search', () => {
     expect(picture.props.height / picture.props.width).toBeCloseTo(16 / 9, 1);
     expect(picture.props.videoActivation).toBe('never');
     // A model the feed does not name is not made up: no made-with, only the date.
-    expect(exactLabel(tree, 'Open post Harbour by @noor')).toMatch(/^Open post Harbour by @noor\. [A-Z][a-z]{2} \d{1,2}$/);
+    expect(exactLabel(tree, 'Open post Harbour by @noor')).toMatch(/^Open post Harbour by @noor, [A-Z][a-z]{2} \d{1,2}, 0 saves, 0 comments$/);
 
     await press(pressableLabelled(tree, label));
     expect(mocks.router.push).toHaveBeenCalledWith('/post/v1');
@@ -1368,9 +1368,9 @@ describe('ExploreSearchOverlay search', () => {
     const tree = await render({ visible: true, onClose: vi.fn() });
     await typeQuery(tree, 'luma');
     // Not a model the feed names: nothing is said of it on Top.
-    expect(exactLabel(tree, 'Open post Post p1 by Ana')).not.toContain('Made with');
+    expect(exactLabel(tree, 'Open post Post p1 by Ana')).not.toContain('made with');
     await press(pressableLabelled(tree, 'Luma Ray 2, model, 1 post. Show posts made with it'));
-    expect(exactLabel(tree, 'Open post Post p1 by Ana')).toContain('Made with Luma Ray 2');
+    expect(exactLabel(tree, 'Open post Post p1 by Ana')).toContain('made with Luma Ray 2');
     await act(async () => tree.unmount());
   });
 
@@ -1712,7 +1712,7 @@ describe('ExploreSearchOverlay related posts', () => {
     expect(asked()).toEqual(['ocean at dusk|top|top|related']);
 
     // Drawn under the search's own outcome with the cards its posts use, and said.
-    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana. Just now', 'Open post Post cliffs by Ana. Just now']);
+    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana, Just now, 0 saves, 0 comments', 'Open post Post cliffs by Ana, Just now, 0 saves, 0 comments']);
     expect(shownTexts(tree)).toContain(SEARCH_RELATED_HEADING);
     expect(saysNoResults(tree)).toBe(true);
     expect(mocks.announce).toHaveBeenCalledWith('2 related posts');
@@ -1803,7 +1803,7 @@ describe('ExploreSearchOverlay related posts', () => {
     expect(lines.filter((line) => line === SEARCH_RELATED_HEADING)).toHaveLength(1);
     expect(lines.indexOf(SEARCH_RELATED_HEADING)).toBeGreaterThan(lines.lastIndexOf('Posts'));
     expect(lines.indexOf(SEARCH_RELATED_HEADING)).toBeGreaterThan(lines.indexOf('Post own'));
-    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana. Just now', 'Open post Post cliffs by Ana. Just now']);
+    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana, Just now, 0 saves, 0 comments', 'Open post Post cliffs by Ana, Just now, 0 saves, 0 comments']);
 
     // Looked for and none found, and a server that says nothing: no group, no words.
     mocks.announce.mockClear();

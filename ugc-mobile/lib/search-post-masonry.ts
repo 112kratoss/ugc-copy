@@ -2,8 +2,9 @@ import { homeModelLabel } from './home-feed-view-model';
 import { formatRelativeTime } from './home-view-model';
 import {
   parseSearchEntityId,
-  searchMadeWithChipLabel,
-  searchPostPinLabel,
+  searchPostCardLabel,
+  searchPostCreatorName,
+  searchPostMadeWithLine,
 } from './public-search-policy/public-search-policy';
 import { isShowcaseVideoPreviewCandidate, isTextOnlyShowcasePost } from './showcase-display';
 import { getShowcaseMediaHeight, showcaseToMasonryCard, type ShowcaseMasonryCard } from './showcase-feed-view-model';
@@ -63,12 +64,12 @@ export function buildSearchPostPin(
   options: { narrowedTo?: { id: string; label: string } | null; now?: Date } = {},
 ): SearchPostPin {
   const card = isTextOnlyShowcasePost(item) ? null : showcaseToMasonryCard(item);
-  const username = item.creator.username?.trim();
-  const handle = username ? `@${username.replace(/^@+/, '')}` : item.creator.name;
+  // The creator by handle, as the web's card names them (searchPostCreatorName).
+  const handle = searchPostCreatorName({ name: item.creator.name, username: item.creator.username?.replace(/^\s*@+/, '') });
   const badge = card?.unlock?.label ?? null;
   const video = isShowcaseVideoPreviewCandidate(item);
   const madeWithLabel = searchPostMadeWithLabel(item, options.narrowedTo ?? null);
-  const madeWith = madeWithLabel ? searchMadeWithChipLabel(madeWithLabel) : null;
+  const madeWith = madeWithLabel ? searchPostMadeWithLine(madeWithLabel) : null;
   const date = formatRelativeTime(item.createdAt, options.now);
   const title = card?.title ?? item.title;
   return {
@@ -80,7 +81,17 @@ export function buildSearchPostPin(
     video,
     madeWith,
     date,
-    label: searchPostPinLabel({ title, creator: handle, badge, video, madeWith, date }),
+    // The web's card words (searchPostCardLabel), so a screen reader hears the same card on both.
+    label: searchPostCardLabel({
+      title,
+      creatorName: handle,
+      saveCount: item.saveCount,
+      commentCount: item.commentCount,
+      video,
+      madeWith: madeWithLabel,
+      badges: badge ? [badge] : [],
+      date,
+    }),
   };
 }
 
