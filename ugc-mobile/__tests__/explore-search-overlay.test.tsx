@@ -2556,6 +2556,16 @@ describe('ExploreSearchOverlay typeahead', () => {
     await act(async () => tree.unmount());
   });
 
+  it('searches a recent search the picked tab would not run on Top, picked with it (review of #786, S2)', async () => {
+    mocks.readSearchHistory.mockResolvedValue(['ai']);
+    const tree = await open();
+    await press(tab(tree, 'Posts'));
+    await press(pressableLabelled(tree, 'Search again for ai'));
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'ai', type: 'top' });
+    expect(tab(tree, 'Top').props.accessibilityState).toMatchObject({ selected: true });
+    await act(async () => tree.unmount());
+  });
+
   it('asks nothing once the search is closed', async () => {
     const onClose = vi.fn();
     const tree = await open();

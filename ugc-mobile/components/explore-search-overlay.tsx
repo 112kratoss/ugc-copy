@@ -946,6 +946,14 @@ export function ExploreSearchOverlay({
     Keyboard.dismiss();
   };
   const submitSearch = () => commitSearch(query);
+  // A recent search pressed under the empty field: searched on the picked tab
+  // when it searches a text this long, else on Top, picked with it (a search
+  // of two characters kept from Top would otherwise do nothing on Posts).
+  const searchAgain = (text: string) => {
+    const onType: PublicSearchType = tabRunsText(text) ? type : 'top';
+    if (onType !== type) setPickedType(onType);
+    commitSearch(text, onType);
+  };
 
   const openResult = (opened: SearchOpenedResult) => rememberQuery(historyQueryFor(opened));
   const openCreator = () => openResult('creator');
@@ -1174,7 +1182,7 @@ export function ExploreSearchOverlay({
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={searchRecentAgainLabel(item)}
-                    onPress={() => commitSearch(item)}
+                    onPress={() => searchAgain(item)}
                     style={{ minHeight: 46, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}
                   >
                     <Clock3 size={appTheme.icon.sm} color={theme.colors.faint} />
