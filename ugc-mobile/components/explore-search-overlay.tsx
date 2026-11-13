@@ -1038,6 +1038,11 @@ export function ExploreSearchOverlay({
               enterKeyHint="search"
               maxLength={100}
               onChangeText={(text) => {
+                // Only a change of the text is typing. iOS sends the text it
+                // holds again as its on-screen keyboard goes, which a commit
+                // makes it do: read as an edit, that took the results away
+                // again (seen on the simulator, 2026-11-13).
+                if (text === query) return;
                 setQuery(text);
                 moveMode('edit');
               }}
@@ -1125,8 +1130,9 @@ export function ExploreSearchOverlay({
           // typed query that is not searched they would read as its results.
           history.length && body === 'start' ? (
             <View style={{ gap: 12 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text accessibilityRole="header" style={{ color: theme.colors.text, fontSize: 17, fontWeight: '800' }}>{SEARCH_RECENTS_HEADING}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                {/* Gives way to "Clear all" at the largest text sizes, which kept it off the screen. */}
+                <Text accessibilityRole="header" style={{ flexShrink: 1, color: theme.colors.text, fontSize: 17, fontWeight: '800' }}>{SEARCH_RECENTS_HEADING}</Text>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={SEARCH_RECENTS_CLEAR_ACTION_LABEL}

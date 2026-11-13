@@ -2327,6 +2327,23 @@ describe('ExploreSearchOverlay typeahead', () => {
     await act(async () => tree.unmount());
   });
 
+  // Seen on the simulator (2026-11-13): iOS sends the field's text again as
+  // its on-screen keyboard goes, which a commit makes it do. Read as typing,
+  // that took the results of a tab pressed while typing away again.
+  it('keeps the results when the field reports the text it already holds, as iOS does when its keyboard goes', async () => {
+    const tree = await open();
+    await typeQuery(tree, 'lum');
+    await press(tab(tree, 'Posts'));
+    expect(list(tree)).toBeNull();
+    await act(async () => { searchInput(tree).props.onChangeText('lum'); });
+    expect(list(tree)).toBeNull();
+    expect(searchPublicContent.mock.calls.map(([params]) => `${params.query}|${params.type}`)).toEqual(['lum|posts']);
+    // A real change is typing again.
+    await typeQuery(tree, 'lumi');
+    expect(list(tree)).not.toBeNull();
+    await act(async () => tree.unmount());
+  });
+
   it.each([
     ['a failed request', () => Promise.reject(new ApiError('Failed to load search suggestions.', 500, null))],
     ['a request that never got an answer', () => Promise.reject(new ApiError('Network request failed', 0, null))],

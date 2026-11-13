@@ -49,7 +49,8 @@ function RowMark({ row }: { row: SearchTypeaheadRow }) {
 function TypedRuns({ text, query }: { text: string; query: string | null }) {
   const theme = useAppTheme();
   return (
-    <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15 }}>
+    // Two lines at most, so a long search still reads whole at the largest text sizes.
+    <Text numberOfLines={2} style={{ color: theme.colors.text, fontSize: 15 }}>
       {searchTypedRuns(text, query).map((run, index) => (
         <Text
           key={index}
@@ -74,7 +75,8 @@ function RowWords({ row, query }: { row: SearchTypeaheadRow; query: string | nul
   if (row.kind === 'search') {
     return (
       <View style={{ minWidth: 0, flex: 1 }}>
-        <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '700' }}>
+        {/* The text it searches is the row's point: never cut off for the words before it. */}
+        <Text numberOfLines={3} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '700' }}>
           {searchForRowLabel(row.text)}
         </Text>
       </View>
