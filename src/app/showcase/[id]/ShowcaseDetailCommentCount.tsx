@@ -1,6 +1,17 @@
 'use client';
 
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from 'react';
 import { ChevronDown } from 'lucide-react';
 
 import PostComments from '@/components/PostComments';
@@ -42,13 +53,39 @@ export function useShowcaseDetailCommentCount(renderedCount: number): number {
   return useContext(CommentCountContext)?.count ?? renderedCount;
 }
 
+/** What the Comment link's press moves focus to: the first of these the thread holds. */
+const COMMENTS_FOCUS_TARGETS = ['textarea[aria-label^="Write a"]', 'a[href^="/login"]', 'button'];
+
 /**
- * Opens the thread's panel again; the engagement row's Comment link calls it,
- * so the link never lands on a panel its reader closed.
+ * The engagement row's Comment link. It opens the thread's panel, so it never
+ * lands on a panel its reader closed, and then goes to the thread.
+ *
+ * In one column the thread is under the post and the link's own jump to
+ * `#comments` is the way there. Beside the post the thread is already in
+ * view, in a rail that follows the window: the same jump scrolled the page
+ * by the rail's offset, took the post out of view and moved the thread
+ * nowhere. There the press keeps the page where it is and puts focus in the
+ * thread: on the composer, or on the sign-in link in its place.
  */
-export function useOpenShowcaseDetailComments(): () => void {
+export function useOpenShowcaseDetailComments(): (event: MouseEvent<HTMLAnchorElement>) => void {
   const setOpen = useContext(CommentCountContext)?.setOpen;
-  return useCallback(() => setOpen?.(true), [setOpen]);
+  return useCallback((event) => {
+    setOpen?.(true);
+    const panel = document.getElementById('comments');
+    const rail = panel?.closest('.canonical-post-actions');
+    if (!panel || !rail || window.getComputedStyle(rail).position !== 'sticky') return;
+    event.preventDefault();
+    // After the panel has opened: a folded one holds nothing to focus.
+    window.requestAnimationFrame(() => {
+      for (const selector of COMMENTS_FOCUS_TARGETS) {
+        const target = panel.querySelector<HTMLElement>(selector);
+        if (target) {
+          target.focus({ preventScroll: true });
+          return;
+        }
+      }
+    });
+  }, [setOpen]);
 }
 
 /** The post's thread, reporting its count to the provider around it. */
@@ -97,6 +134,27 @@ export function ShowcaseDetailCommentsPanel({
   const context = useContext(CommentCountContext);
   const open = context?.open ?? true;
   const count = context?.count ?? commentCount;
+  const bodyId = useId();
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const unfoldRef = useRef<HTMLButtonElement | null>(null);
+  // Close hides the button it was pressed on, and the one row that opens the
+  // panel again leaves the page when pressed: focus follows to the control
+  // that undoes the press. Only after a press here, never on the first draw
+  // or when the post's Comment link opens the panel (it places focus itself).
+  const pressedHereRef = useRef(false);
+  useEffect(() => {
+    if (!pressedHereRef.current) return;
+    pressedHereRef.current = false;
+    if (open) {
+      bodyRef.current?.querySelector<HTMLElement>('button[aria-label="Close comments"]')?.focus();
+    } else {
+      unfoldRef.current?.focus();
+    }
+  }, [open]);
+  const setOpenHere = (next: boolean) => {
+    pressedHereRef.current = true;
+    context?.setOpen(next);
+  };
 
   return (
     <div
@@ -107,9 +165,11 @@ export function ShowcaseDetailCommentsPanel({
     >
       {open ? null : (
         <button
+          ref={unfoldRef}
           type="button"
-          onClick={() => context?.setOpen(true)}
+          onClick={() => setOpenHere(true)}
           aria-expanded={false}
+          aria-controls={bodyId}
           className="ui-focus-ring flex min-h-13 w-full items-center justify-between gap-3 rounded-3xl px-4 text-left transition hover:bg-white/[0.04]"
         >
           <span className="flex items-baseline gap-2 text-base font-bold text-[var(--ui-text-primary)]">
@@ -121,7 +181,7 @@ export function ShowcaseDetailCommentsPanel({
           <ChevronDown className="h-4 w-4 text-zinc-400" aria-hidden="true" />
         </button>
       )}
-      <div hidden={!open} className="canonical-post-comments-body">
+      <div ref={bodyRef} id={bodyId} hidden={!open} className="canonical-post-comments-body">
         <PostComments
           postId={postId}
           postCreatorId={postCreatorId}
@@ -129,7 +189,7 @@ export function ShowcaseDetailCommentsPanel({
           onCommentCountChange={context?.setCount}
           deliveryId={deliveryId}
           layout="panel"
-          onClose={context ? () => context.setOpen(false) : undefined}
+          onClose={context ? () => setOpenHere(false) : undefined}
         />
       </div>
     </div>

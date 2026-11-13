@@ -12,7 +12,7 @@ import {
     X,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import PostCommentAvatar from '@/components/PostCommentAvatar';
 import { useAuth } from '@/components/AuthProvider';
@@ -174,6 +174,9 @@ export default function PostComments({
     const [draft, setDraft] = useState('');
     const [replyTo, setReplyTo] = useState<PostComment | null>(null);
     const [composerOpen, setComposerOpen] = useState(false);
+    // The handle a reply to a reply opened its draft with. Kept so that a
+    // change of target replaces it, and so that it alone is nothing to send.
+    const [replyPrefix, setReplyPrefix] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [busyCommentId, setBusyCommentId] = useState<string | null>(null);
     const [reportTarget, setReportTarget] = useState<PostComment | null>(null);
@@ -199,6 +202,10 @@ export default function PostComments({
     const reportReasonRef = useRef<HTMLSelectElement | null>(null);
     const reportOpenerRef = useRef<HTMLElement | null>(null);
     const scrollRef = useRef<HTMLDivElement | null>(null);
+    // The Reply button a reply was started from: Cancel returns focus to it.
+    const replyOpenerRef = useRef<HTMLElement | null>(null);
+    // Cancel puts focus back on the composer without opening its buttons again.
+    const keepComposerFoldedRef = useRef(false);
 
     const authHeaders = useCallback((json = false) => {
         const headers: Record<string, string> = {};
@@ -427,6 +434,7 @@ export default function PostComments({
     useEffect(() => {
         setDraft('');
         setReplyTo(null);
+        setReplyPrefix('');
         setComposerOpen(false);
         setReportTarget(null);
         setReportDetails('');
@@ -465,25 +473,44 @@ export default function PostComments({
         if (!composer) return;
         composer.style.height = 'auto';
         if (composer.scrollHeight > 0) {
-            composer.style.height = `${Math.min(composer.scrollHeight, COMPOSER_MAX_HEIGHT_PX)}px`;
+            // The height is the border box's and scrollHeight leaves the
+            // border out: without it the one line overflowed by a pixel and
+            // drew a scrollbar wherever scrollbars are always shown.
+            const border = composer.offsetHeight - composer.clientHeight;
+            composer.style.height = `${Math.min(composer.scrollHeight + border, COMPOSER_MAX_HEIGHT_PX)}px`;
         }
     }, [draft]);
 
-    const startReply = useCallback((comment: PostComment) => {
+    const startReply = useCallback((comment: PostComment, opener: HTMLElement) => {
+        replyOpenerRef.current = opener;
         setReplyTo(comment);
         setComposerOpen(true);
-        // A reply to a reply opens by naming who it answers, unless a draft is
-        // already under way.
+        // A reply to a reply opens by naming who it answers. A draft under way
+        // is kept; one that is still only the last target's handle is not, or
+        // "Replying to @bob" would sit over a draft that starts "@alice".
         const prefix = buildReplyDraftPrefix(comment);
-        if (prefix) setDraft((current) => (current.trim() ? current : prefix));
+        setDraft((current) => (current.trim() === '' || current === replyPrefix ? prefix : current));
+        setReplyPrefix(prefix);
         window.requestAnimationFrame(() => composerRef.current?.focus());
-    }, []);
+    }, [replyPrefix]);
 
     const cancelDraft = useCallback(() => {
+        const opener = replyOpenerRef.current;
+        replyOpenerRef.current = null;
         setDraft('');
         setReplyTo(null);
+        setReplyPrefix('');
         setComposerOpen(false);
-        composerRef.current?.blur();
+        // Cancel is about to leave the page with focus on it. A cancelled
+        // reply goes back to the Reply it came from; a cancelled comment stays
+        // on the composer, folded to its one line.
+        if (opener?.isConnected) {
+            opener.focus();
+            return;
+        }
+        keepComposerFoldedRef.current = true;
+        composerRef.current?.focus();
+        keepComposerFoldedRef.current = false;
     }, []);
 
     const retryFailedRead = useCallback(() => {
@@ -539,6 +566,8 @@ export default function PostComments({
 
             setDraft('');
             setReplyTo(null);
+            setReplyPrefix('');
+            replyOpenerRef.current = null;
 
             let loadedCount = commentsRef.current.length;
             if (parentId) {
@@ -727,7 +756,10 @@ export default function PostComments({
     );
 
     const isPanel = layout === 'panel';
-    const canSubmit = draft.trim().length > 0 && !submitting && Boolean(accessToken);
+    // A reply's opening handle alone is nothing to send.
+    const hasSomethingToSend = draft.trim().length > 0
+        && (replyPrefix === '' || draft.trim() !== replyPrefix.trim());
+    const canSubmit = hasSomethingToSend && !submitting && Boolean(accessToken);
     // The composer's buttons come with the first focus and stay until Cancel,
     // so a draft is never left without its way to send or drop it.
     const composerActive = composerOpen || draft.length > 0 || replyTo !== null;
@@ -744,6 +776,88 @@ export default function PostComments({
         onSelect: () => setSort(option.value),
     }));
 
+    // The composer leads a thread laid in a column (a feed card, the reel) and
+    // ends a panel, where it is drawn on the bottom edge: its place in the
+    // document is its place on the page, so Tab follows what the eye sees.
+    const composer = (
+        <div className={`post-comments__composer ${isPanel ? 'px-4 py-3' : ''}`}>
+            {user ? (
+                <div className="flex flex-col gap-2">
+                    {replyTo ? (
+                        <p className="truncate text-xs text-[var(--ui-text-muted)]">
+                            {`Replying to ${getCommentDisplay(replyTo).authorLabel}`}
+                        </p>
+                    ) : null}
+                    <div className="flex items-start gap-3">
+                        <PostCommentAvatar
+                            avatarUrl={(user.user_metadata?.avatar_url as string | undefined) ?? null}
+                            name={(user.user_metadata?.full_name as string | undefined) || user.email || 'You'}
+                            size={replyTo ? 24 : 32}
+                        />
+                        <div className="min-w-0 flex-1">
+                            <textarea
+                                ref={composerRef}
+                                value={draft}
+                                onChange={(event) => setDraft(event.target.value)}
+                                onFocus={() => {
+                                    if (!keepComposerFoldedRef.current) setComposerOpen(true);
+                                }}
+                                onKeyDown={(event) => {
+                                    // Enter is a new line; with Cmd or Ctrl it sends.
+                                    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                                        event.preventDefault();
+                                        void submitComment();
+                                    }
+                                }}
+                                maxLength={POST_COMMENT_MAX_LENGTH}
+                                rows={1}
+                                placeholder={replyTo ? 'Add a reply…' : 'Add a comment…'}
+                                aria-label={replyTo ? 'Write a reply' : 'Write a comment'}
+                                className="ui-focus-ring block max-h-40 min-h-9 w-full resize-none rounded-lg border-b border-[var(--ui-border-default)] bg-transparent px-1 py-1.5 text-sm leading-6 text-[var(--ui-text-primary)] outline-none transition-colors placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-text-primary)]"
+                            />
+                            {composerActive ? (
+                                <div className="mt-2 flex items-center justify-end gap-2">
+                                    {draft.length >= POST_COMMENT_MAX_LENGTH - 200 ? (
+                                        <span className="mr-auto text-xs tabular-nums text-[var(--ui-text-faint)]">
+                                            {`${draft.length}/${POST_COMMENT_MAX_LENGTH}`}
+                                        </span>
+                                    ) : null}
+                                    <button
+                                        type="button"
+                                        onClick={cancelDraft}
+                                        aria-label={replyTo ? 'Cancel reply' : 'Cancel comment'}
+                                        className="ui-focus-ring min-h-9 rounded-full px-4 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-2)]"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => void submitComment()}
+                                        disabled={!canSubmit}
+                                        className="ui-focus-ring inline-flex min-h-9 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:opacity-50"
+                                    >
+                                        {submitting
+                                            ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                                            : null}
+                                        {replyTo ? 'Reply' : 'Comment'}
+                                    </button>
+                                </div>
+                            ) : null}
+                        </div>
+                    </div>
+                </div>
+            ) : (
+                <Link
+                    href={loginHref}
+                    className="ui-focus-ring flex min-h-12 items-center gap-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-strong)]"
+                >
+                    <MessageSquare className="h-4 w-4" aria-hidden="true" />
+                    Sign in to join the conversation
+                </Link>
+            )}
+        </div>
+    );
+
     return (
         <section
             id={`comments-${postId}`}
@@ -753,7 +867,7 @@ export default function PostComments({
         >
             <p className="sr-only" role="status" aria-live="polite">{statusMessage}</p>
 
-            <div className={`flex items-center justify-between gap-3 ${
+            <div className={`post-comments__header flex items-center justify-between gap-3 ${
                 isPanel ? 'border-b border-[var(--ui-border-subtle)] py-2 pl-4 pr-2' : ''
             }`}
             >
@@ -790,82 +904,7 @@ export default function PostComments({
                 </div>
             </div>
 
-            {/* First in the document so a keyboard reaches it before the thread;
-                a panel beside the post draws it along its bottom edge instead. */}
-            <div className={`post-comments__composer ${isPanel ? 'px-4 py-3' : ''}`}>
-                {user ? (
-                    <div className="flex flex-col gap-2">
-                        {replyTo ? (
-                            <p className="truncate text-xs text-[var(--ui-text-muted)]">
-                                {`Replying to ${getCommentDisplay(replyTo).authorLabel}`}
-                            </p>
-                        ) : null}
-                        <div className="flex items-start gap-3">
-                            <PostCommentAvatar
-                                avatarUrl={(user.user_metadata?.avatar_url as string | undefined) ?? null}
-                                name={(user.user_metadata?.full_name as string | undefined) || user.email || 'You'}
-                                size={replyTo ? 24 : 32}
-                            />
-                            <div className="min-w-0 flex-1">
-                                <textarea
-                                    ref={composerRef}
-                                    value={draft}
-                                    onChange={(event) => setDraft(event.target.value)}
-                                    onFocus={() => setComposerOpen(true)}
-                                    onKeyDown={(event) => {
-                                        // Enter is a new line; with Cmd or Ctrl it sends.
-                                        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                                            event.preventDefault();
-                                            void submitComment();
-                                        }
-                                    }}
-                                    maxLength={POST_COMMENT_MAX_LENGTH}
-                                    rows={1}
-                                    placeholder={replyTo ? 'Add a reply…' : 'Add a comment…'}
-                                    aria-label={replyTo ? 'Write a reply' : 'Write a comment'}
-                                    className="ui-focus-ring block max-h-40 min-h-9 w-full resize-none rounded-lg border-b border-[var(--ui-border-default)] bg-transparent px-1 py-1.5 text-sm leading-6 text-[var(--ui-text-primary)] outline-none transition-colors placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-text-primary)]"
-                                />
-                                {composerActive ? (
-                                    <div className="mt-2 flex items-center justify-end gap-2">
-                                        {draft.length >= POST_COMMENT_MAX_LENGTH - 200 ? (
-                                            <span className="mr-auto text-xs tabular-nums text-[var(--ui-text-faint)]">
-                                                {`${draft.length}/${POST_COMMENT_MAX_LENGTH}`}
-                                            </span>
-                                        ) : null}
-                                        <button
-                                            type="button"
-                                            onClick={cancelDraft}
-                                            aria-label={replyTo ? 'Cancel reply' : 'Cancel comment'}
-                                            className="ui-focus-ring min-h-9 rounded-full px-4 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-2)]"
-                                        >
-                                            Cancel
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => void submitComment()}
-                                            disabled={!canSubmit}
-                                            className="ui-focus-ring inline-flex min-h-9 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:opacity-50"
-                                        >
-                                            {submitting
-                                                ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                                                : null}
-                                            {replyTo ? 'Reply' : 'Comment'}
-                                        </button>
-                                    </div>
-                                ) : null}
-                            </div>
-                        </div>
-                    </div>
-                ) : (
-                    <Link
-                        href={loginHref}
-                        className="ui-focus-ring flex min-h-12 items-center gap-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-strong)]"
-                    >
-                        <MessageSquare className="h-4 w-4" aria-hidden="true" />
-                        Sign in to join the conversation
-                    </Link>
-                )}
-            </div>
+            {isPanel ? null : composer}
 
             <div
                 ref={scrollRef}
@@ -1151,7 +1190,7 @@ export default function PostComments({
                                                 <CommentAction
                                                     label="Reply"
                                                     accessibleLabel={`Reply to ${display.authorLabel}`}
-                                                    onClick={() => startReply(comment)}
+                                                    onClick={(event) => startReply(comment, event.currentTarget)}
                                                 />
                                             </div>
                                         ) : null}
@@ -1189,6 +1228,8 @@ export default function PostComments({
                 </button>
             ) : null}
             </div>
+
+            {isPanel ? composer : null}
         </section>
     );
 }
@@ -1209,16 +1250,30 @@ function SignInLink({ href }: { href: string }) {
  * so one essay cannot push the rest of the thread out of a short panel.
  */
 function CommentBody({ text, deleted }: { text: string; deleted: boolean }) {
-    const foldable = !deleted && isLongComment(text);
+    const long = !deleted && isLongComment(text);
     const [unfolded, setUnfolded] = useState(false);
+    // The text decides which comments may fold; the page decides which do. A
+    // paragraph of 400 characters is four lines in a narrow panel and three in
+    // a wide column, where "Read more" would toggle nothing. jsdom lays nothing
+    // out and reports no height: the fold stays, as the text alone decided.
+    const [fits, setFits] = useState(false);
+    const bodyRef = useRef<HTMLParagraphElement | null>(null);
+    useLayoutEffect(() => {
+        const body = bodyRef.current;
+        if (!long || unfolded || !body || body.clientHeight === 0) return;
+        setFits(body.scrollHeight <= body.clientHeight + 1);
+    }, [long, text, unfolded]);
+    const foldable = long && !fits;
 
     return (
         <>
-            <p className={`whitespace-pre-wrap text-sm leading-6 [overflow-wrap:anywhere] ${
+            <p
+                ref={bodyRef}
+                className={`whitespace-pre-wrap text-sm leading-6 [overflow-wrap:anywhere] ${
                 deleted
                     ? 'italic text-[var(--ui-text-faint)]'
                     : 'text-[var(--ui-text-primary)]'
-            } ${foldable && !unfolded ? 'line-clamp-4' : ''}`}
+            } ${long && !unfolded ? 'line-clamp-4' : ''}`}
             >
                 {text}
             </p>

@@ -328,11 +328,29 @@ describe('PostComments', () => {
             });
         });
 
-        // Cancel drops the draft and the reply target with it.
-        fireEvent.click(replyButtons[0]);
+        // The handle belongs to its target. Moved to the top comment with
+        // nothing typed, the draft drops it; moved back, it returns, and it
+        // alone is nothing to send.
+        const freshReplyButtons = () => screen.getAllByRole('button', { name: /^Reply to / });
+        // (This server answers no POST, so the draft above is still there: dropped first.)
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel reply' }));
+        fireEvent.click(freshReplyButtons()[2]);
+        expect(screen.getByRole('textbox', { name: 'Write a reply' })).toHaveValue('@creator ');
+        expect(screen.getByRole('button', { name: 'Reply' })).toBeDisabled();
+        fireEvent.click(freshReplyButtons()[0]);
+        expect(screen.getByRole('textbox', { name: 'Write a reply' })).toHaveValue('');
+        // A draft under way survives a change of target.
+        fireEvent.change(screen.getByRole('textbox', { name: 'Write a reply' }), { target: { value: 'Half a reply' } });
+        fireEvent.click(freshReplyButtons()[2]);
+        expect(screen.getByRole('textbox', { name: 'Write a reply' })).toHaveValue('Half a reply');
+        expect(screen.getByRole('button', { name: 'Reply' })).toBeEnabled();
+
+        // Cancel drops the draft and the reply target with it, and focus goes
+        // back to the Reply the reply came from.
         fireEvent.click(screen.getByRole('button', { name: 'Cancel reply' }));
         expect(screen.queryByRole('textbox', { name: 'Write a reply' })).not.toBeInTheDocument();
         expect(screen.getByRole('textbox', { name: 'Write a comment' })).toHaveValue('');
+        expect(freshReplyButtons()[2]).toHaveFocus();
     });
 
     it('refreshes the full reply thread after posting instead of caching only the new reply', async () => {
@@ -560,6 +578,13 @@ describe('PostComments', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Cancel comment' }));
         expect(composer).toHaveValue('');
         expect(screen.queryByRole('button', { name: 'Comment' })).not.toBeInTheDocument();
+        // Cancel left the page with focus on it: the composer has it, still folded.
+        expect(composer).toHaveFocus();
+
+        // A panel ends with its composer, where a wide page draws it, so Tab
+        // follows the eye: header, thread, composer.
+        const thread = screen.getByRole('list', { name: 'Comment thread' });
+        expect(thread.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
         // A panel beside the post: the count in its header, and its close button.
         expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(/^Comments\s*2$/);
@@ -582,6 +607,10 @@ describe('PostComments', () => {
         // No order to choose, and nothing to close, on an empty thread in a feed card.
         expect(screen.queryByRole('button', { name: 'Sort comments' })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Close comments' })).not.toBeInTheDocument();
+
+        // In a column (a feed card, the reel) the composer leads the thread.
+        expect(composer.compareDocumentPosition(screen.getByText(/No comments yet/)) & Node.DOCUMENT_POSITION_FOLLOWING)
+            .toBeTruthy();
 
         fireEvent.change(composer, { target: { value: 'Sent by key' } });
         fireEvent.keyDown(composer, { key: 'Enter' });

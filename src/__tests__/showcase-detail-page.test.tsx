@@ -271,7 +271,14 @@ describe('Showcase detail page', () => {
     const panel = within(rail).getByTestId('canonical-post-comments');
     expect(panel).toHaveAttribute('data-open', 'false');
     expect(within(panel).getByTestId('post-comments-component')).not.toBeVisible();
-    fireEvent.click(within(panel).getByRole('button', { name: /^Comments/ }));
+    // Close hid the button it was pressed on: focus is on the row that opens
+    // the panel again, which names what it opens.
+    const unfold = within(panel).getByRole('button', { name: /^Comments/ });
+    expect(unfold).toHaveFocus();
+    expect(unfold).toHaveAttribute('aria-expanded', 'false');
+    expect(document.getElementById(unfold.getAttribute('aria-controls') ?? ''))
+      .toContainElement(within(panel).getByTestId('post-comments-component'));
+    fireEvent.click(unfold);
     expect(panel).toHaveAttribute('data-open', 'true');
     expect(within(panel).getByTestId('post-comments-component')).toBeVisible();
     expect(within(column).queryByTestId('canonical-post-comments')).not.toBeInTheDocument();

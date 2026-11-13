@@ -20,7 +20,7 @@ const RAIL_STUCK_TOP_PX = 76;
  * scrolls. Written only when the pixel changes, so past the first hundred or
  * so pixels of scroll (the rail stuck) a scroll costs one read.
  */
-export function usePostRailTop(layoutRef: RefObject<HTMLElement | null>) {
+export function usePostRailTop(layoutRef: RefObject<HTMLElement | null>, layoutKey: string) {
   useEffect(() => {
     const layout = layoutRef.current;
     if (!layout) return;
@@ -53,5 +53,7 @@ export function usePostRailTop(layoutRef: RefObject<HTMLElement | null>) {
       window.removeEventListener('resize', schedule);
       observer?.disconnect();
     };
-  }, [layoutRef]);
+    // `layoutKey` names the layout now drawn: another post, or the page back
+    // from a state that drew none, is another element to measure.
+  }, [layoutRef, layoutKey]);
 }

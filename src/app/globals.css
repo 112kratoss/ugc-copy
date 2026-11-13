@@ -1233,6 +1233,20 @@ button:disabled,
   }
 }
 
+/*
+ * A panel's composer ends it in the document, which is where a wide page
+ * draws it. In one column the panel is as long as its thread, so the
+ * composer is drawn under the header instead, before a reader has to pass
+ * every comment to reach it.
+ */
+.post-comments--panel .post-comments__header {
+  order: -2;
+}
+
+.post-comments--panel .post-comments__composer {
+  order: -1;
+}
+
 @container canonical-post (min-width: 900px) {
   /*
    * The document column caps at 56rem and the pair centers as a unit —
@@ -1241,6 +1255,9 @@ button:disabled,
    */
   .canonical-post-layout {
     grid-template-columns: minmax(0, 56rem) minmax(320px, 400px);
+    /* The rail spans both rows; were both `auto`, a rail taller than a short
+       post would be shared between them and open a band under the masthead. */
+    grid-template-rows: auto 1fr;
     justify-content: center;
     /* The masthead-to-media gap is document rhythm, not column separation. */
     row-gap: 1.25rem;
@@ -1309,12 +1326,11 @@ button:disabled,
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
-    overscroll-behavior: contain;
   }
 
-  /* Drawn last, read first: the composer leads the thread in the document. */
+  /* The composer ends the panel, in the document and on the page. */
   .post-comments--panel .post-comments__composer {
-    order: 10;
+    order: 0;
     border-top: 1px solid var(--ui-border-subtle);
   }
 

@@ -120,9 +120,7 @@ export default function ShowcaseDetailBody({
   // gate takes the place of the content only; the byline, the rail (Report,
   // Block, Owner tools) and the engagement row stay, as the app keeps them.
   const isNsfwCovered = Boolean(detail.isNsfw && !detail.nsfwRevealed);
-  // The rail ends inside the window: it is told where its top is.
   const layoutRef = useRef<HTMLDivElement | null>(null);
-  usePostRailTop(layoutRef);
   const viewer = useShowcasePostViewer({
     postId: detail.id,
     creatorId: detail.creator.id,
@@ -138,6 +136,8 @@ export default function ShowcaseDetailBody({
   });
   // For the owner, the visibility they just saved here: the cached page may not have caught up.
   const { bundle, lockedViewer, viewerIsOwner, deliveryId, returnContext, visibility } = viewer;
+  // The rail ends inside the window: it is told where its top is.
+  usePostRailTop(layoutRef, `${detail.id}:${viewer.blocked ? 'blocked' : 'drawn'}`);
   const previewKinds = bundle?.lockedPreview?.resourceKinds ?? bundle?.resourceKinds ?? [];
   const previewKindSummary = formatResourceKinds(previewKinds);
   const postTypeLabel = getPostTypeLabel({

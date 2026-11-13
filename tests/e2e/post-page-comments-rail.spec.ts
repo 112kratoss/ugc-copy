@@ -1,6 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 import creationPost from './fixtures/creation-post.json';
+import recipePost from './fixtures/post-with-recipe.json';
 
 // Owner, 2026-11-13: the post page's conversation sat under the post and its recipe, a screen or
 // more down, and a post without a recipe printed its prompt in the rail's card while a post with
@@ -98,9 +99,9 @@ const REPLIES = [
 ];
 
 /** Every API call unanswered but the post's thread; the posts the page sends are kept. */
-async function answerThread(page: Page, posted: Array<Record<string, unknown>> = []) {
+async function answerThread(page: Page, posted: Array<Record<string, unknown>> = [], postId = POST_ID) {
   await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { error: 'Not answered offline' } }));
-  await page.route(`**/api/showcase/posts/${POST_ID}/comments**`, (route) => {
+  await page.route(`**/api/showcase/posts/${postId}/comments**`, (route) => {
     const request = route.request();
     if (request.method() === 'POST') {
       const body = request.postDataJSON() as Record<string, unknown>;
@@ -180,6 +181,14 @@ test('the thread is a panel beside the post: its list scrolls inside it and the 
   ]);
   expect(composerTop).toBeGreaterThanOrEqual(scrollerBottom);
   expect(composerBottom).toBeLessThanOrEqual(panelBox.bottom);
+  // Its one line fits its box: a pixel over drew a scrollbar wherever scrollbars always show.
+  const line = await composer.evaluate((element) => ({ scroll: element.scrollHeight, client: element.clientHeight }));
+  expect(line.scroll).toBeLessThanOrEqual(line.client);
+  // And it ends the panel in the document too, so Tab goes header, thread, composer.
+  expect(await composer.evaluate((element) => {
+    const list = element.closest('section')?.querySelector('ol');
+    return Boolean(list && (list.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING));
+  })).toBe(true);
 
   // The post's creator is marked, a long comment opens folded, and a comment's other actions
   // are behind its menu.
@@ -199,8 +208,14 @@ test('the thread is a panel beside the post: its list scrolls inside it and the 
   }).toPass({ timeout: 45_000 });
   await page.screenshot({ path: testInfo.outputPath('post-page-comment-menu.png') });
   await page.keyboard.press('Escape');
-  await panel.getByRole('button', { name: `More actions for @lena's comment` }).first().click();
-  await expect(page.getByRole('menu').getByRole('menuitem')).toHaveText(['Report']);
+  // A menu closes on any scroll, so the row is brought into view before its menu is pressed, and
+  // the press repeated if the list was still settling.
+  const lenaMenu = panel.getByRole('button', { name: `More actions for @lena's comment` }).first();
+  await lenaMenu.scrollIntoViewIfNeeded();
+  await expect(async () => {
+    if (await page.getByRole('menu').count() === 0) await lenaMenu.click({ timeout: 2_000 });
+    await expect(page.getByRole('menu').getByRole('menuitem')).toHaveText(['Report'], { timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
   await page.keyboard.press('Escape');
 
   // Replies open under their comment, and a reply to a reply joins the same thread by name.
@@ -224,9 +239,20 @@ test('the thread is a panel beside the post: its list scrolls inside it and the 
   // Close folds the panel to one row; the post's Comment link opens it again, the thread as it was.
   await panel.getByRole('button', { name: 'Close comments' }).click();
   await expect(composer).toBeHidden();
-  await expect(panel.getByRole('button', { name: /^Comments/ })).toHaveAttribute('aria-expanded', 'false');
-  await page.getByTestId('canonical-post-media').locator('a[href="#comments"]').click();
-  await expect(composer).toBeVisible();
+  const unfold = panel.getByRole('button', { name: /^Comments/ });
+  await expect(unfold).toHaveAttribute('aria-expanded', 'false');
+  // Close hid the button it was pressed on: focus is on the row that opens the panel again.
+  await expect(unfold).toBeFocused();
+  // The thread is beside the post, so the link does not jump the page to it: the page stays
+  // where it is and focus goes to the composer.
+  const commentLink = page.getByTestId('canonical-post-media').locator('a[href="#comments"]');
+  // The link is under the picture: brought into view first, so the press itself scrolls nothing.
+  await commentLink.scrollIntoViewIfNeeded();
+  const scrolledBefore = await page.evaluate(() => window.scrollY);
+  await commentLink.click();
+  await expect(composer).toBeFocused();
+  expect(await page.evaluate(() => window.scrollY)).toBe(scrolledBefore);
+  expect(new URL(page.url()).hash).toBe('');
   await expect(panel.getByText('A 35mm, wide open.')).toBeVisible();
 });
 
@@ -252,6 +278,26 @@ test('a post with no recipe shows its prompt under the post, not in the rail', a
   await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
   await prompt.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('post-page-prompt-under-post.png') });
+});
+
+test('a short post beside a full thread keeps its masthead and its writing together', async ({ page }) => {
+  // The rail runs beside the masthead's row and the post's. A rail taller than both must not
+  // stretch the masthead's row: a text post of a few lines sat 100px or more under its title.
+  await page.context().route('https://example.supabase.co/**', (route) => route.fulfill({ status: 401, json: {} }));
+  await answerThread(page, [], recipePost.post.id);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`/showcase/${recipePost.post.id}`);
+
+  await expect(page.getByRole('heading', { level: 1, name: recipePost.post.title })).toBeVisible(COLD_PAGE);
+  const panel = page.getByTestId('canonical-post-actions').getByTestId('canonical-post-comments');
+  await expect(panel.getByText('Comment 24')).toBeAttached(COLD_PAGE);
+  const [head, media, rail] = await Promise.all([
+    box(page, 'canonical-post-head'), box(page, 'canonical-post-media'), box(page, 'canonical-post-actions'),
+  ]);
+  // The rail is the taller of the two, which is the case that stretched the rows...
+  expect(rail.bottom - rail.top).toBeGreaterThan(head.bottom - head.top + 200);
+  // ...and the writing still starts one row gap (20px) under the masthead.
+  expect(media.top - head.bottom).toBeLessThanOrEqual(24);
 });
 
 test('on a phone the thread follows the post in one column, composer first, with no scroll of its own', async ({ page, context }, testInfo) => {
