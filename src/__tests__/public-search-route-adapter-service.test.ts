@@ -69,10 +69,87 @@ describe('public search route adapter service', () => {
       sort: 'top',
       filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false },
       exact: false,
+      // Related posts were not asked for; a new query would be counted against the request's own key.
+      related: false,
+      viewerKey: 'network-key',
+      // A visitor is no guest session: its one key is the network already.
+      guestNetworkKey: null,
       cursor: null,
       limit: 12,
       viewerUserId: null,
       countryCode: 'IN',
+    });
+  });
+
+  describe('the related parameter', () => {
+    async function ask(
+      search: string,
+      headers: Record<string, string> = {},
+      user: { id: string; is_anonymous?: boolean } = { id: 'viewer-1' },
+    ) {
+      const searchPublicContent = vi.fn(async (options: PublicSearchOptions) => emptyResponse(options.query, options.type));
+      const response = await getPublicSearchRouteResponse({
+        request: new Request(`http://localhost/api/search?${search}`, { headers }),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          createUserClient: vi.fn(() => ({
+            auth: { getUser: vi.fn(async () => ({ data: { user }, error: null })) },
+          }) as unknown as SupabaseClient),
+          enforceBackendRateLimit: vi.fn(allowedRateLimit),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
+          searchPublicContent,
+          runAfterResponse: () => {},
+          withProviderFetchRequestId: requestIdBoundary,
+        },
+      });
+      return { response, options: searchPublicContent.mock.calls[0]?.[0] ?? null };
+    }
+
+    it('asks the service for related posts only when the request says related=1', async () => {
+      expect((await ask('q=ocean+at+dusk')).options).toMatchObject({ related: false });
+      expect((await ask('q=ocean+at+dusk&related=1')).options).toMatchObject({ related: true, type: 'top' });
+      expect((await ask('q=ocean+at+dusk&type=posts&related=1')).options).toMatchObject({ related: true, type: 'posts' });
+    });
+
+    it('counts a new query against the key the request is counted against: the account, or the visitor’s network', async () => {
+      expect((await ask('q=ocean+at+dusk&related=1')).options)
+        .toMatchObject({ viewerKey: 'network-key', guestNetworkKey: null, viewerUserId: null });
+      // A registered account is counted by its own key and no other: a shared network costs it nothing.
+      expect((await ask('q=ocean+at+dusk&related=1', { Authorization: 'Bearer token' })).options)
+        .toMatchObject({ viewerKey: 'viewer-1', guestNetworkKey: null, viewerUserId: 'viewer-1' });
+    });
+
+    it('names a guest session’s network too: its own id is new with every anonymous sign-in', async () => {
+      const guest = { id: 'guest-1', is_anonymous: true };
+      expect((await ask('q=ocean+at+dusk&related=1', { Authorization: 'Bearer token' }, guest)).options)
+        .toMatchObject({ viewerKey: 'guest-1', guestNetworkKey: 'network-key', viewerUserId: 'guest-1' });
+      // A second guest session from the same place has a new key of its own and the same network.
+      expect((await ask('q=ocean+at+dusk&related=1', { Authorization: 'Bearer token' }, { ...guest, id: 'guest-2' })).options)
+        .toMatchObject({ viewerKey: 'guest-2', guestNetworkKey: 'network-key' });
+    });
+
+    it.each(['0', 'true', 'yes', '', '2', '1,1'])('refuses related=%s with a 400, whatever the type', async (value) => {
+      for (const type of ['top', 'posts', 'creators', 'recipes']) {
+        const { response, options } = await ask(`q=ocean+at+dusk&type=${type}&related=${encodeURIComponent(value)}`);
+        expect(response.status, type).toBe(400);
+        await expect(response.json()).resolves.toEqual({ error: 'related must be 1.' });
+        expect(options, type).toBeNull();
+      }
+    });
+
+    it('takes it on any search, where it changes nothing the service does not apply', async () => {
+      // The service alone decides where related posts apply (public-search-service.test.ts).
+      for (const search of [
+        'q=ocean+at+dusk&type=creators&related=1',
+        'q=ocean+at+dusk&type=recipes&related=1',
+        'q=ocean+at+dusk&type=posts&sort=latest&related=1',
+        'q=ocean+at+dusk&type=posts&kind=video&related=1',
+        'q=ocean+at+dusk&exact=1&related=1',
+      ]) {
+        const { response, options } = await ask(search);
+        expect(response.status, search).toBe(200);
+        expect(options, search).toMatchObject({ related: true });
+      }
     });
   });
 
@@ -495,10 +572,11 @@ describe('public search route adapter service', () => {
       expect(row).toMatchObject({
         query: 'port', search_type: 'top', signed_in: false, creator_count: 0, post_count: 0, recipe_count: 0,
         sort: null, made_with: null, media_kind: null, has_recipe: null, followed_only: null, corrected: false,
+        related_count: null,
       });
       expect(Object.keys(row).sort()).toEqual([
         'corrected', 'created_at', 'creator_count', 'followed_only', 'has_recipe', 'made_with', 'media_kind',
-        'post_count', 'query', 'recipe_count', 'search_type', 'signed_in', 'sort', 'visitor_day',
+        'post_count', 'query', 'recipe_count', 'related_count', 'search_type', 'signed_in', 'sort', 'visitor_day',
       ]);
       expect(JSON.stringify(row)).not.toContain('network-key');
     });
@@ -519,6 +597,18 @@ describe('public search route adapter service', () => {
         followed_only: true, corrected: true,
       });
       expect(JSON.stringify(row)).not.toContain('viewer-1');
+    });
+
+    it('logs how many related posts the answer carried, and sends them to the client as they came', async () => {
+      const related = { posts: [{ id: 'related-1' }, { id: 'related-2' }] };
+      const { ask, insert, tasks } = logHarness();
+      const response = await ask('http://localhost/api/search?q=Port&type=top', {
+        searchPublicContent: vi.fn(async () => ({ ...emptyResponse('Port', 'top'), related })),
+      });
+      expect((await response.json()).related).toEqual(related);
+      await tasks[0]();
+      const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
+      expect(row).toMatchObject({ post_count: 0, related_count: 2 });
     });
 
     it('writes nothing for a search asked to read the query as typed', async () => {

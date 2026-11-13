@@ -754,4 +754,267 @@ describe('public search service', () => {
     });
   });
 
+  describe('related posts by meaning', () => {
+    const post = (index: number) => `${index.toString().padStart(8, '0')}-1111-4111-8111-111111111111`;
+    const lexicalRows = (count: number, corrected: string | null = null) => Array.from({ length: count }, (_, index) => ({
+      post_id: post(index + 1),
+      creator_user_id: `creator-${index + 1}`,
+      search_score: 20 - index,
+      created_at: '2026-11-12T09:00:00.000000+00:00',
+      corrected_query: corrected,
+    }));
+    const relatedRows = [
+      { post_id: post(91), creator_user_id: 'creator-91', similarity: 0.91 },
+      { post_id: post(92), creator_user_id: 'creator-92', similarity: 0.88 },
+      { post_id: post(93), creator_user_id: 'creator-93', similarity: 0.85 },
+    ];
+
+    function harness({
+      lexical = lexicalRows(2),
+      related = relatedRows as typeof relatedRows | null | Error,
+      blocked = [] as string[],
+      nsfw = [] as string[],
+    } = {}) {
+      const rpc = vi.fn(async (name: string) => {
+        if (name === 'search_public_posts') return { data: lexical, error: null };
+        if (name === 'search_public_creators' || name === 'search_public_entities') return { data: [], error: null };
+        if (name === 'search_recipes_corrected_query') return { data: null, error: null };
+        throw new Error(`Unexpected RPC ${name}`);
+      });
+      const client = { rpc } as unknown as SupabaseClient;
+      const findRelatedPostRows = vi.fn<(
+        client: SupabaseClient,
+        options: {
+          query: string;
+          viewerUserId: string | null;
+          viewerKey: string;
+          guestNetworkKey?: string | null;
+          excludePostIds: readonly string[];
+          limit?: number;
+        },
+        dependencies?: unknown,
+      ) => Promise<typeof relatedRows | null>>(async () => {
+        if (related instanceof Error) throw related;
+        return related;
+      });
+      const getShowcaseFeedItemsByPostIds = vi.fn(async ({ postIds }: { postIds: string[] }) => (
+        postIds.map((id) => ({ id, isNsfw: nsfw.includes(id) }))
+      ));
+      const loadBlockedCreatorIds = vi.fn(async ({ creatorIds }: { creatorIds: string[] }) => (
+        new Set(creatorIds.filter((id) => blocked.includes(id)))
+      ));
+      const logEvent = vi.fn();
+      const runAfterResponse = vi.fn();
+      const search = (options: Partial<Parameters<typeof searchPublicContent>[0]> = {}) => searchPublicContent({
+        query: 'Ocean at dusk',
+        normalizedQuery: 'Ocean at dusk',
+        type: 'top',
+        cursor: null,
+        limit: 20,
+        viewerUserId: 'viewer-1',
+        countryCode: 'IN',
+        // The client asked for related posts, and the route says who is asking.
+        related: true,
+        viewerKey: 'viewer-1',
+        ...options,
+      }, {
+        createServiceClient: vi.fn(() => client),
+        findRelatedPostRows: findRelatedPostRows as never,
+        getShowcaseFeedItemsByPostIds: getShowcaseFeedItemsByPostIds as never,
+        getMarketplaceResourceList: vi.fn(async () => ({
+          items: [],
+          pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 6 },
+        })) as never,
+        loadBlockedCreatorIds: loadBlockedCreatorIds as never,
+        logEvent,
+        runAfterResponse,
+        now,
+      });
+      return { search, client, findRelatedPostRows, getShowcaseFeedItemsByPostIds, loadBlockedCreatorIds, logEvent, runAfterResponse };
+    }
+
+    it('says which network a guest session asks from, for the allowance counted there', async () => {
+      const { search, findRelatedPostRows } = harness();
+      await search({ viewerUserId: 'guest-1', viewerKey: 'guest-1', guestNetworkKey: 'network-key' });
+      expect(findRelatedPostRows.mock.calls[0][1]).toMatchObject({ viewerKey: 'guest-1', guestNetworkKey: 'network-key' });
+    });
+
+    it('adds them beside a thin answer, nearest first, hydrated as posts are, and leaves the answer’s own posts as they were', async () => {
+      const { search, client, findRelatedPostRows, getShowcaseFeedItemsByPostIds, logEvent, runAfterResponse } = harness();
+      const result = await search();
+      expect(findRelatedPostRows).toHaveBeenCalledExactlyOnceWith(
+        client,
+        {
+          query: 'Ocean at dusk',
+          viewerUserId: 'viewer-1',
+          // A new query is counted against the key the request is counted against.
+          viewerKey: 'viewer-1',
+          // Not a guest session: no network is counted beside the account.
+          guestNetworkKey: null,
+          // The posts the search itself returned never come back as related.
+          excludePostIds: [post(1), post(2)],
+          limit: 8,
+        },
+        { logEvent, runAfterResponse },
+      );
+      expect(result.related).toEqual({ posts: relatedRows.map((row) => ({ id: row.post_id, isNsfw: false })) });
+      expect(getShowcaseFeedItemsByPostIds).toHaveBeenLastCalledWith({
+        postIds: relatedRows.map((row) => row.post_id),
+        viewerUserId: 'viewer-1',
+        countryCode: 'IN',
+      });
+      // The same answer without the lookup: every other field is identical.
+      const without = await harness({ related: null }).search();
+      expect(without).not.toHaveProperty('related');
+      const rest = { ...result };
+      delete rest.related;
+      expect(rest).toEqual(without);
+      expect(result.posts.items.map((item) => item.id)).toEqual([post(1), post(2)]);
+    });
+
+    it('looks for them on a Posts search’s first page too, and when the search found nothing at all', async () => {
+      const posts = harness();
+      expect((await posts.search({ type: 'posts' })).related?.posts).toHaveLength(3);
+      const nothing = harness({ lexical: [] });
+      const result = await nothing.search({ type: 'posts' });
+      expect(result.posts.items).toEqual([]);
+      expect(result.related?.posts.map((item) => item.id)).toEqual(relatedRows.map((row) => row.post_id));
+      expect(nothing.findRelatedPostRows.mock.calls[0][1]).toMatchObject({ excludePostIds: [] });
+    });
+
+    it('embeds the query as the posts search read it: a corrected misspelling is looked up corrected', async () => {
+      const { search, findRelatedPostRows } = harness({ lexical: lexicalRows(1, 'ocean at dusk') });
+      await search({ query: 'Ocaen at dusk', normalizedQuery: 'Ocaen at dusk' });
+      expect(findRelatedPostRows.mock.calls[0][1]).toMatchObject({ query: 'ocean at dusk' });
+    });
+
+    it('looks for none unless the client asked: no read, no reservation, no call', async () => {
+      for (const options of [{ related: false }, { related: undefined }]) {
+        const { search, findRelatedPostRows, client } = harness();
+        const result = await search(options);
+        expect(findRelatedPostRows).not.toHaveBeenCalled();
+        expect(result).not.toHaveProperty('related');
+        // Nothing of search by meaning touched the database either.
+        const rpcNames = (client.rpc as unknown as { mock: { calls: Array<[string]> } }).mock.calls.map(([name]) => name);
+        expect(rpcNames.filter((name) => /embedding|related/.test(name))).toEqual([]);
+      }
+      // Asked, with nobody to count a new query against: none either.
+      for (const viewerKey of [undefined, '', '  ']) {
+        const { search, findRelatedPostRows } = harness();
+        expect(await search({ viewerKey })).not.toHaveProperty('related');
+        expect(findRelatedPostRows).not.toHaveBeenCalled();
+      }
+    });
+
+    it('starts the lookup while the search’s own posts are being hydrated, not after', async () => {
+      const { search, findRelatedPostRows, getShowcaseFeedItemsByPostIds } = harness();
+      let finishHydration: () => void = () => undefined;
+      const hydrating = new Promise<void>((resolve) => { finishHydration = resolve; });
+      let lookupStartedDuringHydration = false;
+      getShowcaseFeedItemsByPostIds.mockImplementationOnce(async ({ postIds }: { postIds: string[] }) => {
+        // Give the event loop a turn: a lookup started beside this has been called by now.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        lookupStartedDuringHydration = findRelatedPostRows.mock.calls.length === 1;
+        await hydrating;
+        return postIds.map((id) => ({ id, isNsfw: false }));
+      });
+      const answering = search();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(findRelatedPostRows).toHaveBeenCalledTimes(1);
+      finishHydration();
+      const result = await answering;
+      expect(lookupStartedDuringHydration).toBe(true);
+      expect(result.posts.items).toHaveLength(2);
+      expect(result.related?.posts).toHaveLength(3);
+    });
+
+    it.each([
+      ['six posts of its own', { lexical: lexicalRows(6) }, {}],
+      ['a Posts page with more behind it', { lexical: lexicalRows(3) }, { type: 'posts' as const, limit: 2 }],
+      ['a later page', {}, {
+        type: 'posts' as const,
+        cursor: { version: 1 as const, type: 'posts' as const, score: 3, id: post(7), asOf: SEARCH_BEGAN.getTime() },
+      }],
+      ['the Latest order', {}, { type: 'posts' as const, sort: 'latest' as const }],
+      ['a filter', {}, { type: 'posts' as const, filters: { madeWith: null, mediaKind: 'video' as const, hasRecipe: false, following: false } }],
+      ['the query read as typed', {}, { exact: true }],
+      ['a Creators search', {}, { type: 'creators' as const }],
+      ['a Recipes search', {}, { type: 'recipes' as const }],
+      ['a query under three characters', { lexical: [] }, { query: 'oc', normalizedQuery: 'oc' }],
+    ])('does not look for them with %s', async (_label, setup, options) => {
+      const { search, findRelatedPostRows } = harness(setup);
+      const result = await search(options);
+      expect(findRelatedPostRows).not.toHaveBeenCalled();
+      expect(result).not.toHaveProperty('related');
+    });
+
+    it('counts the posts it shows: five shown of six ranked, one labelled meanwhile, is a thin answer', async () => {
+      const { search, findRelatedPostRows, getShowcaseFeedItemsByPostIds } = harness({ lexical: lexicalRows(6), nsfw: [post(3)] });
+      // Six rows were ranked, so nothing is started beside the hydration...
+      getShowcaseFeedItemsByPostIds.mockImplementationOnce(async ({ postIds }: { postIds: string[] }) => {
+        expect(findRelatedPostRows).not.toHaveBeenCalled();
+        return postIds.map((id) => ({ id, isNsfw: id === post(3) }));
+      });
+      const result = await search();
+      // ...and once five are shown, the lookup runs after all.
+      expect(result.posts.items).toHaveLength(5);
+      expect(findRelatedPostRows).toHaveBeenCalledTimes(1);
+      // The labelled one is excluded all the same: it was in the ranked read.
+      expect(findRelatedPostRows.mock.calls[0][1]).toMatchObject({ excludePostIds: lexicalRows(6).map((row) => row.post_id) });
+    });
+
+    it('says they were looked for and none passed with an empty list, and says nothing when they could not be looked for', async () => {
+      expect((await harness({ related: [] }).search()).related).toEqual({ posts: [] });
+      expect(await harness({ related: null }).search()).not.toHaveProperty('related');
+    });
+
+    it('drops a creator blocked since the read, a post labelled since, and a post the answer already shows', async () => {
+      const { search, getShowcaseFeedItemsByPostIds, loadBlockedCreatorIds } = harness({
+        related: [
+          { post_id: post(1), creator_user_id: 'creator-1', similarity: 0.95 },
+          ...relatedRows,
+        ],
+        blocked: ['creator-92'],
+        nsfw: [post(93)],
+      });
+      const result = await search();
+      expect(loadBlockedCreatorIds).toHaveBeenLastCalledWith(expect.objectContaining({
+        creatorIds: ['creator-91', 'creator-92', 'creator-93'],
+        viewerUserId: 'viewer-1',
+      }));
+      // The blocked creator's post is never hydrated.
+      expect(getShowcaseFeedItemsByPostIds).toHaveBeenLastCalledWith(expect.objectContaining({ postIds: [post(91), post(93)] }));
+      expect(result.related).toEqual({ posts: [{ id: post(91), isNsfw: false }] });
+    });
+
+    it('holds them to eight', async () => {
+      const many = Array.from({ length: 11 }, (_, index) => ({
+        post_id: post(50 + index), creator_user_id: `creator-${50 + index}`, similarity: 0.95 - index / 100,
+      }));
+      const result = await harness({ related: many }).search();
+      expect(result.related?.posts.map((item) => item.id)).toEqual(many.slice(0, 8).map((row) => row.post_id));
+    });
+
+    it('answers the search unchanged when the lookup throws, with a line in the log that names no query', async () => {
+      const failure = new Error('socket closed');
+      const { search, logEvent } = harness({ related: failure });
+      const result = await search();
+      expect(result).not.toHaveProperty('related');
+      expect(result.posts.items.map((item) => item.id)).toEqual([post(1), post(2)]);
+      expect(logEvent).toHaveBeenCalledWith('warn', 'public_search_related_failed', { error: failure });
+      expect(JSON.stringify(logEvent.mock.calls)).not.toMatch(/ocean/i);
+    });
+
+    it('answers the search unchanged when hydrating them fails', async () => {
+      const { search, getShowcaseFeedItemsByPostIds, logEvent } = harness();
+      getShowcaseFeedItemsByPostIds
+        .mockImplementationOnce(async ({ postIds }: { postIds: string[] }) => postIds.map((id) => ({ id, isNsfw: false })))
+        .mockImplementationOnce(async () => { throw new Error('hydration failed'); });
+      const result = await search();
+      expect(result).not.toHaveProperty('related');
+      expect(result.posts.items).toHaveLength(2);
+      expect(logEvent).toHaveBeenCalledWith('warn', 'public_search_related_failed', expect.anything());
+    });
+  });
+
 });

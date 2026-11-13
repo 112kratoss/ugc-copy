@@ -29,6 +29,7 @@ import { maintainFeedPersonalization } from '@/lib/feed-maintenance';
 import { pruneOperationalBackendData } from '@/lib/operational-data-retention';
 import { sweepRecipeFileCopies } from '@/lib/recipe-copy-sweep';
 import { rebuildSearchDictionary } from '@/lib/search-dictionary';
+import { hasSearchEmbeddingWork, runSearchEmbeddingJob } from '@/lib/search-embeddings';
 import {
   GenerationCompletionBatchError,
   hasDueGenerationCompletionJobs,
@@ -654,6 +655,30 @@ export function runSearchDictionaryBackendJob(options: {
     // One bounded SQL call that reports zeros when nothing changed.
     hasWork: async () => true,
     run: (client) => rebuildSearchDictionary(client),
+  });
+}
+
+export function runSearchEmbeddingsBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['search-embeddings'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'search_embeddings_started',
+      skippedNoWork: 'search_embeddings_skipped_no_work',
+      skippedLocked: 'search_embeddings_skipped',
+      completed: 'search_embeddings_completed',
+      failed: 'search_embeddings_failed',
+    },
+    // One read: a post waiting for its vector, or rows to prune. Nothing while
+    // SEARCH_SEMANTIC_DISABLED is on.
+    hasWork: (client) => hasSearchEmbeddingWork(client),
+    run: (client, context) => runSearchEmbeddingJob(client, { now: new Date(context.startedAtMs) }),
   });
 }
 

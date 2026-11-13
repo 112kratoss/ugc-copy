@@ -99,6 +99,7 @@ describe('backend job registry', () => {
       'recipe-copy-sweep',
       'referral-reward-reconciliation',
       'search-dictionary',
+      'search-embeddings',
       'showcase-media-revocations',
       'workflow-run-steps',
     ]);
@@ -119,6 +120,8 @@ describe('backend job registry', () => {
         'feed-embeddings': 120,
         'kie-account-balance': 60,
         'search-dictionary': 60,
+        // search-embeddings bounds its run as feed-embeddings does: a 45 s request budget.
+        'search-embeddings': 120,
       };
       expect(job.maxDurationSeconds).toBe(boundedDurations[job.name] ?? 300);
       expect(job.maxDurationSeconds).toBeLessThanOrEqual(BACKEND_JOB_SCHEDULER.maxDurationSeconds);
@@ -144,10 +147,11 @@ describe('backend job registry', () => {
     // Vercel invocations. The Kie balance check (+24/day, hourly) is the same:
     // it rides the shared scheduler and adds no cron entry of its own. So does
     // the recipe copy sweep every six hours (+4/day) and the search dictionary
-    // rebuild every hour (+24/day). Both the Kie check and
+    // rebuild every hour (+24/day), and search-embeddings every ten minutes
+    // (+144/day), skipped after one read when nothing waits. Both the Kie check and
     // the alert push (48/day) counted being configured as work and ran on all
     // 144 ticks until 2026-11-04 (1,231 runs a day then).
-    expect(logicalDailyRuns).toBe(1039);
+    expect(logicalDailyRuns).toBe(1183);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBe(144);
     // The budget bounds real Vercel cron invocations, not logical job runs, so
     // it has to be measured across every entry now that F14 added two. Checking
@@ -176,6 +180,7 @@ describe('backend job registry', () => {
       'feed-embeddings',
       'mobile-push-receipts',
       'search-dictionary',
+      'search-embeddings',
       'workflow-run-steps',
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:10:00.000Z')).map((job) => job.name)).toEqual([
@@ -183,6 +188,7 @@ describe('backend job registry', () => {
       'feed-embeddings',
       'kie-account-balance',
       'mobile-push-receipts',
+      'search-embeddings',
       'workflow-run-steps',
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:20:00.000Z')).map((job) => job.name)).toEqual([
@@ -190,6 +196,7 @@ describe('backend job registry', () => {
       'feed-embeddings',
       'feed-maintenance',
       'mobile-push-receipts',
+      'search-embeddings',
       'workflow-run-steps',
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:30:00.000Z')).map((job) => job.name)).toEqual([
@@ -197,6 +204,7 @@ describe('backend job registry', () => {
       'backend-alert-delivery',
       'feed-embeddings',
       'mobile-push-receipts',
+      'search-embeddings',
       'showcase-media-revocations',
       'workflow-run-steps',
     ]);
@@ -205,6 +213,7 @@ describe('backend job registry', () => {
       'feed-embeddings',
       'mobile-push-receipts',
       'referral-reward-reconciliation',
+      'search-embeddings',
       'workflow-run-steps',
     ]);
   });
@@ -245,6 +254,7 @@ describe('backend job registry', () => {
       'account-deletion-resweeps',
       'feed-embeddings',
       'mobile-push-receipts',
+      'search-embeddings',
       'workflow-run-steps',
     ]);
     expect(Math.min(...everyTick.map((job) => job.healthExpectedMaxAgeMinutes))).toBeLessThanOrEqual(30);
@@ -282,6 +292,29 @@ describe('backend job registry', () => {
       maxDurationSeconds: 60,
       lockTtlSeconds: 120,
       healthExpectedMaxAgeMinutes: 180,
+    });
+  });
+
+  it('embeds posts for search every ten minutes inside the shared tick, as the feed’s embeddings run', () => {
+    const due = (timestamp: string) => getDueBackendJobs(Date.parse(timestamp)).map((job) => job.name);
+    for (const timestamp of ['2026-06-22T10:00:00.000Z', '2026-06-22T10:10:00.000Z', '2026-06-22T10:50:00.000Z']) {
+      expect(due(timestamp)).toContain('search-embeddings');
+    }
+    // Logical runs inside the scheduler's invocation: no cron entry, so the
+    // Vercel invocation budget is what it was.
+    expect(BACKEND_JOB_VERCEL_CRONS.map((cron) => cron.path)).not.toContain('/api/cron/search-embeddings');
+    expect(getBackendJobVercelDailyInvocations()).toBe(432);
+    const feed = BACKEND_JOB_REGISTRY.find((job) => job.name === 'feed-embeddings');
+    expect(BACKEND_JOB_REGISTRY.find((job) => job.name === 'search-embeddings')).toMatchObject({
+      route: '/api/cron/search-embeddings',
+      schedule: feed?.schedule,
+      dispatch: 'scheduler',
+      cadenceMinutes: 10,
+      dailyInvocations: 144,
+      maxDurationSeconds: feed?.maxDurationSeconds,
+      lockTtlSeconds: feed?.lockTtlSeconds,
+      noWorkSkipReason: 'no_posts_pending_search_embedding',
+      healthExpectedMaxAgeMinutes: 30,
     });
   });
 

@@ -38,9 +38,9 @@ select is(
 );
 
 select ok(
-  (select count(*) = 27 from public.get_operational_table_growth() as growth
+  (select count(*) = 29 from public.get_operational_table_growth() as growth
    where growth.table_name not in ('auth.users', 'guest_identities')),
-  'every table reported before is still reported'
+  'every table reported before is still reported, and the two search by meaning added (20261112215420)'
 );
 
 create temporary table guests_before on commit drop as

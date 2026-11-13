@@ -1,8 +1,10 @@
 import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { after } from 'next/server';
 
 import { logBackendEvent } from '@/lib/backend-logger';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import { loadBlockedCreatorIds } from '@/lib/moderation-service';
 import {
   getMarketplaceResourceList,
@@ -17,6 +19,7 @@ import {
   appliedPublicSearchSort,
   emptyPublicSearchPage,
   encodePublicSearchCursor,
+  hasPublicSearchFilters,
   publicSearchCursorFilterMark,
   publicSearchQueryLength,
   publicSearchTypeHasFilters,
@@ -30,8 +33,15 @@ import {
   type RecipeSearchResult,
   type SearchEntityResult,
 } from '@/lib/public-search';
+import {
+  SEARCH_RELATED_MAX_POSTS,
+  SEARCH_RELATED_THIN_POST_COUNT,
+  findRelatedPostRows,
+  type RelatedPostRow,
+} from '@/lib/search-embeddings';
 import { searchEntityLabel } from '@/lib/search-entity-label';
 import { createServiceClient } from '@/lib/server-helpers';
+import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { getShowcaseFeedItemsByPostIds } from '@/lib/showcase-feed';
 
 type CreatorSearchRpcRow = {
@@ -68,9 +78,13 @@ export type EntitySearchRpcRow = {
 
 type PublicSearchServiceDependencies = {
   createServiceClient?: typeof createServiceClient;
+  /** The posts nearest the query by meaning, or null when they cannot be looked for. */
+  findRelatedPostRows?: typeof findRelatedPostRows;
   getMarketplaceResourceList?: typeof getMarketplaceResourceList;
   getShowcaseFeedItemsByPostIds?: typeof getShowcaseFeedItemsByPostIds;
   loadBlockedCreatorIds?: typeof loadBlockedCreatorIds;
+  /** Where a new query's vector is kept once the answer is out; Next's `after` by default. */
+  runAfterResponse?: RunAfterResponse;
   /** Where a failed read of the recipes' reading is noted. */
   logEvent?: typeof logBackendEvent;
   /** The clock a new search's instant is read from. */
@@ -95,15 +109,47 @@ export type PublicSearchOptions = {
   filters?: PublicSearchFilters;
   /** Read the query as typed: no spelling correction, for posts or recipes. */
   exact?: boolean;
+  /**
+   * The client asked for related posts (`related=1`): it draws them, and the
+   * query is one a person settled on, not a step of typing. Without it
+   * nothing of search by meaning runs: no read, no reservation, no call.
+   */
+  related?: boolean;
+  /**
+   * Who the request is counted against: the key the route's rate limit uses
+   * (the account, or the hashed network of a visitor). Related posts are
+   * looked for only with one, since a new query is counted against it.
+   */
+  viewerKey?: string;
+  /**
+   * For a guest session only: the hashed network it asks from, which a new
+   * query's vector is counted against as well. Null or left out otherwise.
+   */
+  guestNetworkKey?: string | null;
   cursor: PublicSearchCursor | null;
   limit: number;
   viewerUserId: string | null;
   countryCode: string | null;
 };
 
+/**
+ * Next's `after`, which takes a task only inside a request. Outside one (a
+ * test, a script) it throws, and the task runs at once instead, in front of
+ * nothing.
+ */
+function runAfterResponseByDefault(task: () => Promise<unknown>): void {
+  try {
+    after(task);
+  } catch {
+    void task();
+  }
+}
+
 function resolveDependencies(dependencies?: PublicSearchServiceDependencies) {
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
+    findRelatedPostRows: dependencies?.findRelatedPostRows ?? findRelatedPostRows,
+    runAfterResponse: dependencies?.runAfterResponse ?? runAfterResponseByDefault,
     getMarketplaceResourceList: dependencies?.getMarketplaceResourceList ?? getMarketplaceResourceList,
     getShowcaseFeedItemsByPostIds:
       dependencies?.getShowcaseFeedItemsByPostIds ?? getShowcaseFeedItemsByPostIds,
@@ -340,6 +386,94 @@ async function blockedCreatorIds({
   });
 }
 
+/**
+ * The posts nearest a query by meaning, as rows (search phase 4), or null
+ * when they could not be looked for. Never rejects: it is started beside the
+ * hydration of the search's own posts and awaited after it, and a search must
+ * not fail, then or later, for a promise nobody was holding yet.
+ */
+async function relatedPostRows({
+  adminSupabase,
+  dependencies,
+  excludePostIds,
+  options,
+  query,
+  viewerKey,
+}: {
+  adminSupabase: SupabaseClient;
+  dependencies: ReturnType<typeof resolveDependencies>;
+  excludePostIds: string[];
+  options: PublicSearchOptions;
+  /** The query as the posts search read it. */
+  query: string;
+  viewerKey: string;
+}): Promise<RelatedPostRow[] | null> {
+  try {
+    const rows = await dependencies.findRelatedPostRows(
+      adminSupabase,
+      {
+        query,
+        viewerUserId: options.viewerUserId,
+        viewerKey,
+        guestNetworkKey: options.guestNetworkKey ?? null,
+        excludePostIds,
+        limit: SEARCH_RELATED_MAX_POSTS,
+      },
+      { logEvent: dependencies.logEvent, runAfterResponse: dependencies.runAfterResponse },
+    );
+    if (rows === null) return null;
+    const excluded = new Set(excludePostIds);
+    return rows.filter((row) => !excluded.has(row.post_id)).slice(0, SEARCH_RELATED_MAX_POSTS);
+  } catch (error) {
+    dependencies.logEvent('warn', 'public_search_related_failed', { error });
+    return null;
+  }
+}
+
+/**
+ * Related rows as cards, or undefined when they could not be looked for or
+ * built. They were found on the public search text alone
+ * (`search_related_posts`: labelled posts and both sides of a block left out
+ * in SQL before its limit, the answer's own posts excluded), and here pass
+ * what the answer's posts pass: the block read made after the ranked one, the
+ * hydration every card goes through (so a recipe's fields are the paywall's
+ * allowlist), and the drop of a post labelled meanwhile. Whatever goes wrong
+ * is a line in the log and an answer without them.
+ */
+async function relatedPostCards({
+  adminSupabase,
+  dependencies,
+  options,
+  rows,
+}: {
+  adminSupabase: SupabaseClient;
+  dependencies: ReturnType<typeof resolveDependencies>;
+  options: PublicSearchOptions;
+  rows: RelatedPostRow[] | null;
+}): Promise<ShowcaseFeedItem[] | undefined> {
+  if (rows === null) return undefined;
+  if (rows.length === 0) return [];
+  try {
+    const blockedIds = await blockedCreatorIds({
+      adminSupabase,
+      creatorIds: rows.map((row) => row.creator_user_id),
+      loadBlockedCreatorIds: dependencies.loadBlockedCreatorIds,
+      viewerUserId: options.viewerUserId,
+    });
+    const visible = rows.filter((row) => !blockedIds.has(row.creator_user_id));
+    if (visible.length === 0) return [];
+    const hydrated = await dependencies.getShowcaseFeedItemsByPostIds({
+      postIds: visible.map((row) => row.post_id),
+      viewerUserId: options.viewerUserId,
+      countryCode: options.countryCode,
+    });
+    return hydrated.filter((item) => !item.isNsfw);
+  } catch (error) {
+    dependencies.logEvent('warn', 'public_search_related_failed', { error });
+    return undefined;
+  }
+}
+
 export async function searchPublicContent(
   options: PublicSearchOptions,
   dependencyOverrides?: PublicSearchServiceDependencies,
@@ -449,6 +583,41 @@ export async function searchPublicContent(
     entitiesPromise,
     recipesReadingPromise,
   ]);
+  const postHasMore = !isTop && postRows.length > options.limit;
+
+  // Search by meaning, only for a client that asked for it (`related=1`: it
+  // draws the posts, and sends it for a query a person settled on). On the
+  // first page of a Top or Posts search in the ranked order, unfiltered and
+  // not read as typed, from three characters, one word included (a single
+  // word is the commonest search, and the one a synonym helps most), when the
+  // search's own posts are few. The query is embedded as the posts search
+  // read it, so a corrected misspelling is looked up corrected.
+  const viewerKey = options.viewerKey?.trim() ?? '';
+  const relatedAsked = (options.related ?? false)
+    && viewerKey !== ''
+    && contentQueryAllowed
+    && (options.type === 'top' || options.type === 'posts')
+    && options.cursor === null
+    && sort === 'top'
+    && !exact
+    && !hasPublicSearchFilters(filters)
+    && !postHasMore;
+  const startRelatedRows = () => relatedPostRows({
+    adminSupabase,
+    dependencies,
+    // Every post the ranked read returned, shown or not: none comes back as related.
+    excludePostIds: postRows.map((row) => row.post_id),
+    options,
+    query: postRows[0]?.corrected_query ?? options.normalizedQuery,
+    viewerKey,
+  });
+  // Started here, the moment the ranked rows are known to be few, so the
+  // query's vector is fetched while the search's own posts are hydrated and
+  // the wait for it is beside that work, not after it. Not awaited yet.
+  let relatedRowsPromise = relatedAsked && Math.min(postRows.length, isTop ? postTake : options.limit) < SEARCH_RELATED_THIN_POST_COUNT
+    ? startRelatedRows()
+    : null;
+
   // search_public_creators and search_public_posts leave both sides of a block
   // out before their limit, by the two reads loadBlockedCreatorIds makes, so a
   // page of creators or posts is short only when the results are. This pass
@@ -473,7 +642,6 @@ export async function searchPublicContent(
     .filter((row) => !blockedIds.has(row.creator_user_id));
   const creatorCursorRow = creatorHasMore ? creatorRows[options.limit - 1] : null;
 
-  const postHasMore = !isTop && postRows.length > options.limit;
   const visiblePostRows = postRows
     .slice(0, isTop ? postTake : options.limit)
     .filter((row) => !blockedIds.has(row.creator_user_id));
@@ -506,6 +674,16 @@ export async function searchPublicContent(
   const visibleRecipes = recipePage.items
     .filter((item) => !blockedIds.has(item.seller.id))
     .map(recipeResult);
+
+  // Enough rows were ranked, and fewer than that are shown (a post labelled
+  // or a creator blocked since the ranked read): the answer is thin after
+  // all, and related posts are looked for now.
+  if (relatedAsked && !relatedRowsPromise && shownPosts.length < SEARCH_RELATED_THIN_POST_COUNT) {
+    relatedRowsPromise = startRelatedRows();
+  }
+  const related = relatedRowsPromise
+    ? await relatedPostCards({ adminSupabase, dependencies, options, rows: await relatedRowsPromise })
+    : undefined;
 
   // A posts cursor pages the filters and the reading it was issued under.
   const postCursorFilters = publicSearchCursorFilterMark(filters, exact);
@@ -569,5 +747,6 @@ export async function searchPublicContent(
           : null,
       }
       : emptyPublicSearchPage(),
+    ...(related ? { related: { posts: related } } : {}),
   };
 }
