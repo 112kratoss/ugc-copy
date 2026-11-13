@@ -1,7 +1,6 @@
-import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
+import { getPostMadeWithLabel, isTextOnlyPost } from '@/lib/post-made-with';
 import type { PublicPostDetail } from '@/lib/public-posts';
 import { siteConfig } from '@/lib/seo';
-import { TEMPLATE_RESULT_MODEL } from '@/lib/template-result';
 import { GENERIC_SUGGESTED_TITLES } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 
 /**
@@ -16,6 +15,8 @@ import { GENERIC_SUGGESTED_TITLES } from '../../ugc-mobile/lib/post-publish-poli
 
 const PLACEHOLDER_TITLES = new Set([
     'untitled creation',
+    // What a text post with no title and no body reads (`getPublicPostDetail`).
+    'untitled note',
     'untitled',
     'untitled post',
     'new post',
@@ -36,73 +37,67 @@ export function hasMeaningfulTitle(title: string | null | undefined): boolean {
 }
 
 /**
- * Model ids that name no model: a template result's model is the template's,
- * and an upload whose creator named no tool reads `manual` or `external`.
+ * What the post is, in a word or two. A creation made here (it has a
+ * generation) is an "AI image" or "AI video"; an upload was made elsewhere,
+ * perhaps with a camera, so it is an "image" or "video" and claims nothing
+ * about AI. A text post is a "post".
  */
-const UNNAMED_MODELS = new Set([TEMPLATE_RESULT_MODEL, 'manual', 'external']);
+function describePostKind(detail: PublicPostDetail): string {
+    if (isTextOnlyPost(detail)) return 'post';
 
-/**
- * A catalog model goes by the name the catalog gives it ("Seedance 2.5"), the
- * one the post page's Made with line prints and the one people search for.
- * Anything else (a retired model, an outside tool an upload named) arrives as a
- * slug or free text, which is spaced and cased rather than printed raw.
- */
-function formatModelName(model: string | null | undefined): string | null {
-    const raw = model?.trim();
-    if (!raw || UNNAMED_MODELS.has(raw)) return null;
-
-    const catalogName = getPostModelDisplayName(raw);
-    if (catalogName) return catalogName;
-
-    return raw
-        .replace(/[-_]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .replace(/\b\w/g, (character) => character.toUpperCase());
+    const prefix = detail.generationId ? 'AI ' : '';
+    switch (detail.mediaKind) {
+        case 'video':
+            return `${prefix}video`;
+        case 'image':
+            return `${prefix}image`;
+        default:
+            return `${prefix}creation`;
+    }
 }
 
-function describeMediaKind(mediaKind: PublicPostDetail['mediaKind']): string {
-    switch (mediaKind) {
-        case 'video':
-            return 'AI video';
-        case 'image':
-            return 'AI image';
-        default:
-            return 'AI creation';
-    }
+function withArticle(noun: string): string {
+    return /^[aeiou]/i.test(noun) ? `an ${noun}` : `a ${noun}`;
+}
+
+function capitalize(text: string): string {
+    return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+/** "an AI video made with Seedance 2.5 by @aria", each part only where known. */
+function describePost(detail: PublicPostDetail, kind: string): string {
+    const madeWith = getPostMadeWithLabel(detail);
+    const creatorHandle = detail.creator?.username;
+    return [
+        kind,
+        madeWith ? `made with ${madeWith}` : null,
+        creatorHandle ? `by @${creatorHandle}` : null,
+    ].filter(Boolean).join(' ');
 }
 
 /**
  * The `<title>` for a creation, minus the site suffix that `createMetadata`
  * appends. A titled post keeps its own words and gains the context a searcher
  * needs; an untitled one is described entirely from its metadata rather than
- * sharing a placeholder with every other untitled post.
+ * sharing a placeholder with every other untitled post. A text post's title is
+ * its own words alone. The model is named as the page's Made with line names
+ * it (`getPostMadeWithLabel`), and only where that line does.
  */
 export function composeShowcaseTitle(detail: PublicPostDetail): string {
-    const mediaLabel = describeMediaKind(detail.mediaKind);
-    const modelName = formatModelName(detail.model);
+    const kind = describePostKind(detail);
 
     if (hasMeaningfulTitle(detail.title)) {
         const base = detail.title.trim();
-        const suffix = modelName
-            ? `${mediaLabel} made with ${modelName}`
-            : mediaLabel;
-        const composed = `${base} — ${suffix}`;
+        if (isTextOnlyPost(detail)) return base;
 
+        const madeWith = getPostMadeWithLabel(detail);
+        const composed = `${base} — ${madeWith ? `${kind} made with ${madeWith}` : kind}`;
         return composed.length <= MAX_TITLE_LENGTH ? composed : base;
     }
 
     // No usable title: build one that at least distinguishes this post from the
-    // next untitled one by naming the model that produced it.
-    const creatorHandle = detail.creator?.username;
-    if (modelName && creatorHandle) {
-        return `${mediaLabel} made with ${modelName} by @${creatorHandle}`;
-    }
-    if (modelName) {
-        return `${mediaLabel} made with ${modelName}`;
-    }
-
-    return creatorHandle ? `${mediaLabel} by @${creatorHandle}` : mediaLabel;
+    // next untitled one by naming the model that produced it and its creator.
+    return capitalize(describePost(detail, kind));
 }
 
 /**
@@ -113,22 +108,25 @@ export function composeShowcaseTitle(detail: PublicPostDetail): string {
  * post with a recipe has none in its public read.
  */
 export function composeShowcaseDescription(detail: PublicPostDetail): string {
-    const creatorHandle = detail.creator?.username;
-    // Read as the post page reads it (`ShowcaseDetailBody`): no media, no model.
-    const isTextPost = (detail.postFormat === 'text' || detail.category === 'text') && !detail.mediaUrl;
-    const modelName = isTextPost ? null : formatModelName(detail.model);
-
-    const whatItIs = [
-        isTextPost ? 'a post' : `an ${describeMediaKind(detail.mediaKind)}`,
-        modelName ? `made with ${modelName}` : null,
-        creatorHandle ? `by @${creatorHandle}` : null,
-    ].filter(Boolean).join(' ');
+    const whatItIs = describePost(detail, withArticle(describePostKind(detail)));
     const sentence = hasMeaningfulTitle(detail.title)
-        ? `${detail.title.trim()}, ${whatItIs} on ${siteConfig.name}.`
-        : `${whatItIs.charAt(0).toUpperCase()}${whatItIs.slice(1)} on ${siteConfig.name}.`;
+        ? leadWithTitle(detail.title.trim(), whatItIs)
+        : `${capitalize(whatItIs)} on ${siteConfig.name}.`;
 
     const recipeLine = detail.resourceBundle?.summary?.trim() || detail.resourceBundle?.previewText?.trim();
     return recipeLine ? `${sentence} ${recipeLine}` : sentence;
+}
+
+/**
+ * "Mahabali, an AI image … on Magic Booklet." A title that ends a sentence
+ * ("Golden hour.", "Wow!") is left one, and what follows starts the next;
+ * trailing commas, colons and dashes give way to the comma.
+ */
+function leadWithTitle(title: string, whatItIs: string): string {
+    const base = title.replace(/[\s,;:\u2013\u2014-]+$/u, '');
+    return /[.!?\u2026]["'\u201d\u2019)]*$/u.test(base)
+        ? `${base} ${capitalize(whatItIs)} on ${siteConfig.name}.`
+        : `${base}, ${whatItIs} on ${siteConfig.name}.`;
 }
 
 /**

@@ -47,14 +47,16 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const posts = getSortedPostsData();
 
     // Independent reads; one round trip rather than three sequential ones. Each
-    // resolves to an empty list on failure, so a database problem degrades the
-    // sitemap to its static routes instead of failing the response.
-    const [showcasePosts, creators, templates, models] = await Promise.all([
+    // resolves to an empty list on failure (the templates to null), so a
+    // database problem degrades the sitemap to its static routes instead of
+    // failing the response.
+    const [showcasePosts, creators, templateRows, models] = await Promise.all([
         getIndexableShowcasePosts(),
         getIndexableCreators(),
         getIndexableTemplates(),
         listPublicModels().catch(() => []),
     ]);
+    const templates = templateRows ?? [];
 
     return [
         // No lastModified for pages whose change date is unknown: the sitemap
@@ -65,9 +67,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
             changeFrequency: route.changeFrequency,
             priority: route.priority,
         })),
-        // The catalog only once a template is live: empty, it says "No templates
-        // are live yet" and its page asks not to be indexed (`templates/page.tsx`).
-        ...(templates.length > 0
+        // The catalog only while a template is live, or the read failed: empty,
+        // it says "No templates are live yet" and its page asks not to be
+        // indexed (`templates/page.tsx`), which a failed read leaves indexable.
+        ...(templateRows === null || templateRows.length > 0
             ? [{ url: `${baseUrl}/templates`, changeFrequency: 'daily' as const, priority: 0.75 }]
             : []),
         ...posts.map((post) => ({

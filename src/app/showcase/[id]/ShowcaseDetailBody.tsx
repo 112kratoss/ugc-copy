@@ -9,9 +9,9 @@ import { InviteHandoffBar } from '@/components/InviteHandoffBar';
 import PostCommentAvatar from '@/components/PostCommentAvatar';
 import {
   getPostFeedTitle,
-  getPostModelDisplayName,
   type PostPreviewKind,
 } from '@/lib/post-feed-presentation';
+import { getPostMadeWithLabel, isTextOnlyPost as readTextOnlyPost } from '@/lib/post-made-with';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import {
   formatPostResourcePriceLabel,
@@ -19,7 +19,6 @@ import {
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import type { PublicPostDetail } from '@/lib/public-posts';
-import { isAppSourceToolLabel } from '@/lib/source-tools';
 
 import RemixCreditLine from '@/app/showcase/RemixCreditLine';
 
@@ -57,13 +56,6 @@ function formatResourceKinds(kinds: PostResourceKind[]): string {
 function normalizeComparableText(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
-
-/**
- * Posts made here record the app as their tool, and its own name says nothing
- * on its own page; the app's post Details leave it out the same way
- * (`isOwnTool` in ugc-mobile/lib/post-details-view-model.ts).
- */
-const isOwnSourceTool = isAppSourceToolLabel;
 
 function getPostTypeLabel({
   category,
@@ -138,16 +130,10 @@ export default function ShowcaseDetailBody({
     mediaKind: detail.mediaKind,
     postFormat: detail.postFormat,
   });
-  const isTextOnlyPost = (detail.postFormat === 'text' || detail.category === 'text') && !detail.mediaUrl;
-  // What the post was made with: its model by the name the feed card gives it
-  // (`getPostModelDisplayName`; the slug, "nano-banana-2", was printed here),
-  // else an outside tool its creator named. Nothing on a text post, as its card
-  // names no model either.
-  const outsideTool = detail.sourceTool?.trim();
-  const madeWithLabel = isTextOnlyPost
-    ? null
-    : getPostModelDisplayName(detail.model)
-      ?? (outsideTool && !isOwnSourceTool(outsideTool) ? outsideTool : null);
+  const isTextOnlyPost = readTextOnlyPost(detail);
+  // What the post was made with: one rule for this line, the page's title and
+  // its description (`getPostMadeWithLabel`).
+  const madeWithLabel = getPostMadeWithLabel(detail);
   const detailMediaItems = detail.mediaItems?.length
     ? detail.mediaItems
     : detail.mediaUrl && detail.mediaKind

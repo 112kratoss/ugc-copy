@@ -21,7 +21,7 @@ vi.mock('@/lib/blog', () => ({
 
 import sitemap from '@/app/sitemap';
 import { DEFAULT_APP_STORE_URL, DEFAULT_PLAY_STORE_URL } from '@/lib/app-store-links';
-import { buildOrganizationSchema, siteConfig } from '@/lib/seo';
+import { buildOrganizationSchema, buildSoftwareApplicationSchema, siteConfig } from '@/lib/seo';
 
 async function sitemapPaths() {
     return (await sitemap()).map((entry) => entry.url.replace(siteConfig.siteUrl, '') || '/');
@@ -51,12 +51,40 @@ describe('sitemap routes (SEO audit, 2026-11-13)', () => {
         expect(paths).toContain('/templates');
         expect(paths).toContain('/templates/product-reveal');
     });
+
+    // A failed read says nothing about the catalog: the page stays indexable,
+    // so the sitemap keeps listing it (review of #792).
+    it('keeps the templates catalog when the read fails', async () => {
+        mocks.templates.mockResolvedValue(null);
+
+        expect(await sitemapPaths()).toContain('/templates');
+    });
 });
 
-describe('organization schema', () => {
-    // Ties the brand to its store listings: "Magic Booklet" collides with
-    // magic-trick booklets in search, and nothing linked the two.
-    it('names the App Store and Google Play listings as the same organization', () => {
-        expect(buildOrganizationSchema().sameAs).toEqual([DEFAULT_APP_STORE_URL, DEFAULT_PLAY_STORE_URL]);
+describe('app schema', () => {
+    // The app's store listings are where the product installs; an
+    // Organization's `sameAs` is for pages about the organization itself
+    // (review of #792).
+    it('gives the product its store listings as install addresses', () => {
+        const schema = buildSoftwareApplicationSchema({
+            name: siteConfig.name,
+            path: '/',
+            description: 'x',
+            includeMobileApps: true,
+        });
+
+        expect(schema.operatingSystem).toBe('Web, iOS, Android');
+        expect(schema.installUrl).toEqual([DEFAULT_APP_STORE_URL, DEFAULT_PLAY_STORE_URL]);
+    });
+
+    it('leaves other pages\' product schema as the web app alone', () => {
+        const schema = buildSoftwareApplicationSchema({ name: siteConfig.name, path: '/pricing', description: 'x' });
+
+        expect(schema.operatingSystem).toBe('Web');
+        expect(schema).not.toHaveProperty('installUrl');
+    });
+
+    it('keeps the store listings off the Organization', () => {
+        expect(buildOrganizationSchema()).not.toHaveProperty('sameAs');
     });
 });

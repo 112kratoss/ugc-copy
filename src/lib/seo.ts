@@ -38,6 +38,12 @@ type SoftwareApplicationSchemaOptions = {
     description: string;
     applicationCategory?: string;
     featureList?: string[];
+    /**
+     * The product as a whole, on the web and in its iOS and Android apps, with
+     * the store listings as where it installs: tells search that the "Magic
+     * Booklet" in the stores is this one. Only the home page says so.
+     */
+    includeMobileApps?: boolean;
     offers?: Array<{
         name: string;
         price: number;
@@ -203,7 +209,6 @@ export function createNoIndexMetadata(title: string, description: string): Metad
 }
 
 export function buildOrganizationSchema() {
-    const { appStore, playStore } = getAppStoreLinks();
     return {
         '@context': 'https://schema.org',
         '@type': 'Organization',
@@ -211,9 +216,6 @@ export function buildOrganizationSchema() {
         url: siteConfig.siteUrl,
         logo: absoluteUrl('/icon.png'),
         email: siteConfig.supportEmail,
-        // The app's store listings are the same organization: "Magic Booklet"
-        // shares its words with magic-trick booklets in search.
-        sameAs: [appStore, playStore],
     };
 }
 
@@ -223,15 +225,18 @@ export function buildSoftwareApplicationSchema({
     description,
     applicationCategory = 'BusinessApplication',
     featureList,
+    includeMobileApps = false,
     offers,
 }: SoftwareApplicationSchemaOptions) {
+    const storeListings = includeMobileApps ? getAppStoreLinks() : null;
     return {
         '@context': 'https://schema.org',
         '@type': 'SoftwareApplication',
         name,
         applicationCategory,
-        operatingSystem: 'Web',
+        operatingSystem: storeListings ? 'Web, iOS, Android' : 'Web',
         url: absoluteUrl(path),
+        ...(storeListings ? { installUrl: [storeListings.appStore, storeListings.playStore] } : {}),
         description,
         ...(featureList && featureList.length > 0 ? { featureList } : {}),
         ...(offers && offers.length > 0
