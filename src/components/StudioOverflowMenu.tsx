@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
-import { Loader2, MoreHorizontal } from 'lucide-react';
+import { Check, Loader2, MoreHorizontal } from 'lucide-react';
 
 import { useAnchoredMenu } from '@/components/useAnchoredMenu';
 
@@ -22,6 +22,13 @@ export interface StudioOverflowMenuItem {
   disabled?: boolean;
   /** The action is in flight: shows a spinner and stays disabled. */
   pending?: boolean;
+  /** A second, quieter line under the label: what choosing the item does. */
+  description?: string;
+  /**
+   * Set on the items of a one-of-many menu (a sort order): the item is a
+   * `menuitemradio` and the chosen one is marked.
+   */
+  checked?: boolean;
 }
 
 interface StudioOverflowMenuProps {
@@ -30,6 +37,14 @@ interface StudioOverflowMenuProps {
   items: StudioOverflowMenuItem[];
   align?: 'start' | 'end';
   disabled?: boolean;
+  /**
+   * `quiet` drops the trigger's border and fill for a row that repeats down
+   * a list (a comment's menu), where a column of outlined buttons would be
+   * the loudest thing in the thread.
+   */
+  trigger?: 'outlined' | 'quiet';
+  /** Replaces the three dots, e.g. a sort glyph. */
+  triggerIcon?: ReactNode;
 }
 
 const MENU_WIDTH_PX = 240;
@@ -55,6 +70,8 @@ export default function StudioOverflowMenu({
   items,
   align = 'end',
   disabled = false,
+  trigger = 'outlined',
+  triggerIcon,
 }: StudioOverflowMenuProps) {
   const { isOpen, position, open, close, rootRef, triggerRef, menuRef } = useAnchoredMenu({
     align,
@@ -144,9 +161,11 @@ export default function StudioOverflowMenu({
             open();
           }
         }}
-        className="ui-focus-ring inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+        className={trigger === 'quiet'
+          ? 'ui-focus-ring inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-400 transition hover:bg-white/[0.08] hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-60'
+          : 'ui-focus-ring inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60'}
       >
-        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+        {triggerIcon ?? <MoreHorizontal className="h-4 w-4" aria-hidden="true" />}
       </button>
 
       {isOpen && position ? createPortal(
@@ -168,12 +187,21 @@ export default function StudioOverflowMenu({
             const body = (
               <>
                 {icon}
-                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                {item.description ? (
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{item.label}</span>
+                    <span className="block text-xs font-normal leading-5 text-zinc-400">{item.description}</span>
+                  </span>
+                ) : (
+                  <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                )}
+                {item.checked ? <Check className="h-4 w-4 shrink-0" aria-hidden="true" /> : null}
               </>
             );
             const isInert = Boolean(item.disabled || item.pending);
             const sharedProps = {
-              role: 'menuitem' as const,
+              role: item.checked === undefined ? 'menuitem' as const : 'menuitemradio' as const,
+              'aria-checked': item.checked,
               tabIndex: index === activeIndex ? 0 : -1,
               onFocus: () => setActiveIndex(index),
               className: itemClass(item),

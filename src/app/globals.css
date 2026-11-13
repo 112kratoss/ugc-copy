@@ -87,6 +87,7 @@
 @source "../components/SignInAgreement.tsx";
 @source "../components/SignInWorkspaceCard.tsx";
 @source "../components/SkeletonLoader.tsx";
+@source "../components/StudioOverflowMenu.tsx";
 @source "../components/TabLoadingShell.tsx";
 @source "../components/TextPostPreviewCard.tsx";
 @source "../components/UnavailableMediaNote.tsx";
@@ -1247,8 +1248,9 @@ button:disabled,
   }
 
   /*
-   * Row 1 is the masthead alone; row 2 pairs the post with the rail, so the
-   * rail's top edge lands level with the media instead of the byline.
+   * Row 1 is the masthead, row 2 the post; the rail runs beside both. It
+   * started level with the media until it took the conversation in
+   * (2026-11-13), which on a laptop left the thread a couple of comments tall.
    */
   .canonical-post-head {
     grid-column: 1;
@@ -1260,11 +1262,60 @@ button:disabled,
     grid-row: 2;
   }
 
+  /*
+   * The rail holds the actions card and the conversation, and ends inside
+   * the window: the thread takes what height the card above leaves and
+   * scrolls inside it, its composer on the bottom edge. The rail starts level
+   * with the masthead and sticks at 76px, so its room is the window less
+   * wherever its top is now, which `usePostRailTop` measures (11rem until it
+   * has: the top bar and the back link's row). On a window too short for both, the thread
+   * keeps a floor and the rail itself scrolls.
+   */
   .canonical-post-actions {
     position: sticky;
     top: 76px;
     grid-column: 2;
-    grid-row: 2;
+    /* From the masthead's row down: the conversation needs the height. */
+    grid-row: 1 / span 2;
+    max-height: calc(100dvh - var(--canonical-post-rail-top, 11rem) - 1rem);
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+
+  .canonical-post-actions > * {
+    flex-shrink: 0;
+  }
+
+  .canonical-post-comments[data-open='true'] {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 14rem;
+  }
+
+  .canonical-post-comments-body:not([hidden]) {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .post-comments--panel {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .post-comments--panel .post-comments__scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /* Drawn last, read first: the composer leads the thread in the document. */
+  .post-comments--panel .post-comments__composer {
+    order: 10;
+    border-top: 1px solid var(--ui-border-subtle);
   }
 
   .canonical-post-media-viewport {

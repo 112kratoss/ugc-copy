@@ -15,7 +15,7 @@ import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 
 import PostRemixes from './PostRemixes';
 import { showRecipeJump } from './recipe-jump';
-import { useShowcaseDetailCommentCount } from './ShowcaseDetailCommentCount';
+import { useOpenShowcaseDetailComments, useShowcaseDetailCommentCount } from './ShowcaseDetailCommentCount';
 
 /**
  * The verbs under the post — Remix, Save, Comment, Share — plus passive reach,
@@ -63,6 +63,7 @@ export default function ShowcaseDetailEngagementRow({
   const [isRemixing, setIsRemixing] = useState(false);
   const [remixError, setRemixError] = useState<string | null>(null);
   const liveCommentCount = useShowcaseDetailCommentCount(commentCount);
+  const openComments = useOpenShowcaseDetailComments();
   const nsfwRevealed = useNsfwPostRevealed();
   // Under an NSFW gate the thread stays hidden until the post is revealed, and
   // the link to it goes with it.
@@ -193,6 +194,7 @@ export default function ShowcaseDetailEngagementRow({
         {isCommentsShown ? (
           <a
             href="#comments"
+            onClick={openComments}
             className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-2 transition hover:text-white"
           >
             <MessageCircle className="h-4 w-4" aria-hidden="true" />
