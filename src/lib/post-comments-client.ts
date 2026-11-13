@@ -257,8 +257,30 @@ export function canReportComment(comment: PostComment, viewerUserId: string | nu
         && comment.author?.id !== viewerUserId;
 }
 
+/**
+ * Puts a comment just posted at the head of the thread: under the comment the
+ * post's creator pinned, which leads the thread for every reader, and above
+ * everything else.
+ */
 export function prependComment(comments: PostComment[], comment: PostComment) {
-    return [comment, ...comments.filter((existing) => existing.id !== comment.id)];
+    const others = comments.filter((existing) => existing.id !== comment.id);
+    const lead = comment.pinned ? 0 : countLeadingPinned(others);
+    return [...others.slice(0, lead), comment, ...others.slice(lead)];
+}
+
+function countLeadingPinned(comments: PostComment[]) {
+    const firstUnpinned = comments.findIndex((comment) => !comment.pinned);
+    return firstUnpinned === -1 ? comments.length : firstUnpinned;
+}
+
+/**
+ * Moves the pinned comment to the head of the thread, the rest in the order
+ * they had: what a pin does to the list before the server's order is re-read.
+ */
+export function leadWithPinnedComment(comments: PostComment[]) {
+    const firstPinned = comments.findIndex((comment) => comment.pinned);
+    if (firstPinned <= 0) return comments;
+    return [comments[firstPinned], ...comments.slice(0, firstPinned), ...comments.slice(firstPinned + 1)];
 }
 
 /**
@@ -287,8 +309,8 @@ export function mergeCommentPage(
  * hold. A server re-read can leave a new comment out (under Top every comment
  * with replies ranks ahead of it), and a new reply belongs after replies not
  * loaded yet; dropping either would make the post look as if it failed. New
- * top-level comments lead the list; a new reply, the newest in its thread,
- * closes it.
+ * top-level comments lead the list, under a pinned comment if the post has
+ * one; a new reply, the newest in its thread, closes it.
  */
 export function withPendingComments(
     loaded: PostComment[],
@@ -299,7 +321,11 @@ export function withPendingComments(
     const loadedIds = new Set(loaded.map((comment) => comment.id));
     const missing = pending.filter((comment) => !loadedIds.has(comment.id));
     if (missing.length === 0) return loaded;
-    return placement === 'first' ? [...missing, ...loaded] : [...loaded, ...missing];
+    if (placement === 'last') return [...loaded, ...missing];
+    // The comment the post's creator pinned leads the thread for every reader:
+    // the viewer's own new comments go under it, not over it.
+    const lead = countLeadingPinned(loaded);
+    return [...loaded.slice(0, lead), ...missing, ...loaded.slice(lead)];
 }
 
 /**

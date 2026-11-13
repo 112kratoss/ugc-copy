@@ -398,23 +398,37 @@ BEGIN
     RAISE EXCEPTION 'Comment not found';
   END IF;
 
-  -- The post's row is the lock: two pins on one post take turns, so the one
-  -- pin a post may hold is moved, never contended for.
+  -- Two pins on one post take turns on an advisory lock named for the post,
+  -- so the one pin a post may hold is moved, never contended for. The post's
+  -- own row is deliberately not the lock: every other comment write
+  -- (create_post_comment, set_post_comment_status, the account-deletion
+  -- anonymizer) takes a comment first and the post after, and a pin that held
+  -- the post while it waited for a comment would deadlock with a reply to, or
+  -- the removal of, the comment being pinned or unpinned.
+  PERFORM pg_advisory_xact_lock(hashtextextended('post-comment-pin:post:' || v_post_id::text, 0));
+
   SELECT post.user_id
   INTO v_post_owner_user_id
   FROM public.posts AS post
-  WHERE post.id = v_post_id
-  FOR UPDATE;
+  WHERE post.id = v_post_id;
 
   IF p_actor_user_id IS NULL OR p_actor_user_id IS DISTINCT FROM v_post_owner_user_id THEN
     RAISE EXCEPTION 'Only the post owner can pin this comment';
   END IF;
 
+  -- The comment and the one holding the pin now, locked in id order: a writer
+  -- that takes several of a post's comments never meets this one half-way.
+  PERFORM 1
+  FROM public.post_comments AS held
+  WHERE held.id = p_comment_id
+     OR (held.post_id = v_post_id AND held.pinned_at IS NOT NULL)
+  ORDER BY held.id
+  FOR UPDATE;
+
   SELECT target.status, target.parent_comment_id
   INTO v_status, v_parent_comment_id
   FROM public.post_comments AS target
-  WHERE target.id = p_comment_id
-  FOR UPDATE;
+  WHERE target.id = p_comment_id;
 
   IF v_status IS DISTINCT FROM 'active' THEN
     RAISE EXCEPTION 'Comment is not available';

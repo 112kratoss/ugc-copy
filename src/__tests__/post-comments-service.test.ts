@@ -55,6 +55,8 @@ function createClient({
   userBlocks = [] as Array<{ blocker_user_id: string; blocked_user_id: string }>,
   reactions = [] as Array<{ comment_id: string; user_id: string; reaction: string }>,
   rateLimitAllowed = true,
+  // What a named function raises instead of answering.
+  rpcErrors = {} as Record<string, string>,
 } = {}) {
   const state = {
     comments: [...comments],
@@ -69,6 +71,10 @@ function createClient({
 
   const rpc = vi.fn(async (name: string, args: Row) => {
     state.rpcCalls.push({ name, args });
+
+    if (rpcErrors[name]) {
+      return { data: null, error: { message: rpcErrors[name] } };
+    }
 
     if (name === 'create_post_comment') {
       return {
@@ -981,6 +987,67 @@ describe('post comments service', () => {
       });
       expect(state.rpcCalls.find((call) => call.name === 'edit_post_comment')?.args)
         .toEqual({ p_comment_id: COMMENT_ID, p_actor_user_id: AUTHOR_ID, p_body: 'reworded' });
+    });
+
+    it('refuses an edit across a block with the post\'s creator, or with the comment a reply answers', async () => {
+      // The creator blocked the commenter after the comment was written.
+      const acrossPost = createClient({
+        userBlocks: [{ blocker_user_id: POST_OWNER_ID, blocked_user_id: AUTHOR_ID }],
+      });
+      // A reply by the stranger under the author's comment; the author blocked them.
+      const acrossParent = createClient({
+        comments: [comment(), comment({ id: REPLY_ID, user_id: STRANGER_ID, parent_comment_id: COMMENT_ID })],
+        userBlocks: [{ blocker_user_id: AUTHOR_ID, blocked_user_id: STRANGER_ID }],
+      });
+
+      const cases = [
+        { ...acrossPost, actor: AUTHOR_ID, commentId: COMMENT_ID },
+        { ...acrossParent, actor: STRANGER_ID, commentId: REPLY_ID },
+      ];
+      for (const { client, state, actor, commentId } of cases) {
+        const refused = await update(client, actor, { body: 'new words on their post' }, commentId);
+        expect(refused.ok).toBe(false);
+        if (!refused.ok) {
+          expect(refused.status).toBe(403);
+          expect(refused.body.error).toBe('Editing is unavailable on this comment.');
+        }
+        expect(state.rpcCalls.some((call) => call.name === 'edit_post_comment')).toBe(false);
+      }
+
+      // A block that does not touch the post or the parent refuses nothing.
+      const elsewhere = createClient({
+        userBlocks: [{ blocker_user_id: STRANGER_ID, blocked_user_id: AUTHOR_ID }],
+      });
+      expect((await update(elsewhere.client, AUTHOR_ID, { body: 'reworded' })).ok).toBe(true);
+    });
+
+    it('answers 404, not a fault, when the comment or its post went away under the write', async () => {
+      for (const message of ['Comment is not available', 'Post is private or not found', 'Comment not found']) {
+        const { client } = createClient({ rpcErrors: { set_post_comment_reaction: message } });
+        const lost = await update(client, STRANGER_ID, { reaction: 'like' });
+        expect(lost.ok).toBe(false);
+        if (!lost.ok) {
+          expect(lost.status).toBe(404);
+          expect(lost.body.error).toBe('That comment is no longer available.');
+        }
+      }
+
+      const { client } = createClient({ rpcErrors: { set_post_comment_reaction: 'deadlock detected' } });
+      const failed = await update(client, STRANGER_ID, { reaction: 'like' });
+      expect(failed.ok).toBe(false);
+      if (!failed.ok) expect(failed.status).toBe(500);
+    });
+
+    it('answers a like from the function\'s own result: the comment is read once, the blocks together', async () => {
+      const { client, tableReads } = createClient();
+
+      const liked = await update(client, STRANGER_ID, { reaction: 'like' });
+
+      expect(liked.ok && liked.body.comment).toMatchObject({ likeCount: 1, viewerReaction: 'like' });
+      // No second read of the comment, and none of the reader's reactions: a
+      // write that reached the database is never answered as a failure.
+      expect(tableReads.post_comments).toBe(1);
+      expect(tableReads.post_comment_reactions ?? 0).toBe(0);
     });
 
     it('keeps the heart and the pin for the post\'s creator', async () => {

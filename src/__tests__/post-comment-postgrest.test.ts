@@ -152,6 +152,27 @@ describe.skipIf(!configPath || !connectionString)('comment services with actual 
     expect(await update(comment, viewer, { reaction: 'dislike' })).toMatchObject({ ok: false, status: 404 });
   });
 
+  it('refuses an edit across a block with the post owner or the comment replied to, and saves nothing', async () => {
+    const parent = await created(author, 'Parent');
+    const reply = await created(viewer, 'A reply', parent);
+    const words = async (id: string) => (await db.query('select body, edited_at from public.post_comments where id=$1', [id])).rows[0];
+
+    // The post's owner blocked the commenter after the comment was written.
+    await db.query('insert into public.user_blocks(blocker_user_id,blocked_user_id) values($1,$2)', [owner, author]);
+    expect(await update(parent, author, { body: 'New words on their post' })).toMatchObject({ ok: false, status: 403 });
+    expect(await words(parent)).toMatchObject({ body: 'Parent', edited_at: null });
+    await db.query('delete from public.user_blocks where blocker_user_id=$1', [owner]);
+
+    // The author of the comment a reply answers blocked the replier.
+    await db.query('insert into public.user_blocks(blocker_user_id,blocked_user_id) values($1,$2)', [author, viewer]);
+    expect(await update(reply, viewer, { body: 'New words under their comment' })).toMatchObject({ ok: false, status: 403 });
+    expect(await words(reply)).toMatchObject({ body: 'A reply', edited_at: null });
+    expect((await db.query('select count(*)::int as n from public.post_comment_edits where comment_id = any($1)', [[parent, reply]])).rows[0].n).toBe(0);
+
+    await db.query('delete from public.user_blocks where blocker_user_id=$1', [author]);
+    expect(await update(reply, viewer, { body: 'Reworded' })).toMatchObject({ ok: true, body: { comment: { body: 'Reworded' } } });
+  });
+
   it('keeps the heart and the pin for the post owner, moves the one pin, and leads the thread with it', async () => {
     const first = await created(author, 'First');
     const second = await created(viewer, 'Second');

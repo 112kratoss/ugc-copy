@@ -709,6 +709,72 @@ describe('PostComments', () => {
             expect(like).toHaveTextContent('4');
         });
 
+        it('sends a reaction pressed before the last one was answered, instead of dropping it', async () => {
+            signIn();
+            let release: () => void = () => {};
+            const held = new Promise<void>((resolve) => { release = resolve; });
+            const sent: Array<Record<string, unknown>> = [];
+            let thread = [comment({ likeCount: 4 })];
+            vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: Init) => {
+                if (init?.method !== 'PATCH') return jsonResponse(page(thread));
+                const change = JSON.parse(String(init.body)) as Record<string, unknown>;
+                sent.push(change);
+                // The first answer is slow: the correction is pressed while it is out.
+                if (sent.length === 1) await held;
+                const fresh = {
+                    ...thread[0],
+                    viewerReaction: change.reaction as PostComment['viewerReaction'],
+                    likeCount: change.reaction === 'like' ? 5 : 4,
+                };
+                thread = [fresh];
+                return answered(fresh);
+            }));
+            render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />);
+
+            const like = await screen.findByRole('button', { name: "Like @creator's comment" });
+            const dislike = screen.getByRole('button', { name: "Dislike @creator's comment" });
+            fireEvent.click(like);
+            fireEvent.click(dislike);
+
+            // Both presses show at once; only the first is on its way.
+            expect(dislike).toHaveAttribute('aria-pressed', 'true');
+            expect(like).toHaveAttribute('aria-pressed', 'false');
+            expect(like).toHaveTextContent('4');
+            expect(sent).toEqual([{ reaction: 'like' }]);
+
+            release();
+            await waitFor(() => expect(sent).toEqual([{ reaction: 'like' }, { reaction: 'dislike' }]));
+            await waitFor(() => expect(dislike).toHaveAttribute('aria-pressed', 'true'));
+            expect(like).toHaveAttribute('aria-pressed', 'false');
+            expect(like).toHaveTextContent('4');
+            expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        });
+
+        it('leads the thread with a comment the moment it is pinned, whatever becomes of the re-read', async () => {
+            signIn();
+            const first = comment({ id: 'first', body: 'From an early reader' });
+            const second = comment({ id: 'second', body: 'From a later reader' });
+            let reads = 0;
+            vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: Init) => {
+                if (init?.method === 'PATCH') return answered({ ...second, pinned: true });
+                reads += 1;
+                // The read after the pin fails: the list is left as the page has it.
+                return reads === 1
+                    ? jsonResponse({ ...page([first, second]), postCreatorId: 'viewer-1' })
+                    : jsonResponse({ error: 'Unavailable' }, 500);
+            }));
+            render(<PostComments postId="post-1" postCreatorId="viewer-1" commentCount={2} />);
+            await screen.findByText('From a later reader');
+
+            const menus = screen.getAllByRole('button', { name: /^More actions for/ });
+            chooseFromMenu(menus[1], 'Pin');
+
+            const pinnedRow = (await screen.findByText('Pinned by the creator')).closest('li') as HTMLElement;
+            expect(within(pinnedRow).getByText('From a later reader')).toBeInTheDocument();
+            const bodies = screen.getAllByText(/^From an? (early|later) reader$/).map((node) => node.textContent);
+            expect(bodies).toEqual(['From a later reader', 'From an early reader']);
+        });
+
         it('shows a visitor the likes, the heart, the pin and the edit mark, and sends a press to sign-in', async () => {
             vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(page([comment({
                 likeCount: 12, hearted: true, pinned: true, editedAt: '2026-11-01T00:00:00.000Z',

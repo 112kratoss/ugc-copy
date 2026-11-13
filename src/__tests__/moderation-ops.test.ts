@@ -255,7 +255,57 @@ describe('moderation operations', () => {
         postId: POST_ID,
         body: 'Reported body',
         status: 'active',
+        // Never edited: the edit history is not read at all.
+        editedAt: null,
+        earlierVersions: 0,
       },
+    });
+  });
+
+  it('says a reported comment was edited, and how many earlier wordings are kept', async () => {
+    const subjectReports = queryResult([{
+      id: REPORT_ID,
+      reporter_user_id: '50000000-0000-4000-8000-000000000005',
+      target_type: 'comment',
+      reported_user_id: null,
+      generation_id: null,
+      comment_id: COMMENT_ID,
+      reason: 'harassment',
+      details: 'Targeted abuse',
+      source_surface: 'comments',
+      status: 'open',
+      created_at: '2026-07-21T02:00:00.000Z',
+      updated_at: '2026-07-21T02:00:00.000Z',
+      reviewed_at: null,
+      reviewed_by: null,
+    }]);
+    // Reported, then reworded twice into something harmless.
+    const comments = queryResult([{
+      id: COMMENT_ID,
+      post_id: POST_ID,
+      parent_comment_id: null,
+      user_id: '60000000-0000-4000-8000-000000000006',
+      body: 'Nice work!',
+      status: 'active',
+      edited_at: '2026-11-13T12:00:00.000Z',
+    }]);
+    const edits = queryResult([{ comment_id: COMMENT_ID }, { comment_id: COMMENT_ID }]);
+    const from = vi.fn((table: string) => {
+      if (table === 'post_reports') return queryResult([]);
+      if (table === 'moderation_reports') return subjectReports;
+      if (table === 'post_comments') return comments;
+      if (table === 'post_comment_edits') return edits;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const snapshot = await listOpenModerationReports({ from } as unknown as SupabaseClient);
+
+    expect(comments.select).toHaveBeenCalledWith(expect.stringContaining('edited_at'));
+    expect(edits.in).toHaveBeenCalledWith('comment_id', [COMMENT_ID]);
+    expect(snapshot.subjectReports[0]?.comment).toMatchObject({
+      body: 'Nice work!',
+      editedAt: '2026-11-13T12:00:00.000Z',
+      earlierVersions: 2,
     });
   });
 

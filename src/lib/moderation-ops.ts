@@ -70,6 +70,13 @@ export type SubjectModerationQueueItem = {
     authorUserId: string | null;
     body: string;
     status: string;
+    /**
+     * When its author last reworded it, and how many earlier wordings
+     * `post_comment_edits` keeps: the body above is the comment as it reads
+     * now, which may not be the words that were reported.
+     */
+    editedAt: string | null;
+    earlierVersions: number;
   } | null;
   /** What an operator needs to judge a template: its creator-written words, its page and its state. */
   template: {
@@ -281,6 +288,8 @@ type CommentModerationRow = {
   user_id: string | null;
   body: string;
   status: string;
+  edited_at?: string | null;
+  earlierVersions?: number;
 };
 
 type TemplateModerationRow = {
@@ -588,12 +597,32 @@ async function hydrateReportedComments(
 
   const result = await supabase
     .from('post_comments')
-    .select('id, post_id, parent_comment_id, user_id, body, status')
+    .select('id, post_id, parent_comment_id, user_id, body, status, edited_at')
     .in('id', commentIds);
   if (result.error) {
     throw databaseError('Failed to hydrate reported comments', result.error);
   }
-  return new Map(((result.data ?? []) as CommentModerationRow[]).map((row) => [row.id, row]));
+  const comments = (result.data ?? []) as CommentModerationRow[];
+
+  // An author can reword a reported comment. The queue shows it as it reads
+  // now, so it also has to say that earlier words exist, or the evidence in
+  // post_comment_edits is never looked for.
+  const editedIds = comments.filter((row) => row.edited_at).map((row) => row.id);
+  const earlierVersions = new Map<string, number>();
+  if (editedIds.length > 0) {
+    const edits = await supabase
+      .from('post_comment_edits')
+      .select('comment_id')
+      .in('comment_id', editedIds);
+    if (edits.error) {
+      throw databaseError('Failed to count the earlier versions of reported comments', edits.error);
+    }
+    for (const row of (edits.data ?? []) as Array<{ comment_id: string }>) {
+      earlierVersions.set(row.comment_id, (earlierVersions.get(row.comment_id) ?? 0) + 1);
+    }
+  }
+
+  return new Map(comments.map((row) => [row.id, { ...row, earlierVersions: earlierVersions.get(row.id) ?? 0 }]));
 }
 
 async function hydrateReportedTemplates(
@@ -669,6 +698,8 @@ function toSubjectReportItem(
           authorUserId: comment.user_id,
           body: comment.body,
           status: comment.status,
+          editedAt: comment.edited_at ?? null,
+          earlierVersions: comment.earlierVersions ?? 0,
         }
       : null,
     template: template

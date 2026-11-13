@@ -78,4 +78,28 @@ describe('post comment reactions migration', () => {
     expect(service).not.toContain('dislike_count');
     expect(service).not.toContain('dislikeCount');
   });
+
+  it('never has the pin hold the post\'s row while it waits for a comment', () => {
+    // Every other comment write locks a comment, then the post. A pin that
+    // locked the post first deadlocked with a reply to, or the removal of, the
+    // comment being pinned; pgTAP is one session and cannot show that, so the
+    // order is held here.
+    const pin = migration.slice(
+      migration.indexOf('CREATE OR REPLACE FUNCTION public.set_post_comment_pin('),
+      migration.indexOf('REVOKE ALL ON FUNCTION public.set_post_comment_reaction'),
+    );
+    expect(pin).toContain("pg_advisory_xact_lock(hashtextextended('post-comment-pin:post:' || v_post_id::text, 0))");
+    expect(pin).not.toMatch(/FROM public\.posts AS post\s+WHERE post\.id = v_post_id\s+FOR /);
+    expect(pin).toMatch(/ORDER BY held\.id\s+FOR UPDATE;/);
+    // No statement of the pin writes the post.
+    expect(pin).not.toMatch(/UPDATE public\.posts\b/);
+  });
+
+  it('raises the three refusals the service answers as 404', () => {
+    // updatePostCommentForRoute reads these words to tell a lost race from a fault.
+    for (const refusal of ['Comment not found', 'Comment is not available', 'Post is private or not found']) {
+      expect(migration).toContain(`RAISE EXCEPTION '${refusal}'`);
+      expect(service).toContain(refusal);
+    }
+  });
 });

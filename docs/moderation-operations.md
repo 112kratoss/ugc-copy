@@ -101,7 +101,10 @@ where comment_id = '<comment-uuid>'
 order by replaced_at;
 ```
 
-`post_comments.edited_at` says whether there is anything to look for. After
+The queue says when there is anything to look for: `list` prints
+`comment_edited` beside the body ("edited, 2 earlier versions"), from
+`post_comments.edited_at` and the count of kept versions, and leaves it empty
+for a comment that was never reworded. After
 confirming a violation, in the current words or in replaced ones, resolve the
 report:
 

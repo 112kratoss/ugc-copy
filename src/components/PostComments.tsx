@@ -43,6 +43,7 @@ import {
     getCommentDisplay,
     isLongComment,
     isPostCreatorComment,
+    leadWithPinnedComment,
     markCommentRemoved,
     mergeCommentPage,
     nextCommentReaction,
@@ -222,9 +223,13 @@ export default function PostComments({
     // The row menu an edit was opened from: closing the editor returns focus to it.
     const editOpenerRef = useRef<HTMLElement | null>(null);
     const editorRef = useRef<HTMLTextAreaElement | null>(null);
-    // Comments with a like, a dislike or a heart on its way to the server: a
-    // second press waits for the first one's answer.
+    // Comments with a heart on its way to the server: a second press on the
+    // heart waits for the first one's answer.
     const updatingIdsRef = useRef(new Set<string>());
+    // Comments with a like or a dislike on its way, and the reaction pressed
+    // meanwhile, which is sent when that answer lands (reactToComment).
+    const reactingIdsRef = useRef(new Set<string>());
+    const queuedReactionsRef = useRef(new Map<string, PostCommentReaction | null>());
     // Cancel puts focus back on the composer without opening its buttons again.
     const keepComposerFoldedRef = useRef(false);
 
@@ -758,27 +763,48 @@ export default function PostComments({
     // if the server refuses. The answer replaces the guess: another reader may
     // have moved the count meanwhile.
     const reactToComment = useCallback(async (comment: PostComment, pressed: PostCommentReaction) => {
-        if (updatingIdsRef.current.has(comment.id)) return;
-        updatingIdsRef.current.add(comment.id);
         const next = nextCommentReaction(comment.viewerReaction, pressed);
         mapComment(comment.id, (current) => applyOwnCommentReaction(current, next));
         setActionError(null);
+        // A press while the last one is still on its way (a like corrected to
+        // a dislike on a slow connection) is not dropped: it shows at once and
+        // is sent when that answer lands. The latest press is the one kept.
+        if (reactingIdsRef.current.has(comment.id)) {
+            queuedReactionsRef.current.set(comment.id, next);
+            return;
+        }
+        reactingIdsRef.current.add(comment.id);
+        // What the server last confirmed: where a refusal puts the comment back.
+        let settled = { viewerReaction: comment.viewerReaction, likeCount: comment.likeCount };
+        let wanted = next;
         try {
-            const { comment: fresh } = await sendCommentUpdate(comment.id, 'react', { reaction: next });
-            mapComment(comment.id, () => fresh);
+            for (;;) {
+                const { comment: fresh } = await sendCommentUpdate(comment.id, 'react', { reaction: wanted });
+                settled = { viewerReaction: fresh.viewerReaction, likeCount: fresh.likeCount };
+                const queued = queuedReactionsRef.current;
+                if (!queued.has(comment.id) || queued.get(comment.id) === fresh.viewerReaction) {
+                    queued.delete(comment.id);
+                    mapComment(comment.id, () => fresh);
+                    break;
+                }
+                wanted = queued.get(comment.id) ?? null;
+                queued.delete(comment.id);
+                const following = wanted;
+                mapComment(comment.id, () => applyOwnCommentReaction(fresh, following));
+            }
         } catch (reactionError) {
-            mapComment(comment.id, (current) => ({
-                ...current,
-                viewerReaction: comment.viewerReaction,
-                likeCount: comment.likeCount,
-            }));
+            queuedReactionsRef.current.delete(comment.id);
+            const confirmed = settled;
+            mapComment(comment.id, (current) => ({ ...current, ...confirmed }));
             setActionError(toFailure('react', reactionError));
         } finally {
-            updatingIdsRef.current.delete(comment.id);
+            reactingIdsRef.current.delete(comment.id);
         }
     }, [mapComment, sendCommentUpdate]);
 
     const heartComment = useCallback(async (comment: PostComment) => {
+        // The heart waits on its own answer only: the creator's like on the
+        // same comment, still on its way, does not hold it back.
         if (updatingIdsRef.current.has(comment.id)) return;
         updatingIdsRef.current.add(comment.id);
         const hearted = !comment.hearted;
@@ -808,6 +834,9 @@ export default function PostComments({
             if (unpinnedCommentId) {
                 mapComment(unpinnedCommentId, (current) => ({ ...current, pinned: false }));
             }
+            // The pinned comment leads the thread from this moment, not from
+            // the re-read below, which may be slow or fail.
+            setComments(leadWithPinnedComment);
             setStatusMessage(pinned ? 'Comment pinned.' : 'Comment unpinned.');
             // The pinned comment leads the thread and no offset counts it, so
             // a pin moves every later offset: the loaded range is read again,

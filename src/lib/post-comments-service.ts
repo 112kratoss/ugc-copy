@@ -886,6 +886,9 @@ const UPDATE_FAILURE: Record<PostCommentUpdate['kind'], string> = {
   pin: 'Failed to update the pin.',
 };
 
+/** What each function raises when the comment or its post went away under it. */
+const UPDATE_LOST_RACE = /Comment not found|Comment is not available|Post is private or not found/;
+
 export async function updatePostCommentForRoute({
   postId,
   commentId,
@@ -994,19 +997,45 @@ export async function updatePostCommentForRoute({
   if (update.kind === 'pin' && update.pinned && comment.parent_comment_id) {
     return { ok: false, status: 400, body: { error: 'Only a top-level comment can be pinned.' } };
   }
-  if (update.kind === 'reaction' && update.reaction !== null) {
+  if (update.kind === 'edit' || (update.kind === 'reaction' && update.reaction !== null)) {
     // The thread hides a blocked pair from each other, so the page never
-    // offers this; a request made by hand is refused the same as a reply is.
-    // Taking a reaction back is always allowed.
-    for (const counterpartUserId of [comment.user_id, post.user_id]) {
-      if (await isCommentInteractionBlocked({
-        actorUserId,
-        counterpartUserId,
-        adminSupabase,
-        checkRelationshipBlocked,
-      })) {
-        return { ok: false, status: 403, body: { error: 'Reacting is unavailable on this comment.' } };
+    // offers either; a request made by hand, or from a page opened before the
+    // block, is refused the same as a new comment or reply is. An edit is new
+    // words on the post, so it answers to the people a new comment would: the
+    // post's creator and, for a reply, the comment replied to. Taking a
+    // reaction back is always allowed.
+    const counterparts = new Set<string>();
+    if (post.user_id) counterparts.add(String(post.user_id));
+    if (update.kind === 'reaction') {
+      counterparts.add(String(comment.user_id));
+    } else if (comment.parent_comment_id) {
+      const { data: parent, error: parentError } = await adminSupabase
+        .from('post_comments')
+        .select('user_id')
+        .eq('id', comment.parent_comment_id)
+        .maybeSingle();
+
+      if (parentError) {
+        logBackendError('failed_to_load_parent_post_comment_for_edit', { error: parentError });
+        return { ok: false, status: 500, body: { error: failure } };
       }
+      if (parent?.user_id) counterparts.add(String(parent.user_id));
+    }
+    counterparts.delete(actorUserId);
+
+    const blocked = await Promise.all([...counterparts].map((counterpartUserId) => (
+      isCommentInteractionBlocked({ actorUserId, counterpartUserId, adminSupabase, checkRelationshipBlocked })
+    )));
+    if (blocked.some(Boolean)) {
+      return {
+        ok: false,
+        status: 403,
+        body: {
+          error: update.kind === 'edit'
+            ? 'Editing is unavailable on this comment.'
+            : 'Reacting is unavailable on this comment.',
+        },
+      };
     }
   }
 
@@ -1029,34 +1058,49 @@ export async function updatePostCommentForRoute({
 
   if (updateError) {
     // The checks above are repeated inside each function under the row's
-    // lock. One that fails here lost a race: the comment was removed, or the
-    // post taken down, between the read and the write.
+    // lock. One of these three lost a race: the comment was removed, or the
+    // post taken down, between the read and the write. That is the 404 the
+    // same request would have had a moment later, not a fault to retry.
+    if (UPDATE_LOST_RACE.test(String(updateError.message ?? ''))) {
+      return { ok: false, status: 404, body: { error: 'That comment is no longer available.' } };
+    }
+
     logBackendError('failed_to_update_post_comment', { error: updateError, kind: update.kind });
     return { ok: false, status: 500, body: { error: failure } };
   }
 
-  const changedRow = (Array.isArray(changed) ? changed[0] : changed) as
-    | { unpinned_comment_id?: string | null }
-    | null;
+  const result = ((Array.isArray(changed) ? changed[0] : changed) ?? {}) as {
+    body?: string | null;
+    edited_at?: string | null;
+    changed?: boolean | null;
+    like_count?: number | null;
+    unpinned_comment_id?: string | null;
+  };
 
-  // Answered from the row as it now is, not from what was asked for: an edit
-  // takes the heart off, and a like moves a count another reader may have
-  // moved too.
-  const { data: fresh, error: freshError } = await adminSupabase
-    .from('post_comments')
-    .select(COMMENT_ROW_COLUMNS)
-    .eq('id', normalizedCommentId)
-    .maybeSingle();
+  // Answered from the row read above with the function's own result laid over
+  // it, not from a second read: the change is in the database by now, and a
+  // read that failed here would tell the reader it was not. Each function
+  // returns what it alone decides (the count another reader may have moved,
+  // whether the words changed and so whether the heart came off).
+  const now = new Date().toISOString();
+  const updatedRow: CommentRow = {
+    ...comment,
+    ...(update.kind === 'edit'
+      ? result.changed === false
+        ? {}
+        : { body: result.body ?? update.body, edited_at: result.edited_at ?? now, hearted_at: null }
+      : update.kind === 'reaction'
+        ? { like_count: result.like_count ?? comment.like_count }
+        : update.kind === 'heart'
+          ? { hearted_at: update.hearted ? comment.hearted_at ?? now : null }
+          : { pinned_at: update.pinned ? comment.pinned_at ?? now : null }),
+  };
 
-  if (freshError || !fresh) {
-    logBackendError('failed_to_reload_updated_post_comment', { error: freshError });
-    return { ok: false, status: 500, body: { error: failure } };
-  }
-
-  const freshRow = fresh as CommentRow;
   const [profiles, viewerReactions] = await Promise.all([
-    loadCommentAuthors(adminSupabase, [freshRow.user_id]),
-    loadViewerReactions(adminSupabase, actorUserId, [freshRow.id]),
+    loadCommentAuthors(adminSupabase, [updatedRow.user_id]),
+    update.kind === 'reaction'
+      ? new Map(update.reaction ? [[updatedRow.id, update.reaction] as const] : [])
+      : loadViewerReactions(adminSupabase, actorUserId, [updatedRow.id]),
   ]);
 
   return {
@@ -1064,8 +1108,8 @@ export async function updatePostCommentForRoute({
     status: 200,
     body: {
       success: true,
-      comment: toPostCommentItem(freshRow, profiles, viewerReactions),
-      unpinnedCommentId: update.kind === 'pin' ? changedRow?.unpinned_comment_id ?? null : null,
+      comment: toPostCommentItem(updatedRow, profiles, viewerReactions),
+      unpinnedCommentId: update.kind === 'pin' ? result.unpinned_comment_id ?? null : null,
     },
   };
 }

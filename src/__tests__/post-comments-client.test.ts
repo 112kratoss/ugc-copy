@@ -17,6 +17,7 @@ import {
     getCommentDisplay,
     isLongComment,
     isPostCreatorComment,
+    leadWithPinnedComment,
     markCommentRemoved,
     mergeCommentPage,
     nextCommentReaction,
@@ -140,6 +141,27 @@ describe('post comments client', () => {
             expect(prependComment(existing, fresh).map((c) => c.id)).toEqual(['new', 'old']);
             expect(prependComment(prependComment(existing, fresh), fresh).map((c) => c.id))
                 .toEqual(['new', 'old']);
+        });
+
+        it('puts a new comment under the pinned comment, never over it', () => {
+            const thread = [comment({ id: 'pinned', pinned: true }), comment({ id: 'old' })];
+
+            expect(prependComment(thread, comment({ id: 'new' })).map((c) => c.id))
+                .toEqual(['pinned', 'new', 'old']);
+            // A thread of nothing but the pinned comment.
+            expect(prependComment([thread[0]], comment({ id: 'new' })).map((c) => c.id))
+                .toEqual(['pinned', 'new']);
+        });
+
+        it('leads the thread with a comment the moment it is pinned, the rest in their order', () => {
+            const thread = [comment({ id: 'a' }), comment({ id: 'b' }), comment({ id: 'c', pinned: true })];
+
+            expect(leadWithPinnedComment(thread).map((c) => c.id)).toEqual(['c', 'a', 'b']);
+            // Already first, or nothing pinned: the same list, untouched.
+            const led = leadWithPinnedComment(thread);
+            expect(leadWithPinnedComment(led)).toBe(led);
+            const unpinned = [comment({ id: 'a' }), comment({ id: 'b' })];
+            expect(leadWithPinnedComment(unpinned)).toBe(unpinned);
         });
 
         it('deduplicates rows when mutable offset pages overlap', () => {
@@ -271,6 +293,18 @@ describe('post comments client', () => {
             // A dislike shows nowhere but on the reader's own button.
             expect(applyOwnCommentReaction(comment({ likeCount: 4 }), 'dislike').likeCount).toBe(4);
             expect(applyOwnCommentReaction(comment({ likeCount: 0, viewerReaction: 'like' }), null).likeCount).toBe(0);
+        });
+
+        it("keeps the creator's pinned comment first, above the viewer's own new ones", () => {
+            const pinned = comment({ id: 'pinned', pinned: true });
+            const other = comment({ id: 'other' });
+            const mine = comment({ id: 'mine' });
+            expect(withPendingComments([pinned, other], [mine], 'first').map((item) => item.id))
+                .toEqual(['pinned', 'mine', 'other']);
+            expect(withPendingComments([other], [mine], 'first').map((item) => item.id)).toEqual(['mine', 'other']);
+            expect(withPendingComments([pinned], [mine], 'first').map((item) => item.id)).toEqual(['pinned', 'mine']);
+            // A reply list has no pin: a new reply closes it, as before.
+            expect(withPendingComments([other], [mine], 'last').map((item) => item.id)).toEqual(['other', 'mine']);
         });
 
         it('swaps in the comment the server answered and leaves the rest', () => {
