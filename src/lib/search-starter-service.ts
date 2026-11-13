@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { normalizeCreatorSearchQuery } from '@/lib/public-search';
 import { entityResult } from '@/lib/public-search-service';
 import {
   SEARCH_STARTER_CREATOR_LIMIT,
@@ -100,6 +101,20 @@ function searchFromRow(row: unknown): SearchStarterSearch {
 }
 
 /**
+ * Whether `/api/search` would search an entity's query as the database
+ * counted it. The route reads `q` with normalizeCreatorSearchQuery (NFKC, one
+ * space between words, a leading `@` taken off) before the database
+ * lowercases it; the database counted the query lowercased with its spaces
+ * collapsed and nothing else. A tool's name is free text, so for one such as
+ * "Ｍidjourney" (full-width), "Kling²" or "@studio tool" the route would search
+ * other words than those counted, and the row could open fewer posts than it
+ * says, or a corrected reading. Such a row is left out, never sent.
+ */
+function isSearchedAsCounted(query: string): boolean {
+  return normalizeCreatorSearchQuery(query).toLowerCase() === query;
+}
+
+/**
  * The starter read: one call to `search_starter`, which leaves out, in the
  * database and before its limits, everything the lists must never show: a
  * guest, a suspended or deleting account, either side of a block with the
@@ -137,7 +152,10 @@ export async function getSearchStarter(
   return {
     // The caps are the database's too; held here so the answer's size never
     // rests on one side alone.
-    entities: data.entities.slice(0, SEARCH_STARTER_ENTITY_LIMIT).map(entityFromRow),
+    entities: data.entities
+      .slice(0, SEARCH_STARTER_ENTITY_LIMIT)
+      .map(entityFromRow)
+      .filter((entity) => isSearchedAsCounted(entity.query)),
     creators: data.creators.slice(0, SEARCH_STARTER_CREATOR_LIMIT).map(creatorFromRow),
     searches: data.searches.slice(0, SEARCH_STARTER_SEARCH_LIMIT).map(searchFromRow),
   };

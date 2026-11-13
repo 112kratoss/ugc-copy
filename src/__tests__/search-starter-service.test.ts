@@ -8,6 +8,7 @@ import {
   SEARCH_STARTER_SEARCH_LIMIT,
   SEARCH_STARTER_SUGGESTED_SEARCHES,
 } from '@/lib/search-starter';
+import { normalizeCreatorSearchQuery } from '@/lib/public-search';
 import { getSearchStarter } from '@/lib/search-starter-service';
 
 import { searchStarterEntityAction } from '../../ugc-mobile/lib/public-search-policy/search-starter';
@@ -141,6 +142,40 @@ describe('search starter service', () => {
     expect(entity.label).not.toBe('qwen3');
     expect(entity.query).toBe('qwen3');
     expect(searchStarterEntityAction(entity)).toMatchObject({ query: 'qwen3', madeWith: 'model:qwen3' });
+  });
+
+  it.each([
+    ['full-width letters', 'ｍidjourney ｖ７', 'midjourney v7'],
+    ['a superscript', 'kling²', 'kling2'],
+    ['a leading @', '@studio tool', 'studio tool'],
+    ['a no-break space', 'lumen\u00a0forge', 'lumen forge'],
+  ])('leaves out an entity whose query holds %s, which /api/search would search as other words', async (_name, query, searched) => {
+    // What the route sends the database for q (public-search-route-adapter-service):
+    // a different text than the one the count was made for.
+    expect(normalizeCreatorSearchQuery(query).toLowerCase()).toBe(searched);
+    const { createServiceClient } = clientAnswering({
+      data: {
+        entities: [entityRow(1, { query }), entityRow(2, { query: 'tool 2' })],
+        creators: [],
+        searches: [],
+      },
+      error: null,
+    });
+    const answer = await getSearchStarter({ viewerUserId: null }, { createServiceClient });
+    expect(answer.entities.map((entity) => entity.query)).toEqual(['tool 2']);
+  });
+
+  it('keeps an entity whose query the route searches as it is', async () => {
+    const { createServiceClient } = clientAnswering({
+      data: {
+        entities: [entityRow(1, { query: 'kling 2.6' }), entityRow(2, { query: 'nano-banana-pro' }), entityRow(3, { query: 'café crème' })],
+        creators: [],
+        searches: [],
+      },
+      error: null,
+    });
+    const answer = await getSearchStarter({ viewerUserId: null }, { createServiceClient });
+    expect(answer.entities.map((entity) => entity.query)).toEqual(['kling 2.6', 'nano-banana-pro', 'café crème']);
   });
 
   it('never answers more than its caps, whatever the database returns', async () => {

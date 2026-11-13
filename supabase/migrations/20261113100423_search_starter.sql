@@ -75,10 +75,10 @@
 --    (search_starter_term_finds_post): a post search_public_posts finds for
 --    it, so an offer never opens an empty search. At most 20 terms are read.
 --
--- COST. The window reads at most 10,000 index entries; each entity count
--- reads at most 1,001 rows of its own entity (never every entity its query
--- names), for at most 12 entities; followers are counted at most 1,000 per creator, for
--- at most 50. The searches list is NOT bounded the same way: a term's check
+-- COST. The window reads at most 10,000 index entries; each entity is read
+-- by its key alone (never every entity its query names): its name from at
+-- most 201 of its posts, its count until 201 of them match, for at most 12
+-- entities; followers are counted at most 1,000 per creator, for at most 50. The searches list is NOT bounded the same way: a term's check
 -- reads the word index's posting list of each of its words, which grows with
 -- the posts that hold the word (about 2.5 ms for 'portrait' in 25,000 of
 -- 50,000 posts, so tens of ms a common word at a million), for at most 20
@@ -180,6 +180,19 @@ GRANT EXECUTE ON FUNCTION public.search_starter_term_finds_post(text, uuid) TO s
 -- as the query does. It stops at 200 ("200+ posts" says as much on a starter
 -- row as the exact figure). No row when that search would find nothing (a
 -- name under three characters, or of no word, or no such post).
+--
+-- Neither read is ordered. For an entity with more than 201 posts, the name
+-- is the one most of the first 201 the plan reads print, and "named" is read
+-- over the first 201 matches, so between two calls on the same data a change
+-- of plan can change which name (and so which query) a very large entity is
+-- offered under; the count is always the count of that query's search. An
+-- order would fix the sample, but the planner served `ORDER BY post_id` by
+-- walking every post in id order and joining each to its entity rows (0.6 ms
+-- for 'runway' on 5,000 posts, and for a rare entity a walk of the whole
+-- posts table), not by the key's own index: left unordered, each read stops
+-- after 201 rows of the entity. The count reads until 201 of the entity's
+-- posts match: when most of them do not hold the name (a slug printed under
+-- many names), it can read more of the entity's posts than 201.
 --
 -- Read by the entity's key, not through search_public_entities(query), which
 -- first finds every entity row the query names (16,000 for 'runway' on 50,000
