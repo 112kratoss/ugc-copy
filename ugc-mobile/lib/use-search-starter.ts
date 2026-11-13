@@ -25,6 +25,10 @@ export function useSearchStarter(
   viewerKey: string | null,
 ): SearchStarterResponse | null {
   const [answer, setAnswer] = useState<{ viewerKey: string | null; response: SearchStarterResponse } | null>(null);
+  // Cleared as the screen closes (review of #794): the next opening never
+  // draws this one's list, whoever is signed in by then and whatever they
+  // have blocked since, nor keeps it when its own request fails.
+  if (!active && answer !== null) setAnswer(null);
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();

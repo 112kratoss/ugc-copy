@@ -2859,6 +2859,85 @@ describe('ExploreSearchOverlay starting and ending screens', () => {
     await act(async () => tree.unmount());
   });
 
+  // Review of #794.
+  it('opens Posts from "See posts" without a switch left on there, Videos or Has recipe (review of #794, must-fix)', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => (type === 'creators'
+      ? full(query, 'creators')
+      : full(query, type ?? 'top', { posts: [post('p1'), post('p2')] })));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await press(tab(tree, 'Posts'));
+    await typeQuery(tree, 'nano');
+    const switchNamed = (label: string) => hostNodes(tree, 'choice-chip').find((node) => node.props.label === label)!;
+    await press(switchNamed('Videos'));
+    await press(switchNamed('Has recipe'));
+    expect(searchPublicContent.mock.calls.at(-1)?.[0].filters).toMatchObject({ mediaKind: 'video', hasRecipe: true });
+
+    await press(tab(tree, 'Creators'));
+    expect(statusBodies(tree)).toEqual(['2 posts match']);
+    await press(hostNodes(tree, 'secondary-button').find((node) => node.props.label === 'See posts')!);
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'nano', type: 'posts' });
+    expect(searchPublicContent.mock.calls.at(-1)?.[0].filters).toMatchObject({ madeWith: null, mediaKind: null, hasRecipe: false, following: false });
+    expect(switchNamed('Videos').props.active).toBe(false);
+    await act(async () => tree.unmount());
+  });
+
+  it('draws no starter of an earlier opening: cleared on close, so a failed request leaves the invitation (review of #794)', async () => {
+    const onClose = vi.fn();
+    const tree = await render({ visible: true, onClose });
+    expect(headers(tree)).toContain('Creators to follow');
+    await update(tree, { visible: false, onClose });
+    searchStarter.mockRejectedValueOnce(new ApiError('Server error', 500));
+    await update(tree, { visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(2);
+    expect(headers(tree)).not.toContain('Creators to follow');
+    expect(statusTitles(tree)).toEqual([SEARCH_IDLE_TITLE]);
+    await act(async () => tree.unmount());
+  });
+
+  it('keeps a late Top answer for an earlier query from the current query\'s pointer (review of #794)', async () => {
+    // A request that answers even after it was cut off, as a slow server's may.
+    const late: Array<(value: PublicSearchResponse) => void> = [];
+    searchPublicContent.mockImplementation(({ query, type }) => {
+      if (type !== 'top') return Promise.resolve(full(query, type ?? 'top'));
+      if (query === 'lake') return new Promise<PublicSearchResponse>((resolve) => { late.push(resolve); });
+      return Promise.resolve(full(query, 'top', { posts: [post('p1')] }));
+    });
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await press(tab(tree, 'Creators'));
+    await typeQuery(tree, 'lake');
+    await typeQuery(tree, 'lakes');
+    expect(statusBodies(tree)).toEqual(['1 post matches']);
+    await act(async () => { late[0](full('lake', 'top')); });
+    expect(statusBodies(tree)).toEqual(['1 post matches']);
+    // Nor is the current query's asked again for it.
+    expect(searched().filter((line) => line === 'lakes|top')).toHaveLength(1);
+    expect(statusTitles(tree)).toEqual(['No creators for “lakes”']);
+    await act(async () => tree.unmount());
+  });
+
+  it('does not run a starter row whose query no tab can search, nor leave a filter or tab picked by it (review of #794)', async () => {
+    searchStarter.mockResolvedValue({
+      ...STARTER,
+      entities: [
+        { kind: 'model' as const, key: 'o3', label: 'o3', postCount: 4, postCountCapped: false, query: 'o3' },
+        { kind: 'tool' as const, key: 'x', label: 'X', postCount: 2, postCountCapped: false, query: 'x' },
+      ],
+    });
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', { posts: [post('p1')] }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    // One character: no tab searches it, so no row is drawn for it.
+    expect(() => pressableLabelled(tree, 'X, tool, 2 posts. Show posts made with it')).toThrow();
+    // Two: Posts cannot run it, so it runs on Top, picked, with no filter.
+    await press(pressableLabelled(tree, 'o3, model, 4 posts. Show posts made with it'));
+    expect(searched()).toEqual(['o3|top']);
+    expect(tab(tree, 'Top').props.accessibilityState).toMatchObject({ selected: true });
+    // Nothing of it is left for the next search on Posts.
+    await press(tab(tree, 'Posts'));
+    await typeQuery(tree, 'nano');
+    expect(searched().at(-1)).toBe('nano|posts');
+    await act(async () => tree.unmount());
+  });
+
   it('asks for the starter again when the signed-in account changes, not when its session is renewed', async () => {
     mocks.user.value = { id: 'account-1' };
     const onClose = vi.fn();

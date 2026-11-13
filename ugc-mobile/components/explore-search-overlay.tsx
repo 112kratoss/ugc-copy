@@ -97,6 +97,7 @@ import {
 } from '@/lib/public-search-policy/public-search-policy';
 import {
   SEARCH_STARTER_NO_RESULTS_HEADING,
+  isSearchStarterEmpty,
   searchStarterEntityAction,
   type SearchStarterCreator,
   type SearchStarterEntity,
@@ -1006,11 +1007,29 @@ export function ExploreSearchOverlay({
 
   // Ideas to start from: before anything is typed, and when a search finds
   // nothing. Asked once each time the search opens.
-  const starter = useSearchStarter(api, visible, user?.id ?? null);
+  const starterAnswer = useSearchStarter(api, visible, user?.id ?? null);
+  // A model or tool row whose query no tab can search (one character: Top
+  // starts at two) is not drawn: pressed, it could run nothing (review of #794).
+  const starter = useMemo(() => {
+    if (!starterAnswer) return null;
+    const entities = starterAnswer.entities.filter((entity) => searchTabRuns('top', searchQueryLength(normalizeCreatorSearchQuery(entity.query))));
+    const shown = entities.length === starterAnswer.entities.length ? starterAnswer : { ...starterAnswer, entities };
+    return isSearchStarterEmpty(shown) ? null : shown;
+  }, [starterAnswer]);
   const startFromEntity = (entity: SearchStarterEntity) => {
     // The search the starter counted: the entity's own query, on Posts, narrowed to it.
     const action = searchStarterEntityAction(entity);
     if (action.type !== 'entity') return;
+    // A query too short for Posts (Posts from three characters) runs on Top,
+    // the tab that can, with nothing narrowed: the length is read before
+    // anything changes, so no tab or filter is left picked by a row that
+    // could not run as drawn (review of #794).
+    if (!tabRunsText(action.query, 'posts')) {
+      setPickedFilters(NO_SEARCH_FILTERS);
+      setPickedType('top');
+      commitSearch(action.query, 'top');
+      return;
+    }
     setEntityLabels((current) => ({ ...current, [action.madeWith]: entity.label }));
     setFiltersOffered(true);
     setPickedFilters({ ...NO_SEARCH_FILTERS, madeWith: action.madeWith });
@@ -1052,6 +1071,8 @@ export function ExploreSearchOverlay({
       controller.signal,
     )
       .then((next) => {
+        // One cut off may still answer: it is for a query no longer on screen.
+        if (controller.signal.aborted) return;
         askedTopFor.current = countsKey;
         setTopCounts({ key: countsKey, top: topSectionsOf(next) });
       })
