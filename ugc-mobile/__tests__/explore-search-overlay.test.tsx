@@ -2605,7 +2605,8 @@ describe('ExploreSearchOverlay typeahead', () => {
     // A third letter runs on Posts.
     await typeQuery(tree, 'lum');
     await commit(tree);
-    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'lum', type: 'posts' });
+    // (An empty Posts may then ask Top for its counts: the empty-tab pointer.)
+    expect(searchPublicContent.mock.calls[0]?.[0]).toMatchObject({ query: 'lum', type: 'posts' });
     await act(async () => tree.unmount());
   });
 
