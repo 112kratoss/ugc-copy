@@ -84,7 +84,22 @@ describe('buildSearchQueryEventRow', () => {
       has_recipe: null,
       followed_only: null,
       corrected: false,
+      // No related posts were looked for.
+      related_count: null,
     });
+  });
+
+  it('says how many related posts the answer added: 0 when none passed, null when none were looked for', () => {
+    const read = (related: PublicSearchResponse['related']) => (
+      buildSearchQueryEventRow({ ...input, response: { ...answer({ posts: 2 }), ...(related ? { related } : {}) } }, DAY_KEY)?.related_count
+    );
+    expect(read(undefined)).toBeNull();
+    expect(read({ posts: [] })).toBe(0);
+    expect(read({ posts: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] as never })).toBe(3);
+    // The posts the search itself found are counted apart, as before.
+    expect(buildSearchQueryEventRow({
+      ...input, response: { ...answer({ posts: 2 }), related: { posts: [{ id: 'a' }] as never } },
+    }, DAY_KEY)).toMatchObject({ post_count: 2, related_count: 1 });
   });
 
   it('says what narrowed a Posts search, and nothing of filters for any other type', () => {

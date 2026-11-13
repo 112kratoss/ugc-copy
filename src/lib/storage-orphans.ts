@@ -206,6 +206,8 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   post_media_object_cleanup: UPLOAD_BOOKKEEPING,
   post_save_events: TELEMETRY,
   post_saves: NO_TEXT,
+  // Search's vectors of a post's public text: a hash and 384 numbers per row.
+  post_search_embeddings: TELEMETRY,
   // Search's models and tools: which a post has, under the name it prints.
   post_search_entities: SEARCH_ENTITIES,
   post_share_events: TELEMETRY,
@@ -222,6 +224,9 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   referral_account_devices: TELEMETRY,
   referral_purchase_reconciliation_retries: NO_TEXT,
   referral_visits: TELEMETRY,
+  // Search's cache of query vectors (a hash and 384 numbers) and its daily count.
+  search_query_embedding_days: TELEMETRY,
+  search_query_embeddings: TELEMETRY,
   // The anonymous search log: a short query, a hash and three counts per row.
   search_query_events: TELEMETRY,
   search_visitor_day_keys: TELEMETRY,

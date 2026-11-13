@@ -13,6 +13,7 @@ export type BackendJobName =
   | 'recipe-copy-sweep'
   | 'referral-reward-reconciliation'
   | 'search-dictionary'
+  | 'search-embeddings'
   | 'showcase-media-revocations'
   | 'workflow-run-steps';
 
@@ -71,6 +72,8 @@ export type BackendJobDefinition = {
  * ten minutes (`kie-account-balance-refusal.ts`). `recipe-copy-sweep` is the
  * same: four logical runs a day inside the shared tick, no cron entry.
  * `search-dictionary` too: 24 logical runs a day, no cron entry.
+ * `search-embeddings` as well: 144 logical runs a day inside the shared tick,
+ * most of them skipped with nothing to embed, and no cron entry.
  */
 export const BACKEND_JOB_DAILY_INVOCATION_BUDGET = 456;
 
@@ -383,6 +386,23 @@ export const BACKEND_JOB_REGISTRY = [
     maxDurationSeconds: 60,
     lockTtlSeconds: 120,
     noWorkSkipReason: 'search_dictionary_no_work',
+    maxMissedRunsBeforeDegraded: 3,
+  }),
+  defineBackendJob({
+    // Search by meaning: the public search text of new and edited posts is
+    // embedded by the `embed-post` Edge Function in its search mode
+    // (search-embeddings.ts), and the vectors of posts search can no longer
+    // return are deleted. Shared dispatch, as feed-embeddings: the work is
+    // network-bound and bounded per run (96 posts in at most 12 function
+    // requests, a 45 s request budget), and a run with nothing waiting is
+    // skipped after one read. Every ten minutes, so a fresh table of a few
+    // hundred posts fills within the hour.
+    name: 'search-embeddings',
+    route: '/api/cron/search-embeddings',
+    schedule: '*/10 * * * *',
+    maxDurationSeconds: 120,
+    lockTtlSeconds: 600,
+    noWorkSkipReason: 'no_posts_pending_search_embedding',
     maxMissedRunsBeforeDegraded: 3,
   }),
   defineBackendJob({

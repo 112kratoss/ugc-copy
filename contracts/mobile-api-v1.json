@@ -1028,6 +1028,7 @@
         "following": "following",
         "exact": "exact"
       },
+      "relatedParameter": "related",
       "response": {
         "query": "Neon product",
         "normalizedQuery": "Neon product",
@@ -1396,6 +1397,92 @@
               "nextCursor": null
             }
           }
+        },
+        "relatedPosts": {
+          "query": {
+            "q": "ocean at dusk",
+            "type": "top",
+            "related": "1"
+          },
+          "response": {
+            "query": "ocean at dusk",
+            "normalizedQuery": "ocean at dusk",
+            "type": "top",
+            "sort": "top",
+            "entities": [],
+            "filters": {
+              "madeWith": null,
+              "mediaKind": null,
+              "hasRecipe": false,
+              "following": false
+            },
+            "correctedQuery": {
+              "posts": null,
+              "recipes": null
+            },
+            "exact": false,
+            "creators": {
+              "items": [],
+              "nextCursor": null
+            },
+            "posts": {
+              "items": [],
+              "nextCursor": null
+            },
+            "recipes": {
+              "items": [],
+              "nextCursor": null
+            },
+            "related": {
+              "posts": [
+                {
+                  "id": "post-9",
+                  "mediaUrl": "https://cdn.example.test/post-9.png",
+                  "mediaKind": "image",
+                  "mediaItems": [
+                    {
+                      "id": "post-media-9",
+                      "url": "https://cdn.example.test/post-9.png",
+                      "previewUrl": "https://cdn.example.test/post-9-preview.png",
+                      "previewThumbhash": null,
+                      "previewStatus": "ready",
+                      "previewCacheKey": "post-media:9",
+                      "gridReady": true,
+                      "mediaKind": "image",
+                      "contentType": "image/png",
+                      "originalName": "sea.png",
+                      "width": 1024,
+                      "height": 1024,
+                      "durationSeconds": null,
+                      "sortOrder": 0
+                    }
+                  ],
+                  "model": "Nano Banana 2.0",
+                  "title": "Sea after sunset",
+                  "prompt": null,
+                  "body": "Waves under a violet sky.",
+                  "category": "image",
+                  "creationMode": null,
+                  "postFormat": "media",
+                  "saveCount": 5,
+                  "remixCount": 0,
+                  "commentCount": 1,
+                  "createdAt": "2026-11-10T06:00:00.000Z",
+                  "creator": {
+                    "id": "user-1",
+                    "username": "creator",
+                    "name": "Creator One",
+                    "avatar": "https://cdn.example.test/avatar.png"
+                  },
+                  "isSaved": false,
+                  "generationId": null,
+                  "asset": null,
+                  "canRemix": false,
+                  "generationSetup": []
+                }
+              ]
+            }
+          }
         }
       },
       "cursors": {
@@ -1493,6 +1580,16 @@
           "status": 400,
           "response": {
             "error": "cursor is invalid for these filters."
+          }
+        },
+        "unknownRelated": {
+          "query": {
+            "q": "Neon product",
+            "related": "yes"
+          },
+          "status": 400,
+          "response": {
+            "error": "related must be 1."
           }
         }
       }
