@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { isIndexableShowcasePost, type ShowcaseSitemapRow } from '@/lib/sitemap-entries';
 import {
+    composeShowcaseDescription,
     composeShowcaseTitle,
     hasMeaningfulTitle,
     isShowcaseDetailIndexable,
@@ -144,6 +145,74 @@ describe('composeShowcaseTitle', () => {
             .toBe('Sunset skincare hook — AI video');
         expect(composeShowcaseTitle(postDetail({ title: 'untitled', model: 'template-workflow' })))
             .toBe('AI video by @aria');
+    });
+
+    // The catalog names a model the way people search for it. Spacing out the
+    // slug printed "Seedance 2 5" in titles while the page itself said
+    // "Seedance 2.5" (SEO audit, 2026-11-13).
+    it('names a catalog model by its display name', () => {
+        expect(composeShowcaseTitle(postDetail({ title: 'intense', model: 'seedance-2-5' })))
+            .toBe('intense — AI video made with Seedance 2.5');
+        expect(composeShowcaseTitle(postDetail({ title: 'Mahabali', mediaKind: 'image', model: 'nano-banana-2' })))
+            .toBe('Mahabali — AI image made with Nano Banana 2.0');
+    });
+
+    // An upload that named no tool reads `manual` or `external`: no model's name.
+    it.each(['manual', 'external'])('names no model for an upload read as %j', (model) => {
+        expect(composeShowcaseTitle(postDetail({ model }))).toBe('Sunset skincare hook — AI video');
+    });
+});
+
+describe('composeShowcaseDescription', () => {
+    function withRecipe(summary: string) {
+        return { summary, previewText: '' } as unknown as PublicPostDetail['resourceBundle'];
+    }
+
+    // Every post with a recipe was described by its recipe line alone,
+    // "Includes the prompt.", so many pages shared one 20-character description.
+    it('describes the creation, then its recipe', () => {
+        expect(composeShowcaseDescription(postDetail({
+            title: 'Mahabali',
+            mediaKind: 'image',
+            model: 'nano-banana-2',
+            creator: { id: 'u2', username: 'alisa', name: 'Alisa', avatar: null } as PublicPostDetail['creator'],
+            resourceBundle: withRecipe('Includes the prompt.'),
+        }))).toBe('Mahabali, an AI image made with Nano Banana 2.0 by @alisa on Magic Booklet. Includes the prompt.');
+    });
+
+    it('gives two posts with the same recipe line different descriptions', () => {
+        const recipe = withRecipe('Includes the prompt.');
+        const first = composeShowcaseDescription(postDetail({ title: 'Mahabali', resourceBundle: recipe }));
+        const second = composeShowcaseDescription(postDetail({ title: 'Neon alley', resourceBundle: recipe }));
+        expect(first).not.toBe(second);
+    });
+
+    it('describes an untitled creation without its placeholder title', () => {
+        expect(composeShowcaseDescription(postDetail({ title: 'Untitled Creation', model: 'seedance-2-5' })))
+            .toBe('An AI video made with Seedance 2.5 by @aria on Magic Booklet.');
+    });
+
+    it('leaves out a model it cannot name and a creator with no handle', () => {
+        expect(composeShowcaseDescription(postDetail({ model: 'manual', creator: null as unknown as PublicPostDetail['creator'] })))
+            .toBe('Sunset skincare hook, an AI video on Magic Booklet.');
+    });
+
+    // A text post's words are its body; one with none is no AI creation.
+    it('describes a text post with no body as a post', () => {
+        expect(composeShowcaseDescription(postDetail({
+            title: 'My prompt pack',
+            postFormat: 'text',
+            mediaKind: null,
+            mediaUrl: null,
+            model: 'external',
+            resourceBundle: withRecipe('Includes 3 prompts.'),
+        }))).toBe('My prompt pack, a post by @aria on Magic Booklet. Includes 3 prompts.');
+    });
+
+    it('falls back to the recipe preview when the recipe has no summary', () => {
+        expect(composeShowcaseDescription(postDetail({
+            resourceBundle: { summary: '', previewText: 'Prompt and two reference images.' } as unknown as PublicPostDetail['resourceBundle'],
+        }))).toBe('Sunset skincare hook, an AI video made with Kling V2 Master by @aria on Magic Booklet. Prompt and two reference images.');
     });
 });
 

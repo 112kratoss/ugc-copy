@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 
+import { getAppStoreLinks } from '@/lib/app-store-links';
+
 /**
  * An OG image. Pass a bare string to accept the 1200x630 default, or the object
  * form when the real dimensions are known — post media is usually portrait, and
@@ -201,6 +203,7 @@ export function createNoIndexMetadata(title: string, description: string): Metad
 }
 
 export function buildOrganizationSchema() {
+    const { appStore, playStore } = getAppStoreLinks();
     return {
         '@context': 'https://schema.org',
         '@type': 'Organization',
@@ -208,6 +211,9 @@ export function buildOrganizationSchema() {
         url: siteConfig.siteUrl,
         logo: absoluteUrl('/icon.png'),
         email: siteConfig.supportEmail,
+        // The app's store listings are the same organization: "Magic Booklet"
+        // shares its words with magic-trick booklets in search.
+        sameAs: [appStore, playStore],
     };
 }
 

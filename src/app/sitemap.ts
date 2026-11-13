@@ -23,7 +23,7 @@ const INDEXABLE_ROUTES: Array<{
     { path: '/ai-video-generator', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/ai-motion-transfer', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/ai-workflow-builder', changeFrequency: 'weekly', priority: 0.8 },
-    { path: '/templates', changeFrequency: 'daily', priority: 0.75 },
+    { path: '/marketplace', changeFrequency: 'daily', priority: 0.75 },
     { path: '/models', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/alternatives', changeFrequency: 'monthly', priority: 0.7 },
     { path: '/developers/mcp', changeFrequency: 'monthly', priority: 0.6 },
@@ -65,6 +65,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
             changeFrequency: route.changeFrequency,
             priority: route.priority,
         })),
+        // The catalog only once a template is live: empty, it says "No templates
+        // are live yet" and its page asks not to be indexed (`templates/page.tsx`).
+        ...(templates.length > 0
+            ? [{ url: `${baseUrl}/templates`, changeFrequency: 'daily' as const, priority: 0.75 }]
+            : []),
         ...posts.map((post) => ({
             url: `${baseUrl}/blog/${post.slug}`,
             lastModified: new Date(post.date),

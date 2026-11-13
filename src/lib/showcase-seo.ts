@@ -1,4 +1,6 @@
+import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
 import type { PublicPostDetail } from '@/lib/public-posts';
+import { siteConfig } from '@/lib/seo';
 import { TEMPLATE_RESULT_MODEL } from '@/lib/template-result';
 import { GENERIC_SUGGESTED_TITLES } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 
@@ -34,15 +36,23 @@ export function hasMeaningfulTitle(title: string | null | undefined): boolean {
 }
 
 /**
- * Model identifiers arrive as slugs (`kling-v2-master`). Rendering the raw slug
- * in a title looks like a leaked internal, so it is spaced and cased — but not
- * aggressively rewritten, because the slug is what a person searching for that
- * model actually types. A template result names none: its model is the
- * template's, and `template-workflow` is no model's name.
+ * Model ids that name no model: a template result's model is the template's,
+ * and an upload whose creator named no tool reads `manual` or `external`.
+ */
+const UNNAMED_MODELS = new Set([TEMPLATE_RESULT_MODEL, 'manual', 'external']);
+
+/**
+ * A catalog model goes by the name the catalog gives it ("Seedance 2.5"), the
+ * one the post page's Made with line prints and the one people search for.
+ * Anything else (a retired model, an outside tool an upload named) arrives as a
+ * slug or free text, which is spaced and cased rather than printed raw.
  */
 function formatModelName(model: string | null | undefined): string | null {
     const raw = model?.trim();
-    if (!raw || raw === TEMPLATE_RESULT_MODEL) return null;
+    if (!raw || UNNAMED_MODELS.has(raw)) return null;
+
+    const catalogName = getPostModelDisplayName(raw);
+    if (catalogName) return catalogName;
 
     return raw
         .replace(/[-_]+/g, ' ')
@@ -93,6 +103,32 @@ export function composeShowcaseTitle(detail: PublicPostDetail): string {
     }
 
     return creatorHandle ? `${mediaLabel} by @${creatorHandle}` : mediaLabel;
+}
+
+/**
+ * The meta description for a creation with no words of its own (no
+ * description, body or public prompt): what it is, then what its recipe holds.
+ * Its recipe line alone ("Includes the prompt.") was every such post's whole
+ * description, the same 20 characters on many pages. Never reads a prompt: a
+ * post with a recipe has none in its public read.
+ */
+export function composeShowcaseDescription(detail: PublicPostDetail): string {
+    const creatorHandle = detail.creator?.username;
+    // Read as the post page reads it (`ShowcaseDetailBody`): no media, no model.
+    const isTextPost = (detail.postFormat === 'text' || detail.category === 'text') && !detail.mediaUrl;
+    const modelName = isTextPost ? null : formatModelName(detail.model);
+
+    const whatItIs = [
+        isTextPost ? 'a post' : `an ${describeMediaKind(detail.mediaKind)}`,
+        modelName ? `made with ${modelName}` : null,
+        creatorHandle ? `by @${creatorHandle}` : null,
+    ].filter(Boolean).join(' ');
+    const sentence = hasMeaningfulTitle(detail.title)
+        ? `${detail.title.trim()}, ${whatItIs} on ${siteConfig.name}.`
+        : `${whatItIs.charAt(0).toUpperCase()}${whatItIs.slice(1)} on ${siteConfig.name}.`;
+
+    const recipeLine = detail.resourceBundle?.summary?.trim() || detail.resourceBundle?.previewText?.trim();
+    return recipeLine ? `${sentence} ${recipeLine}` : sentence;
 }
 
 /**
