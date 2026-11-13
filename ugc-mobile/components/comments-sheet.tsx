@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { MoreHorizontal, SendHorizontal } from 'lucide-react-native';
+import { Check, Heart, MoreHorizontal, Pin, SendHorizontal, ThumbsDown, ThumbsUp } from 'lucide-react-native';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { AccessibilityInfo, ActivityIndicator, Animated, Easing, FlatList, type LayoutChangeEvent, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from 'react-native';
@@ -17,34 +17,53 @@ import {
   POST_COMMENTS_PAGE_SIZE,
   POST_COMMENT_MAX_LENGTH,
   POST_COMMENT_SORTS,
+  HEARTED_COMMENT_LABEL,
+  PINNED_COMMENT_LABEL,
   applyCommentCountToInfiniteFeed,
   applyCommentCountToPostResponse,
   applyCommentCountToSourceData,
   appendReplyToPages,
+  applyOwnCommentReaction,
+  buildReplyDraftPrefix,
   canBlockCommentAuthor,
   canDeleteComment,
+  canEditComment,
+  canHeartComment,
+  canPinComment,
   canRemoveComment,
   canReportComment,
   createPostCommentRepliesQueryKey,
   createPostCommentsQueryKey,
   createPostCommentsThreadQueryKey,
   getCommentAuthReturnTo,
+  draftForReplyTarget,
   getCommentDisplay,
+  getCommentLikeCountLabel,
   getCommentPostErrorCopy,
+  getCommentUpdateErrorCopy,
   getCommentsLoadErrorCopy,
   getCommentsPageParams,
   getNextCommentsPageOffset,
   getRemoveCommentConfirmation,
   getRepliesToggleLabel,
+  hasCommentToSend,
+  hasUnsavedCommentEdit,
   incrementParentReplyCountInPages,
   incrementReplyCountInList,
+  isLongComment,
+  isPostCreatorComment,
   keepFirstCommentPage,
+  leadCommentPagesWith,
+  mapCommentInList,
+  mapCommentInPages,
   markCommentRemovedInList,
   markCommentRemovedInPages,
   mergeRepliesWithPending,
   mergeTopLevelWithPending,
+  nextCommentReaction,
   prependCommentToPages,
   suspendCommentPagination,
+  type CommentUpdateKind,
   type PostCommentSort,
 } from '@/lib/comments-view-model';
 import { buildCommentMenu } from '@/lib/comment-menu';
@@ -58,6 +77,7 @@ import { Overlay } from '@/components/overlay-host';
 import { SheetGrabber, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
+import { verticalHitSlop } from '@/lib/hit-target';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { useMenuHandoff } from '@/lib/menu-handoff';
 import { appTheme } from '@/lib/theme';
@@ -66,6 +86,7 @@ import type { CommentReportReason } from '@/lib/api-client';
 import type {
   OwnerPostsResponse,
   PostComment,
+  PostCommentReaction,
   PostCommentsResponse,
   ShowcaseFeedResponse,
   ShowcasePostResponse,
@@ -82,6 +103,16 @@ const REPORT_REASONS: Array<{ label: string; value: CommentReportReason }> = [
 ];
 
 type CommentActionHandler = (comment: PostComment) => void;
+type HeldComposer = { draft: string; replyTo: PostComment | null; replyPrefix: string };
+type CommentReactionHandler = (comment: PostComment, reaction: PostCommentReaction) => void;
+/** What a row needs to draw a comment's likes, heart and marks, and to act on them. */
+type CommentRowActions = {
+  postCreatorId: string | null;
+  viewerUserId: string | null;
+  onReact: CommentReactionHandler;
+  onHeart: CommentActionHandler;
+  onReply: CommentActionHandler;
+};
 type CommentMenuBuilder = (comment: PostComment) => NativeMenuModel;
 type AuthorOpenHandler = (username: string) => void;
 
@@ -142,6 +173,24 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   const sort = sortChoice?.postId === postId ? sortChoice.sort : DEFAULT_POST_COMMENT_SORT;
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState<PostComment | null>(null);
+  // The handle a reply to a reply opened its draft with: a change of target
+  // replaces it, and it alone is nothing to send.
+  const [replyPrefix, setReplyPrefix] = useState('');
+  // The viewer's own comment being reworded: the composer holds its words.
+  const [editing, setEditing] = useState<PostComment | null>(null);
+  // What the composer held when an edit took it over (an unsent comment or
+  // reply, and who it answered): put back when the edit is saved or cancelled.
+  const [heldComposer, setHeldComposer] = useState<HeldComposer | null>(null);
+  // The field's words for the handlers that must not change with every key
+  // pressed (each row holds them): read in a press, never while drawing.
+  const draftRef = useRef('');
+  // Comments with a heart on its way to the server: a second press on the
+  // heart waits for the first one's answer.
+  const updatingIdsRef = useRef(new Set<string>());
+  // Comments with a like or a dislike on its way, and the reaction pressed
+  // meanwhile, which is sent when that answer lands (reactToComment).
+  const reactingIdsRef = useRef(new Set<string>());
+  const queuedReactionsRef = useRef(new Map<string, PostCommentReaction | null>());
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   const [pendingRepliesByParent, setPendingRepliesByParent] = useState<Record<string, PostComment[]>>({});
   // The viewer's own top-level comments from this thread, pinned above the
@@ -250,8 +299,15 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   );
 
   useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  useEffect(() => {
     setDraft('');
     setReplyTo(null);
+    setReplyPrefix('');
+    setEditing(null);
+    setHeldComposer(null);
     setExpandedIds(new Set());
     setPendingRepliesByParent({});
     setPendingTopLevel([]);
@@ -402,10 +458,238 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     }
   }, [postId, presentation]);
 
+  /** Changes one comment wherever the thread holds it: the cached pages and the ones just posted. */
+  const patchComment = useCallback((target: PostComment, change: (comment: PostComment) => PostComment) => {
+    queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
+      commentsQueryKey,
+      (current) => mapCommentInPages(current, target.id, change)
+    );
+    setPendingTopLevel((current) => mapCommentInList(current, target.id, change));
+    if (target.parentId) {
+      const parentId = target.parentId;
+      queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
+        createPostCommentRepliesQueryKey(postId, parentId, user?.id),
+        (current) => mapCommentInPages(current, target.id, change)
+      );
+      setPendingRepliesByParent((current) => (current[parentId]
+        ? { ...current, [parentId]: mapCommentInList(current[parentId], target.id, change) }
+        : current));
+    }
+  }, [commentsQueryKey, postId, queryClient, user?.id]);
+
+  const reportUpdateFailure = useCallback((error: unknown, kind: CommentUpdateKind) => {
+    haptic.error();
+    const copy = getCommentUpdateErrorCopy(error, kind);
+    if (copy.signIn) {
+      void showConfirmDialog({ title: copy.title, message: copy.message, confirmLabel: 'Sign in' })
+        .then((confirmed) => {
+          if (confirmed) openSignIn();
+        });
+      return;
+    }
+    showMessageDialog({ title: copy.title, message: copy.message });
+  }, [openSignIn]);
+
+  // A like, a dislike and the creator's heart show at once and are put back if
+  // the server refuses. The answer replaces the guess: another reader may have
+  // moved the count meanwhile.
+  const reactToComment = useCallback((comment: PostComment, pressed: PostCommentReaction) => {
+    if (!requireSignIn()) return;
+    const next = nextCommentReaction(comment.viewerReaction, pressed);
+    haptic.select();
+    patchComment(comment, (current) => applyOwnCommentReaction(current, next));
+    // A press while the last one is still on its way (a like corrected to a
+    // dislike on a slow connection) is not dropped: it shows at once and is
+    // sent when that answer lands. The latest press is the one kept.
+    if (reactingIdsRef.current.has(comment.id)) {
+      queuedReactionsRef.current.set(comment.id, next);
+      return;
+    }
+    reactingIdsRef.current.add(comment.id);
+    // What the server last confirmed: where a refusal puts the comment back.
+    let settled = { viewerReaction: comment.viewerReaction ?? null, likeCount: comment.likeCount ?? 0 };
+    const send = (wanted: PostCommentReaction | null): Promise<void> => (
+      api.updatePostComment(postId, comment.id, { reaction: wanted }).then((response) => {
+        const fresh = response.comment;
+        settled = { viewerReaction: fresh.viewerReaction ?? null, likeCount: fresh.likeCount ?? 0 };
+        const queued = queuedReactionsRef.current;
+        if (!queued.has(comment.id) || queued.get(comment.id) === settled.viewerReaction) {
+          queued.delete(comment.id);
+          patchComment(comment, () => fresh);
+          markThreadStale();
+          return undefined;
+        }
+        const following = queued.get(comment.id) ?? null;
+        queued.delete(comment.id);
+        patchComment(comment, () => applyOwnCommentReaction(fresh, following));
+        return send(following);
+      })
+    );
+    send(next)
+      .catch((error: unknown) => {
+        queuedReactionsRef.current.delete(comment.id);
+        const confirmed = settled;
+        patchComment(comment, (current) => ({ ...current, ...confirmed }));
+        reportUpdateFailure(error, 'react');
+      })
+      .finally(() => {
+        reactingIdsRef.current.delete(comment.id);
+      });
+  }, [api, markThreadStale, patchComment, postId, reportUpdateFailure, requireSignIn]);
+
+  const heartComment = useCallback((comment: PostComment) => {
+    // The heart waits on its own answer only: the creator's like on the same
+    // comment, still on its way, does not hold it back.
+    if (updatingIdsRef.current.has(comment.id)) return;
+    updatingIdsRef.current.add(comment.id);
+    const hearted = !comment.hearted;
+    haptic.select();
+    patchComment(comment, (current) => ({ ...current, hearted }));
+    api.updatePostComment(postId, comment.id, { hearted })
+      .then((response) => {
+        patchComment(comment, () => response.comment);
+        markThreadStale();
+        AccessibilityInfo.announceForAccessibility(hearted ? 'Comment hearted.' : 'Heart removed.');
+      })
+      .catch((error: unknown) => {
+        patchComment(comment, (current) => ({ ...current, hearted: Boolean(comment.hearted) }));
+        reportUpdateFailure(error, 'heart');
+      })
+      .finally(() => {
+        updatingIdsRef.current.delete(comment.id);
+      });
+  }, [api, markThreadStale, patchComment, postId, reportUpdateFailure]);
+
+  const pinComment = useCallback((comment: PostComment) => {
+    const pinned = !comment.pinned;
+    api.updatePostComment(postId, comment.id, { pinned })
+      .then((response) => {
+        patchComment(comment, () => response.comment);
+        // The pin a post holds moved: the comment it left reads unpinned at once.
+        if (response.unpinnedCommentId) {
+          const left = response.unpinnedCommentId;
+          queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
+            commentsQueryKey,
+            (current) => mapCommentInPages(current, left, (item) => ({ ...item, pinned: false }))
+          );
+          setPendingTopLevel((current) => mapCommentInList(current, left, (item) => ({ ...item, pinned: false })));
+        }
+        haptic.success();
+        AccessibilityInfo.announceForAccessibility(pinned ? 'Comment pinned.' : 'Comment unpinned.');
+        // The pinned comment leads the thread and no offset counts it, so a pin
+        // moves every later offset: the first page is kept and the rest read
+        // again. The comment itself is moved to the head of that page first, so
+        // it leads the thread from this moment, whatever becomes of the read.
+        queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
+          commentsQueryKey,
+          (current) => keepFirstCommentPage(
+            response.comment.pinned ? leadCommentPagesWith(current, response.comment) : current
+          )
+        );
+        markThreadStale();
+        void commentsQuery.refetch();
+      })
+      .catch((error: unknown) => {
+        reportUpdateFailure(error, 'pin');
+      });
+  }, [api, commentsQuery, commentsQueryKey, markThreadStale, patchComment, postId, queryClient, reportUpdateFailure]);
+
+  // An edit borrows the composer. Leaving it for something else never loses
+  // words without a question: an edit with changes asks before they go.
+  const leaveEditThen = useCallback((proceed: () => void) => {
+    if (!hasUnsavedCommentEdit(draftRef.current, editing)) {
+      proceed();
+      return;
+    }
+    void showConfirmDialog({
+      title: 'Discard your changes?',
+      message: 'The changes to your comment have not been saved.',
+      confirmLabel: 'Discard',
+      cancelLabel: 'Keep editing',
+      destructive: true,
+    }).then((confirmed) => {
+      if (confirmed) proceed();
+    });
+  }, [editing]);
+
+  const startReply = useCallback((comment: PostComment) => {
+    if (!requireSignIn(comment)) return;
+    leaveEditThen(() => {
+      // Out of an edit, the reply starts from what the composer held before
+      // it: an edit's own words are not a reply's draft.
+      const base = editing
+        ? { draft: heldComposer?.draft ?? '', replyPrefix: heldComposer?.replyPrefix ?? '' }
+        : { draft: draftRef.current, replyPrefix };
+      setEditing(null);
+      setHeldComposer(null);
+      setReplyTo(comment);
+      // A reply to a reply opens by naming who it answers.
+      setDraft(draftForReplyTarget(base.draft, base.replyPrefix, comment));
+      setReplyPrefix(buildReplyDraftPrefix(comment));
+      composerRef.current?.focus();
+    });
+  }, [editing, heldComposer, leaveEditThen, replyPrefix, requireSignIn]);
+
+  const startEdit = useCallback((comment: PostComment) => {
+    if (editing?.id === comment.id) {
+      composerRef.current?.focus();
+      return;
+    }
+    leaveEditThen(() => {
+      // A comment or reply being written is put aside, not thrown away: it
+      // comes back when this edit is saved or cancelled.
+      if (!editing) setHeldComposer({ draft: draftRef.current, replyTo, replyPrefix });
+      setReplyTo(null);
+      setReplyPrefix('');
+      setEditing(comment);
+      setDraft(comment.body);
+      composerRef.current?.focus();
+    });
+  }, [editing, leaveEditThen, replyPrefix, replyTo]);
+
+  /** Ends an edit, saved or cancelled, and gives the composer back what it held. */
+  const leaveEdit = useCallback(() => {
+    setDraft(heldComposer?.draft ?? '');
+    setReplyTo(heldComposer?.replyTo ?? null);
+    setReplyPrefix(heldComposer?.replyPrefix ?? '');
+    setHeldComposer(null);
+    setEditing(null);
+  }, [heldComposer]);
+
+  // Cancel leaves a reply's own words in the field, as it always has, and
+  // takes away what the composer itself put there: a handle, or the words of
+  // the comment being edited, in whose place the draft it interrupted returns.
+  const cancelComposerMode = useCallback(() => {
+    if (editing) {
+      leaveEdit();
+      return;
+    }
+    setDraft((current) => (current === replyPrefix ? '' : current));
+    setReplyTo(null);
+    setReplyPrefix('');
+  }, [editing, leaveEdit, replyPrefix]);
+
   const submitComment = useCallback(async () => {
     const body = draft.trim();
     if (!body || submitting) return;
     if (!requireSignIn(replyTo)) return;
+
+    if (editing) {
+      const target = editing;
+      setSubmitting(true);
+      try {
+        const response = await api.updatePostComment(postId, target.id, { body });
+        patchComment(target, () => response.comment);
+        leaveEdit();
+        markThreadStale();
+        AccessibilityInfo.announceForAccessibility('Comment edited.');
+      } catch (error) {
+        reportUpdateFailure(error, 'edit');
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
 
     // The product exposes one reply level. Normalizing here also protects
     // restored/stale reply targets while the server enforces the same rule.
@@ -418,6 +702,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       const response = await api.createPostComment(postId, { body, parentId, deliveryId });
       setDraft('');
       setReplyTo(null);
+      setReplyPrefix('');
 
       if (parentId) {
         queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(
@@ -473,7 +758,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     } finally {
       setSubmitting(false);
     }
-  }, [api, commentsQuery, commentsQueryKey, deliveryId, draft, markThreadStale, openSignIn, postId, publishCommentCount, queryClient, replyTo, requireSignIn, submitting, user?.id]);
+  }, [api, commentsQuery, commentsQueryKey, deliveryId, draft, editing, leaveEdit, markThreadStale, openSignIn, patchComment, postId, publishCommentCount, queryClient, replyTo, reportUpdateFailure, requireSignIn, submitting, user?.id]);
 
   const removeComment = useCallback((comment: PostComment, asOwner: boolean) => {
     void showConfirmDialog({
@@ -600,10 +885,23 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     block: canBlockCommentAuthor(comment, resolvedPostCreatorId, user?.id)
       ? { authorLabel: getCommentDisplay(comment).authorLabel, onBlock: () => blockAuthor(comment) }
       : null,
+    canEdit: canEditComment(comment, user?.id),
+    pin: canPinComment(comment, resolvedPostCreatorId, user?.id)
+      ? { pinned: Boolean(comment.pinned), onToggle: () => pinComment(comment) }
+      : null,
+    onEdit: () => startEdit(comment),
     onDelete: () => removeComment(comment, false),
     onRemove: () => removeComment(comment, true),
     onReport: () => reportComment(comment),
-  }), [blockAuthor, removeComment, reportComment, resolvedPostCreatorId, user?.id]);
+  }), [blockAuthor, pinComment, removeComment, reportComment, resolvedPostCreatorId, startEdit, user?.id]);
+
+  const rowActions = useMemo<CommentRowActions>(() => ({
+    postCreatorId: resolvedPostCreatorId,
+    viewerUserId: user?.id ?? null,
+    onReact: reactToComment,
+    onHeart: heartComment,
+    onReply: startReply,
+  }), [heartComment, reactToComment, resolvedPostCreatorId, startReply, user?.id]);
 
   const openCommentActions = useCallback((comment: PostComment) => {
     const menu = commentMenu(comment);
@@ -630,9 +928,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
           actionsMenu={commentMenu}
           onActions={hasCommentActions(comment) ? openCommentActions : undefined}
           onAuthorOpen={openAuthorProfile}
-          onReply={(nextComment) => {
-            if (requireSignIn(nextComment)) setReplyTo(nextComment);
-          }}
+          rowActions={rowActions}
         />
         {expanded ? (
           <RepliesList
@@ -643,6 +939,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
             actionsMenu={commentMenu}
             onActions={openCommentActions}
             onAuthorOpen={openAuthorProfile}
+            rowActions={rowActions}
           />
         ) : null}
         {comment.replyCount > 0 ? (
@@ -666,9 +963,11 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         ) : null}
       </View>
     );
-  }, [expandedIds, commentMenu, hasCommentActions, openAuthorProfile, openCommentActions, pendingRepliesByParent, postId, requireSignIn, toggleReplies]);
+  }, [expandedIds, commentMenu, hasCommentActions, openAuthorProfile, openCommentActions, pendingRepliesByParent, postId, rowActions, toggleReplies]);
 
-  const canSubmit = draft.trim().length > 0 && !submitting && !commentsUnavailable;
+  const canSubmit = hasCommentToSend(draft, replyPrefix, editing ? editing.body : null)
+    && !submitting
+    && !commentsUnavailable;
 
   const focusComposer = useCallback(() => {
     if (!enabled || commentsUnavailable) return;
@@ -816,15 +1115,15 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         gap: appTheme.spacing.compact,
       }}
     >
-      {replyTo ? (
+      {replyTo || editing ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
           <Text numberOfLines={1} style={{ color: theme.colors.faint, ...appTheme.type.caption, flex: 1 }}>
-            {`Replying to ${getCommentDisplay(replyTo).authorLabel}`}
+            {editing ? 'Editing your comment' : `Replying to ${getCommentDisplay(replyTo as PostComment).authorLabel}`}
           </Text>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Cancel reply"
-            onPress={() => setReplyTo(null)}
+            accessibilityLabel={editing ? 'Cancel edit' : 'Cancel reply'}
+            onPress={cancelComposerMode}
             style={({ pressed }) => ({ minWidth: 48, minHeight: 48, alignItems: 'flex-end', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
             <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>Cancel</Text>
@@ -834,7 +1133,9 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: appTheme.spacing.compact }}>
         <TextInput
           ref={composerRef}
-          accessibilityLabel={replyTo ? `Write a reply to ${getCommentDisplay(replyTo).authorLabel}` : 'Write a comment'}
+          accessibilityLabel={editing
+            ? 'Edit your comment'
+            : replyTo ? `Write a reply to ${getCommentDisplay(replyTo).authorLabel}` : 'Write a comment'}
           accessibilityHint={commentsUnavailable ? 'Retry loading comments before posting.' : undefined}
           value={draft}
           onChangeText={setDraft}
@@ -866,7 +1167,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         />
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Post comment"
+          accessibilityLabel={editing ? 'Save edit' : 'Post comment'}
           accessibilityState={{ disabled: !canSubmit }}
           disabled={!canSubmit}
           onPress={() => void submitComment()}
@@ -884,10 +1185,14 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
           {submitting ? (
             <ActivityIndicator color={theme.colors.onPrimary} />
           ) : (
-            <SendHorizontal
-              size={18}
-              color={canSubmit ? theme.colors.onPrimary : theme.colors.faint}
-            />
+            editing ? (
+              <Check size={18} color={canSubmit ? theme.colors.onPrimary : theme.colors.faint} />
+            ) : (
+              <SendHorizontal
+                size={18}
+                color={canSubmit ? theme.colors.onPrimary : theme.colors.faint}
+              />
+            )
           )}
         </Pressable>
       </View>
@@ -992,6 +1297,7 @@ function RepliesList({
   actionsMenu,
   onActions,
   onAuthorOpen,
+  rowActions,
 }: {
   parentId: string;
   pendingReplies: PostComment[];
@@ -1000,6 +1306,7 @@ function RepliesList({
   actionsMenu: CommentMenuBuilder;
   onActions: CommentActionHandler;
   onAuthorOpen: AuthorOpenHandler;
+  rowActions: CommentRowActions;
 }) {
   const theme = useAppTheme();
   const { api, user } = useAuth();
@@ -1042,6 +1349,7 @@ function RepliesList({
           actionsMenu={actionsMenu}
           onActions={hasActions(reply) ? onActions : undefined}
           onAuthorOpen={onAuthorOpen}
+          rowActions={rowActions}
         />
       ))}
       {repliesQuery.isError ? (
@@ -1107,7 +1415,7 @@ function CommentRowView({
   actionsMenu,
   onActions,
   onAuthorOpen,
-  onReply,
+  rowActions,
 }: {
   comment: PostComment;
   isReply?: boolean;
@@ -1115,10 +1423,18 @@ function CommentRowView({
   actionsMenu?: CommentMenuBuilder;
   onActions?: CommentActionHandler;
   onAuthorOpen?: AuthorOpenHandler;
-  onReply?: CommentActionHandler;
+  rowActions: CommentRowActions;
 }) {
   const theme = useAppTheme();
   const display = getCommentDisplay(comment);
+  // A long comment opens folded to four lines, so one essay cannot push the
+  // rest of the thread off the sheet.
+  const foldable = !display.isDeleted && isLongComment(display.bodyText);
+  const [unfolded, setUnfolded] = useState(false);
+  const liked = comment.viewerReaction === 'like';
+  const disliked = comment.viewerReaction === 'dislike';
+  const likeCountLabel = getCommentLikeCountLabel(comment);
+  const mayHeart = canHeartComment(comment, rowActions.postCreatorId, rowActions.viewerUserId);
   // A removed comment has no author, and the profile route needs a handle.
   const authorUsername = display.isDeleted ? null : comment.author?.username ?? null;
   // Their page is read once the finger has rested on either (`creatorProfilePress`).
@@ -1133,6 +1449,23 @@ function CommentRowView({
   );
 
   return (
+    <View>
+      {comment.pinned && !display.isDeleted ? (
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            paddingHorizontal: appTheme.spacing.panel,
+            paddingTop: appTheme.spacing.gap,
+          }}
+        >
+          <Pin size={14} color={theme.colors.faint} />
+          <Text style={{ color: theme.colors.faint, ...appTheme.type.caption, fontWeight: '800' }}>
+            {PINNED_COMMENT_LABEL}
+          </Text>
+        </View>
+      ) : null}
     <View
       style={{
         flexDirection: 'row',
@@ -1171,9 +1504,24 @@ function CommentRowView({
               {authorName}
             </Pressable>
           ) : authorName}
+          {isPostCreatorComment(comment, rowActions.postCreatorId) ? (
+            <View
+              style={{
+                borderRadius: appTheme.radii.pill,
+                backgroundColor: theme.colors.surfaceStrong,
+                paddingHorizontal: 6,
+                paddingVertical: 1,
+              }}
+            >
+              <Text style={{ color: theme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800' }}>
+                Creator
+              </Text>
+            </View>
+          ) : null}
           <Text style={{ color: theme.colors.faint, ...appTheme.type.caption }}>{display.timeLabel}</Text>
         </View>
         <Text
+          numberOfLines={foldable && !unfolded ? 4 : undefined}
           style={{
             color: display.isDeleted ? theme.colors.faint : theme.colors.text,
             ...appTheme.type.bodySm,
@@ -1182,15 +1530,112 @@ function CommentRowView({
         >
           {display.bodyText}
         </Text>
-        {!display.isDeleted && onReply ? (
+        {foldable ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Reply to ${display.authorLabel}`}
-            onPress={() => onReply(comment)}
-            style={({ pressed }) => ({ minHeight: 48, alignSelf: 'flex-start', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+            accessibilityLabel={unfolded ? 'Show less of this comment' : 'Read more of this comment'}
+            accessibilityState={{ expanded: unfolded }}
+            onPress={() => setUnfolded((current) => !current)}
+            // One line of text under the comment it belongs to, with the reach of a button.
+            hitSlop={verticalHitSlop(28)}
+            style={({ pressed }) => ({ minHeight: 28, alignSelf: 'flex-start', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
           >
-            <Text style={{ color: theme.colors.faint, ...appTheme.type.caption, fontWeight: '800' }}>Reply</Text>
+            <Text style={{ color: theme.colors.muted, ...appTheme.type.caption, fontWeight: '800' }}>
+              {unfolded ? 'Show less' : 'Read more'}
+            </Text>
           </Pressable>
+        ) : null}
+        {!display.isDeleted ? (
+          // Like with its count, Dislike with none (the server never sends
+          // one), the creator's heart, Reply: the web thread's row.
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: -10 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Like ${display.authorLabel}'s comment`}
+              accessibilityValue={{ text: likeCountLabel ? `${likeCountLabel} likes` : 'No likes' }}
+              accessibilityState={{ selected: liked }}
+              onPress={() => rowActions.onReact(comment, 'like')}
+              style={({ pressed }) => ({
+                minWidth: 48,
+                minHeight: 48,
+                flexDirection: 'row',
+                alignItems: 'center',
+                // From the left, so the thumb sits in one column down the
+                // thread whether or not a count follows it.
+                justifyContent: 'flex-start',
+                gap: 6,
+                paddingHorizontal: 10,
+                opacity: pressed ? appTheme.opacity.pressed : 1,
+              })}
+            >
+              <ThumbsUp
+                size={16}
+                color={liked ? theme.colors.text : theme.colors.faint}
+                fill={liked ? theme.colors.text : 'none'}
+              />
+              {likeCountLabel ? (
+                <Text style={{ color: liked ? theme.colors.text : theme.colors.faint, ...appTheme.type.caption, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
+                  {likeCountLabel}
+                </Text>
+              ) : null}
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Dislike ${display.authorLabel}'s comment`}
+              accessibilityState={{ selected: disliked }}
+              onPress={() => rowActions.onReact(comment, 'dislike')}
+              style={({ pressed }) => ({
+                width: 48,
+                minHeight: 48,
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: pressed ? appTheme.opacity.pressed : 1,
+              })}
+            >
+              <ThumbsDown
+                size={16}
+                color={disliked ? theme.colors.text : theme.colors.faint}
+                fill={disliked ? theme.colors.text : 'none'}
+              />
+            </Pressable>
+            {mayHeart ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Heart ${display.authorLabel}'s comment`}
+                accessibilityState={{ selected: Boolean(comment.hearted) }}
+                onPress={() => rowActions.onHeart(comment)}
+                style={({ pressed }) => ({
+                  width: 48,
+                  minHeight: 48,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: pressed ? appTheme.opacity.pressed : 1,
+                })}
+              >
+                <Heart
+                  size={16}
+                  color={comment.hearted ? theme.colors.primary : theme.colors.faint}
+                  fill={comment.hearted ? theme.colors.primary : 'none'}
+                />
+              </Pressable>
+            ) : comment.hearted ? (
+              <View
+                accessible
+                accessibilityLabel={HEARTED_COMMENT_LABEL}
+                style={{ width: 36, minHeight: 48, alignItems: 'center', justifyContent: 'center' }}
+              >
+                <Heart size={16} color={theme.colors.primary} fill={theme.colors.primary} />
+              </View>
+            ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Reply to ${display.authorLabel}`}
+              onPress={() => rowActions.onReply(comment)}
+              style={({ pressed }) => ({ minHeight: 48, paddingHorizontal: 10, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+            >
+              <Text style={{ color: theme.colors.faint, ...appTheme.type.caption, fontWeight: '800' }}>Reply</Text>
+            </Pressable>
+          </View>
         ) : null}
       </View>
       {!display.isDeleted && onActions ? (
@@ -1211,6 +1656,7 @@ function CommentRowView({
           )}
         />
       ) : null}
+    </View>
     </View>
   );
 }
