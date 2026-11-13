@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { cache } from 'react';
 
 import { OptionalAuth } from '@/components/RouteAuthBoundary';
 import TemplateCatalogClient from '@/components/templates/TemplateCatalogClient';
@@ -12,24 +13,10 @@ import {
   createMetadata,
 } from '@/lib/seo';
 
-// Was a bare metadata object, so this page shipped without a canonical URL or a
-// social card while still being indexable.
-export const metadata: Metadata = createMetadata({
-  title: 'Media Templates',
-  description:
-    'Create AI images and videos from reusable community workflows — bring your own media and run a process someone has already proven.',
-  path: '/templates',
-  keywords: [
-    'AI content templates',
-    'reusable AI workflows',
-    'AI video templates',
-    'AI image templates',
-  ],
-});
-
 export const revalidate = 300;
 
-async function loadInitialTemplates(): Promise<{ templates: MediaTemplate[]; nextCursor: string | null } | undefined> {
+/** One read per render, shared by the metadata and the page. */
+const loadInitialTemplates = cache(async (): Promise<{ templates: MediaTemplate[]; nextCursor: string | null } | undefined> => {
   try {
     const page = await listActiveMediaTemplatesPage(createServiceClient());
     return { nextCursor: page.nextCursor, templates: page.templates.map((template) => {
@@ -46,6 +33,28 @@ async function loadInitialTemplates(): Promise<{ templates: MediaTemplate[]; nex
     console.error('Failed to server-render the template catalog:', error);
     return undefined;
   }
+});
+
+// Was a bare metadata object, so this page shipped without a canonical URL or a
+// social card while still being indexable. An empty catalog ("No templates are
+// live yet") asks not to be indexed, and the sitemap leaves it out the same way;
+// a failed read says nothing about the catalog, so it stays indexable.
+export async function generateMetadata(): Promise<Metadata> {
+  const initialPage = await loadInitialTemplates();
+
+  return createMetadata({
+    title: 'Media Templates',
+    description:
+      'Create AI images and videos from reusable community workflows — bring your own media and run a process someone has already proven.',
+    path: '/templates',
+    keywords: [
+      'AI content templates',
+      'reusable AI workflows',
+      'AI video templates',
+      'AI image templates',
+    ],
+    noIndex: initialPage !== undefined && initialPage.templates.length === 0,
+  });
 }
 
 export default async function TemplatesPage() {

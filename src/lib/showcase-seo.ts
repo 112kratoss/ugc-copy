@@ -1,5 +1,6 @@
+import { getPostMadeWithLabel } from '@/lib/post-feed-presentation';
 import type { PublicPostDetail } from '@/lib/public-posts';
-import { TEMPLATE_RESULT_MODEL } from '@/lib/template-result';
+import { siteConfig } from '@/lib/seo';
 import { GENERIC_SUGGESTED_TITLES } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 
 /**
@@ -14,6 +15,8 @@ import { GENERIC_SUGGESTED_TITLES } from '../../ugc-mobile/lib/post-publish-poli
 
 const PLACEHOLDER_TITLES = new Set([
     'untitled creation',
+    // What a text post with no title and no body reads (`getPublicPostDetail`).
+    'untitled note',
     'untitled',
     'untitled post',
     'new post',
@@ -34,65 +37,102 @@ export function hasMeaningfulTitle(title: string | null | undefined): boolean {
 }
 
 /**
- * Model identifiers arrive as slugs (`kling-v2-master`). Rendering the raw slug
- * in a title looks like a leaked internal, so it is spaced and cased — but not
- * aggressively rewritten, because the slug is what a person searching for that
- * model actually types. A template result names none: its model is the
- * template's, and `template-workflow` is no model's name.
+ * What the post is, in a word or two. A creation made here (it has a
+ * generation) is an "AI image" or "AI video"; an upload was made elsewhere,
+ * perhaps with a camera, so it is an "image" or "video" and claims nothing
+ * about AI. A text post is a "post".
  */
-function formatModelName(model: string | null | undefined): string | null {
-    const raw = model?.trim();
-    if (!raw || raw === TEMPLATE_RESULT_MODEL) return null;
-
-    return raw
-        .replace(/[-_]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .replace(/\b\w/g, (character) => character.toUpperCase());
+/** A post with no media is a text post, as its page reads it (`ShowcaseDetailBody`). */
+function isTextOnlyPost(detail: PublicPostDetail): boolean {
+    return (detail.postFormat === 'text' || detail.category === 'text') && !detail.mediaUrl;
 }
 
-function describeMediaKind(mediaKind: PublicPostDetail['mediaKind']): string {
-    switch (mediaKind) {
+function describePostKind(detail: PublicPostDetail): string {
+    if (isTextOnlyPost(detail)) return 'post';
+
+    const prefix = detail.generationId ? 'AI ' : '';
+    switch (detail.mediaKind) {
         case 'video':
-            return 'AI video';
+            return `${prefix}video`;
         case 'image':
-            return 'AI image';
+            return `${prefix}image`;
         default:
-            return 'AI creation';
+            return `${prefix}creation`;
     }
+}
+
+function withArticle(noun: string): string {
+    return /^[aeiou]/i.test(noun) ? `an ${noun}` : `a ${noun}`;
+}
+
+function capitalize(text: string): string {
+    return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+/** "an AI video made with Seedance 2.5 by @aria", each part only where known. */
+function describePost(detail: PublicPostDetail, kind: string): string {
+    const madeWith = getPostMadeWithLabel(detail);
+    const creatorHandle = detail.creator?.username;
+    return [
+        kind,
+        madeWith ? `made with ${madeWith}` : null,
+        creatorHandle ? `by @${creatorHandle}` : null,
+    ].filter(Boolean).join(' ');
 }
 
 /**
  * The `<title>` for a creation, minus the site suffix that `createMetadata`
  * appends. A titled post keeps its own words and gains the context a searcher
  * needs; an untitled one is described entirely from its metadata rather than
- * sharing a placeholder with every other untitled post.
+ * sharing a placeholder with every other untitled post. A text post's title is
+ * its own words alone. The model is named as the page's Made with line names
+ * it (`getPostMadeWithLabel`, which the search cards read too), and only where
+ * that line does.
  */
 export function composeShowcaseTitle(detail: PublicPostDetail): string {
-    const mediaLabel = describeMediaKind(detail.mediaKind);
-    const modelName = formatModelName(detail.model);
+    const kind = describePostKind(detail);
 
     if (hasMeaningfulTitle(detail.title)) {
         const base = detail.title.trim();
-        const suffix = modelName
-            ? `${mediaLabel} made with ${modelName}`
-            : mediaLabel;
-        const composed = `${base} — ${suffix}`;
+        if (isTextOnlyPost(detail)) return base;
 
+        const madeWith = getPostMadeWithLabel(detail);
+        const composed = `${base} — ${madeWith ? `${kind} made with ${madeWith}` : kind}`;
         return composed.length <= MAX_TITLE_LENGTH ? composed : base;
     }
 
     // No usable title: build one that at least distinguishes this post from the
-    // next untitled one by naming the model that produced it.
-    const creatorHandle = detail.creator?.username;
-    if (modelName && creatorHandle) {
-        return `${mediaLabel} made with ${modelName} by @${creatorHandle}`;
-    }
-    if (modelName) {
-        return `${mediaLabel} made with ${modelName}`;
-    }
+    // next untitled one by naming the model that produced it and its creator.
+    return capitalize(describePost(detail, kind));
+}
 
-    return creatorHandle ? `${mediaLabel} by @${creatorHandle}` : mediaLabel;
+/**
+ * The meta description for a creation with no words of its own (no
+ * description, body or public prompt): what it is, then what its recipe holds.
+ * Its recipe line alone ("Includes the prompt.") was every such post's whole
+ * description, the same 20 characters on many pages. Never reads a prompt: a
+ * post with a recipe has none in its public read.
+ */
+export function composeShowcaseDescription(detail: PublicPostDetail): string {
+    const whatItIs = describePost(detail, withArticle(describePostKind(detail)));
+    const sentence = hasMeaningfulTitle(detail.title)
+        ? leadWithTitle(detail.title.trim(), whatItIs)
+        : `${capitalize(whatItIs)} on ${siteConfig.name}.`;
+
+    const recipeLine = detail.resourceBundle?.summary?.trim() || detail.resourceBundle?.previewText?.trim();
+    return recipeLine ? `${sentence} ${recipeLine}` : sentence;
+}
+
+/**
+ * "Mahabali, an AI image … on Magic Booklet." A title that ends a sentence
+ * ("Golden hour.", "Wow!") is left one, and what follows starts the next;
+ * trailing commas, colons and dashes give way to the comma.
+ */
+function leadWithTitle(title: string, whatItIs: string): string {
+    const base = title.replace(/[\s,;:\u2013\u2014-]+$/u, '');
+    return /[.!?\u2026]["'\u201d\u2019)]*$/u.test(base)
+        ? `${base} ${capitalize(whatItIs)} on ${siteConfig.name}.`
+        : `${base}, ${whatItIs} on ${siteConfig.name}.`;
 }
 
 /**

@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 
+import { getAppStoreLinks } from '@/lib/app-store-links';
+
 /**
  * An OG image. Pass a bare string to accept the 1200x630 default, or the object
  * form when the real dimensions are known — post media is usually portrait, and
@@ -36,6 +38,12 @@ type SoftwareApplicationSchemaOptions = {
     description: string;
     applicationCategory?: string;
     featureList?: string[];
+    /**
+     * The product as a whole, on the web and in its iOS and Android apps, with
+     * the store listings as where it installs: tells search that the "Magic
+     * Booklet" in the stores is this one. Only the home page says so.
+     */
+    includeMobileApps?: boolean;
     offers?: Array<{
         name: string;
         price: number;
@@ -217,15 +225,18 @@ export function buildSoftwareApplicationSchema({
     description,
     applicationCategory = 'BusinessApplication',
     featureList,
+    includeMobileApps = false,
     offers,
 }: SoftwareApplicationSchemaOptions) {
+    const storeListings = includeMobileApps ? getAppStoreLinks() : null;
     return {
         '@context': 'https://schema.org',
         '@type': 'SoftwareApplication',
         name,
         applicationCategory,
-        operatingSystem: 'Web',
+        operatingSystem: storeListings ? 'Web, iOS, Android' : 'Web',
         url: absoluteUrl(path),
+        ...(storeListings ? { installUrl: [storeListings.appStore, storeListings.playStore] } : {}),
         description,
         ...(featureList && featureList.length > 0 ? { featureList } : {}),
         ...(offers && offers.length > 0
