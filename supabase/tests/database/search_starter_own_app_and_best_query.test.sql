@@ -12,7 +12,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(14);
+select plan(17);
 
 create function pg_temp.uid(p_suffix text)
 returns uuid
@@ -58,6 +58,12 @@ $$;
 --   which, like every creation, name the app as their tool.
 -- "Sun Forge" (slug sun-forge) on posts of …03 and …04: its name and its key
 --   open the same two posts.
+-- Enough more tools to fill the twelve-candidate cut: "Tool 01" to "Tool 09"
+--   on two posts each (…01, …02), and two tools on three posts each (…01 to
+--   …03) whose search finds nothing: "Zq", a two-character key, and "...",
+--   punctuation only. Ranked by window posts, then kind and key, the app's
+--   names (6, 2 and 2 posts) would sit inside the cut and push Tool 05 to Tool
+--   07 out of it, had the app been left out only after the cut.
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at)
 select pg_temp.uid(suffix), 'e5e2-' || suffix || '@example.invalid', 'authenticated', 'authenticated',
@@ -102,6 +108,26 @@ from (
     ('32', '04', 'external', 'Sun Forge', 'sun-forge', null, 31)
 ) as post(suffix, owner, kind, tool, slug, generation, age_minutes);
 
+insert into public.posts (
+  id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw,
+  title, body, showcase_asset_path, source_tool, source_tool_slug, created_at, updated_at
+)
+select
+  pg_temp.uid(lpad((40 + tools.position * 3 + creators.position)::text, 2, '0')),
+  pg_temp.uid(creators.owner), 'public', 'image', 'external', 'media', 'visible', false,
+  'Plain title', 'a plain frame', 'showcase/e5e2-t' || tools.position || '-' || creators.owner || '.png',
+  tools.tool, tools.slug, now() - make_interval(mins => 40 + tools.position), now()
+from (
+  values
+    -- position, tool, slug, how many creators' posts
+    (1, 'Tool 01', 'tool-01', 2), (2, 'Tool 02', 'tool-02', 2), (3, 'Tool 03', 'tool-03', 2),
+    (4, 'Tool 04', 'tool-04', 2), (5, 'Tool 05', 'tool-05', 2), (6, 'Tool 06', 'tool-06', 2),
+    (7, 'Tool 07', 'tool-07', 2), (8, 'Tool 08', 'tool-08', 2), (9, 'Tool 09', 'tool-09', 2),
+    (10, 'Zq', 'zq', 3), (11, '...', '...', 3)
+) as tools(position, tool, slug, creator_count)
+join (values (0, '01'), (1, '02'), (2, '03')) as creators(position, owner)
+  on creators.position < tools.creator_count;
+
 -- The Made with rows naming the model by the catalog's name, on …01's and …02's Studiotool posts.
 insert into public.post_source_tools (post_id, tool_label, tool_slug, model_label, model_slug)
 values
@@ -122,8 +148,29 @@ select ok(
   exists (select 1 from public.search_public_entities('magicbooklet', null, 10, null) where kind = 'tool' and key = 'magicbooklet'),
   'search itself still offers it to someone who types its name'
 );
-select is(pg_temp.entity_ids(), array['model:nanomodel-2', 'tool:studiotool', 'tool:sun-forge'],
-  'the other models and tools are offered as before, the app taking no place among them');
+select is(
+  (select array_agg(key order by key) from (
+     select key from public.post_search_entities
+     where kind = 'tool' and key in ('zq', '...')
+     group by key having count(distinct creator_user_id) >= 2
+   ) as found),
+  array['...', 'zq'],
+  'fixture: two creators'' posts carry each of the tools whose search finds nothing'
+);
+select is(
+  pg_temp.entity_ids(),
+  array['model:nanomodel-2', 'tool:studiotool', 'tool:sun-forge', 'tool:tool-01', 'tool:tool-02',
+        'tool:tool-03', 'tool:tool-04', 'tool:tool-05', 'tool:tool-06', 'tool:tool-07'],
+  'the app is left out before the twelve-candidate cut, so it takes no place there: Tool 05 to 07 are offered, Tool 08 and 09 fall past the cut'
+);
+select ok(pg_temp.entity_ids(pg_temp.uid('05')) @> array['tool:tool-05', 'tool:tool-06', 'tool:tool-07'],
+  'and the same for a signed-in viewer');
+select ok(
+  not (pg_temp.entity_ids() && array['tool:zq', 'tool:...'])
+  and not exists (select 1 from public.search_starter_entity_offer('tool', 'zq', null))
+  and not exists (select 1 from public.search_starter_entity_offer('tool', '...', null)),
+  'a candidate whose search finds nothing (a key under three characters, or punctuation only) is not offered'
+);
 
 -- ─── The query that opens more ───────────────────────────────────────────────
 
