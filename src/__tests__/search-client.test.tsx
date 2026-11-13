@@ -15,6 +15,13 @@ const { replaceMock, routerMock } = vi.hoisted(() => {
 });
 const getSessionMock = vi.fn();
 const fetchMock = vi.fn();
+// The typeahead asks /api/search/suggest as the person types
+// (search-typeahead-client.test.tsx holds it). Here it is answered apart, with
+// nothing to offer, so `fetchMock` sees the searches and only the searches.
+const suggestFetchMock = vi.fn();
+function fetchBySurface(url: string, init?: RequestInit) {
+  return String(url).startsWith('/api/search/suggest') ? suggestFetchMock(url, init) : fetchMock(url, init);
+}
 // The page's auth listener, kept so a test can say "signed out" as Supabase does.
 const authListeners: Array<(event: string) => void> = [];
 
@@ -124,7 +131,7 @@ function requestedUrls() {
 }
 
 function typeQuery(value: string) {
-  fireEvent.change(screen.getByRole('searchbox'), { target: { value } });
+  fireEvent.change(screen.getByRole('combobox'), { target: { value } });
 }
 
 describe('SearchClient', () => {
@@ -134,7 +141,13 @@ describe('SearchClient', () => {
     fetchMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
     fetchMock.mockResolvedValue(jsonResponse(searchResponse()));
-    vi.stubGlobal('fetch', fetchMock);
+    suggestFetchMock.mockReset();
+    suggestFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ query: '', normalizedQuery: '', creators: [], entities: [], completions: [] }),
+    });
+    vi.stubGlobal('fetch', fetchBySurface);
     window.localStorage.clear();
     window.history.replaceState(null, '', '/search');
     authListeners.length = 0;
@@ -193,9 +206,9 @@ describe('SearchClient', () => {
     render(<SearchClient initialQuery="luna" initialType="top" />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled(), { timeout: 2000 });
 
-    fireEvent.keyDown(screen.getByRole('searchbox'), { key: 'Escape' });
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
 
-    expect((screen.getByRole('searchbox') as HTMLInputElement).value).toBe('');
+    expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('');
     expect(await screen.findByText('Start with a creator or idea')).toBeInTheDocument();
   });
 
@@ -990,7 +1003,7 @@ describe('SearchClient', () => {
         render(<SearchClient initialQuery="" initialType="top" />);
         await settle();
         // Not focused yet in this DOM: the guidance, and no list.
-        const field = screen.getByRole('searchbox');
+        const field = screen.getByRole('combobox');
         fireEvent.focus(field);
 
         const recents = screen.getByRole('list', { name: 'Recent searches' });
@@ -1020,7 +1033,7 @@ describe('SearchClient', () => {
         window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['kling portrait']));
         // An empty search autofocuses its box, and the browser focuses it before this script runs.
         render(<SearchClient initialQuery="" initialType="top" />);
-        expect(screen.getByRole('searchbox')).toHaveFocus();
+        expect(screen.getByRole('combobox')).toHaveFocus();
         await settle();
         expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
       });
@@ -1029,7 +1042,7 @@ describe('SearchClient', () => {
         window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['kling portrait']));
         render(<SearchClient initialQuery="" initialType="top" />);
         await settle();
-        fireEvent.focus(screen.getByRole('searchbox'));
+        fireEvent.focus(screen.getByRole('combobox'));
         expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
 
         // Another auth event changes nothing.
@@ -1045,7 +1058,7 @@ describe('SearchClient', () => {
         window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['kling portrait']));
         render(<SearchClient initialQuery="" initialType="top" />);
         await settle();
-        const field = screen.getByRole('searchbox');
+        const field = screen.getByRole('combobox');
         fireEvent.focus(field);
         expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
         // Into the list: still open.
@@ -1067,7 +1080,7 @@ describe('SearchClient', () => {
       it('keeps a search committed with Enter or opened from, never each pause in typing', async () => {
         fetchMock.mockResolvedValue(jsonResponse(searchResponse({ creators: { items: [creator('Luna Studio')], nextCursor: null } })));
         render(<SearchClient initialQuery="" initialType="top" />);
-        const field = screen.getByRole('searchbox');
+        const field = screen.getByRole('combobox');
         typeQuery('lu');
         await settle(300);
         typeQuery('luna');
@@ -1090,7 +1103,7 @@ describe('SearchClient', () => {
         fetchMock.mockReturnValueOnce(answer.promise);
         render(<SearchClient initialQuery="zzzznope" initialType="top" />);
         await settle();
-        fireEvent.submit(screen.getByRole('searchbox').closest('form') as HTMLFormElement);
+        fireEvent.submit(screen.getByRole('combobox').closest('form') as HTMLFormElement);
         answer.resolve(jsonResponse(searchResponse()));
         await settle();
         expect(screen.getByText('No results for “zzzznope”')).toBeInTheDocument();
@@ -1103,7 +1116,7 @@ describe('SearchClient', () => {
         fetchMock.mockResolvedValue(jsonResponse(searchResponse({ creators: { items: [creator('Luna Studio')], nextCursor: null } })));
         render(<SearchClient initialQuery="luna" initialType="top" />);
         await settle();
-        fireEvent.submit(screen.getByRole('searchbox').closest('form') as HTMLFormElement);
+        fireEvent.submit(screen.getByRole('combobox').closest('form') as HTMLFormElement);
         expect(screen.getByText('Luna Studio')).toBeInTheDocument();
         getItem.mockRestore();
         setItem.mockRestore();

@@ -560,6 +560,17 @@ describe('public search service', () => {
       ]);
     });
 
+    it('names a motion creation’s model by the catalog, not by the provider’s id it is stored under', async () => {
+      // Live on 2026-11-12: "kling" offered an entity that read "kling-2.6/motion-control".
+      const { search } = harness({
+        entities: [{ kind: 'model', key: 'kling-2.6-motion-control', label: 'kling-2.6/motion-control', post_count: 31, post_count_capped: false }],
+      });
+      const result = await search({ query: 'kling', normalizedQuery: 'kling' });
+      expect(result.entities).toEqual([
+        { kind: 'model', key: 'kling-2.6-motion-control', label: 'Kling 2.6', postCount: 31, postCountCapped: false },
+      ]);
+    });
+
     it('offers no entity for a two-character query: pressing one opens Posts, searched from three', async () => {
       for (const query of ['kl', '\u{1F600}\u{1F600}']) {
         const { search, argsOf } = harness({ entities: [{ kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', post_count: 14, post_count_capped: false }] });

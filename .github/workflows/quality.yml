@@ -91,7 +91,11 @@ jobs:
   e2e:
     name: E2E smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The suite takes 26 to 28 minutes. At a 30-minute limit the run on main
+    # for #776 was cancelled at the limit and its production release skipped
+    # (2026-11-12), as two pull-request runs were that day; 45 leaves room
+    # without hiding a real hang for long.
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -142,6 +146,14 @@ jobs:
       # none of the app's variables from the job's env, and no .env file.
       - name: Run E2E smoke tests
         run: npm run test:e2e
+        # `next dev` exits and restarts when its heap nears V8's limit
+        # ("Server is approaching the used memory threshold, restarting..."),
+        # and a page opened during the restart spends its whole 60 seconds
+        # waiting: app-shell-top-bar's /search case failed that way on #776 and
+        # on #777 (2026-11-12). The config hands NODE_OPTIONS on to the dev
+        # server with its preload added; the runner has 16 GB.
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
 
       # A failed test leaves its trace in test-results/ (trace: 'retain-on-failure'
       # in playwright.config.ts) and the runner is gone when the job ends. Kept for

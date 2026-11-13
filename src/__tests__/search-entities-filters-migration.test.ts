@@ -95,9 +95,11 @@ describe('search entities and filters migration', () => {
     expect(statements).not.toContain('creator_search_documents');
     // Each of those is still defined last where it was: nothing here shadows one.
     expect(newestDefiner('rebuild_search_terms')).toBe('20261112144018_search_suggestions_typeahead.sql');
-    for (const name of ['search_suggest_completions', 'search_suggest_creators', 'search_suggestions']) {
+    for (const name of ['search_suggest_completions', 'search_suggest_creators']) {
       expect(newestDefiner(name), name).toBe('20261112144018_search_suggestions_typeahead.sql');
     }
+    // Re-created after this file, to offer the entities this file is the source of.
+    expect(newestDefiner('search_suggestions')).toBe('20261112192423_search_suggestions_entities.sql');
     expect(newestDefiner('search_corrected_query')).toBe('20261111231942_recipe_search_recall_and_relevance.sql');
     expect(newestDefiner('refresh_post_search_documents')).toBe('20261111224010_search_recall_models_prefixes_stems_typos.sql');
   });

@@ -2,7 +2,11 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { SEARCH_SUGGEST_MAX_COMPLETIONS, SEARCH_SUGGEST_MAX_CREATORS } from '@/lib/search-suggest';
+import {
+  SEARCH_SUGGEST_MAX_COMPLETIONS,
+  SEARCH_SUGGEST_MAX_CREATORS,
+  SEARCH_SUGGEST_MAX_ENTITIES,
+} from '@/lib/search-suggest';
 
 // What the migration does to real rows is held by
 // supabase/tests/database/search_suggestions.test.sql: who and what is never
@@ -20,6 +24,10 @@ const withoutComments = (sql: string) => sql.replace(/--.*$/gm, '');
 const migration = readFileSync(join(migrationsDirectory, MIGRATION), 'utf8');
 const statements = withoutComments(migration);
 const serviceSource = readFileSync(join(process.cwd(), 'src/lib/search-suggest-service.ts'), 'utf8');
+// The file that fills the place this one left for models and tools.
+const ENTITIES_MIGRATION = '20261112192423_search_suggestions_entities.sql';
+const entitiesMigration = readFileSync(join(migrationsDirectory, ENTITIES_MIGRATION), 'utf8');
+const entitiesStatements = withoutComments(entitiesMigration);
 
 const COMPLETIONS_SIGNATURE = 'public.search_suggest_completions(text, integer)';
 const CREATORS_SIGNATURE = 'public.search_suggest_creators(text, uuid, boolean, integer)';
@@ -239,15 +247,18 @@ describe('search suggestions migration', () => {
     expect(statements).toContain('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.search_suggestion_denylist TO service_role;');
     // No policy: the Data API roles see and write nothing.
     expect(statements).not.toMatch(/CREATE POLICY/i);
-    // Completions alone read it: search, spelling and creator suggestions do not.
-    for (const reader of ['search_suggest_creators', 'rebuild_search_terms', 'search_suggestions']) {
+    // Completions read it, and the entities of search_suggestions since 20261112192423:
+    // search, spelling and creator suggestions do not.
+    for (const reader of ['search_suggest_creators', 'rebuild_search_terms', 'search_public_entities', 'search_public_posts']) {
       expect(newestDefinition(reader).definition, reader).not.toContain('search_suggestion_denylist');
     }
   });
 
   it('answers the route in one call, with a marked place for model and tool suggestions', () => {
-    const { file, definition } = newestDefinition('search_suggestions');
-    expect(file).toBe(MIGRATION);
+    // This file's own definition: the newest is the entities migration's, held below.
+    const start = statements.indexOf('CREATE FUNCTION public.search_suggestions(');
+    const definition = statements.slice(start, statements.indexOf('\n$function$;', start));
+    expect(start).toBeGreaterThan(0);
     expect(definition).toMatch(/RETURNS jsonb\s+LANGUAGE sql\s+STABLE\s+SET search_path = ''/);
     expect(definition).not.toContain('SECURITY DEFINER');
     expect(definition).toContain("'creators', coalesce((");
@@ -258,11 +269,9 @@ describe('search suggestions migration', () => {
     expect(definition).toContain("jsonb_build_object('text', completions.completion)");
     // A query typed as a handle is offered no words.
     expect(definition).toContain('WHERE NOT coalesce(p_handles_only, false)');
-    // The seam: named in the SQL and in the response type, and not built yet.
+    // The seam: named in this file's SQL, and filled by the entities migration.
     expect(migration).toContain("-- SEAM (model and tool suggestions): 'entities', a third key, joins here.");
     expect(definition).not.toContain("'entities'");
-    expect(readFileSync(join(process.cwd(), 'src/lib/search-suggest.ts'), 'utf8'))
-      .toContain('// SEAM (model and tool suggestions): `entities: SearchSuggestEntity[]` joins');
   });
 
   it('keeps every function off the client roles', () => {
@@ -284,5 +293,101 @@ describe('search suggestions migration', () => {
     expect(serviceSource).toContain(".rpc('search_suggestions', {");
     expect(header![1]).toContain(`p_creator_limit integer DEFAULT ${SEARCH_SUGGEST_MAX_CREATORS}`);
     expect(header![1]).toContain(`p_completion_limit integer DEFAULT ${SEARCH_SUGGEST_MAX_COMPLETIONS}`);
+  });
+});
+
+describe('search suggestions entities migration', () => {
+  it('runs after the typeahead and entities migrations, as one transaction that changes no table', () => {
+    for (const earlier of [MIGRATION, '20261112174210_search_entities_filters_corrected_reading.sql']) {
+      expect(migrationNames.indexOf(earlier), earlier).toBeGreaterThanOrEqual(0);
+      expect(migrationNames.indexOf(ENTITIES_MIGRATION)).toBeGreaterThan(migrationNames.indexOf(earlier));
+    }
+    expect(entitiesStatements.trim()).toMatch(/^BEGIN;\s+SET LOCAL lock_timeout = '5s';/);
+    expect(entitiesStatements.trim()).toMatch(/COMMIT;$/);
+    expect(entitiesStatements).not.toMatch(/\b(?:CREATE|ALTER|DROP) (?:TABLE|INDEX|TRIGGER)\b|\bLOCK TABLE\b/i);
+    expect(entitiesStatements).not.toMatch(/\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+public\./i);
+  });
+
+  it('re-creates search_suggestions under the parameters the live route calls it by', () => {
+    const { file, definition } = newestDefinition('search_suggestions');
+    expect(file).toBe(ENTITIES_MIGRATION);
+    // CREATE OR REPLACE: the same five parameters, or Postgres refuses it. No second function of the name.
+    expect(entitiesStatements).not.toMatch(/DROP FUNCTION/i);
+    const header = /CREATE OR REPLACE FUNCTION public\.search_suggestions\(([\s\S]*?)\)\s+RETURNS jsonb/.exec(entitiesStatements);
+    expect(header).not.toBeNull();
+    const earlier = /CREATE FUNCTION public\.search_suggestions\(([\s\S]*?)\)\s+RETURNS jsonb/.exec(statements);
+    expect(header![1].replace(/\s+/g, ' ')).toBe(earlier![1].replace(/\s+/g, ' '));
+    expect(definition).toMatch(/RETURNS jsonb\s+LANGUAGE sql\s+STABLE\s+SET search_path = ''/);
+    expect(definition).not.toContain('SECURITY DEFINER');
+    expect(entitiesStatements).toContain(`REVOKE ALL ON FUNCTION ${SUGGESTIONS_SIGNATURE} FROM PUBLIC, anon, authenticated;`);
+    expect(entitiesStatements).toContain(`GRANT EXECUTE ON FUNCTION ${SUGGESTIONS_SIGNATURE} TO service_role;`);
+    expect(entitiesStatements).not.toMatch(/GRANT[^;]*\bTO\b[^;]*\b(?:anon|authenticated|PUBLIC)\b/i);
+  });
+
+  it('keeps the two lists the live route reads exactly as they were', () => {
+    const { definition } = newestDefinition('search_suggestions');
+    const start = statements.indexOf('CREATE FUNCTION public.search_suggestions(');
+    const earlier = statements.slice(start, statements.indexOf('\n$function$;', start));
+    const squash = (sql: string) => sql.replace(/\s+/g, ' ');
+    const list = (sql: string, key: string) => {
+      const from = sql.indexOf(`'${key}', coalesce((`);
+      expect(from, key).toBeGreaterThan(0);
+      return squash(sql.slice(from, sql.indexOf("'[]'::jsonb)", from)));
+    };
+    expect(list(definition, 'creators')).toBe(list(earlier, 'creators'));
+    expect(list(definition, 'completions')).toBe(list(earlier, 'completions'));
+    // The helpers are not re-created: they are the typeahead file's still.
+    for (const helper of ['search_suggest_creators', 'search_suggest_completions', 'rebuild_search_terms']) {
+      expect(newestDefinition(helper).file, helper).toBe(MIGRATION);
+    }
+  });
+
+  it('takes entities from search itself, and only takes away from its answer', () => {
+    const { definition } = newestDefinition('search_suggestions');
+    // The one source: the call /api/search makes, for this query and viewer, with no filter of its own.
+    expect(definition).toContain('FROM public.search_public_entities(p_query, p_viewer_user_id, 10, NULL)');
+    expect(definition.match(/search_public_entities/g)).toHaveLength(1);
+    expect(newestDefinition('search_public_entities').file).toBe('20261112174210_search_entities_filters_corrected_reading.sql');
+    // Every row offered is one of that call's rows: the subquery reads `found` and nothing joins a row in.
+    expect(definition).toMatch(/SELECT found\.kind, found\.key, found\.label, found\.post_count, found\.post_count_capped, found\.position\s+FROM public\.search_public_entities/);
+    for (const key of ['kind', 'key', 'label', 'post_count', 'post_count_capped']) {
+      expect(definition, key).toContain(`'${key}', offered.${key}`);
+    }
+    // Not for a query typed as a handle; at most the cap, in search's order.
+    expect(definition).toMatch(/WITH ORDINALITY AS found\(kind, key, label, post_count, post_count_capped, position\)\s+WHERE NOT coalesce\(p_handles_only, false\)/);
+    expect(definition).toContain(`ORDER BY found.position\n        LIMIT ${SEARCH_SUGGEST_MAX_ENTITIES}`);
+    // Two creators, of unlabelled posts, within a bounded read.
+    expect(definition).toMatch(/WHERE makers\.creator_user_id <> \(/);
+    expect(definition.match(/AND posts\.is_nsfw = false/g)).toHaveLength(2);
+    expect(definition).toMatch(/AND posts\.is_nsfw = false\s+LIMIT 500/);
+    // No withdrawn word in the name or the key.
+    expect(definition).toMatch(/AND NOT EXISTS \(\s+SELECT 1\s+FROM public\.search_suggestion_denylist AS denied\s+WHERE denied\.term = ANY \(tsvector_to_array\(to_tsvector\(\s+'pg_catalog\.simple',\s+coalesce\(public\.search_term_variants\(found\.label\), ''\) \|\| ' ' \|\| coalesce\(public\.search_term_variants\(found\.key\), ''\)/);
+  });
+
+  it('holds the entity lookup to nested loops, and nothing after re-creates it without them', () => {
+    for (const setting of ['enable_hashjoin', 'enable_mergejoin']) {
+      expect(entitiesStatements).toContain(
+        `ALTER FUNCTION public.search_public_entities(text, uuid, integer, text) SET ${setting} = off;`,
+      );
+    }
+    // CREATE OR REPLACE resets a function's settings: a later file that re-creates it must set them again.
+    const later = migrationNames
+      .filter((file) => file > ENTITIES_MIGRATION)
+      .filter((file) => {
+        const sql = withoutComments(readFileSync(join(migrationsDirectory, file), 'utf8'));
+        return /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+public\.search_public_entities\s*\(/i.test(sql)
+          && !/enable_hashjoin\s*(?:=|TO)\s*off/i.test(sql);
+      });
+    expect(later).toEqual([]);
+  });
+
+  it('is read by the service list for list, with the cap the SQL holds', () => {
+    expect(serviceSource).toContain('entities: entityRows.slice(0, SEARCH_SUGGEST_MAX_ENTITIES).map(entityFromRow),');
+    for (const column of ['kind', 'key', 'label', 'post_count', 'post_count_capped']) {
+      expect(serviceSource, column).toContain(`row.${column}`);
+    }
+    // The service sends the same five arguments as before: nothing new to name.
+    expect(Array.from(serviceSource.matchAll(/^\s+(p_\w+):/gm), (match) => match[1]))
+      .toEqual(['p_query', 'p_viewer_user_id', 'p_handles_only', 'p_creator_limit', 'p_completion_limit']);
   });
 });

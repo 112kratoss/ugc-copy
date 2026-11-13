@@ -10,7 +10,6 @@ import {
   WandSparkles,
   X,
 } from 'lucide-react';
-import Form from 'next/form';
 import Link from 'next/link';
 import { usePathname, useSelectedLayoutSegment } from 'next/navigation';
 import {
@@ -44,9 +43,9 @@ import AppShellCreateMenu, {
   openCreateMenuWithoutPopovers,
 } from './AppShellCreateMenu';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
+import { AppShellSearch } from '@/components/AppShellSearch';
 import AlertsBadge from '@/components/AlertsBadge';
 import { useUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
-import { holdForLeaveGuard } from '@/lib/use-leave-guard';
 
 // The places to go. Search, Alerts, Create and Invite & Earn are the top bar's
 // (its search field, the bell, the Create menu, the account menu), so the side
@@ -543,34 +542,8 @@ const AppShellFrame = memo(function AppShellFrame({
             ) : null}
           </div>
 
-          {activeItem?.id !== 'search' ? (
-            <Form
-              action="/search"
-              // Not a link, so a page's leave guard is asked here: a page with
-              // unsaved work asks first, and a leave submits the search again.
-              onSubmit={(event) => {
-                const form = event.currentTarget;
-                if (holdForLeaveGuard(() => form.requestSubmit())) event.preventDefault();
-              }}
-              className="app-shell-search mx-auto min-w-0 basis-md items-center gap-2.5 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 transition focus-within:border-[var(--ui-border-strong)] focus-within:bg-[var(--ui-surface-3)]"
-            >
-              <button
-                type="submit"
-                aria-label="Search"
-                className="ui-focus-ring -ml-2 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--ui-text-faint)] transition hover:text-[var(--ui-text-primary)]"
-              >
-                <Search className="h-4 w-4" aria-hidden />
-              </button>
-              <input
-                type="search"
-                name="q"
-                placeholder="Search Magic Booklet"
-                aria-label="Search creators, posts, and recipes"
-                autoComplete="off"
-                className="h-12 min-w-0 flex-1 bg-transparent text-sm text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)]"
-              />
-            </Form>
-          ) : null}
+          {/* The search page has its own box, so the bar's gives way there. */}
+          {activeItem?.id !== 'search' ? <AppShellSearch /> : null}
 
           {/* Never shrinks: the search field gives way (.app-shell-search in globals.css). */}
           <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">

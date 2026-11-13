@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Box, Clock3, LoaderCircle, MessageCircle, RefreshCcw, Sparkles, Wrench, X } from 'lucide-react';
 
@@ -8,6 +9,8 @@ import { SegmentedControl } from '@/components/DesignSystem';
 import { CreatorSearchResult } from '@/components/search/CreatorSearchResult';
 import { SearchField } from '@/components/search/SearchField';
 import { SearchStateBlock } from '@/components/search/SearchStateBlock';
+import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
+import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
 import {
   NO_PUBLIC_SEARCH_FILTERS,
   PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
@@ -54,6 +57,7 @@ import {
   searchMadeWithRemoveLabel,
   toggleSearchFilterSwitch,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
+import type { SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
 import { clearSearchHistory, forgetSearchQuery, readSearchHistory, rememberSearchQuery } from './search-history';
 
 const SEARCH_TABS: Array<{ id: PublicSearchType; label: string }> = [
@@ -358,6 +362,9 @@ export default function SearchClient({
   // paint: the server's HTML has none to agree with.
   const [history, setHistory] = useState<string[]>([]);
   const [recentsOpen, setRecentsOpen] = useState(false);
+  // The focus is in the search form: the typeahead asks and draws only then.
+  const [fieldFocused, setFieldFocused] = useState(false);
+  const router = useRouter();
   const recentsRef = useRef<HTMLDivElement | null>(null);
   const searchFormRef = useRef<HTMLFormElement | null>(null);
   // A search committed with Enter before its answer landed: kept once it finds something.
@@ -372,6 +379,9 @@ export default function SearchClient({
   // The query of the last scheduled search. A URL query arrives already typed
   // and a tab change keeps the query, so only a new query waits for a pause.
   const scheduledQuery = useRef(initialQuery);
+  // The address the page was at when the person left it for a creator's page
+  // from the typeahead, or null: the search effect does not write it again.
+  const leavingAt = useRef<string | null>(null);
   const tabRefs = useRef<Partial<Record<PublicSearchType, HTMLButtonElement | null>>>({});
   const normalizedQuery = useMemo(() => normalizePublicSearchQuery(query), [query]);
   // The server strips leading "@" (a handle search) before its length checks
@@ -489,7 +499,10 @@ export default function SearchClient({
     // The box can hold the focus before this script runs (autofocus on an
     // empty search, or a press on the server's HTML), and a focus that
     // happened then fires no event here.
-    if (searchFormRef.current?.contains(document.activeElement)) setRecentsOpen(true);
+    if (searchFormRef.current?.contains(document.activeElement)) {
+      setRecentsOpen(true);
+      setFieldFocused(true);
+    }
     // Recent searches end at sign-out, as the app's do: a sign-out while this
     // page is open clears them here; one made anywhere else is caught by the
     // list's own check of whose it is (search-history.ts).
@@ -512,14 +525,25 @@ export default function SearchClient({
       setFailure(null);
       // history.replaceState keeps Next's router in step without a server
       // render; this page is dynamic, so router.replace re-rendered it per keystroke.
-      window.history.replaceState(null, '', '/search');
+      // Not once the person has left for a creator's page from here (`leavingAt`).
+      if (leavingAt.current !== '/search') {
+        leavingAt.current = null;
+        window.history.replaceState(null, '', '/search');
+      }
       return;
     }
     // Cleared now rather than when the request starts, so an old error never
     // stands for the new query during the pause.
     setFailure(null);
     const search = () => {
-      window.history.replaceState(null, '', searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact));
+      const path = searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact);
+      // The person has left for a creator's page from the typeahead (below):
+      // the search they left is not run, and above all its address is not
+      // written. A write here is a navigation to Next's router, and a
+      // navigation discards the one still on its way.
+      if (leavingAt.current === path) return;
+      leavingAt.current = null;
+      window.history.replaceState(null, '', path);
       void requestSearch();
     };
     const waitForPause = scheduledQuery.current !== normalizedQuery;
@@ -591,6 +615,42 @@ export default function SearchClient({
     if (currentAnswer && resultCount > 0) setHistory(rememberSearchQuery(normalizedQuery));
   };
   const recentsShown = recentsOpen && query === '' && history.length > 0;
+
+  // Typeahead: what the box offers while the person types, ahead of the
+  // results, which load as they did. Its list is drawn only for the text the
+  // box holds, and is closed by Escape, by Enter and by choosing a row, so it
+  // never stands over a search the person has committed.
+  const typeahead = useSearchTypeahead({ text: query, focused: fieldFocused });
+  const runTypeaheadAction = (action: SearchTypeaheadAction | null) => {
+    if (!action) return;
+    if (action.type === 'creator') {
+      // The page writes its address a pause after the last letter
+      // (history.replaceState), and Next's router takes that write for a
+      // navigation, which discards the one to the creator's page while it is
+      // still loading: a creator chosen within the pause opened nothing.
+      // So the page notes the address it is being left at, and does not
+      // write it; a change of the search afterwards writes again.
+      leavingAt.current = canSearch
+        ? searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact)
+        : '/search';
+      router.push(`/creators/${encodeURIComponent(action.username)}`);
+      return;
+    }
+    if (action.type === 'entity') {
+      // As pressing the entity among the results does: Posts for what is typed, narrowed to it.
+      pickEntity(action.entity);
+      return;
+    }
+    // A completion fills the box and is searched at once, with no pause for
+    // typing, and committed as Enter commits a search: kept among the recent
+    // ones once it finds something.
+    const next = normalizePublicSearchQuery(action.query);
+    const nextFilters = publicSearchTypeHasFilters(pickedType) ? pickedFilters : NO_PUBLIC_SEARCH_FILTERS;
+    const nextSort: PublicSearchSort = publicSearchTypeHasSorts(pickedType) ? pickedSort : 'top';
+    scheduledQuery.current = next;
+    rememberOnAnswer.current = `${pickedType}:${nextSort}:${publicSearchFilterKey(nextFilters, false)}:${next}`;
+    setQuery(action.query);
+  };
   const nextCursor = !currentAnswer
     ? null
     : activeType === 'creators'
@@ -616,14 +676,44 @@ export default function SearchClient({
           <form
             ref={searchFormRef}
             role="search"
+            className="relative"
             onSubmit={(event) => { event.preventDefault(); commitSearch(); }}
-            onFocus={() => setRecentsOpen(true)}
+            onFocus={() => { setRecentsOpen(true); setFieldFocused(true); }}
             onBlur={(event) => {
               const next = event.relatedTarget;
               if (!(next instanceof Node) || !recentsRef.current?.contains(next)) setRecentsOpen(false);
+              // Still focused while the focus only moves inside the form (to Clear and back).
+              if (!(next instanceof Node) || !event.currentTarget.contains(next)) setFieldFocused(false);
             }}
           >
-            <SearchField value={query} onChange={setQuery} onClear={() => setQuery('')} autoFocus={!initialQuery} />
+            <SearchField
+              value={query}
+              onChange={setQuery}
+              onClear={() => setQuery('')}
+              autoFocus={!initialQuery}
+              combobox={{
+                expanded: typeahead.shown,
+                listId: typeahead.listId,
+                activeOptionId: typeahead.activeOptionId,
+                onKeyDown: (event) => runTypeaheadAction(typeahead.onKeyDown(event)),
+              }}
+            />
+            {/* Said politely when the list opens or changes; the results have a status of their own below. */}
+            <div aria-live="polite" aria-atomic="true" className="sr-only" data-search-typeahead-status="">{typeahead.status}</div>
+            {typeahead.shown ? (
+              <SearchTypeaheadList
+                listId={typeahead.listId}
+                sections={typeahead.sections}
+                activeIndex={typeahead.activeIndex}
+                stale={typeahead.stale}
+                busy={typeahead.busy}
+                onPick={(row) => runTypeaheadAction(typeahead.press(row))}
+                onHighlight={typeahead.highlightRow}
+                // Under the box, over the tabs and the results while the person
+                // is still typing; clear of the phone's bottom navigation.
+                className="absolute inset-x-0 top-full z-30 mt-2 max-h-[min(26rem,calc(100dvh-17rem))]"
+              />
+            ) : null}
           </form>
           <div
             className="mt-2 flex gap-1 overflow-x-auto px-1 pb-1"
@@ -653,8 +743,13 @@ export default function SearchClient({
         </div>
 
         {/* Announce a settled summary rather than making the whole result grid
-            a live region, which would re-read every card on each change. */}
-        <p role="status" className="sr-only">{statusMessage}</p>
+            a live region, which would re-read every card on each change.
+            Silent while the typeahead's list is open: the box is still being
+            typed into, the list's own region says its count, and two polite
+            regions changing at each pause would talk over each other. It
+            speaks when the list closes (Enter, a row, Escape, the focus
+            leaving) and whenever there is no list. */}
+        <p role="status" className="sr-only">{typeahead.shown ? '' : statusMessage}</p>
 
         {recentsShown ? (
           <div
