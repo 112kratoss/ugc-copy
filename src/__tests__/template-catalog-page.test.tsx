@@ -91,6 +91,38 @@ describe('TemplatesPage server bootstrap', () => {
     );
   });
 
+  // An empty catalog is a page that says "No templates are live yet": nothing
+  // to index until a template is live (SEO audit, 2026-11-13).
+  it('keeps an empty catalog out of the index', async () => {
+    mocks.createServiceClient.mockReturnValue({ source: 'service-client' });
+    mocks.listActiveMediaTemplates.mockResolvedValue([]);
+    const { generateMetadata } = await import('@/app/templates/page');
+
+    const metadata = await generateMetadata();
+
+    expect(metadata.robots).toMatchObject({ index: false, follow: true });
+    expect(metadata.alternates?.canonical).toBe('/templates');
+  });
+
+  it('indexes the catalog once a template is live', async () => {
+    mocks.createServiceClient.mockReturnValue({ source: 'service-client' });
+    mocks.listActiveMediaTemplates.mockResolvedValue([ACTIVE_TEMPLATE]);
+    const { generateMetadata } = await import('@/app/templates/page');
+
+    expect((await generateMetadata()).robots).toBeUndefined();
+  });
+
+  // A failed read says nothing about the catalog, so the page stays indexable.
+  it('leaves the catalog indexable when the read fails', async () => {
+    mocks.createServiceClient.mockReturnValue({ source: 'service-client' });
+    mocks.listActiveMediaTemplates.mockRejectedValue(new Error('database unavailable'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { generateMetadata } = await import('@/app/templates/page');
+
+    expect((await generateMetadata()).robots).toBeUndefined();
+    consoleError.mockRestore();
+  });
+
   it('falls back to the existing client fetch when the server bootstrap fails', async () => {
     const serverError = new Error('database unavailable');
     mocks.createServiceClient.mockReturnValue({ source: 'service-client' });

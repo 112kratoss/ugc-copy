@@ -43,6 +43,7 @@ import {
   selectWithGenerationSetup,
 } from '@/lib/public-generation-setup';
 import { isTemplateResultGeneration, shownGenerationModel } from '@/lib/template-result';
+import { composeShowcaseDescription } from '@/lib/showcase-seo';
 import type { GenerationSetupEntry } from '../../ugc-mobile/lib/generation-setup/generation-setup';
 import {
   MAGICBOOKLET_SOURCE_KIND,
@@ -553,13 +554,16 @@ export async function getPublicPostDetail(
   return revealed ? { ...detail, nsfwRevealed: true } : coverNsfwContent(detail);
 }
 
+/**
+ * The post's own words when it has any; otherwise a sentence composed from what
+ * it is, followed by its recipe line (`composeShowcaseDescription`). A public
+ * prompt and a recipe never meet: a post with a recipe reads no prompt.
+ */
 export function getPublicPostMetaDescription(detail: PublicPostDetail): string {
   return (
     detail.description ||
     summarizeBody(detail.body) ||
-    detail.resourceBundle?.summary ||
-    detail.resourceBundle?.previewText ||
     detail.prompt ||
-    `Explore ${detail.title} on Magic Booklet.`
+    composeShowcaseDescription(detail)
   );
 }

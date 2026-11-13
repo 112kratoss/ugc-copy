@@ -32,6 +32,8 @@ const MIN_PUBLIC_POSTS_FOR_INDEXING = 1;
  */
 const PLACEHOLDER_TITLES = new Set([
     'untitled creation',
+    // What a text post with no title and no body reads (`getPublicPostDetail`).
+    'untitled note',
     'untitled',
     'untitled post',
     'new post',
@@ -197,9 +199,11 @@ export type TemplateSitemapRow = {
 
 /**
  * Active templates, matching the same filters the public catalogue applies —
- * a template that would 404 or render empty must never enter a sitemap.
+ * a template that would 404 or render empty must never enter a sitemap. Null
+ * when the read failed: that says nothing about the catalog, so the sitemap
+ * keeps listing `/templates`, as its page stays indexable then too.
  */
-export async function getIndexableTemplates(): Promise<TemplateSitemapRow[]> {
+export async function getIndexableTemplates(): Promise<TemplateSitemapRow[] | null> {
     try {
         const supabase = createServiceClient();
         const { data, error } = await supabase
@@ -215,7 +219,7 @@ export async function getIndexableTemplates(): Promise<TemplateSitemapRow[]> {
 
         if (error) {
             logBackendError('failed_to_load_template_sitemap_entries', { error });
-            return [];
+            return null;
         }
 
         return ((data ?? []) as Array<{ slug: string | null; updated_at: string | null }>)
@@ -223,6 +227,6 @@ export async function getIndexableTemplates(): Promise<TemplateSitemapRow[]> {
             .map((row) => ({ slug: row.slug as string, updated_at: row.updated_at }));
     } catch (error) {
         logBackendError('failed_to_load_template_sitemap_entries', { error });
-        return [];
+        return null;
     }
 }

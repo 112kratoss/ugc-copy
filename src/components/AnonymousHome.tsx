@@ -179,6 +179,7 @@ export default function AnonymousHome() {
           description:
             'Magic Booklet helps teams generate AI images, AI videos, motion-transfer ads, and reusable creative workflows.',
           featureList: ['AI images', 'AI videos', 'Motion transfer', 'Workflows'],
+          includeMobileApps: true,
           offers: [
             {
               name: `${PRICING_PLAN_MAP.starter.name} credits`,

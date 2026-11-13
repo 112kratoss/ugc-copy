@@ -23,7 +23,7 @@ const INDEXABLE_ROUTES: Array<{
     { path: '/ai-video-generator', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/ai-motion-transfer', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/ai-workflow-builder', changeFrequency: 'weekly', priority: 0.8 },
-    { path: '/templates', changeFrequency: 'daily', priority: 0.75 },
+    { path: '/marketplace', changeFrequency: 'daily', priority: 0.75 },
     { path: '/models', changeFrequency: 'weekly', priority: 0.8 },
     { path: '/alternatives', changeFrequency: 'monthly', priority: 0.7 },
     { path: '/developers/mcp', changeFrequency: 'monthly', priority: 0.6 },
@@ -47,14 +47,16 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const posts = getSortedPostsData();
 
     // Independent reads; one round trip rather than three sequential ones. Each
-    // resolves to an empty list on failure, so a database problem degrades the
-    // sitemap to its static routes instead of failing the response.
-    const [showcasePosts, creators, templates, models] = await Promise.all([
+    // resolves to an empty list on failure (the templates to null), so a
+    // database problem degrades the sitemap to its static routes instead of
+    // failing the response.
+    const [showcasePosts, creators, templateRows, models] = await Promise.all([
         getIndexableShowcasePosts(),
         getIndexableCreators(),
         getIndexableTemplates(),
         listPublicModels().catch(() => []),
     ]);
+    const templates = templateRows ?? [];
 
     return [
         // No lastModified for pages whose change date is unknown: the sitemap
@@ -65,6 +67,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
             changeFrequency: route.changeFrequency,
             priority: route.priority,
         })),
+        // The catalog only while a template is live, or the read failed: empty,
+        // it says "No templates are live yet" and its page asks not to be
+        // indexed (`templates/page.tsx`), which a failed read leaves indexable.
+        ...(templateRows === null || templateRows.length > 0
+            ? [{ url: `${baseUrl}/templates`, changeFrequency: 'daily' as const, priority: 0.75 }]
+            : []),
         ...posts.map((post) => ({
             url: `${baseUrl}/blog/${post.slug}`,
             lastModified: new Date(post.date),
