@@ -16,7 +16,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { isGuestUser } from '@/lib/account-identity';
-import { HOME_SHELF_SCHEMA_VERSION } from '@/lib/home-shelf';
+import { HOME_SHELF_FREE_RECIPES_PARAM, HOME_SHELF_SCHEMA_VERSION } from '@/lib/home-shelf';
 import {
   HomeShelfUnavailableError,
   loadHomeShelfForApi,
@@ -99,8 +99,11 @@ async function handleHomeShelfGET(
     const body: HomeShelfRouteResponse = {
       success: true,
       schemaVersion: HOME_SHELF_SCHEMA_VERSION,
-      // The app's shelf: without the posts whose remix comes with a free recipe (`loadHomeShelfForApi`).
-      items: await dependencies.loadHomeShelfForApi(viewer, { withFreeRecipePosts: false }),
+      // With the posts whose remix comes with a free recipe only for an app that asks for them
+      // (`HOME_SHELF_FREE_RECIPES_PARAM`): an installed app from before cannot make their cards.
+      items: await dependencies.loadHomeShelfForApi(viewer, {
+        withFreeRecipePosts: new URL(request.url).searchParams.get(HOME_SHELF_FREE_RECIPES_PARAM) === '1',
+      }),
     };
 
     // A signed-out answer is the same for everyone and caches at the edge; a

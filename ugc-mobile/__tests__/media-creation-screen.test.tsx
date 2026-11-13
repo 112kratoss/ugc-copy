@@ -57,6 +57,8 @@ const authState = vi.hoisted(() => ({
     getMobileNotificationPreferences: vi.fn(),
     quoteGenerationModel: vi.fn(),
     getRemixSourceBundle: vi.fn(),
+    // The free recipe a remix link's post keeps its remix behind, taken by the restore.
+    unlockFreeBundle: vi.fn(),
     // The remix source row's post, read when a link names it by id alone.
     getShowcasePost: vi.fn(),
     createMediaReadUrl: vi.fn(),
@@ -1901,6 +1903,39 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       tree!.root.findByProps({ accessibilityLabel: 'Open details for Hero Product' }).props.onPress();
     });
     expect(tree!.root.findByProps({ accessibilityLabel: 'Reference name for Hero Product' }).props.value).toBe('Hero Product');
+  });
+
+  // Owner, 2026-11-13: a guest who signs up from a Home shelf card whose remix comes with a free
+  // recipe lands here on the remix link, with no Remix tap to take the recipe. The read is refused
+  // for it; the creator takes the recipe, reads again and restores, as the web's creators do.
+  it('takes the free recipe a remix link’s post keeps its remix behind, then restores the remix', async () => {
+    authState.api.unlockFreeBundle.mockReset();
+    authState.api.unlockFreeBundle.mockResolvedValue({ success: true });
+    authState.api.getRemixSourceBundle
+      .mockRejectedValueOnce(Object.assign(new Error('Unlock this post to remix it.'), { status: 403, code: 'REMIX_UNLOCK_REQUIRED' }))
+      .mockResolvedValueOnce({
+        generation: { id: 'gen-1', title: 'Paper boat', prompt: 'A paper boat drifting on a pond.', category: 'image', model: 'nano-banana-2' },
+        result: null,
+        inputs: {},
+        workflowSettings: { model: 'nano-banana-2', aspectRatio: '9:16', resolution: '2K' },
+        restoreIssues: [],
+      });
+    let tree: renderer.ReactTestRenderer | undefined;
+
+    await renderer.act(async () => {
+      tree = renderer.create(<MediaCreationScreen initialTool="image" remixSource={{ generationId: 'gen-1', postId: 'post-1' }} />);
+    });
+    for (let step = 0; step < 4; step += 1) {
+      await renderer.act(async () => { await Promise.resolve(); });
+    }
+
+    expect(authState.api.unlockFreeBundle).toHaveBeenCalledWith('post-1');
+    expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(2);
+    expect(authState.api.unlockFreeBundle.mock.invocationCallOrder[0])
+      .toBeLessThan(authState.api.getRemixSourceBundle.mock.invocationCallOrder[1]);
+    const promptInput = tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
+    expect(promptInput.props.value).toBe('A paper boat drifting on a pond.');
+    expect(collectText(tree!.root)).not.toContain('Unlock this post to remix it.');
   });
 
   it('shows the restore as in flight and keeps a prompt typed while it was still running', async () => {

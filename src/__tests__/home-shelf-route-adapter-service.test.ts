@@ -11,13 +11,15 @@ function call({
   authorization = 'Bearer token',
   lookup = { data: { user: { id: 'user-2', is_anonymous: false } as Pick<User, 'id' | 'is_anonymous'> | null }, error: null as unknown },
   loadHomeShelfForApi = vi.fn(async () => []),
+  query = '',
 }: {
+  query?: string;
   authorization?: string | null;
   lookup?: { data: { user: Pick<User, 'id' | 'is_anonymous'> | null }; error: unknown };
   loadHomeShelfForApi?: ReturnType<typeof vi.fn>;
 } = {}) {
   return getHomeShelfRouteResponse({
-    request: new Request('http://localhost/api/home/shelf', {
+    request: new Request(`http://localhost/api/home/shelf${query}`, {
       headers: authorization ? { Authorization: authorization } : {},
     }),
     dependencies: {
@@ -59,6 +61,24 @@ describe('/api/home/shelf', () => {
     expect(response.status).toBe(503);
     expect(response.headers.get('Cache-Control')).toBe('no-store');
     expect(loadHomeShelfForApi).not.toHaveBeenCalled();
+  });
+
+  // Owner, 2026-11-13: the posts whose remix comes with a free recipe are on the shelf, for an app
+  // that can make their cards and says so. An installed app from before sends no query.
+  it('sends the posts whose remix comes with a free recipe only to an app that asks for them', async () => {
+    const asking = vi.fn(async () => []);
+    await call({ query: '?freeRecipes=1', loadHomeShelfForApi: asking });
+    expect(asking).toHaveBeenCalledWith({ viewerUserId: 'user-2', isAnonymous: false }, { withFreeRecipePosts: true });
+
+    const signedOutAsking = vi.fn(async () => []);
+    await call({ authorization: null, query: '?freeRecipes=1', loadHomeShelfForApi: signedOutAsking });
+    expect(signedOutAsking).toHaveBeenCalledWith({ viewerUserId: null, isAnonymous: false }, { withFreeRecipePosts: true });
+
+    for (const query of ['', '?freeRecipes=0', '?freeRecipes=true', '?other=1']) {
+      const notAsking = vi.fn(async () => []);
+      await call({ query, loadHomeShelfForApi: notAsking });
+      expect(notAsking).toHaveBeenCalledWith({ viewerUserId: 'user-2', isAnonymous: false }, { withFreeRecipePosts: false });
+    }
   });
 
   it('reads a guest token as a guest, and no token as signed out', async () => {

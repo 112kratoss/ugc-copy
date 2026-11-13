@@ -19,6 +19,16 @@ import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase
 export const HOME_SHELF_SCHEMA_VERSION = 1;
 
 /**
+ * The query an app sends `/api/home/shelf` once it can make a card whose remix
+ * comes with a free recipe (`homeShelfPostTakesFreeRecipe`): its member's tap
+ * takes the recipe, and its creator takes it for a guest who signs up from the
+ * card. An app without it is sent the shelf without those cards. Pinned under
+ * `getHomeShelf.query` in `contracts/mobile-api-v1.json`, which the app's
+ * request is held to.
+ */
+export const HOME_SHELF_FREE_RECIPES_PARAM = 'freeRecipes';
+
+/**
  * Below this many creations the shelf renders nothing: two cards and an offer
  * read as a broken row, not a shelf.
  */

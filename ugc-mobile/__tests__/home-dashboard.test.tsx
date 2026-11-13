@@ -1520,6 +1520,34 @@ describe('Home screen', () => {
     renderer.act(() => tree.unmount());
   });
 
+  // Owner, 2026-11-13: the shelf carries posts whose remix comes with a free recipe. The shelf's
+  // read is the same for everyone, so it says the remix is behind the recipe; a member's tap takes
+  // the recipe on its way and opens the remix, in the one tap, as a feed card's Remix does.
+  it('takes a shelf card’s free recipe on the way and opens its remix, in the one tap', async () => {
+    const { tree } = renderHome();
+    const header = renderHeader(tree);
+    const freeRecipePost = {
+      ...shelfPost('post-1'),
+      canRemix: false,
+      remixCapability: 'unlock_required',
+      asset: { id: 'recipe-1', postId: 'post-1', title: 'Recipe', accessMode: 'free', priceUsdCents: 0, previewText: '', allowRemix: true },
+    };
+
+    await renderer.act(async () => {
+      hostProps(header, 'home-shelf').onMake({ id: 'post-1', post: freeRecipePost });
+      await settlePromises();
+    });
+
+    expect(authState.api.unlockFreeBundle).toHaveBeenCalledWith('post-1');
+    expect(authState.api.remixShowcasePost).toHaveBeenCalledWith('post-1');
+    expect(authState.api.unlockFreeBundle.mock.invocationCallOrder[0])
+      .toBeLessThan(authState.api.remixShowcasePost.mock.invocationCallOrder[0]);
+    expect(pushedCreatorRoute()).toEqual(POST_1_REMIX_ROUTE);
+
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
   // A card's Remix names its post in the creator's row above the prompt
   // (poster, title, creator), as the reel's Remix does. Until 2026-11-01 the
   // card sent none of them and the creator read "Source creation".

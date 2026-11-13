@@ -444,11 +444,11 @@ export async function loadHomeShelfCreationsWithPosts(identity: HomeShelfIdentit
  * `HomeShelfUnavailableError` where the web pages' loader would draw nothing.
  * It has two readers, and each says which shelf it draws:
  *
- * - `/api/home/shelf`, the app's shelf, without the posts whose remix comes
- *   with a free recipe (owner, 2026-11-13: they are on the web's shelf). An
- *   installed app's member could take one from the card, but its guest signs
- *   up and lands in the app's creator, which cannot take the recipe: the card
- *   stays off the app's shelf until the app asks for it.
+ * - `/api/home/shelf`, the app's shelf. The posts whose remix comes with a free
+ *   recipe (owner, 2026-11-13: they are on the shelf) go only to an app that
+ *   asks for them (`HOME_SHELF_FREE_RECIPES_PARAM`): its member's tap takes the
+ *   recipe, and its creator takes it for a guest who signs up from the card.
+ *   An installed app from before cannot, so it is sent the shelf without them.
  * - the signed-out web page (`anonymous-home-data.ts`), with them: it reads
  *   here for the throw, so that its own cache never keeps a failed read, and
  *   its cards open the web's creators, which take the recipe after sign-in.

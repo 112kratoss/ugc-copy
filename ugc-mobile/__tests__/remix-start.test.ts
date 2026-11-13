@@ -7,6 +7,7 @@ import {
   REMIX_UNLOCK_REQUIRED_CODE,
   findRemixLaunch,
   launchShowcaseRemix,
+  readRemixSourceTakingFreeRecipe,
   showcasePostRemixSourceContext,
   showcaseRemixCreateHref,
   startShowcaseRemix,
@@ -169,6 +170,107 @@ function motionPost(): ShowcaseFeedItem {
     canRemix: true,
   } as unknown as ShowcaseFeedItem;
 }
+
+// Owner, 2026-11-13: Home's shelf carries posts whose remix comes with a free recipe. A guest who
+// signs up from such a card lands in the creator on the remix (`homeShelfGuestReturnTo`), with no
+// Remix tap to take the recipe: the creator's own read takes it, as the web's creators do
+// (`src/lib/use-remix-source-read.ts`).
+describe('readRemixSourceTakingFreeRecipe', () => {
+  const BUNDLE = { generation: { id: 'gen-1' } } as unknown as RemixSourceBundle;
+  const UNLOCK_REQUIRED = () => apiError('Unlock this post to remix it.', 403, REMIX_UNLOCK_REQUIRED_CODE);
+
+  function sourceApi({ reads, claim = async () => ({ success: true }) }: {
+    reads: Array<() => Promise<RemixSourceBundle>>;
+    claim?: () => Promise<{ success: boolean }>;
+  }) {
+    const calls: string[] = [];
+    const queue = [...reads];
+    return {
+      calls,
+      api: {
+        getRemixSourceBundle: vi.fn(async (generationId: string, options: { postId?: string | null } = {}) => {
+          calls.push(`read:${generationId}:${options.postId ?? ''}`);
+          const next = queue.shift();
+          if (!next) throw new Error('no more reads');
+          return next();
+        }),
+        unlockFreeBundle: vi.fn(async (postId: string) => {
+          calls.push(`claim:${postId}`);
+          return claim();
+        }),
+      },
+    };
+  }
+
+  it('reads an open remix once and takes nothing', async () => {
+    const { api, calls } = sourceApi({ reads: [async () => BUNDLE] });
+    const taken = vi.fn();
+
+    await expect(readRemixSourceTakingFreeRecipe(api, 'gen-1', 'post-1', taken)).resolves.toBe(BUNDLE);
+    expect(calls).toEqual(['read:gen-1:post-1']);
+    expect(taken).not.toHaveBeenCalled();
+  });
+
+  it('takes the free recipe when the read is refused for it, reads once more, and says it took it', async () => {
+    const { api, calls } = sourceApi({ reads: [async () => { throw UNLOCK_REQUIRED(); }, async () => BUNDLE] });
+    const taken = vi.fn();
+
+    await expect(readRemixSourceTakingFreeRecipe(api, 'gen-1', 'post-1', taken)).resolves.toBe(BUNDLE);
+    expect(calls).toEqual(['read:gen-1:post-1', 'claim:post-1', 'read:gen-1:post-1']);
+    expect(taken).toHaveBeenCalledTimes(1);
+  });
+
+  // A paid recipe, a blocked pair, a recipe since retired: the server refuses the claim, and the
+  // remix stays refused as it was (the creator offers Retry restore beside it).
+  it('leaves the remix refused when the server will not give the recipe', async () => {
+    const refusal = UNLOCK_REQUIRED();
+    const { api, calls } = sourceApi({
+      reads: [async () => { throw refusal; }],
+      claim: async () => { throw apiError('This bundle requires payment.', 400); },
+    });
+    const taken = vi.fn();
+
+    await expect(readRemixSourceTakingFreeRecipe(api, 'gen-1', 'post-1', taken)).rejects.toBe(refusal);
+    expect(calls).toEqual(['read:gen-1:post-1', 'claim:post-1']);
+    expect(taken).not.toHaveBeenCalled();
+  });
+
+  // The claim only failed to be made: what it says is the reason, and Retry restore asks again.
+  it.each([
+    ['a 429', apiError('Too many recipes. Try again shortly.', 429)],
+    ['a 5xx', apiError('Failed to get the free recipe.', 500)],
+    ['the network', apiError('Could not reach Magicbooklet.', 0)],
+  ])('says the claim’s own failure after %s', async (_case, failure) => {
+    const { api } = sourceApi({
+      reads: [async () => { throw UNLOCK_REQUIRED(); }],
+      claim: async () => { throw failure; },
+    });
+
+    await expect(readRemixSourceTakingFreeRecipe(api, 'gen-1', 'post-1', vi.fn())).rejects.toBe(failure);
+  });
+
+  it('takes the recipe once: a refusal after the claim is final', async () => {
+    const second = UNLOCK_REQUIRED();
+    const { api, calls } = sourceApi({
+      reads: [async () => { throw UNLOCK_REQUIRED(); }, async () => { throw second; }],
+    });
+
+    await expect(readRemixSourceTakingFreeRecipe(api, 'gen-1', 'post-1', vi.fn())).rejects.toBe(second);
+    expect(calls).toEqual(['read:gen-1:post-1', 'claim:post-1', 'read:gen-1:post-1']);
+  });
+
+  it('takes nothing for any other refusal, or for a remix that names no post', async () => {
+    const forbidden = apiError('Forbidden', 403, 'REGISTRATION_REQUIRED');
+    const guest = sourceApi({ reads: [async () => { throw forbidden; }] });
+    await expect(readRemixSourceTakingFreeRecipe(guest.api, 'gen-1', 'post-1', vi.fn())).rejects.toBe(forbidden);
+    expect(guest.calls).toEqual(['read:gen-1:post-1']);
+
+    const refusal = UNLOCK_REQUIRED();
+    const noPost = sourceApi({ reads: [async () => { throw refusal; }] });
+    await expect(readRemixSourceTakingFreeRecipe(noPost.api, 'gen-1', null, vi.fn())).rejects.toBe(refusal);
+    expect(noPost.calls).toEqual(['read:gen-1:']);
+  });
+});
 
 describe('showcaseRemixCreateHref', () => {
   const route = (href: string | null) => {

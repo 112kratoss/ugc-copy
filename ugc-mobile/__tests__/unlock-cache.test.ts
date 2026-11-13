@@ -152,4 +152,21 @@ describe('refreshUnlockedBundleCaches', () => {
     expect(pending.has(JSON.stringify(['viewer-unlocks']))).toBe(true);
     expect(pending.has(JSON.stringify(['showcase-post', 'post-123']))).toBe(true);
   });
+
+  // A claim made by the creator's read of a remix knows the post alone
+  // (`readRemixSourceTakingFreeRecipe`): every read of that post's recipe is refreshed.
+  it('refreshes every read of the post’s recipe when the unlock knows the post alone', async () => {
+    const invalidateQueries = vi.fn(async (_options: { queryKey: readonly unknown[] }) => undefined);
+    const client = { invalidateQueries, setQueriesData: vi.fn() } as unknown as Parameters<typeof refreshUnlockedBundleCaches>[0];
+
+    await refreshUnlockedBundleCaches(client, { postId: 'post-123' });
+
+    const keys = invalidateQueries.mock.calls.map(([options]) => JSON.stringify(options.queryKey));
+    expect(keys).toEqual(expect.arrayContaining([
+      JSON.stringify(['post-resource-bundle', 'post-123']),
+      JSON.stringify(['viewer-unlocks']),
+      JSON.stringify(['showcase-post', 'post-123']),
+    ]));
+    expect(keys.some((key) => key.includes('marketplace-resource') || key.includes('undefined'))).toBe(false);
+  });
 });

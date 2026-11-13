@@ -63,6 +63,46 @@ export async function startShowcaseRemix({
 }
 
 /**
+ * A creator's read of the remix it opened on, taking the post's free recipe on the way when the
+ * read is refused for it (`REMIX_UNLOCK_REQUIRED`), then reading once more. A Remix tap takes the
+ * recipe itself (`startShowcaseRemix`); a creator opened any other way has no tap to do it: a
+ * guest who signs up from a Home shelf card lands in the creator on the remix
+ * (`homeShelfGuestReturnTo`), and so does a link to a remix. The web's creators do the same
+ * (`src/lib/use-remix-source-read.ts`, owner 2026-11-13).
+ *
+ * The server decides what is free: a paid, retired or withheld recipe refuses the claim, and the
+ * remix stays refused as it was. A claim that only failed to be made (a 429, a 5xx, the network)
+ * is thrown as itself, so the creator says why, and its Retry restore asks again. `onFreeRecipeTaken`
+ * is told once the recipe is the reader's, for the caches and the notice a claim brings.
+ */
+export async function readRemixSourceTakingFreeRecipe(
+  api: Pick<MagicbookletApiClient, 'getRemixSourceBundle' | 'unlockFreeBundle'>,
+  generationId: string,
+  postId: string | null,
+  onFreeRecipeTaken: () => void,
+): Promise<RemixSourceBundle> {
+  try {
+    return await api.getRemixSourceBundle(generationId, { postId });
+  } catch (refusal) {
+    if (!postId || !isRemixUnlockRequired(refusal)) throw refusal;
+    try {
+      await api.unlockFreeBundle(postId);
+    } catch (claimFailure) {
+      throw claimMayWorkLater(claimFailure) ? claimFailure : refusal;
+    }
+    onFreeRecipeTaken();
+    return api.getRemixSourceBundle(generationId, { postId });
+  }
+}
+
+/** A claim that failed for a passing reason: the network (no status), a timeout, a 429 or a 5xx. */
+function claimMayWorkLater(error: unknown) {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status !== 'number' || status === 0) return true;
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/**
  * The creator a started remix opens: the server's create link as the app's
  * route (or the post's own tool and prompt when the app cannot map it), with
  * the row naming the source. `item` is the post as the reel reads it. Home and
