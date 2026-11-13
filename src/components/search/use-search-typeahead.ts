@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 
 import {
@@ -14,6 +14,7 @@ import {
   moveSearchTypeaheadHighlight,
   parseSearchSuggestResponse,
   placeSearchTypeaheadRows,
+  searchTypeaheadUnsettledRows,
   searchTypeaheadAction,
   searchTypeaheadDrawn,
   searchTypeaheadQuery,
@@ -49,6 +50,9 @@ type KeptAnswer = { response: SearchSuggestResponse; at: number };
  * the highlighted one is named to assistive technology by
  * `aria-activedescendant`.
  */
+// No row is settling: one array, so a list that has settled keeps its props.
+const NO_ROWS: readonly string[] = [];
+
 export function useSearchTypeahead({ text, focused }: {
   /** What the box holds. */
   text: string;
@@ -192,30 +196,40 @@ export function useSearchTypeahead({ text, focused }: {
   // The rows' places, kept as they are drawn (the shared rule,
   // placeSearchTypeaheadRows): a row that has just come to stand where it is
   // takes no press for a moment, so a press aimed at the row before it does
-  // not open this one. A press handler runs after this effect: React runs
-  // pending effects before it handles a press.
-  useEffect(() => {
+  // not open this one. Kept in a layout effect, which React runs inside the
+  // commit that draws the rows: no press can find them drawn in places this
+  // has not recorded. (A passive effect may run after the paint when the
+  // change came from an answer arriving and not from a key, and a press
+  // landing in between was judged by the places before: a row that had only
+  // just moved under the pointer took it.)
+  useLayoutEffect(() => {
     placement.current = shown ? placeSearchTypeaheadRows(placement.current, rows, Date.now()) : null;
   }, [rows, shown]);
 
-  // The list says it is busy for that moment, as it does while its rows are
-  // stale: from a change of its rows while it is on show until they have
-  // stood for the same time (a little longer than the rule itself asks of a
-  // row that did not move). A list that comes on show has nothing to settle.
-  // Adjusted while rendering, as the close above is.
+  // What the list shows of that moment: the rows that do not take a press yet
+  // (the shared rule, searchTypeaheadUnsettledRows), drawn dimmed, and the
+  // list busy, as it is while its rows are stale. From a change of the order
+  // on show that moved a row until the order has stood for the same time (a
+  // little longer than the press rule asks of a row an earlier change moved).
+  // A list that comes on show has nothing to settle, and neither has a change
+  // that moves no row. Adjusted while rendering, as the close above is.
   const rowOrder = useMemo(() => rows.map((row) => row.key).join('\n'), [rows]);
   const drawnOrder = shown ? rowOrder : null;
-  // The order on show, and whether it has stood: any change while on show
-  // unsettles it, a change back to an order it had a moment ago included.
-  const [order, setOrder] = useState<{ drawn: string | null; settled: boolean }>({ drawn: null, settled: true });
+  const [order, setOrder] = useState<{ drawn: string | null; unsettled: readonly string[] }>({ drawn: null, unsettled: NO_ROWS });
   if (order.drawn !== drawnOrder) {
-    setOrder({ drawn: drawnOrder, settled: order.drawn === null || drawnOrder === null });
+    setOrder({
+      drawn: drawnOrder,
+      unsettled: order.drawn === null || drawnOrder === null
+        ? NO_ROWS
+        : searchTypeaheadUnsettledRows({ order: order.drawn.split('\n'), unsettled: order.unsettled }, rows.map((row) => row.key)),
+    });
   }
-  const settling = shown && order.drawn === drawnOrder && !order.settled;
+  const settlingRows = shown && order.drawn === drawnOrder ? order.unsettled : NO_ROWS;
+  const settling = settlingRows.length > 0;
   useEffect(() => {
     if (!settling) return;
     const timer = window.setTimeout(() => {
-      setOrder((current) => (current.drawn === rowOrder ? { drawn: rowOrder, settled: true } : current));
+      setOrder((current) => (current.drawn === rowOrder ? { drawn: rowOrder, unsettled: NO_ROWS } : current));
     }, SEARCH_TYPEAHEAD_PRESS_SETTLE_MS);
     return () => window.clearTimeout(timer);
   }, [rowOrder, settling]);
@@ -309,6 +323,8 @@ export function useSearchTypeahead({ text, focused }: {
     stale: shown && stale,
     /** The list is changing or has just changed: stale, or a row moved a moment ago and takes no press yet. */
     busy: shown && (stale || settling),
+    /** The keys of the rows that moved a moment ago and take no press yet: drawn dimmed. */
+    settlingRows,
     sections,
     rows,
     activeIndex,

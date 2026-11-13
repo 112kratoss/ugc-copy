@@ -11,6 +11,8 @@ import {
 } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
 import { searchTypeaheadOptionId } from './use-search-typeahead';
 
+const NO_ROWS: readonly string[] = [];
+
 const ICON_FRAME_CLASS = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06]';
 
 function RowBody({ row }: { row: SearchTypeaheadRow }) {
@@ -77,6 +79,7 @@ export function SearchTypeaheadList({
   activeIndex,
   stale = false,
   busy = stale,
+  settlingRows = NO_ROWS,
   onPick,
   onHighlight,
   className = '',
@@ -98,6 +101,15 @@ export function SearchTypeaheadList({
    * (`useSearchTypeahead`'s `press`). Said to assistive technology.
    */
   busy?: boolean;
+  /**
+   * The keys of the rows that came to stand in a new place a moment ago and
+   * take no press yet. Each is drawn dimmed, at once, and comes back to full
+   * strength as it starts to take a press: what a sighted person has in place
+   * of `busy`. Only the rows a change moved, so a list whose answer leaves its
+   * rows where they were does not change at all, and a new row reads as
+   * arriving.
+   */
+  settlingRows?: readonly string[];
   onPick: (row: SearchTypeaheadRow) => void;
   onHighlight: (index: number) => void;
   className?: string;
@@ -125,6 +137,7 @@ export function SearchTypeaheadList({
             {section.rows.map((row, rowInSection) => {
               const rowIndex = sectionStarts[sectionIndex] + rowInSection;
               const active = rowIndex === activeIndex;
+              const settling = settlingRows.includes(row.key);
               return (
                 <div
                   key={row.key}
@@ -133,9 +146,10 @@ export function SearchTypeaheadList({
                   aria-selected={active}
                   aria-label={searchTypeaheadRowLabel(row)}
                   data-typeahead-row={row.kind}
+                  data-settling={settling || undefined}
                   onClick={() => onPick(row)}
                   onMouseMove={() => { if (!active) onHighlight(rowIndex); }}
-                  className={`flex min-h-12 cursor-pointer items-center gap-3 rounded-2xl px-3 py-1.5 ${active ? 'bg-white/[0.09]' : 'hover:bg-white/[0.05]'}`}
+                  className={`flex min-h-12 cursor-pointer items-center gap-3 rounded-2xl px-3 py-1.5 ${active ? 'bg-white/[0.09]' : 'hover:bg-white/[0.05]'} ${settling ? 'opacity-60' : 'transition-opacity duration-150'}`}
                 >
                   <RowBody row={row} />
                 </div>

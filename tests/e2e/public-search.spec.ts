@@ -522,4 +522,76 @@ test.describe('public search', () => {
     await expect.poll(() => requests.length).toBeGreaterThan(0);
     expect(requests.every((search) => search.includes('type=creators'))).toBe(true);
   });
+
+  // The page writes its address a pause after the last letter. It used to do
+  // so through Next's patched history.replaceState, which Next's router takes
+  // for a navigation, and a navigation discards the one still loading: any
+  // link pressed inside the pause, on a page slower than the pause, opened
+  // nothing (first seen on CI as a suggestion's press, #778). The write now
+  // carries the entry's own state, which Next hands straight to the browser
+  // (src/app/search/search-address.ts), and a press writes it first, so the
+  // entry being left names the search left. The page's clock is the test's
+  // here, so the pause passes exactly while the page being opened is held back.
+  for (const way of [
+    { name: 'a result', path: '/creators/e2e-creator', link: { name: /E2E Creator/ }, within: 'main' },
+    { name: 'a link of the sidebar', path: '/marketplace', link: { name: 'Marketplace' }, within: 'complementary' },
+  ] as const) {
+    test(`opens ${way.name} pressed inside the search’s pause, however slowly its page answers and whatever is typed meanwhile, and Back returns to the search left`, async ({ page }) => {
+      await page.clock.install();
+      let release: () => void = () => {};
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const requests: string[] = [];
+      await page.route(SEARCH_API, async (route) => {
+        const url = new URL(route.request().url());
+        requests.push(url.search);
+        const answer = searchResponse(url.searchParams.get('q') ?? '', url.searchParams.get('type') ?? 'top');
+        answer.creators.items[0] = { ...answer.creators.items[0], id: 'workflow-user', username: 'e2e-creator', displayName: 'E2E Creator' };
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(answer) });
+      });
+      await page.goto('/search?q=luna');
+      await expect(page.getByRole('main').getByRole('link', { name: /E2E Creator/ })).toBeVisible();
+      // The page is compiled before it is held: the hold is the page's answer, not the compiler's.
+      await page.request.get(way.path, { timeout: 0 });
+      await page.route((url) => url.pathname === way.path, async (route) => {
+        await held;
+        await route.continue();
+      });
+      const box = page.getByRole('combobox');
+
+      // Time stands still: the letter's pause (300 ms) passes only when the test says so.
+      await page.clock.pauseAt(new Date(Date.now() + 5_000));
+      await box.press('End');
+      await box.press('r');
+      await expect(box).toHaveValue('lunar');
+      expect(new URL(page.url()).searchParams.get('q')).toBe('luna');
+      // The cards of "luna" stay up while "lunar" waits; the link is pressed inside the pause.
+      await page.getByRole(way.within).getByRole('link', way.link).first().click();
+      // The press wrote the search being left, ahead of the way out.
+      expect(new URL(page.url()).pathname).toBe('/search');
+      expect(new URL(page.url()).searchParams.get('q')).toBe('lunar');
+
+      // The person types on while the page they pressed is still loading, and
+      // the pause passes. The page's write for the new text lands with the
+      // navigation on its way: told to Next's router, it would discard it.
+      // The search the page says it is running is asked too: a navigation
+      // that failed here would not leave "Searching…" with no request behind it.
+      await box.fill('lunars');
+      await page.clock.runFor(1_000);
+      expect(new URL(page.url()).pathname).toBe('/search');
+      expect(new URL(page.url()).searchParams.get('q')).toBe('lunars');
+      expect(requests.filter((search) => /[?&]q=lunars(&|$)/.test(search))).toHaveLength(1);
+
+      release();
+      await page.clock.resume();
+      await expect(page).toHaveURL((url) => url.pathname === way.path, { timeout: 30_000 });
+
+      // Back: the search the person left, in the box, in the address and run again.
+      const asked = requests.length;
+      await page.goBack();
+      await expect(page).toHaveURL(/\/search\?q=lunars$/);
+      await expect(page.getByRole('combobox')).toHaveValue('lunars');
+      await expect.poll(() => requests.slice(asked)).toEqual(['?q=lunars&type=top']);
+      await expect(page.locator('p[role="status"]')).toContainText('1 result for lunars');
+    });
+  }
 });

@@ -1435,6 +1435,18 @@ describe('ExploreSearchOverlay typeahead', () => {
     if (!panel) return [];
     return panel.findAll((node) => isHost(node, 'pressable')).map((node) => node.props.accessibilityLabel as string);
   }
+  /** The rows drawn dimmed: they have only just come to stand where they are, and take no tap yet. */
+  function dimmedRows(tree: Tree) {
+    const panel = list(tree);
+    if (!panel) return [];
+    return panel.findAll((node) => isHost(node, 'pressable'))
+      .filter((node) => {
+        const style = node.props.style as unknown;
+        const drawn = (typeof style === 'function' ? style({ pressed: false }) : style) as { opacity?: number };
+        return drawn.opacity !== 1;
+      })
+      .map((node) => node.props.accessibilityLabel as string);
+  }
   function asked() {
     return suggestSearch.mock.calls.map(([params]) => params.query);
   }
@@ -1650,6 +1662,9 @@ describe('ExploreSearchOverlay typeahead', () => {
     // a tap there now was aimed at the model.
     suggestSearch.mockReturnValueOnce(later.promise);
     await typeQuery(tree, 'lumi');
+    // What a sighted person has of it: the rows that moved are dimmed, at
+    // once, and the creators that stayed are not.
+    expect(dimmedRows(tree)).toEqual(['Search for luminous', 'Search for lumen glow']);
     await press(pressableLabelled(tree, 'Search for luminous'));
     expect(searchInput(tree).props.value).toBe('lumi');
     expect(mocks.keyboardDismiss).not.toHaveBeenCalled();
@@ -1664,6 +1679,7 @@ describe('ExploreSearchOverlay typeahead', () => {
     });
     expect(rowLabels(tree)).toHaveLength(5);
     expect(list(tree)!.props.accessibilityState).toEqual({ busy: true });
+    expect(dimmedRows(tree)).toEqual(['Luma Ray 2, model, 14 posts. Show posts made with it', 'Search for luminous', 'Search for lumen glow']);
     await press(pressableLabelled(tree, 'Luma Ray 2, model, 14 posts. Show posts made with it'));
     await press(pressableLabelled(tree, 'Search for luminous'));
     await advance(SETTLE - 1);
@@ -1675,6 +1691,36 @@ describe('ExploreSearchOverlay typeahead', () => {
     // Once the rows have stood, the tap counts, and opens the row it is on.
     await advance(1);
     expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
+    expect(dimmedRows(tree)).toEqual([]);
+    await press(pressableLabelled(tree, 'Search for luminous'));
+    expect(searchInput(tree).props.value).toBe('luminous');
+    await act(async () => tree.unmount());
+  });
+
+  it('dims nothing and is not busy for an answer that leaves the rows where they were', async () => {
+    // The common case as a person types on: every row the panel has is still
+    // named by the longer text, and its answer brings the same rows. Nothing
+    // moves, so nothing may flicker.
+    const later = deferred<SearchSuggestResponse>();
+    const tree = await open();
+    await typeQuery(tree, 'lum');
+    await advance(PAUSE);
+    const before = rowLabels(tree);
+    suggestSearch.mockReturnValueOnce(later.promise);
+    await typeQuery(tree, 'luma');
+    // Stale until the answer lands: busy for that, with every row at full strength.
+    expect(rowLabels(tree)).toEqual(before);
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: true });
+    expect(dimmedRows(tree)).toEqual([]);
+    await advance(PAUSE);
+    await act(async () => {
+      later.resolve(suggestions({ query: 'luma', normalizedQuery: 'luma' }));
+      await later.promise;
+    });
+    // The answer is drawn: not busy at once, no row dimmed, and a tap counts.
+    expect(rowLabels(tree)).toEqual(before);
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
+    expect(dimmedRows(tree)).toEqual([]);
     await press(pressableLabelled(tree, 'Search for luminous'));
     expect(searchInput(tree).props.value).toBe('luminous');
     await act(async () => tree.unmount());

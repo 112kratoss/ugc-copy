@@ -58,6 +58,7 @@ import {
   toggleSearchFilterSwitch,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import type { SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
+import { SEARCH_PAGE_PATH, readSearchPageAddress, writeSearchPageAddress, type SearchPageOpening } from './search-address';
 import { clearSearchHistory, forgetSearchQuery, readSearchHistory, rememberSearchQuery } from './search-history';
 
 const SEARCH_TABS: Array<{ id: PublicSearchType; label: string }> = [
@@ -154,7 +155,7 @@ function searchPath(
   if (type !== 'top') params.set('type', type);
   if (sort !== 'top') params.set('sort', sort);
   for (const [name, value] of Object.entries(publicSearchFilterParams(filters, exact))) params.set(name, value);
-  return `/search${params.size ? `?${params.toString()}` : ''}`;
+  return `${SEARCH_PAGE_PATH}${params.size ? `?${params.toString()}` : ''}`;
 }
 
 const CHIP_CLASS = 'ui-focus-ring inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full border px-4 text-sm font-semibold transition';
@@ -339,20 +340,30 @@ export default function SearchClient({
   /** A shared link asked for the query as typed. */
   initialExact?: boolean;
 }) {
-  const [query, setQuery] = useState(initialQuery);
+  // The search the page opens on: the address's own when history brings the
+  // page back (readSearchPageAddress says why), the server's reading of it
+  // otherwise. Read once, as the page mounts.
+  const [opening] = useState<SearchPageOpening>(() => readSearchPageAddress() ?? {
+    query: initialQuery,
+    type: initialType,
+    sort: initialSort,
+    filters: initialFilters,
+    exact: initialExact,
+  });
+  const [query, setQuery] = useState(opening.query);
   // The tab the user chose. Below three characters only creators can be
   // searched, so a content tab shows as Creators and comes back at three.
-  const [pickedType, setPickedType] = useState(initialType);
+  const [pickedType, setPickedType] = useState(opening.type);
   // The order the user chose for Posts and Recipes. It is kept across tabs,
   // and read only on the two that have another order than the ranked one.
-  const [pickedSort, setPickedSort] = useState(initialSort);
+  const [pickedSort, setPickedSort] = useState(opening.sort);
   // What narrows Posts. Kept across tabs, as the order is, and read only on
   // Posts: the Top tab is the best of each kind.
-  const [pickedFilters, setPickedFilters] = useState(initialFilters);
+  const [pickedFilters, setPickedFilters] = useState(opening.filters);
   // The query the person asked to have read as typed ("search instead for").
   // It belongs to that query: typing another one is a new search, corrected
   // again where it needs to be.
-  const [exactQuery, setExactQuery] = useState(initialExact ? initialQuery : null);
+  const [exactQuery, setExactQuery] = useState(opening.exact ? opening.query : null);
   // The name of each entity this page has been told, by its id, so a filter
   // picked from a result is named before its own answer arrives.
   const [entityLabels, setEntityLabels] = useState<Record<string, string>>({});
@@ -378,10 +389,7 @@ export default function SearchClient({
   const retryUnblockTimer = useRef<number | null>(null);
   // The query of the last scheduled search. A URL query arrives already typed
   // and a tab change keeps the query, so only a new query waits for a pause.
-  const scheduledQuery = useRef(initialQuery);
-  // The address the page was at when the person left it for a creator's page
-  // from the typeahead, or null: the search effect does not write it again.
-  const leavingAt = useRef<string | null>(null);
+  const scheduledQuery = useRef(opening.query);
   const tabRefs = useRef<Partial<Record<PublicSearchType, HTMLButtonElement | null>>>({});
   const normalizedQuery = useMemo(() => normalizePublicSearchQuery(query), [query]);
   // The server strips leading "@" (a handle search) before its length checks
@@ -397,6 +405,8 @@ export default function SearchClient({
   const activeExact = activeType !== 'creators' && exactQuery !== null && exactQuery === normalizedQuery;
   const narrowing = publicSearchFilterKey(activeFilters, activeExact);
   const returnTo = searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact);
+  // The page's address: the search's, once there is one to run.
+  const address = canSearch ? returnTo : SEARCH_PAGE_PATH;
 
   const onTabListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
@@ -523,27 +533,20 @@ export default function SearchClient({
       requestSequence.current += 1;
       setAnswer(null);
       setFailure(null);
-      // history.replaceState keeps Next's router in step without a server
-      // render; this page is dynamic, so router.replace re-rendered it per keystroke.
-      // Not once the person has left for a creator's page from here (`leavingAt`).
-      if (leavingAt.current !== '/search') {
-        leavingAt.current = null;
-        window.history.replaceState(null, '', '/search');
-      }
+      writeSearchPageAddress(SEARCH_PAGE_PATH);
       return;
     }
     // Cleared now rather than when the request starts, so an old error never
     // stands for the new query during the pause.
     setFailure(null);
     const search = () => {
-      const path = searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact);
-      // The person has left for a creator's page from the typeahead (below):
-      // the search they left is not run, and above all its address is not
-      // written. A write here is a navigation to Next's router, and a
-      // navigation discards the one still on its way.
-      if (leavingAt.current === path) return;
-      leavingAt.current = null;
-      window.history.replaceState(null, '', path);
+      // The address follows the search without a server render (this page is
+      // dynamic: router.replace rendered it again at every keystroke) and
+      // without a word to Next's router (writeSearchPageAddress says why).
+      // The search is asked whether or not the person has pressed something
+      // that leaves the page meanwhile: a navigation that fails, or is given
+      // up, finds the page with the search it says it is running.
+      writeSearchPageAddress(address);
       void requestSearch();
     };
     const waitForPause = scheduledQuery.current !== normalizedQuery;
@@ -554,7 +557,18 @@ export default function SearchClient({
     }
     const timer = window.setTimeout(search, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [activeExact, activeFilters, activeSort, activeType, canSearch, normalizedQuery, requestSearch]);
+  }, [address, canSearch, normalizedQuery, requestSearch]);
+
+  // The address waits for the pause the search waits for, and a press can
+  // leave the page inside that pause: a result, a link of the header, a
+  // suggestion. So any press anywhere writes it first, in the capture phase,
+  // ahead of whatever the press goes on to do: the entry the person leaves
+  // names the search they left, and Back returns to it.
+  useEffect(() => {
+    const writeAddress = () => writeSearchPageAddress(address);
+    document.addEventListener('click', writeAddress, true);
+    return () => document.removeEventListener('click', writeAddress, true);
+  }, [address]);
 
   const currentAnswer = isSameRequest(answer, normalizedQuery, activeType, activeSort, narrowing) ? answer : null;
   const currentFailure = isSameRequest(failure, normalizedQuery, activeType, activeSort, narrowing) ? failure : null;
@@ -624,15 +638,8 @@ export default function SearchClient({
   const runTypeaheadAction = (action: SearchTypeaheadAction | null) => {
     if (!action) return;
     if (action.type === 'creator') {
-      // The page writes its address a pause after the last letter
-      // (history.replaceState), and Next's router takes that write for a
-      // navigation, which discards the one to the creator's page while it is
-      // still loading: a creator chosen within the pause opened nothing.
-      // So the page notes the address it is being left at, and does not
-      // write it; a change of the search afterwards writes again.
-      leavingAt.current = canSearch
-        ? searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact)
-        : '/search';
+      // Chosen with Enter there is no press to write the address first (above).
+      writeSearchPageAddress(address);
       router.push(`/creators/${encodeURIComponent(action.username)}`);
       return;
     }
@@ -690,7 +697,7 @@ export default function SearchClient({
               value={query}
               onChange={setQuery}
               onClear={() => setQuery('')}
-              autoFocus={!initialQuery}
+              autoFocus={!opening.query}
               combobox={{
                 expanded: typeahead.shown,
                 listId: typeahead.listId,
@@ -707,6 +714,7 @@ export default function SearchClient({
                 activeIndex={typeahead.activeIndex}
                 stale={typeahead.stale}
                 busy={typeahead.busy}
+                settlingRows={typeahead.settlingRows}
                 onPick={(row) => runTypeaheadAction(typeahead.press(row))}
                 onHighlight={typeahead.highlightRow}
                 // Under the box, over the tabs and the results while the person

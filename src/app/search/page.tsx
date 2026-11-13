@@ -1,14 +1,8 @@
 import type { Metadata } from 'next';
 
 import { createMetadata } from '@/lib/seo';
-import {
-  NO_PUBLIC_SEARCH_FILTERS,
-  normalizePublicSearchQuery,
-  parsePublicSearchSort,
-  parsePublicSearchType,
-  readPublicSearchFilterParams,
-} from '@/lib/public-search';
 import SearchClient from './SearchClient';
+import { readSearchPageOpening } from './search-address';
 
 type SearchPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -27,21 +21,16 @@ export const metadata: Metadata = createMetadata({
 
 export default async function SearchPage({ searchParams }: SearchPageProps) {
   const resolved = searchParams ? await searchParams : {};
-  const initialQuery = normalizePublicSearchQuery(first(resolved.q));
-  const initialType = parsePublicSearchType(first(resolved.type)) ?? 'top';
-  // A shared link's order; one it does not name, or names wrongly, is the ranked one.
-  const initialSort = parsePublicSearchSort(first(resolved.sort)) ?? 'top';
-
-  // A shared link's filters and reading; an address that names one wrongly opens unfiltered.
-  const narrowing = readPublicSearchFilterParams((name) => first(resolved[name]) ?? null);
+  // Read as the page itself reads its address when history brings it back.
+  const opening = readSearchPageOpening((name) => first(resolved[name]) ?? null);
 
   return (
     <SearchClient
-      initialQuery={initialQuery}
-      initialType={initialType}
-      initialSort={initialSort}
-      initialFilters={narrowing.ok ? narrowing.filters : NO_PUBLIC_SEARCH_FILTERS}
-      initialExact={narrowing.ok ? narrowing.exact : false}
+      initialQuery={opening.query}
+      initialType={opening.type}
+      initialSort={opening.sort}
+      initialFilters={opening.filters}
+      initialExact={opening.exact}
     />
   );
 }

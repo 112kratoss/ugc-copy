@@ -107,10 +107,17 @@ const sessionSays = (event: string) => act(() => { for (const listener of [...se
 /** The list has stood as it is for the moment a moved row needs before it takes a press. */
 const settled = () => waitFor(() => expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false));
 const options = () => screen.getAllByRole('option').map((option) => option.getAttribute('aria-label'));
+/** The rows drawn dimmed: they have only just come to stand where they are, and take no press yet. */
+const dimmed = () => screen.getAllByRole('option')
+  .filter((option) => option.classList.contains('opacity-60'))
+  .map((option) => option.getAttribute('aria-label'));
 
 describe('search page typeahead', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    // The address of the page the person comes from: a mount at the search's
+    // own address reads the search from it (search-client.test.tsx).
+    window.history.replaceState(null, '', '/');
     pushMock.mockReset();
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
@@ -334,6 +341,9 @@ describe('search page typeahead', () => {
     // a press there now was aimed at the model.
     suggestFetchMock.mockReturnValueOnce(later.promise);
     type('lumi');
+    // What a sighted person has of it: the rows that moved are dimmed, at
+    // once, and the creators that stayed are not.
+    expect(dimmed()).toEqual(['Search for luminous', 'Search for lumen glow']);
     fireEvent.click(screen.getByRole('option', { name: 'Search for luminous' }));
     expect((box() as HTMLInputElement).value).toBe('lumi');
     expect(screen.queryByRole('listbox')).not.toBeNull();
@@ -355,9 +365,11 @@ describe('search page typeahead', () => {
     expect((box() as HTMLInputElement).value).toBe('lumi');
     expect(screen.getByRole('tab', { name: 'Top' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true');
+    expect(dimmed()).toEqual(['Luma Ray 2, model, 14 posts. Show posts made with it', 'Search for luminous', 'Search for lumen glow']);
 
     // Once the rows have stood, the press counts, and opens the row it is on.
     await settled();
+    expect(dimmed()).toEqual([]);
     fireEvent.click(screen.getByRole('option', { name: 'Search for luminous' }));
     expect((box() as HTMLInputElement).value).toBe('luminous');
   });
@@ -373,36 +385,84 @@ describe('search page typeahead', () => {
     expect(pushMock).toHaveBeenCalledWith('/creators/lumen');
   });
 
-  it('opens a creator chosen within the search’s pause: the page does not write its own address over the way out', async () => {
-    // The page writes its address a pause after the last letter, and Next's
-    // router reads that write as a navigation, which discards the one to the
-    // creator's page while it is still loading (CI, #778: the press opened nothing).
+  it('dims nothing and is not busy for an answer that leaves the rows where they were', async () => {
+    // The common case as a person types on: every row the list has is still
+    // named by the longer text, and its answer brings the same rows. Nothing
+    // moves, so nothing may flicker.
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('lum');
+    await list();
+    const later = deferred<ReturnType<typeof ok>>();
+    suggestFetchMock.mockReturnValueOnce(later.promise);
+    const before = options();
+    type('luma');
+    // Stale until the answer lands: busy for that, with every row at full strength.
+    expect(options()).toEqual(before);
+    expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true');
+    expect(dimmed()).toEqual([]);
+    await act(async () => {
+      later.resolve(ok(suggestions({ query: 'luma', normalizedQuery: 'luma' })));
+      await later.promise;
+    });
+    await waitFor(() => expect(suggestRequests()).toHaveLength(2));
+    // The answer is drawn: not busy at once, no row dimmed, and a press counts.
+    await waitFor(() => expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false), { timeout: 100 });
+    expect(options()).toEqual(before);
+    expect(dimmed()).toEqual([]);
+    fireEvent.click(screen.getByRole('option', { name: 'Search for luminous' }));
+    expect((box() as HTMLInputElement).value).toBe('luminous');
+  });
+
+  it('writes its address when a creator is chosen within the search’s pause, without a word to Next’s router, and still runs the search', async () => {
+    // The page used to write its address a pause after the last letter through
+    // Next's patched history.replaceState, which Next's router reads as a
+    // navigation, and a navigation discards the one still loading (CI, #778:
+    // the press opened nothing). Now the write carries the entry's own state
+    // with Next's mark, which Next hands straight to the browser
+    // (search-address.test.ts), and a press writes it first.
     vi.useFakeTimers();
     const written = vi.spyOn(window.history, 'replaceState');
     const addresses = () => written.mock.calls.map(([, , url]) => String(url));
     const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+    const address = () => `${window.location.pathname}${window.location.search}`;
     render(<SearchClient initialQuery="" initialType="top" />);
     type('lum');
-    // Past the typeahead's pause, inside the search's.
+    // Past the typeahead's pause, inside the search's: the address still waits.
     await tick(SEARCH_TYPEAHEAD_DEBOUNCE_MS + 20);
-    expect(addresses()).not.toContain('/search?q=lum');
+    expect(address()).toBe('/search');
     fireEvent.click(screen.getByRole('option', { name: '@lumen. Open profile' }));
+    // The press wrote the search the person is leaving, ahead of the way out.
+    expect(address()).toBe('/search?q=lum');
     expect(pushMock).toHaveBeenCalledWith('/creators/lumen');
+    expect(written.mock.invocationCallOrder.at(-1)).toBeLessThan(pushMock.mock.invocationCallOrder[0]);
 
-    // The search's pause passes: nothing is written, and the search left behind is not asked.
+    // The way out never completes (the router here goes nowhere): the pause
+    // passes, the search the page says it is running is asked, and its
+    // outcome is said, never "Searching…" with no request behind it.
     await tick(2000);
-    expect(addresses()).not.toContain('/search?q=lum');
-    expect(searchRequests()).toEqual([]);
+    expect(searchRequests()).toEqual(['/api/search?q=lum&type=top']);
+    expect(resultsSaid()).toBe('0 results for lum');
+    expect(addresses().filter((path) => path === '/search?q=lum')).toHaveLength(1);
 
-    // The person is still here after all, and types on: the page is itself again.
+    // Every write the page made carries Next's mark: none is a navigation to its router.
     type('lumi');
     await tick(400);
-    expect(addresses()).toContain('/search?q=lumi');
-    expect(searchRequests()).toEqual(['/api/search?q=lumi&type=top']);
-    // And the text they left at is searched when they come back to it.
+    expect(address()).toBe('/search?q=lumi');
+    for (const [state] of written.mock.calls) expect(state).toMatchObject({ __NA: true });
+  });
+
+  it('writes its address before opening a creator chosen with Enter, where no press does it', async () => {
+    vi.useFakeTimers();
+    const written = vi.spyOn(window.history, 'replaceState');
+    const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+    render(<SearchClient initialQuery="" initialType="top" />);
     type('lum');
-    await tick(400);
-    expect(addresses()).toContain('/search?q=lum');
+    await tick(SEARCH_TYPEAHEAD_DEBOUNCE_MS + 20);
+    key('ArrowDown');
+    key('Enter');
+    expect(pushMock).toHaveBeenCalledWith('/creators/luma-studio');
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/search?q=lum');
+    expect(written.mock.invocationCallOrder.at(-1)).toBeLessThan(pushMock.mock.invocationCallOrder[0]);
   });
 
   it('takes the list of the text before away at once when the box is emptied, and when this text has nothing', async () => {

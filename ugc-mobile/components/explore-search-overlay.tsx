@@ -954,7 +954,7 @@ export function ExploreSearchOverlay({
         {/* Above everything the search itself draws, in every state of it: the
             person is still typing, and what completes the typing comes first.
             It takes no room once it has nothing to offer or the keyboard is down. */}
-        {typeahead.shown ? <SearchTypeaheadList sections={typeahead.sections} busy={typeahead.busy} onPick={pickSuggestion} /> : null}
+        {typeahead.shown ? <SearchTypeaheadList sections={typeahead.sections} busy={typeahead.busy} settlingRows={typeahead.settlingRows} onPick={pickSuggestion} /> : null}
         {filtersShown ? (
           <SearchFilterBar
             filters={filters}

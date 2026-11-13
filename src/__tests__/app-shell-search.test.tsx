@@ -124,7 +124,10 @@ describe('top bar search', () => {
     const settled = () => waitFor(() => expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false));
     fireEvent.change(box(), { target: { value: 'lumx' } });
     fireEvent.change(box(), { target: { value: 'lum' } });
+    // Until then the rows that moved are dimmed, here as on the search page.
+    expect((await screen.findByRole('option', { name: /Luma Ray 2/ })).classList.contains('opacity-60')).toBe(true);
     await settled();
+    expect(screen.getByRole('option', { name: /Luma Ray 2/ }).classList.contains('opacity-60')).toBe(false);
     fireEvent.click(await screen.findByRole('option', { name: /Luma Ray 2/ }));
     expect(pushMock).toHaveBeenLastCalledWith('/search?q=lum&type=posts&madeWith=model%3Aluma-ray-2');
 

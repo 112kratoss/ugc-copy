@@ -13,6 +13,8 @@ import {
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
+const NO_ROWS: readonly string[] = [];
+
 // A row's leading mark, the size of a creator's avatar beside it.
 const MARK_SIZE = 36;
 
@@ -70,17 +72,24 @@ function RowWords({ row }: { row: SearchTypeaheadRow }) {
  * `busy` is the panel changing or just changed: its rows are the answer to the
  * text before this one, kept on show until this text's arrives so the panel
  * does not go and come back at every letter, or a row came to stand in a new
- * place a moment ago and takes no press yet. The panel says so and looks the
- * same (a dim at every letter would be the flicker the keeping avoids); a row
- * that takes a press does what it shows.
+ * place a moment ago and takes no press yet. The panel says so, and its stale
+ * rows look the same (a dim at every letter would be the flicker the keeping
+ * avoids); a row that takes a press does what it shows.
+ *
+ * `settlingRows` are the keys of the rows that take no press yet: each is
+ * drawn dimmed until it does (the theme's disabled strength), and shows no
+ * press, since a press on it does nothing. Only the rows a change moved, so a panel whose answer leaves its
+ * rows where they were does not change at all.
  */
 export function SearchTypeaheadList({
   sections,
   busy = false,
+  settlingRows = NO_ROWS,
   onPick,
 }: {
   sections: readonly SearchTypeaheadSection[];
   busy?: boolean;
+  settlingRows?: readonly string[];
   onPick: (row: SearchTypeaheadRow) => void;
 }) {
   const theme = useAppTheme();
@@ -115,31 +124,35 @@ export function SearchTypeaheadList({
           >
             {section.heading}
           </Text>
-          {section.rows.map((row) => (
-            <Pressable
-              key={row.key}
-              accessibilityRole="button"
-              accessibilityLabel={searchTypeaheadRowLabel(row)}
-              testID={`search-typeahead-${row.kind}`}
-              // A creator's page is read once the finger has rested on their row,
-              // as on a found creator's (`creatorProfilePress`).
-              {...(row.kind === 'creator'
-                ? creatorProfilePress(row.creator.username, () => onPick(row))
-                : { onPress: () => onPick(row) })}
-              style={({ pressed }) => ({
-                minHeight: 52,
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 12,
-                opacity: pressed ? appTheme.opacity.pressed : 1,
-                paddingHorizontal: 13,
-                paddingVertical: 6,
-              })}
-            >
-              <RowMark row={row} />
-              <RowWords row={row} />
-            </Pressable>
-          ))}
+          {section.rows.map((row) => {
+            const settling = settlingRows.includes(row.key);
+            return (
+              <Pressable
+                key={row.key}
+                accessibilityRole="button"
+                accessibilityLabel={searchTypeaheadRowLabel(row)}
+                testID={`search-typeahead-${row.kind}`}
+                // A creator's page is read once the finger has rested on their row,
+                // as on a found creator's (`creatorProfilePress`).
+                {...(row.kind === 'creator'
+                  ? creatorProfilePress(row.creator.username, () => onPick(row))
+                  : { onPress: () => onPick(row) })}
+                style={({ pressed }) => ({
+                  minHeight: 52,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 12,
+                  // A row that takes no press yet is drawn as a control that is off, for that moment.
+                  opacity: settling ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+                  paddingHorizontal: 13,
+                  paddingVertical: 6,
+                })}
+              >
+                <RowMark row={row} />
+                <RowWords row={row} />
+              </Pressable>
+            );
+          })}
         </View>
       ))}
     </View>
