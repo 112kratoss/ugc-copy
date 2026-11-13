@@ -7,7 +7,12 @@
  * copies disagreed on which endpoint a generation-backed post goes through.
  * This module is the one place that knows: the post route, for every post,
  * the same door the mobile app uses.
+ *
+ * Each change it makes drops what search kept for Back (search-kept-pages.ts):
+ * a search redrawn from before would list the post as it was.
  */
+
+import { forgetKeptSearchPages } from '@/lib/search-kept-pages';
 
 export type PostVisibility = 'public' | 'unlisted' | 'private';
 
@@ -107,6 +112,7 @@ async function sendLifecycleRequest(
       field: readString(data, 'field'),
     });
   }
+  forgetKeptSearchPages();
   return { response, data };
 }
 
@@ -195,5 +201,6 @@ export async function requestPostDelete({
     });
   }
 
+  forgetKeptSearchPages();
   return { deleted: true, tombstoned: data.tombstoned === true };
 }

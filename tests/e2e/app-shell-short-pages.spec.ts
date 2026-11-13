@@ -171,14 +171,14 @@ test.describe('a short page in the app shell', () => {
   // room taller than the window.
   for (const { route, heading, root } of [
     { route: '/notifications', heading: 'Alerts', root: /(^|\s)ui-page(\s|$)/ },
-    { route: '/search', heading: 'Search the creator community', root: /(^|\s)min-h-screen(\s|$)/ },
+    { route: '/search', heading: 'Search', root: /(^|\s)min-h-screen(\s|$)/ },
     { route: '/contact', heading: 'Get in Touch', root: /(^|\s)ui-page(\s|$)/ },
     { route: '/create-workflow', heading: 'Your creation systems, at a glance.', root: /(^|\s)min-h-screen(\s|$)/ },
   ]) {
     test(`${route} emptied is no taller than the window`, async ({ page }) => {
       await page.setViewportSize(VIEWPORTS[0]);
       await page.goto(route);
-      await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible();
+      await expect(page.getByRole('heading', { level: 1, name: heading, exact: true })).toBeVisible();
       await expect(page.locator('#main-content > div').first()).toHaveClass(root);
       await page.addStyleTag({ content: '#main-content > * > * { display: none !important; }' });
       await expectFitsAtEveryWidth(page);

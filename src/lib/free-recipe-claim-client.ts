@@ -1,4 +1,5 @@
 import { trackProductEvent } from '@/lib/product-analytics';
+import { forgetKeptSearchPages } from '@/lib/search-kept-pages';
 
 /**
  * Takes a post's free recipe for the viewer, as the post page's recipe panel
@@ -23,4 +24,6 @@ export async function claimFreeRecipe(postId: string, accessToken: string) {
     );
   }
   trackProductEvent('recipe_unlock_succeeded', { method: 'free', post_id: postId });
+  // A search Back would redraw from what it kept says the recipe is not the viewer's yet.
+  forgetKeptSearchPages();
 }

@@ -115,7 +115,7 @@ test('a short page opened from a scrolled one shows its top below the top bar', 
   // opens the search page itself.
   await page.getByRole('combobox', { name: 'Search creators, posts, and recipes' }).press('Enter');
   await page.waitForURL(/\/search\?q=$/);
-  await expect(page.getByRole('heading', { name: 'Search the creator community' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Search', exact: true })).toBeAttached();
 
   expect(await settledScrollY(page)).toBe(0);
   const barBottom = await page.locator('header.app-shell-header').evaluate((bar) => bar.getBoundingClientRect().bottom);

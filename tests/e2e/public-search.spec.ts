@@ -157,6 +157,120 @@ test.describe('public search', () => {
     expect(shifted).toBeLessThan(0.01);
   });
 
+  test('comes back by Back to the answer it showed, the pages added with Show more and the place scrolled to, without asking again', async ({ page }) => {
+    const post = (index: number) => ({
+      id: `post-${index}`, title: `Harbor ${index}`, saveCount: 0, commentCount: 0, createdAt: '2026-11-12T10:00:00.000Z',
+      creator: { name: 'Luna Studio', username: 'luna' }, mediaKind: 'image', mediaUrl: null,
+      mediaItems: [{ id: `m-${index}`, url: '', previewUrl: null, mediaKind: 'image', width: 800, height: index % 2 ? 1200 : 800, sortOrder: 0 }],
+    });
+    const requests: string[] = [];
+    await page.route(SEARCH_API, async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url.search);
+      const second = url.searchParams.get('cursor') === 'page-2';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...searchResponse(url.searchParams.get('q') ?? '', 'posts'),
+          creators: emptyPage,
+          posts: {
+            items: Array.from({ length: 12 }, (_, index) => post(index + (second ? 12 : 0))),
+            nextCursor: second ? null : 'page-2',
+          },
+        }),
+      });
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/search?q=harbor&type=posts');
+    await expect(page.getByText('Harbor 11')).toBeVisible();
+    await page.getByRole('button', { name: 'Show more' }).click();
+    await expect(page.getByText('Harbor 23')).toBeVisible();
+    expect(requests).toHaveLength(2);
+    // Down to a card of the second page, and into it.
+    const card = page.getByRole('link', { name: /Open post Harbor 20 / });
+    await card.scrollIntoViewIfNeeded();
+    await page.mouse.wheel(0, 120);
+    await page.waitForTimeout(200);
+    const scrolled = await page.evaluate(() => window.scrollY);
+    expect(scrolled).toBeGreaterThan(1000);
+    const cardTop = (await card.boundingBox())!.y;
+    await page.request.get('/showcase/post-20', { timeout: 0 });
+    await card.click();
+    await expect(page).toHaveURL(/\/showcase\/post-20/, { timeout: 30_000 });
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/search\?q=harbor&type=posts$/);
+    // Both pages, at once, where they were.
+    await expect(page.getByText('Harbor 23')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(scrolled);
+    expect(Math.abs((await card.boundingBox())!.y - cardTop)).toBeLessThanOrEqual(1);
+    await page.waitForTimeout(500);
+    expect(requests).toHaveLength(2);
+    await expect(page.getByRole('button', { name: 'Show more' })).toHaveCount(0);
+
+    // A fresh visit to the same address asks, and opens at the top.
+    await page.goto('/search?q=harbor&type=posts');
+    await expect(page.getByText('Harbor 11')).toBeVisible();
+    expect(requests).toHaveLength(3);
+  });
+
+  test('puts the field at the top in a solid bar flush under the top bar; on a phone the tabs scroll away and posts are two across', async ({ page }) => {
+    const post = (index: number) => ({
+      id: `post-${index}`, title: `Tide ${index}`, saveCount: 1, commentCount: 0, createdAt: '2026-11-12T10:00:00.000Z',
+      creator: { name: 'Sassy23b', username: 'batman' }, mediaKind: 'image', mediaUrl: null,
+      model: 'manual', sourceTool: 'Midjourney',
+      mediaItems: [{ id: `m-${index}`, url: '', previewUrl: null, mediaKind: 'image', width: 900, height: index % 2 ? 1600 : 900, sortOrder: 0 }],
+    });
+    await page.route(SEARCH_API, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...searchResponse('tide', 'posts'), creators: emptyPage, posts: { items: Array.from({ length: 12 }, (_, index) => post(index)), nextCursor: null } }),
+    }));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/search?q=tide&type=posts');
+    await expect(page.getByText('Tide 11')).toBeVisible();
+    // One heading, for a screen reader; no marketing words over the field.
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Search');
+    await expect(page.getByText('Search the creator community')).toHaveCount(0);
+    const topBar = (await page.locator('.app-shell-header').boundingBox())!;
+    const field = page.getByRole('main').getByRole('combobox');
+    expect((await field.boundingBox())!.y).toBeLessThan(topBar.height + 24);
+    // The creator by handle, what it was made with, and two cards side by side.
+    const cards = page.getByRole('main').getByRole('link', { name: /Open post Tide/ });
+    await expect(cards.first()).toContainText('@batman');
+    await expect(cards.first()).toContainText('Made with Midjourney');
+    const [first, second] = [(await cards.nth(0).boundingBox())!, (await cards.nth(1).boundingBox())!];
+    expect(Math.abs(first.y - second.y)).toBeLessThanOrEqual(1);
+    expect(second.x).toBeGreaterThan(first.x + first.width);
+    // Each picture at its own shape: a square and a tall one.
+    const frames = page.getByRole('main').locator('a[data-search-result="post"] span[style*="aspect-ratio"]');
+    const [square, tall] = [(await frames.nth(0).boundingBox())!, (await frames.nth(1).boundingBox())!];
+    expect(Math.abs(square.height - square.width)).toBeLessThanOrEqual(1);
+    expect(tall.height / tall.width).toBeCloseTo(16 / 9, 1);
+
+    // Scrolled: the field's row stays, flush under the top bar and solid; the tabs have gone.
+    await page.mouse.wheel(0, 1200);
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(1000);
+    const bar = page.getByRole('search').locator('xpath=..');
+    const barBox = (await bar.boundingBox())!;
+    expect(Math.abs(barBox.y - topBar.height)).toBeLessThanOrEqual(1);
+    expect(barBox.x).toBeLessThanOrEqual(0);
+    expect(barBox.width).toBeGreaterThanOrEqual(390);
+    expect(await bar.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toMatch(/rgba\(.*, 0(\.\d+)?\)$/);
+    const tabs = (await page.getByRole('tablist', { name: 'Search result type' }).boundingBox())!;
+    expect(tabs.y + tabs.height).toBeLessThanOrEqual(topBar.height);
+
+    // From 640 px the tabs stay pinned under the field.
+    await page.setViewportSize({ width: 1024, height: 800 });
+    await page.mouse.wheel(0, 600);
+    await page.waitForTimeout(200);
+    const wideBar = (await bar.boundingBox())!;
+    const wideTabs = (await page.getByRole('tablist', { name: 'Search result type' }).boundingBox())!;
+    expect(wideTabs.y).toBeGreaterThanOrEqual(wideBar.y + wideBar.height - 1);
+    expect(wideTabs.y).toBeLessThan(wideBar.y + wideBar.height + 16);
+  });
+
   test('reads Posts as Best match or Latest, keeps the choice in the address, and pages the order it shows', async ({ page }) => {
     const post = (id: string, title: string) => ({
       id,
@@ -189,7 +303,7 @@ test.describe('public search', () => {
         }),
       });
     });
-    const cardTitles = () => page.locator('a[href*="/showcase/"] .font-semibold').allTextContents();
+    const cardTitles = () => page.locator('a[href*="/showcase/"] [data-search-post-title]').allTextContents();
 
     await page.goto('/search?q=portrait&type=posts');
 
@@ -313,7 +427,7 @@ test.describe('public search', () => {
         };
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
     });
-    const cardTitles = () => page.locator('a[href*="/showcase/"] .font-semibold').allTextContents();
+    const cardTitles = () => page.locator('a[href*="/showcase/"] [data-search-post-title]').allTextContents();
 
     await page.goto('/search?q=kling');
 
@@ -707,7 +821,7 @@ test.describe('public search', () => {
     const href = await related.getByRole('link').first().getAttribute('href');
     expect(new URL(href ?? '', 'http://127.0.0.1').searchParams.get('returnTo')).toBe('/search?q=ocean+at+dusk');
     // Said after the search's own count, once the box is left.
-    await page.getByRole('heading', { level: 1 }).click();
+    await page.getByRole('heading', { level: 2, name: 'Posts', exact: true }).click();
     await expect(status).toHaveText('1 result for ocean at dusk. 2 related posts');
     // Once per answer.
     await page.clock.runFor(10_000);
@@ -793,13 +907,15 @@ test.describe('public search', () => {
       await page.clock.resume();
       await expect(page).toHaveURL((url) => url.pathname === way.path, { timeout: 30_000 });
 
-      // Back: the search the person left, in the box, in the address and run again.
+      // Back: the search the person left, in the box and in the address, with
+      // the answer it showed when they left (kept for Back, not asked again).
       const asked = requests.length;
       await page.goBack();
       await expect(page).toHaveURL(/\/search\?q=lunars$/);
       await expect(page.getByRole('combobox')).toHaveValue('lunars');
-      await expect.poll(() => requests.slice(asked)).toEqual(['?q=lunars&type=top']);
       await expect(page.locator('p[role="status"]')).toContainText('1 result for lunars');
+      await page.waitForTimeout(500);
+      expect(requests.slice(asked)).toEqual([]);
     });
   }
 });

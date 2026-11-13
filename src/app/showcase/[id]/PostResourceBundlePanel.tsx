@@ -67,6 +67,7 @@ import {
   type RecipeGroupKind,
   type RecipeReadingGroup,
 } from '@/app/showcase/recipe-reading';
+import { forgetKeptSearchPages } from '@/lib/search-kept-pages';
 import RecipeMediaGallery from './RecipeMediaGallery';
 import {
   clearRazorpayCheckoutIntentKey,
@@ -549,7 +550,12 @@ export default function PostResourceBundlePanel({
   };
 
   const applyBundleAccess = (bundle: BundleRefreshPayload) => {
-    setHasAccess(bundle.viewerCanAccess || bundle.viewerIsOwner);
+    const nowHasAccess = bundle.viewerCanAccess || bundle.viewerIsOwner;
+    // The recipe has just become the viewer's: a search Back would redraw from
+    // what it kept still prices it (search-kept-pages.ts). A refresh that
+    // changes nothing keeps them.
+    if (nowHasAccess && !hasAccess) forgetKeptSearchPages();
+    setHasAccess(nowHasAccess);
     setResources(bundle.resources);
 
     if (onAccessChange) {
