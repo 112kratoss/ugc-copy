@@ -3,10 +3,15 @@ import Link from 'next/link';
 import type { CreatorSearchResult as CreatorResult } from '@/lib/public-search';
 import { getUserInitials } from '@/lib/profile';
 
-export function CreatorSearchResult({ creator }: { creator: CreatorResult }) {
+export function CreatorSearchResult({ creator, label }: {
+  creator: CreatorResult;
+  /** What the link says to a screen reader, in place of its text run together. */
+  label?: string;
+}) {
   return (
     <Link
       href={`/creators/${encodeURIComponent(creator.username)}`}
+      aria-label={label}
       className="ui-focus-ring flex min-h-20 items-center gap-4 rounded-2xl border border-white/8 bg-white/[0.035] p-3 transition hover:border-white/15 hover:bg-white/[0.065]"
     >
       {creator.avatarUrl ? (
@@ -34,9 +39,9 @@ export function CreatorSearchResult({ creator }: { creator: CreatorResult }) {
           ) : null}
         </span>
         <span className="mt-0.5 block truncate text-xs text-zinc-400">@{creator.username}</span>
-        {creator.bio ? <span className="mt-1 block truncate text-xs text-zinc-500">{creator.bio}</span> : null}
+        {creator.bio ? <span className="mt-1 block truncate text-xs text-zinc-400">{creator.bio}</span> : null}
       </span>
-      <span className="shrink-0 text-xs text-zinc-500">
+      <span className="shrink-0 text-xs text-zinc-400">
         {creator.publicPostCount} {creator.publicPostCount === 1 ? 'post' : 'posts'}
       </span>
     </Link>

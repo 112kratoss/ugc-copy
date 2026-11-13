@@ -6,6 +6,7 @@ import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppShellSearch } from '@/components/AppShellSearch';
+import { clearSearchFieldHandoff, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
 
 // The top bar's search field: Enter searches on the search page as it always
 // did, and while the person types it offers what the search page's own box
@@ -90,6 +91,24 @@ describe('top bar search', () => {
     fireEvent.submit(box().closest('form')!);
     expect(submitted).toEqual(['/search?q=neon+city']);
     expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it('hands the focus on to the search page\'s field: Enter and a row that opens the search page mark it', async () => {
+    clearSearchFieldHandoff();
+    render(<AppShellSearch />);
+    expect(box()).toHaveAttribute('placeholder', 'Search');
+    fireEvent.change(box(), { target: { value: 'neon city' } });
+    fireEvent.submit(box().closest('form')!);
+    expect(searchFieldHandoffPending()).toBe(true);
+
+    clearSearchFieldHandoff();
+    await typeFocused('lum');
+    fireEvent.keyDown(box(), { key: 'ArrowDown' });
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(pushMock).toHaveBeenLastCalledWith('/creators/luma-studio');
+    // A profile is not the search page: nothing is handed on.
+    expect(searchFieldHandoffPending()).toBe(false);
+    clearSearchFieldHandoff();
   });
 
   it('is a combobox that offers creators, models and tools, and completions while it has the focus', async () => {

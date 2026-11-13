@@ -73,6 +73,8 @@ test.describe('public search', () => {
     // The app shell mounts a toast viewport with role="status" too, so target
     // the search page's own summary element.
     await expect(page.locator('p[role="status"]')).toContainText('1 result for luna');
+    // The title names the search, so history and tabs tell searches apart.
+    await expect(page).toHaveTitle('luna · Search | Magic Booklet');
     expect(requests[0]).toContain('q=luna');
     expect(requests[0]).toContain('type=top');
 
@@ -85,15 +87,17 @@ test.describe('public search', () => {
 
     // A query with no matches lands on the explicit zero state.
     const field = page.getByRole('combobox');
+    // Plain "Search" in every field, the app's included: no product name.
+    await expect(field).toHaveAttribute('placeholder', 'Search');
     await field.fill('zzzznope');
     await expect(page.getByText('No results for “zzzznope”')).toBeVisible();
 
-    // Escape clears back to the initial guidance state.
+    // Escape clears back to the idle invitation.
     await field.press('Escape');
-    await expect(page.getByText('Start with a creator or idea')).toBeVisible();
+    await expect(page.getByText('Find creators, posts and recipes')).toBeVisible();
   });
 
-  test('reads Posts as Top or Latest, keeps the choice in the address, and pages the order it shows', async ({ page }) => {
+  test('reads Posts as Best match or Latest, keeps the choice in the address, and pages the order it shows', async ({ page }) => {
     const post = (id: string, title: string) => ({
       id,
       title,
@@ -129,9 +133,9 @@ test.describe('public search', () => {
 
     await page.goto('/search?q=portrait&type=posts');
 
-    // Top is the order a search opens in, and the address does not name it.
+    // Best match is the order a search opens in, and the address does not name it.
     const sorts = page.getByRole('radiogroup', { name: 'Sort posts' });
-    await expect(sorts.getByRole('radio', { name: 'Top' })).toBeChecked();
+    await expect(sorts.getByRole('radio', { name: 'Best match' })).toBeChecked();
     await expect.poll(cardTitles).toEqual(['Most saved portrait', 'Newest portrait']);
     expect(requests[0]).not.toContain('sort=');
 
@@ -153,11 +157,11 @@ test.describe('public search', () => {
     const returnTo = new URL((await firstCard.getAttribute('href')) ?? '', 'http://127.0.0.1:3100').searchParams.get('returnTo');
     expect(returnTo).toBe('/search?q=portrait&type=posts&sort=latest');
 
-    // The keyboard moves the choice, as in every radio group; back on Top the address drops it.
+    // The keyboard moves the choice, as in every radio group; back on Best match the address drops it.
     await sorts.getByRole('radio', { name: 'Latest' }).focus();
     await page.keyboard.press('ArrowLeft');
-    await expect(sorts.getByRole('radio', { name: 'Top' })).toBeChecked();
-    await expect(sorts.getByRole('radio', { name: 'Top' })).toBeFocused();
+    await expect(sorts.getByRole('radio', { name: 'Best match' })).toBeChecked();
+    await expect(sorts.getByRole('radio', { name: 'Best match' })).toBeFocused();
     await expect.poll(cardTitles).toEqual(['Most saved portrait', 'Newest portrait']);
     await expect(page).toHaveURL(/[?&]type=posts$/);
 
@@ -494,13 +498,13 @@ test.describe('public search', () => {
     await page.goto('/search');
     await expect(field).toBeFocused();
     await expect(recents.getByRole('listitem')).toHaveText(['luna']);
-    await page.getByRole('button', { name: 'Clear all' }).click();
+    await page.getByRole('button', { name: 'Clear all recent searches' }).click();
     await expect(recents).toHaveCount(0);
     expect(await page.evaluate(() => window.localStorage.getItem('magicbooklet:public-search-history:v1'))).toBeNull();
-    await expect(page.getByText('Start with a creator or idea')).toBeVisible();
+    await expect(page.getByText('Find creators, posts and recipes')).toBeVisible();
   });
 
-  test('keeps two-character queries on creator search only', async ({ page }) => {
+  test('keeps a two-character query on its tab: Posts waits, idle and undimmed, for a third character', async ({ page }) => {
     const requests: string[] = [];
     await page.route(SEARCH_API, async (route) => {
       const url = new URL(route.request().url());
@@ -508,19 +512,47 @@ test.describe('public search', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(searchResponse(url.searchParams.get('q') ?? '', 'creators')),
+        body: JSON.stringify(searchResponse(url.searchParams.get('q') ?? '', url.searchParams.get('type') ?? 'top')),
       });
     });
 
     await page.goto('/search?q=lu&type=posts');
 
-    // The page coerces a two-character content search onto Creators and
-    // disables the content tabs until a third character arrives.
-    await expect(page.getByRole('tab', { name: 'Creators' })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('tab', { name: 'Posts' })).toBeDisabled();
-    await expect(page.getByRole('tab', { name: 'Recipes' })).toBeDisabled();
+    // No tab is dimmed or switched for another: Posts stays chosen and shows
+    // the idle invitation, asking nothing until a third character.
+    await expect(page.getByRole('tab', { name: 'Posts' })).toHaveAttribute('aria-selected', 'true');
+    for (const name of ['Top', 'Creators', 'Posts', 'Recipes']) await expect(page.getByRole('tab', { name })).toBeEnabled();
+    await expect(page.getByText('Find creators, posts and recipes')).toBeVisible();
+    await expect(page.getByText(/No results/)).toHaveCount(0);
+
+    // Top searches creators from two characters.
+    await page.getByRole('tab', { name: 'Top' }).click();
+    await expect(page.getByText('Luna Studio')).toBeVisible();
+    expect(requests.every((search) => search.includes('type=top'))).toBe(true);
+  });
+
+  test('never says "No results" for two characters: a creator search that finds none leaves the idle state', async ({ page }) => {
+    const requests: string[] = [];
+    await page.route(SEARCH_API, async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url.search);
+      const query = url.searchParams.get('q') ?? '';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...searchResponse(query, url.searchParams.get('type') ?? 'top'), creators: emptyPage }),
+      });
+    });
+
+    await page.goto('/search?q=na');
     await expect.poll(() => requests.length).toBeGreaterThan(0);
-    expect(requests.every((search) => search.includes('type=creators'))).toBe(true);
+    await expect(page.locator('p[role="status"]')).toContainText('0 results for na');
+    await expect(page.getByText('Find creators, posts and recipes')).toBeVisible();
+    await expect(page.getByText(/No results/)).toHaveCount(0);
+
+    // From three characters a search that finds nothing says so.
+    await page.getByRole('combobox').fill('nax');
+    await expect(page.getByText('No results for “nax”')).toBeVisible();
   });
 
   // The page writes its address behind Next's back (search-address.ts), so
@@ -590,7 +622,7 @@ test.describe('public search', () => {
     });
     await page.goto('/search');
     const box = page.getByRole('combobox');
-    await expect(page.getByText('Start with a creator or idea')).toBeVisible();
+    await expect(page.getByText('Find creators, posts and recipes')).toBeVisible();
     const related = page.getByRole('region', { name: 'Related posts' });
     const status = page.locator('p[role="status"]');
 

@@ -2,6 +2,8 @@ import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 import {
   NO_SEARCH_FILTERS,
+  SEARCH_MIN_CONTENT_QUERY_LENGTH,
+  SEARCH_MIN_CREATOR_QUERY_LENGTH,
   searchFilterKey,
   type SearchCorrectedQuery,
   type SearchEntity,
@@ -28,8 +30,8 @@ export type {
   SearchMediaKind as PublicSearchMediaKind,
 } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
 
-export const PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH = 2;
-export const PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH = 3;
+export const PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH = SEARCH_MIN_CREATOR_QUERY_LENGTH;
+export const PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH = SEARCH_MIN_CONTENT_QUERY_LENGTH;
 export const PUBLIC_SEARCH_MAX_QUERY_LENGTH = 100;
 export const PUBLIC_SEARCH_DEFAULT_LIMIT = 20;
 export const PUBLIC_SEARCH_MAX_LIMIT = 24;

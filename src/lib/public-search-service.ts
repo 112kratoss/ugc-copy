@@ -44,6 +44,8 @@ import { createServiceClient } from '@/lib/server-helpers';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { getShowcaseFeedItemsByPostIds } from '@/lib/showcase-feed';
 
+import { SEARCH_TOP_SECTION_SIZES } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
+
 type CreatorSearchRpcRow = {
   creator_user_id: string;
   username: string;
@@ -496,11 +498,13 @@ export async function searchPublicContent(
     ? new Date(options.cursor.asOf)
     : dependencies.now();
   const contentQueryAllowed = publicSearchQueryLength(options.normalizedQuery) >= PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH;
-  const creatorTake = isTop ? 5 : options.limit + 1;
-  const postTake = isTop ? 12 : options.limit + 1;
+  // Top's sections hold at most these, the sizes the clients read a full
+  // section by ("See all", public-search-policy.ts).
+  const creatorTake = isTop ? SEARCH_TOP_SECTION_SIZES.creators : options.limit + 1;
+  const postTake = isTop ? SEARCH_TOP_SECTION_SIZES.posts : options.limit + 1;
   // The marketplace list already reads one row past the page to learn whether
   // there is more, so it is asked for the page itself.
-  const recipeTake = isTop ? 6 : options.limit;
+  const recipeTake = isTop ? SEARCH_TOP_SECTION_SIZES.recipes : options.limit;
 
   const creatorsPromise = options.type === 'top' || options.type === 'creators'
     ? searchCreators({

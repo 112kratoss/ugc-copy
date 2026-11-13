@@ -53,17 +53,24 @@ type KeptAnswer = { response: SearchSuggestResponse; at: number };
 // No row is settling: one array, so a list that has settled keeps its props.
 const NO_ROWS: readonly string[] = [];
 
-export function useSearchTypeahead({ text, focused }: {
+export function useSearchTypeahead({ text, focused, closedFor = null }: {
   /** What the box holds. */
   text: string;
   /** The focus is in the box (or its form). */
   focused: boolean;
+  /**
+   * A text the list starts closed for, as if committed with Enter: the search
+   * page opened from the top bar's field (search-field-handoff.ts). Read once.
+   */
+  closedFor?: string | null;
 }) {
   const listId = `${useId()}-search-typeahead`;
   const query = useMemo(() => searchTypeaheadQuery(text), [text]);
   const [answer, setAnswer] = useState<SearchTypeaheadAnswer | null>(null);
   // The query the list was closed for (Escape) or committed with (Enter, a row).
-  const [closedQuery, setClosedQuery] = useState<string | null>(null);
+  const [closedQuery, setClosedQuery] = useState<string | null>(
+    () => (closedFor === null ? null : searchTypeaheadQuery(closedFor)),
+  );
   // The highlighted row, by its key and for the query it was highlighted
   // under: typing on returns the highlight to the box, and a list that
   // changes under the highlight (a stale one replaced by its answer) keeps it

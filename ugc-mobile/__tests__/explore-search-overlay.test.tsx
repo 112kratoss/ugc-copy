@@ -13,7 +13,17 @@ import {
   SEARCH_TYPEAHEAD_PRESS_SETTLE_MS,
   type SearchSuggestResponse,
 } from '../lib/public-search-policy/search-typeahead';
-import { SEARCH_RELATED_HEADING, SEARCH_RELATED_SETTLE_MS } from '../lib/public-search-policy/public-search-policy';
+import {
+  SEARCH_FAILED_BODY,
+  SEARCH_IDLE_BODY,
+  SEARCH_IDLE_TITLE,
+  SEARCH_OFFLINE_BODY,
+  SEARCH_PLACEHOLDER,
+  SEARCH_RELATED_HEADING,
+  SEARCH_RELATED_SETTLE_MS,
+  SEARCH_RETRY_LABEL,
+  SEARCH_SORT_OPTIONS,
+} from '../lib/public-search-policy/public-search-policy';
 import type {
   CreatorSearchResult,
   PublicSearchResponse,
@@ -57,6 +67,8 @@ const mocks = vi.hoisted(() => {
     scrollTo: vi.fn(),
     readSearchHistory: vi.fn(async () => [] as string[]),
     rememberSearchQuery: vi.fn(async (_query: string) => [] as string[]),
+    // The phone's text size, as React Native reports it.
+    fontScale: { value: 1 },
   };
 });
 
@@ -95,7 +107,7 @@ vi.mock('react-native', () => ({
     return React.createElement('text-input', props);
   }),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
-  useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
+  useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: mocks.fontScale.value }),
 }));
 
 vi.mock('react-native-safe-area-context', () => ({
@@ -290,8 +302,8 @@ function showMoreButton(tree: Tree) {
 }
 
 function retryButton(tree: Tree) {
-  const match = hostNodes(tree, 'secondary-button').find((node) => node.props.label === 'Retry search');
-  if (!match) throw new Error('No Retry search button');
+  const match = hostNodes(tree, 'secondary-button').find((node) => node.props.label === SEARCH_RETRY_LABEL);
+  if (!match) throw new Error('No Try again button');
   return match;
 }
 
@@ -414,11 +426,140 @@ describe('ExploreSearchOverlay search', () => {
     mocks.rememberSearchQuery.mockClear();
     mocks.user.value = null;
     mocks.announce.mockClear();
+    mocks.fontScale.value = 1;
     searchPublicContent.mockReset();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  describe('search UX quick fixes (audit 2026-11-13)', () => {
+    it('opens on the shared invitation and placeholder, with no rule about characters', async () => {
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      expect(statusTitles(tree)).toEqual([SEARCH_IDLE_TITLE]);
+      expect(statusBodies(tree)).toEqual([SEARCH_IDLE_BODY]);
+      expect(searchInput(tree).props.placeholder).toBe(SEARCH_PLACEHOLDER);
+      expect(shownTexts(tree).join(' ')).not.toMatch(/character/i);
+      await act(async () => tree.unmount());
+    });
+
+    it('never says "No results" for two characters: the creators found, or the idle state', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'na');
+      await advance(300);
+      expect(requested()).toEqual([{ query: 'na', type: 'top' }]);
+      expect(saysNoResults(tree)).toBe(false);
+      expect(statusTitles(tree)).toEqual([SEARCH_IDLE_TITLE]);
+
+      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { creators: [creator('nadia')] }));
+      await typeQuery(tree, 'nad');
+      await advance(300);
+      expect(() => pressableLabelled(tree, "Open Creator nadia's profile, @nadia")).not.toThrow();
+      await typeQuery(tree, 'na');
+      await advance(300);
+      expect(() => pressableLabelled(tree, "Open Creator nadia's profile, @nadia")).not.toThrow();
+      await act(async () => tree.unmount());
+    });
+
+    it('keeps the corrected spelling among recent searches, and the typed one when asked for as typed', async () => {
+      const corrected = { entities: [], correctedQuery: { posts: 'portrait', recipes: null }, exact: false };
+      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { posts: [post('p1')] }, corrected));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'portriat');
+      await advance(300);
+      await act(async () => searchInput(tree).props.onSubmitEditing());
+      expect(mocks.rememberSearchQuery.mock.calls).toEqual([['portrait']]);
+
+      // Opening a result keeps it the same way.
+      await press(pressableLabelled(tree, 'Open post Post p1 by Ana'));
+      expect(mocks.rememberSearchQuery.mock.calls.at(-1)).toEqual(['portrait']);
+
+      // Asked for as typed, the typed spelling is what the person meant.
+      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { posts: [post('p1')] }, { ...corrected, correctedQuery: { posts: null, recipes: null }, exact: true }));
+      await press(pressableLabelled(tree, 'Search instead for “portriat”'));
+      await advance(1);
+      await act(async () => searchInput(tree).props.onSubmitEditing());
+      expect(mocks.rememberSearchQuery.mock.calls.at(-1)).toEqual(['portriat']);
+      await act(async () => tree.unmount());
+    });
+
+    it('keeps the corrected spelling for a search committed before its answer landed', async () => {
+      const pending = deferred<PublicSearchResponse>();
+      searchPublicContent.mockImplementation(() => pending.promise);
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'portriat');
+      await act(async () => searchInput(tree).props.onSubmitEditing());
+      await advance(300);
+      await act(async () => pending.resolve(searchAnswer('portriat', 'top', { posts: [post('p1')] }, {
+        entities: [], correctedQuery: { posts: 'portrait', recipes: null }, exact: false,
+      })));
+      expect(mocks.rememberSearchQuery.mock.calls).toEqual([['portrait']]);
+      await act(async () => tree.unmount());
+    });
+
+    it('offers "See all" by each Top section, and a full-width one under a full section', async () => {
+      const posts = Array.from({ length: 12 }, (_, index) => post(`p${index}`));
+      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, {
+        creators: [creator('jane')],
+        posts,
+        recipes: [recipe('r1', { accessMode: 'free', priceUsdCents: 0 }, 'Jane')],
+      }));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+
+      for (const section of ['creators', 'posts', 'recipes']) {
+        expect(() => pressableLabelled(tree, `See all ${section}`), section).not.toThrow();
+      }
+      // Twelve posts fill Top's section; one creator and one recipe do not.
+      expect(hostNodes(tree, 'secondary-button').map((node) => node.props.label)).toEqual(['See all posts']);
+
+      await act(async () => hostNodes(tree, 'secondary-button')[0].props.onPress());
+      expect(tab(tree, 'Posts').props.accessibilityState.selected).toBe(true);
+      await advance(1);
+      expect(() => pressableLabelled(tree, 'See all posts')).toThrow();
+
+      await press(tab(tree, 'Top'));
+      await advance(1);
+      await press(pressableLabelled(tree, 'See all creators'));
+      expect(tab(tree, 'Creators').props.accessibilityState.selected).toBe(true);
+      await act(async () => tree.unmount());
+    });
+
+    it('draws posts one across at the accessibility text sizes, two across below them', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { posts: [post('p1'), post('p2')] }));
+      // The cell a card sits in: the nearest view above it with a width of its own.
+      const cellWidths = (tree: Tree) => {
+        let node = pressableLabelled(tree, 'Open post Post p1 by Ana').parent;
+        while (node && !(node.type === 'view' && node.props.style?.width)) node = node.parent;
+        return node?.props.style.width;
+      };
+
+      mocks.fontScale.value = 1.35;
+      let tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+      expect(cellWidths(tree)).toBe('48%');
+      await act(async () => tree.unmount());
+
+      mocks.fontScale.value = 1.65;
+      tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'portrait');
+      await advance(300);
+      expect(cellWidths(tree)).toBe('100%');
+      await act(async () => tree.unmount());
+    });
+
+    it('names its recents "Clear all", as the web does', async () => {
+      mocks.readSearchHistory.mockResolvedValueOnce(['portrait']);
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await advance(200);
+      expect(shownTexts(tree)).toContain('Clear all');
+      expect(() => pressableLabelled(tree, 'Clear all recent searches')).not.toThrow();
+      await act(async () => tree.unmount());
+    });
   });
 
   describe('entities, filters and the corrected reading', () => {
@@ -764,11 +905,11 @@ describe('ExploreSearchOverlay search', () => {
     const tree = await render({ visible: true, onClose: vi.fn() });
     await typeQuery(tree, 'portrait');
     await advance(300);
-    expect(() => pressableLabelled(tree, "Open Creator jane's profile")).not.toThrow();
+    expect(() => pressableLabelled(tree, "Open Creator jane's profile, @jane")).not.toThrow();
 
     await typeQuery(tree, 'portraits');
     expect(isSearching(tree)).toBe(true);
-    expect(() => pressableLabelled(tree, "Open Creator jane's profile")).toThrow();
+    expect(() => pressableLabelled(tree, "Open Creator jane's profile, @jane")).toThrow();
 
     searchPublicContent.mockRejectedValueOnce(new ApiError('Failed to search public content.', 500));
     await advance(300);
@@ -803,7 +944,7 @@ describe('ExploreSearchOverlay search', () => {
 
     await act(async () => pending.resolve(searchAnswer('portrait', 'posts', { posts: [post('p1')] })));
     expect(isSearching(tree)).toBe(false);
-    expect(() => pressableLabelled(tree, 'Open post Post p1')).not.toThrow();
+    expect(() => pressableLabelled(tree, 'Open post Post p1 by Ana')).not.toThrow();
 
     await act(async () => tree.unmount());
   });
@@ -816,7 +957,7 @@ describe('ExploreSearchOverlay search', () => {
     await advance(300);
     expect(searchPublicContent).not.toHaveBeenCalled();
     expect(isSearching(tree)).toBe(false);
-    expect(statusTitles(tree)).toEqual(['Find your next idea']);
+    expect(statusTitles(tree)).toEqual([SEARCH_IDLE_TITLE]);
 
     await typeQuery(tree, '@jo');
     await advance(300);
@@ -834,34 +975,35 @@ describe('ExploreSearchOverlay search', () => {
     await typeQuery(tree, '\u{1F600}');
     await advance(300);
     expect(searchPublicContent).not.toHaveBeenCalled();
-    expect(statusTitles(tree)).toEqual(['Find your next idea']);
+    expect(statusTitles(tree)).toEqual([SEARCH_IDLE_TITLE]);
 
-    // Two characters: creators only, whatever tab was picked.
+    // Two characters: Posts still waits for a third.
     await typeQuery(tree, '\u{1F600}\u{1F600}');
     await advance(300);
-    expect(requested()).toEqual([{ query: '\u{1F600}\u{1F600}', type: 'creators' }]);
+    expect(searchPublicContent).not.toHaveBeenCalled();
+    await typeQuery(tree, '\u{1F600}\u{1F600}\u{1F600}');
+    await advance(300);
+    expect(requested()).toEqual([{ query: '\u{1F600}\u{1F600}\u{1F600}', type: 'posts' }]);
 
     await act(async () => tree.unmount());
   });
 
-  it('never asks for posts with "@ab": it searches creators until a third character', async () => {
+  it('never asks for posts with "@ab": Posts stays picked, undimmed and idle until a third character', async () => {
     searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type));
     const tree = await render({ visible: true, onClose: vi.fn() });
     await press(tab(tree, 'Posts'));
 
     await typeQuery(tree, '@ab');
     await advance(300);
-    expect(requested()).toEqual([{ query: '@ab', type: 'creators' }]);
-    expect(tab(tree, 'Posts').props.accessibilityState).toEqual({ selected: false, disabled: true });
-    expect(tab(tree, 'Creators').props.accessibilityState).toEqual({ selected: true, disabled: false });
+    expect(searchPublicContent).not.toHaveBeenCalled();
+    expect(tab(tree, 'Posts').props.accessibilityState).toEqual({ selected: true });
+    expect(tab(tree, 'Creators').props.accessibilityState).toEqual({ selected: false });
+    expect(statusTitles(tree)).toEqual([SEARCH_IDLE_TITLE]);
 
     await typeQuery(tree, '@abc');
     await advance(300);
-    expect(requested()).toEqual([
-      { query: '@ab', type: 'creators' },
-      { query: '@abc', type: 'posts' },
-    ]);
-    expect(tab(tree, 'Posts').props.accessibilityState).toEqual({ selected: true, disabled: false });
+    expect(requested()).toEqual([{ query: '@abc', type: 'posts' }]);
+    expect(tab(tree, 'Posts').props.accessibilityState).toEqual({ selected: true });
 
     await act(async () => tree.unmount());
   });
@@ -873,14 +1015,11 @@ describe('ExploreSearchOverlay search', () => {
 
     await typeQuery(tree, 'ab');
     await advance(300);
-    expect(tab(tree, 'Creators').props.accessibilityState.selected).toBe(true);
+    expect(tab(tree, 'Posts').props.accessibilityState.selected).toBe(true);
 
     await typeQuery(tree, 'abc');
     await advance(300);
-    expect(requested()).toEqual([
-      { query: 'ab', type: 'creators' },
-      { query: 'abc', type: 'posts' },
-    ]);
+    expect(requested()).toEqual([{ query: 'abc', type: 'posts' }]);
     expect(tab(tree, 'Posts').props.accessibilityState.selected).toBe(true);
 
     // A new word passes through two characters again and still lands on Posts.
@@ -905,7 +1044,7 @@ describe('ExploreSearchOverlay search', () => {
     expect(searchPublicContent).toHaveBeenCalledTimes(3);
     expect(mocks.rememberSearchQuery).not.toHaveBeenCalled();
 
-    await press(pressableLabelled(tree, "Open Creator jane's profile"));
+    await press(pressableLabelled(tree, "Open Creator jane's profile, @jane"));
     expect(mocks.rememberSearchQuery.mock.calls).toEqual([['port']]);
     expect(mocks.router.push).toHaveBeenCalledWith('/creators/jane');
 
@@ -921,7 +1060,7 @@ describe('ExploreSearchOverlay search', () => {
     const tree = await render({ visible: true, onClose: vi.fn() });
     await typeQuery(tree, 'port');
     await advance(300);
-    const row = pressableLabelled(tree, "Open Creator jane's profile");
+    const row = pressableLabelled(tree, "Open Creator jane's profile, @jane");
 
     expect(row.props.unstable_pressDelay).toBe(CREATOR_PROFILE_PRESS_DELAY_MS);
     await act(async () => row.props.onPressIn());
@@ -985,7 +1124,7 @@ describe('ExploreSearchOverlay search', () => {
     await typeQuery(tree, 'portrait');
     await advance(300);
 
-    expect(statusBodies(tree)).toContain('Search is busy. Try again in 30 s.');
+    expect(statusBodies(tree)).toContain('Too many searches at once. Wait 30 s.');
     expect(retryButton(tree).props.disabled).toBe(true);
     await advance(29_000);
     expect(retryButton(tree).props.disabled).toBe(true);
@@ -998,7 +1137,7 @@ describe('ExploreSearchOverlay search', () => {
       { query: 'portrait', type: 'top' },
       { query: 'portrait', type: 'top' },
     ]);
-    expect(() => pressableLabelled(tree, "Open Creator jane's profile")).not.toThrow();
+    expect(() => pressableLabelled(tree, "Open Creator jane's profile, @jane")).not.toThrow();
 
     await act(async () => tree.unmount());
   });
@@ -1020,8 +1159,8 @@ describe('ExploreSearchOverlay search', () => {
       filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false }, exact: false, related: false,
     });
     // The first page stays up, with the reason under it.
-    expect(() => pressableLabelled(tree, "Open Creator jane's profile")).not.toThrow();
-    expect(shownTexts(tree)).toContain('Search is busy. Try again in 10 s.');
+    expect(() => pressableLabelled(tree, "Open Creator jane's profile, @jane")).not.toThrow();
+    expect(shownTexts(tree)).toContain('Search did not load. Too many searches at once. Wait 10 s.');
     expect(showMoreButton(tree).props.disabled).toBe(true);
 
     await advance(10_000);
@@ -1052,11 +1191,11 @@ describe('ExploreSearchOverlay search', () => {
 
   it.each([
     // A rate limit that names no window leaves Retry to the person.
-    [429, 'Search is busy. Try again shortly.'],
-    [400, 'Search creators from two characters, or use three characters to discover posts and recipes.'],
-    [503, 'Search could not be loaded. Check your connection and try again.'],
-    [0, 'Search could not be loaded. Check your connection and try again.'],
-    [404, 'Search could not be loaded.'],
+    [429, 'Too many searches at once. Wait a moment.'],
+    [400, SEARCH_FAILED_BODY],
+    [503, SEARCH_OFFLINE_BODY],
+    [0, SEARCH_OFFLINE_BODY],
+    [404, SEARCH_FAILED_BODY],
   ])('reads the status of a failed search: %i', async (status, body) => {
     searchPublicContent.mockRejectedValueOnce(new ApiError('Request failed', status));
     const tree = await render({ visible: true, onClose: vi.fn() });
@@ -1098,13 +1237,13 @@ describe('ExploreSearchOverlay search', () => {
     await advance(300);
 
     // A screen reader hears the mark too: the row reads as its label.
-    expect(cardTexts(tree, "Open Creator jane's profile, following"))
+    expect(cardTexts(tree, "Open Creator jane's profile, @jane, following"))
       .toEqual(['Creator jane', 'Following', '@jane', 'Films and stills', '3 posts']);
-    const bio = pressableLabelled(tree, "Open Creator jane's profile, following")
+    const bio = pressableLabelled(tree, "Open Creator jane's profile, @jane, following")
       .find((node) => node.type === 'text' && textOf(node) === 'Films and stills');
     expect(bio.props.numberOfLines).toBe(1);
     // No bio leaves no empty line, and no follow leaves no mark.
-    expect(cardTexts(tree, "Open Creator janet's profile")).toEqual(['Creator janet', '@janet', '2 posts']);
+    expect(cardTexts(tree, "Open Creator janet's profile, @janet")).toEqual(['Creator janet', '@janet', '2 posts']);
 
     await act(async () => tree.unmount());
   });
@@ -1117,8 +1256,8 @@ describe('ExploreSearchOverlay search', () => {
     await typeQuery(tree, 'portrait');
     await advance(300);
 
-    expect(cardTexts(tree, 'Open post Post p1')).toEqual(['Post p1', 'Ana', '1 save', '4']);
-    expect(cardTexts(tree, 'Open post Post p2')).toEqual(['Post p2', 'Ana', '12 saves', '0']);
+    expect(cardTexts(tree, 'Open post Post p1 by Ana')).toEqual(['Post p1', 'Ana', '1 save', '4']);
+    expect(cardTexts(tree, 'Open post Post p2 by Ana')).toEqual(['Post p2', 'Ana', '12 saves', '0']);
 
     await act(async () => tree.unmount());
   });
@@ -1141,7 +1280,7 @@ describe('ExploreSearchOverlay search', () => {
     await advance(300);
 
     // The writing in the frame, on one run of lines; the title once, in the caption under it.
-    expect(cardTexts(tree, 'Open post Creative Idea')).toEqual(['Exploring the app features.', 'Creative Idea', 'Ana', '0 saves', '0']);
+    expect(cardTexts(tree, 'Open post Creative Idea by Ana')).toEqual(['Exploring the app features.', 'Creative Idea', 'Ana', '0 saves', '0']);
 
     await act(async () => tree.unmount());
   });
@@ -1157,9 +1296,9 @@ describe('ExploreSearchOverlay search', () => {
     await typeQuery(tree, 'lighting');
     await advance(300);
 
-    expect(cardTexts(tree, 'Open recipe Recipe r1')).toEqual(['Recipe r1', 'Lighting, lens and grade', 'Luna Studio', 'Free']);
+    expect(cardTexts(tree, 'Open recipe Recipe r1 by Luna Studio, Free')).toEqual(['Recipe r1', 'Lighting, lens and grade', 'Luna Studio', 'Free']);
     // The app prices an unlock in credits where the web quotes cash; the seller reads the same.
-    expect(cardTexts(tree, 'Open recipe Recipe r2')).toEqual(['Recipe r2', 'Lighting, lens and grade', 'Noor', '900 credits']);
+    expect(cardTexts(tree, 'Open recipe Recipe r2 by Noor, 900 credits')).toEqual(['Recipe r2', 'Lighting, lens and grade', 'Noor', '900 credits']);
 
     await act(async () => tree.unmount());
   });
@@ -1179,14 +1318,14 @@ describe('ExploreSearchOverlay search', () => {
       pathname: '/viewer',
       params: { source: 'showcase-feed', initialId: 'post-r1', initialPage: 'details', initialSection: 'resources' },
     }];
-    await press(pressableLabelled(tree, 'Open recipe Recipe r1'));
+    await press(pressableLabelled(tree, 'Open recipe Recipe r1 by Noor, 900 credits'));
     expect(mocks.router.push.mock.calls).toEqual([opensRecipe]);
     expect(mocks.rememberSearchQuery.mock.calls).toEqual([['lighting']]);
 
     // The Recipes tab draws the same row.
     await press(tab(tree, 'Recipes'));
     await advance(300);
-    await press(pressableLabelled(tree, 'Open recipe Recipe r1'));
+    await press(pressableLabelled(tree, 'Open recipe Recipe r1 by Noor, 900 credits'));
     expect(mocks.router.push.mock.calls).toEqual([opensRecipe, opensRecipe]);
     expect(JSON.stringify(mocks.router.push.mock.calls)).not.toContain('marketplace');
 
@@ -1202,7 +1341,7 @@ describe('ExploreSearchOverlay search', () => {
       return hostNodes(tree, 'pressable')
         .map((node) => node.props.accessibilityLabel as string | undefined)
         .filter((label): label is string => Boolean(label?.startsWith('Open post ')))
-        .map((label) => label.replace('Open post Post ', ''));
+        .map((label) => label.replace('Open post Post ', '').replace(' by Ana', ''));
     }
 
     async function pickSort(tree: Tree, sort: PublicSearchSort) {
@@ -1231,7 +1370,7 @@ describe('ExploreSearchOverlay search', () => {
         role: 'tab',
         fill: false,
         accessibilityLabel: 'Sort posts',
-        options: [{ value: 'top', label: 'Top' }, { value: 'latest', label: 'Latest' }],
+        options: SEARCH_SORT_OPTIONS,
         value: 'top',
       });
       expect(asked()).toEqual([{ type: 'posts', sort: 'top', cursor: null }]);
@@ -1289,7 +1428,7 @@ describe('ExploreSearchOverlay search', () => {
       expect(isSearching(tree)).toBe(false);
       // The failed search, as every failed search is drawn.
       expect(statusTitles(tree)).toEqual(['Search did not load']);
-      expect(statusBodies(tree)).toEqual(['Search could not be loaded. Check your connection and try again.']);
+      expect(statusBodies(tree)).toEqual([SEARCH_OFFLINE_BODY]);
       expect(retryButton(tree).props.disabled).toBe(false);
       // The control stays, on the order that was asked for.
       expect(sortControls(tree)).toHaveLength(1);
@@ -1400,7 +1539,7 @@ describe('ExploreSearchOverlay search', () => {
         expect(sortControls(tree), label).toHaveLength(0);
         expect(asked().at(-1)?.sort, label).toBe('top');
       }
-      expect(() => pressableLabelled(tree, 'Open recipe Recipe r1')).not.toThrow();
+      expect(() => pressableLabelled(tree, 'Open recipe Recipe r1 by Noor, Free')).not.toThrow();
 
       await act(async () => tree.unmount());
     });
@@ -1465,7 +1604,7 @@ describe('ExploreSearchOverlay related posts', () => {
     expect(asked()).toEqual(['ocean|top|top|plain', 'ocean at dusk|top|top|plain', 'ocean at dusk|top|top|related']);
 
     // Drawn under the search's own outcome with the cards its posts use, and said.
-    expect(relatedLabels(tree)).toEqual(['Open post Post sea', 'Open post Post cliffs']);
+    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana', 'Open post Post cliffs by Ana']);
     expect(shownTexts(tree)).toContain(SEARCH_RELATED_HEADING);
     expect(saysNoResults(tree)).toBe(true);
     expect(mocks.announce).toHaveBeenCalledWith('2 related posts');
@@ -1587,7 +1726,7 @@ describe('ExploreSearchOverlay related posts', () => {
     searchPublicContent.mockRejectedValue(new ApiError('Failed to search public content.', 500));
     await advance(SETTLE);
     expect(asked()).toEqual(['ocean at dusk|top|top|plain', 'ocean at dusk|top|top|related']);
-    expect(() => pressableLabelled(tree, "Open Creator jane's profile")).not.toThrow();
+    expect(() => pressableLabelled(tree, "Open Creator jane's profile, @jane")).not.toThrow();
     expect(statusTitles(tree)).not.toContain('Search did not load');
     // Nor under the results, where a failed next page is said.
     expect(tree.root.findAll((node) => node.props.accessibilityRole === 'alert')).toHaveLength(0);
@@ -1608,7 +1747,7 @@ describe('ExploreSearchOverlay related posts', () => {
     expect(lines.filter((line) => line === SEARCH_RELATED_HEADING)).toHaveLength(1);
     expect(lines.indexOf(SEARCH_RELATED_HEADING)).toBeGreaterThan(lines.lastIndexOf('Posts'));
     expect(lines.indexOf(SEARCH_RELATED_HEADING)).toBeGreaterThan(lines.indexOf('Post own'));
-    expect(relatedLabels(tree)).toEqual(['Open post Post sea', 'Open post Post cliffs']);
+    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana', 'Open post Post cliffs by Ana']);
 
     // Looked for and none found, and a server that says nothing: no group, no words.
     mocks.announce.mockClear();

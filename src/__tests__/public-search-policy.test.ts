@@ -1,7 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
   NO_PUBLIC_SEARCH_FILTERS,
+  PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
+  PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH,
   appliedPublicSearchFilters,
   decodePublicSearchCursor,
   encodePublicSearchCursor,
@@ -14,6 +19,28 @@ import { stripShowcaseViewerState } from '@/lib/share';
 
 import {
   NO_SEARCH_FILTERS,
+  SEARCH_FAILED_TITLE,
+  SEARCH_FIELD_LABEL,
+  SEARCH_IDLE_BODY,
+  SEARCH_IDLE_TITLE,
+  SEARCH_PLACEHOLDER,
+  SEARCH_RECENTS_CLEAR_LABEL,
+  SEARCH_SORT_OPTIONS,
+  SEARCH_TABS,
+  SEARCH_TOP_SECTION_SIZES,
+  searchBusyBody,
+  searchCreatorCardLabel,
+  searchDocumentTitle,
+  searchFailedLine,
+  searchHistoryQueryFor,
+  searchPostCardLabel,
+  searchRecipeCardLabel,
+  searchSaysNoResults,
+  searchSeeAllLabel,
+  searchTabRuns,
+  searchTopSectionHasMore,
+  SEARCH_FAILED_BODY,
+  SEARCH_OFFLINE_BODY,
   SEARCH_FILTER_PARAMS,
   SEARCH_FILTER_SWITCHES,
   SEARCH_HISTORY_LIMIT,
@@ -226,5 +253,103 @@ describe('what the server makes of filters', () => {
     }
     expect(decodePublicSearchCursor(forged({ v: 1, t: 'creators', s: 4.5, i: id, f: 'deadbeef' }), 'creators')).toBeNull();
     expect(decodePublicSearchCursor(forged({ v: 1, t: 'recipes', o: 24, f: 'deadbeef' }), 'recipes')).toBeNull();
+  });
+});
+
+// The words both clients show, said once in the shared module (search UX
+// audit, 2026-11-13, finding 10) and asserted here as the web reads them;
+// ugc-mobile/__tests__/public-search-policy.test.ts holds the app's side.
+describe('the words both search clients show', () => {
+  it('names every field, state and control in one set of words, none of them the product\'s name', async () => {
+    const policy = await import('../../ugc-mobile/lib/public-search-policy/public-search-policy');
+    for (const [name, value] of Object.entries(policy)) {
+      // The prose spellings; the lowercase `magicbooklet` of a storage key is an address, not the name.
+      if (typeof value === 'string') expect(value, name).not.toMatch(/Magic ?[Bb]ooklet/);
+    }
+    // Plain "Search": no product name, so no question of how the app's wordmark is spelled.
+    expect(SEARCH_PLACEHOLDER).toBe('Search');
+    expect(SEARCH_FIELD_LABEL).toBe('Search creators, posts, and recipes');
+    expect(SEARCH_IDLE_TITLE).toBe('Find creators, posts and recipes');
+    expect(SEARCH_IDLE_BODY).toBe('Try a creator’s name, a model, or an idea like “neon portrait”.');
+    // An invitation, never a rule about how much to type.
+    expect(`${SEARCH_IDLE_TITLE} ${SEARCH_IDLE_BODY}`).not.toMatch(/character/i);
+    expect(SEARCH_RECENTS_CLEAR_LABEL).toBe('Clear all');
+    expect(SEARCH_TABS.map((tab) => tab.label)).toEqual(['Top', 'Creators', 'Posts', 'Recipes']);
+    // The order is not a second "Top"; the parameter's values do not change.
+    expect(SEARCH_SORT_OPTIONS).toEqual([{ value: 'top', label: 'Best match' }, { value: 'latest', label: 'Latest' }]);
+    expect(searchSeeAllLabel('posts')).toBe('See all posts');
+    expect(searchDocumentTitle('nano')).toBe('nano · Search');
+    expect(searchDocumentTitle('')).toBe('Search');
+  });
+
+  it('says a failure once: the title what happened, the body what to do', () => {
+    for (const body of [SEARCH_FAILED_BODY, SEARCH_OFFLINE_BODY, searchBusyBody(9), searchBusyBody(null)]) {
+      expect(body.toLowerCase()).not.toContain('load');
+      expect(body.toLowerCase()).not.toContain('try again');
+    }
+    expect(SEARCH_FAILED_TITLE).toBe('Search did not load');
+    expect(searchBusyBody(9)).toBe('Too many searches at once. Wait 9 s.');
+    expect(searchFailedLine(SEARCH_OFFLINE_BODY)).toBe('Search did not load. Check your connection.');
+  });
+
+  it('names a result card in words', () => {
+    expect(searchPostCardLabel({ title: 'Mahabali', creatorName: 'Sassy23b' })).toBe('Open post Mahabali by Sassy23b');
+    expect(searchRecipeCardLabel({ title: 'Neon grade', sellerName: 'Luna', price: '10 credits' }))
+      .toBe('Open recipe Neon grade by Luna, 10 credits');
+    expect(searchCreatorCardLabel({ displayName: 'Luna', username: 'luna', isFollowing: true }))
+      .toBe("Open Luna's profile, @luna, following");
+  });
+
+  it('holds no copy of a shared word in the web clients', () => {
+    const root = join(__dirname, '..');
+    for (const file of ['app/search/SearchClient.tsx', 'components/search/SearchField.tsx', 'components/AppShellSearch.tsx']) {
+      const source = readFileSync(join(root, file), 'utf8');
+      for (const word of ['Search Magic Booklet', 'Search Magicbooklet', 'Search creators, posts, and recipes', 'Search did not load', 'Clear all', 'characters.']) {
+        expect(source.includes(`'${word}`) || source.includes(`"${word}`) || source.includes(`>${word}`), `${file}: ${word}`).toBe(false);
+      }
+    }
+  });
+});
+
+describe('when a tab is searched, and when a search says it found nothing', () => {
+  it('searches Top and Creators from two characters, Posts and Recipes from three: the server\'s minimums', () => {
+    expect(PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH).toBe(2);
+    expect(PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH).toBe(3);
+    for (const type of ['top', 'creators'] as const) {
+      expect(searchTabRuns(type, 1)).toBe(false);
+      expect(searchTabRuns(type, 2)).toBe(true);
+    }
+    for (const type of ['posts', 'recipes'] as const) {
+      expect(searchTabRuns(type, 2)).toBe(false);
+      expect(searchTabRuns(type, 3)).toBe(true);
+    }
+  });
+
+  it('never gives a verdict on half a word', () => {
+    expect(searchSaysNoResults(2)).toBe(false);
+    expect(searchSaysNoResults(3)).toBe(true);
+  });
+
+  it('reads a full Top section as one with more on its tab, at the server\'s own sizes', () => {
+    const service = readFileSync(join(__dirname, '../lib/public-search-service.ts'), 'utf8');
+    for (const section of ['creators', 'posts', 'recipes'] as const) {
+      expect(service).toContain(`SEARCH_TOP_SECTION_SIZES.${section}`);
+      expect(searchTopSectionHasMore(section, SEARCH_TOP_SECTION_SIZES[section])).toBe(true);
+      expect(searchTopSectionHasMore(section, SEARCH_TOP_SECTION_SIZES[section] - 1)).toBe(false);
+    }
+  });
+});
+
+describe('the query a committed search is kept under', () => {
+  const corrected = { posts: 'portrait', recipes: 'portraits' };
+  it('keeps the reading the results were shown for, unless the person asked for the query as typed', () => {
+    expect(searchHistoryQueryFor({ query: 'portriat', type: 'top', correctedQuery: corrected, exact: false })).toBe('portrait');
+    expect(searchHistoryQueryFor({ query: 'portriat', type: 'posts', correctedQuery: corrected, exact: false })).toBe('portrait');
+    expect(searchHistoryQueryFor({ query: 'portriat', type: 'recipes', correctedQuery: corrected, exact: false })).toBe('portraits');
+    expect(searchHistoryQueryFor({ query: 'portriat', type: 'top', correctedQuery: corrected, exact: true })).toBe('portriat');
+    // Creators are never corrected.
+    expect(searchHistoryQueryFor({ query: 'portriat', type: 'creators', correctedQuery: corrected, exact: false })).toBe('portriat');
+    expect(searchHistoryQueryFor({ query: 'portrait', type: 'top', correctedQuery: { posts: null, recipes: null }, exact: false })).toBe('portrait');
+    expect(searchHistoryQueryFor({ query: 'portrait', type: 'top', correctedQuery: undefined, exact: false })).toBe('portrait');
   });
 });

@@ -523,6 +523,7 @@ test.describe('search typeahead', () => {
     }), { timeout: 60_000, message: 'React commits the page’s hydration' }).toBe(true);
 
     const box = page.getByRole('banner').getByRole('combobox', { name: 'Search creators, posts, and recipes' });
+    await expect(box).toHaveAttribute('placeholder', 'Search');
     await box.click();
     await box.pressSequentially('lum', { delay: 30 });
     const list = page.getByRole('listbox', { name: 'Search suggestions' });
@@ -537,6 +538,12 @@ test.describe('search typeahead', () => {
     await box.press('Enter');
     await expect(page).toHaveURL(/\/search\?q=luminous\+portrait$/, { timeout: 60_000 });
     await expect.poll(() => searched.some((search) => search.includes('q=luminous+portrait')), { timeout: 30_000 }).toBe(true);
+    // The focus came on into the search page's field, ready to refine the
+    // search, with the typeahead closed over the search just committed.
+    const pageBox = page.getByRole('main').getByRole('combobox', { name: 'Search creators, posts, and recipes' });
+    await expect(pageBox).toBeFocused();
+    await expect(pageBox).toHaveValue('luminous portrait');
+    await expect(page.getByRole('listbox', { name: 'Search suggestions' })).toHaveCount(0);
   });
 
   test('keeps Vary: Authorization on a visitor’s cacheable answer beside the proxy’s CORS headers', async ({ page }) => {

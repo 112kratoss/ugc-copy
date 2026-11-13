@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Search } from 'lucide-react';
 import { useRef, useState } from 'react';
 
+import { markSearchFieldHandoff } from '@/components/search/search-field-handoff';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
 import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
@@ -12,6 +13,8 @@ import { holdForLeaveGuard } from '@/lib/use-leave-guard';
 
 import {
   NO_SEARCH_FILTERS,
+  SEARCH_FIELD_LABEL,
+  SEARCH_PLACEHOLDER,
   normalizeSearchHistoryQuery,
   searchFilterParams,
 } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
@@ -39,6 +42,8 @@ export function AppShellSearch() {
   const typeahead = useSearchTypeahead({ text, focused });
 
   const leaveFor = (path: string) => {
+    // A search lands with the focus in the search page's field (search-field-handoff.ts).
+    if (path.startsWith('/search')) markSearchFieldHandoff();
     if (!holdForLeaveGuard(() => router.push(path))) router.push(path);
   };
 
@@ -72,6 +77,8 @@ export function AppShellSearch() {
       // unsaved work asks first, and a leave submits the search again.
       onSubmit={(event) => {
         const form = event.currentTarget;
+        // Enter: the search page takes the focus on in its own field.
+        markSearchFieldHandoff();
         if (holdForLeaveGuard(() => form.requestSubmit())) event.preventDefault();
       }}
       onFocus={() => setFocused(true)}
@@ -88,6 +95,7 @@ export function AppShellSearch() {
       >
         <Search className="h-4 w-4" aria-hidden />
       </button>
+      {/* The browser's own clear button is hidden: Chrome and Safari drew it in every search field. */}
       <input
         ref={fieldRef}
         type="search"
@@ -95,8 +103,8 @@ export function AppShellSearch() {
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => runTypeaheadAction(typeahead.onKeyDown(event))}
-        placeholder="Search Magic Booklet"
-        aria-label="Search creators, posts, and recipes"
+        placeholder={SEARCH_PLACEHOLDER}
+        aria-label={SEARCH_FIELD_LABEL}
         role="combobox"
         aria-autocomplete="list"
         aria-haspopup="listbox"
@@ -104,7 +112,7 @@ export function AppShellSearch() {
         aria-controls={typeahead.shown ? typeahead.listId : undefined}
         aria-activedescendant={typeahead.shown ? typeahead.activeOptionId : undefined}
         autoComplete="off"
-        className="h-12 min-w-0 flex-1 bg-transparent text-sm text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)]"
+        className="h-12 min-w-0 flex-1 bg-transparent text-sm text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)] [&::-webkit-search-cancel-button]:hidden"
       />
       {/* Said politely when the list opens or changes. */}
       <div aria-live="polite" aria-atomic="true" className="sr-only" data-search-typeahead-status="">{typeahead.status}</div>

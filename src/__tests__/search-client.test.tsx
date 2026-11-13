@@ -3,8 +3,21 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SearchClient from '@/app/search/SearchClient';
+import {
+  clearSearchFieldHandoff,
+  markSearchFieldHandoff,
+  searchFieldHandoffPending,
+} from '@/components/search/search-field-handoff';
 import type { CreatorSearchResult, PublicSearchResponse, RecipeSearchResult } from '@/lib/public-search';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
+
+import {
+  SEARCH_FAILED_BODY,
+  SEARCH_IDLE_BODY,
+  SEARCH_IDLE_TITLE,
+  SEARCH_OFFLINE_BODY,
+  SEARCH_PLACEHOLDER,
+} from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
 
 // One stable router object, like Next's real one. SearchClient writes its
 // address itself (history.replaceState, search-address.ts); the mock catches a
@@ -153,10 +166,14 @@ describe('SearchClient', () => {
     authListeners.length = 0;
   });
 
-  it('renders the initial guidance state until two characters are typed', () => {
+  it('renders the idle invitation, in the shared words, until two characters are typed', () => {
     render(<SearchClient initialQuery="" initialType="top" />);
 
-    expect(screen.getByText('Start with a creator or idea')).toBeInTheDocument();
+    expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(SEARCH_IDLE_BODY)).toBeInTheDocument();
+    // No sentence explains how many characters to type.
+    expect(document.body.textContent).not.toMatch(/character/i);
+    expect(screen.getByRole('combobox')).toHaveAttribute('placeholder', SEARCH_PLACEHOLDER);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -212,7 +229,7 @@ describe('SearchClient', () => {
     window.dispatchEvent(new PopStateEvent('popstate'));
     render(<SearchClient initialQuery="luna" initialType="top" />);
     expect(screen.getByRole('combobox')).toHaveValue('');
-    expect(screen.getByText('Start with a creator or idea')).toBeInTheDocument();
+    expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -223,7 +240,7 @@ describe('SearchClient', () => {
     window.history.replaceState({ __NA: true }, '', '/search?q=cat');
     render(<SearchClient initialQuery="" initialType="top" />);
     expect(screen.getByRole('combobox')).toHaveValue('');
-    expect(screen.getByText('Start with a creator or idea')).toBeInTheDocument();
+    expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
 
     // A traversal is spent by the mount it brought: the next mount at the same address is not one.
@@ -278,15 +295,68 @@ describe('SearchClient', () => {
     written.mockRestore();
   });
 
-  it('forces a two-character query onto the creators tab and disables content tabs', async () => {
+  it('keeps a two-character query on its tab: Posts waits for a third character, idle and undimmed', async () => {
     render(<SearchClient initialQuery="ab" initialType="posts" />);
 
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
+    expect(fetchMock).not.toHaveBeenCalled();
+    for (const name of ['Top', 'Creators', 'Posts', 'Recipes']) {
+      expect(screen.getByRole('tab', { name })).toBeEnabled();
+    }
+    expect(screen.getByRole('tab', { name: 'Posts' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(/No results/)).not.toBeInTheDocument();
+    // The address keeps the search, so a reload opens the same tab.
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/search?q=ab&type=posts');
+
+    // Top searches creators from two characters.
+    fireEvent.click(screen.getByRole('tab', { name: 'Top' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled(), { timeout: 2000 });
-    const [url] = fetchMock.mock.calls[0] as [string];
-    expect(url).toBe('/api/search?q=ab&type=creators');
-    expect(screen.getByRole('tab', { name: 'Posts' })).toBeDisabled();
-    expect(screen.getByRole('tab', { name: 'Recipes' })).toBeDisabled();
-    expect(screen.getByRole('tab', { name: 'Creators' })).toHaveAttribute('aria-selected', 'true');
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe('/api/search?q=ab&type=top');
+  });
+
+  it('ends a full Top section with a full-width "See all", and names each card in words', async () => {
+    const posts = Array.from({ length: 12 }, (_, index) => post(`post-${index}`, `Lantern ${index}`, 1));
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({
+      creators: { items: [creator('Luna Studio')], nextCursor: null },
+      posts: { items: posts, nextCursor: null },
+      recipes: { items: [{ ...recipe('recipe-1', 'Cinematic light', 'Luna Studio'), accessMode: 'free' }], nextCursor: null },
+    })));
+    render(<SearchClient initialQuery="luna" initialType="top" />);
+    await screen.findByText('Lantern 0');
+
+    // Twelve posts fill Top's section: it has more on Posts. One creator and one recipe do not.
+    // By the heading, the short word named in full; under the last row, the full words.
+    expect(screen.getAllByRole('button', { name: 'See all posts' }).map((button) => button.textContent)).toEqual(['See all', 'See all posts']);
+    expect(screen.getAllByRole('button', { name: 'See all creators' })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: 'See all recipes' })).toHaveLength(1);
+    expect(screen.getByText('See all posts')).toBeInTheDocument();
+
+    // A card's link is named in words, not its text run together.
+    expect(screen.getByRole('link', { name: 'Open post Lantern 0 by Luna Studio' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open recipe Cinematic light by Luna Studio, Free' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: "Open Luna Studio's profile, @luna-studio" })).toBeInTheDocument();
+
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({ type: 'posts', posts: { items: posts, nextCursor: null } })));
+    fireEvent.click(screen.getByText('See all posts'));
+    expect(screen.getByRole('tab', { name: 'Posts' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('puts the query in the page title while one is searched', async () => {
+    render(<SearchClient initialQuery="nano" initialType="top" />);
+    await waitFor(() => expect(document.title).toBe('nano · Search | Magic Booklet'));
+
+    fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
+    await waitFor(() => expect(document.title).toBe('Search | Magic Booklet'));
+  });
+
+  it('never says "No results" for two characters: a creator search that finds none leaves the idle state', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse()));
+    render(<SearchClient initialQuery="na" initialType="top" />);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled(), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeInTheDocument());
+    expect(screen.queryByText(/No results/)).not.toBeInTheDocument();
   });
 
   it('clears the query with Escape and returns to the initial state', async () => {
@@ -296,7 +366,7 @@ describe('SearchClient', () => {
     fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
 
     expect((screen.getByRole('combobox') as HTMLInputElement).value).toBe('');
-    expect(await screen.findByText('Start with a creator or idea')).toBeInTheDocument();
+    expect(await screen.findByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
   });
 
   it('server-renders a URL query as loading rather than as an empty answer', () => {
@@ -420,7 +490,7 @@ describe('SearchClient', () => {
       typeQuery('@j');
       await settle(300);
       expect(fetchMock).not.toHaveBeenCalled();
-      expect(screen.getByText('Start with a creator or idea')).toBeInTheDocument();
+      expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
 
       typeQuery('@jo');
       await settle(300);
@@ -433,42 +503,44 @@ describe('SearchClient', () => {
       typeQuery('\u{1F600}');
       await settle(300);
       expect(fetchMock).not.toHaveBeenCalled();
-      expect(screen.getByText('Start with a creator or idea')).toBeInTheDocument();
+      expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
 
-      // Two characters: creators only, whatever tab was picked.
+      // Two characters: Posts still waits for a third.
       typeQuery('\u{1F600}\u{1F600}');
       await settle(300);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      typeQuery('\u{1F600}\u{1F600}\u{1F600}');
+      await settle(300);
       expect(requestedUrls()).toEqual([
-        `/api/search?q=${encodeURIComponent('\u{1F600}\u{1F600}')}&type=creators`,
+        `/api/search?q=${encodeURIComponent('\u{1F600}\u{1F600}\u{1F600}')}&type=posts`,
       ]);
-      expect(screen.getByRole('tab', { name: 'Posts' })).toBeDisabled();
     });
 
-    it('keeps posts and recipes closed until three characters follow the @', async () => {
+    it('asks for posts only once three characters follow the @', async () => {
       render(<SearchClient initialQuery="" initialType="posts" />);
 
       typeQuery('@ab');
       await settle(300);
-      expect(requestedUrls()).toEqual(['/api/search?q=%40ab&type=creators']);
-      expect(screen.getByRole('tab', { name: 'Posts' })).toBeDisabled();
-      expect(screen.getByRole('tab', { name: 'Recipes' })).toBeDisabled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(screen.getByRole('tab', { name: 'Posts' })).toBeEnabled();
 
       typeQuery('@abc');
       await settle(300);
-      expect(requestedUrls()[1]).toBe('/api/search?q=%40abc&type=posts');
+      expect(requestedUrls()).toEqual(['/api/search?q=%40abc&type=posts']);
     });
 
-    it('returns to the chosen tab once a query passes through two characters', async () => {
+    it('keeps the chosen tab while a query passes through two characters', async () => {
       render(<SearchClient initialQuery="" initialType="posts" />);
 
       typeQuery('ab');
       await settle(300);
-      expect(requestedUrls()).toEqual(['/api/search?q=ab&type=creators']);
-      expect(screen.getByRole('tab', { name: 'Creators' })).toHaveAttribute('aria-selected', 'true');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(screen.getByRole('tab', { name: 'Posts' })).toHaveAttribute('aria-selected', 'true');
 
       typeQuery('abc');
       await settle(300);
-      expect(requestedUrls()[1]).toBe('/api/search?q=abc&type=posts');
+      expect(requestedUrls()[0]).toBe('/api/search?q=abc&type=posts');
       expect(screen.getByRole('tab', { name: 'Posts' })).toHaveAttribute('aria-selected', 'true');
       expect(`${window.location.pathname}${window.location.search}`).toBe('/search?q=abc&type=posts');
     });
@@ -482,8 +554,8 @@ describe('SearchClient', () => {
       render(<SearchClient initialQuery="luna" initialType="top" />);
       await settle();
 
-      expect(screen.getByText('Search is busy. Try again in 9 s.')).toBeInTheDocument();
-      const retry = screen.getByRole('button', { name: 'Retry' });
+      expect(screen.getByText('Too many searches at once. Wait 9 s.')).toBeInTheDocument();
+      const retry = screen.getByRole('button', { name: 'Try again' });
       expect(retry).toBeDisabled();
 
       await settle(8_999);
@@ -510,7 +582,7 @@ describe('SearchClient', () => {
       await settle();
 
       expect(requestedUrls()[1]).toBe('/api/search?q=luna&type=creators&cursor=cursor-2');
-      expect(screen.getByRole('alert')).toHaveTextContent('Search is busy. Try again in 5 s.');
+      expect(screen.getByRole('alert')).toHaveTextContent('Search did not load. Too many searches at once. Wait 5 s.');
       expect(screen.getByText('Luna Studio')).toBeInTheDocument();
       const showMore = screen.getByRole('button', { name: 'Show more' });
       expect(showMore).toBeDisabled();
@@ -519,19 +591,17 @@ describe('SearchClient', () => {
     });
 
     it.each([
-      ['a server error', () => Promise.resolve(failedResponse(500)), 'Search could not be loaded.'],
-      [
-        'a lost connection',
-        () => Promise.reject(new TypeError('Failed to fetch')),
-        'Search could not be loaded. Check your connection and try again.',
-      ],
-    ])('reads %s as its own message with Retry open', async (_label, reply, message) => {
+      ['a server error', () => Promise.resolve(failedResponse(500)), SEARCH_FAILED_BODY],
+      ['a lost connection', () => Promise.reject(new TypeError('Failed to fetch')), SEARCH_OFFLINE_BODY],
+    ])('reads %s as its own message with Try again open', async (_label, reply, message) => {
       fetchMock.mockImplementationOnce(reply);
       render(<SearchClient initialQuery="luna" initialType="top" />);
       await settle();
 
+      // The title says what happened and the body what to do, never the same thing twice.
+      expect(screen.getByText('Search did not load')).toBeInTheDocument();
       expect(screen.getByText(message)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
     });
 
     it('counts saves in the singular and the plural', async () => {
@@ -623,8 +693,8 @@ describe('SearchClient', () => {
         await settle();
 
         const sorts = screen.getByRole('radiogroup', { name: 'Sort posts' });
-        expect(Array.from(sorts.querySelectorAll('[role="radio"]')).map((radio) => radio.textContent)).toEqual(['Top', 'Latest']);
-        expect(screen.getByRole('radio', { name: 'Top' })).toBeChecked();
+        expect(Array.from(sorts.querySelectorAll('[role="radio"]')).map((radio) => radio.textContent)).toEqual(['Best match', 'Latest']);
+        expect(screen.getByRole('radio', { name: 'Best match' })).toBeChecked();
         // The ranked order is the address's default and the request's.
         expect(requestedUrls()).toEqual(['/api/search?q=portrait&type=posts']);
         expect(address()).toBe('/search?q=portrait&type=posts');
@@ -681,7 +751,7 @@ describe('SearchClient', () => {
         fetchMock.mockReturnValueOnce(late.promise);
         fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
         fetchMock.mockResolvedValueOnce(postsAnswer('top', ['Most saved portrait']));
-        fireEvent.click(screen.getByRole('radio', { name: 'Top' }));
+        fireEvent.click(screen.getByRole('radio', { name: 'Best match' }));
         await settle();
         late.resolve(postsAnswer('latest', ['Stray portrait']));
         await settle();
@@ -1085,6 +1155,41 @@ describe('SearchClient', () => {
         expect(requestedUrls().at(-1)).toBe('/api/search?q=portriat&type=creators');
       });
 
+      it('keeps the corrected spelling among recent searches, and the typed one only when asked for as typed', async () => {
+        fetchMock.mockResolvedValue(postsAnswer({
+          query: 'portriat', normalizedQuery: 'portriat', correctedQuery: { posts: 'portrait', recipes: null },
+        }));
+        render(<SearchClient initialQuery="portriat" initialType="posts" />);
+        await settle();
+        // Enter commits the search on the answer it has.
+        fireEvent.submit(screen.getByRole('search'));
+        expect(JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]')).toEqual(['portrait']);
+
+        // Asked for as typed, the typed spelling is what the person meant.
+        fetchMock.mockResolvedValue(postsAnswer({ query: 'portriat', normalizedQuery: 'portriat', exact: true }));
+        fireEvent.click(screen.getByRole('button', { name: 'Search instead for “portriat”' }));
+        await settle();
+        fireEvent.submit(screen.getByRole('search'));
+        expect(JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]')).toEqual(['portriat', 'portrait']);
+      });
+
+      it('keeps the corrected spelling for a search committed before its answer landed', async () => {
+        const pending = deferred<ReturnType<typeof jsonResponse>>();
+        fetchMock.mockImplementation(() => pending.promise);
+        render(<SearchClient initialQuery="" initialType="top" />);
+        typeQuery('portriat');
+        fireEvent.submit(screen.getByRole('search'));
+        await settle(300);
+        await act(async () => pending.resolve(jsonResponse(searchResponse({
+          query: 'portriat',
+          normalizedQuery: 'portriat',
+          correctedQuery: { posts: 'portrait', recipes: null },
+          posts: { items: [post('post-1', 'Portrait', 1)], nextCursor: null },
+        }))));
+        await settle();
+        expect(JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]')).toEqual(['portrait']);
+      });
+
       it('shows recent searches while the empty box has the focus, each removable, with Clear all', async () => {
         window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['kling portrait', 'neon harbor']));
         render(<SearchClient initialQuery="" initialType="top" />);
@@ -1111,7 +1216,7 @@ describe('SearchClient', () => {
         // Cleared, the box shows them again; Clear all empties the list and the store.
         fireEvent.keyDown(field, { key: 'Escape' });
         fireEvent.focus(field);
-        fireEvent.click(screen.getByRole('button', { name: 'Clear all' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Clear all recent searches' }));
         expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
         expect(window.localStorage.getItem(HISTORY_KEY)).toBeNull();
       });
@@ -1209,5 +1314,48 @@ describe('SearchClient', () => {
         setItem.mockRestore();
       });
     });
+  });
+});
+
+describe('SearchClient opened from the top bar', () => {
+  beforeEach(() => {
+    getSessionMock.mockReset();
+    getSessionMock.mockResolvedValue({ data: { session: null } });
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({ creators: { items: [creator('Luna Studio')], nextCursor: null } })));
+    suggestFetchMock.mockReset();
+    suggestFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ query: 'luna', normalizedQuery: 'luna', creators: [], entities: [], completions: [{ text: 'luna portrait' }] }),
+    });
+    vi.stubGlobal('fetch', fetchBySurface);
+    window.history.replaceState(null, '', '/search');
+  });
+
+  afterEach(() => {
+    cleanup();
+    clearSearchFieldHandoff();
+    vi.unstubAllGlobals();
+  });
+
+  it('takes the focus into its field, with the typeahead closed over the committed search', async () => {
+    markSearchFieldHandoff();
+    render(<SearchClient initialQuery="luna" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveFocus();
+    await screen.findByText('Luna Studio');
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(searchFieldHandoffPending()).toBe(false);
+
+    // Typing on is a new search, and the list is offered for it.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'luna p' } });
+    expect(await screen.findByRole('listbox', { name: 'Search suggestions' })).toBeInTheDocument();
+  });
+
+  it('leaves the focus alone for a search opened any other way: a shared link does not pull a keyboard up', async () => {
+    render(<SearchClient initialQuery="luna" initialType="top" />);
+    await screen.findByText('Luna Studio');
+    expect(screen.getByRole('combobox')).not.toHaveFocus();
   });
 });
