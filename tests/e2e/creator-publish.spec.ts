@@ -391,3 +391,48 @@ test('a remix credits its original with Follow, says the alert went when it fini
   await expect(sheet.getByRole('link', { name: 'See every pack' }))
     .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/create-video?remix=gen-cats&remixPost=post-cats')}`);
 });
+
+// Owner, 2026-11-13: Home's shelf and the creators' "Start from a post" carry posts whose remix
+// comes with a free recipe, and their cards open the creator on the remix. The creator's read of
+// that remix is refused for the recipe, so the page takes the recipe and reads once more: one click
+// from the card to the remix, as the feed card's Remix and the post page's are.
+test('a remix behind a free recipe takes the recipe as the creator opens, and puts the original on the form', async ({ page, context }) => {
+  await signIn(context);
+  const answers: Answers = { creationTitle: '', publishes: [], profileSaves: [] };
+  await answerApi(page, answers);
+  const asked: string[] = [];
+  let recipeTaken = false;
+  await page.route('**/api/remix-source?**', (route) => {
+    asked.push('GET remix-source');
+    return recipeTaken
+      ? route.fulfill({
+        json: {
+          generation: { id: 'gen-boat', title: 'Paper boat on a pond', prompt: PROMPT, category: 'video', model: 'seedance-2-mini' },
+          result: { mediaType: 'video', url: null },
+          inputs: {},
+          workflowSettings: { model: 'seedance-2-mini', duration: 5, aspectRatio: '16:9', resolution: '480p', sound: false },
+          restoreIssues: [],
+        },
+      })
+      : route.fulfill({ status: 403, json: { error: 'Unlock this post to remix it.', code: 'REMIX_UNLOCK_REQUIRED' } });
+  });
+  await page.route('**/api/posts/post-boat/resource-bundle/unlock-free', (route) => {
+    asked.push(`${route.request().method()} unlock-free`);
+    recipeTaken = true;
+    return route.fulfill({ json: { success: true } });
+  });
+  await page.route('**/api/showcase/posts/post-boat', (route) => route.fulfill({
+    json: {
+      success: true,
+      item: { id: 'post-boat', title: 'Paper boat on a pond', creator: { id: 'creator-batman', username: 'batman', name: 'Batman', avatar: null } },
+    },
+  }));
+  await page.goto('/create-video?remix=gen-boat&remixPost=post-boat', COLD_PAGE);
+
+  // The original's prompt is on the form: the remix was read, after the recipe was taken.
+  await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue(PROMPT, COLD_PAGE);
+  expect(asked).toEqual(['GET remix-source', 'POST unlock-free', 'GET remix-source']);
+  // Nothing says the remix could not be brought back.
+  await expect(page.getByText('Some source media could not be restored automatically')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Generate · 19 credits' })).toBeVisible();
+});

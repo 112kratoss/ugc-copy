@@ -10,6 +10,7 @@ import {
   type HomeShelfActionFacts,
   type HomeShelfCreation,
   type HomeShelfCreationFacts,
+  homeShelfPostTakesFreeRecipe,
 } from '@/lib/home-shelf';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
@@ -59,6 +60,13 @@ function post(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {
   } as ShowcaseFeedItem;
 }
 
+/** The post as the shelf's shared read sees it when its remix sits behind a recipe: no viewer holds it. */
+const LOCKED = { canRemix: false, remixCapability: 'unlock_required' } as const;
+
+function recipe(accessMode: 'free' | 'paid') {
+  return { accessMode, allowRemix: true, priceUsdCents: accessMode === 'free' ? 0 : 900 } as NonNullable<ShowcaseFeedItem['asset']>;
+}
+
 const facts: HomeShelfCreationFacts = {
   modelName: 'Grok Imagine',
   price: { kind: 'credits', credits: 15 },
@@ -96,11 +104,28 @@ describe('toHomeShelfCreation', () => {
     });
   });
 
+  // Owner, 2026-11-13: a pinned post with a free recipe is on the shelf too (the lead pin had
+  // dropped out when its recipe was added). Its creator page takes the recipe as it opens the remix.
+  it('keeps a post whose remix comes with a free recipe, and says the recipe is taken on the way', () => {
+    const freeRecipePost = post({ ...LOCKED, asset: recipe('free') });
+
+    const card = toHomeShelfCreation(freeRecipePost, { postId: 'post-1' }, facts);
+
+    expect(card).toMatchObject({ id: 'post-1', makeHref: '/create-video?remix=generation-1&remixPost=post-1' });
+    expect(homeShelfPostTakesFreeRecipe(freeRecipePost)).toBe(true);
+    // A post open to everyone takes nothing, and neither does a paid recipe.
+    expect(homeShelfPostTakesFreeRecipe(post())).toBe(false);
+    expect(homeShelfPostTakesFreeRecipe(post({ ...LOCKED, asset: recipe('paid') }))).toBe(false);
+  });
+
   it('leaves out posts a one-tap card cannot make', () => {
     const pin = { postId: 'post-1' };
 
-    // Remix sold with a recipe: it needs the unlock sheet.
-    expect(toHomeShelfCreation(post({ remixCapability: 'unlock_required' }), pin, facts)).toBeNull();
+    // Remix sold with a paid recipe: it needs the unlock sheet, and no card's tap spends credits.
+    expect(toHomeShelfCreation(post({ ...LOCKED, asset: recipe('paid') }), pin, facts)).toBeNull();
+    // Locked with no recipe to take, or one that leaves the remix out: nothing a tap can open.
+    expect(toHomeShelfCreation(post({ ...LOCKED }), pin, facts)).toBeNull();
+    expect(toHomeShelfCreation(post({ ...LOCKED, asset: { ...recipe('free'), allowRemix: false } }), pin, facts)).toBeNull();
     // An upload from another tool has no generation to restore.
     expect(toHomeShelfCreation(post({ generationId: null }), pin, facts)).toBeNull();
     expect(toHomeShelfCreation(post({ remixTarget: 'workflow' }), pin, facts)).toBeNull();

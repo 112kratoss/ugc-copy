@@ -15,7 +15,12 @@ export async function claimFreeRecipe(postId: string, accessToken: string) {
   if (!response?.ok) {
     const data = await response?.json().catch(() => null) as { error?: unknown } | null | undefined;
     trackProductEvent('recipe_unlock_failed', { method: 'free', post_id: postId });
-    throw new Error(typeof data?.error === 'string' && data.error ? data.error : 'Failed to get the free recipe.');
+    // With the answer's status (none for a failed network), which tells a recipe that cannot be
+    // taken from a claim a later try can make (`remixReadMaySucceedLater`).
+    throw Object.assign(
+      new Error(typeof data?.error === 'string' && data.error ? data.error : 'Failed to get the free recipe.'),
+      { status: response?.status },
+    );
   }
   trackProductEvent('recipe_unlock_succeeded', { method: 'free', post_id: postId });
 }

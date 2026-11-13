@@ -17,6 +17,7 @@ import {
   HOME_SHELF_MIN_CREATIONS,
   arrangeHomeShelf,
   selectHomeShelfActions,
+  homeShelfPostTakesFreeRecipe,
   toHomeShelfCreation,
   type HomeShelfAction,
   type HomeShelfCreation,
@@ -52,7 +53,7 @@ export const HOME_SHELF_REVALIDATE_SECONDS = 300;
  * Part of the build's cache key. The Data Cache outlives a deploy, so bump this
  * whenever what a build holds or which posts it lets in changes.
  */
-const HOME_SHELF_BUILD_VERSION = 'home-shelf-creations-v3';
+const HOME_SHELF_BUILD_VERSION = 'home-shelf-creations-v4';
 
 /** The shelf could not be read, or not filtered for its viewer; the app's route answers an error. */
 export class HomeShelfUnavailableError extends Error {
@@ -333,9 +334,12 @@ async function loadMemberActions(viewerUserId: string): Promise<HomeShelfAction[
 async function loadHomeShelfForViewer(
   identity: HomeShelfIdentity,
   failure: FailureMode,
-  { withOffers = true }: { withOffers?: boolean } = {},
+  { withOffers = true, withFreeRecipePosts = true }: { withOffers?: boolean; withFreeRecipePosts?: boolean } = {},
 ): Promise<Array<HomeShelfCreationWithPost | HomeShelfAction>> {
-  const creations = await loadHomeShelfCreations(failure);
+  const built = await loadHomeShelfCreations(failure);
+  // Left out before the count and the cap, so the shelf is judged, and the
+  // next pin let in, on what this reader is shown.
+  const creations = withFreeRecipePosts ? built : built.filter((creation) => !homeShelfPostTakesFreeRecipe(creation.post));
   if (creations.length < HOME_SHELF_MIN_CREATIONS || !identity.viewerUserId) {
     return arrangeHomeShelf(creations, []);
   }
@@ -441,5 +445,10 @@ export async function loadHomeShelfCreationsWithPosts(identity: HomeShelfIdentit
  * draw nothing.
  */
 export async function loadHomeShelfForApi(identity: HomeShelfIdentity): Promise<HomeShelfApiItem[]> {
-  return loadHomeShelfForViewer(identity, 'throw');
+  // Without the posts whose remix comes with a free recipe (owner, 2026-11-13:
+  // they are on the web's shelf). An installed app's member could take one from
+  // the card, but its guest signs up and lands in the app's creator, which
+  // cannot take the recipe: the card stays off the app's shelf until the app
+  // asks for it.
+  return loadHomeShelfForViewer(identity, 'throw', { withFreeRecipePosts: false });
 }

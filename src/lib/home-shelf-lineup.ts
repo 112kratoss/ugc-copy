@@ -5,9 +5,15 @@ import type { HomeShelfPin } from '@/lib/home-shelf';
  * owner approves each creation before it is pinned here.
  *
  * Each pin must be a public post made in the app (it has a generation) whose
- * remix is open to everyone: a recipe that sells its remix keeps the post off
- * the shelf, and so does a placeholder title. `toHomeShelfCreation` checks all
- * of it on every build, so a pin that stops qualifying simply drops out.
+ * remix is open to everyone or comes with a free recipe, which the creator
+ * page takes as it opens the remix (owner, 2026-11-13; the app's shelf leaves
+ * such a pin out until the app can do the same). A paid recipe that sells its
+ * remix keeps the post off the shelf, and so does a placeholder title. One
+ * thing the build cannot see: a free recipe on a remix of someone's paid recipe
+ * (published before 2026-11-05) is never given away, so its card would open a
+ * creator with nothing restored. Do not pin a remix of a paid recipe.
+ * `toHomeShelfCreation` checks all of it on every build, so a pin that stops
+ * qualifying simply drops out.
  *
  * The lineup this was planned with (2026-10-25): a new model while it is new,
  * an image and a video that fit the welcome credits, a motion, then a premium

@@ -178,10 +178,14 @@ export async function fetchRemixSource(
     headers: { Authorization: `Bearer ${accessToken}` },
     ...(signal ? { signal } : {}),
   });
-  const data = await response.json().catch(() => null) as RemixSourceBundle & { error?: string } | null;
+  const data = await response.json().catch(() => null) as RemixSourceBundle & { error?: string; code?: unknown } | null;
   if (!response.ok || !data) {
-    // With its status, which tells a refusal of the remix from one a later read can get past.
-    throw Object.assign(new Error(data?.error || 'Failed to load remix data'), { status: response.status });
+    // With its status, which tells a refusal of the remix from one a later read can get past, and
+    // the server's code where it sent one (`REMIX_UNLOCK_REQUIRED`: the remix is behind a recipe).
+    throw Object.assign(new Error(data?.error || 'Failed to load remix data'), {
+      status: response.status,
+      code: typeof data?.code === 'string' ? data.code : null,
+    });
   }
   return data;
 }
