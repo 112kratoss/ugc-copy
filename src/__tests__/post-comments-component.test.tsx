@@ -131,6 +131,12 @@ function serveThread(initial: PostComment[]) {
     return { fetchMock, reads };
 }
 
+/** Opens a comment's menu (or the header's) and presses one of its items. */
+function chooseFromMenu(trigger: HTMLElement, item: string | RegExp) {
+    fireEvent.click(trigger);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: item }));
+}
+
 function threadItems() {
     return within(screen.getByRole('list', { name: 'Comment thread' })).getAllByRole('listitem');
 }
@@ -223,7 +229,10 @@ describe('PostComments', () => {
         );
 
         await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-        fireEvent.click(screen.getByRole('button', { name: 'New' }));
+        // The order is a menu in the thread's header, the chosen one checked.
+        fireEvent.click(screen.getByRole('button', { name: 'Sort comments' }));
+        expect(screen.getByRole('menuitemradio', { name: /^Top/ })).toHaveAttribute('aria-checked', 'true');
+        fireEvent.click(screen.getByRole('menuitemradio', { name: /^Newest/ }));
         expect(await screen.findByText('Newest result')).toBeInTheDocument();
 
         resolveTop(jsonResponse(page([comment({
@@ -238,7 +247,7 @@ describe('PostComments', () => {
         expect(screen.getByText('Newest result')).toBeInTheDocument();
     });
 
-    it('loads every reply page and never offers a nested reply action', async () => {
+    it('loads every reply page, and a reply to a reply joins the same thread by name', async () => {
         authState.session = { access_token: 'token-1' };
         authState.user = {
             id: 'viewer-1',
@@ -294,12 +303,54 @@ describe('PostComments', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Load more replies' }));
         expect(await screen.findByText('Last reply')).toBeInTheDocument();
 
-        // Only the top-level comment can be a reply target.
-        expect(screen.getAllByRole('button', { name: /^Reply to / })).toHaveLength(1);
         expect(fetchMock.mock.calls.some(([input]) => (
             String(input).includes('parentId=root-1')
             && String(input).includes('offset=20')
         ))).toBe(true);
+
+        // A reply can be answered too. The product keeps one reply level, so
+        // the answer is sent to the thread's top comment and opens by naming
+        // the reply it answers.
+        const replyButtons = screen.getAllByRole('button', { name: /^Reply to / });
+        expect(replyButtons).toHaveLength(3);
+        fireEvent.click(replyButtons[2]);
+        const composer = screen.getByRole('textbox', { name: 'Write a reply' });
+        expect(composer).toHaveValue('@creator ');
+        fireEvent.change(composer, { target: { value: '@creator agreed' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+        await waitFor(() => {
+            const post = fetchMock.mock.calls
+                .map((call) => (call as unknown as [RequestInfo | URL, RequestInit | undefined])[1])
+                .find((init) => init?.method === 'POST');
+            expect(JSON.parse(String(post?.body))).toMatchObject({
+                body: '@creator agreed',
+                parentId: 'root-1',
+            });
+        });
+
+        // The handle belongs to its target. Moved to the top comment with
+        // nothing typed, the draft drops it; moved back, it returns, and it
+        // alone is nothing to send.
+        const freshReplyButtons = () => screen.getAllByRole('button', { name: /^Reply to / });
+        // (This server answers no POST, so the draft above is still there: dropped first.)
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel reply' }));
+        fireEvent.click(freshReplyButtons()[2]);
+        expect(screen.getByRole('textbox', { name: 'Write a reply' })).toHaveValue('@creator ');
+        expect(screen.getByRole('button', { name: 'Reply' })).toBeDisabled();
+        fireEvent.click(freshReplyButtons()[0]);
+        expect(screen.getByRole('textbox', { name: 'Write a reply' })).toHaveValue('');
+        // A draft under way survives a change of target.
+        fireEvent.change(screen.getByRole('textbox', { name: 'Write a reply' }), { target: { value: 'Half a reply' } });
+        fireEvent.click(freshReplyButtons()[2]);
+        expect(screen.getByRole('textbox', { name: 'Write a reply' })).toHaveValue('Half a reply');
+        expect(screen.getByRole('button', { name: 'Reply' })).toBeEnabled();
+
+        // Cancel drops the draft and the reply target with it, and focus goes
+        // back to the Reply the reply came from.
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel reply' }));
+        expect(screen.queryByRole('textbox', { name: 'Write a reply' })).not.toBeInTheDocument();
+        expect(screen.getByRole('textbox', { name: 'Write a comment' })).toHaveValue('');
+        expect(freshReplyButtons()[2]).toHaveFocus();
     });
 
     it('refreshes the full reply thread after posting instead of caching only the new reply', async () => {
@@ -435,8 +486,8 @@ describe('PostComments', () => {
             />
         );
 
-        const reportButton = await screen.findByRole('button', { name: "Report @creator's comment" });
-        fireEvent.click(reportButton);
+        const reportButton = await screen.findByRole('button', { name: "More actions for @creator's comment" });
+        chooseFromMenu(reportButton, 'Report');
         expect(screen.getByLabelText('Reason')).toHaveFocus();
         fireEvent.change(screen.getByLabelText('Reason'), {
             target: { value: 'unsafe_content' },
@@ -468,9 +519,9 @@ describe('PostComments', () => {
             <PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />
         );
 
-        const report = await screen.findByRole('button', { name: "Report @creator's comment" });
+        const report = await screen.findByRole('button', { name: "More actions for @creator's comment" });
         expect(screen.getByRole('button', { name: 'Reply to @creator' })).toBeInTheDocument();
-        fireEvent.click(report);
+        chooseFromMenu(report, 'Report');
         expect(screen.getByLabelText('Reason')).toHaveFocus();
         fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -483,8 +534,89 @@ describe('PostComments', () => {
             postCreatorId: 'viewer-1',
         })));
         render(<PostComments postId="post-1" postCreatorId="viewer-1" commentCount={1} />);
-        expect(await screen.findByRole('button', { name: "Remove @creator's comment" }))
+        fireEvent.click(await screen.findByRole('button', { name: "More actions for @creator's comment" }));
+        expect(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Remove' }))
             .toBeInTheDocument();
+    });
+
+    it("marks the post's creator, folds a long comment, and keeps the composer's buttons for a draft", async () => {
+        signIn();
+        const long = Array.from({ length: 6 }, (_, index) => `Line ${index + 1}`).join('\n');
+        vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(page([
+            comment({ id: 'by-owner', body: 'From the creator', author: { ...viewerAuthor, id: 'post-owner', username: 'owner' } }),
+            // Named apart from the mark: the avatar stand-in above prints the name it is given.
+            comment({ id: 'long', body: long, author: { id: 'author-2', username: 'lena', displayName: 'Lena', avatarUrl: null } }),
+        ]))));
+        const onClose = vi.fn();
+
+        render(
+            <PostComments postId="post-1" postCreatorId="post-owner" commentCount={2} layout="panel" onClose={onClose} />
+        );
+        await screen.findByText('From the creator');
+
+        const [byOwner, longRow] = threadItems();
+        expect(within(byOwner).getByText('Creator')).toBeInTheDocument();
+        expect(within(longRow).queryByText('Creator')).not.toBeInTheDocument();
+
+        // Folded to four lines until asked for; a short comment has no fold.
+        expect(within(byOwner).queryByRole('button', { name: 'Read more' })).not.toBeInTheDocument();
+        const body = within(longRow).getByText(/^Line 1/);
+        expect(body).toHaveClass('line-clamp-4');
+        fireEvent.click(within(longRow).getByRole('button', { name: 'Read more' }));
+        expect(body).not.toHaveClass('line-clamp-4');
+        fireEvent.click(within(longRow).getByRole('button', { name: 'Show less' }));
+        expect(body).toHaveClass('line-clamp-4');
+
+        // One line until it is used: Cancel and Comment come with the focus,
+        // and Cancel drops the draft.
+        const composer = screen.getByRole('textbox', { name: 'Write a comment' });
+        expect(screen.queryByRole('button', { name: 'Comment' })).not.toBeInTheDocument();
+        fireEvent.focus(composer);
+        expect(screen.getByRole('button', { name: 'Comment' })).toBeDisabled();
+        fireEvent.change(composer, { target: { value: 'Half a thought' } });
+        expect(screen.getByRole('button', { name: 'Comment' })).toBeEnabled();
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel comment' }));
+        expect(composer).toHaveValue('');
+        expect(screen.queryByRole('button', { name: 'Comment' })).not.toBeInTheDocument();
+        // Cancel left the page with focus on it: the composer has it, still folded.
+        expect(composer).toHaveFocus();
+
+        // A panel ends with its composer, where a wide page draws it, so Tab
+        // follows the eye: header, thread, composer.
+        const thread = screen.getByRole('list', { name: 'Comment thread' });
+        expect(thread.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+        // A panel beside the post: the count in its header, and its close button.
+        expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(/^Comments\s*2$/);
+        expect(screen.getByRole('region', { name: 'Comments' })).toHaveClass('post-comments--panel');
+        fireEvent.click(screen.getByRole('button', { name: 'Close comments' }));
+        expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('sends a draft with Cmd or Ctrl and Enter, and leaves a bare Enter as a new line', async () => {
+        signIn();
+        const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (_input, init) => (
+            init?.method === 'POST'
+                ? jsonResponse({ comment: comment({ id: 'new', body: 'Sent by key', author: viewerAuthor }), commentCount: 1 })
+                : jsonResponse(page([]))
+        ));
+        vi.stubGlobal('fetch', fetchMock);
+
+        render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={0} />);
+        const composer = await screen.findByRole('textbox', { name: 'Write a comment' });
+        // No order to choose, and nothing to close, on an empty thread in a feed card.
+        expect(screen.queryByRole('button', { name: 'Sort comments' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Close comments' })).not.toBeInTheDocument();
+
+        // In a column (a feed card, the reel) the composer leads the thread.
+        expect(composer.compareDocumentPosition(screen.getByText(/No comments yet/)) & Node.DOCUMENT_POSITION_FOLLOWING)
+            .toBeTruthy();
+
+        fireEvent.change(composer, { target: { value: 'Sent by key' } });
+        fireEvent.keyDown(composer, { key: 'Enter' });
+        expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+        fireEvent.keyDown(composer, { key: 'Enter', metaKey: true });
+        await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
     });
 
     // 04-2: a delete deep in a long thread keeps every page the reader opened.
@@ -508,7 +640,7 @@ describe('PostComments', () => {
         expect(threadItems()).toHaveLength(60);
         server.reads.length = 0;
 
-        fireEvent.click(screen.getByRole('button', { name: 'Delete your comment' }));
+        chooseFromMenu(screen.getByRole('button', { name: 'More actions for your comment' }), 'Delete');
         await waitFor(() => expect(server.reads).toHaveLength(2), { timeout: 5000 });
         await screen.findByRole('button', { name: 'Load more comments' }, { timeout: 5000 });
 
@@ -569,7 +701,8 @@ describe('PostComments', () => {
         fireEvent.click(await screen.findByRole('button', { name: 'View 21 replies' }));
         await screen.findByText('Reply 20');
 
-        fireEvent.click(screen.getByRole('button', { name: 'Reply to @creator' }));
+        // The first Reply is the top comment's; each reply under it has its own.
+        fireEvent.click(screen.getAllByRole('button', { name: 'Reply to @creator' })[0]);
         fireEvent.change(screen.getByRole('textbox', { name: 'Write a reply' }), {
             target: { value: 'My new reply' },
         });
@@ -644,15 +777,15 @@ describe('PostComments', () => {
             </>
         );
         await screen.findByText('Stands alone');
-        const [withReplies, alone] = screen.getAllByRole('button', { name: 'Delete your comment' });
+        const [withReplies, alone] = screen.getAllByRole('button', { name: 'More actions for your comment' });
 
-        fireEvent.click(withReplies);
+        chooseFromMenu(withReplies, 'Delete');
         let question = await screen.findByRole('alertdialog', { name: 'Delete your comment?' });
         expect(question).toHaveAccessibleDescription('It will be replaced with “[deleted]”. Replies to it stay visible.');
         fireEvent.click(within(question).getByRole('button', { name: 'Cancel' }));
         await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
 
-        fireEvent.click(alone);
+        chooseFromMenu(alone, 'Delete');
         question = await screen.findByRole('alertdialog', { name: 'Delete your comment?' });
         expect(question).toHaveAccessibleDescription('It will be removed from this post.');
         expect(within(question).getByRole('button', { name: 'Delete comment' })).toBeInTheDocument();
@@ -676,7 +809,7 @@ describe('PostComments', () => {
         vi.spyOn(window, 'confirm').mockReturnValue(true);
 
         render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />);
-        fireEvent.click(await screen.findByRole('button', { name: 'Delete your comment' }));
+        chooseFromMenu(await screen.findByRole('button', { name: 'More actions for your comment' }), 'Delete');
 
         expect(await screen.findByRole('alert'))
             .toHaveTextContent('Too many requests. Wait a moment, then try again.');

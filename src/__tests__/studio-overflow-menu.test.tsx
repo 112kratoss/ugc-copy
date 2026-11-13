@@ -73,6 +73,37 @@ describe('StudioOverflowMenu', () => {
     expect(trigger).toHaveFocus();
   });
 
+  it('draws a one-of-many menu as radio items, the chosen one checked, each with its second line', () => {
+    const onNewest = vi.fn();
+    render(
+      <StudioOverflowMenu
+        label="Sort comments"
+        trigger="quiet"
+        triggerIcon={<span data-testid="sort-glyph" />}
+        items={[
+          { key: 'top', label: 'Top', description: 'Most discussed first', checked: true, onSelect: vi.fn() },
+          { key: 'newest', label: 'Newest', description: 'Latest comments first', checked: false, onSelect: onNewest },
+        ]}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: 'Sort comments' });
+    // The caller's glyph replaces the three dots, on a trigger with no outline.
+    expect(within(trigger).getByTestId('sort-glyph')).toBeInTheDocument();
+    expect(trigger.className).not.toMatch(/\bborder\b/);
+
+    fireEvent.click(trigger);
+    const menu = screen.getByRole('menu');
+    expect(within(menu).queryByRole('menuitem')).not.toBeInTheDocument();
+    const [top, newest] = within(menu).getAllByRole('menuitemradio');
+    expect(top).toHaveAttribute('aria-checked', 'true');
+    expect(top).toHaveTextContent('Most discussed first');
+    expect(newest).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.click(newest);
+    expect(onNewest).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
   it('renders nothing without items', () => {
     const { container } = render(<StudioOverflowMenu label="More actions" items={[]} />);
     expect(container).toBeEmptyDOMElement();

@@ -306,10 +306,11 @@ select is(
 
 -- ─── Entities ────────────────────────────────────────────────────────────────
 
-select is(pg_temp.entity_ids(), array['tool:epsilontool', 'tool:zephyrtool', 'tool:alphatool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool', 'tool:lumen-2.6'],
+select is(pg_temp.entity_ids(), array['tool:zephyrtool', 'tool:epsilontool', 'tool:alphatool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool', 'tool:lumen-2.6'],
   'a visitor is offered the models and tools two creators use, most posts first');
 select is(
-  public.search_starter(null, '{}', 8, 0, 0) -> 'entities' -> 0,
+  (select entity from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
+   where entity ->> 'key' = 'epsilontool'),
   (select jsonb_build_object('kind', kind, 'key', key, 'label', label, 'post_count', post_count,
                              'post_count_capped', post_count_capped, 'query', 'epsilontool')
    from public.search_public_entities('epsilontool', null, 10, null) where key = 'epsilontool'),
@@ -344,8 +345,8 @@ select ok(
 select is(
   (select entity - 'kind' - 'post_count_capped' from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
    where entity ->> 'key' = 'zephyrtool'),
-  '{"key": "zephyrtool", "label": "Kestrel Kite", "post_count": 4, "query": "kestrel kite"}'::jsonb,
-  'fixture: a visitor''s zephyrtool row is the name most of its six posts print, "Kestrel Kite", and the four that hold it'
+  '{"key": "zephyrtool", "label": "Kestrel Kite", "post_count": 6, "query": "zephyrtool"}'::jsonb,
+  'fixture: a visitor''s zephyrtool row is drawn under the name most of its six posts print, "Kestrel Kite", and searched by its key, which all six hold (the name holds four: 20261113152020)'
 );
 select is(
   (select entity - 'kind' - 'post_count_capped' from jsonb_array_elements(public.search_starter(pg_temp.uid('05'), '{}', 8, 0, 0) -> 'entities') as entity
@@ -390,14 +391,14 @@ select is((select post_count from public.search_public_entities(null, null, 1, '
 select is(
   (select entity - 'kind' - 'post_count_capped' from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
    where entity ->> 'key' = 'nimbus'),
-  '{"key": "nimbus", "label": "Nimbus Forge", "post_count": 2, "query": "nimbus forge"}'::jsonb,
-  'the row says two: the search it runs, for the name most of them print, finds two, not the three the filter holds'
+  '{"key": "nimbus", "label": "Nimbus Forge", "post_count": 3, "query": "nimbus"}'::jsonb,
+  'the row is searched by its key, which opens all three, where the name most of them print opens two (20261113152020)'
 );
 select is(
   (select count(*)::integer from public.search_public_posts(
      p_query => 'nimbus forge', p_viewer_user_id => null, p_limit => 25, p_made_with => 'tool:nimbus', p_correct => false)),
   2,
-  'and pressing it opens those two'
+  'the name alone opens two: the third post prints another name under the same slug'
 );
 select is(
   (select (entity ->> 'post_count')::integer from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
@@ -409,9 +410,15 @@ select ok(not (pg_temp.entity_ids() @> array['tool:zq']),
   'an entity whose search would find nothing (a two-character key, which search does not search) is not offered');
 select ok(not (pg_temp.entity_ids(pg_temp.uid('05')) @> array['tool:blockertool']),
   'the viewer is not offered a tool whose second creator blocked them');
-select is((public.search_starter(null, '{}', 8, 0, 0) -> 'entities' -> 0 ->> 'post_count')::integer, 5,
+select is(
+  (select (entity ->> 'post_count')::integer from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
+   where entity ->> 'key' = 'epsilontool'),
+  5,
   'five posts made with Epsilontool');
-select is(public.search_starter(null, '{}', 8, 0, 0) -> 'entities' -> 0 ->> 'label', 'Epsilontool',
+select is(
+  (select entity ->> 'label' from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
+   where entity ->> 'key' = 'epsilontool'),
+  'Epsilontool',
   'under the name its posts print');
 select is(
   (select (entity ->> 'post_count')::integer from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
@@ -431,7 +438,7 @@ select ok(not exists (
   'a template result''s hidden model is not offered, though two creators'' results have it');
 select is(pg_temp.entity_ids(pg_temp.uid('05')), array['tool:epsilontool', 'tool:alphatool', 'tool:nimbus', 'model:qwen3', 'tool:lumen-2.6', 'tool:zephyrtool'],
   'the viewer is not offered a tool only creators on either side of a block with them use');
-select is(pg_temp.entity_ids(null, 1), array['tool:epsilontool'], 'the limit cuts the list');
+select is(pg_temp.entity_ids(null, 1), array['tool:zephyrtool'], 'the limit cuts the list');
 
 -- A count passes another: the order follows the count pressing opens.
 insert into public.posts (
@@ -442,10 +449,10 @@ select pg_temp.uid('4' || to_hex(n)), pg_temp.uid('02'), 'public', 'image', 'ext
        'Plain title', 'a plain frame', 'showcase/e5e1-4' || to_hex(n) || '.png', 'Alphatool', 'alphatool',
        now() - make_interval(mins => 300 + n), now()
 from generate_series(0, 2) as n;
-select is(pg_temp.entity_ids(), array['tool:alphatool', 'tool:epsilontool', 'tool:zephyrtool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool', 'tool:lumen-2.6'],
+select is(pg_temp.entity_ids(), array['tool:alphatool', 'tool:zephyrtool', 'tool:epsilontool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool', 'tool:lumen-2.6'],
   'three more Alphatool posts put it first, at once: nothing is rebuilt');
 delete from public.posts where id in (pg_temp.uid('40'), pg_temp.uid('41'), pg_temp.uid('42'));
-select is(pg_temp.entity_ids(), array['tool:epsilontool', 'tool:zephyrtool', 'tool:alphatool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool', 'tool:lumen-2.6'],
+select is(pg_temp.entity_ids(), array['tool:zephyrtool', 'tool:epsilontool', 'tool:alphatool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool', 'tool:lumen-2.6'],
   'and deleting them puts it back');
 
 -- A second creator for Betatool, then that post labelled: it counts only while a visitor can see it.
@@ -454,7 +461,7 @@ insert into public.posts (
   title, body, showcase_asset_path, source_tool, source_tool_slug, created_at, updated_at
 ) values (pg_temp.uid('50'), pg_temp.uid('03'), 'public', 'image', 'external', 'media', 'visible', false,
           'Plain title', 'a plain frame', 'showcase/e5e1-50.png', 'Betatool', 'betatool', now() - interval '5 minutes', now());
-select is(pg_temp.entity_ids(), array['tool:betatool', 'tool:epsilontool', 'tool:zephyrtool', 'tool:alphatool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool'],
+select is(pg_temp.entity_ids(), array['tool:betatool', 'tool:zephyrtool', 'tool:epsilontool', 'tool:alphatool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool'],
   'a second creator''s post offers Betatool, with its six posts first');
 update public.posts set visibility = 'private' where id = pg_temp.uid('50');
 select ok(not (pg_temp.entity_ids() @> array['tool:betatool']),

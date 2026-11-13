@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getPostMadeWithLabel } from '@/lib/post-made-with';
+import { getPostMadeWithLabel } from '@/lib/post-feed-presentation';
 import { isIndexableShowcasePost, type ShowcaseSitemapRow } from '@/lib/sitemap-entries';
 import {
     composeShowcaseDescription,

@@ -88,6 +88,7 @@
 @source "../components/SignInAgreement.tsx";
 @source "../components/SignInWorkspaceCard.tsx";
 @source "../components/SkeletonLoader.tsx";
+@source "../components/StudioOverflowMenu.tsx";
 @source "../components/TabLoadingShell.tsx";
 @source "../components/TextPostPreviewCard.tsx";
 @source "../components/UnavailableMediaNote.tsx";
@@ -1233,6 +1234,20 @@ button:disabled,
   }
 }
 
+/*
+ * A panel's composer ends it in the document, which is where a wide page
+ * draws it. In one column the panel is as long as its thread, so the
+ * composer is drawn under the header instead, before a reader has to pass
+ * every comment to reach it.
+ */
+.post-comments--panel .post-comments__header {
+  order: -2;
+}
+
+.post-comments--panel .post-comments__composer {
+  order: -1;
+}
+
 @container canonical-post (min-width: 900px) {
   /*
    * The document column caps at 56rem and the pair centers as a unit —
@@ -1241,6 +1256,9 @@ button:disabled,
    */
   .canonical-post-layout {
     grid-template-columns: minmax(0, 56rem) minmax(320px, 400px);
+    /* The rail spans both rows; were both `auto`, a rail taller than a short
+       post would be shared between them and open a band under the masthead. */
+    grid-template-rows: auto 1fr;
     justify-content: center;
     /* The masthead-to-media gap is document rhythm, not column separation. */
     row-gap: 1.25rem;
@@ -1248,8 +1266,9 @@ button:disabled,
   }
 
   /*
-   * Row 1 is the masthead alone; row 2 pairs the post with the rail, so the
-   * rail's top edge lands level with the media instead of the byline.
+   * Row 1 is the masthead, row 2 the post; the rail runs beside both. It
+   * started level with the media until it took the conversation in
+   * (2026-11-13), which on a laptop left the thread a couple of comments tall.
    */
   .canonical-post-head {
     grid-column: 1;
@@ -1261,11 +1280,59 @@ button:disabled,
     grid-row: 2;
   }
 
+  /*
+   * The rail holds the actions card and the conversation, and ends inside
+   * the window: the thread takes what height the card above leaves and
+   * scrolls inside it, its composer on the bottom edge. The rail starts level
+   * with the masthead and sticks at 76px, so its room is the window less
+   * wherever its top is now, which `usePostRailTop` measures (11rem until it
+   * has: the top bar and the back link's row). On a window too short for both, the thread
+   * keeps a floor and the rail itself scrolls.
+   */
   .canonical-post-actions {
     position: sticky;
     top: 76px;
     grid-column: 2;
-    grid-row: 2;
+    /* From the masthead's row down: the conversation needs the height. */
+    grid-row: 1 / span 2;
+    max-height: calc(100dvh - var(--canonical-post-rail-top, 11rem) - 1rem);
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+
+  .canonical-post-actions > * {
+    flex-shrink: 0;
+  }
+
+  .canonical-post-comments[data-open='true'] {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 14rem;
+  }
+
+  .canonical-post-comments-body:not([hidden]) {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .post-comments--panel {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .post-comments--panel .post-comments__scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* The composer ends the panel, in the document and on the page. */
+  .post-comments--panel .post-comments__composer {
+    order: 0;
+    border-top: 1px solid var(--ui-border-subtle);
   }
 
   .canonical-post-media-viewport {

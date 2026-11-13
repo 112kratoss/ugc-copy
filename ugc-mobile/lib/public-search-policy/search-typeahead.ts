@@ -36,8 +36,8 @@ import {
   normalizeSearchHistoryQuery,
   searchEntityActionLabel,
   searchEntityId,
-  searchRecentAgainLabel,
   searchQueryLength,
+  searchRecentAgainLabel,
   type SearchEntity,
   type SearchEntityKind,
   type SearchTabId,
@@ -200,7 +200,13 @@ export type SearchTypeaheadSectionId = (typeof SEARCH_TYPEAHEAD_SECTION_IDS)[num
 export type SearchTypeaheadRow =
   | { kind: 'creator'; key: string; creator: SearchSuggestCreator }
   | { kind: 'entity'; key: string; entity: SearchEntity }
-  | { kind: 'completion'; key: string; text: string; recent?: true };
+  | { kind: 'completion'; key: string; text: string; recent?: true }
+  /**
+   * The text as typed, searched as it stands: "Search for “nano”" (the app's
+   * typing list, searchTypingSections). Never a recent search; `recent` is
+   * declared so a client may read it on any row that carries text.
+   */
+  | { kind: 'search'; key: string; text: string; recent?: never };
 
 export interface SearchTypeaheadSection {
   id: SearchTypeaheadSectionId;
@@ -277,9 +283,8 @@ function foldedQuery(query: string): string {
  * The recent searches a text matches: the ones the typed text begins, as a
  * whole or at one of its words ("por" finds "neon portrait"), most recent
  * first, at most SEARCH_TYPEAHEAD_MAX_RECENTS. A recent search that is exactly
- * what the box holds is not offered back. The same rule as the app's typing
- * list (`searchTypingRecents` on the app track's branch): one of the two goes
- * when both are on main.
+ * what the box holds is not offered back. The app's typing list draws its
+ * recents by this too (searchTypingSections).
  */
 export function searchTypeaheadMatchingRecents(recents: readonly string[], query: string | null): string[] {
   if (query === null) return [];
@@ -361,7 +366,7 @@ export function searchTypeaheadSections(
 }
 
 /** Every row of the sections, top to bottom: the order the arrow keys walk. */
-export function searchTypeaheadRows(sections: readonly SearchTypeaheadSection[]): SearchTypeaheadRow[] {
+export function searchTypeaheadRows(sections: readonly { rows: readonly SearchTypeaheadRow[] }[]): SearchTypeaheadRow[] {
   return sections.flatMap((section) => section.rows);
 }
 
@@ -441,7 +446,7 @@ export interface SearchTypeaheadTextRun {
  * draw a suggestion: the part the person typed plain, the part they have not
  * typed heavier, so the eye goes to what the row adds. The typed text is found
  * where it first stands at the start of the row or of one of its words,
- * ignoring case (the app track's `searchTypedRuns` reads it the same way); a
+ * ignoring case (the app's typing list draws its rows by it too); a
  * row that does not hold it so is all heavier. The row's accessible name is
  * its whole text: this is drawing only.
  */
@@ -498,6 +503,62 @@ export function searchTypeaheadAction(row: SearchTypeaheadRow): SearchTypeaheadA
   return { type: 'search', query: row.text };
 }
 
+// ─── While typing: the list in place of results ──────────────────────────────
+
+/**
+ * A screen that shows suggestions *instead of* results while the person types
+ * (the app: search UX audit 2026-11-13, finding 1) draws one list for the text
+ * in the box, top to bottom:
+ *
+ *   1. "Search for “nano”": the text as it stands, searched as the Search key
+ *      would (a `search` row; first, so it never moves under a finger);
+ *   2. searchTypeaheadDrawn's sections for the text, drawn with this device's
+ *      recent searches and every kind offered (SEARCH_TYPEAHEAD_OFFER_ALL):
+ *      the recent searches the text matches (searchTypeaheadMatchingRecents),
+ *      then creators, models and tools, and completions.
+ *
+ * The first row and the recents need no answer, so the list is there from the
+ * first letter and an answer only ever adds rows under them. Nothing for an
+ * empty box: that is the screen's empty state (recent searches, ideas to start
+ * from). The web's boxes have no "Search for" row: the Enter key is theirs.
+ */
+
+/** The first row of the typing list, its words and its accessible name: "Search for “nano”". */
+export function searchForRowLabel(text: string): string {
+  return `Search for “${text}”`;
+}
+
+export const SEARCH_TYPING_SEARCH_ROW_KEY = 'search';
+
+export type SearchTypingSectionId = 'search' | SearchTypeaheadSectionId;
+
+export interface SearchTypingSection {
+  id: SearchTypingSectionId;
+  /** Null for the rows that say what they are themselves: "Search for", and recents with their clock. */
+  heading: string | null;
+  rows: SearchTypeaheadRow[];
+}
+
+/**
+ * The typing list for the text in the box (`query`, searchTypeaheadQuery of
+ * it): the "Search for" row, then `sections` (searchTypeaheadDrawn's, drawn
+ * with the recents), the recents' heading left off since each carries its
+ * clock. Empty when the box asks about nothing. `searchable` false leaves the
+ * "Search for" row out: the text is too short for the search it would commit
+ * (the picked tab's minimum), and a row that leads nowhere is not offered.
+ */
+export function searchTypingSections(input: {
+  query: string | null;
+  sections: readonly SearchTypeaheadSection[];
+  searchable?: boolean;
+}): SearchTypingSection[] {
+  if (input.query === null) return [];
+  return [
+    ...(input.searchable === false ? [] : [{ id: 'search' as const, heading: null, rows: [{ kind: 'search' as const, key: SEARCH_TYPING_SEARCH_ROW_KEY, text: input.query }] }]),
+    ...input.sections.map((section) => (section.id === 'recents' ? { ...section, heading: null } : section)),
+  ];
+}
+
 // ─── When a press counts ─────────────────────────────────────────────────────
 
 /**
@@ -524,7 +585,7 @@ export type SearchTypeaheadPlacement = ReadonlyMap<string, { index: number; sinc
  */
 export function placeSearchTypeaheadRows(
   previous: SearchTypeaheadPlacement | null,
-  rows: readonly SearchTypeaheadRow[],
+  rows: readonly { key: string }[],
   now: number,
 ): SearchTypeaheadPlacement {
   const placement = new Map<string, { index: number; since: number }>();
@@ -606,6 +667,7 @@ export function moveSearchTypeaheadHighlight(
 
 /** A row in words: "Luna Studio, @luna-studio, following. Open profile". */
 export function searchTypeaheadRowLabel(row: SearchTypeaheadRow): string {
+  if (row.kind === 'search') return searchForRowLabel(row.text);
   if (row.kind === 'creator') {
     const { displayName, username, isFollowing } = row.creator;
     const name = displayName.toLowerCase() === username.toLowerCase() ? `@${username}` : `${displayName}, @${username}`;

@@ -36,7 +36,15 @@ function fetchBySurface(url: string, init?: RequestInit) {
   return String(url).startsWith('/api/search/suggest') ? suggestFetchMock(url, init) : fetchMock(url, init);
 }
 // The page's auth listener, kept so a test can say "signed out" as Supabase does.
-const authListeners: Array<(event: string) => void> = [];
+type AuthListener = (event: string, session?: { user?: { id: string; is_anonymous?: boolean } } | null) => void;
+const authListeners: AuthListener[] = [];
+// The account the session cookie names (a hint the kept searches and the recent ones read).
+const { cookieUserMock } = vi.hoisted(() => ({ cookieUserMock: vi.fn<() => string | null>(() => null) }));
+vi.mock('@/lib/supabase-auth-cookie', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase-auth-cookie')>()),
+  readSupabaseAuthCookieUserId: () => cookieUserMock(),
+}));
+const KEPT_KEY = 'magicbooklet:search-kept-pages:v2';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
@@ -46,7 +54,7 @@ vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
       getSession: () => getSessionMock(),
-      onAuthStateChange: (listener: (event: string) => void) => {
+      onAuthStateChange: (listener: AuthListener) => {
         authListeners.push(listener);
         return {
           data: {
@@ -149,6 +157,10 @@ function typeQuery(value: string) {
 
 describe('SearchClient', () => {
   beforeEach(() => {
+    // What a search left behind for Back (search-kept-pages.ts): each test starts with none.
+    window.sessionStorage.clear();
+    cookieUserMock.mockReset();
+    cookieUserMock.mockReturnValue(null);
     replaceMock.mockReset();
     getSessionMock.mockReset();
     fetchMock.mockReset();
@@ -230,6 +242,140 @@ describe('SearchClient', () => {
     render(<SearchClient initialQuery="luna" initialType="top" />);
     expect(screen.getByRole('combobox')).toHaveValue('');
     expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('draws what a search showed when Back brings the page back to it, pages added included, at its scroll, without asking again', async () => {
+    const posts = Array.from({ length: 3 }, (_, index) => post(`post-${index}`, `Lantern ${index}`, index));
+    fetchMock.mockResolvedValueOnce(jsonResponse(searchResponse({ type: 'posts', posts: { items: posts.slice(0, 2), nextCursor: 'next-1' } })));
+    fetchMock.mockResolvedValueOnce(jsonResponse(searchResponse({ type: 'posts', posts: { items: posts.slice(2), nextCursor: null } })));
+    window.history.replaceState({ __NA: true }, '', '/search?q=lantern&type=posts');
+    render(<SearchClient initialQuery="lantern" initialType="posts" />);
+    await screen.findByText('Lantern 0');
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    await screen.findByText('Lantern 2');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // The person scrolls and opens a post: the press keeps what is on screen.
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 640 });
+    fireEvent.click(screen.getByRole('link', { name: /Open post Lantern 2/ }));
+    cleanup();
+
+    // Back: the same three cards at once, no request, scrolled to where they were.
+    const scrolled = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    render(<SearchClient initialQuery="luna" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveValue('lantern');
+    expect(screen.getByText('Lantern 0')).toBeInTheDocument();
+    expect(screen.getByText('Lantern 2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
+    expect(scrolled).toHaveBeenCalledWith(0, 640);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('status')).toHaveTextContent('3 results for lantern');
+
+    // Typing on and back again asks, as any search does.
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({ type: 'posts', posts: { items: posts.slice(0, 1), nextCursor: null } })));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'lanterns' } });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3), { timeout: 2000 });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'lantern' } });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4), { timeout: 2000 });
+    scrolled.mockRestore();
+    Reflect.deleteProperty(window, 'scrollY');
+  });
+
+  it('asks again on a fresh visit to an address it kept, and draws nothing kept for another account', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({ type: 'posts', posts: { items: [post('post-1', 'Kept lantern', 1)], nextCursor: null } })));
+    window.history.replaceState({ __NA: true }, '', '/search?q=lantern&type=posts');
+    render(<SearchClient initialQuery="lantern" initialType="posts" />);
+    await screen.findByText('Kept lantern');
+    cleanup();
+    expect(window.sessionStorage.getItem(KEPT_KEY)).toContain('Kept lantern');
+    // A link to the same search (not Back): asked again.
+    render(<SearchClient initialQuery="lantern" initialType="posts" />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    cleanup();
+    // Kept under another session: not drawn, asked again.
+    const kept = JSON.parse(window.sessionStorage.getItem(KEPT_KEY) ?? '[]') as Array<{ accountId: string | null }>;
+    window.sessionStorage.setItem(KEPT_KEY, JSON.stringify(kept.map((entry) => ({ ...entry, accountId: 'someone-else' }))));
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    render(<SearchClient initialQuery="lantern" initialType="posts" />);
+    expect(screen.queryByText('Kept lantern')).toBeNull();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3), { timeout: 2000 });
+  });
+
+  it('never draws one account’s kept search for the visitor after a sign-out on the page (review of #788)', async () => {
+    // Account A searches, opens a post, comes back, signs out from the menu:
+    // the menu's soft navigation unmounts the page with A's answer on screen.
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-a', user: { id: 'account-a', is_anonymous: false } } } });
+    cookieUserMock.mockReturnValue('account-a');
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({ type: 'posts', posts: { items: [post('post-1', 'Bought lantern', 1)], nextCursor: null } })));
+    window.history.replaceState({ __NA: true }, '', '/search?q=lantern&type=posts');
+    render(<SearchClient initialQuery="lantern" initialType="posts" />);
+    await screen.findByText('Bought lantern');
+    // Kept under the account it was asked for.
+    fireEvent.click(screen.getByRole('link', { name: /Open post Bought lantern/ }));
+    expect(JSON.parse(window.sessionStorage.getItem(KEPT_KEY) ?? '[]')[0].accountId).toBe('account-a');
+    // The sign-out: the cookie goes, Supabase says so, the page goes.
+    getSessionMock.mockResolvedValue({ data: { session: null } });
+    cookieUserMock.mockReturnValue(null);
+    act(() => { for (const listener of [...authListeners]) listener('SIGNED_OUT', null); });
+    cleanup();
+    expect(window.sessionStorage.getItem(KEPT_KEY)).toBeNull();
+    // Back, as the visitor: asked again, never A's answer.
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({ type: 'posts', posts: { items: [post('post-2', 'Public lantern', 0)], nextCursor: null } })));
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    render(<SearchClient initialQuery="lantern" initialType="posts" />);
+    expect(screen.queryByText('Bought lantern')).toBeNull();
+    expect(await screen.findByText('Public lantern')).toBeInTheDocument();
+  });
+
+  it('never keeps a visitor’s answer for an account that signed in meanwhile in another tab', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({ type: 'posts', posts: { items: [post('post-1', 'Visitor lantern', 1)], nextCursor: null } })));
+    window.history.replaceState({ __NA: true }, '', '/search?q=lantern&type=posts');
+    render(<SearchClient initialQuery="lantern" initialType="posts" />);
+    await screen.findByText('Visitor lantern');
+    cookieUserMock.mockReturnValue('account-b');
+    act(() => { for (const listener of [...authListeners]) listener('SIGNED_IN', { user: { id: 'account-b', is_anonymous: false } }); });
+    fireEvent.click(screen.getByRole('link', { name: /Open post Visitor lantern/ }));
+    cleanup();
+    expect(window.sessionStorage.getItem(KEPT_KEY)).toBeNull();
+  });
+
+  it('keeps what it kept when the tab comes back into view (Supabase’s SIGNED_IN for the same account), and forgets it for another', async () => {
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-a', user: { id: 'account-a', is_anonymous: false } } } });
+    cookieUserMock.mockReturnValue('account-a');
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({ type: 'posts', posts: { items: [post('post-1', 'Kept lantern', 1)], nextCursor: null } })));
+    window.history.replaceState({ __NA: true }, '', '/search?q=lantern&type=posts');
+    render(<SearchClient initialQuery="lantern" initialType="posts" />);
+    await screen.findByText('Kept lantern');
+    fireEvent.click(screen.getByRole('link', { name: /Open post Kept lantern/ }));
+    expect(window.sessionStorage.getItem(KEPT_KEY)).toContain('Kept lantern');
+    act(() => { for (const listener of [...authListeners]) listener('SIGNED_IN', { user: { id: 'account-a', is_anonymous: false } }); });
+    expect(window.sessionStorage.getItem(KEPT_KEY)).toContain('Kept lantern');
+    act(() => { for (const listener of [...authListeners]) listener('SIGNED_IN', { user: { id: 'account-c', is_anonymous: false } }); });
+    expect(window.sessionStorage.getItem(KEPT_KEY)).toBeNull();
+  });
+
+  it('draws the Following switch on a search Back restores for an account, and says the restored count', async () => {
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-a', user: { id: 'account-a', is_anonymous: false } } } });
+    cookieUserMock.mockReturnValue('account-a');
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({ type: 'posts', posts: { items: [post('post-1', 'Followed lantern', 1)], nextCursor: null } })));
+    window.history.replaceState({ __NA: true }, '', '/search?q=lantern&type=posts&following=1');
+    render(<SearchClient initialQuery="lantern" initialType="posts" initialFilters={{ madeWith: null, mediaKind: null, hasRecipe: false, following: true }} />);
+    await screen.findByText('Followed lantern');
+    fireEvent.click(screen.getByRole('link', { name: /Open post Followed lantern/ }));
+    cleanup();
+    fetchMock.mockClear();
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByText('Followed lantern')).toBeInTheDocument();
+    // The status line is empty as the page is drawn, then says the count: a
+    // polite region speaks when its words change, never for what it held at first.
+    expect(screen.getByRole('status')).toHaveTextContent('');
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('1 result for lantern'));
+    // The switch it is narrowed by is there to turn off, as on any search of an account.
+    expect(await screen.findByRole('button', { name: 'Following' })).toHaveAttribute('aria-pressed', 'true');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -651,8 +797,9 @@ describe('SearchClient', () => {
       render(<SearchClient initialQuery="portrait" initialType="posts" />);
       await settle();
 
-      expect(screen.getByText('1 save')).toBeInTheDocument();
-      expect(screen.getByText('2 saves')).toBeInTheDocument();
+      // The card draws the count by a heart; its name says it in words.
+      expect(screen.getByRole('link', { name: 'Open post One save by Luna Studio, 1 save, 0 comments' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Open post Two saves by Luna Studio, 2 saves, 0 comments' })).toBeInTheDocument();
     });
 
     it('marks a creator the viewer follows, and only that one', async () => {
@@ -1380,6 +1527,7 @@ describe('SearchClient', () => {
 
 describe('SearchClient opened from the top bar', () => {
   beforeEach(() => {
+    window.sessionStorage.clear();
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
     fetchMock.mockReset();

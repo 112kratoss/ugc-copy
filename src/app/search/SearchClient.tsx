@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Box, Clock3, LoaderCircle, MessageCircle, RefreshCcw, Sparkles, Wrench, X } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, Box, Clock3, LoaderCircle, RefreshCcw, Wrench, X } from 'lucide-react';
 
 import { SegmentedControl } from '@/components/DesignSystem';
 import { CreatorSearchResult } from '@/components/search/CreatorSearchResult';
 import { SearchField } from '@/components/search/SearchField';
+import { SearchPostWall } from '@/components/search/SearchPostWall';
 import { SearchResultsPlaceholder } from '@/components/search/SearchResultsPlaceholder';
 import { SearchStateBlock } from '@/components/search/SearchStateBlock';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
@@ -41,6 +42,7 @@ import { supabase } from '@/lib/supabase';
 import {
   SEARCH_CORRECTED_AGAIN_LABEL,
   SEARCH_ENTITIES_HEADING,
+  SEARCH_PAGE_HEADING,
   SEARCH_FAILED_BODY,
   SEARCH_FAILED_TITLE,
   SEARCH_FILTERED_EMPTY_BODY,
@@ -81,7 +83,6 @@ import {
   searchMadeWithChipLabel,
   searchMadeWithRemoveLabel,
   searchNoResultsTitle,
-  searchPostCardLabel,
   searchRecentAgainLabel,
   searchRecentRemoveLabel,
   searchRecipeCardLabel,
@@ -105,6 +106,8 @@ import {
   type SearchPageOpening,
 } from './search-address';
 import { clearSearchHistory, forgetSearchQuery, readSearchHistory, rememberSearchQuery } from '@/components/search/search-history';
+import { forgetKeptSearchPages, keepSearchPage, readKeptSearchPage, type KeptSearchPage } from '@/lib/search-kept-pages';
+import type { Session } from '@supabase/supabase-js';
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -115,7 +118,27 @@ const SEARCH_DEBOUNCE_MS = 300;
 type SearchRequest = { query: string; type: PublicSearchType; sort: PublicSearchSort; narrowing: string };
 // `relatedAsked`: the answer was asked for with related posts, or has been
 // asked about them since. They are asked about once per answer.
-type SearchAnswer = SearchRequest & { result: PublicSearchResponse; relatedAsked: boolean };
+// `viewerId`: the account the answer was asked for (a guest's, or null for a
+// visitor): what Back may draw it for (search-kept-pages.ts), and whose own
+// recipes its cards say "Your recipe" on.
+type SearchAnswer = SearchRequest & { result: PublicSearchResponse; relatedAsked: boolean; viewerId: string | null };
+
+/** A kept answer in the shape this page draws: a tab that spans a deploy may hold an older one. */
+function isKeptSearchAnswer(value: unknown): value is SearchAnswer {
+  if (typeof value !== 'object' || value === null) return false;
+  const answer = value as Partial<SearchAnswer>;
+  const result = answer.result as Partial<PublicSearchResponse> | undefined;
+  return typeof answer.query === 'string'
+    && typeof answer.type === 'string'
+    && typeof answer.sort === 'string'
+    && typeof answer.narrowing === 'string'
+    && typeof answer.relatedAsked === 'boolean'
+    && (answer.viewerId === null || typeof answer.viewerId === 'string')
+    && typeof result === 'object' && result !== null
+    && Array.isArray(result.creators?.items)
+    && Array.isArray(result.posts?.items)
+    && Array.isArray(result.recipes?.items);
+}
 type SearchFailure = SearchRequest & { message: string };
 
 class SearchRequestError extends Error {
@@ -136,6 +159,10 @@ async function failedResponseError(response: Response): Promise<SearchRequestErr
     ? Math.ceil(body.retryAfterSeconds)
     : null;
   return new SearchRequestError(searchBusyBody(seconds), seconds);
+}
+
+function requestKey(request: SearchRequest): string {
+  return `${request.type}:${request.sort}:${request.narrowing}:${request.query}`;
 }
 
 function isSameRequest(
@@ -292,36 +319,6 @@ function SearchSortControl({
   );
 }
 
-function PostSearchCard({ item, returnTo }: { item: ShowcaseFeedItem; returnTo: string }) {
-  const cover = item.mediaItems?.slice().sort((a, b) => a.sortOrder - b.sortOrder)[0];
-  const preview = cover?.previewUrl ?? (cover?.mediaKind === 'image' ? cover.url : null) ?? (item.mediaKind === 'image' ? item.mediaUrl : null);
-  return (
-    <Link
-      href={buildShowcaseDetailPath(item.id, { from: 'search', returnTo })}
-      data-search-result="post"
-      aria-label={searchPostCardLabel({ title: item.title, creatorName: item.creator.name, saveCount: item.saveCount, commentCount: item.commentCount })}
-      className="ui-focus-ring group overflow-hidden rounded-3xl border border-white/8 bg-white/[0.035] transition hover:-translate-y-0.5 hover:border-white/15 hover:bg-white/[0.055]"
-    >
-      {preview ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={preview} alt="" className="aspect-[4/3] w-full object-cover transition duration-300 group-hover:scale-[1.015]" />
-      ) : (
-        <div className="flex aspect-[4/3] items-center justify-center bg-[radial-gradient(circle_at_30%_20%,rgba(255,122,89,0.2),transparent_50%),#111116]">
-          <Sparkles className="h-7 w-7 text-[var(--ui-primary)]" aria-hidden="true" />
-        </div>
-      )}
-      <div className="p-4">
-        <div className="truncate text-sm font-semibold text-white">{item.title}</div>
-        <div className="mt-1 truncate text-xs text-zinc-400">{item.creator.name}</div>
-        <div className="mt-3 flex items-center gap-4 text-xs text-zinc-400">
-          <span>{item.saveCount} {item.saveCount === 1 ? 'save' : 'saves'}</span>
-          <span className="inline-flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" aria-hidden="true" />{item.commentCount}</span>
-        </div>
-      </div>
-    </Link>
-  );
-}
-
 function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; returnTo: string }) {
   // The server leaves the preview empty until a video has a poster; its
   // media URL is not an image, so only an image post falls back to it.
@@ -386,14 +383,12 @@ function SeeAllButton({ section, onPress }: { section: SearchTopSection; onPress
 
 // Posts that mean what the query says without holding its words: the same
 // cards as the search's own posts, under everything the search itself found.
-function RelatedPosts({ posts, returnTo }: { posts: readonly ShowcaseFeedItem[]; returnTo: string }) {
+function RelatedPosts({ posts, returnTo, viewerId }: { posts: readonly ShowcaseFeedItem[]; returnTo: string; viewerId: string | null }) {
   if (posts.length === 0) return null;
   return (
     <section aria-labelledby="search-related-heading">
       <h2 id="search-related-heading" className="mb-4 text-xl font-semibold text-white">{SEARCH_RELATED_HEADING}</h2>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {posts.map((item) => <PostSearchCard key={item.id} item={item} returnTo={returnTo} />)}
-      </div>
+      <SearchPostWall items={posts} returnTo={returnTo} viewerId={viewerId} />
     </section>
   );
 }
@@ -423,6 +418,15 @@ export default function SearchClient({
     filters: initialFilters,
     exact: initialExact,
   });
+  // What this address showed when the person left it, when Back or Forward
+  // has brought the page back to it (search-kept-pages.ts): drawn at once,
+  // with the pages "Show more" added, at the place they had scrolled to, and
+  // not asked for again. A fresh visit to the same address asks as before.
+  const [restored] = useState<KeptSearchPage<SearchAnswer> | null>(() => (
+    readSearchPageAddress()
+      ? readKeptSearchPage(`${window.location.pathname}${window.location.search}`, isKeptSearchAnswer)
+      : null
+  ));
   const [query, setQuery] = useState(opening.query);
   // The tab the user chose. It stays chosen whatever the length of the query:
   // a tab that is not searched yet shows the idle state (searchTabRuns).
@@ -442,6 +446,9 @@ export default function SearchClient({
   const [entityLabels, setEntityLabels] = useState<Record<string, string>>({});
   // A registered account: the only viewer "from creators I follow" means anything for.
   const [canFollow, setCanFollow] = useState(false);
+  // The account the session names now, once read (undefined until then):
+  // an answer asked for another is never kept for Back.
+  const viewer = useRef<string | null | undefined>(undefined);
   // Recent searches live in this browser alone, and are read after the first
   // paint: the server's HTML has none to agree with.
   const [history, setHistory] = useState<string[]>([]);
@@ -457,7 +464,11 @@ export default function SearchClient({
   const searchFormRef = useRef<HTMLFormElement | null>(null);
   // A search committed with Enter before its answer landed: kept once it finds something.
   const rememberOnAnswer = useRef<string | null>(null);
-  const [answer, setAnswer] = useState<SearchAnswer | null>(null);
+  const [answer, setAnswer] = useState<SearchAnswer | null>(() => restored?.answer ?? null);
+  // The request the restored answer is, while the page still asks it: the
+  // search it would make on mount is not made. Forgotten once the search
+  // changes, so coming back to the same text later asks as any search does.
+  const restoredRequest = useRef(restored ? requestKey(restored.answer) : null);
   const [failure, setFailure] = useState<SearchFailure | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [retryBlocked, setRetryBlocked] = useState(false);
@@ -546,6 +557,9 @@ export default function SearchClient({
       const { data: { session } } = await supabase.auth.getSession();
       const registered = Boolean(session?.user) && session?.user?.is_anonymous !== true;
       setCanFollow(registered);
+      const viewerId = session?.user?.id ?? null;
+      // Whose session this is, if the page's own read has not said yet.
+      if (viewer.current === undefined) viewer.current = viewerId;
       if (!registered && activeFilters.following) {
         // A visitor or a guest follows nobody, and the server would leave the
         // filter out: a shared link that names it is read without it, in the
@@ -590,7 +604,7 @@ export default function SearchClient({
         }
       }
       setAnswer((current) => {
-        if (!append) return { ...request, result: next, relatedAsked: askRelated };
+        if (!append) return { ...request, result: next, relatedAsked: askRelated, viewerId };
         if (!current || !isSameRequest(current, request.query, request.type, request.sort, request.narrowing)) return current;
         return {
           ...current,
@@ -650,10 +664,33 @@ export default function SearchClient({
     // Recent searches end at sign-out, as the app's do: a sign-out while this
     // page is open clears them here; one made anywhere else is caught by the
     // list's own check of whose it is (search-history.ts).
-    const { data } = supabase.auth.onAuthStateChange((event) => {
+    // Whose session this is: read once as the page mounts (a page Back has
+    // restored makes no request that would read it), then kept by the events.
+    let disposed = false;
+    const learnViewer = (session: Session | null) => {
+      viewer.current = session?.user?.id ?? null;
+      setCanFollow(Boolean(session?.user) && session?.user?.is_anonymous !== true);
+    };
+    void supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!disposed && viewer.current === undefined) learnViewer(session);
+    }).catch(() => {});
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') setHistory(clearSearchHistory());
+      // What another account's searches showed is not drawn for this one.
+      // supabase-js says SIGNED_IN again each time the tab comes back into
+      // view: only a change of account forgets them.
+      const next = session?.user?.id ?? null;
+      if (event === 'SIGNED_OUT' || (event === 'SIGNED_IN' && viewer.current !== undefined && next !== viewer.current)) {
+        forgetKeptSearchPages();
+      }
+      if (event === 'SIGNED_OUT' || event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') {
+        learnViewer(event === 'SIGNED_OUT' ? null : session ?? null);
+      }
     });
-    return () => data.subscription.unsubscribe();
+    return () => {
+      disposed = true;
+      data.subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => () => {
@@ -667,6 +704,13 @@ export default function SearchClient({
       requestSequence.current += 1;
       setAnswer(null);
       setFailure(null);
+      writeSearchPageAddress(address);
+      return;
+    }
+    // The restored answer is this search's: nothing to ask, only the address to keep.
+    const key = requestKey({ query: normalizedQuery, type: activeType, sort: activeSort, narrowing });
+    if (restoredRequest.current !== null && restoredRequest.current !== key) restoredRequest.current = null;
+    if (restoredRequest.current === key) {
       writeSearchPageAddress(address);
       return;
     }
@@ -691,7 +735,7 @@ export default function SearchClient({
     }
     const timer = window.setTimeout(search, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [address, canSearch, normalizedQuery, requestSearch]);
+  }, [activeSort, activeType, address, canSearch, narrowing, normalizedQuery, requestSearch]);
 
   // History and the browser's tabs tell searches apart: "nano · Search |
   // Magic Booklet". Written from here, after Next's metadata has set the
@@ -713,6 +757,76 @@ export default function SearchClient({
   }, [address]);
 
   const currentAnswer = isSameRequest(answer, normalizedQuery, activeType, activeSort, narrowing) ? answer : null;
+
+  // What is on screen, kept for Back and Forward (search-kept-pages.ts): the
+  // answer for the search in front, the pages added to it included, under the
+  // address that names it and the account it was asked for, and how far the
+  // page is scrolled. Kept at a press on a link (before it opens), when a
+  // creator is chosen from the list, when the page is hidden, and as the page
+  // goes; the scroll for that last one is the one noted while the address was
+  // still this page's, since the next page may scroll the window before this
+  // one is gone. Never an answer asked for an account the session no longer
+  // names: a sign-out unmounts the page with the account's answer on screen.
+  const onScreen = useRef<{ address: string; answer: SearchAnswer | null }>({ address, answer: null });
+  onScreen.current = { address, answer: currentAnswer };
+  const lastScrollY = useRef(restored?.scrollY ?? 0);
+  // A live region speaks when its words change, never for what it held when
+  // drawn: a page Back restored says its count a moment after it is drawn.
+  const [restoredUnsaid, setRestoredUnsaid] = useState(restored !== null);
+  useEffect(() => {
+    if (!restoredUnsaid) return;
+    const timer = window.setTimeout(() => setRestoredUnsaid(false), 100);
+    return () => window.clearTimeout(timer);
+  }, [restoredUnsaid]);
+  // Keeps what is on screen now: for a way out that is no link press (a creator chosen with Enter).
+  const keepBeforeLeaving = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const keep = (scrollY: number) => {
+      const { address: kept, answer: shown } = onScreen.current;
+      if (!shown || kept === SEARCH_PAGE_PATH || shown.viewerId !== viewer.current) return;
+      keepSearchPage(kept, shown, scrollY, shown.viewerId);
+    };
+    let frame = 0;
+    const noteScroll = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        if (window.location.pathname === SEARCH_PAGE_PATH) lastScrollY.current = window.scrollY;
+      });
+    };
+    const keepNow = () => {
+      if (window.location.pathname === SEARCH_PAGE_PATH) lastScrollY.current = window.scrollY;
+      keep(lastScrollY.current);
+    };
+    // A press that can leave the page: on a link. Every other press (a tab, a
+    // switch, the field) leaves the page where it is and writes nothing.
+    const keepOnLink = (event: MouseEvent) => {
+      if (event.target instanceof Element && event.target.closest('a[href]')) keepNow();
+    };
+    keepBeforeLeaving.current = keepNow;
+    window.addEventListener('scroll', noteScroll, { passive: true });
+    document.addEventListener('click', keepOnLink, true);
+    window.addEventListener('pagehide', keepNow);
+    return () => {
+      keepBeforeLeaving.current = null;
+      window.removeEventListener('scroll', noteScroll);
+      document.removeEventListener('click', keepOnLink, true);
+      window.removeEventListener('pagehide', keepNow);
+      if (frame) window.cancelAnimationFrame(frame);
+      keep(lastScrollY.current);
+    };
+  }, []);
+  // Back at the place the person left, before the first paint. The posts
+  // wall has measured its cards by now (a child's layout effect runs first)
+  // but places them in a render that follows this effect, so the window is
+  // scrolled against the wall's plain grid of the same columns, which is at
+  // least as tall as the placed wall: the scroll is never cut short, and the
+  // placing, in the same commit before the paint, keeps it (the E2E case holds
+  // the card under the same pixel).
+  useLayoutEffect(() => {
+    if (restored) window.scrollTo(0, restored.scrollY);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as the page mounts
+  }, []);
   const currentFailure = isSameRequest(failure, normalizedQuery, activeType, activeSort, narrowing) ? failure : null;
   const pending = canSearch && !currentAnswer && !currentFailure;
   // While the next query on the same tab loads, the previous cards stay up,
@@ -750,7 +864,7 @@ export default function SearchClient({
   // One live region says the settled outcome, the reading first: "Showing
   // results for “portrait”. 12 results for portriat", and the related posts
   // after it: "0 results for ocean at dusk. 3 related posts".
-  const statusMessage = !canSearch
+  const statusMessage = !canSearch || restoredUnsaid
     ? ''
     : pending
       ? SEARCH_SEARCHING_LABEL
@@ -827,8 +941,9 @@ export default function SearchClient({
   const runTypeaheadAction = (action: SearchTypeaheadAction | null) => {
     if (!action) return;
     if (action.type === 'creator') {
-      // Chosen with Enter there is no press to write the address first (above).
+      // Chosen with Enter there is no press to write the address first (above), nor to keep the page.
       writeSearchPageAddress(address);
+      keepBeforeLeaving.current?.();
       router.push(`/creators/${encodeURIComponent(action.username)}`);
       return;
     }
@@ -859,15 +974,18 @@ export default function SearchClient({
           : null;
 
   return (
-    <div className="min-h-screen px-4 pb-24 pt-10 sm:px-6 sm:pt-14">
+    // The field's row, pinned under the top bar: its height is the token the
+    // tabs, pinned under it from 640px, are offset by (rem, never pixels).
+    <div className="min-h-screen px-4 pb-24 sm:px-6 [--search-field-row:4.75rem]">
       <div className="mx-auto max-w-6xl">
-        <div className="max-w-2xl">
-          <p className="text-xs font-bold uppercase tracking-[0.22em] text-[var(--ui-primary)]">Discover Magic Booklet</p>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white sm:text-5xl">Search the creator community</h1>
-          <p className="mt-3 max-w-xl text-sm leading-6 text-zinc-400 sm:text-base">Find people, public work, and production-ready recipes without leaving your creative flow.</p>
-        </div>
+        {/* The page's one heading, for a screen reader and the outline: the
+            field is the first thing a person sees (no marketing heading over
+            it, search UX audit 2026-11-13, finding 4). */}
+        <h1 className="sr-only">{SEARCH_PAGE_HEADING}</h1>
 
-        <div className="sticky top-20 z-20 mt-8 rounded-4xl bg-black/70 p-2 backdrop-blur-xl sm:top-24">
+        {/* Solid and flush under the top bar, wider than the column by its
+            gutter, so no card shows through at its sides or above it. */}
+        <div className="sticky top-[var(--app-shell-topbar-height)] z-20 -mx-4 h-[var(--search-field-row)] bg-[var(--ui-bg-app)] px-4 pt-3 sm:-mx-6 sm:px-6">
           {/* Enter commits the search (it is kept among the recent ones); the
               results follow the typing either way. */}
           <form
@@ -912,13 +1030,18 @@ export default function SearchClient({
                 onPick={(row) => runTypeaheadAction(typeahead.press(row))}
                 onHighlight={typeahead.highlightRow}
                 // Under the box, over the tabs and the results while the person
-                // is still typing; clear of the phone's bottom navigation.
-                className="absolute inset-x-0 top-full z-30 mt-2 max-h-[min(26rem,calc(100dvh-17rem))]"
+                // is still typing; clear of the top bar, the field's row and
+                // the phone's bottom navigation.
+                className="absolute inset-x-0 top-full z-30 mt-2 max-h-[min(26rem,calc(100dvh-var(--app-shell-topbar-height)-var(--search-field-row)-var(--app-shell-bottom-nav-space,0px)-1rem))]"
               />
             ) : null}
           </form>
+        </div>
+        {/* Pinned under the field from 640px; on a phone it scrolls away with
+            the page, so the results get the screen and the field stays in reach. */}
+        <div className="z-10 -mx-4 bg-[var(--ui-bg-app)] px-4 pb-2 sm:sticky sm:top-[calc(var(--app-shell-topbar-height)+var(--search-field-row))] sm:-mx-6 sm:px-6">
           <div
-            className="mt-2 flex gap-1 overflow-x-auto px-1 pb-1"
+            className="flex gap-1 overflow-x-auto pb-1"
             role="tablist"
             aria-label="Search result type"
             onKeyDown={onTabListKeyDown}
@@ -952,7 +1075,7 @@ export default function SearchClient({
         {recentsShown ? (
           <div
             ref={recentsRef}
-            className="mt-6 rounded-3xl border border-white/8 bg-white/[0.025] p-4 sm:p-5"
+            className="mt-4 rounded-3xl border border-white/8 bg-white/[0.025] p-4 sm:p-5"
             // A press on a row must not take the focus from the field first:
             // the list would close under the pointer before the press lands.
             onMouseDown={(event) => event.preventDefault()}
@@ -1004,7 +1127,7 @@ export default function SearchClient({
           </div>
         ) : null}
 
-        <div className="mt-8" aria-busy={pending} onClickCapture={rememberOpenedResult}>
+        <div className="mt-4" aria-busy={pending} onClickCapture={rememberOpenedResult}>
           {filtersShown ? (
             <SearchFilterBar
               filters={activeFilters}
@@ -1063,7 +1186,7 @@ export default function SearchClient({
                   title={searchNoResultsTitle(normalizedQuery)}
                   body={hasPublicSearchFilters(activeFilters) ? SEARCH_FILTERED_EMPTY_BODY : SEARCH_NO_RESULTS_BODY}
                 />
-                <RelatedPosts posts={relatedPosts} returnTo={returnTo} />
+                <RelatedPosts posts={relatedPosts} returnTo={returnTo} viewerId={shownAnswer?.viewerId ?? null} />
               </div>
             )
           ) : (
@@ -1098,7 +1221,7 @@ export default function SearchClient({
                       ? <SeeAllLink section="posts" onPress={() => setPickedType('posts')} />
                       : <SearchSortControl kind="posts" sort={activeSort} onChange={setPickedSort} />}
                   </div>
-                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{shownAnswer.result.posts.items.map((item) => <PostSearchCard key={item.id} item={item} returnTo={returnTo} />)}</div>
+                  <SearchPostWall items={shownAnswer.result.posts.items} returnTo={returnTo} viewerId={shownAnswer.viewerId} />
                   {activeType === 'top' && searchTopSectionHasMore('posts', shownAnswer.result.posts.items.length)
                     ? <SeeAllButton section="posts" onPress={() => setPickedType('posts')} />
                     : null}
@@ -1134,7 +1257,7 @@ export default function SearchClient({
                 </div>
               ) : null}
 
-              <RelatedPosts posts={relatedPosts} returnTo={returnTo} />
+              <RelatedPosts posts={relatedPosts} returnTo={returnTo} viewerId={shownAnswer?.viewerId ?? null} />
 
               {currentFailure ? <p role="alert" className="text-center text-sm text-rose-300">{searchFailedLine(currentFailure.message)}</p> : null}
             </div>

@@ -2,16 +2,16 @@
 
 import NsfwPostReveal from '@/components/NsfwPostReveal';
 import Link from 'next/link';
-import { Suspense } from 'react';
+import { Suspense, useRef } from 'react';
 import { BookText, ShoppingBag } from 'lucide-react';
 
 import { InviteHandoffBar } from '@/components/InviteHandoffBar';
 import PostCommentAvatar from '@/components/PostCommentAvatar';
 import {
   getPostFeedTitle,
+  getPostMadeWithLabel,
   type PostPreviewKind,
 } from '@/lib/post-feed-presentation';
-import { getPostMadeWithLabel, isTextOnlyPost as readTextOnlyPost } from '@/lib/post-made-with';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import {
   formatPostResourcePriceLabel,
@@ -30,9 +30,14 @@ import { buildRecipePanelProps, getRecipeRemixOffer } from './recipe-panel-props
 import ReportPostButton from './ReportPostButton';
 import ShowcaseDetailActions from './ShowcaseDetailActions';
 import ShowcaseDetailBackLink from './ShowcaseDetailBackLink';
-import { ShowcaseDetailCommentCountProvider, ShowcaseDetailComments } from './ShowcaseDetailCommentCount';
+import {
+  ShowcaseDetailCommentCountProvider,
+  ShowcaseDetailComments,
+  ShowcaseDetailCommentsPanel,
+} from './ShowcaseDetailCommentCount';
 import ShowcaseDetailEngagementRow from './ShowcaseDetailEngagementRow';
 import ShowcasePostUnavailable from './ShowcasePostUnavailable';
+import { usePostRailTop } from './usePostRailTop';
 import { ShowcaseSearchParamsReporter, useShowcasePostViewer } from './useShowcasePostViewer';
 
 /**
@@ -107,6 +112,7 @@ export default function ShowcaseDetailBody({
   // gate takes the place of the content only; the byline, the rail (Report,
   // Block, Owner tools) and the engagement row stay, as the app keeps them.
   const isNsfwCovered = Boolean(detail.isNsfw && !detail.nsfwRevealed);
+  const layoutRef = useRef<HTMLDivElement | null>(null);
   const viewer = useShowcasePostViewer({
     postId: detail.id,
     creatorId: detail.creator.id,
@@ -122,6 +128,8 @@ export default function ShowcaseDetailBody({
   });
   // For the owner, the visibility they just saved here: the cached page may not have caught up.
   const { bundle, lockedViewer, viewerIsOwner, deliveryId, returnContext, visibility } = viewer;
+  // The rail ends inside the window: it is told where its top is.
+  usePostRailTop(layoutRef, `${detail.id}:${viewer.blocked ? 'blocked' : 'drawn'}`);
   const previewKinds = bundle?.lockedPreview?.resourceKinds ?? bundle?.resourceKinds ?? [];
   const previewKindSummary = formatResourceKinds(previewKinds);
   const postTypeLabel = getPostTypeLabel({
@@ -130,9 +138,11 @@ export default function ShowcaseDetailBody({
     mediaKind: detail.mediaKind,
     postFormat: detail.postFormat,
   });
-  const isTextOnlyPost = readTextOnlyPost(detail);
-  // What the post was made with: one rule for this line, the page's title and
-  // its description (`getPostMadeWithLabel`).
+  const isTextOnlyPost = (detail.postFormat === 'text' || detail.category === 'text') && !detail.mediaUrl;
+  // What the post was made with: its model by the name the feed card gives it
+  // (the slug, "nano-banana-2", was printed here), else an outside tool its
+  // creator named; nothing on a text post (`getPostMadeWithLabel`, which the
+  // search card's line reads too).
   const madeWithLabel = getPostMadeWithLabel(detail);
   const detailMediaItems = detail.mediaItems?.length
     ? detail.mediaItems
@@ -216,7 +226,31 @@ export default function ShowcaseDetailBody({
       {resourceBundlePanel}
     </div>
   ) : null;
-  const commentsBlock = visibility === 'public' ? (
+  /*
+   * The prompt of a post with no recipe, where a recipe would show its own:
+   * under the post, in the document column. It sat in the rail's card, so the
+   * same words were beside the picture on one post and under it on the next
+   * (owner, 2026-11-13). A post with a recipe sends no prompt at all
+   * (`sanitizePublicPostContent`), so the two never draw together.
+   */
+  const promptBlock = detail.prompt ? (
+    <div
+      data-testid="canonical-post-prompt"
+      className="mt-8 w-full min-w-0 max-w-4xl border-t border-white/8 pt-8"
+    >
+      <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+        {detail.postFormat === 'text' ? 'Workflow notes' : 'Prompt'}
+      </h2>
+      <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-300 [overflow-wrap:anywhere]">
+        {detail.prompt}
+      </p>
+    </div>
+  ) : null;
+  // The conversation is a panel in the rail, beside the post. Under an NSFW
+  // cover it stays in the document column, where the gate shows it with the
+  // post it reveals: the rail is outside the gate and knows nothing of it.
+  const commentsAreOpen = visibility === 'public';
+  const coveredCommentsBlock = commentsAreOpen && isNsfwCovered ? (
     <div
       id="comments"
       data-testid="canonical-post-comments"
@@ -242,7 +276,7 @@ export default function ShowcaseDetailBody({
       commentCount={detail.commentCount}
       remixCount={detail.remixCount}
       shareVisitCount={detail.shareVisitCount}
-      showComments={visibility === 'public'}
+      showComments={commentsAreOpen}
       recipeRemix={remixOffer.recipeRemix}
     />
   );
@@ -273,11 +307,12 @@ export default function ShowcaseDetailBody({
           <ShowcaseDetailBackLink href={returnContext.href} label={returnContext.label} />
         </div>
 
-        <div className="canonical-post-layout">
+        <ShowcaseDetailCommentCountProvider key={detail.id} initialCount={detail.commentCount}>
+        <div ref={layoutRef} className="canonical-post-layout">
           {/*
-            * The masthead owns its own grid row so the rail can start level
-            * with the media rather than with the byline — attribution reads
-            * above the post, the way a document titles itself.
+            * The masthead owns its own grid row: attribution reads above the
+            * post, the way a document titles itself. The rail runs beside
+            * both rows since it took the conversation in.
             */}
           <header
             data-testid="canonical-post-head"
@@ -353,10 +388,9 @@ export default function ShowcaseDetailBody({
             aria-label="Post content"
             className="canonical-post-media min-w-0"
           >
-            <ShowcaseDetailCommentCountProvider key={detail.id} initialCount={detail.commentCount}>
               {isNsfwCovered ? (
                 <div data-testid="nsfw-detail-gate" className="w-full max-w-4xl">
-                  <NsfwPostReveal key={detail.id} postId={detail.id} afterReveal={commentsBlock}>
+                  <NsfwPostReveal key={detail.id} postId={detail.id} afterReveal={coveredCommentsBlock}>
                     {engagementRow}
                   </NsfwPostReveal>
                 </div>
@@ -404,16 +438,15 @@ export default function ShowcaseDetailBody({
 
                       {engagementRow}
                   </article>
+                  {promptBlock}
                   {recipeBlock}
-                  {commentsBlock}
                 </>
               )}
-            </ShowcaseDetailCommentCountProvider>
           </section>
 
           <aside
             data-testid="canonical-post-actions"
-            className="canonical-post-actions min-w-0 space-y-4"
+            className="canonical-post-actions flex min-w-0 flex-col gap-4"
           >
             <div className="overflow-hidden rounded-3xl border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.86),rgba(10,10,12,0.9))] shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
               {/*
@@ -467,17 +500,6 @@ export default function ShowcaseDetailBody({
                 />
               </div>
 
-              {detail.prompt ? (
-                <div className="border-t border-white/8 px-5 py-4 sm:px-6">
-                  <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                    {detail.postFormat === 'text' ? 'Workflow notes' : 'Prompt'}
-                  </div>
-                  <p className="mt-3 max-h-64 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-7 text-zinc-300 [overflow-wrap:anywhere] custom-scrollbar">
-                    {detail.prompt}
-                  </p>
-                </div>
-              ) : null}
-
               {/* Not on the creator's own post: the feed card's menu and the app
                   leave it out there too, and the server refuses the report. */}
               {viewerIsOwner ? null : (
@@ -490,8 +512,18 @@ export default function ShowcaseDetailBody({
                 />
               )}
             </div>
+
+            {commentsAreOpen && !isNsfwCovered ? (
+              <ShowcaseDetailCommentsPanel
+                postId={detail.id}
+                postCreatorId={detail.creator.id}
+                commentCount={detail.commentCount}
+                deliveryId={deliveryId}
+              />
+            ) : null}
           </aside>
         </div>
+        </ShowcaseDetailCommentCountProvider>
       </div>
 
       {bundle && lockedViewer ? (

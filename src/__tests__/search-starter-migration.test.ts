@@ -126,10 +126,12 @@ describe('search starter migration', () => {
 
   it('counts an entity for the search its row runs, by search’s own match, read for that one entity', () => {
     const sql = entityOffer();
-    // The query: the name most of the viewer's posts with it print, read as search reads a query.
+    // The query: of the name most of the viewer's posts with it print and its key
+    // (20261113152020), the one whose search opens more, read as search reads a query.
     expect(sql).toMatch(/ORDER BY \(printed\.label = p_key\), count\(\*\) DESC, printed\.label/);
-    expect(sql).toMatch(/v_query := lower\(btrim\(regexp_replace\(v_label, '\[\[:space:\]\]\+', ' ', 'g'\)\)\);/);
-    expect(sql).toMatch(/IF char_length\(v_query\) < 3 OR char_length\(v_query\) > 100 THEN\s+RETURN;/);
+    expect(sql).toContain('FOREACH v_candidate IN ARRAY ARRAY[v_label, p_key] LOOP');
+    expect(sql).toMatch(/v_query := lower\(btrim\(regexp_replace\(v_candidate, '\[\[:space:\]\]\+', ' ', 'g'\)\)\);/);
+    expect(sql).toContain('CONTINUE WHEN char_length(v_query) < 3 OR char_length(v_query) > 100;');
     expect(sql).toContain('v_tsquery := public.search_query_tsquery(v_query, true);');
     expect(sql).toContain('v_name_tsquery := public.search_query_tsquery(v_query, false);');
     expect(sql).toContain(String.raw`v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_');`);
@@ -141,7 +143,9 @@ describe('search starter migration', () => {
     expect(sql).toMatch(/WHERE members\.kind = p_kind\s+AND members\.key = p_key/g);
     expect(sql.match(/blocks\.blocker_user_id = p_viewer_user_id/g)).toHaveLength(2);
     expect(sql.match(/blocks\.blocked_user_id = p_viewer_user_id/g)).toHaveLength(2);
-    expect(sql).toMatch(/IF v_total = 0 OR NOT v_named THEN\s+RETURN;/);
+    // A query counts only when one of its posts names the entity as it does; the printed name wins a tie.
+    expect(sql).toContain('IF v_named AND v_total > v_best_total THEN');
+    expect(sql).toMatch(/IF v_best_total = 0 THEN\s+RETURN;/);
     // Bounded: 201 rows a count, planned for its own values, nested loops, one process.
     expect(sql).toMatch(/c_count_cap CONSTANT integer := 200;/);
     expect(sql.match(/LIMIT c_count_cap \+ 1/g)).toHaveLength(2);

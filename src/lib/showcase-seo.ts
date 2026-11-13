@@ -1,4 +1,4 @@
-import { getPostMadeWithLabel, isTextOnlyPost } from '@/lib/post-made-with';
+import { getPostMadeWithLabel } from '@/lib/post-feed-presentation';
 import type { PublicPostDetail } from '@/lib/public-posts';
 import { siteConfig } from '@/lib/seo';
 import { GENERIC_SUGGESTED_TITLES } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
@@ -42,6 +42,11 @@ export function hasMeaningfulTitle(title: string | null | undefined): boolean {
  * perhaps with a camera, so it is an "image" or "video" and claims nothing
  * about AI. A text post is a "post".
  */
+/** A post with no media is a text post, as its page reads it (`ShowcaseDetailBody`). */
+function isTextOnlyPost(detail: PublicPostDetail): boolean {
+    return (detail.postFormat === 'text' || detail.category === 'text') && !detail.mediaUrl;
+}
+
 function describePostKind(detail: PublicPostDetail): string {
     if (isTextOnlyPost(detail)) return 'post';
 
@@ -81,7 +86,8 @@ function describePost(detail: PublicPostDetail, kind: string): string {
  * needs; an untitled one is described entirely from its metadata rather than
  * sharing a placeholder with every other untitled post. A text post's title is
  * its own words alone. The model is named as the page's Made with line names
- * it (`getPostMadeWithLabel`), and only where that line does.
+ * it (`getPostMadeWithLabel`, which the search cards read too), and only where
+ * that line does.
  */
 export function composeShowcaseTitle(detail: PublicPostDetail): string {
     const kind = describePostKind(detail);
