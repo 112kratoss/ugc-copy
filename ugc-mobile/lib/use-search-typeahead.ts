@@ -17,6 +17,8 @@ import {
   searchTypeaheadRows,
   searchTypeaheadStatus,
   searchTypeaheadUnsettledRows,
+  searchTypingRecents,
+  searchTypingSections,
   type SearchSuggestResponse,
   type SearchTypeaheadAction,
   type SearchTypeaheadAnswer,
@@ -40,22 +42,25 @@ const NO_ROWS: readonly string[] = [];
  * (`lib/public-search-policy/search-typeahead.ts`), the web's search page
  * follows the same; this is the app's timer and request around them.
  *
- * `active` is the search open with its field focused: nothing is asked or
- * drawn otherwise, so the list goes when the keyboard does and never stands
- * over results the person has scrolled into.
+ * `active` is the search open and in its typing mode (`lib/search-typing-mode.ts`):
+ * from the moment the field takes the focus or is typed in until the person
+ * commits a search. The list is drawn *in place of* results for that whole
+ * time, the keyboard put away by a drag included, and nothing is asked or
+ * drawn otherwise. It is the "Search for" row, the recent searches the text
+ * begins (`history`), then the answer's sections (searchTypingSections).
  */
-export function useSearchTypeahead({ api, text, active, viewerKey }: {
+export function useSearchTypeahead({ api, text, active, viewerKey, history }: {
   api: MagicbookletApiClient;
   /** What the field holds. */
   text: string;
   active: boolean;
   /** Whose answers these are: another account's are not drawn for this one. */
   viewerKey: string | null;
+  /** The recent searches kept on this device, newest first. */
+  history: readonly string[];
 }) {
   const query = useMemo(() => searchTypeaheadQuery(text), [text]);
   const [answer, setAnswer] = useState<SearchTypeaheadAnswer | null>(null);
-  // The query the list was closed for: the Search key, or a row chosen.
-  const [closedQuery, setClosedQuery] = useState<string | null>(null);
   const kept = useRef(new Map<string, KeptAnswer>());
   const keptFor = useRef(viewerKey);
   // A 429 names how long the limit lasts: nothing is asked until then.
@@ -123,24 +128,28 @@ export function useSearchTypeahead({ api, text, active, viewerKey }: {
   // State that follows the field, adjusted while rendering, as React asks of
   // state that follows a value (an effect would draw the stale state for a
   // frame first):
-  //   - a close belongs to the text it was made on: once the field holds
-  //     another, it is forgotten, so the same text typed again later is
-  //     offered its list;
   //   - an answer is kept on show for the text typed after it only (the
   //     shared rule, searchTypeaheadDrawn): it goes when the field is emptied,
-  //     when the focus leaves, so coming back never draws what was asked
+  //     when the typing ends, so coming back never draws what was asked
   //     before, and when the account changes.
   const [checkedFor, setCheckedFor] = useState({ active, query, viewerKey });
   if (checkedFor.active !== active || checkedFor.query !== query || checkedFor.viewerKey !== viewerKey) {
     setCheckedFor({ active, query, viewerKey });
-    if (closedQuery !== null && closedQuery !== query) setClosedQuery(null);
     if ((!active || query === null || checkedFor.viewerKey !== viewerKey) && answer !== null) setAnswer(null);
   }
 
-  // This text's answer, or until it arrives the one before it, marked stale.
-  const { sections, stale } = useMemo(() => searchTypeaheadDrawn(answer, query), [answer, query]);
+  // This text's answer, or until it arrives the one before it, marked stale,
+  // under the rows that need no answer: "Search for" and the recents it begins.
+  const drawn = useMemo(() => searchTypeaheadDrawn(answer, query), [answer, query]);
+  const stale = drawn.stale;
+  const recents = useMemo(() => searchTypingRecents(history, query), [history, query]);
+  const sections = useMemo(
+    () => searchTypingSections({ query, sections: drawn.sections, recents }),
+    [drawn.sections, query, recents],
+  );
   const rows = useMemo(() => searchTypeaheadRows(sections), [sections]);
-  const shown = isSearchTypeaheadShown({ focused: active, query, closedQuery, rowCount: rows.length });
+  // The list is the typing screen: never closed while the typing lasts.
+  const shown = isSearchTypeaheadShown({ focused: active, query, closedQuery: null, rowCount: rows.length });
 
   const placement = useRef<SearchTypeaheadPlacement | null>(null);
   // The rows' places, kept as they are drawn (the shared rule,
@@ -162,7 +171,7 @@ export function useSearchTypeahead({ api, text, active, viewerKey }: {
   // on show that moved a row until the order has stood for the same time (a
   // little longer than the press rule asks of a row an earlier change moved).
   // A list that comes on show has nothing to settle, and neither has a change
-  // that moves no row. Adjusted while rendering, as the close above is.
+  // that moves no row. Adjusted while rendering, as the answer above is.
   const rowOrder = useMemo(() => rows.map((row) => row.key).join('\n'), [rows]);
   const drawnOrder = shown ? rowOrder : null;
   const [order, setOrder] = useState<{ drawn: string | null; unsettled: readonly string[] }>({ drawn: null, unsettled: NO_ROWS });
@@ -196,21 +205,16 @@ export function useSearchTypeahead({ api, text, active, viewerKey }: {
     return () => clearTimeout(timer);
   }, [rowCount, shown, stale]);
 
-  /** The Search key: the search is what is typed, and the list gets out of its way. */
-  const close = useCallback(() => setClosedQuery(query), [query]);
-
   /**
-   * A row was pressed: what to do, with the list closed for the text the
-   * field will then hold; or null for a press that does not count, because
-   * the row has only just come to stand under the finger
-   * (isSearchTypeaheadPressAccepted).
+   * A row was pressed: what to do; or null for a press that does not count,
+   * because the row has only just come to stand under the finger
+   * (isSearchTypeaheadPressAccepted). What ends the typing is the screen's to
+   * say (a creator's profile leaves it as it is).
    */
   const press = useCallback((row: SearchTypeaheadRow): SearchTypeaheadAction | null => {
     if (!isSearchTypeaheadPressAccepted(placement.current, row.key, Date.now())) return null;
-    const action = searchTypeaheadAction(row);
-    setClosedQuery(action.type === 'search' ? searchTypeaheadQuery(action.query) : query);
-    return action;
-  }, [query]);
+    return searchTypeaheadAction(row);
+  }, []);
 
   return {
     /** The list is drawn. */
@@ -222,7 +226,6 @@ export function useSearchTypeahead({ api, text, active, viewerKey }: {
     sections,
     /** For a screen reader: "5 suggestions" once this text's list has stood for a pause, nothing once it is gone. */
     status,
-    close,
     press,
   };
 }

@@ -1,4 +1,4 @@
-import { Box, Search, Wrench } from 'lucide-react-native';
+import { Box, Clock3, Search, Wrench } from 'lucide-react-native';
 import { Pressable, Text, View } from 'react-native';
 
 import { CreatorAvatar } from '@/components/ui';
@@ -6,9 +6,12 @@ import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { searchEntityCountLabel, searchEntityKindLabel } from '@/lib/public-search-policy/public-search-policy';
 import {
   SEARCH_TYPEAHEAD_LIST_LABEL,
+  searchForRowLabel,
+  searchTypeaheadQuery,
   searchTypeaheadRowLabel,
+  searchTypedRuns,
   type SearchTypeaheadRow,
-  type SearchTypeaheadSection,
+  type SearchTypingSection,
 } from '@/lib/public-search-policy/search-typeahead';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -23,7 +26,7 @@ function RowMark({ row }: { row: SearchTypeaheadRow }) {
   if (row.kind === 'creator') {
     return <CreatorAvatar uri={row.creator.avatarUrl} name={row.creator.displayName} size={MARK_SIZE} />;
   }
-  const Icon = row.kind === 'completion' ? Search : row.entity.kind === 'model' ? Box : Wrench;
+  const Icon = row.kind === 'recent' ? Clock3 : row.kind === 'entity' ? (row.entity.kind === 'model' ? Box : Wrench) : Search;
   return (
     <View
       style={{
@@ -40,9 +43,44 @@ function RowMark({ row }: { row: SearchTypeaheadRow }) {
   );
 }
 
-function RowWords({ row }: { row: SearchTypeaheadRow }) {
+// A completion or a recent search with the part not yet typed emphasised and
+// the part typed plain (searchTypedRuns). The runs are one Text: the row's
+// accessible name, set on its button, stays whole.
+function TypedRuns({ text, query }: { text: string; query: string | null }) {
   const theme = useAppTheme();
-  const title = row.kind === 'creator' ? row.creator.displayName : row.kind === 'entity' ? row.entity.label : row.text;
+  return (
+    <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15 }}>
+      {searchTypedRuns(text, query).map((run, index) => (
+        <Text
+          key={index}
+          style={run.typed ? { color: theme.colors.textSecondary, fontWeight: '400' } : { color: theme.colors.text, fontWeight: '700' }}
+        >
+          {run.text}
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
+function RowWords({ row, query }: { row: SearchTypeaheadRow; query: string | null }) {
+  const theme = useAppTheme();
+  if (row.kind === 'completion' || row.kind === 'recent') {
+    return (
+      <View style={{ minWidth: 0, flex: 1 }}>
+        <TypedRuns text={row.text} query={query} />
+      </View>
+    );
+  }
+  if (row.kind === 'search') {
+    return (
+      <View style={{ minWidth: 0, flex: 1 }}>
+        <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '700' }}>
+          {searchForRowLabel(row.text)}
+        </Text>
+      </View>
+    );
+  }
+  const title = row.kind === 'creator' ? row.creator.displayName : row.entity.label;
   const detail = row.kind === 'creator'
     ? `@${row.creator.username}${row.creator.isFollowing ? ' · Following' : ''}`
     : row.kind === 'entity'
@@ -50,10 +88,7 @@ function RowWords({ row }: { row: SearchTypeaheadRow }) {
       : null;
   return (
     <View style={{ minWidth: 0, flex: 1 }}>
-      <Text
-        numberOfLines={1}
-        style={{ color: theme.colors.text, fontSize: 15, fontWeight: row.kind === 'completion' ? '600' : '800' }}
-      >
+      <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>
         {title}
       </Text>
       {detail ? <Text numberOfLines={1} style={{ marginTop: 1, color: theme.colors.muted, fontSize: 13 }}>{detail}</Text> : null}
@@ -62,12 +97,13 @@ function RowWords({ row }: { row: SearchTypeaheadRow }) {
 }
 
 /**
- * What the search field offers while a person types: creators, then models
- * and tools, then completions, as one quiet panel above the results. Each row
- * is a button a thumb can press (44pt and more) that says what it does; the
- * list it sits in keeps the keyboard up for the press
- * (`keyboardShouldPersistTaps` on the overlay's scroll view), so a row is
- * chosen in one tap.
+ * What the search screen shows while a person types, in place of results
+ * (`lib/search-typing-mode.ts`): "Search for “…”", the recent searches the
+ * text begins, then creators, models and tools, and completions
+ * (searchTypingSections), as one list under the tabs. Each row is a button a
+ * thumb can press (44pt and more) that says what it does; the list it sits in
+ * keeps the keyboard up for the press (`keyboardShouldPersistTaps` on the
+ * overlay's scroll view), so a row is chosen in one tap.
  *
  * `busy` is the panel changing or just changed: its rows are the answer to the
  * text before this one, kept on show until this text's arrives so the panel
@@ -83,47 +119,45 @@ function RowWords({ row }: { row: SearchTypeaheadRow }) {
  */
 export function SearchTypeaheadList({
   sections,
+  query: text,
   busy = false,
   settlingRows = NO_ROWS,
   onPick,
 }: {
-  sections: readonly SearchTypeaheadSection[];
+  sections: readonly SearchTypingSection[];
+  /** What the field holds: the part of a row already typed is drawn plain. */
+  query: string;
   busy?: boolean;
   settlingRows?: readonly string[];
   onPick: (row: SearchTypeaheadRow) => void;
 }) {
   const theme = useAppTheme();
+  const query = searchTypeaheadQuery(text);
   return (
     <View
       accessibilityLabel={SEARCH_TYPEAHEAD_LIST_LABEL}
       accessibilityState={{ busy }}
       testID="search-typeahead-list"
-      style={{
-        borderRadius: appTheme.radii.lg,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: theme.colors.borderSubtle,
-        backgroundColor: theme.colors.surface,
-        paddingVertical: 6,
-      }}
+      // The screen's own list, edge to edge in its margins, as the recent
+      // searches under an empty field are: not a panel over something else.
+      style={{ marginTop: -6 }}
     >
       {sections.map((section) => (
         <View key={section.id}>
-          <Text
+          {section.heading === null ? null : <Text
             accessibilityRole="header"
             style={{
               color: theme.colors.muted,
               fontSize: 12,
               fontWeight: '800',
               letterSpacing: 0.6,
-              paddingHorizontal: 13,
-              paddingTop: 8,
+              paddingTop: 14,
               paddingBottom: 2,
               textTransform: 'uppercase',
             }}
           >
             {section.heading}
-          </Text>
+          </Text>}
           {section.rows.map((row) => {
             const settling = settlingRows.includes(row.key);
             return (
@@ -144,12 +178,11 @@ export function SearchTypeaheadList({
                   gap: 12,
                   // A row that takes no press yet is drawn as a control that is off, for that moment.
                   opacity: settling ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-                  paddingHorizontal: 13,
                   paddingVertical: 6,
                 })}
               >
                 <RowMark row={row} />
-                <RowWords row={row} />
+                <RowWords row={row} query={query} />
               </Pressable>
             );
           })}

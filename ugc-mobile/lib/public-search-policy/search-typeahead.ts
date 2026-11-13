@@ -32,6 +32,7 @@ import {
   searchEntityActionLabel,
   searchEntityId,
   searchQueryLength,
+  searchRecentAgainLabel,
   type SearchEntity,
   type SearchEntityKind,
 } from './public-search-policy';
@@ -188,7 +189,11 @@ export type SearchTypeaheadSectionId = (typeof SEARCH_TYPEAHEAD_SECTION_IDS)[num
 export type SearchTypeaheadRow =
   | { kind: 'creator'; key: string; creator: SearchSuggestCreator }
   | { kind: 'entity'; key: string; entity: SearchEntity }
-  | { kind: 'completion'; key: string; text: string };
+  | { kind: 'completion'; key: string; text: string }
+  /** The text as typed, searched as it stands: "Search for “nano”" (searchTypingSections). */
+  | { kind: 'search'; key: string; text: string }
+  /** A recent search the typed text begins (searchTypingSections). */
+  | { kind: 'recent'; key: string; text: string };
 
 export interface SearchTypeaheadSection {
   id: SearchTypeaheadSectionId;
@@ -248,7 +253,7 @@ export function searchTypeaheadSections(answer: SearchSuggestResponse | null, qu
 }
 
 /** Every row of the sections, top to bottom: the order the arrow keys walk. */
-export function searchTypeaheadRows(sections: readonly SearchTypeaheadSection[]): SearchTypeaheadRow[] {
+export function searchTypeaheadRows(sections: readonly { rows: readonly SearchTypeaheadRow[] }[]): SearchTypeaheadRow[] {
   return sections.flatMap((section) => section.rows);
 }
 
@@ -342,6 +347,133 @@ export function searchTypeaheadAction(row: SearchTypeaheadRow): SearchTypeaheadA
   return { type: 'search', query: row.text };
 }
 
+// ─── While typing: the list in place of results ──────────────────────────────
+
+/**
+ * A screen that shows suggestions *instead of* results while the person types
+ * (the app: search UX audit 2026-11-13, finding 1) draws one list for the text
+ * in the box, top to bottom:
+ *
+ *   1. "Search for “nano”": the text as it stands, searched as the Search key
+ *      would (a `search` row; first, so it never moves under a finger);
+ *   2. the recent searches the text begins, newest first, with a clock
+ *      (`recent` rows, at most SEARCH_TYPING_MAX_RECENTS);
+ *   3. the answer's own sections (searchTypeaheadSections: creators, models
+ *      and tools, completions), less a completion that is already a row above.
+ *
+ * The first two need no answer, so the list is there from the first letter
+ * and an answer only ever adds rows under them. Nothing for an empty box:
+ * that is the screen's empty state (recent searches, ideas to start from).
+ */
+export const SEARCH_TYPING_MAX_RECENTS = 3;
+
+/** The first row of the typing list, its words and its accessible name: "Search for “nano”". */
+export function searchForRowLabel(text: string): string {
+  return `Search for “${text}”`;
+}
+
+export const SEARCH_TYPING_SEARCH_ROW_KEY = 'search';
+
+// Case and spacing folded as recent searches compare them.
+function foldedText(text: string): string {
+  return normalizeSearchHistoryQuery(text).toLowerCase();
+}
+
+/**
+ * The recent searches the typed text begins: the whole search, or one of its
+ * words ("por" finds "neon portrait"), in the order kept (newest first), at
+ * most `limit`. Never the text itself, which the "Search for" row already is.
+ */
+export function searchTypingRecents(
+  history: readonly string[],
+  query: string | null,
+  limit: number = SEARCH_TYPING_MAX_RECENTS,
+): string[] {
+  if (query === null) return [];
+  const typed = foldedText(query);
+  if (!typed) return [];
+  const found: string[] = [];
+  for (const item of history) {
+    const folded = foldedText(item);
+    if (!folded || folded === typed) continue;
+    const begins = folded.startsWith(typed) || folded.split(' ').some((_, index, words) => words.slice(index).join(' ').startsWith(typed));
+    if (!begins) continue;
+    found.push(normalizeSearchHistoryQuery(item));
+    if (found.length === limit) break;
+  }
+  return found;
+}
+
+export type SearchTypingSectionId = 'search' | 'recents' | SearchTypeaheadSectionId;
+
+export interface SearchTypingSection {
+  id: SearchTypingSectionId;
+  /** Null for the rows that say what they are themselves: "Search for", and recents with their clock. */
+  heading: string | null;
+  rows: SearchTypeaheadRow[];
+}
+
+/**
+ * The typing list for the text in the box (`query`, searchTypeaheadQuery of
+ * it): the "Search for" row, the recent searches it begins, then `sections`
+ * (searchTypeaheadDrawn's) with any completion that repeats a row above left
+ * out. Empty when the box asks about nothing.
+ */
+export function searchTypingSections(input: {
+  query: string | null;
+  sections: readonly SearchTypeaheadSection[];
+  recents: readonly string[];
+}): SearchTypingSection[] {
+  if (input.query === null) return [];
+  const shown = new Set<string>([foldedText(input.query)]);
+  const recents = input.recents.map((text) => {
+    shown.add(foldedText(text));
+    return { kind: 'recent' as const, key: `recent:${foldedText(text)}`, text };
+  });
+  const answered: SearchTypingSection[] = [];
+  for (const section of input.sections) {
+    const rows = section.id === 'completions'
+      ? section.rows.filter((row) => row.kind !== 'completion' || !shown.has(foldedText(row.text)))
+      : section.rows;
+    if (rows.length) answered.push({ id: section.id, heading: section.heading, rows });
+  }
+  return [
+    { id: 'search', heading: null, rows: [{ kind: 'search', key: SEARCH_TYPING_SEARCH_ROW_KEY, text: input.query }] },
+    ...(recents.length ? [{ id: 'recents' as const, heading: null, rows: recents }] : []),
+    ...answered,
+  ];
+}
+
+/** A run of a suggestion's words: what the person typed, or what the row adds to it. */
+export interface SearchTypedRun {
+  text: string;
+  /** True for the part already typed, drawn as plain; the rest is emphasised. */
+  typed: boolean;
+}
+
+/**
+ * A completion or a recent search as runs, so the part not yet typed can be
+ * emphasised and the part typed drawn plain (as Instagram, X, Pinterest and
+ * Reddit do): "nano" in "nano banana pro" is typed, " banana pro" is not. The
+ * typed text is found at the start of the row or at the start of one of its
+ * words, ignoring case; where it is not found the whole row is the row's own.
+ * The runs joined are the row's text exactly: the accessible name stays whole.
+ */
+export function searchTypedRuns(text: string, query: string | null): SearchTypedRun[] {
+  const typed = query === null ? '' : normalizeSearchHistoryQuery(query).toLowerCase();
+  const lower = text.toLowerCase();
+  // Lower case may change a text's length (a dotted capital I): then there is no safe place to cut.
+  let at = typed && lower.length === text.length ? lower.indexOf(typed) : -1;
+  while (at > 0 && /\S/.test(lower[at - 1])) at = lower.indexOf(typed, at + 1);
+  if (at < 0) return text ? [{ text, typed: false }] : [];
+  const runs: SearchTypedRun[] = [
+    { text: text.slice(0, at), typed: false },
+    { text: text.slice(at, at + typed.length), typed: true },
+    { text: text.slice(at + typed.length), typed: false },
+  ];
+  return runs.filter((run) => run.text.length > 0);
+}
+
 // ─── When a press counts ─────────────────────────────────────────────────────
 
 /**
@@ -368,7 +500,7 @@ export type SearchTypeaheadPlacement = ReadonlyMap<string, { index: number; sinc
  */
 export function placeSearchTypeaheadRows(
   previous: SearchTypeaheadPlacement | null,
-  rows: readonly SearchTypeaheadRow[],
+  rows: readonly { key: string }[],
   now: number,
 ): SearchTypeaheadPlacement {
   const placement = new Map<string, { index: number; since: number }>();
@@ -450,6 +582,8 @@ export function moveSearchTypeaheadHighlight(
 
 /** A row in words: "Luna Studio, @luna-studio, following. Open profile". */
 export function searchTypeaheadRowLabel(row: SearchTypeaheadRow): string {
+  if (row.kind === 'search') return searchForRowLabel(row.text);
+  if (row.kind === 'recent') return searchRecentAgainLabel(row.text);
   if (row.kind === 'creator') {
     const { displayName, username, isFollowing } = row.creator;
     const name = displayName.toLowerCase() === username.toLowerCase() ? `@${username}` : `${displayName}, @${username}`;
