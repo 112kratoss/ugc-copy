@@ -3,6 +3,7 @@ import type { InfiniteData } from '@tanstack/react-query';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 import type {
   PostComment,
+  PostCommentReaction,
   PostCommentsResponse,
   ShowcaseFeedItem,
   ShowcaseFeedResponse,
@@ -24,7 +25,7 @@ export type PostCommentSort = 'top' | 'newest';
  */
 export const POST_COMMENT_SORTS: ReadonlyArray<{ id: PostCommentSort; label: string }> = [
   { id: 'top', label: 'Top' },
-  { id: 'newest', label: 'New' },
+  { id: 'newest', label: 'Newest' },
 ];
 export const DEFAULT_POST_COMMENT_SORT: PostCommentSort = 'top';
 
@@ -32,8 +33,17 @@ export interface CommentDisplay {
   isDeleted: boolean;
   bodyText: string;
   authorLabel: string;
+  /** Its age, and "(edited)" after it once its author has changed its words. */
   timeLabel: string;
 }
+
+/** The line over the post's one pinned comment, and what a heart reads as; the web's words. */
+export const PINNED_COMMENT_LABEL = 'Pinned by the creator';
+export const HEARTED_COMMENT_LABEL = 'Loved by the creator';
+
+/** A comment longer than this many characters, or lines, opens folded (the web's numbers). */
+export const COMMENT_FOLD_MAX_LENGTH = 320;
+export const COMMENT_FOLD_MAX_LINES = 4;
 
 const POST_COMMENTS_QUERY_ROOT = 'post-comments';
 const POST_COMMENT_REPLIES_QUERY_ROOT = 'post-comment-replies';
@@ -88,12 +98,13 @@ export function flattenCommentPages(pages: PostCommentsResponse[] | undefined) {
 }
 
 /**
- * The top-level thread with the viewer's own new comments pinned above it,
- * newest first. Under Top the server ranks by reply count, so on a busy post a
- * comment with no replies yet falls past page 1 and would vanish on the
- * refetch that follows posting it. The server's copy of a pinned comment wins
- * once a loaded page holds it (a newer reply count, a removal), and it is
- * listed once, in the pinned place.
+ * The top-level thread with the viewer's own new comments held above it,
+ * newest first. Under Top the server ranks by likes and replies, so on a busy
+ * post a new comment falls past page 1 and would vanish on the refetch that
+ * follows posting it. The server's copy of a held comment wins once a loaded
+ * page holds it (a newer reply count, a removal), and it is listed once, in
+ * the held place. The comment the post's creator pinned stays first, above
+ * them: it leads the thread for every reader.
  */
 export function mergeTopLevelWithPending(
   pages: PostCommentsResponse[] | undefined,
@@ -102,10 +113,15 @@ export function mergeTopLevelWithPending(
   const server = flattenCommentPages(pages);
   if (!pendingTopLevel.length) return server;
   const serverById = new Map(server.map((comment) => [comment.id, comment]));
-  const pinnedIds = new Set(pendingTopLevel.map((comment) => comment.id));
+  const heldIds = new Set(pendingTopLevel.map((comment) => comment.id));
+  const rest = server.filter((comment) => !heldIds.has(comment.id));
+  const held = pendingTopLevel.map((comment) => serverById.get(comment.id) ?? comment);
   return [
-    ...pendingTopLevel.map((comment) => serverById.get(comment.id) ?? comment),
-    ...server.filter((comment) => !pinnedIds.has(comment.id)),
+    ...rest.filter((comment) => comment.pinned),
+    // One of the viewer's own just-posted comments may be the pinned one.
+    ...held.filter((comment) => comment.pinned),
+    ...held.filter((comment) => !comment.pinned),
+    ...rest.filter((comment) => !comment.pinned),
   ];
 }
 
@@ -183,8 +199,92 @@ export function getCommentDisplay(comment: PostComment, now = new Date()): Comme
       : comment.author?.username
         ? `@${comment.author.username}`
         : comment.author?.displayName ?? 'Creator',
-    timeLabel: formatRelativeTime(comment.createdAt, now),
+    timeLabel: `${formatRelativeTime(comment.createdAt, now)}${!isDeleted && comment.editedAt ? ' (edited)' : ''}`,
   };
+}
+
+/**
+ * Whether a comment opens folded behind "Read more": a long one would
+ * otherwise push every comment after it off a sheet. Counted on the text, as
+ * the web's thread does.
+ */
+export function isLongComment(body: string): boolean {
+  return body.length > COMMENT_FOLD_MAX_LENGTH
+    || body.split('\n').length > COMMENT_FOLD_MAX_LINES;
+}
+
+/** The post's own creator, marked in the thread so their answers stand out. */
+export function isPostCreatorComment(
+  comment: PostComment,
+  postCreatorId: string | null | undefined
+): boolean {
+  return comment.status === 'active'
+    && Boolean(postCreatorId)
+    && comment.author?.id === postCreatorId;
+}
+
+/**
+ * What a reply's draft opens with. A reply to a reply joins the same thread
+ * (the product keeps one reply level), so it names who it answers; a reply to
+ * the top comment needs no name, and neither does an author without a handle.
+ */
+export function buildReplyDraftPrefix(target: PostComment): string {
+  if (!target.parentId) return '';
+  const username = target.author?.username?.trim();
+  return username ? `@${username} ` : '';
+}
+
+/**
+ * The draft a reply starts from when its target is chosen. A draft under way
+ * is kept; one that is empty, or still only the last target's handle, becomes
+ * the new target's handle (nothing, for a top-level comment).
+ */
+export function draftForReplyTarget(draft: string, previousPrefix: string, target: PostComment): string {
+  return draft.trim() === '' || draft === previousPrefix ? buildReplyDraftPrefix(target) : draft;
+}
+
+/** An edit whose words differ from the comment's: leaving it would lose them. */
+export function hasUnsavedCommentEdit(draft: string, editing: PostComment | null): boolean {
+  return editing !== null && draft.trim() !== editing.body.trim();
+}
+
+/** A reply's opening handle alone is nothing to send, and neither is an unchanged edit. */
+export function hasCommentToSend(draft: string, replyPrefix: string, editingBody: string | null): boolean {
+  const body = draft.trim();
+  if (!body) return false;
+  if (editingBody !== null) return body !== editingBody.trim();
+  return replyPrefix === '' || body !== replyPrefix.trim();
+}
+
+/** Pressing the reaction already given takes it back; the other one replaces it. */
+export function nextCommentReaction(
+  current: PostCommentReaction | null | undefined,
+  pressed: PostCommentReaction
+): PostCommentReaction | null {
+  return current === pressed ? null : pressed;
+}
+
+/**
+ * The comment as it reads the moment the reader presses, before the server
+ * answers: their reaction, and the like count moved by their own like alone.
+ */
+export function applyOwnCommentReaction(
+  comment: PostComment,
+  next: PostCommentReaction | null
+): PostComment {
+  const had = comment.viewerReaction === 'like' ? 1 : 0;
+  const has = next === 'like' ? 1 : 0;
+  return {
+    ...comment,
+    viewerReaction: next,
+    likeCount: Math.max(0, (comment.likeCount ?? 0) + has - had),
+  };
+}
+
+/** The like count beside the thumb: nothing at zero, as the web shows it. */
+export function getCommentLikeCountLabel(comment: PostComment): string {
+  const count = comment.likeCount ?? 0;
+  return count > 0 ? formatCompactCount(count) : '';
 }
 
 export function getRepliesToggleLabel(replyCount: number, expanded: boolean) {
@@ -230,6 +330,33 @@ export function canRemoveComment(
     && Boolean(postCreatorId)
     && postCreatorId === viewerUserId
     && comment.author?.id !== viewerUserId;
+}
+
+/** Its author may reword a comment, as they may delete it. */
+export function canEditComment(comment: PostComment, viewerUserId: string | null | undefined) {
+  return canDeleteComment(comment, viewerUserId);
+}
+
+/** The heart is the post's creator marking someone else's comment or reply. */
+export function canHeartComment(
+  comment: PostComment,
+  postCreatorId: string | null | undefined,
+  viewerUserId: string | null | undefined
+) {
+  return canRemoveComment(comment, postCreatorId, viewerUserId);
+}
+
+/** The post's creator pins one top-level comment, their own included. */
+export function canPinComment(
+  comment: PostComment,
+  postCreatorId: string | null | undefined,
+  viewerUserId: string | null | undefined
+) {
+  return comment.status === 'active'
+    && !comment.parentId
+    && Boolean(viewerUserId)
+    && Boolean(postCreatorId)
+    && postCreatorId === viewerUserId;
 }
 
 export function canReportComment(comment: PostComment, viewerUserId: string | null | undefined) {
@@ -316,6 +443,25 @@ export function appendReplyToPages(
  * authoritative first page and let the active query rebuild subsequent pages
  * from the server before another load-more request.
  */
+/**
+ * Moves a comment to the head of the first page, out of whichever page held
+ * it: where the comment a creator just pinned belongs before the server's
+ * order is read again. A thread with no page yet is left as it is.
+ */
+export function leadCommentPagesWith(
+  data: InfiniteData<PostCommentsResponse> | undefined,
+  comment: PostComment
+): InfiniteData<PostCommentsResponse> | undefined {
+  if (!data?.pages?.length) return data;
+  if (data.pages[0].comments[0]?.id === comment.id) return data;
+  const pages = data.pages.map((page, index) => {
+    const others = page.comments.filter((item) => item.id !== comment.id);
+    if (index === 0) return { ...page, comments: [comment, ...others] };
+    return others.length === page.comments.length ? page : { ...page, comments: others };
+  });
+  return { ...data, pages };
+}
+
 export function keepFirstCommentPage(
   data: InfiniteData<PostCommentsResponse> | undefined
 ): InfiniteData<PostCommentsResponse> | undefined {
@@ -357,8 +503,46 @@ export function markCommentRemovedInList(
     if (comment.id !== commentId) return [comment];
     // A removed comment stays only while it still anchors replies.
     if (comment.replyCount <= 0) return [];
-    return [{ ...comment, status, body: '', author: null }];
+    // As the server sends a removed comment: no likes, heart, pin or edit stamp.
+    return [{
+      ...comment,
+      status,
+      body: '',
+      author: null,
+      likeCount: 0,
+      viewerReaction: null,
+      editedAt: null,
+      hearted: false,
+      pinned: false,
+    }];
   });
+}
+
+/** Changes one comment where a list holds it; returns the same list when it does not. */
+export function mapCommentInList(
+  comments: PostComment[],
+  commentId: string,
+  change: (comment: PostComment) => PostComment
+): PostComment[] {
+  if (!comments.some((comment) => comment.id === commentId)) return comments;
+  return comments.map((comment) => (comment.id === commentId ? change(comment) : comment));
+}
+
+/** Changes one comment on whichever cached page holds it. */
+export function mapCommentInPages(
+  data: InfiniteData<PostCommentsResponse> | undefined,
+  commentId: string,
+  change: (comment: PostComment) => PostComment
+): InfiniteData<PostCommentsResponse> | undefined {
+  if (!data?.pages) return data;
+  let changed = false;
+  const pages = data.pages.map((page) => {
+    const comments = mapCommentInList(page.comments, commentId, change);
+    if (comments === page.comments) return page;
+    changed = true;
+    return { ...page, comments };
+  });
+  return changed ? { ...data, pages } : data;
 }
 
 /** Returns the same list when it does not hold the parent. */
@@ -493,6 +677,33 @@ export function getCommentPostErrorCopy(error: unknown, isReply: boolean): Comme
   }
   return {
     title: 'Could not post comment',
+    message: error instanceof Error && error.message.trim() ? error.message : 'Please try again.',
+    signIn: false,
+  };
+}
+
+export type CommentUpdateKind = 'react' | 'edit' | 'heart' | 'pin';
+
+const COMMENT_UPDATE_FAILURE_TITLES: Record<CommentUpdateKind, string> = {
+  react: 'Could not save your reaction',
+  edit: 'Could not save your edit',
+  heart: 'Could not update the heart',
+  pin: 'Could not update the pin',
+};
+
+/**
+ * A failed like, edit, heart or pin. A 401 is a session that ended, a 404 a
+ * comment removed (or a post closed) meanwhile; the rest keep the server's own
+ * words, as a failed post does.
+ */
+export function getCommentUpdateErrorCopy(error: unknown, kind: CommentUpdateKind): CommentPostErrorCopy {
+  const status = errorStatus(error);
+  const title = COMMENT_UPDATE_FAILURE_TITLES[kind];
+  if (status === 401) return { title: 'Your session ended', message: 'Sign in to continue.', signIn: true };
+  if (status === 404) return { title, message: 'That comment is no longer available.', signIn: false };
+  if (status === 429) return { title, message: `Too many requests in a short time. ${waitSentence(error)}`, signIn: false };
+  return {
+    title,
     message: error instanceof Error && error.message.trim() ? error.message : 'Please try again.',
     signIn: false,
   };

@@ -538,6 +538,15 @@ Rules:
 - report, remove and delete appear where allowed;
 - writing needs an account, and a guest goes to sign-in and comes back to the thread.
 
+Since November 2026 it reads as the web thread does (`design-web.md` → Post page → The thread), under the same rules and words, kept in parallel in `lib/comments-view-model.ts`:
+
+- **Order:** Top (the most liked, then the most replied to) or Newest, the segmented control beside the title. The comment the post's creator pinned leads both under "Pinned by the creator", above the reader's own just-posted comments.
+- **A row:** the handle, a Creator mark on the post's creator, the age and "(edited)", then the text, folded to four lines behind Read more past 320 characters or four lines. Under it, in 48pt targets: Like with its count, Dislike with none (the server never sends one), the creator's heart, Reply. A like and a heart show at once and are put back with a dialog if the server refuses; a guest's press goes to sign-in. The heart is a button only for the post's creator, on other people's comments and replies; everyone else sees it filled, "Loved by the creator".
+- **Reply** is on replies too: the answer goes to the thread's top comment and its draft opens with the handle it answers, which a change of target replaces and which alone cannot be sent.
+- **The ••• menu** (`lib/comment-menu.ts`) leads with Pin or Unpin (the creator, on a top-level comment) and Edit (the author), neither destructive, then Delete, Remove from post, Report and Block.
+- **Edit** uses the composer: "Editing your comment" with Cancel over the field, the comment's words in it, and a check in place of Send, off until the words change. The composer is borrowed, never emptied: a comment or reply being written is put aside when an edit starts and comes back when it is saved or cancelled, and leaving an edit that has changes (Reply, or Edit on another comment) asks "Discard your changes?" first, Keep editing or Discard.
+- **Presses that overlap:** a like or dislike pressed while the last one is still on its way shows at once and is sent when that answer lands, the latest press kept; the heart waits on its own answer only. A comment just pinned moves to the head of the thread at once, before the thread is read again.
+
 ### Post composer
 
 `app/post/new.tsx`. Two steps. The header names the step ("Step 1 of 2 · post details", "Step 2 of 2 · recipe optional") over a two-part progress bar. "Mark as NSFW / mature" sits at the top of both.

@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   listPostComments: vi.fn(),
   createPostComment: vi.fn(),
   deletePostComment: vi.fn(),
+  updatePostComment: vi.fn(),
   reportComment: vi.fn(),
   querySetData: vi.fn(),
   querySetQueriesData: vi.fn(),
@@ -187,8 +188,13 @@ vi.mock('expo-router', () => ({
   useNavigationContainerRef: () => container.ref,
 }));
 vi.mock('lucide-react-native', () => ({
+  Check: (props: MockProps) => React.createElement('icon-check', props),
+  Heart: (props: MockProps) => React.createElement('icon-heart', props),
   MoreHorizontal: (props: MockProps) => React.createElement('icon-more', props),
+  Pin: (props: MockProps) => React.createElement('icon-pin', props),
   SendHorizontal: (props: MockProps) => React.createElement('icon-send', props),
+  ThumbsDown: (props: MockProps) => React.createElement('icon-thumbs-down', props),
+  ThumbsUp: (props: MockProps) => React.createElement('icon-thumbs-up', props),
 }));
 vi.mock('@/components/ui', async (importOriginal) => {
   // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
@@ -205,6 +211,7 @@ vi.mock('@/lib/auth', () => ({
       blockUser: mocks.blockUser,
       createPostComment: mocks.createPostComment,
       deletePostComment: mocks.deletePostComment,
+      updatePostComment: mocks.updatePostComment,
       listPostComments: mocks.listPostComments,
       reportComment: mocks.reportComment,
     },
@@ -408,6 +415,7 @@ beforeEach(() => {
     listPostComments,
     createPostComment,
     deletePostComment,
+    mocks.updatePostComment,
     reportComment,
     querySetData,
     querySetQueriesData,
@@ -556,7 +564,7 @@ describe('comments sheet', () => {
     )).toHaveLength(0);
   });
 
-  it('paginates replies and never offers a nested reply action', () => {
+  it('paginates replies, and a reply can be answered too', () => {
     pages = [page([comment({ replyCount: 21 })], 22)];
     replyPages = [page([
       comment({
@@ -573,10 +581,23 @@ describe('comments sheet', () => {
     });
 
     expect(texts(tree.root)).toContain('@robin');
+    // The product keeps one reply level: an answer to a reply joins the same
+    // thread, and its draft opens with the handle it answers.
     expect(tree.root.findAll(
       (node) => String(node.type) === 'pressable'
         && String(node.props.accessibilityLabel).startsWith('Reply to ')
-    )).toHaveLength(1);
+    ).map((node) => node.props.accessibilityLabel)).toEqual(['Reply to @batman', 'Reply to @robin']);
+    renderer.act(() => {
+      pressable(tree.root, 'Reply to @robin').props.onPress();
+    });
+    expect(tree.root.find((node) => String(node.type) === 'textinput').props.value).toBe('@robin ');
+    // The handle alone is nothing to send.
+    expect(pressable(tree.root, 'Post comment').props.disabled).toBe(true);
+    // Moved to the top comment with nothing typed, the draft drops it.
+    renderer.act(() => {
+      pressable(tree.root, 'Reply to @batman').props.onPress();
+    });
+    expect(tree.root.find((node) => String(node.type) === 'textinput').props.value).toBe('');
 
     renderer.act(() => {
       pressable(tree.root, 'Load more replies').props.onPress();
@@ -1010,7 +1031,7 @@ describe('comments sheet', () => {
     ])];
     const tree = renderSheet();
 
-    expect(commentOptions(tree.root, '@viewer').actions.map((action) => action.label)).toEqual(['Delete']);
+    expect(commentOptions(tree.root, '@viewer').actions.map((action) => action.label)).toEqual(['Edit', 'Delete']);
     expect(commentOptions(tree.root, '@owner').actions.map((action) => action.label)).toEqual(['Report']);
   });
 
@@ -1188,7 +1209,7 @@ describe('comment order', () => {
     return threads[threads.length - 1];
   }
 
-  function pickOrder(root: renderer.ReactTestInstance, label: 'Top' | 'New') {
+  function pickOrder(root: renderer.ReactTestInstance, label: 'Top' | 'Newest') {
     renderer.act(() => {
       pressable(root, label).props.onPress();
     });
@@ -1200,13 +1221,13 @@ describe('comment order', () => {
     const tree = renderSheet();
 
     expect(pressable(tree.root, 'Top').props.accessibilityState).toMatchObject({ selected: true });
-    expect(pressable(tree.root, 'New').props.accessibilityState).toMatchObject({ selected: false });
+    expect(pressable(tree.root, 'Newest').props.accessibilityState).toMatchObject({ selected: false });
     expect(threadQuery().queryKey).toEqual(['post-comments', 'post-1', 'top', 'viewer-1']);
 
-    pickOrder(tree.root, 'New');
+    pickOrder(tree.root, 'Newest');
 
     expect(pressable(tree.root, 'Top').props.accessibilityState).toMatchObject({ selected: false });
-    expect(pressable(tree.root, 'New').props.accessibilityState).toMatchObject({ selected: true });
+    expect(pressable(tree.root, 'Newest').props.accessibilityState).toMatchObject({ selected: true });
     expect(threadQuery().queryKey).toEqual(['post-comments', 'post-1', 'newest', 'viewer-1']);
     await threadQuery().queryFn({ pageParam: 0 });
     expect(listPostComments).toHaveBeenLastCalledWith('post-1', { limit: 20, offset: 0, sort: 'newest' });
@@ -1229,7 +1250,7 @@ describe('comment order', () => {
     await postFromComposer(tree.root, 'Just said this');
     expect(queryInvalidate).toHaveBeenCalledWith({ queryKey: ['post-comments', 'post-1'], refetchType: 'none' });
 
-    pickOrder(tree.root, 'New');
+    pickOrder(tree.root, 'Newest');
 
     const shown = texts(tree.root);
     expect(shown).toContain('Just said this');
@@ -1262,13 +1283,13 @@ describe('comment order', () => {
     const tree = renderSheet();
 
     expect(pressables(tree.root, 'Top')).toHaveLength(0);
-    expect(pressables(tree.root, 'New')).toHaveLength(0);
+    expect(pressables(tree.root, 'Newest')).toHaveLength(0);
   });
 
   it('opens the next post on Top, without asking for its newest page first', () => {
     pages = [page([comment()])];
     const tree = renderSheet();
-    pickOrder(tree.root, 'New');
+    pickOrder(tree.root, 'Newest');
     queryOptions.mockClear();
 
     renderer.act(() => {
@@ -1287,10 +1308,342 @@ describe('comment order', () => {
     pages = [page([comment()])];
     const { tree } = renderInline();
 
-    pickOrder(tree.root, 'New');
+    pickOrder(tree.root, 'Newest');
 
-    expect(pressable(tree.root, 'New').props.accessibilityState).toMatchObject({ selected: true });
+    expect(pressable(tree.root, 'Newest').props.accessibilityState).toMatchObject({ selected: true });
     expect(threadQuery().queryKey).toEqual(['post-comments', 'post-1', 'newest', 'viewer-1']);
     expect(listScrollToOffset).not.toHaveBeenCalled();
+  });
+});
+
+// What the web thread gained in #791 and with comment reactions, in the app's sheet.
+describe('likes, the heart, the pin and edits', () => {
+  const mine = { id: 'viewer-1', username: 'viewer', displayName: 'Viewer', avatarUrl: null };
+  /** The updater the sheet last gave the thread's cache, run over a page holding `held`. */
+  function lastThreadPatch(held: PostComment) {
+    const call = [...querySetData.mock.calls].reverse().find(
+      ([key]) => Array.isArray(key) && key[0] === 'post-comments'
+    );
+    if (!call) throw new Error('The thread cache was not written');
+    const update = call[1] as (
+      data: { pages: PostCommentsResponse[]; pageParams: number[] }
+    ) => { pages: PostCommentsResponse[]; pageParams: number[] };
+    return update({ pages: [page([held])], pageParams: [0] }).pages[0].comments[0];
+  }
+
+  it('shows a like at once, sends it, and keeps the count the server answers', async () => {
+    const held = comment({ likeCount: 4 });
+    pages = [page([held])];
+    mocks.updatePostComment.mockResolvedValue({
+      success: true, unpinnedCommentId: null, comment: { ...held, likeCount: 6, viewerReaction: 'like' },
+    });
+    const tree = renderSheet();
+
+    const like = pressable(tree.root, "Like @batman's comment");
+    expect(like.props.accessibilityState).toMatchObject({ selected: false });
+    expect(like.props.accessibilityValue).toEqual({ text: '4 likes' });
+    // A dislike shows no count: the server never sends one.
+    expect(pressable(tree.root, "Dislike @batman's comment").props.accessibilityValue).toBeUndefined();
+
+    let pressed: Promise<void> | undefined;
+    renderer.act(() => {
+      pressed = like.props.onPress();
+    });
+    // At once, before the answer: the reader's own like, one more on the count.
+    expect(lastThreadPatch(held)).toMatchObject({ likeCount: 5, viewerReaction: 'like' });
+    expect(mocks.updatePostComment).toHaveBeenCalledWith('post-1', 'comment-1', { reaction: 'like' });
+    await renderer.act(async () => {
+      await pressed;
+      await Promise.resolve();
+    });
+    expect(lastThreadPatch(held)).toMatchObject({ likeCount: 6, viewerReaction: 'like' });
+  });
+
+  it('takes a like back when it is pressed again, and puts a refused one back', async () => {
+    const held = comment({ likeCount: 4, viewerReaction: 'like' });
+    pages = [page([held])];
+    mocks.updatePostComment.mockRejectedValue(new ApiError('Reacting is unavailable on this comment.', 403));
+    const tree = renderSheet();
+
+    await renderer.act(async () => {
+      pressable(tree.root, "Like @batman's comment").props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.updatePostComment).toHaveBeenCalledWith('post-1', 'comment-1', { reaction: null });
+    expect(lastThreadPatch(held)).toMatchObject({ likeCount: 4, viewerReaction: 'like' });
+    expect(alert.mock.calls.at(-1)?.slice(0, 2)).toEqual([
+      'Could not save your reaction',
+      'Reacting is unavailable on this comment.',
+    ]);
+  });
+
+  it('sends a signed-out reader to sign-in instead of liking', () => {
+    authUser = null;
+    pages = [page([comment({ likeCount: 4 })])];
+    const tree = renderSheet();
+
+    renderer.act(() => {
+      pressable(tree.root, "Like @batman's comment").props.onPress();
+    });
+
+    expect(mocks.updatePostComment).not.toHaveBeenCalled();
+    expect(routerPush).toHaveBeenCalledWith(expect.objectContaining({ pathname: '/auth' }));
+  });
+
+  it("marks the creator, the pinned comment, an edit and a heart, and gives only the post's creator the heart to press", () => {
+    pages = [page([
+      comment({
+        id: 'by-creator', pinned: true, editedAt: '2026-07-27T10:30:00.000Z',
+        author: { id: 'owner-1', username: 'owner', displayName: 'Owner', avatarUrl: null },
+      }),
+      comment({ id: 'hearted', hearted: true }),
+    ])];
+    const tree = renderSheet();
+
+    const shown = texts(tree.root);
+    expect(shown).toContain('Pinned by the creator');
+    expect(shown).toContain('Creator');
+    expect(shown.some((text) => text.endsWith(' (edited)'))).toBe(true);
+    // A reader sees the heart and cannot press it.
+    expect(tree.root.findAll((node) => node.props.accessibilityLabel === 'Loved by the creator').length).toBeGreaterThan(0);
+    expect(pressables(tree.root, "Heart @batman's comment")).toHaveLength(0);
+    renderer.act(() => tree.unmount());
+
+    // The post's creator: a heart to press on the reader's comment, none on their own.
+    authUser = { id: 'owner-1' };
+    mocks.updatePostComment.mockResolvedValue({
+      success: true, unpinnedCommentId: null, comment: comment({ id: 'hearted', hearted: false }),
+    });
+    const owners = renderSheet();
+    expect(pressables(owners.root, "Heart @owner's comment")).toHaveLength(0);
+    const heart = pressable(owners.root, "Heart @batman's comment");
+    expect(heart.props.accessibilityState).toMatchObject({ selected: true });
+    renderer.act(() => {
+      heart.props.onPress();
+    });
+    expect(mocks.updatePostComment).toHaveBeenCalledWith('post-1', 'hearted', { hearted: false });
+  });
+
+  it('folds a long comment behind Read more', () => {
+    pages = [page([comment({ body: 'A long line of thought. '.repeat(30) })])];
+    const tree = renderSheet();
+
+    const body = () => tree.root.find(
+      (node) => String(node.type) === 'text' && String(node.children[0]).startsWith('A long line of thought.')
+    );
+    expect(body().props.numberOfLines).toBe(4);
+    renderer.act(() => {
+      pressable(tree.root, 'Read more of this comment').props.onPress();
+    });
+    expect(body().props.numberOfLines).toBeUndefined();
+    expect(pressable(tree.root, 'Show less of this comment').props.accessibilityState).toMatchObject({ expanded: true });
+  });
+
+  it("rewords the viewer's own comment through the composer and saves it as an edit", async () => {
+    const held = comment({ id: 'mine', body: 'First words', author: mine });
+    pages = [page([held])];
+    mocks.updatePostComment.mockResolvedValue({
+      success: true, unpinnedCommentId: null,
+      comment: { ...held, body: 'Better words', editedAt: '2026-11-13T12:00:00.000Z' },
+    });
+    const tree = renderSheet();
+    const field = () => tree.root.find((node) => String(node.type) === 'textinput');
+
+    const options = commentOptions(tree.root, '@viewer');
+    renderer.act(() => {
+      options.actions.find((action) => action.label === 'Edit')?.onPress?.();
+    });
+    expect(texts(tree.root)).toContain('Editing your comment');
+    expect(field().props.value).toBe('First words');
+    expect(field().props.accessibilityLabel).toBe('Edit your comment');
+    // The same words are nothing to save.
+    expect(pressable(tree.root, 'Save edit').props.disabled).toBe(true);
+
+    // Cancel takes the comment's words back out of the field.
+    renderer.act(() => {
+      pressable(tree.root, 'Cancel edit').props.onPress();
+    });
+    expect(field().props.value).toBe('');
+    expect(pressables(tree.root, 'Save edit')).toHaveLength(0);
+
+    renderer.act(() => {
+      commentOptions(tree.root, '@viewer').actions.find((action) => action.label === 'Edit')?.onPress?.();
+    });
+    renderer.act(() => {
+      field().props.onChangeText('  Better words ');
+    });
+    await renderer.act(async () => {
+      await pressable(tree.root, 'Save edit').props.onPress();
+    });
+
+    expect(mocks.updatePostComment).toHaveBeenCalledWith('post-1', 'mine', { body: 'Better words' });
+    expect(createPostComment).not.toHaveBeenCalled();
+    expect(lastThreadPatch(held)).toMatchObject({ body: 'Better words', editedAt: '2026-11-13T12:00:00.000Z' });
+    expect(field().props.value).toBe('');
+    expect(texts(tree.root)).not.toContain('Editing your comment');
+    expect(announce).toHaveBeenCalledWith('Comment edited.');
+  });
+
+  it('puts an unsent comment aside for an edit and gives it back on Cancel and on Save', async () => {
+    const held = comment({ id: 'mine', body: 'First words', author: mine });
+    pages = [page([held])];
+    mocks.updatePostComment.mockResolvedValue({
+      success: true, unpinnedCommentId: null,
+      comment: { ...held, body: 'Better words', editedAt: '2026-11-13T12:00:00.000Z' },
+    });
+    const tree = renderSheet();
+    const field = () => tree.root.find((node) => String(node.type) === 'textinput');
+    const edit = () => renderer.act(() => {
+      commentOptions(tree.root, '@viewer').actions.find((action) => action.label === 'Edit')?.onPress?.();
+    });
+
+    renderer.act(() => {
+      field().props.onChangeText('A comment I have not sent');
+    });
+    edit();
+    expect(field().props.value).toBe('First words');
+    renderer.act(() => {
+      pressable(tree.root, 'Cancel edit').props.onPress();
+    });
+    // The unsent comment is back, not an empty field.
+    expect(field().props.value).toBe('A comment I have not sent');
+
+    edit();
+    renderer.act(() => {
+      field().props.onChangeText('Better words');
+    });
+    await renderer.act(async () => {
+      await pressable(tree.root, 'Save edit').props.onPress();
+    });
+    expect(mocks.updatePostComment).toHaveBeenCalledWith('post-1', 'mine', { body: 'Better words' });
+    expect(field().props.value).toBe('A comment I have not sent');
+    expect(createPostComment).not.toHaveBeenCalled();
+  });
+
+  it('asks before a reply takes the place of an edit with changes, and not for one with none', async () => {
+    const own = comment({ id: 'mine', body: 'First words', author: mine });
+    pages = [page([own, comment({ id: 'theirs' })])];
+    const tree = renderSheet();
+    const field = () => tree.root.find((node) => String(node.type) === 'textinput');
+    const edit = () => renderer.act(() => {
+      commentOptions(tree.root, '@viewer').actions.find((action) => action.label === 'Edit')?.onPress?.();
+    });
+    const reply = () => renderer.act(() => {
+      pressable(tree.root, 'Reply to @batman').props.onPress();
+    });
+
+    edit();
+    renderer.act(() => {
+      field().props.onChangeText('Words I have not saved');
+    });
+    reply();
+    // Still editing, with the words in the field, until the reader answers.
+    expect(texts(tree.root)).toContain('Editing your comment');
+    expect(field().props.value).toBe('Words I have not saved');
+    await renderer.act(async () => {
+      pressDialogButton('Discard your changes?', 'Keep editing');
+      await Promise.resolve();
+    });
+    expect(texts(tree.root)).toContain('Editing your comment');
+    expect(field().props.value).toBe('Words I have not saved');
+
+    alert.mockClear();
+    reply();
+    await renderer.act(async () => {
+      pressDialogButton('Discard your changes?', 'Discard');
+      await Promise.resolve();
+    });
+    expect(texts(tree.root)).not.toContain('Editing your comment');
+    expect(field().props.value).toBe('');
+
+    // An edit with nothing changed is left without a question.
+    alert.mockClear();
+    renderer.act(() => {
+      pressable(tree.root, 'Cancel reply').props.onPress();
+    });
+    edit();
+    reply();
+    expect(alert).not.toHaveBeenCalled();
+    expect(texts(tree.root)).not.toContain('Editing your comment');
+  });
+
+  it('sends a reaction pressed before the last one was answered, instead of dropping it', async () => {
+    const held = comment({ likeCount: 4 });
+    pages = [page([held])];
+    let answerFirst: (value: unknown) => void = () => {};
+    mocks.updatePostComment
+      .mockImplementationOnce(() => new Promise((resolve) => { answerFirst = resolve; }))
+      .mockResolvedValueOnce({
+        success: true, unpinnedCommentId: null, comment: { ...held, likeCount: 4, viewerReaction: 'dislike' },
+      });
+    const tree = renderSheet();
+
+    renderer.act(() => {
+      pressable(tree.root, "Like @batman's comment").props.onPress();
+    });
+    // The correction, pressed while the like is still out.
+    renderer.act(() => {
+      pressable(tree.root, "Dislike @batman's comment").props.onPress();
+    });
+    // Shown at once; only the first is on its way.
+    expect(lastThreadPatch(held)).toMatchObject({ likeCount: 4, viewerReaction: 'dislike' });
+    expect(mocks.updatePostComment).toHaveBeenCalledTimes(1);
+
+    await renderer.act(async () => {
+      answerFirst({ success: true, unpinnedCommentId: null, comment: { ...held, likeCount: 5, viewerReaction: 'like' } });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mocks.updatePostComment.mock.calls.map(([, , change]) => change))
+      .toEqual([{ reaction: 'like' }, { reaction: 'dislike' }]);
+    expect(lastThreadPatch(held)).toMatchObject({ likeCount: 4, viewerReaction: 'dislike' });
+    expect(alert).not.toHaveBeenCalled();
+  });
+
+  it("pins from the menu on the creator's own post, and reads the thread again", async () => {
+    authUser = { id: 'owner-1' };
+    const held = comment();
+    pages = [page([
+      held,
+      comment({ id: 'old-pin', pinned: true, author: { id: 'creator-3', username: 'robin', displayName: 'Robin', avatarUrl: null } }),
+    ])];
+    mocks.updatePostComment.mockResolvedValue({
+      success: true, unpinnedCommentId: 'old-pin', comment: { ...held, pinned: true },
+    });
+    const tree = renderSheet();
+
+    const options = commentOptions(tree.root, '@batman');
+    expect(options.actions.map((action) => action.label))
+      .toEqual(['Pin', 'Remove from post', 'Report', 'Block @batman']);
+    await renderer.act(async () => {
+      options.actions.find((action) => action.label === 'Pin')?.onPress?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.updatePostComment).toHaveBeenCalledWith('post-1', 'comment-1', { pinned: true });
+    expect(topRefetch).toHaveBeenCalled();
+    expect(announce).toHaveBeenCalledWith('Comment pinned.');
+    // The post's one pin moved: the comment it left reads unpinned at once.
+    const oldPin = comment({ id: 'old-pin', pinned: true });
+    const unpinned = querySetData.mock.calls
+      .filter(([key]) => Array.isArray(key) && key[0] === 'post-comments')
+      .map(([, update]) => (update as (data: { pages: PostCommentsResponse[]; pageParams: number[] }) => {
+        pages: PostCommentsResponse[];
+      })({ pages: [page([oldPin])], pageParams: [0] }).pages[0].comments[0].pinned);
+    expect(unpinned).toContain(false);
+    // The pinned comment leads the one page kept, from a later page too.
+    const kept = [...querySetData.mock.calls].reverse()
+      .find(([key]) => Array.isArray(key) && key[0] === 'post-comments');
+    const after = (kept?.[1] as (data: { pages: PostCommentsResponse[]; pageParams: number[] }) => {
+      pages: PostCommentsResponse[];
+    })({ pages: [page([oldPin]), page([held])], pageParams: [0, 20] });
+    expect(after.pages).toHaveLength(1);
+    expect(after.pages[0].comments.map((item) => [item.id, item.pinned])).toEqual([
+      ['comment-1', true], ['old-pin', true],
+    ]);
   });
 });
