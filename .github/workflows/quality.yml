@@ -151,9 +151,16 @@ jobs:
         # and a page opened during the restart spends its whole 60 seconds
         # waiting: app-shell-top-bar's /search case failed that way on #776 and
         # on #777 (2026-11-12). The config hands NODE_OPTIONS on to the dev
-        # server with its preload added; the runner has 16 GB.
+        # server with its preload added; the runner has 16 GB. Next restarts
+        # once the heap in use passes 80% of the limit, checked as each request
+        # ends (getMemoryRestartStats, next/dist/server/lib/utils.js). At 8 GB
+        # that was 6.5 GB, and the suite, which grows with every spec, reached
+        # it 25 minutes into main's run on 813ded4e1 (run 43369796744, the
+        # restart at 05:32:39Z): 194 passed and
+        # workflow-run-catalog-revision.spec.ts:269 got ECONNRESET from the
+        # server going down. 12 GB puts the restart at 9.8 GB.
         env:
-          NODE_OPTIONS: --max-old-space-size=8192
+          NODE_OPTIONS: --max-old-space-size=12288
 
       # A failed test leaves its trace in test-results/ (trace: 'retain-on-failure'
       # in playwright.config.ts) and the runner is gone when the job ends. Kept for
