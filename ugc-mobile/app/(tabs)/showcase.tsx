@@ -26,8 +26,8 @@ import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo-notice';
 import { NativeMenu } from '@/components/native-menu';
 import { NewPostsPill } from '@/components/new-posts-pill';
-import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
 import { SEARCH_FIELD_LABEL, SEARCH_PLACEHOLDER } from '@/lib/public-search-policy/public-search-policy';
+import { openSearchScreen } from '@/lib/open-search-screen';
 import { PinBadge, VideoCornerPlay, VideoPinPreview, VisualFallbackPreview } from '@/components/showcase-pin-marks';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { TopScrim } from '@/components/top-scrim';
@@ -300,7 +300,6 @@ export default function ShowcaseScreen() {
   const [resolvedAspectRatios, setResolvedAspectRatios] = useState<Record<string, number>>({});
   const [isSwipingMedia, setIsSwipingMedia] = useState(false);
   const [feedbackItem, setFeedbackItem] = useState<ShowcaseFeedItem | null>(null);
-  const [searchVisible, setSearchVisible] = useState(false);
   // The last Not interested or Hide, offering Undo for five seconds; one at a
   // time (`FeedUndoNotice`).
   const [undoNotice, setUndoNotice] = useState<FeedUndoNoticeModel | null>(null);
@@ -591,6 +590,9 @@ export default function ShowcaseScreen() {
   useEffect(() => {
     if (cards.length) feedRef.current?.recomputeViewableItems();
   }, [cards]);
+
+  // Search is a screen of its own, pushed over the tabs (app/search.tsx).
+  const openSearch = openSearchScreen;
 
   const clearToolFilter = () => {
     setActiveTool(null);
@@ -1015,7 +1017,7 @@ export default function ShowcaseScreen() {
               {/* Search as a field at the top of Explore, as Instagram, Pinterest and
                   Reddit put it (search UX audit 2026-11-13, finding 11): it reads
                   "Search" and opens search. */}
-              <ExploreSearchBar onPress={() => setSearchVisible(true)} />
+              <ExploreSearchBar onPress={openSearch} />
 
               <ScrollView
                 horizontal
@@ -1099,7 +1101,7 @@ export default function ShowcaseScreen() {
         {/* Centred on the header's last control as it sat at rest. */}
         <CompactSearchButton
           visible={listHeaderScrolledOff}
-          onPress={() => setSearchVisible(true)}
+          onPress={openSearch}
           top={topInset + LIST_HEADER_TOP_GAP + (appTheme.touch.compact - COMPACT_SEARCH_SIZE) / 2}
           right={FEED_HORIZONTAL_PADDING + (appTheme.touch.compact - COMPACT_SEARCH_SIZE) / 2}
         />
@@ -1110,7 +1112,6 @@ export default function ShowcaseScreen() {
           bottomOffset={tabBarMetrics.contentBottomPadding}
         />
 
-        <ExploreSearchOverlay api={api} visible={searchVisible} onClose={() => setSearchVisible(false)} />
 
         <FeedFeedbackSheet
           creatorLabel={feedbackItem ? formatCreatorLabel(feedbackItem.creator.username || feedbackItem.creator.name) : '@creator'}

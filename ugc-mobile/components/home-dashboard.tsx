@@ -9,7 +9,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
 import { SetupReopen } from '@/components/setup-reopen';
-import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo-notice';
@@ -25,6 +24,7 @@ import { HomeFeedSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
+import { openSearchScreen } from '@/lib/open-search-screen';
 import { useAuth } from '@/lib/auth';
 import { openSignUpSheet, signUpNeededToCreate } from '@/lib/join-navigation';
 import { useAutoplayPolicy } from '@/lib/autoplay-preference';
@@ -173,8 +173,6 @@ export function HomeDashboard() {
 
   // Drawn by the tab bar, which outlives this tab (lib/side-menu-host.ts).
   const sideMenu = useWorkspaceSideMenuState();
-  // The search Explore opens, opened over Home from its top bar.
-  const [searchVisible, setSearchVisible] = useState(false);
   const [activeChipId, setActiveChipId] = useState<HomeFeedChipId>('for-you');
   // Playback lives outside React state: each tile subscribes to its own id,
   // so an election re-renders that tile and never this screen or the list.
@@ -216,18 +214,13 @@ export function HomeDashboard() {
     const shelf = shelfCandidateRef.current;
     playbackController.dispatch({ type: 'itemsChanged', items: shelf ? [shelf, ...feedItemsRef.current] : feedItemsRef.current });
   }, [playbackController]);
-  // The search opened over Home covers it whole: nothing under it plays, and
-  // what played keeps its player for when the search closes.
-  const searchVisibleRef = useRef(false);
+  // Search is a screen pushed over Home (app/search.tsx): Home loses the
+  // focus, which stops its playback above, as a post opened over it does.
   const dispatchPlaybackCandidates = useCallback(() => {
     const shelf = shelfInViewRef.current ? shelfCandidateRef.current : null;
-    const items = searchVisibleRef.current ? [] : shelf ? [shelf] : feedViewableRef.current;
+    const items = shelf ? [shelf] : feedViewableRef.current;
     playbackController.dispatch({ type: 'viewableItemsChanged', items });
   }, [playbackController]);
-  useEffect(() => {
-    searchVisibleRef.current = searchVisible;
-    dispatchPlaybackCandidates();
-  }, [dispatchPlaybackCandidates, searchVisible]);
   // Synchronous on Fabric: a rest handler measures first, so the election at
   // rest already has the right candidates. A shelf measured at no size is out
   // of layout, not off screen (under a reel on Android the tabs are taken out
@@ -345,12 +338,12 @@ export function HomeDashboard() {
   // removal that puts other posts at the same places says nothing, so the
   // cards on screen are read again from these whenever the data changes.
   const dwellIndexesRef = useRef<number[]>([]);
-  // A stretch on screen counts only while Home is in front: focused, with the
-  // app in the foreground and no search open over the cards. Leaving ends it,
-  // and the dwell goes then.
+  // A stretch on screen counts only while Home is in front: focused (search
+  // and posts are screens pushed over it), with the app in the foreground.
+  // Leaving ends it, and the dwell goes then.
   useEffect(() => {
-    recordAttention(attention.setActive(isFocused && foreground && !searchVisible, Date.now()));
-  }, [attention, foreground, isFocused, recordAttention, searchVisible]);
+    recordAttention(attention.setActive(isFocused && foreground, Date.now()));
+  }, [attention, foreground, isFocused, recordAttention]);
   useEffect(() => () => recordAttention(attention.setActive(false, Date.now())), [attention, recordAttention]);
 
   // Tints the dock from the card nearest it, and hands the neutral dock back
@@ -1128,7 +1121,7 @@ export function HomeDashboard() {
                 askToSignUp={signUpNeededToCreate({ credits, hasUser: Boolean(user) })}
                 promiseWelcomeCredits={welcomePromise}
                 onMenuPress={sideMenu.open}
-                onSearchPress={() => setSearchVisible(true)}
+                onSearchPress={openSearchScreen}
               />
               {/* What became of the guest credits a sign-in carried over, under
                   the balance it changed. It showed on Pricing alone, so a
@@ -1235,7 +1228,6 @@ export function HomeDashboard() {
         bottomOffset={tabBarMetrics.contentBottomPadding}
       />
 
-      <ExploreSearchOverlay api={api} visible={searchVisible} onClose={() => setSearchVisible(false)} />
 
       <FeedFeedbackSheet
         creatorLabel={feedbackItem?.creator.username || feedbackItem?.creator.name || 'this creator'}

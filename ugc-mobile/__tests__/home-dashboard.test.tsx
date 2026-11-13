@@ -396,6 +396,7 @@ import {
 } from '../lib/showcase-feed-events';
 import { showcaseFeedLaneQueryOptions } from '../lib/showcase-feed-lane';
 import { createShowcaseFeedViewerQueryKey } from '../lib/showcase-feed-query';
+import { searchScreenOpener } from '../lib/open-search-screen';
 
 const T0 = Date.parse('2026-10-14T09:00:00.000Z');
 let now = T0;
@@ -611,6 +612,8 @@ function sentEvents(): SentEvent[] {
 
 describe("Home's read-ahead of Explore", () => {
   beforeEach(() => {
+    // One opener is shared by every entry (lib/open-search-screen.ts): each test opens afresh.
+    searchScreenOpener.reset();
     vi.clearAllMocks();
     navState.focused = true;
     authState.isLoading = false;
@@ -690,6 +693,8 @@ describe("Home's read-ahead of Explore", () => {
 
 describe('Home screen', () => {
   beforeEach(() => {
+    // One opener is shared by every entry (lib/open-search-screen.ts): each test opens afresh.
+    searchScreenOpener.reset();
     vi.clearAllMocks();
     trackers.length = 0;
     now = T0;
@@ -1220,31 +1225,31 @@ describe('Home screen', () => {
   });
 
   // Product decision E1 (2026-10-14): Explore's search, a tap from Home.
-  it('opens the search from the top bar, and counts no card as read while the search covers it', () => {
+  // Search is a screen pushed over Home (search UX audit 2026-11-13, finding 7).
+  it('opens the search screen from the top bar, and counts no card as read while it covers Home', () => {
     queryState.pages = [page([mediaItem('a', 'delivery-search-a'), textItem('b', 'delivery-search-b')])];
+    routerState.push.mockClear();
     const { tree } = renderHome();
-    expect(hostProps(tree, 'explore-search-overlay').visible).toBe(false);
+    expect(tree.root.findAll((node) => String(node.type) === 'explore-search-overlay')).toHaveLength(0);
     reportOnScreen(tree, [0, 1]);
 
     now = T0 + 3_000;
     const header = renderHeader(tree);
     press(header, 'Search creators, posts, and recipes');
-    expect(hostProps(tree, 'explore-search-overlay').visible).toBe(true);
-    expect(hostProps(tree, 'explore-search-overlay').api).toBe(authState.api);
-    // The stretch on screen ends as the search covers the cards.
+    expect(routerState.push).toHaveBeenCalledWith('/search');
+    // The pushed screen takes the focus from Home: the stretch on screen ends.
+    navState.focused = false;
+    renderer.act(() => tree.update(<HomeDashboard />));
     expect(sentEvents()).toEqual([
       { eventType: 'dwell', deliveryId: 'delivery-search-a', durationMs: 3_000 },
       { eventType: 'dwell', deliveryId: 'delivery-search-b', durationMs: 3_000 },
     ]);
-
-    now = T0 + 60_000;
-    renderer.act(() => hostProps(tree, 'explore-search-overlay').onClose());
-    expect(hostProps(tree, 'explore-search-overlay').visible).toBe(false);
     // A minute spent searching is not read as a minute on either card.
-    navState.focused = false;
+    now = T0 + 60_000;
     renderer.act(() => tree.update(<HomeDashboard />));
     expect(sentEvents()).toHaveLength(2);
 
+    navState.focused = true;
     renderer.act(() => header.unmount());
     renderer.act(() => tree.unmount());
   });
@@ -1352,7 +1357,7 @@ describe('Home screen', () => {
     renderer.act(() => tree.unmount());
   });
 
-  it('plays nothing under the search, and the same clip again once it closes', () => {
+  it('keeps its clip elected under the search screen, to play again once Back returns to Home', () => {
     queryState.pages = [page([videoItem('a', 'delivery-video-a')])];
     const { tree } = renderHome();
     const store = activationStores.at(-1)!;
@@ -1360,13 +1365,16 @@ describe('Home screen', () => {
     renderer.act(() => hostProps(header, 'home-shelf').onPlaybackCandidateChange({ ...videoItem('post-1', 'delivery-shelf'), id: 'home-shelf:post-1' }));
     expect(store.snapshot().activeIds).toEqual(['home-shelf:post-1']);
 
+    // The search screen covers Home as a post does: Home loses the focus, and
+    // the tile pauses itself for that (`FeedVideoPreview` streams only while
+    // its screen is focused). The election stands, so coming back is a resume.
     press(header, 'Search creators, posts, and recipes');
-    expect(hostProps(tree, 'explore-search-overlay').visible).toBe(true);
-    expect(store.snapshot().activeIds).toEqual([]);
-    // Its player is kept for the close: coming back is a resume.
-    expect(store.snapshot().preparedIds).toContain('home-shelf:post-1');
-
-    renderer.act(() => hostProps(tree, 'explore-search-overlay').onClose());
+    expect(routerState.push).toHaveBeenCalledWith('/search');
+    navState.focused = false;
+    renderer.act(() => tree.update(<HomeDashboard />));
+    expect(store.snapshot().activeIds).toEqual(['home-shelf:post-1']);
+    navState.focused = true;
+    renderer.act(() => tree.update(<HomeDashboard />));
     expect(store.snapshot().activeIds).toEqual(['home-shelf:post-1']);
 
     renderer.act(() => header.unmount());

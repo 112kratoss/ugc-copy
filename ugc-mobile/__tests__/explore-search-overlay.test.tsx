@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -48,6 +49,7 @@ const mocks = vi.hoisted(() => {
   return {
     listeners,
     focused: { value: true },
+    inputFocus: vi.fn(),
     keyboardDismiss: vi.fn(),
     addEventListener: vi.fn((_event: string, listener: () => boolean) => {
       listeners.push(listener);
@@ -103,7 +105,7 @@ vi.mock('react-native', () => ({
   }),
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   TextInput: React.forwardRef((props: MockProps, ref: React.ForwardedRef<{ focus: () => void }>) => {
-    React.useImperativeHandle(ref, () => ({ focus: () => {} }));
+    React.useImperativeHandle(ref, () => ({ focus: mocks.inputFocus }));
     return React.createElement('text-input', props);
   }),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
@@ -192,64 +194,26 @@ async function update(tree: renderer.ReactTestRenderer, props: { visible: boolea
   });
 }
 
-describe('ExploreSearchOverlay hardware back', () => {
-  beforeEach(() => {
-    mocks.listeners.length = 0;
-    mocks.focused.value = true;
-    mocks.addEventListener.mockClear();
-    mocks.keyboardDismiss.mockClear();
-  });
-
-  it('closes the open search on Android back while its screen is focused', async () => {
-    const onClose = vi.fn();
-    const tree = await render({ visible: true, onClose });
-
-    expect(mocks.listeners).toHaveLength(1);
-    expect(pressBack()).toBe(true);
-    expect(onClose).toHaveBeenCalledTimes(1);
-    expect(mocks.keyboardDismiss).toHaveBeenCalledTimes(1);
-
-    await act(async () => tree.unmount());
+// Search is a pushed screen (search UX audit 2026-11-13, finding 7): the
+// navigator owns the back swipe and Android's back key.
+describe('ExploreSearchOverlay as a screen', () => {
+  it('leaves Back to the navigator: no back-key claim of its own', () => {
+    const source = readFileSync(join(__dirname, '../components/explore-search-overlay.tsx'), 'utf8');
+    expect(source).not.toContain('useHardwareBack');
+    expect(source).not.toContain('BackHandler');
+    expect(source).not.toContain('useOverlayPresence');
+    const route = readFileSync(join(__dirname, '../app/search.tsx'), 'utf8');
+    expect(route).toContain('<ExploreSearchOverlay');
+    const layout = readFileSync(join(__dirname, '../app/_layout.tsx'), 'utf8');
+    expect(layout).toContain('<Stack.Screen name="search" options={{ headerShown: false }} />');
   });
 
   it('claims nothing while hidden', async () => {
+    mocks.listeners.length = 0;
     const tree = await render({ visible: false, onClose: vi.fn() });
-
-    expect(mocks.addEventListener).not.toHaveBeenCalled();
-
-    await act(async () => tree.unmount());
-  });
-
-  it('releases the key under a route pushed from a result and reclaims it on return', async () => {
-    // A result tap pushes the post over the tabs with the search still open
-    // underneath. Back must pop the post first; only then does it close the
-    // search. Holding the key here made the first press close the search out
-    // of sight and left the post on screen.
-    const onClose = vi.fn();
-    const tree = await render({ visible: true, onClose });
-    expect(mocks.listeners).toHaveLength(1);
-
-    mocks.focused.value = false;
-    await update(tree, { visible: true, onClose });
     expect(mocks.listeners).toHaveLength(0);
-    expect(pressBack()).toBe(false);
-    expect(onClose).not.toHaveBeenCalled();
-
-    mocks.focused.value = true;
-    await update(tree, { visible: true, onClose });
-    expect(mocks.listeners).toHaveLength(1);
-    expect(pressBack()).toBe(true);
-    expect(onClose).toHaveBeenCalledTimes(1);
-
+    expect(tree.toJSON()).toBeNull();
     await act(async () => tree.unmount());
-  });
-
-  it('claims the key through the focus-gated shared hook, never a raw subscription', () => {
-    const source = readFileSync('components/explore-search-overlay.tsx', 'utf8');
-
-    expect(source).toContain('useHardwareBack(visible && isFocused, requestClose)');
-    expect(source).toContain('useIsFocused()');
-    expect(source).not.toContain('BackHandler');
   });
 });
 
@@ -2956,5 +2920,109 @@ describe('ExploreSearchOverlay starting and ending screens', () => {
     await update(tree, { visible: true, onClose });
     expect(searchStarter).toHaveBeenCalledTimes(3);
     await act(async () => tree.unmount());
+  });
+});
+
+describe('ExploreSearchOverlay opened and left as a screen', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.router.push.mockClear();
+    mocks.readSearchHistory.mockReset();
+    mocks.readSearchHistory.mockResolvedValue([]);
+    mocks.rememberSearchQuery.mockReset();
+    mocks.rememberSearchQuery.mockResolvedValue([]);
+    searchPublicContent.mockReset();
+    searchStarter.mockReset();
+    searchStarter.mockResolvedValue({ entities: [], creators: [], searches: [] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('keeps the search on screen among the recent ones when it leaves by the navigator', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type ?? 'top', { creators: [creator('jane')] }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'jane');
+    mocks.rememberSearchQuery.mockClear();
+    // The back swipe or Android's back key: the screen goes, nothing pressed.
+    await act(async () => tree.unmount());
+    expect(mocks.rememberSearchQuery.mock.calls).toEqual([['jane']]);
+  });
+
+  it('keeps nothing when it leaves while typing or on a search that found nothing', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type ?? 'top'));
+    const typing = await render({ visible: true, onClose: vi.fn() });
+    await typeOnly(typing, 'jane');
+    await act(async () => typing.unmount());
+    const empty = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(empty, 'zzzz');
+    await act(async () => empty.unmount());
+    expect(mocks.rememberSearchQuery).not.toHaveBeenCalled();
+  });
+
+  it('opens on a link’s search: its results, on its tab, without the keyboard', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type ?? 'top', { posts: [post('p1')] }));
+    let tree: renderer.ReactTestRenderer | null = null;
+    await act(async () => {
+      tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn(), initialQuery: 'nano', initialType: 'posts' }));
+    });
+    expect(searchInput(tree!).props.value).toBe('nano');
+    expect(tab(tree!, 'Posts').props.accessibilityState).toMatchObject({ selected: true });
+    expect(searchPublicContent.mock.calls.map(([params]) => `${params.query}|${params.type}`)).toEqual(['nano|posts']);
+    // A link is not the person's commit (review of #795): nothing is kept,
+    // not when it finds something, and not when the screen leaves.
+    expect(mocks.rememberSearchQuery).not.toHaveBeenCalled();
+    await act(async () => tree!.unmount());
+    expect(mocks.rememberSearchQuery).not.toHaveBeenCalled();
+  });
+
+  async function openOnLink(initialQuery: string, initialType: PublicSearchType | null = null, extra: Record<string, unknown> = {}) {
+    let tree: renderer.ReactTestRenderer | null = null;
+    await act(async () => {
+      tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn(), initialQuery, initialType, ...extra }));
+    });
+    return tree!;
+  }
+
+  it('keeps a link\'s search once the person opens a result from it, or presses Search themselves (review of #795)', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type ?? 'top', { posts: [post('p1')] }));
+    const opened = await openOnLink('nano', 'posts');
+    expect(mocks.rememberSearchQuery).not.toHaveBeenCalled();
+    await press(pressableLabelled(opened, 'Open post Post p1 by Ana'));
+    expect(mocks.rememberSearchQuery).toHaveBeenCalledWith('nano');
+    await act(async () => opened.unmount());
+
+    mocks.rememberSearchQuery.mockClear();
+    const committed = await openOnLink('nano', 'posts');
+    await act(async () => { searchInput(committed).props.onFocus(); });
+    await act(async () => { searchInput(committed).props.onSubmitEditing(); });
+    expect(mocks.rememberSearchQuery).toHaveBeenCalledWith('nano');
+    await act(async () => committed.unmount());
+  });
+
+  it('opens a link\'s text the picked tab cannot search as any opening: typing, the keyboard up, nothing asked (review of #795, N4)', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type ?? 'top'));
+    mocks.inputFocus.mockClear();
+    const tree = await openOnLink('ab', 'posts');
+    expect(searchInput(tree).props.value).toBe('ab');
+    await act(async () => { vi.advanceTimersByTime(200); });
+    expect(mocks.inputFocus).toHaveBeenCalled();
+    expect(searchPublicContent).not.toHaveBeenCalled();
+    await act(async () => tree.unmount());
+  });
+
+  it('puts the keyboard up only once the screen says its entrance is over (review of #795, S2)', async () => {
+    searchStarter.mockResolvedValue({ entities: [], creators: [], searches: [] });
+    mocks.inputFocus.mockClear();
+    let tree: renderer.ReactTestRenderer | null = null;
+    const props = { api, visible: true, onClose: vi.fn(), focusReady: false };
+    await act(async () => { tree = renderer.create(React.createElement(ExploreSearchOverlay, props)); });
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(mocks.inputFocus).not.toHaveBeenCalled();
+    await act(async () => { tree!.update(React.createElement(ExploreSearchOverlay, { ...props, focusReady: true })); });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    expect(mocks.inputFocus).toHaveBeenCalledTimes(1);
+    await act(async () => tree!.unmount());
   });
 });
