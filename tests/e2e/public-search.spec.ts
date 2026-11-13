@@ -522,4 +522,189 @@ test.describe('public search', () => {
     await expect.poll(() => requests.length).toBeGreaterThan(0);
     expect(requests.every((search) => search.includes('type=creators'))).toBe(true);
   });
+
+  // The page writes its address behind Next's back (search-address.ts), so
+  // Next holds the address the page was first opened at. A link to the search
+  // page drawn on the search page would therefore do the wrong thing: one to
+  // that first address is, to Next, a press on where it already is. The shell
+  // draws none there today (the bar's search link gives way to the page's own
+  // box, and no group of the side navigation or the drawer lists Search). If
+  // this fails, such a link has been added: make it start the search over in
+  // the page itself before it ships.
+  for (const viewer of ['a visitor', 'an account'] as const) {
+    test(`draws no link to the search page on the search page, for ${viewer}`, async ({ page, context }) => {
+      if (viewer === 'an account') {
+        await context.addCookies([{ name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' }]);
+      }
+      await page.route(SEARCH_API, (route) => route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(searchResponse('luna', 'top')),
+      }));
+      const linksToSearch = () => page.evaluate(() => Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'))
+        // The skip link is a fragment of the page, not a navigation to it.
+        .filter((link) => new URL(link.href).pathname === '/search' && !link.getAttribute('href')?.startsWith('#'))
+        .map((link) => link.getAttribute('href')));
+      for (const width of [1440, 900, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto('/search?q=luna');
+        await expect(page.getByText('Luna Studio')).toBeVisible();
+        expect(await linksToSearch(), `at ${width}px`).toEqual([]);
+        const menu = page.getByRole('button', { name: /^Open navigation/ });
+        if (await menu.isVisible()) {
+          await menu.click();
+          await expect(page.getByRole('button', { name: 'Close navigation' })).toBeVisible();
+          expect(await linksToSearch(), `at ${width}px, the drawer open`).toEqual([]);
+        }
+      }
+    });
+  }
+
+  test('asks for related posts only for a search left alone or settled on, and draws them under its own results', async ({ page }) => {
+    // Each new query asked about with related=1 spends one of the viewer's
+    // forty a day, so the page never asks at a step of the typing. The page's
+    // clock is the test's: a second and a half passes when the test says so.
+    await page.clock.install();
+    const card = (id: string, title: string) => ({
+      id, title, saveCount: 0, commentCount: 0, creator: { name: 'Luna Studio' }, mediaItems: [], mediaKind: null, mediaUrl: null,
+    });
+    const requests: string[] = [];
+    await page.route(SEARCH_API, async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url.search);
+      const query = url.searchParams.get('q') ?? '';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...searchResponse(query, url.searchParams.get('type') ?? 'top'),
+          sort: 'top',
+          creators: emptyPage,
+          posts: { items: query === 'ocean at dusk' ? [card('own-1', 'Ocean at dusk, long exposure')] : [], nextCursor: null },
+          // The server looks for them only when asked.
+          ...(url.searchParams.get('related') === '1'
+            ? { related: { posts: [card('related-1', 'Sea after sunset'), card('related-2', 'Cliffs in mist')] } }
+            : {}),
+        }),
+      });
+    });
+    await page.goto('/search');
+    const box = page.getByRole('combobox');
+    await expect(page.getByText('Start with a creator or idea')).toBeVisible();
+    const related = page.getByRole('region', { name: 'Related posts' });
+    const status = page.locator('p[role="status"]');
+
+    // Typed and left: the search is asked without the parameter, and its answer drawn.
+    await page.clock.pauseAt(new Date(Date.now() + 5_000));
+    await box.fill('ocean at dusk');
+    await page.clock.runFor(300);
+    await expect(page.getByRole('link', { name: /Ocean at dusk, long exposure/ })).toBeVisible();
+    expect(requests).toEqual(['?q=ocean+at+dusk&type=top']);
+    await expect(related).toHaveCount(0);
+    // Not while the answer has stood for less than the settle time.
+    await page.clock.runFor(1_499);
+    expect(requests).toHaveLength(1);
+    await page.clock.runFor(1);
+    await expect(related.getByRole('link')).toHaveText([/Sea after sunset/, /Cliffs in mist/]);
+    expect(requests).toEqual(['?q=ocean+at+dusk&type=top', '?q=ocean+at+dusk&type=top&related=1']);
+    // Under the search's own posts, with the same cards, which come back to this search.
+    await expect(page.getByRole('heading', { level: 2 })).toHaveText(['Posts', 'Related posts']);
+    const href = await related.getByRole('link').first().getAttribute('href');
+    expect(new URL(href ?? '', 'http://127.0.0.1').searchParams.get('returnTo')).toBe('/search?q=ocean+at+dusk');
+    // Said after the search's own count, once the box is left.
+    await page.getByRole('heading', { level: 1 }).click();
+    await expect(status).toHaveText('1 result for ocean at dusk. 2 related posts');
+    // Once per answer.
+    await page.clock.runFor(10_000);
+    expect(requests).toHaveLength(2);
+
+    // Enter inside the pause: the person has settled on it, so the search itself asks.
+    await box.fill('quiet harbour');
+    await box.press('Enter');
+    await page.clock.runFor(300);
+    await expect(related.getByRole('link')).toHaveCount(2);
+    await expect(page.getByText('No results for “quiet harbour”')).toBeVisible();
+    expect(requests.slice(2)).toEqual(['?q=quiet+harbour&type=top&related=1']);
+    await page.clock.runFor(10_000);
+    expect(requests).toHaveLength(3);
+
+    // Recipes bring none: the parameter is not sent there, settled or not.
+    await page.getByRole('tab', { name: 'Recipes' }).click();
+    await page.clock.runFor(10_000);
+    expect(requests.slice(3)).toEqual(['?q=quiet+harbour&type=recipes']);
+    await expect(related).toHaveCount(0);
+    await page.clock.resume();
+  });
+
+  // The page writes its address a pause after the last letter. It used to do
+  // so through Next's patched history.replaceState, which Next's router takes
+  // for a navigation, and a navigation discards the one still loading: any
+  // link pressed inside the pause, on a page slower than the pause, opened
+  // nothing (first seen on CI as a suggestion's press, #778). The write now
+  // carries the entry's own state, which Next hands straight to the browser
+  // (src/app/search/search-address.ts), and a press writes it first, so the
+  // entry being left names the search left. The page's clock is the test's
+  // here, so the pause passes exactly while the page being opened is held back.
+  for (const way of [
+    { name: 'a result', path: '/creators/e2e-creator', link: { name: /E2E Creator/ }, within: 'main' },
+    { name: 'a link of the sidebar', path: '/marketplace', link: { name: 'Marketplace' }, within: 'complementary' },
+  ] as const) {
+    test(`opens ${way.name} pressed inside the search’s pause, however slowly its page answers and whatever is typed meanwhile, and Back returns to the search left`, async ({ page }) => {
+      await page.clock.install();
+      let release: () => void = () => {};
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const requests: string[] = [];
+      await page.route(SEARCH_API, async (route) => {
+        const url = new URL(route.request().url());
+        requests.push(url.search);
+        const answer = searchResponse(url.searchParams.get('q') ?? '', url.searchParams.get('type') ?? 'top');
+        answer.creators.items[0] = { ...answer.creators.items[0], id: 'workflow-user', username: 'e2e-creator', displayName: 'E2E Creator' };
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(answer) });
+      });
+      await page.goto('/search?q=luna');
+      await expect(page.getByRole('main').getByRole('link', { name: /E2E Creator/ })).toBeVisible();
+      // The page is compiled before it is held: the hold is the page's answer, not the compiler's.
+      await page.request.get(way.path, { timeout: 0 });
+      await page.route((url) => url.pathname === way.path, async (route) => {
+        await held;
+        await route.continue();
+      });
+      const box = page.getByRole('combobox');
+
+      // Time stands still: the letter's pause (300 ms) passes only when the test says so.
+      await page.clock.pauseAt(new Date(Date.now() + 5_000));
+      await box.press('End');
+      await box.press('r');
+      await expect(box).toHaveValue('lunar');
+      expect(new URL(page.url()).searchParams.get('q')).toBe('luna');
+      // The cards of "luna" stay up while "lunar" waits; the link is pressed inside the pause.
+      await page.getByRole(way.within).getByRole('link', way.link).first().click();
+      // The press wrote the search being left, ahead of the way out.
+      expect(new URL(page.url()).pathname).toBe('/search');
+      expect(new URL(page.url()).searchParams.get('q')).toBe('lunar');
+
+      // The person types on while the page they pressed is still loading, and
+      // the pause passes. The page's write for the new text lands with the
+      // navigation on its way: told to Next's router, it would discard it.
+      // The search the page says it is running is asked too: a navigation
+      // that failed here would not leave "Searching…" with no request behind it.
+      await box.fill('lunars');
+      await page.clock.runFor(1_000);
+      expect(new URL(page.url()).pathname).toBe('/search');
+      expect(new URL(page.url()).searchParams.get('q')).toBe('lunars');
+      expect(requests.filter((search) => /[?&]q=lunars(&|$)/.test(search))).toHaveLength(1);
+
+      release();
+      await page.clock.resume();
+      await expect(page).toHaveURL((url) => url.pathname === way.path, { timeout: 30_000 });
+
+      // Back: the search the person left, in the box, in the address and run again.
+      const asked = requests.length;
+      await page.goBack();
+      await expect(page).toHaveURL(/\/search\?q=lunars$/);
+      await expect(page.getByRole('combobox')).toHaveValue('lunars');
+      await expect.poll(() => requests.slice(asked)).toEqual(['?q=lunars&type=top']);
+      await expect(page.locator('p[role="status"]')).toContainText('1 result for lunars');
+    });
+  }
 });

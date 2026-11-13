@@ -398,6 +398,29 @@ export function isSearchTypeaheadPressAccepted(
   return place !== undefined && now - place.since >= SEARCH_TYPEAHEAD_PRESS_SETTLE_MS;
 }
 
+/**
+ * The rows of a list on show that are drawn as not yet taking a press: the
+ * ones the list's last change brought to stand where they are (a row new to
+ * the list, or one at another place than before), and the ones an earlier
+ * change did that have not stood their time since. A row that stays where it
+ * stood is never among them, so an answer that leaves the rows where they were
+ * marks none, and a change marks only the rows it moved: the list does not
+ * flicker as a person types.
+ *
+ * `before` is the order drawn until now and its rows that were still marked.
+ * A client marks them from each change of the order until the order has stood
+ * for SEARCH_TYPEAHEAD_PRESS_SETTLE_MS, which is as long as the press rule
+ * above holds any of them, and a little longer than it holds a row that an
+ * earlier change moved and this one did not. A list that comes on show marks
+ * none: its rows take a press at once.
+ */
+export function searchTypeaheadUnsettledRows(
+  before: { order: readonly string[]; unsettled: readonly string[] },
+  order: readonly string[],
+): string[] {
+  return order.filter((key, index) => before.order[index] !== key || before.unsettled.includes(key));
+}
+
 // ─── The keys ────────────────────────────────────────────────────────────────
 
 export type SearchTypeaheadMoveKey = 'ArrowDown' | 'ArrowUp' | 'Home' | 'End';

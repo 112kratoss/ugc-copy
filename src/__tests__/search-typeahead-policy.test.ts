@@ -21,6 +21,7 @@ import {
   moveSearchTypeaheadHighlight,
   parseSearchSuggestResponse,
   placeSearchTypeaheadRows,
+  searchTypeaheadUnsettledRows,
   searchTypeaheadAction,
   searchTypeaheadDrawn,
   searchTypeaheadQuery,
@@ -317,6 +318,48 @@ describe('search typeahead: when a press on a row counts', () => {
     const again = placeSearchTypeaheadRows(moved, typedOn, T + 1100);
     expect(again.get('completion:luminous')).toEqual({ index: 2, since: T + 1000 });
     expect(isSearchTypeaheadPressAccepted(again, 'completion:luminous', T + 1000 + SETTLE)).toBe(true);
+  });
+
+  describe('the rows drawn as not taking a press yet', () => {
+    const keys = (rows: readonly { key: string }[]) => rows.map((row) => row.key);
+    const settledList = (rows: readonly { key: string }[]) => ({ order: keys(rows), unsettled: [] as string[] });
+
+    it('marks none for an answer that leaves the rows where they were', () => {
+      expect(searchTypeaheadUnsettledRows(settledList(before), keys(before))).toEqual([]);
+      expect(searchTypeaheadUnsettledRows(settledList(typedOn), keys(typedOn))).toEqual([]);
+    });
+
+    it('marks only the rows a change moved or brought, and never one that stayed', () => {
+      // The model goes: the completions under it move up. The creators above it stay.
+      expect(searchTypeaheadUnsettledRows(settledList(before), keys(typedOn)))
+        .toEqual(['completion:luminous', 'completion:lumen glow']);
+      // The model comes back: it is new, and the completions move down again.
+      expect(searchTypeaheadUnsettledRows(settledList(typedOn), keys(before)))
+        .toEqual(['entity:model:luma-ray-2', 'completion:luminous', 'completion:lumen glow']);
+      // Rows taken from the end move nothing.
+      expect(searchTypeaheadUnsettledRows(settledList(before), keys(before).slice(0, 3))).toEqual([]);
+      // Rows added at the end are the only ones marked.
+      expect(searchTypeaheadUnsettledRows(settledList(before.slice(0, 3)), keys(before)))
+        .toEqual(['completion:luminous', 'completion:lumen glow']);
+    });
+
+    it('keeps a row marked through a change that leaves it in place before it has stood', () => {
+      const stillMarked = { order: keys(typedOn), unsettled: ['completion:luminous', 'completion:lumen glow'] };
+      // The last completion goes: "luminous" stays where a change put it a moment ago.
+      expect(searchTypeaheadUnsettledRows(stillMarked, keys(typedOn).slice(0, 3))).toEqual(['completion:luminous']);
+    });
+
+    it('marks exactly the rows the press rule refuses, at each change of a list that had stood', () => {
+      const lists = [before, typedOn, before.slice(0, 3), [...before].reverse(), before.slice(1), before];
+      for (const from of lists) {
+        for (const to of lists) {
+          const stood = placeSearchTypeaheadRows(null, from, T);
+          const changed = placeSearchTypeaheadRows(stood, to, T + 1000);
+          const refused = to.filter((row) => !isSearchTypeaheadPressAccepted(changed, row.key, T + 1000)).map((row) => row.key);
+          expect(searchTypeaheadUnsettledRows(settledList(from), keys(to))).toEqual(refused);
+        }
+      }
+    });
   });
 
   it('counts no press on a row that is not drawn, or with no list', () => {

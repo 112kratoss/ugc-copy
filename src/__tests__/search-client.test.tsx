@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -6,9 +6,9 @@ import SearchClient from '@/app/search/SearchClient';
 import type { CreatorSearchResult, PublicSearchResponse, RecipeSearchResult } from '@/lib/public-search';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
-// One stable router object, like Next's real one. SearchClient keeps the URL in
-// step through history.replaceState; the mock catches a return to
-// router.replace, which re-rendered this dynamic page on every keystroke.
+// One stable router object, like Next's real one. SearchClient writes its
+// address itself (history.replaceState, search-address.ts); the mock catches a
+// return to router.replace, which re-rendered this dynamic page on every keystroke.
 const { replaceMock, routerMock } = vi.hoisted(() => {
   const replace = vi.fn();
   return { replaceMock: replace, routerMock: { replace } };
@@ -189,6 +189,93 @@ describe('SearchClient', () => {
     // The URL follows the query through history.replaceState, not a server render.
     expect(replaceMock).not.toHaveBeenCalled();
     expect(`${window.location.pathname}${window.location.search}`).toBe('/search?q=luna');
+  });
+
+  it('reads its own address when history brings it back: the search the person left, run at once', async () => {
+    // Back from a page opened here. Next draws the entry from the render it
+    // kept, whose props are the search the page was first opened with (luna);
+    // the address is the search the person left.
+    window.history.replaceState({ __NA: true }, '', '/search?q=lumi&type=posts&sort=latest&recipe=1');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    render(<SearchClient initialQuery="luna" initialType="top" />);
+
+    expect(screen.getByRole('combobox')).toHaveValue('lumi');
+    expect(screen.getByRole('tab', { name: 'Posts' })).toHaveAttribute('aria-selected', 'true');
+    // No pause: the query arrives already typed, as a shared link's does.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 250 });
+    expect((fetchMock.mock.calls[0] as [string])[0]).toBe('/api/search?q=lumi&type=posts&sort=latest&recipe=1');
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/search?q=lumi&type=posts&sort=latest&recipe=1');
+    // An emptied search comes back empty, not as the first load's.
+    cleanup();
+    fetchMock.mockClear();
+    window.history.replaceState({ __NA: true }, '', '/search');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    render(<SearchClient initialQuery="luna" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveValue('');
+    expect(screen.getByText('Start with a creator or idea')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('opens on its props at any mount that is not a return through history, its own address included', async () => {
+    // A navigation to the page first renders it while the address is still the
+    // page before's, and that page can be the search page: a link there to
+    // another search would otherwise open the search being left.
+    window.history.replaceState({ __NA: true }, '', '/search?q=cat');
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveValue('');
+    expect(screen.getByText('Start with a creator or idea')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // A traversal is spent by the mount it brought: the next mount at the same address is not one.
+    cleanup();
+    window.history.replaceState({ __NA: true }, '', '/search?q=cat');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveValue('cat');
+    cleanup();
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveValue('');
+    // And one that landed on another address is not this mount's.
+    cleanup();
+    window.history.replaceState({ __NA: true }, '', '/search?q=dog');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    window.history.replaceState({ __NA: true }, '', '/search?q=cat');
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveValue('');
+  });
+
+  it('writes nothing once the address is another page’s: Back inside the pause leaves that page’s entry alone', async () => {
+    render(<SearchClient initialQuery="" initialType="top" />);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'luna' } });
+    // Back: the browser's address is the page before's at once; Next takes this page away a moment later.
+    window.history.replaceState({ __NA: true }, '', '/creators/lumen');
+    const written = vi.spyOn(window.history, 'replaceState');
+    // The pause's timer fires in that gap, and so does a press.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    fireEvent.click(document.body);
+    expect(written).not.toHaveBeenCalled();
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/creators/lumen');
+    written.mockRestore();
+  });
+
+  it('writes its address at a press anywhere, ahead of the pause the search waits for, and once', async () => {
+    const written = vi.spyOn(window.history, 'replaceState');
+    const address = () => `${window.location.pathname}${window.location.search}`;
+    render(<SearchClient initialQuery="" initialType="top" />);
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'luna' } });
+    // Inside the pause: the address waits, as the search does.
+    expect(address()).toBe('/search');
+    expect(fetchMock).not.toHaveBeenCalled();
+    // A press on anything, a link of the header as much as a result: the
+    // entry the person may be leaving names the search they leave.
+    fireEvent.click(document.body);
+    expect(address()).toBe('/search?q=luna');
+    // The pause's own write finds the address said, and the search is asked.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    expect(written.mock.calls.filter(([, , url]) => url === '/search?q=luna')).toHaveLength(1);
+    // None of the page's writes is a navigation to Next's router (search-address.test.ts).
+    for (const [state] of written.mock.calls) expect(state).toMatchObject({ __NA: true });
+    written.mockRestore();
   });
 
   it('forces a two-character query onto the creators tab and disables content tabs', async () => {
@@ -1018,7 +1105,7 @@ describe('SearchClient', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Search again for kling portrait' }));
         await settle(300);
         expect(field).toHaveValue('kling portrait');
-        expect(requestedUrls().at(-1)).toBe('/api/search?q=kling+portrait&type=top');
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=kling+portrait&type=top&related=1');
         expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
 
         // Cleared, the box shows them again; Clear all empties the list and the store.

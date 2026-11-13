@@ -326,3 +326,128 @@ export function searchEntityActionLabel(entity: SearchEntity): string {
 export function searchMadeWithRemoveLabel(label: string): string {
   return `Remove filter: made with ${label}`;
 }
+
+// ─── Related posts ───────────────────────────────────────────────────────────
+//
+// Posts that mean what a query says without holding its words (`related` on
+// the answer of /api/search, up to eight feed cards), drawn as a second group
+// under the search's own results. The server looks for them only for a
+// request that asks (`related=1`), and each new query a viewer asks about
+// spends one of that viewer's forty a day. So a client asks for a search a
+// person has settled on, never at each step of the typing.
+
+/** The parameter a client asks for related posts with; its one value is `1`. */
+export const SEARCH_RELATED_PARAM = 'related';
+
+/** The heading of the group. */
+export const SEARCH_RELATED_HEADING = 'Related posts';
+
+/**
+ * How long a search's answer stands, the search unchanged, before the search
+ * counts as settled without a word from the person: long enough to have read
+ * that the answer is thin, and several times the pause a search waits for
+ * after a letter, so a person still typing does not settle on each word.
+ */
+export const SEARCH_RELATED_SETTLE_MS = 1500;
+
+/**
+ * An answer with fewer posts than this is thin: the server looks for related
+ * posts only under one (`SEARCH_RELATED_THIN_POST_COUNT`, src/lib/search-embeddings.ts),
+ * so a client does not ask again for an answer that is not.
+ */
+export const SEARCH_RELATED_THIN_POSTS = 6;
+
+/** A query shorter than this is not searched for posts at all. */
+const SEARCH_RELATED_MIN_QUERY_LENGTH = 3;
+
+/**
+ * Whether related posts can come with a search at all: the first page of a
+ * Top or Posts search in the ranked order, with no filter and not read as
+ * typed, from three characters. The server's own conditions; anywhere else
+ * it ignores the parameter, and a client does not send it.
+ *
+ * Never for a handle search (a query that begins with "@"): that is a look
+ * for a creator, which the typeahead reads the same way, and posts that mean
+ * what the handle's letters say are not what it asks for. The server would
+ * look all the same, and spend one of the viewer's lookups on it.
+ *
+ * `query` is the search as the client normalizes it. `narrowing` is the
+ * filters and the exact reading as one string (`searchFilterKey`), '' for
+ * none; `queryLength` is counted as the server counts it
+ * (`searchQueryLength` of the query less a leading "@").
+ */
+export function searchRelatedApplies(search: {
+  query: string;
+  type: string;
+  sort: string;
+  narrowing: string;
+  queryLength: number;
+  /** A later page of the same search: `cursor` is set. */
+  laterPage: boolean;
+}): boolean {
+  return !search.query.trimStart().startsWith('@')
+    && (search.type === 'top' || search.type === 'posts')
+    && search.sort === 'top'
+    && search.narrowing === ''
+    && search.queryLength >= SEARCH_RELATED_MIN_QUERY_LENGTH
+    && !search.laterPage;
+}
+
+/**
+ * Whether an answer on hand is thin enough that asking again, for related
+ * posts, can bring any: few posts, and on Posts no further page of them.
+ */
+export function isSearchAnswerThin(
+  type: string,
+  posts: { items: readonly unknown[]; nextCursor: string | null },
+): boolean {
+  return posts.items.length < SEARCH_RELATED_THIN_POSTS && (type !== 'posts' || posts.nextCursor === null);
+}
+
+/**
+ * When a client asks for related posts, as one rule for both.
+ *
+ * - With the search itself, when the person had already settled on it as the
+ *   request is sent: the Search key or Enter, a suggestion pressed, a recent
+ *   search opened (`settled`).
+ * - Otherwise once, after the search's own answer: at once when the person
+ *   settles on it then, or when the answer has stood for
+ *   SEARCH_RELATED_SETTLE_MS with the search unchanged. Only for a thin
+ *   answer, and never twice for one answer (`relatedAsked`).
+ *
+ * Returns how long to wait before asking again, in milliseconds, or null for
+ * not at all.
+ */
+export function searchRelatedFollowUpDelay(answer: {
+  /** Related posts can come with this search (searchRelatedApplies). */
+  applies: boolean;
+  /** The answer on hand was asked for with `related=1`, or has been asked about since. */
+  relatedAsked: boolean;
+  /** The answer on hand is thin (isSearchAnswerThin). */
+  thin: boolean;
+  /** The person settled on this search. */
+  settled: boolean;
+}): number | null {
+  if (!answer.applies || answer.relatedAsked || !answer.thin) return null;
+  return answer.settled ? 0 : SEARCH_RELATED_SETTLE_MS;
+}
+
+/**
+ * The related posts an answer brings, to draw: none for an answer without the
+ * field (they were not looked for, or the server is from before them), and
+ * none on a tab that has no posts group.
+ */
+export function searchRelatedPosts<Post>(
+  type: string,
+  answer: { related?: { posts?: readonly Post[] | null } | null },
+): readonly Post[] {
+  if (type !== 'top' && type !== 'posts') return NO_RELATED_POSTS as readonly Post[];
+  const posts = answer.related?.posts;
+  return Array.isArray(posts) ? posts : (NO_RELATED_POSTS as readonly Post[]);
+}
+const NO_RELATED_POSTS: readonly never[] = Object.freeze([]);
+
+/** What a screen reader is told of them, after the search's own count: "3 related posts". */
+export function searchRelatedStatus(count: number): string {
+  return count <= 0 ? '' : `${count} related ${count === 1 ? 'post' : 'posts'}`;
+}

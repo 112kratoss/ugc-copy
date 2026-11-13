@@ -1261,6 +1261,16 @@ export interface PublicSearchResponse {
   creators: PublicSearchPage<CreatorSearchResult>;
   posts: PublicSearchPage<ShowcaseFeedItem>;
   recipes: PublicSearchPage<RecipeSearchResult>;
+  /**
+   * Posts that mean what the query says without holding its words, nearest
+   * first, none of them in `posts`: at most eight feed cards. Present only
+   * where they were looked for, which takes a request that asked
+   * (`related=1`, `searchPublicContent`'s `related`) and a thin answer on the
+   * first page of a ranked, unfiltered Top or Posts search. Left out
+   * everywhere else and by a server from before them (2026-11-13): the app
+   * draws nothing for an answer without it.
+   */
+  related?: { posts: ShowcaseFeedItem[] };
 }
 
 export interface ShowcasePostResponse {

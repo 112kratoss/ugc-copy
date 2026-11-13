@@ -13,6 +13,7 @@ import {
   SEARCH_TYPEAHEAD_PRESS_SETTLE_MS,
   type SearchSuggestResponse,
 } from '../lib/public-search-policy/search-typeahead';
+import { SEARCH_RELATED_HEADING, SEARCH_RELATED_SETTLE_MS } from '../lib/public-search-policy/public-search-policy';
 import type {
   CreatorSearchResult,
   PublicSearchResponse,
@@ -1015,8 +1016,8 @@ describe('ExploreSearchOverlay search', () => {
     await press(showMoreButton(tree));
     expect(searchPublicContent.mock.calls.at(-1)?.[0]).toEqual({
       query: 'jan', type: 'creators', sort: 'top', cursor: 'page-2',
-      // Creators are neither narrowed nor read as typed.
-      filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false }, exact: false,
+      // Creators are neither narrowed nor read as typed, and bring no related posts.
+      filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false }, exact: false, related: false,
     });
     // The first page stays up, with the reason under it.
     expect(() => pressableLabelled(tree, "Open Creator jane's profile")).not.toThrow();
@@ -1406,6 +1407,224 @@ describe('ExploreSearchOverlay search', () => {
   });
 });
 
+// Related posts: when the app asks for them (`related: true` costs the viewer
+// one of forty new queries a day, so never at a step of the typing), and what
+// it draws. The rule is the web's too (lib/public-search-policy, "Related posts").
+describe('ExploreSearchOverlay related posts', () => {
+  const SETTLE = SEARCH_RELATED_SETTLE_MS;
+  const RELATED = { posts: [post('sea'), post('cliffs')] };
+  const full = (query: string, type: PublicSearchType, kinds: Parameters<typeof searchAnswer>[2] = {}, related?: PublicSearchResponse['related']) => ({
+    ...searchAnswer(query, type, { sort: 'top', ...kinds }, {
+      entities: [], filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false }, correctedQuery: { posts: null, recipes: null }, exact: false,
+    }),
+    ...(related ? { related } : {}),
+  });
+  const asked = () => searchPublicContent.mock.calls.map(([params]) => `${params.query}|${params.type}|${params.sort}|${params.related ? 'related' : 'plain'}${params.cursor ? `|${params.cursor}` : ''}`);
+  const submit = (tree: Tree) => act(async () => { searchInput(tree).props.onSubmitEditing(); });
+  const relatedGroup = (tree: Tree) => hostNodes(tree, 'view').find((node) => node.props.testID === 'search-related-posts') ?? null;
+  const relatedLabels = (tree: Tree) => (relatedGroup(tree)?.findAll((node) => (node.type as unknown as string) === 'pressable') ?? [])
+    .map((node) => node.props.accessibilityLabel as string);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.listeners.length = 0;
+    mocks.focused.value = true;
+    mocks.router.push.mockClear();
+    mocks.readSearchHistory.mockReset();
+    mocks.readSearchHistory.mockResolvedValue([]);
+    mocks.rememberSearchQuery.mockClear();
+    mocks.user.value = null;
+    mocks.announce.mockClear();
+    searchPublicContent.mockReset();
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top'));
+    suggestSearch.mockReset();
+    suggestSearch.mockResolvedValue({ query: '', normalizedQuery: '', creators: [], entities: [], completions: [] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('never asks at a step of the typing: only once the thin answer of a search left alone has stood', async () => {
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'ocean');
+    await advance(300);
+    expect(asked()).toEqual(['ocean|top|top|plain']);
+    // The person types on before the answer has stood: nothing was asked about "ocean".
+    await advance(SETTLE - 1);
+    await typeQuery(tree, 'ocean at dusk');
+    await advance(300);
+    expect(asked()).toEqual(['ocean|top|top|plain', 'ocean at dusk|top|top|plain']);
+    expect(relatedGroup(tree)).toBeNull();
+
+    // Left alone: asked once, for this search.
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', {}, RELATED));
+    await advance(SETTLE - 1);
+    expect(asked()).toHaveLength(2);
+    await advance(1);
+    expect(asked()).toEqual(['ocean|top|top|plain', 'ocean at dusk|top|top|plain', 'ocean at dusk|top|top|related']);
+
+    // Drawn under the search's own outcome with the cards its posts use, and said.
+    expect(relatedLabels(tree)).toEqual(['Open post Post sea', 'Open post Post cliffs']);
+    expect(shownTexts(tree)).toContain(SEARCH_RELATED_HEADING);
+    expect(saysNoResults(tree)).toBe(true);
+    expect(mocks.announce).toHaveBeenCalledWith('2 related posts');
+
+    // Once per answer: nothing more however long it stands.
+    await advance(SETTLE * 4);
+    expect(asked()).toHaveLength(3);
+    await act(async () => tree.unmount());
+  });
+
+  it('asks with the search itself when the person settled on it first: the Search key inside the pause', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', {}, RELATED));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'ocean at dusk');
+    await submit(tree);
+    await advance(300);
+    expect(asked()).toEqual(['ocean at dusk|top|top|related']);
+    expect(relatedGroup(tree)).not.toBeNull();
+    await advance(SETTLE * 2);
+    expect(asked()).toHaveLength(1);
+    await act(async () => tree.unmount());
+  });
+
+  it('asks at once when the Search key is pressed over a thin answer already on hand', async () => {
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'ocean at dusk');
+    await advance(300);
+    expect(asked()).toEqual(['ocean at dusk|top|top|plain']);
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', {}, RELATED));
+    await submit(tree);
+    await advance(0);
+    expect(asked()).toEqual(['ocean at dusk|top|top|plain', 'ocean at dusk|top|top|related']);
+    expect(relatedGroup(tree)).not.toBeNull();
+    await act(async () => tree.unmount());
+  });
+
+  it('asks with the search itself for a recent search opened', async () => {
+    mocks.readSearchHistory.mockResolvedValue(['ocean at dusk']);
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await advance(0);
+    await press(pressableLabelled(tree, 'Search again for ocean at dusk'));
+    await advance(300);
+    expect(asked()).toEqual(['ocean at dusk|top|top|related']);
+    await act(async () => tree.unmount());
+  });
+
+  it('does not ask again for an answer that is not thin, and never for a later page', async () => {
+    const six = ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => post(id));
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', { posts: six, postsCursor: 'page-2' }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await press(tab(tree, 'Posts'));
+    await typeQuery(tree, 'ocean at dusk');
+    await submit(tree);
+    await advance(300);
+    expect(asked()).toEqual(['ocean at dusk|posts|top|related']);
+    await advance(SETTLE * 2);
+    expect(asked()).toHaveLength(1);
+    await press(showMoreButton(tree));
+    expect(asked().at(-1)).toBe('ocean at dusk|posts|top|plain|page-2');
+
+    // A full Top answer that came without it is left as it is.
+    await press(tab(tree, 'Top'));
+    await typeQuery(tree, 'harbour lights');
+    await advance(300 + SETTLE * 2);
+    expect(asked().filter((line) => line.startsWith('harbour'))).toEqual(['harbour lights|top|top|plain']);
+    await act(async () => tree.unmount());
+  });
+
+  it('never asks on Creators, Recipes or Latest, nor for a query too short to be searched for posts', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', type === 'posts' ? { posts: [post('own')] } : {}));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'ocean at dusk');
+    await advance(300);
+    await press(tab(tree, 'Creators'));
+    await submit(tree);
+    await advance(SETTLE * 2);
+    await press(tab(tree, 'Recipes'));
+    await advance(SETTLE * 2);
+    // Posts in the ranked order is where they apply, and the person has settled on this query.
+    await press(tab(tree, 'Posts'));
+    await advance(0);
+    await act(async () => { hostNodes(tree, 'segmented-control')[0].props.onChange('latest'); });
+    await advance(SETTLE * 2);
+    expect(asked()).toEqual([
+      'ocean at dusk|top|top|plain',
+      'ocean at dusk|creators|top|plain',
+      'ocean at dusk|recipes|top|plain',
+      'ocean at dusk|posts|top|related',
+      'ocean at dusk|posts|latest|plain',
+    ]);
+    await press(tab(tree, 'Top'));
+    await typeQuery(tree, 'oc');
+    await submit(tree);
+    await advance(300 + SETTLE * 2);
+    expect(asked().filter((line) => line.startsWith('oc|'))).toEqual(['oc|top|top|plain']);
+    await act(async () => tree.unmount());
+  });
+
+  it('never asks for a handle search, by the Search key or left alone, and asks for the same letters without the "@"', async () => {
+    // Seen on the simulator against production (2026-11-13): "@flu" left alone spent a lookup.
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, '@flu');
+    await advance(300 + SETTLE * 2);
+    await submit(tree);
+    await advance(SETTLE * 2);
+    expect(asked()).toEqual(['@flu|top|top|plain']);
+    await typeQuery(tree, 'flu');
+    await advance(300);
+    await advance(SETTLE);
+    expect(asked().slice(1)).toEqual(['flu|top|top|plain', 'flu|top|top|related']);
+    await act(async () => tree.unmount());
+  });
+
+  it('keeps the answer on hand when the request for related posts fails, says nothing, and does not ask again', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', { creators: [creator('jane')] }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'ocean at dusk');
+    await advance(300);
+    searchPublicContent.mockRejectedValue(new ApiError('Failed to search public content.', 500));
+    await advance(SETTLE);
+    expect(asked()).toEqual(['ocean at dusk|top|top|plain', 'ocean at dusk|top|top|related']);
+    expect(() => pressableLabelled(tree, "Open Creator jane's profile")).not.toThrow();
+    expect(statusTitles(tree)).not.toContain('Search did not load');
+    // Nor under the results, where a failed next page is said.
+    expect(tree.root.findAll((node) => node.props.accessibilityRole === 'alert')).toHaveLength(0);
+    expect(relatedGroup(tree)).toBeNull();
+    await advance(SETTLE * 4);
+    expect(asked()).toHaveLength(2);
+    await act(async () => tree.unmount());
+  });
+
+  it('draws the group under the search’s own results, and nothing for an answer that brings none', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', { posts: [post('own')] }, RELATED));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'ocean at dusk');
+    await submit(tree);
+    await advance(300);
+    // After the search's own Posts group (the tab of that name comes first of all).
+    const lines = shownTexts(tree);
+    expect(lines.filter((line) => line === SEARCH_RELATED_HEADING)).toHaveLength(1);
+    expect(lines.indexOf(SEARCH_RELATED_HEADING)).toBeGreaterThan(lines.lastIndexOf('Posts'));
+    expect(lines.indexOf(SEARCH_RELATED_HEADING)).toBeGreaterThan(lines.indexOf('Post own'));
+    expect(relatedLabels(tree)).toEqual(['Open post Post sea', 'Open post Post cliffs']);
+
+    // Looked for and none found, and a server that says nothing: no group, no words.
+    mocks.announce.mockClear();
+    for (const [typed, related] of [['quiet harbour', { posts: [] }], ['quiet harbours', undefined]] as const) {
+      searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', { posts: [post('own')] }, related as PublicSearchResponse['related']));
+      await typeQuery(tree, typed);
+      await submit(tree);
+      await advance(300);
+      expect(relatedGroup(tree)).toBeNull();
+      expect(shownTexts(tree)).not.toContain(SEARCH_RELATED_HEADING);
+    }
+    expect(mocks.announce).not.toHaveBeenCalledWith(expect.stringContaining('related'));
+    await act(async () => tree.unmount());
+  });
+});
+
 describe('ExploreSearchOverlay typeahead', () => {
   const PAUSE = SEARCH_TYPEAHEAD_DEBOUNCE_MS;
   const ANNOUNCE_PAUSE = SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS;
@@ -1434,6 +1653,18 @@ describe('ExploreSearchOverlay typeahead', () => {
     const panel = list(tree);
     if (!panel) return [];
     return panel.findAll((node) => isHost(node, 'pressable')).map((node) => node.props.accessibilityLabel as string);
+  }
+  /** The rows drawn dimmed: they have only just come to stand where they are, and take no tap yet. */
+  function dimmedRows(tree: Tree) {
+    const panel = list(tree);
+    if (!panel) return [];
+    return panel.findAll((node) => isHost(node, 'pressable'))
+      .filter((node) => {
+        const style = node.props.style as unknown;
+        const drawn = (typeof style === 'function' ? style({ pressed: false }) : style) as { opacity?: number };
+        return drawn.opacity !== 1;
+      })
+      .map((node) => node.props.accessibilityLabel as string);
   }
   function asked() {
     return suggestSearch.mock.calls.map(([params]) => params.query);
@@ -1650,6 +1881,9 @@ describe('ExploreSearchOverlay typeahead', () => {
     // a tap there now was aimed at the model.
     suggestSearch.mockReturnValueOnce(later.promise);
     await typeQuery(tree, 'lumi');
+    // What a sighted person has of it: the rows that moved are dimmed, at
+    // once, and the creators that stayed are not.
+    expect(dimmedRows(tree)).toEqual(['Search for luminous', 'Search for lumen glow']);
     await press(pressableLabelled(tree, 'Search for luminous'));
     expect(searchInput(tree).props.value).toBe('lumi');
     expect(mocks.keyboardDismiss).not.toHaveBeenCalled();
@@ -1664,6 +1898,7 @@ describe('ExploreSearchOverlay typeahead', () => {
     });
     expect(rowLabels(tree)).toHaveLength(5);
     expect(list(tree)!.props.accessibilityState).toEqual({ busy: true });
+    expect(dimmedRows(tree)).toEqual(['Luma Ray 2, model, 14 posts. Show posts made with it', 'Search for luminous', 'Search for lumen glow']);
     await press(pressableLabelled(tree, 'Luma Ray 2, model, 14 posts. Show posts made with it'));
     await press(pressableLabelled(tree, 'Search for luminous'));
     await advance(SETTLE - 1);
@@ -1675,6 +1910,36 @@ describe('ExploreSearchOverlay typeahead', () => {
     // Once the rows have stood, the tap counts, and opens the row it is on.
     await advance(1);
     expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
+    expect(dimmedRows(tree)).toEqual([]);
+    await press(pressableLabelled(tree, 'Search for luminous'));
+    expect(searchInput(tree).props.value).toBe('luminous');
+    await act(async () => tree.unmount());
+  });
+
+  it('dims nothing and is not busy for an answer that leaves the rows where they were', async () => {
+    // The common case as a person types on: every row the panel has is still
+    // named by the longer text, and its answer brings the same rows. Nothing
+    // moves, so nothing may flicker.
+    const later = deferred<SearchSuggestResponse>();
+    const tree = await open();
+    await typeQuery(tree, 'lum');
+    await advance(PAUSE);
+    const before = rowLabels(tree);
+    suggestSearch.mockReturnValueOnce(later.promise);
+    await typeQuery(tree, 'luma');
+    // Stale until the answer lands: busy for that, with every row at full strength.
+    expect(rowLabels(tree)).toEqual(before);
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: true });
+    expect(dimmedRows(tree)).toEqual([]);
+    await advance(PAUSE);
+    await act(async () => {
+      later.resolve(suggestions({ query: 'luma', normalizedQuery: 'luma' }));
+      await later.promise;
+    });
+    // The answer is drawn: not busy at once, no row dimmed, and a tap counts.
+    expect(rowLabels(tree)).toEqual(before);
+    expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
+    expect(dimmedRows(tree)).toEqual([]);
     await press(pressableLabelled(tree, 'Search for luminous'));
     expect(searchInput(tree).props.value).toBe('luminous');
     await act(async () => tree.unmount());
@@ -1833,6 +2098,8 @@ describe('ExploreSearchOverlay typeahead', () => {
     // No pause for typing: the person chose this search.
     await advance(0);
     expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'luminous', type: 'top' });
+    // The person settled on it: its related posts are asked for with it.
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ related: true });
     // Committed as the Search key commits one: kept once it finds something.
     expect(mocks.rememberSearchQuery).toHaveBeenCalledWith('luminous');
     // Its own suggestions are not drawn over the results it asked for.

@@ -45,6 +45,9 @@ import {
   SEARCH_FILTER_SWITCHES,
   SEARCH_RECENTS_CLEAR_LABEL,
   SEARCH_RECENTS_HEADING,
+  SEARCH_RELATED_HEADING,
+  SEARCH_RELATED_PARAM,
+  isSearchAnswerThin,
   isSearchFilterSwitchOn,
   parseSearchEntityId,
   searchCorrectionNotice,
@@ -55,9 +58,20 @@ import {
   searchInsteadLabel,
   searchMadeWithChipLabel,
   searchMadeWithRemoveLabel,
+  searchRelatedApplies,
+  searchRelatedFollowUpDelay,
+  searchRelatedPosts,
+  searchRelatedStatus,
   toggleSearchFilterSwitch,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import type { SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
+import {
+  SEARCH_PAGE_PATH,
+  forgetSearchPageTraversal,
+  readSearchPageAddress,
+  writeSearchPageAddress,
+  type SearchPageOpening,
+} from './search-address';
 import { clearSearchHistory, forgetSearchQuery, readSearchHistory, rememberSearchQuery } from './search-history';
 
 const SEARCH_TABS: Array<{ id: PublicSearchType; label: string }> = [
@@ -82,7 +96,9 @@ const SEARCH_OFFLINE_MESSAGE = 'Search could not be loaded. Check your connectio
 // `narrowing` is the filters and the exact reading as one string
 // (publicSearchFilterKey), '' for none.
 type SearchRequest = { query: string; type: PublicSearchType; sort: PublicSearchSort; narrowing: string };
-type SearchAnswer = SearchRequest & { result: PublicSearchResponse };
+// `relatedAsked`: the answer was asked for with related posts, or has been
+// asked about them since. They are asked about once per answer.
+type SearchAnswer = SearchRequest & { result: PublicSearchResponse; relatedAsked: boolean };
 type SearchFailure = SearchRequest & { message: string };
 
 class SearchRequestError extends Error {
@@ -154,7 +170,7 @@ function searchPath(
   if (type !== 'top') params.set('type', type);
   if (sort !== 'top') params.set('sort', sort);
   for (const [name, value] of Object.entries(publicSearchFilterParams(filters, exact))) params.set(name, value);
-  return `/search${params.size ? `?${params.toString()}` : ''}`;
+  return `${SEARCH_PAGE_PATH}${params.size ? `?${params.toString()}` : ''}`;
 }
 
 const CHIP_CLASS = 'ui-focus-ring inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full border px-4 text-sm font-semibold transition';
@@ -324,6 +340,20 @@ function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; re
   );
 }
 
+// Posts that mean what the query says without holding its words: the same
+// cards as the search's own posts, under everything the search itself found.
+function RelatedPosts({ posts, returnTo }: { posts: readonly ShowcaseFeedItem[]; returnTo: string }) {
+  if (posts.length === 0) return null;
+  return (
+    <section aria-labelledby="search-related-heading">
+      <h2 id="search-related-heading" className="mb-4 text-xl font-semibold text-white">{SEARCH_RELATED_HEADING}</h2>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {posts.map((item) => <PostSearchCard key={item.id} item={item} returnTo={returnTo} />)}
+      </div>
+    </section>
+  );
+}
+
 export default function SearchClient({
   initialQuery,
   initialType,
@@ -339,20 +369,30 @@ export default function SearchClient({
   /** A shared link asked for the query as typed. */
   initialExact?: boolean;
 }) {
-  const [query, setQuery] = useState(initialQuery);
+  // The search the page opens on: the address's own when Back or Forward has
+  // brought the page back (readSearchPageAddress says why), the server's
+  // reading of it otherwise. Read once, as the page mounts.
+  const [opening] = useState<SearchPageOpening>(() => readSearchPageAddress() ?? {
+    query: initialQuery,
+    type: initialType,
+    sort: initialSort,
+    filters: initialFilters,
+    exact: initialExact,
+  });
+  const [query, setQuery] = useState(opening.query);
   // The tab the user chose. Below three characters only creators can be
   // searched, so a content tab shows as Creators and comes back at three.
-  const [pickedType, setPickedType] = useState(initialType);
+  const [pickedType, setPickedType] = useState(opening.type);
   // The order the user chose for Posts and Recipes. It is kept across tabs,
   // and read only on the two that have another order than the ranked one.
-  const [pickedSort, setPickedSort] = useState(initialSort);
+  const [pickedSort, setPickedSort] = useState(opening.sort);
   // What narrows Posts. Kept across tabs, as the order is, and read only on
   // Posts: the Top tab is the best of each kind.
-  const [pickedFilters, setPickedFilters] = useState(initialFilters);
+  const [pickedFilters, setPickedFilters] = useState(opening.filters);
   // The query the person asked to have read as typed ("search instead for").
   // It belongs to that query: typing another one is a new search, corrected
   // again where it needs to be.
-  const [exactQuery, setExactQuery] = useState(initialExact ? initialQuery : null);
+  const [exactQuery, setExactQuery] = useState(opening.exact ? opening.query : null);
   // The name of each entity this page has been told, by its id, so a filter
   // picked from a result is named before its own answer arrives.
   const [entityLabels, setEntityLabels] = useState<Record<string, string>>({});
@@ -378,10 +418,18 @@ export default function SearchClient({
   const retryUnblockTimer = useRef<number | null>(null);
   // The query of the last scheduled search. A URL query arrives already typed
   // and a tab change keeps the query, so only a new query waits for a pause.
-  const scheduledQuery = useRef(initialQuery);
-  // The address the page was at when the person left it for a creator's page
-  // from the typeahead, or null: the search effect does not write it again.
-  const leavingAt = useRef<string | null>(null);
+  const scheduledQuery = useRef(opening.query);
+  // The query the person settled on: Enter, a suggestion pressed, a recent
+  // search opened. A search for it is asked with related posts
+  // (public-search-policy.ts, "Related posts"); one still being typed is not.
+  // The ref is read as a request is sent, the state by the wait after an
+  // answer: a request that read the state would be made again when it changed.
+  const settledQueryAtSend = useRef<string | null>(null);
+  const [settledQuery, setSettledQuery] = useState<string | null>(null);
+  const settleOn = (settled: string) => {
+    settledQueryAtSend.current = settled;
+    setSettledQuery(settled);
+  };
   const tabRefs = useRef<Partial<Record<PublicSearchType, HTMLButtonElement | null>>>({});
   const normalizedQuery = useMemo(() => normalizePublicSearchQuery(query), [query]);
   // The server strips leading "@" (a handle search) before its length checks
@@ -397,6 +445,8 @@ export default function SearchClient({
   const activeExact = activeType !== 'creators' && exactQuery !== null && exactQuery === normalizedQuery;
   const narrowing = publicSearchFilterKey(activeFilters, activeExact);
   const returnTo = searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact);
+  // The page's address: the search's, once there is one to run.
+  const address = canSearch ? returnTo : SEARCH_PAGE_PATH;
 
   const onTabListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
@@ -409,16 +459,36 @@ export default function SearchClient({
     tabRefs.current[nextTab.id]?.focus();
   };
 
-  const requestSearch = useCallback(async ({ append = false, cursor = null }: { append?: boolean; cursor?: string | null } = {}) => {
+  // Related posts can come with the search in front (the first page of it).
+  const relatedApplies = canSearch && searchRelatedApplies({
+    query: normalizedQuery,
+    type: activeType,
+    sort: activeSort,
+    narrowing,
+    queryLength: gatedQueryLength,
+    laterPage: false,
+  });
+
+  // `relatedFollowUp`: the search in front asked again for its related posts,
+  // over the answer on hand. That answer stays whatever becomes of the
+  // request: its failure is not the search's, and is drawn as nothing.
+  const requestSearch = useCallback(async ({
+    append = false,
+    cursor = null,
+    relatedFollowUp = false,
+  }: { append?: boolean; cursor?: string | null; relatedFollowUp?: boolean } = {}) => {
     const request: SearchRequest = { query: normalizedQuery, type: activeType, sort: activeSort, narrowing };
+    // Asked for with the search a person has settled on, and by the follow-up; never for a later page.
+    const askRelated = relatedApplies && !cursor && (relatedFollowUp || settledQueryAtSend.current === request.query);
     const sequence = ++requestSequence.current;
     requestController.current?.abort();
     const controller = new AbortController();
     requestController.current = controller;
     if (append) setLoadingMore(true);
-    setFailure(null);
+    if (!relatedFollowUp) setFailure(null);
     try {
       const params = new URLSearchParams({ q: request.query, type: request.type });
+      if (askRelated) params.set(SEARCH_RELATED_PARAM, '1');
       // A cursor pages the order it was issued for, so a later page names it too.
       if (request.sort !== 'top') params.set('sort', request.sort);
       // A cursor pages the filters and the reading it was issued under, so a later page names them too.
@@ -464,7 +534,7 @@ export default function SearchClient({
         if (shownResultCount(next, request.type, request.query) > 0) setHistory(rememberSearchQuery(request.query));
       }
       setAnswer((current) => {
-        if (!append) return { ...request, result: next };
+        if (!append) return { ...request, result: next, relatedAsked: askRelated };
         if (!current || !isSameRequest(current, request.query, request.type, request.sort, request.narrowing)) return current;
         return {
           ...current,
@@ -479,6 +549,15 @@ export default function SearchClient({
     } catch (requestError) {
       if (sequence !== requestSequence.current) return;
       if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
+      if (relatedFollowUp) {
+        // The answer on hand stands, and is not asked about again.
+        setAnswer((current) => (
+          current && isSameRequest(current, request.query, request.type, request.sort, request.narrowing)
+            ? { ...current, relatedAsked: true }
+            : current
+        ));
+        return;
+      }
       const error = requestError instanceof SearchRequestError ? requestError : new SearchRequestError(SEARCH_FAILED_MESSAGE);
       setFailure({ ...request, message: error.message });
       if (error.retryAfterSeconds !== null) {
@@ -492,7 +571,10 @@ export default function SearchClient({
     } finally {
       if (sequence === requestSequence.current) setLoadingMore(false);
     }
-  }, [activeExact, activeFilters, activeSort, activeType, narrowing, normalizedQuery]);
+  }, [activeExact, activeFilters, activeSort, activeType, narrowing, normalizedQuery, relatedApplies]);
+
+  // The traversal that brought the page back, if one did, has been read above.
+  useEffect(() => forgetSearchPageTraversal(), []);
 
   useEffect(() => {
     setHistory(readSearchHistory());
@@ -523,27 +605,20 @@ export default function SearchClient({
       requestSequence.current += 1;
       setAnswer(null);
       setFailure(null);
-      // history.replaceState keeps Next's router in step without a server
-      // render; this page is dynamic, so router.replace re-rendered it per keystroke.
-      // Not once the person has left for a creator's page from here (`leavingAt`).
-      if (leavingAt.current !== '/search') {
-        leavingAt.current = null;
-        window.history.replaceState(null, '', '/search');
-      }
+      writeSearchPageAddress(SEARCH_PAGE_PATH);
       return;
     }
     // Cleared now rather than when the request starts, so an old error never
     // stands for the new query during the pause.
     setFailure(null);
     const search = () => {
-      const path = searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact);
-      // The person has left for a creator's page from the typeahead (below):
-      // the search they left is not run, and above all its address is not
-      // written. A write here is a navigation to Next's router, and a
-      // navigation discards the one still on its way.
-      if (leavingAt.current === path) return;
-      leavingAt.current = null;
-      window.history.replaceState(null, '', path);
+      // The address follows the search without a server render (this page is
+      // dynamic: router.replace rendered it again at every keystroke) and
+      // without a word to Next's router (writeSearchPageAddress says why).
+      // The search is asked whether or not the person has pressed something
+      // that leaves the page meanwhile: a navigation that fails, or is given
+      // up, finds the page with the search it says it is running.
+      writeSearchPageAddress(address);
       void requestSearch();
     };
     const waitForPause = scheduledQuery.current !== normalizedQuery;
@@ -554,7 +629,18 @@ export default function SearchClient({
     }
     const timer = window.setTimeout(search, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [activeExact, activeFilters, activeSort, activeType, canSearch, normalizedQuery, requestSearch]);
+  }, [address, canSearch, normalizedQuery, requestSearch]);
+
+  // The address waits for the pause the search waits for, and a press can
+  // leave the page inside that pause: a result, a link of the header, a
+  // suggestion. So any press anywhere writes it first, in the capture phase,
+  // ahead of whatever the press goes on to do: the entry the person leaves
+  // names the search they left, and Back returns to it.
+  useEffect(() => {
+    const writeAddress = () => writeSearchPageAddress(address);
+    document.addEventListener('click', writeAddress, true);
+    return () => document.removeEventListener('click', writeAddress, true);
+  }, [address]);
 
   const currentAnswer = isSameRequest(answer, normalizedQuery, activeType, activeSort, narrowing) ? answer : null;
   const currentFailure = isSameRequest(failure, normalizedQuery, activeType, activeSort, narrowing) ? failure : null;
@@ -571,15 +657,36 @@ export default function SearchClient({
     ? searchCorrectionNotice(currentAnswer.result.correctedQuery, activeType)
     : null;
   const exactNotice = currentAnswer && activeExact ? searchExactNotice(normalizedQuery) : null;
+  // Related posts: the group the answer in front brings, and when to ask for
+  // it over an answer that came without (the shared rule,
+  // searchRelatedFollowUpDelay): at once for a search the person has settled
+  // on, after a pause with the search left alone otherwise, only where the
+  // answer is thin, and once.
+  const relatedPosts = shownAnswer ? searchRelatedPosts(activeType, shownAnswer.result) : [];
+  const relatedFollowUpDelay = currentAnswer
+    ? searchRelatedFollowUpDelay({
+      applies: relatedApplies,
+      relatedAsked: currentAnswer.relatedAsked,
+      thin: isSearchAnswerThin(activeType, currentAnswer.result.posts),
+      settled: settledQuery === normalizedQuery,
+    })
+    : null;
+  useEffect(() => {
+    if (relatedFollowUpDelay === null) return;
+    const timer = window.setTimeout(() => void requestSearch({ relatedFollowUp: true }), relatedFollowUpDelay);
+    return () => window.clearTimeout(timer);
+  }, [relatedFollowUpDelay, requestSearch]);
+  const relatedStatus = currentAnswer ? searchRelatedStatus(searchRelatedPosts(activeType, currentAnswer.result).length) : '';
   // One live region says the settled outcome, the reading first: "Showing
-  // results for “portrait”. 12 results for portriat".
+  // results for “portrait”. 12 results for portriat", and the related posts
+  // after it: "0 results for ocean at dusk. 3 related posts".
   const statusMessage = !canSearch
     ? ''
     : pending
       ? 'Searching…'
       : currentFailure
         ? ''
-        : `${correctionNotice ?? exactNotice ? `${correctionNotice ?? exactNotice}. ` : ''}${resultCount} ${resultCount === 1 ? 'result' : 'results'} for ${normalizedQuery}`;
+        : `${correctionNotice ?? exactNotice ? `${correctionNotice ?? exactNotice}. ` : ''}${resultCount} ${resultCount === 1 ? 'result' : 'results'} for ${normalizedQuery}${relatedStatus ? `. ${relatedStatus}` : ''}`;
   // The filters as the page shows them: the made-with entity by the name an
   // answer or a pressed result gave it, by its key until then.
   const madeWithLabel = !activeFilters.madeWith
@@ -604,6 +711,7 @@ export default function SearchClient({
   // typing: a search committed with Enter, and one a result was opened from.
   const commitSearch = () => {
     if (!canSearch) return;
+    settleOn(normalizedQuery);
     if (currentAnswer) {
       if (resultCount > 0) setHistory(rememberSearchQuery(normalizedQuery));
       return;
@@ -624,15 +732,8 @@ export default function SearchClient({
   const runTypeaheadAction = (action: SearchTypeaheadAction | null) => {
     if (!action) return;
     if (action.type === 'creator') {
-      // The page writes its address a pause after the last letter
-      // (history.replaceState), and Next's router takes that write for a
-      // navigation, which discards the one to the creator's page while it is
-      // still loading: a creator chosen within the pause opened nothing.
-      // So the page notes the address it is being left at, and does not
-      // write it; a change of the search afterwards writes again.
-      leavingAt.current = canSearch
-        ? searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact)
-        : '/search';
+      // Chosen with Enter there is no press to write the address first (above).
+      writeSearchPageAddress(address);
       router.push(`/creators/${encodeURIComponent(action.username)}`);
       return;
     }
@@ -649,6 +750,7 @@ export default function SearchClient({
     const nextSort: PublicSearchSort = publicSearchTypeHasSorts(pickedType) ? pickedSort : 'top';
     scheduledQuery.current = next;
     rememberOnAnswer.current = `${pickedType}:${nextSort}:${publicSearchFilterKey(nextFilters, false)}:${next}`;
+    settleOn(next);
     setQuery(action.query);
   };
   const nextCursor = !currentAnswer
@@ -690,7 +792,7 @@ export default function SearchClient({
               value={query}
               onChange={setQuery}
               onClear={() => setQuery('')}
-              autoFocus={!initialQuery}
+              autoFocus={!opening.query}
               combobox={{
                 expanded: typeahead.shown,
                 listId: typeahead.listId,
@@ -707,6 +809,7 @@ export default function SearchClient({
                 activeIndex={typeahead.activeIndex}
                 stale={typeahead.stale}
                 busy={typeahead.busy}
+                settlingRows={typeahead.settlingRows}
                 onPick={(row) => runTypeaheadAction(typeahead.press(row))}
                 onHighlight={typeahead.highlightRow}
                 // Under the box, over the tabs and the results while the person
@@ -785,7 +888,7 @@ export default function SearchClient({
                   <button
                     type="button"
                     aria-label={`Search again for ${item}`}
-                    onClick={() => { setQuery(item); setRecentsOpen(false); }}
+                    onClick={() => { settleOn(normalizePublicSearchQuery(item)); setQuery(item); setRecentsOpen(false); }}
                     className="ui-focus-ring flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-xl px-2 text-left text-sm text-zinc-200 hover:bg-white/[0.06]"
                   >
                     <Clock3 className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />
@@ -857,12 +960,15 @@ export default function SearchClient({
                 <LoaderCircle className="mr-2 h-5 w-5 animate-spin" /> Searching…
               </div>
             ) : (
-              <SearchStateBlock
-                title={`No results for “${normalizedQuery}”`}
-                body={hasPublicSearchFilters(activeFilters)
-                  ? SEARCH_FILTERED_EMPTY_BODY
-                  : 'Try a shorter phrase, check the spelling, or search for a creator handle.'}
-              />
+              <div className="space-y-10">
+                <SearchStateBlock
+                  title={`No results for “${normalizedQuery}”`}
+                  body={hasPublicSearchFilters(activeFilters)
+                    ? SEARCH_FILTERED_EMPTY_BODY
+                    : 'Try a shorter phrase, check the spelling, or search for a creator handle.'}
+                />
+                <RelatedPosts posts={relatedPosts} returnTo={returnTo} />
+              </div>
             )
           ) : (
             <div className={`space-y-10 transition-opacity${staleResultsShown ? ' opacity-60' : ''}`}>
@@ -922,6 +1028,8 @@ export default function SearchClient({
                   </button>
                 </div>
               ) : null}
+
+              <RelatedPosts posts={relatedPosts} returnTo={returnTo} />
 
               {currentFailure ? <p role="alert" className="text-center text-sm text-rose-300">{currentFailure.message}</p> : null}
             </div>

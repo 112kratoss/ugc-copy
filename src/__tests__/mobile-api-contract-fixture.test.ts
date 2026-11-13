@@ -138,7 +138,13 @@ type MobileApiContractFixture = {
         | 'latestPosts' | 'latestPostsNextPage' | 'beforeSorts'
         | 'filteredPosts' | 'filteredPostsNextPage' | 'correctedPosts' | 'exactPosts' | 'beforeFilters'
         | 'relatedPosts',
-        { query: Record<string, string>; response: PublicSearchResponse }
+        {
+          query: Record<string, string>;
+          // The related cards are read through the web's type below; the pinned
+          // one has no prompt, creation or asset (null), which the app's card
+          // type does not say a card can lack.
+          response: Omit<PublicSearchResponse, 'related'> & { related?: { posts: unknown[] } };
+        }
       >;
       cursors: Record<'latestPosts' | 'topPosts' | 'topPostsBeforeInstants' | 'filteredTopPosts', {
         encoded: string;

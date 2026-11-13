@@ -37,6 +37,8 @@ import {
   hasSearchFilters,
   isSearchFilterSwitchOn,
   parseSearchEntityId,
+  SEARCH_RELATED_HEADING,
+  isSearchAnswerThin,
   searchCorrectionNotice,
   searchEntityActionLabel,
   searchEntityCountLabel,
@@ -47,6 +49,10 @@ import {
   searchInsteadLabel,
   searchMadeWithChipLabel,
   searchMadeWithRemoveLabel,
+  searchRelatedApplies,
+  searchRelatedFollowUpDelay,
+  searchRelatedPosts,
+  searchRelatedStatus,
   toggleSearchFilterSwitch,
   type SearchEntity,
   type SearchFilters,
@@ -99,7 +105,9 @@ const SEARCH_DEBOUNCE_MS = 300;
 const SEARCH_LENGTH_HINT = 'Search creators from two characters, or use three characters to discover posts and recipes.';
 
 // `scope` is the query and tab an answer was asked for, whatever the order.
-type SearchAnswer = { key: string; scope: string; response: PublicSearchResponse };
+// `relatedAsked`: the answer was asked for with related posts, or has been
+// asked about them since. They are asked about once per answer.
+type SearchAnswer = { key: string; scope: string; response: PublicSearchResponse; relatedAsked: boolean };
 type SearchFailure = { key: string; message: string; retryAfterSeconds: number | null };
 
 function isContentType(type: PublicSearchType) {
@@ -213,7 +221,7 @@ function ResultsHeading({
   sort,
   onSortChange,
 }: {
-  title: 'Creators' | 'Posts' | 'Recipes' | typeof SEARCH_ENTITIES_HEADING;
+  title: 'Creators' | 'Posts' | 'Recipes' | typeof SEARCH_ENTITIES_HEADING | typeof SEARCH_RELATED_HEADING;
   /** Null where the results have one order, or the server has not said it reads another. */
   sort: PublicSearchSort | null;
   onSortChange: (sort: PublicSearchSort) => void;
@@ -560,6 +568,23 @@ function RecipeRow({ recipe, onOpen }: { recipe: RecipeSearchResult; onOpen: () 
   );
 }
 
+const NO_RELATED_POSTS: readonly ShowcaseFeedItem[] = [];
+
+// Posts that mean what the query says without holding its words: the cards
+// the search's own posts are, under everything the search itself found.
+function RelatedPosts({ posts, onOpen }: { posts: readonly ShowcaseFeedItem[]; onOpen: () => void }) {
+  if (posts.length === 0) return null;
+  return (
+    <View testID="search-related-posts" style={{ gap: 10 }}>
+      <ResultsHeading title={SEARCH_RELATED_HEADING} sort={null} onSortChange={noSortChange} />
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+        {posts.map((post) => <View key={post.id} style={{ width: '48%' }}><PostRow item={post} onOpen={onOpen} /></View>)}
+      </View>
+    </View>
+  );
+}
+const noSortChange = () => {};
+
 export function ExploreSearchOverlay({
   api,
   onClose,
@@ -593,6 +618,17 @@ export function ExploreSearchOverlay({
   const rememberOnAnswer = useRef<string | null>(null);
   // A completion just chosen: its search is committed as the Search key commits one.
   const committedCompletion = useRef<string | null>(null);
+  // The query the person settled on: the Search key, a suggestion pressed, a
+  // recent search opened. A search for it is asked with related posts
+  // (public-search-policy.ts, "Related posts"); one still being typed is not.
+  // The ref is read as a request is sent, the state by the wait after an
+  // answer: a request that read the state would be made again when it changed.
+  const settledQueryAtSend = useRef<string | null>(null);
+  const [settledQuery, setSettledQuery] = useState<string | null>(null);
+  const settleOn = (settled: string) => {
+    settledQueryAtSend.current = settled;
+    setSettledQuery(settled);
+  };
   const [query, setQuery] = useState('');
   // The field has the focus, which on a phone is the keyboard being up.
   const [inputFocused, setInputFocused] = useState(false);
@@ -721,18 +757,33 @@ export function ExploreSearchOverlay({
     return () => clearTimeout(focusTimer);
   }, [visible]);
 
-  const runSearch = useCallback(async (cursor: string | null = null) => {
+  // Related posts can come with the search in front (the first page of it).
+  const relatedApplies = requestKey !== null && searchRelatedApplies({
+    query: normalizedQuery,
+    type,
+    sort,
+    narrowing,
+    queryLength: countedLength,
+    laterPage: false,
+  });
+
+  // `relatedFollowUp`: the search in front asked again for its related posts,
+  // over the answer on hand. That answer stays whatever becomes of the
+  // request: its failure is not the search's, and is drawn as nothing.
+  const runSearch = useCallback(async (cursor: string | null = null, relatedFollowUp = false) => {
     if (!requestKey) return;
     const key = requestKey;
     const scope = searchScope(normalizedQuery, type);
+    // Asked for with the search a person has settled on, and by the follow-up; never for a later page.
+    const askRelated = relatedApplies && !cursor && (relatedFollowUp || settledQueryAtSend.current === normalizedQuery);
     const sequence = ++requestSequence.current;
     requestController.current?.abort();
     const controller = new AbortController();
     requestController.current = controller;
     if (cursor) setLoadingMore(true);
-    setFailure(null);
+    if (!relatedFollowUp) setFailure(null);
     try {
-      const next = await api.searchPublicContent({ query: normalizedQuery, type, sort, filters, exact, cursor }, controller.signal);
+      const next = await api.searchPublicContent({ query: normalizedQuery, type, sort, filters, exact, cursor, related: askRelated }, controller.signal);
       if (sequence !== requestSequence.current) return;
       if (next.filters !== undefined) setFiltersOffered(true);
       // The names this answer gives: its entities, and the one its filter is read with.
@@ -747,6 +798,7 @@ export function ExploreSearchOverlay({
         setAnswer((current) => current?.key === key ? {
           key,
           scope,
+          relatedAsked: current.relatedAsked,
           response: {
             ...next,
             creators: type === 'creators' ? { ...next.creators, items: [...current.response.creators.items, ...next.creators.items] } : next.creators,
@@ -756,18 +808,24 @@ export function ExploreSearchOverlay({
         } : current);
         return;
       }
-      setAnswer({ key, scope, response: next });
+      setAnswer({ key, scope, response: next, relatedAsked: askRelated });
       if (rememberOnAnswer.current === key) {
         rememberOnAnswer.current = null;
         if (shownResultCount(next, type, normalizedQuery) > 0) rememberQuery(normalizedQuery);
       }
     } catch (requestError) {
       if (controller.signal.aborted || (requestError instanceof Error && requestError.name === 'AbortError')) return;
-      if (sequence === requestSequence.current) setFailure({ key, ...describeSearchFailure(requestError) });
+      if (sequence !== requestSequence.current) return;
+      if (relatedFollowUp) {
+        // The answer on hand stands, and is not asked about again.
+        setAnswer((current) => (current?.key === key ? { ...current, relatedAsked: true } : current));
+        return;
+      }
+      setFailure({ key, ...describeSearchFailure(requestError) });
     } finally {
       if (sequence === requestSequence.current) setLoadingMore(false);
     }
-  }, [api, exact, filters, normalizedQuery, rememberQuery, requestKey, sort, type]);
+  }, [api, exact, filters, normalizedQuery, relatedApplies, rememberQuery, requestKey, sort, type]);
 
   useEffect(() => () => requestController.current?.abort(), []);
 
@@ -810,6 +868,7 @@ export function ExploreSearchOverlay({
     // The search is what is typed: the typeahead gets out of its way.
     typeahead.close();
     if (!requestKey) return;
+    settleOn(normalizedQuery);
     if (!response) {
       rememberOnAnswer.current = requestKey;
       return;
@@ -853,6 +912,9 @@ export function ExploreSearchOverlay({
     const next = normalizeSearchHistoryQuery(action.query);
     scheduledQuery.current = next;
     committedCompletion.current = next;
+    // The person settled on it: its request asks for related posts with the
+    // search, and an answer already on hand for this very text is asked about at once.
+    settleOn(next);
     setQuery(action.query);
   };
 
@@ -874,6 +936,31 @@ export function ExploreSearchOverlay({
   useEffect(() => {
     if (typeaheadStatus) AccessibilityInfo.announceForAccessibility(typeaheadStatus);
   }, [typeaheadStatus]);
+
+  // Related posts: the group the answer in front brings, and when to ask for
+  // it over an answer that came without (the shared rule,
+  // searchRelatedFollowUpDelay): at once for a search the person has settled
+  // on, after a pause with the search left alone otherwise, only where the
+  // answer is thin, and once.
+  const relatedPosts = shownResponse ? searchRelatedPosts(type, shownResponse) : NO_RELATED_POSTS;
+  const relatedFollowUpDelay = answer !== null && answer.key === requestKey && visible
+    ? searchRelatedFollowUpDelay({
+      applies: relatedApplies,
+      relatedAsked: answer.relatedAsked,
+      thin: isSearchAnswerThin(type, answer.response.posts),
+      settled: settledQuery === normalizedQuery,
+    })
+    : null;
+  useEffect(() => {
+    if (relatedFollowUpDelay === null) return;
+    const timer = setTimeout(() => void runSearch(null, true), relatedFollowUpDelay);
+    return () => clearTimeout(timer);
+  }, [relatedFollowUpDelay, runSearch]);
+  // They can arrive after the results a screen reader has already been through: said when they do.
+  const relatedStatus = response ? searchRelatedStatus(searchRelatedPosts(type, response).length) : '';
+  useEffect(() => {
+    if (relatedStatus) AccessibilityInfo.announceForAccessibility(relatedStatus);
+  }, [relatedStatus]);
 
   // Android reads the notice from its live region; iOS has none, so the line is announced.
   const announcedNotice = correctionNotice ?? exactNotice;
@@ -954,7 +1041,7 @@ export function ExploreSearchOverlay({
         {/* Above everything the search itself draws, in every state of it: the
             person is still typing, and what completes the typing comes first.
             It takes no room once it has nothing to offer or the keyboard is down. */}
-        {typeahead.shown ? <SearchTypeaheadList sections={typeahead.sections} busy={typeahead.busy} onPick={pickSuggestion} /> : null}
+        {typeahead.shown ? <SearchTypeaheadList sections={typeahead.sections} busy={typeahead.busy} settlingRows={typeahead.settlingRows} onPick={pickSuggestion} /> : null}
         {filtersShown ? (
           <SearchFilterBar
             filters={filters}
@@ -991,7 +1078,7 @@ export function ExploreSearchOverlay({
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={`Search again for ${item}`}
-                    onPress={() => setQuery(item)}
+                    onPress={() => { settleOn(normalizeSearchHistoryQuery(item)); setQuery(item); }}
                     style={{ minHeight: 46, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}
                   >
                     <Clock3 size={appTheme.icon.sm} color={theme.colors.faint} />
@@ -1047,6 +1134,7 @@ export function ExploreSearchOverlay({
               </View>
             ) : null}
             {nextCursor ? <SecondaryButton disabled={loadingMore || retryBlocked} label={loadingMore ? 'Loading…' : 'Show more'} onPress={() => void runSearch(nextCursor)} /> : null}
+            <RelatedPosts posts={relatedPosts} onOpen={openResult} />
             {shownFailure ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center', fontSize: 13 }}>{shownFailure.message}</Text> : null}
           </View>
         ) : shownFailure ? (
@@ -1060,12 +1148,15 @@ export function ExploreSearchOverlay({
             <SecondaryButton disabled={retryBlocked} label="Retry search" onPress={() => void runSearch()} />
           </View>
         ) : response ? (
-          <StatusBlock
-            title={`No results for “${normalizedQuery}”`}
-            body={hasSearchFilters(filters)
-              ? SEARCH_FILTERED_EMPTY_BODY
-              : 'Try a shorter phrase, check the spelling, or search for a creator handle.'}
-          />
+          <View style={{ gap: 25 }}>
+            <StatusBlock
+              title={`No results for “${normalizedQuery}”`}
+              body={hasSearchFilters(filters)
+                ? SEARCH_FILTERED_EMPTY_BODY
+                : 'Try a shorter phrase, check the spelling, or search for a creator handle.'}
+            />
+            <RelatedPosts posts={relatedPosts} onOpen={openResult} />
+          </View>
         ) : (
           <View style={{ minHeight: 260, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
             <ActivityIndicator color={theme.colors.primary} />

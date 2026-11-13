@@ -12,6 +12,7 @@ import {
 import { isCreationLibraryMember } from '../lib/creation-library';
 import {
   SEARCH_FILTER_PARAMS,
+  SEARCH_RELATED_PARAM,
   searchCorrectionNotice,
   type SearchFilters,
 } from '../lib/public-search-policy/public-search-policy';
@@ -1172,18 +1173,25 @@ describe('mobile shared API v1 contract fixture', () => {
     // Related posts (search by meaning, 2026-11-13): a client that draws them
     // asks with related=1, for a query a person settled on, and a thin answer
     // then carries posts that mean what the query says, in a field of their
-    // own. The server looks for none without the parameter. This app does not
-    // send it yet: its request is the Top search it has always been, which is
-    // the pinned one less the parameter; it sends it once it draws the cards.
-    it('reads an answer that carries related posts as one that does not, the related cards beside its own lists', async () => {
+    // own. The server looks for none without the parameter. The app draws
+    // them, so it sends the pinned request for a settled search
+    // (`related: true`), and the Top search it has always sent otherwise.
+    it('asks for related posts with the pinned request, only when told to, and reads the cards beside the answer’s own lists', async () => {
       const { relatedPosts } = search.responseVariants;
       expect(search.relatedParameter).toBe('related');
+      expect(SEARCH_RELATED_PARAM).toBe(search.relatedParameter);
       expect(relatedPosts.query).toEqual({ q: 'ocean at dusk', type: 'top', related: '1' });
       const { api, asked } = clientAnswering(relatedPosts.response);
-      const answer = await api.searchPublicContent({ query: relatedPosts.query.q });
-      const sentToday: Record<string, string> = { ...relatedPosts.query };
-      delete sentToday.related;
-      expect(Object.fromEntries(asked[0].searchParams)).toEqual(sentToday);
+      const answer = await api.searchPublicContent({ query: relatedPosts.query.q, related: true });
+      expect(Object.fromEntries(asked[0].searchParams)).toEqual(relatedPosts.query);
+      // A search still being typed, and any call that does not say so, sends no parameter:
+      // the server refuses every value but 1, and looks for none without it.
+      const unasked: Record<string, string> = { ...relatedPosts.query };
+      delete unasked.related;
+      await api.searchPublicContent({ query: relatedPosts.query.q });
+      await api.searchPublicContent({ query: relatedPosts.query.q, related: false });
+      expect(Object.fromEntries(asked[1].searchParams)).toEqual(unasked);
+      expect(Object.fromEntries(asked[2].searchParams)).toEqual(unasked);
       expect(answer.posts).toEqual({ items: [], nextCursor: null });
       expect(answer.creators.items).toEqual([]);
       expect(answer.recipes.items).toEqual([]);

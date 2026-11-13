@@ -87,7 +87,7 @@ import type {
   UndoFeedFeedbackRequest,
   UndoFeedFeedbackResponse,
 } from './types';
-import { NO_SEARCH_FILTERS, searchFilterParams, type SearchFilters } from './public-search-policy/public-search-policy';
+import { NO_SEARCH_FILTERS, SEARCH_RELATED_PARAM, searchFilterParams, type SearchFilters } from './public-search-policy/public-search-policy';
 import {
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
   parseGenerationModelCatalog,
@@ -1402,11 +1402,18 @@ export function createApiClient({
       exact?: boolean;
       cursor?: string | null;
       limit?: number;
+      /**
+       * Ask for related posts too. Each new query asked about spends one of
+       * the viewer's forty a day, so only for a search the person has settled
+       * on (the shared rule: public-search-policy.ts, "Related posts").
+       */
+      related?: boolean;
     }, signal?: AbortSignal) => request<PublicSearchResponse>('/api/search' + buildQuery({
       q: params.query,
       type: params.type ?? 'top',
       sort: params.sort === 'latest' ? params.sort : undefined,
       ...searchFilterParams(params.filters ?? NO_SEARCH_FILTERS, params.exact ?? false),
+      [SEARCH_RELATED_PARAM]: params.related ? '1' : undefined,
       cursor: params.cursor,
       limit: params.limit,
     }), { signal }, { auth: true }),
