@@ -1011,7 +1011,7 @@ export function ExploreSearchOverlay({
     setFiltersOffered(true);
     setPickedFilters({ ...NO_SEARCH_FILTERS, madeWith: action.madeWith });
     setPickedType('posts');
-    commitSearch(action.query);
+    commitSearch(action.query, 'posts');
   };
   const startFromCreator = (creator: SearchStarterCreator) => {
     router.push(`/creators/${encodeURIComponent(creator.username)}` as never);
@@ -1019,7 +1019,7 @@ export function ExploreSearchOverlay({
   // A search to try starts afresh: a filter left on from an earlier search would narrow it.
   const startFromSearch = (search: SearchStarterSearch) => {
     setPickedFilters(NO_SEARCH_FILTERS);
-    commitSearch(search.text);
+    searchAgain(search.text);
   };
 
   // A search that found nothing on its tab says what another tab holds
