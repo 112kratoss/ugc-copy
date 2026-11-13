@@ -1448,8 +1448,11 @@ export function createApiClient({
     // the creators and posts it blocked, hid or reported in the feed (a guest's
     // Not interested and Hide are kept under its uid, D1), which the answer the
     // edge shares between signed-out visitors cannot. Signed out, none is sent.
+    // `freeRecipes=1`: this app makes the cards whose remix comes with a free recipe (a member's
+    // tap takes it, the creator takes it for a guest who signs up from the card), so the server
+    // sends them (`getHomeShelf.query` in contracts/mobile-api-v1.json).
     getHomeShelf: () =>
-      request<HomeShelfResponse>('/api/home/shelf'),
+      request<HomeShelfResponse>('/api/home/shelf?freeRecipes=1'),
     undoFeedFeedback: (body: UndoFeedFeedbackRequest) =>
       request<UndoFeedFeedbackResponse>('/api/showcase/feed/feedback/undo', {
         method: 'POST',

@@ -3760,6 +3760,10 @@
     "getHomeShelf": {
       "method": "GET",
       "path": "/api/home/shelf",
+      "query": {
+        "freeRecipes": "1"
+      },
+      "coverage": "freeRecipes=1: this app can make a card whose remix comes with a free recipe (its member's tap takes the recipe, its creator takes it for a guest who signs up from the card), so those posts are on its shelf. An app that sends no query is sent the shelf without them (owner, 2026-11-13).",
       "auth": "optional",
       "cacheControl": "public, s-maxage=60, stale-while-revalidate=300",
       "response": {

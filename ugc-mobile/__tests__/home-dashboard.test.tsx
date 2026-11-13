@@ -386,6 +386,7 @@ import { haptic } from '../lib/haptics';
 import { FEED_PREPARED_WINDOW_STEP_MS } from '../lib/media-performance';
 import { schedulePersistHomeFeed } from '../lib/persisted-home-feed';
 import { REMIX_LAUNCH_PARAM, REMIX_UNLOCK_REQUIRED_CODE, findRemixLaunch, type RemixLaunch } from '../lib/remix-start';
+import { dismissRecipeUnlockedNotice, readRecipeUnlockedNotice } from '../lib/recipe-unlocked-notice';
 import {
   SHOWCASE_DWELL_VIEWABILITY,
   SHOWCASE_PLAYBACK_VIEWABILITY,
@@ -1515,6 +1516,69 @@ describe('Home screen', () => {
     expect(authState.api.unlockFreeBundle).not.toHaveBeenCalled();
     expect(pushedCreatorRoute()).toEqual(POST_1_REMIX_ROUTE);
     expect(authState.api.recordShowcaseFeedEvent).not.toHaveBeenCalled();
+
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  // Owner, 2026-11-13: the shelf carries posts whose remix comes with a free recipe. The shelf's
+  // read is the same for everyone, so it says the remix is behind the recipe; a member's tap takes
+  // the recipe on its way and opens the remix, in the one tap, as a feed card's Remix does.
+  it('takes a shelf card’s free recipe on the way and opens its remix, in the one tap', async () => {
+    authState.api.unlockFreeBundle.mockResolvedValueOnce({ success: true });
+    const { tree } = renderHome();
+    const header = renderHeader(tree);
+    const freeRecipePost = {
+      ...shelfPost('post-1'),
+      canRemix: false,
+      remixCapability: 'unlock_required',
+      asset: { id: 'recipe-1', postId: 'post-1', title: 'Recipe', accessMode: 'free', priceUsdCents: 0, previewText: '', allowRemix: true },
+    };
+
+    await renderer.act(async () => {
+      hostProps(header, 'home-shelf').onMake({ id: 'post-1', post: freeRecipePost });
+      await settlePromises();
+    });
+
+    expect(authState.api.unlockFreeBundle).toHaveBeenCalledWith('post-1');
+    expect(authState.api.remixShowcasePost).toHaveBeenCalledWith('post-1');
+    expect(authState.api.unlockFreeBundle.mock.invocationCallOrder[0])
+      .toBeLessThan(authState.api.remixShowcasePost.mock.invocationCallOrder[0]);
+    expect(pushedCreatorRoute()).toEqual(POST_1_REMIX_ROUTE);
+    // Taken just now: the post's caches are patched and "Recipe unlocked" is said.
+    expect(readRecipeUnlockedNotice()).not.toBeNull();
+    expect(queryState.client.setQueriesData).toHaveBeenCalledWith({ queryKey: ['showcase-feed'] }, expect.any(Function));
+
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  // Review of #783: the shelf is read for no one, so its card says the recipe is still to take for
+  // the post's creator and for a member who took it before. The server answers them
+  // `alreadyPurchased`; the tap opens the remix and says nothing was unlocked.
+  it('says no recipe was unlocked when a shelf card’s viewer held it already or owns the post', async () => {
+    authState.api.unlockFreeBundle.mockResolvedValueOnce({ success: true, alreadyPurchased: true });
+    const notice = readRecipeUnlockedNotice();
+    if (notice) dismissRecipeUnlockedNotice(notice.id);
+    const { tree } = renderHome();
+    const header = renderHeader(tree);
+    const freeRecipePost = {
+      ...shelfPost('post-1'),
+      canRemix: false,
+      remixCapability: 'unlock_required',
+      asset: { id: 'recipe-1', postId: 'post-1', title: 'Recipe', accessMode: 'free', priceUsdCents: 0, previewText: '', allowRemix: true },
+    };
+    queryState.client.setQueriesData.mockClear();
+
+    await renderer.act(async () => {
+      hostProps(header, 'home-shelf').onMake({ id: 'post-1', post: freeRecipePost });
+      await settlePromises();
+    });
+
+    expect(authState.api.remixShowcasePost).toHaveBeenCalledWith('post-1');
+    expect(pushedCreatorRoute()).toEqual(POST_1_REMIX_ROUTE);
+    expect(readRecipeUnlockedNotice()).toBeNull();
+    expect(queryState.client.setQueriesData).not.toHaveBeenCalledWith({ queryKey: ['showcase-feed'] }, expect.any(Function));
 
     renderer.act(() => header.unmount());
     renderer.act(() => tree.unmount());

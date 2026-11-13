@@ -5,7 +5,12 @@ import type { CreatorProfileResponse, ShowcaseFeedItem, ShowcaseFeedResponse, Sh
 
 export interface UnlockedBundleRef {
   postId: string;
-  resourceId: string;
+  /**
+   * The recipe's id, where the unlock knew it. A claim made by the creator's read of a remix
+   * (`readRemixSourceTakingFreeRecipe`) knows the post alone: every read of that post's recipe is
+   * refreshed then, and the marketplace listing, keyed by the recipe, waits for its own refresh.
+   */
+  resourceId?: string;
 }
 
 type UnlockCacheClient = Pick<QueryClient, 'invalidateQueries' | 'setQueriesData'>;
@@ -110,8 +115,10 @@ export async function refreshUnlockedBundleCaches(queryClient: UnlockCacheClient
     void Promise.resolve(queryClient.invalidateQueries({ queryKey })).catch(() => undefined);
   }
 
-  await Promise.all([
-    queryClient.invalidateQueries({ queryKey: ['post-resource-bundle', unlock.postId, unlock.resourceId] }),
-    queryClient.invalidateQueries({ queryKey: ['marketplace-resource', unlock.resourceId] }),
-  ]);
+  await Promise.all(unlock.resourceId
+    ? [
+        queryClient.invalidateQueries({ queryKey: ['post-resource-bundle', unlock.postId, unlock.resourceId] }),
+        queryClient.invalidateQueries({ queryKey: ['marketplace-resource', unlock.resourceId] }),
+      ]
+    : [queryClient.invalidateQueries({ queryKey: ['post-resource-bundle', unlock.postId] })]);
 }

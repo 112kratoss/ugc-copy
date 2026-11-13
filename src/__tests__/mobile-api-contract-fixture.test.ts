@@ -89,6 +89,8 @@ import { SEARCH_FILTER_PARAMS } from '../../ugc-mobile/lib/public-search-policy/
 type MobileApiContractEndpoint<Response> = {
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   path: string;
+  /** The query the app's request carries (`getHomeShelf`'s `freeRecipes=1`), where the contract pins one. */
+  query?: Record<string, string>;
   auth: 'required' | 'optional' | 'none';
   cacheControl: string;
   status?: number;
@@ -851,7 +853,7 @@ describe('shared mobile API v1 contract fixture', () => {
     ) => {
       const loadHomeShelfForApi = vi.fn(async () => items);
       const response = await getHomeShelfRouteResponse({
-        request: new Request(`http://localhost${endpoint.path}`, {
+        request: new Request(`http://localhost${endpoint.path}?${new URLSearchParams(endpoint.query)}`, {
           headers: authorization ? { Authorization: authorization } : {},
         }),
         dependencies: {
@@ -877,18 +879,18 @@ describe('shared mobile API v1 contract fixture', () => {
     const signedOut = await answer(null, endpoint.response.items, null);
     expect(signedOut.response.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
     await expect(signedOut.response.json()).resolves.toEqual(endpoint.response);
-    expect(signedOut.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: null, isAnonymous: false }, { withFreeRecipePosts: false });
+    expect(signedOut.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: null, isAnonymous: false }, { withFreeRecipePosts: true });
 
     for (const variant of ['member', 'memberWhoPosted'] as const) {
       const fixture = endpoint.responseVariants[variant];
       const member = await answer('Bearer token-1', fixture.response.items, { id: 'user-2', is_anonymous: false });
       expect(member.response.headers.get('Cache-Control')).toBe(fixture.cacheControl);
       await expect(member.response.json()).resolves.toEqual(fixture.response);
-      expect(member.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: 'user-2', isAnonymous: false }, { withFreeRecipePosts: false });
+      expect(member.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: 'user-2', isAnonymous: false }, { withFreeRecipePosts: true });
     }
 
     const guest = await answer('Bearer guest-token', endpoint.response.items, { id: 'guest-1', is_anonymous: true });
-    expect(guest.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: 'guest-1', isAnonymous: true }, { withFreeRecipePosts: false });
+    expect(guest.loadHomeShelfForApi).toHaveBeenCalledWith({ viewerUserId: 'guest-1', isAnonymous: true }, { withFreeRecipePosts: true });
     expect(guest.response.headers.get('Cache-Control')).toBe(endpoint.responseVariants.member.cacheControl);
     await expect(guest.response.json()).resolves.toEqual(endpoint.response);
   });

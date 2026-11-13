@@ -46,7 +46,9 @@ import { env } from '@/lib/env';
 import { countDraftMedia, heldDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaSeedanceAsset, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
 import { holdsRemixOriginal, remixOriginalMedia, remixOriginalOf, remixOriginalPlace, replacedRemixOriginal, storedRemixOriginal, withRenewedRemixOriginal, type RemixOriginal, type RemixOriginalPlace } from '@/lib/remix-original-reference';
 import { claimRemixFreshStart } from '@/lib/remix-opening';
-import { findRemixLaunch, type RemixLaunchAnswer } from '@/lib/remix-start';
+import { findRemixLaunch, readRemixSourceTakingFreeRecipe, type RemixLaunchAnswer } from '@/lib/remix-start';
+import { announceRecipeUnlocked } from '@/lib/recipe-unlocked-notice';
+import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 import { APP_CREATOR_OPENINGS } from '@/lib/app-creator-opening/app-creator-opening';
 import { creatorParameterSummary } from '@/lib/creator-parameter-summary';
 import { recordCreatorSession } from '@/lib/creator-session-diagnostics';
@@ -1907,7 +1909,19 @@ function IdentityCreationScreen({
 
     // A Remix tap's creator takes the read its tap sent beside the start, and nothing it
     // reads lands before the start is answered as this remix (`RemixLaunch.readSource`).
-    void (remixLaunch ? remixLaunch.readSource() : api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null }))
+    // Opened any other way (a guest back from signing up on a Home shelf card, a link), the
+    // creator takes the post's free recipe itself when the read is refused for it.
+    const remixPostId = remixSource?.postId ?? null;
+    void (remixLaunch
+      ? remixLaunch.readSource()
+      : readRemixSourceTakingFreeRecipe(api, generationId, remixPostId, {
+          isWanted: () => !isCancelled,
+          onFreeRecipeTaken: () => {
+            if (remixPostId) void refreshUnlockedBundleCaches(queryClient, { postId: remixPostId });
+            // The recipe is theirs now, said as every unlock is (B-F9).
+            if (!isCancelled) announceRecipeUnlocked();
+          },
+        }))
       .then(async (bundle) => {
         const modelId = typeof bundle.workflowSettings.model === 'string' ? bundle.workflowSettings.model : bundle.generation.model;
         const restoredCatalog = await loadCatalogDetails([modelId]);
@@ -1992,7 +2006,7 @@ function IdentityCreationScreen({
       // is back, and marked resolved, before this cleanup runs.
       setIsRestoringRemix(false);
     };
-  }, [api, catalog, catalogQuery.missingIds, loadCatalogDetails, draftsHydrated, guidedScreen, initialTool, linkPrompt, remixLaunch, remixSource?.generationId, remixSource?.postId, remixRetry, identityUserId, revisionUnconfirmed]);
+  }, [api, catalog, catalogQuery.missingIds, loadCatalogDetails, draftsHydrated, guidedScreen, initialTool, linkPrompt, queryClient, remixLaunch, remixSource?.generationId, remixSource?.postId, remixRetry, identityUserId, revisionUnconfirmed]);
 
   // A resumed remix does not read its source again (above). Its session keeps the original it was
   // offered; one saved before sessions kept it does not say, so its source is asked once, for the

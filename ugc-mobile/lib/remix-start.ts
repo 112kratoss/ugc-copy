@@ -14,7 +14,12 @@ export type RemixStartResult =
   | {
       kind: 'started';
       response: RemixStartResponse;
-      /** True when this tap also took the post's free unlock, so its caches are stale. */
+      /**
+       * True when this tap took the post's free unlock just now, so its caches are stale and
+       * "Recipe unlocked" is due. False when the viewer held it already, or owns the post: the
+       * server answers `alreadyPurchased`, which a Home shelf card's tap meets on every press,
+       * since the shelf is read for no one and says every free recipe is still to take.
+       */
       claimedFreeUnlock: boolean;
     }
   /**
@@ -48,18 +53,61 @@ export async function startShowcaseRemix({
   onSourceReadable?: () => void;
 }): Promise<RemixStartResult> {
   // Claiming twice is harmless: the server answers a repeat as already owned.
-  if (claimFreeUnlock) await api.unlockFreeBundle(postId);
+  const claim = claimFreeUnlock ? await api.unlockFreeBundle(postId) : null;
   onSourceReadable?.();
 
   try {
     const response = await api.remixShowcasePost(postId);
-    return { kind: 'started', response, claimedFreeUnlock: claimFreeUnlock };
+    return { kind: 'started', response, claimedFreeUnlock: Boolean(claim) && claim?.alreadyPurchased !== true };
   } catch (error) {
     // Still locked straight after a claim means something else is wrong, and
     // sending the viewer back to unlock again would only loop.
     if (claimFreeUnlock || !isRemixUnlockRequired(error)) throw error;
     return { kind: 'unlock-required' };
   }
+}
+
+/**
+ * A creator's read of the remix it opened on, taking the post's free recipe on the way when the
+ * read is refused for it (`REMIX_UNLOCK_REQUIRED`), then reading once more. A Remix tap takes the
+ * recipe itself (`startShowcaseRemix`); a creator opened any other way has no tap to do it: a
+ * guest who signs up from a Home shelf card lands in the creator on the remix
+ * (`homeShelfGuestReturnTo`), and so does a link to a remix. The web's creators do the same
+ * (`src/lib/use-remix-source-read.ts`, owner 2026-11-13).
+ *
+ * The server decides what is free: a paid, retired or withheld recipe refuses the claim, and the
+ * remix stays refused as it was. A claim that only failed to be made (a 429, a 5xx, the network)
+ * is thrown as itself, so the creator says why, and its Retry restore asks again. `onFreeRecipeTaken`
+ * is told once the recipe has just become the reader's (not when the server says they held it
+ * already), for the caches and the notice a claim brings. `isWanted` is asked before the claim: a
+ * creator that has closed, or whose restore has started over, takes nothing.
+ */
+export async function readRemixSourceTakingFreeRecipe(
+  api: Pick<MagicbookletApiClient, 'getRemixSourceBundle' | 'unlockFreeBundle'>,
+  generationId: string,
+  postId: string | null,
+  { isWanted, onFreeRecipeTaken }: { isWanted: () => boolean; onFreeRecipeTaken: () => void },
+): Promise<RemixSourceBundle> {
+  try {
+    return await api.getRemixSourceBundle(generationId, { postId });
+  } catch (refusal) {
+    if (!postId || !isRemixUnlockRequired(refusal) || !isWanted()) throw refusal;
+    let claim: Awaited<ReturnType<typeof api.unlockFreeBundle>>;
+    try {
+      claim = await api.unlockFreeBundle(postId);
+    } catch (claimFailure) {
+      throw claimMayWorkLater(claimFailure) ? claimFailure : refusal;
+    }
+    if (claim?.alreadyPurchased !== true) onFreeRecipeTaken();
+    return api.getRemixSourceBundle(generationId, { postId });
+  }
+}
+
+/** A claim that failed for a passing reason: the network (no status), a timeout, a 429 or a 5xx. */
+function claimMayWorkLater(error: unknown) {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status !== 'number' || status === 0) return true;
+  return status === 408 || status === 429 || status >= 500;
 }
 
 /**
