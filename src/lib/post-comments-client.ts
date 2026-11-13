@@ -33,7 +33,19 @@ export interface PostComment {
     replyCount: number;
     /** Null once a comment is removed — the server withholds the author too. */
     author: PostCommentAuthor | null;
+    /** Likes only: the count of dislikes never leaves the server. */
+    likeCount: number;
+    /** The reader's own like or dislike; null signed out and for none. */
+    viewerReaction: PostCommentReaction | null;
+    /** When its author last changed its words; null as first posted. */
+    editedAt: string | null;
+    /** The post's creator marked it. */
+    hearted: boolean;
+    /** The post's creator pinned it: it leads the thread's first page. */
+    pinned: boolean;
 }
+
+export type PostCommentReaction = 'like' | 'dislike';
 
 export interface PostCommentsPage {
     postId: string;
@@ -164,6 +176,63 @@ export function buildReplyDraftPrefix(target: PostComment): string {
     return username ? `@${username} ` : '';
 }
 
+/** Pressing the reaction already given takes it back; the other one replaces it. */
+export function nextCommentReaction(
+    current: PostCommentReaction | null,
+    pressed: PostCommentReaction
+): PostCommentReaction | null {
+    return current === pressed ? null : pressed;
+}
+
+/**
+ * The comment as it reads the moment the reader presses, before the server
+ * answers: their reaction, and the like count moved by their own like alone.
+ */
+export function applyOwnCommentReaction(
+    comment: PostComment,
+    next: PostCommentReaction | null
+): PostComment {
+    const had = comment.viewerReaction === 'like' ? 1 : 0;
+    const has = next === 'like' ? 1 : 0;
+    return {
+        ...comment,
+        viewerReaction: next,
+        likeCount: Math.max(0, comment.likeCount + has - had),
+    };
+}
+
+/** Swaps in a comment the server answered, wherever a list holds it. */
+export function replaceComment(comments: PostComment[], updated: PostComment) {
+    return comments.map((comment) => (comment.id === updated.id ? updated : comment));
+}
+
+/** Its author may reword a comment, as they may delete it. */
+export function canEditComment(comment: PostComment, viewerUserId: string | null | undefined) {
+    return canDeleteComment(comment, viewerUserId);
+}
+
+/** The heart is the post's creator marking someone else's comment or reply. */
+export function canHeartComment(
+    comment: PostComment,
+    postCreatorId: string | null | undefined,
+    viewerUserId: string | null | undefined
+) {
+    return canRemoveComment(comment, postCreatorId, viewerUserId);
+}
+
+/** The post's creator pins one top-level comment, their own included. */
+export function canPinComment(
+    comment: PostComment,
+    postCreatorId: string | null | undefined,
+    viewerUserId: string | null | undefined
+) {
+    return comment.status === 'active'
+        && !comment.parentId
+        && Boolean(viewerUserId)
+        && Boolean(postCreatorId)
+        && postCreatorId === viewerUserId;
+}
+
 export function canDeleteComment(comment: PostComment, viewerUserId: string | null | undefined) {
     return comment.status === 'active'
         && Boolean(viewerUserId)
@@ -188,8 +257,30 @@ export function canReportComment(comment: PostComment, viewerUserId: string | nu
         && comment.author?.id !== viewerUserId;
 }
 
+/**
+ * Puts a comment just posted at the head of the thread: under the comment the
+ * post's creator pinned, which leads the thread for every reader, and above
+ * everything else.
+ */
 export function prependComment(comments: PostComment[], comment: PostComment) {
-    return [comment, ...comments.filter((existing) => existing.id !== comment.id)];
+    const others = comments.filter((existing) => existing.id !== comment.id);
+    const lead = comment.pinned ? 0 : countLeadingPinned(others);
+    return [...others.slice(0, lead), comment, ...others.slice(lead)];
+}
+
+function countLeadingPinned(comments: PostComment[]) {
+    const firstUnpinned = comments.findIndex((comment) => !comment.pinned);
+    return firstUnpinned === -1 ? comments.length : firstUnpinned;
+}
+
+/**
+ * Moves the pinned comment to the head of the thread, the rest in the order
+ * they had: what a pin does to the list before the server's order is re-read.
+ */
+export function leadWithPinnedComment(comments: PostComment[]) {
+    const firstPinned = comments.findIndex((comment) => comment.pinned);
+    if (firstPinned <= 0) return comments;
+    return [comments[firstPinned], ...comments.slice(0, firstPinned), ...comments.slice(firstPinned + 1)];
 }
 
 /**
@@ -218,8 +309,8 @@ export function mergeCommentPage(
  * hold. A server re-read can leave a new comment out (under Top every comment
  * with replies ranks ahead of it), and a new reply belongs after replies not
  * loaded yet; dropping either would make the post look as if it failed. New
- * top-level comments lead the list; a new reply, the newest in its thread,
- * closes it.
+ * top-level comments lead the list, under a pinned comment if the post has
+ * one; a new reply, the newest in its thread, closes it.
  */
 export function withPendingComments(
     loaded: PostComment[],
@@ -230,7 +321,11 @@ export function withPendingComments(
     const loadedIds = new Set(loaded.map((comment) => comment.id));
     const missing = pending.filter((comment) => !loadedIds.has(comment.id));
     if (missing.length === 0) return loaded;
-    return placement === 'first' ? [...missing, ...loaded] : [...loaded, ...missing];
+    if (placement === 'last') return [...loaded, ...missing];
+    // The comment the post's creator pinned leads the thread for every reader:
+    // the viewer's own new comments go under it, not over it.
+    const lead = countLeadingPinned(loaded);
+    return [...loaded.slice(0, lead), ...missing, ...loaded.slice(lead)];
 }
 
 /**
@@ -246,7 +341,18 @@ export function markCommentRemoved(
     return comments.flatMap((comment) => {
         if (comment.id !== commentId) return [comment];
         if (comment.replyCount <= 0) return [];
-        return [{ ...comment, status, body: '', author: null }];
+        // As the server sends a removed comment: no likes, heart, pin or edit stamp.
+        return [{
+            ...comment,
+            status,
+            body: '',
+            author: null,
+            likeCount: 0,
+            viewerReaction: null,
+            editedAt: null,
+            hearted: false,
+            pinned: false,
+        }];
     });
 }
 
@@ -277,7 +383,9 @@ export function buildCommentsQuery({
 }
 
 /** What the thread was doing when a request failed; it picks the copy. */
-export type CommentRequestKind = 'load' | 'replies' | 'post' | 'reply' | 'remove' | 'report';
+export type CommentRequestKind =
+    | 'load' | 'replies' | 'post' | 'reply' | 'remove' | 'report'
+    | 'react' | 'edit' | 'heart' | 'pin';
 
 export interface CommentRequestFailure {
     message: string;
@@ -294,6 +402,10 @@ const COMMENT_REQUEST_FALLBACKS: Record<CommentRequestKind, string> = {
     reply: 'Could not post reply.',
     remove: 'Could not remove comment.',
     report: 'Could not report that comment.',
+    react: 'Could not save your reaction.',
+    edit: 'Could not save your edit.',
+    heart: 'Could not update the heart.',
+    pin: 'Could not update the pin.',
 };
 
 function formatWait(seconds: number) {

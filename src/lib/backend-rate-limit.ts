@@ -98,6 +98,17 @@ export const POST_COMMENT_MUTATION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+/**
+ * A like or a dislike on a comment. Its own budget, well above an edit's or a
+ * delete's: a reader likes their way down a thread, and that must not leave
+ * them unable to delete their own comment.
+ */
+export const POST_COMMENT_REACTION_RATE_LIMIT = {
+  scope: 'post-comment:react',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const MODERATION_REPORT_RATE_LIMIT = {
   scope: 'moderation-report:submit',
   limit: 10,

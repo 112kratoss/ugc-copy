@@ -413,6 +413,7 @@ const successCases: Array<{
     key: 'createPostComment',
     call: (api) => api.createPostComment('post-1', { body: 'Saving this for later.', parentId: null, deliveryId: '9001' }),
   },
+  { key: 'updatePostComment', call: (api) => api.updatePostComment('post-1', 'comment-1', { reaction: 'like' }) },
   { key: 'deletePostComment', call: (api) => api.deletePostComment('post-1', 'comment-1') },
   {
     key: 'setCreatorFollowing',

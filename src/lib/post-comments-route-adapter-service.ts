@@ -20,6 +20,7 @@ import {
   normalizePostCommentOffset,
   normalizePostCommentSort,
   removePostCommentForRoute,
+  updatePostCommentForRoute,
   type PostCommentsRouteResult,
 } from '@/lib/post-comments-service';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
@@ -40,6 +41,7 @@ type PostCommentsRouteDependencies = {
   getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   listPostCommentsForRoute?: typeof listPostCommentsForRoute;
   removePostCommentForRoute?: typeof removePostCommentForRoute;
+  updatePostCommentForRoute?: typeof updatePostCommentForRoute;
   runAfterResponse?: RunAfterResponse;
 };
 
@@ -52,6 +54,7 @@ function resolveDependencies(dependencies: PostCommentsRouteDependencies | undef
     getFeedNetworkKeyHash: dependencies?.getFeedNetworkKeyHash ?? getFeedNetworkKeyHash,
     listPostCommentsForRoute: dependencies?.listPostCommentsForRoute ?? listPostCommentsForRoute,
     removePostCommentForRoute: dependencies?.removePostCommentForRoute ?? removePostCommentForRoute,
+    updatePostCommentForRoute: dependencies?.updatePostCommentForRoute ?? updatePostCommentForRoute,
     runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
   };
 }
@@ -185,6 +188,30 @@ async function handlePostCommentDELETE(
   );
 }
 
+async function handlePostCommentPATCH(
+  request: Request,
+  context: PostCommentRouteContext,
+  dependencies: ReturnType<typeof resolveDependencies>,
+) {
+  const { postId, commentId } = await context.params;
+  const actorUserId = await requireViewerUserId(request, dependencies);
+
+  if (!actorUserId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  return toJsonResponse(
+    await dependencies.updatePostCommentForRoute({
+      postId,
+      commentId,
+      actorUserId,
+      // One change: the comment's words, the reader's reaction, the heart or the pin.
+      readBody: () => request.json(),
+      createAdminSupabase: () => dependencies.createServiceClient(),
+    }),
+  );
+}
+
 export async function getPostCommentsRouteResponse({
   context,
   dependencies,
@@ -227,6 +254,21 @@ export async function deletePostCommentRouteResponse({
 }) {
   return applyPrivateNoStoreApiResponseHeaders(
     await handlePostCommentDELETE(request, context, resolveDependencies(dependencies)),
+    request,
+  );
+}
+
+export async function updatePostCommentRouteResponse({
+  context,
+  dependencies,
+  request,
+}: {
+  context: PostCommentRouteContext;
+  dependencies?: PostCommentsRouteDependencies;
+  request: Request;
+}) {
+  return applyPrivateNoStoreApiResponseHeaders(
+    await handlePostCommentPATCH(request, context, resolveDependencies(dependencies)),
     request,
   );
 }
