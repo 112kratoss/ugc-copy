@@ -81,7 +81,7 @@ describe('StudioOverflowMenu', () => {
         trigger="quiet"
         triggerIcon={<span data-testid="sort-glyph" />}
         items={[
-          { key: 'top', label: 'Top', description: 'Most discussed first', checked: true, onSelect: vi.fn() },
+          { key: 'top', label: 'Top', description: 'Most liked first', checked: true, onSelect: vi.fn() },
           { key: 'newest', label: 'Newest', description: 'Latest comments first', checked: false, onSelect: onNewest },
         ]}
       />,
@@ -96,7 +96,7 @@ describe('StudioOverflowMenu', () => {
     expect(within(menu).queryByRole('menuitem')).not.toBeInTheDocument();
     const [top, newest] = within(menu).getAllByRole('menuitemradio');
     expect(top).toHaveAttribute('aria-checked', 'true');
-    expect(top).toHaveTextContent('Most discussed first');
+    expect(top).toHaveTextContent('Most liked first');
     expect(newest).toHaveAttribute('aria-checked', 'false');
 
     fireEvent.click(newest);

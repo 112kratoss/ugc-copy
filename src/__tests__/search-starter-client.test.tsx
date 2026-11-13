@@ -85,6 +85,8 @@ function answer(query: string, type: string, overrides: Partial<PublicSearchResp
 const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
 const searches = () => searchFetchMock.mock.calls.map(([url]) => url as string);
 const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+/** How long a wait in a test that renders the page several times over may take on a loaded runner. */
+const SLOW_RUNNER_MS = 10_000;
 
 describe('search starter', () => {
   beforeEach(() => {
@@ -305,29 +307,47 @@ describe('an empty tab', () => {
     };
     searchFetchMock.mockImplementation(abortable(answering));
     render(<StrictMode><SearchClient initialQuery="nano" initialType="recipes" /></StrictMode>);
-    expect(await screen.findByText('12+ posts match')).toBeTruthy();
+    // A loaded runner can take seconds to render the page twice over: the wait
+    // says how long, not the one-second default.
+    expect(await screen.findByText('12+ posts match', {}, { timeout: SLOW_RUNNER_MS })).toBeTruthy();
     cleanup();
     searchFetchMock.mockClear();
-    // The person leaves the tab while Top's answer is on its way, then comes back.
-    let releaseTop: () => void = () => {};
-    searchFetchMock.mockImplementation(abortable(async (url: string) => {
+
+    // The person leaves the tab while Top's answer is on its way, then comes
+    // back. Each Top request is held until the test answers that very request:
+    // the Creators tab, empty too, asks Top for itself while the person is on
+    // it (and gives that request up as they leave), so "the latest" request is
+    // never a safe guess (CI on main f411f4113 answered the Creators tab's
+    // given-up request and left the Recipes tab's own unanswered).
+    const topRequests: Array<{ signal: AbortSignal | undefined; answer: () => void }> = [];
+    const liveTopRequests = () => topRequests.filter((request) => !request.signal?.aborted);
+    searchFetchMock.mockImplementation(abortable(async (url: string, init?: RequestInit) => {
       const params = new URL(url, 'http://localhost').searchParams;
       const type = params.get('type') ?? 'top';
-      if (type === 'top') await new Promise<void>((resolve) => { releaseTop = resolve; });
+      if (type === 'top') await new Promise<void>((resolve) => { topRequests.push({ signal: init?.signal ?? undefined, answer: resolve }); });
       return ok(answer(params.get('q') ?? '', type, type === 'top'
         ? { posts: { items: Array.from({ length: 12 }, (_, index) => post(`p${index}`)), nextCursor: null } }
         : {}));
     }));
     render(<SearchClient initialQuery="nano" initialType="recipes" />);
-    await waitFor(() => expect(searches()).toContain('/api/search?q=nano&type=top&probe=1'));
+    await waitFor(() => expect(liveTopRequests()).toHaveLength(1), { timeout: SLOW_RUNNER_MS });
+    const firstAsked = topRequests[0];
     fireEvent.click(screen.getByRole('tab', { name: 'Creators' }));
-    await screen.findByText('No creators for “nano”');
-    releaseTop();
+    await screen.findByText('No creators for “nano”', {}, { timeout: SLOW_RUNNER_MS });
+    // Leaving the tab gave its request up; answering it now draws nothing.
+    expect(firstAsked.signal?.aborted).toBe(true);
+    firstAsked.answer();
+
     fireEvent.click(screen.getByRole('tab', { name: 'Recipes' }));
-    // Asked again (the first was given up): the pointer and its count.
-    await waitFor(() => expect(searches().filter((url) => url.includes('type=top'))).toHaveLength(2));
-    releaseTop();
-    expect(await screen.findByText('12+ posts match')).toBeTruthy();
+    await screen.findByText('No recipes for “nano”', {}, { timeout: SLOW_RUNNER_MS });
+    // Asked again for this tab (the first was given up): one request out, its own.
+    await waitFor(() => expect(liveTopRequests()).toHaveLength(1), { timeout: SLOW_RUNNER_MS });
+    const askedAgain = liveTopRequests()[0];
+    expect(askedAgain).not.toBe(firstAsked);
+    expect(searches().filter((url) => url === '/api/search?q=nano&type=top&probe=1').length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText('12+ posts match')).toBeNull();
+    askedAgain.answer();
+    expect(await screen.findByText('12+ posts match', {}, { timeout: SLOW_RUNNER_MS })).toBeTruthy();
   });
 
   it('opens Posts as it counted them: unfiltered', async () => {

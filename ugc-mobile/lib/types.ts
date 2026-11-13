@@ -1351,6 +1351,37 @@ export interface PostComment {
   replyCount: number;
   /** Null once a comment is removed — the server withholds the author too. */
   author: PostCommentAuthor | null;
+  /** Likes only: the count of dislikes never leaves the server. */
+  likeCount: number;
+  /** The reader's own like or dislike; null signed out and for none. */
+  viewerReaction: PostCommentReaction | null;
+  /** When its author last changed its words; null as first posted. */
+  editedAt: string | null;
+  /** The post's creator marked it. */
+  hearted: boolean;
+  /** The post's creator pinned it: it leads the thread's first page. */
+  pinned: boolean;
+}
+
+export type PostCommentReaction = 'like' | 'dislike';
+
+/**
+ * `PATCH /api/showcase/posts/:postId/comments/:commentId` takes one change:
+ * the comment's words (its author), the reader's own reaction (null takes it
+ * back), or the heart or the pin (the post's creator).
+ */
+export type UpdatePostCommentBody =
+  | { body: string }
+  | { reaction: PostCommentReaction | null }
+  | { hearted: boolean }
+  | { pinned: boolean };
+
+export interface UpdatePostCommentResponse {
+  success: true;
+  /** The comment as it now is: an edit takes the heart off, a like moves the count. */
+  comment: PostComment;
+  /** The comment a new pin took the post's one pin from, if any. */
+  unpinnedCommentId: string | null;
 }
 
 export interface PostCommentsResponse {

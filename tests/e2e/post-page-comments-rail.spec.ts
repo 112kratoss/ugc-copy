@@ -83,14 +83,18 @@ const strangerAuthor = { id: 'someone-else', username: 'lena', displayName: 'Len
 const LONG_COMMENT = Array.from({ length: 12 }, (_, index) => `Line ${index + 1} of a long comment about the light on this rooftop.`).join(' ');
 
 function comment(id: string, body: string, author: typeof creatorAuthor, extra: Record<string, unknown> = {}) {
-  return { id, parentId: null, body, status: 'active', createdAt: '2026-11-10T08:00:00.000Z', replyCount: 0, author, ...extra };
+  return {
+    id, parentId: null, body, status: 'active', createdAt: '2026-11-10T08:00:00.000Z', replyCount: 0, author,
+    likeCount: 0, viewerReaction: null, editedAt: null, hearted: false, pinned: false,
+    ...extra,
+  };
 }
 
 // More comments than a short panel holds, so the list has to scroll inside it.
 const THREAD = [
-  comment('c-creator', 'Shot on the first try, thanks all.', creatorAuthor, { replyCount: 2 }),
-  comment('c-viewer', 'My own comment on this.', viewerAuthor),
-  comment('c-long', LONG_COMMENT, strangerAuthor),
+  comment('c-creator', 'Shot on the first try, thanks all.', creatorAuthor, { replyCount: 2, pinned: true, likeCount: 12 }),
+  comment('c-viewer', 'My own comment on this.', viewerAuthor, { hearted: true }),
+  comment('c-long', LONG_COMMENT, strangerAuthor, { likeCount: 3 }),
   ...Array.from({ length: 21 }, (_, index) => comment(`c-${index + 4}`, `Comment ${index + 4}`, strangerAuthor)),
 ];
 const REPLIES = [
@@ -98,11 +102,43 @@ const REPLIES = [
   comment('r-2', 'A 35mm, wide open.', creatorAuthor, { parentId: 'c-creator' }),
 ];
 
-/** Every API call unanswered but the post's thread; the posts the page sends are kept. */
-async function answerThread(page: Page, posted: Array<Record<string, unknown>> = [], postId = POST_ID) {
+/**
+ * Every API call unanswered but the post's thread; the posts the page sends are kept. The thread
+ * is answered as the server would: a change stays, and the pinned comment leads the next read.
+ * `postCreatorId` is who the thread says made the post (the page takes the thread's word).
+ */
+async function answerThread(
+  page: Page,
+  posted: Array<Record<string, unknown>> = [],
+  postId = POST_ID,
+  postCreatorId: string = creationPost.creator.id,
+) {
+  // A comment as the page may have changed it: any field but these three may hold what was sent.
+  type Row = Record<string, unknown> & { id: string; likeCount: number; pinned: unknown };
+  let thread: Row[] = THREAD.map((item) => ({ ...item }));
   await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { error: 'Not answered offline' } }));
   await page.route(`**/api/showcase/posts/${postId}/comments**`, (route) => {
     const request = route.request();
+    if (request.method() === 'PATCH') {
+      // One change to a comment, answered with the comment as it now is.
+      const id = new URL(request.url()).pathname.split('/').pop();
+      const change = request.postDataJSON() as Record<string, unknown>;
+      const target = [...thread, ...REPLIES].find((item) => item.id === id) as Row;
+      posted.push({ id, ...change });
+      const base = [...THREAD, ...REPLIES].find((item) => item.id === id) as Row;
+      const fresh: Row = 'reaction' in change
+        ? { ...target, viewerReaction: change.reaction, likeCount: base.likeCount + (change.reaction === 'like' ? 1 : 0) }
+        : 'hearted' in change
+          ? { ...target, hearted: change.hearted }
+          : 'pinned' in change
+            ? { ...target, pinned: change.pinned }
+            : { ...target, body: change.body, editedAt: '2026-11-13T12:00:00.000Z', hearted: false };
+      // A post holds one pin: a new one takes it from the comment that had it.
+      const left = change.pinned === true ? thread.find((item) => item.pinned && item.id !== id) : undefined;
+      thread = thread.map((item) => (item.id === id ? fresh : item.id === left?.id ? { ...item, pinned: false } : item));
+      thread = [...thread.filter((item) => item.pinned), ...thread.filter((item) => !item.pinned)];
+      return route.fulfill({ json: { success: true, comment: fresh, unpinnedCommentId: left?.id ?? null } });
+    }
     if (request.method() === 'POST') {
       const body = request.postDataJSON() as Record<string, unknown>;
       posted.push(body);
@@ -114,11 +150,11 @@ async function answerThread(page: Page, posted: Array<Record<string, unknown>> =
       });
     }
     const parentId = new URL(request.url()).searchParams.get('parentId');
-    const comments = parentId ? REPLIES : THREAD;
+    const comments = parentId ? REPLIES : thread;
     return route.fulfill({
       json: {
         postId: POST_ID,
-        postCreatorId: creationPost.creator.id,
+        postCreatorId,
         commentCount: THREAD.length + REPLIES.length + posted.length,
         comments,
         pageInfo: { hasMore: false, nextOffset: null, limit: 50, offset: 0 },
@@ -254,6 +290,107 @@ test('the thread is a panel beside the post: its list scrolls inside it and the 
   expect(await page.evaluate(() => window.scrollY)).toBe(scrolledBefore);
   expect(new URL(page.url()).hash).toBe('');
   await expect(panel.getByText('A 35mm, wide open.')).toBeVisible();
+});
+
+test('a comment shows its likes, the creator\'s heart, the pin and its edit, and takes a like and an edit', async ({ page, context }, testInfo) => {
+  const sent: Array<Record<string, unknown>> = [];
+  await signIn(context);
+  await answerThread(page, sent);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/showcase/${POST_ID}`);
+
+  const panel = page.getByTestId('canonical-post-actions').getByTestId('canonical-post-comments');
+  await expect(panel.getByRole('textbox', { name: 'Write a comment' })).toBeVisible(COLD_PAGE);
+  await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
+  const rows = panel.getByRole('list', { name: 'Comment thread' }).getByRole('listitem');
+  // By what they say: a comment with replies is followed by a row for its replies.
+  const pinned = rows.filter({ hasText: 'Shot on the first try' });
+  const mine = rows.filter({ hasText: /My own comment/ });
+  const long = rows.filter({ hasText: 'Line 1 of a long comment' });
+  await expect(rows.first()).toContainText('Shot on the first try');
+
+  // The pinned comment leads the thread and says who pinned it; its likes show on its Like.
+  await expect(pinned.getByText('Pinned by the creator')).toBeVisible();
+  await expect(pinned.getByRole('button', { name: /^Like / })).toHaveText('12');
+  // A dislike shows no count, pressed or not.
+  await expect(pinned.getByRole('button', { name: /^Dislike / })).toHaveText('');
+  // The creator hearted the reader's own comment; the reader cannot heart anything.
+  await expect(mine.getByText('Loved by the creator')).toBeAttached();
+  await expect(panel.getByRole('button', { name: /^Heart / })).toHaveCount(0);
+
+  // A like shows as pressed with its count, and is what the page sent. A press before the page's
+  // script has taken the thread over is dropped (.claude/rules/e2e.md), so it is repeated.
+  const like = long.getByRole('button', { name: "Like @lena's comment", exact: true });
+  await expect(async () => {
+    if (await like.getAttribute('aria-pressed') !== 'true') await like.click({ timeout: 2_000 });
+    await expect(like).toHaveAttribute('aria-pressed', 'true', { timeout: 2_000 });
+  }).toPass({ timeout: 45_000 });
+  await expect(like).toHaveText('4');
+  expect(sent[0]).toEqual({ id: 'c-long', reaction: 'like' });
+  await page.screenshot({ path: testInfo.outputPath('post-page-comment-likes-pin-heart.png') });
+
+  // The reader rewords their own comment in place; the edit shows, and takes the heart off.
+  await mine.getByRole('button', { name: 'More actions for your comment' }).scrollIntoViewIfNeeded();
+  await expect(async () => {
+    if (await page.getByRole('menu').count() === 0) {
+      await mine.getByRole('button', { name: 'More actions for your comment' }).click({ timeout: 2_000 });
+    }
+    await expect(page.getByRole('menu').getByRole('menuitem')).toHaveText(['Edit', 'Delete'], { timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
+  await page.getByRole('menu').getByRole('menuitem', { name: 'Edit' }).click();
+  const editor = mine.getByRole('textbox', { name: 'Edit your comment' });
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveValue('My own comment on this.');
+  await expect(mine.getByRole('button', { name: 'Save' })).toBeDisabled();
+  await editor.fill('My own comment, reworded.');
+  await page.screenshot({ path: testInfo.outputPath('post-page-comment-edit.png') });
+  await mine.getByRole('button', { name: 'Save' }).click();
+  await expect(mine.getByText('My own comment, reworded.')).toBeVisible();
+  await expect(mine.getByText(/\(edited\)/)).toBeVisible();
+  await expect(mine.getByText('Loved by the creator')).toHaveCount(0);
+  expect(sent.at(-1)).toEqual({ id: 'c-viewer', body: 'My own comment, reworded.' });
+});
+
+test('the post\'s creator moves the pin and hearts a comment, and the pinned comment leads the thread at once', async ({ page, context }, testInfo) => {
+  const sent: Array<Record<string, unknown>> = [];
+  await signIn(context);
+  // The thread says the signed-in reader made the post.
+  await answerThread(page, sent, POST_ID, user.id);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/showcase/${POST_ID}`);
+
+  const panel = page.getByTestId('canonical-post-actions').getByTestId('canonical-post-comments');
+  await expect(panel.getByRole('textbox', { name: 'Write a comment' })).toBeVisible(COLD_PAGE);
+  await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
+  const rows = panel.getByRole('list', { name: 'Comment thread' }).getByRole('listitem');
+  const wasPinned = rows.filter({ hasText: 'Shot on the first try' });
+  const long = rows.filter({ hasText: 'Line 1 of a long comment' });
+  await expect(rows.first()).toContainText('Shot on the first try');
+  await expect(wasPinned.getByText('Pinned by the creator')).toBeVisible();
+
+  // The pin, behind the comment's menu. A press before the page's script has taken the thread
+  // over is dropped (.claude/rules/e2e.md), and the menu closes on a scroll, so it is repeated.
+  const menu = long.getByRole('button', { name: /^More actions for/ });
+  await menu.scrollIntoViewIfNeeded();
+  await expect(async () => {
+    if (await page.getByRole('menu').count() === 0) await menu.click({ timeout: 2_000 });
+    await expect(page.getByRole('menu').getByRole('menuitem', { name: 'Pin', exact: true })).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 45_000 });
+  await page.getByRole('menu').getByRole('menuitem', { name: 'Pin', exact: true }).click();
+
+  // It leads the thread and carries the line; the comment that held the pin has lost it.
+  await expect(rows.first()).toContainText('Line 1 of a long comment');
+  await expect(long.getByText('Pinned by the creator')).toBeVisible();
+  await expect(wasPinned.getByText('Pinned by the creator')).toHaveCount(0);
+  await expect(panel.getByText('Pinned by the creator')).toHaveCount(1);
+  expect(sent[0]).toEqual({ id: 'c-long', pinned: true });
+
+  // The creator's heart, on someone else's comment only.
+  const heart = long.getByRole('button', { name: "Heart @lena's comment", exact: true });
+  await heart.click();
+  await expect(heart).toHaveAttribute('aria-pressed', 'true');
+  expect(sent.at(-1)).toEqual({ id: 'c-long', hearted: true });
+  await page.screenshot({ path: testInfo.outputPath('post-page-comment-pin-moved.png') });
 });
 
 test('a post with no recipe shows its prompt under the post, not in the rail', async ({ page }, testInfo) => {

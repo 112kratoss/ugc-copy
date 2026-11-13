@@ -88,6 +88,14 @@ export const OPERATIONAL_TABLE_ROW_BUDGETS: Record<string, { warning: number; de
   // good until a pruning migration (the runbook's retention follow-up). A backstop against a
   // runaway agent, sized far above any steady state today.
   agent_tool_calls: { warning: 200_000, degraded: 1_000_000 },
+  // One row per reader and comment liked or disliked, kept for as long as the
+  // comment is: user history, not a pruned table. A planning threshold.
+  post_comment_reactions: { warning: 500_000, degraded: 2_500_000 },
+  // What each edit of a comment replaced, up to 2,000 characters a row, kept
+  // for moderators and append-only by grant: nothing prunes it. An account at
+  // the mutation limit can add 4,320 rows a day, so this is the notice that a
+  // per-comment cap on kept versions, or a pruning migration, is due.
+  post_comment_edits: { warning: 100_000, degraded: 500_000 },
   // The anonymous search log: one row per first-page search answer, kept 90 days. A backstop
   // against a runaway client, not a traffic measure: typing steps log one row each.
   search_query_events: { warning: 500_000, degraded: 2_000_000 },

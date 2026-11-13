@@ -286,6 +286,11 @@ function printQueue(snapshot: Awaited<ReturnType<typeof listOpenModerationReport
       comment_post_id: report.comment?.postId ?? '',
       comment_status: report.comment?.status ?? '',
       comment_body: summarizeDetails(report.comment?.body ?? null),
+      // The body is the comment as it reads now; the words that were reported
+      // may be in post_comment_edits (the runbook's "Comment reports").
+      comment_edited: report.comment?.editedAt
+        ? `edited, ${report.comment.earlierVersions} earlier version${report.comment.earlierVersions === 1 ? '' : 's'}`
+        : '',
       reason: report.reason,
       details: summarizeDetails(report.details),
       status: report.status,

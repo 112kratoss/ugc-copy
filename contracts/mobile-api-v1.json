@@ -2287,7 +2287,12 @@
               "username": "batman",
               "displayName": "Batman",
               "avatarUrl": null
-            }
+            },
+            "likeCount": 3,
+            "viewerReaction": "like",
+            "editedAt": "2026-07-27T10:30:00.000Z",
+            "hearted": true,
+            "pinned": true
           },
           {
             "id": "comment-2",
@@ -2296,7 +2301,12 @@
             "status": "removed_by_author",
             "createdAt": "2026-07-27T09:00:00.000Z",
             "replyCount": 2,
-            "author": null
+            "author": null,
+            "likeCount": 0,
+            "viewerReaction": null,
+            "editedAt": null,
+            "hearted": false,
+            "pinned": false
           }
         ],
         "pageInfo": {
@@ -2332,7 +2342,50 @@
             "username": "creator",
             "displayName": "Creator",
             "avatarUrl": null
-          }
+          },
+          "likeCount": 0,
+          "viewerReaction": null,
+          "editedAt": null,
+          "hearted": false,
+          "pinned": false
+        }
+      }
+    },
+    "updatePostComment": {
+      "method": "PATCH",
+      "path": "/api/showcase/posts/:postId/comments/:commentId",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "reaction": "like"
+      },
+      "requestVariants": {
+        "clearReaction": { "reaction": null },
+        "edit": { "body": "This prompt is unreal, reworded." },
+        "heart": { "hearted": true },
+        "pin": { "pinned": true }
+      },
+      "response": {
+        "success": true,
+        "unpinnedCommentId": null,
+        "comment": {
+          "id": "comment-1",
+          "parentId": null,
+          "body": "This prompt is unreal.",
+          "status": "active",
+          "createdAt": "2026-07-27T10:00:00.000Z",
+          "replyCount": 1,
+          "author": {
+            "id": "creator-2",
+            "username": "batman",
+            "displayName": "Batman",
+            "avatarUrl": null
+          },
+          "likeCount": 4,
+          "viewerReaction": "like",
+          "editedAt": null,
+          "hearted": false,
+          "pinned": false
         }
       }
     },

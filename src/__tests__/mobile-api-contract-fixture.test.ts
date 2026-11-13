@@ -225,6 +225,7 @@ const expectedEndpointKeys = [
   'listPostRemixes',
   'listPostComments',
   'createPostComment',
+  'updatePostComment',
   'deletePostComment',
   'setCreatorFollowing',
   'saveShowcasePost',

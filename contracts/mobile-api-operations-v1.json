@@ -241,6 +241,11 @@
       "path": "/api/showcase/posts/:postId/comments",
       "auth": "required"
     },
+    "updatePostComment": {
+      "method": "PATCH",
+      "path": "/api/showcase/posts/:postId/comments/:commentId",
+      "auth": "required"
+    },
     "deletePostComment": {
       "method": "DELETE",
       "path": "/api/showcase/posts/:postId/comments/:commentId",

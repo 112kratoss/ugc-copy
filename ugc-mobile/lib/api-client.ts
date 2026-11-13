@@ -67,6 +67,8 @@ import type {
   PostCommentsResponse,
   CreatePostCommentResponse,
   DeletePostCommentResponse,
+  UpdatePostCommentBody,
+  UpdatePostCommentResponse,
   SourceToolOption,
   TemplateRunInputFinalizeRequest,
   TemplateRunInputSignRequest,
@@ -1513,6 +1515,11 @@ export function createApiClient({
         // The delivery only when there is one: a thread opened anywhere but a
         // ranked feed sends the body it always sent.
         { method: 'POST', body: JSON.stringify({ ...body, deliveryId: body.deliveryId || undefined }) }
+      ),
+    updatePostComment: (postId: string, commentId: string, body: UpdatePostCommentBody) =>
+      request<UpdatePostCommentResponse>(
+        `/api/showcase/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+        { method: 'PATCH', body: JSON.stringify(body) }
       ),
     deletePostComment: (postId: string, commentId: string) =>
       request<DeletePostCommentResponse>(

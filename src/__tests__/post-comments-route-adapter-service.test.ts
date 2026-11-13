@@ -5,6 +5,7 @@ import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import {
   createPostCommentRouteResponse,
   deletePostCommentRouteResponse,
+  updatePostCommentRouteResponse,
   getPostCommentsRouteResponse,
 } from '@/lib/post-comments-route-adapter-service';
 import type {
@@ -251,6 +252,11 @@ describe('createPostCommentRouteResponse', () => {
             createdAt: '2026-07-27T12:00:00.000Z',
             replyCount: 0,
             author: null,
+            likeCount: 0,
+            viewerReaction: null,
+            editedAt: null,
+            hearted: false,
+            pinned: false,
           },
         },
       };
@@ -386,5 +392,57 @@ describe('deletePostCommentRouteResponse', () => {
       commentId: COMMENT_ID,
       actorUserId: 'author-1',
     });
+  });
+});
+
+describe('updatePostCommentRouteResponse', () => {
+  const patch = (headers: Record<string, string> = {}) => new Request(
+    `http://localhost/api/showcase/posts/${POST_ID}/comments/${COMMENT_ID}`,
+    { method: 'PATCH', headers, body: JSON.stringify({ reaction: 'like' }) },
+  );
+
+  it('refuses a visitor and a guest before creating an admin client', async () => {
+    for (const userClient of [createUserClient(null), createGuestClient()]) {
+      const updatePostCommentForRoute = vi.fn();
+      const createServiceClient = vi.fn();
+
+      const response = await updatePostCommentRouteResponse({
+        context: commentContext(),
+        request: patch({ authorization: 'Bearer token' }),
+        dependencies: { createServiceClient, createUserClient: () => userClient, updatePostCommentForRoute },
+      });
+
+      // A like, a heart, a pin and an edit are an account's, as a comment is.
+      expect(response.status).toBe(401);
+      expect(updatePostCommentForRoute).not.toHaveBeenCalled();
+      expect(createServiceClient).not.toHaveBeenCalled();
+    }
+  });
+
+  it('delegates the actor, the ids and a lazy body reader, and keeps the answer out of caches', async () => {
+    const updatePostCommentForRoute = vi.fn(async (input: { readBody: () => Promise<unknown> }) => ({
+      ok: true as const,
+      status: 200 as const,
+      body: { success: true as const, read: await input.readBody(), unpinnedCommentId: null },
+    }));
+
+    const response = await updatePostCommentRouteResponse({
+      context: commentContext(),
+      request: patch({ authorization: 'Bearer token' }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        createUserClient: () => createUserClient('reader-1'),
+        updatePostCommentForRoute: updatePostCommentForRoute as never,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(updatePostCommentForRoute.mock.calls[0][0]).toMatchObject({
+      postId: POST_ID,
+      commentId: COMMENT_ID,
+      actorUserId: 'reader-1',
+    });
+    expect(await response.json()).toMatchObject({ read: { reaction: 'like' } });
   });
 });
