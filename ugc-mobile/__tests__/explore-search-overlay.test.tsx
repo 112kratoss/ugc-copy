@@ -1357,6 +1357,35 @@ describe('ExploreSearchOverlay search', () => {
     await act(async () => tree.unmount());
   });
 
+  // Review of #793: a post opens over the search, and Back finds the same
+  // results at the same place, with nothing asked again.
+  it('comes back from a post to the same results at the same place, asking nothing again', async () => {
+    searchPublicContent.mockResolvedValueOnce(searchAnswer('harbour', 'top', { posts: [post('v1'), post('v2')] }));
+    const onClose = vi.fn();
+    const tree = await render({ visible: true, onClose });
+    await typeQuery(tree, 'harbour');
+    const asked = searchPublicContent.mock.calls.length;
+    const shownBefore = hostNodes(tree, 'pressable').map((node) => node.props.accessibilityLabel as string | undefined).filter((label) => label?.startsWith('Open post '));
+    expect(shownBefore).toHaveLength(2);
+    mocks.scrollTo.mockClear();
+
+    await press(pressableLabelled(tree, 'Open post Post v2 by Ana'));
+    expect(mocks.router.push).toHaveBeenCalledWith('/post/v2');
+    // The post's page covers the search, which stays mounted under it; then Back.
+    mocks.focused.value = false;
+    await update(tree, { visible: true, onClose });
+    mocks.focused.value = true;
+    await update(tree, { visible: true, onClose });
+
+    expect(searchPublicContent.mock.calls.length).toBe(asked);
+    expect(hostNodes(tree, 'pressable').map((node) => node.props.accessibilityLabel as string | undefined).filter((label) => label?.startsWith('Open post '))).toEqual(shownBefore);
+    expect(searchInput(tree).props.value).toBe('harbour');
+    // Not scrolled back to the top: the place is kept.
+    expect(mocks.scrollTo).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => tree.unmount());
+  });
+
   it('says a post was made with the model or tool the search is narrowed to', async () => {
     const made = { ...post('p1'), model: 'luma-ray-2' } as unknown as ShowcaseFeedItem;
     searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { posts: [made] }, {
