@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { Search, X } from 'lucide-react';
+import { LoaderCircle, Search, X } from 'lucide-react';
 
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
@@ -32,12 +32,21 @@ export type SearchFieldCombobox = {
 
 export function SearchField({
   autoFocus = false,
+  busy = false,
   combobox,
   onChange,
   onClear,
   value,
 }: {
   autoFocus?: boolean;
+  /**
+   * A search for what the field holds is on its way while earlier results stay
+   * on show: the magnifier turns into a spinner (still under reduced motion).
+   * Drawing only: the page's status line says "Searching…" to a screen reader.
+   * In the field and not as a line over the results, which pushed every card
+   * down as it came and back up as it went at each pause in typing.
+   */
+  busy?: boolean;
   combobox?: SearchFieldCombobox;
   onChange: (value: string) => void;
   onClear: () => void;
@@ -50,7 +59,11 @@ export function SearchField({
   useFieldValueBeforeHydration(fieldRef, { drawn: value, onValue: onChange });
   return (
     <label className="ui-focus-within-ring flex min-h-14 items-center gap-3 rounded-full border border-white/10 bg-white/[0.055] px-5 shadow-[0_18px_60px_-32px_rgba(0,0,0,0.9)] backdrop-blur-xl">
-      <Search className="h-5 w-5 shrink-0 text-zinc-400" aria-hidden="true" />
+      {busy ? (
+        <LoaderCircle data-search-field-busy="" className="h-5 w-5 shrink-0 text-zinc-400 motion-safe:animate-spin" aria-hidden="true" />
+      ) : (
+        <Search className="h-5 w-5 shrink-0 text-zinc-400" aria-hidden="true" />
+      )}
       <span className="sr-only">{SEARCH_FIELD_LABEL}</span>
       <input
         ref={fieldRef}

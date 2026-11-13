@@ -6,7 +6,7 @@ import {
   forgetSearchQuery,
   readSearchHistory,
   rememberSearchQuery,
-} from '@/app/search/search-history';
+} from '@/components/search/search-history';
 
 const HISTORY_KEY = 'magicbooklet:public-search-history:v1';
 const ACCOUNT = '11111111-1111-4111-8111-111111111111';

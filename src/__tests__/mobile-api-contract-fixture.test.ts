@@ -216,6 +216,7 @@ const expectedEndpointKeys = [
   'undoFeedFeedback',
   'searchPublicContent',
   'suggestSearch',
+  'searchStarter',
   'getSavedMedia',
   'getShowcasePost',
   'resolveShowcasePost',

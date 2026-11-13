@@ -448,8 +448,10 @@ describe('SearchClient', () => {
       typeQuery('lunar');
 
       expect(screen.getByText('Luna Studio')).toBeInTheDocument();
-      // The visible indicator and the screen-reader status both say so.
-      expect(screen.getAllByText('Searching…')).toHaveLength(2);
+      // The field's spinner says so on the page, the status line to a screen
+      // reader; no line over the cards, which pushed them down (review of #787).
+      expect(screen.getAllByText('Searching…')).toEqual([screen.getByRole('status')]);
+      expect(document.querySelector('[data-search-field-busy]')).not.toBeNull();
       expect(screen.queryByText(/No results/)).not.toBeInTheDocument();
 
       await settle(300);
@@ -475,7 +477,13 @@ describe('SearchClient', () => {
 
       expect(requestedUrls()).toEqual(['/api/search?q=luna&type=top', '/api/search?q=luna&type=posts']);
       expect(screen.queryByText('Luna Studio')).not.toBeInTheDocument();
-      expect(screen.getAllByText('Searching…')).toHaveLength(2);
+      // No earlier cards of this tab to keep on show: blocks in the shape of
+      // Posts' results, hidden from assistive technology, and the status line
+      // alone says "Searching…" (no centred card).
+      expect(screen.getAllByText('Searching…')).toEqual([screen.getByRole('status')]);
+      const placeholder = document.querySelector('[data-search-placeholder]');
+      expect(placeholder?.getAttribute('data-search-placeholder')).toBe('posts');
+      expect(placeholder?.getAttribute('aria-hidden')).toBe('true');
 
       answer.resolve(jsonResponse(searchResponse({
         type: 'posts',
@@ -483,6 +491,24 @@ describe('SearchClient', () => {
       })));
       await settle();
       expect(screen.getByText('Moonlit portrait')).toBeInTheDocument();
+      expect(document.querySelector('[data-search-placeholder]')).toBeNull();
+    });
+
+    it('draws only the creators’ blocks for a query too short for posts, and the posts’ too from three characters', async () => {
+      // Under three characters only creators are searched: blocks for posts
+      // that could never come flashed and collapsed at every search passing
+      // through two characters (review of #787).
+      fetchMock.mockReturnValue(new Promise(() => {}));
+      render(<SearchClient initialQuery="lu" initialType="top" />);
+      await settle();
+      const placeholder = () => document.querySelector('[data-search-placeholder="top"]');
+      expect(placeholder()).not.toBeNull();
+      expect(placeholder()?.querySelectorAll('.grid').length).toBe(1);
+      expect(placeholder()?.querySelectorAll('[style*="aspect"], .aspect-\\[4\\/3\\]').length).toBe(0);
+      cleanup();
+      render(<SearchClient initialQuery="lum" initialType="top" />);
+      await settle();
+      expect(placeholder()?.querySelectorAll('.grid').length).toBe(2);
     });
 
     it('clears a failed search as soon as the query changes', async () => {
@@ -723,8 +749,9 @@ describe('SearchClient', () => {
         expect(screen.getByRole('radio', { name: 'Latest' })).toBeChecked();
         // The other order's cards stay up, marked as loading: the same results, reordered.
         expect(screen.getByText('Most saved portrait')).toBeInTheDocument();
-        // Once for a screen reader, once on the page.
-        expect(screen.getAllByText('Searching…')).toHaveLength(2);
+        // For a screen reader; the field's spinner on the page.
+        expect(screen.getAllByText('Searching…')).toEqual([screen.getByRole('status')]);
+        expect(document.querySelector('[data-search-field-busy]')).not.toBeNull();
 
         answer.resolve(postsAnswer('latest', ['Newest portrait', 'Most saved portrait']));
         await settle();
@@ -733,6 +760,7 @@ describe('SearchClient', () => {
           expect.stringContaining('Most saved portrait'),
         ]);
         expect(screen.queryByText('Searching…')).not.toBeInTheDocument();
+        expect(document.querySelector('[data-search-field-busy]')).toBeNull();
       });
 
       it('opens a shared Latest link on Latest, and a post opened from it comes back to it', async () => {

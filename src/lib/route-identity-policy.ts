@@ -246,6 +246,10 @@ const PUBLIC_ROUTES = [
   // marks the viewer's follows, leaves out whom they are blocked with and
   // keys the rate limit on them.
   '/api/search/suggest',
+  // What the search screen shows before anything is typed: admitted as
+  // /api/search is. A token only leaves out whom the viewer is blocked with
+  // or already follows, and keys the rate limit on them.
+  '/api/search/starter',
   '/api/showcase/feed',
   '/api/showcase/feed/events',
   // Whether a lane has a post newer than the one a client holds: no identity

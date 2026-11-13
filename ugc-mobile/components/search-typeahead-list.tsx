@@ -9,7 +9,7 @@ import {
   searchForRowLabel,
   searchTypeaheadQuery,
   searchTypeaheadRowLabel,
-  searchTypedRuns,
+  searchTypeaheadTextRuns,
   type SearchTypeaheadRow,
   type SearchTypingSection,
 } from '@/lib/public-search-policy/search-typeahead';
@@ -26,7 +26,7 @@ function RowMark({ row }: { row: SearchTypeaheadRow }) {
   if (row.kind === 'creator') {
     return <CreatorAvatar uri={row.creator.avatarUrl} name={row.creator.displayName} size={MARK_SIZE} />;
   }
-  const Icon = row.kind === 'recent' ? Clock3 : row.kind === 'entity' ? (row.entity.kind === 'model' ? Box : Wrench) : Search;
+  const Icon = row.kind === 'completion' && row.recent ? Clock3 : row.kind === 'entity' ? (row.entity.kind === 'model' ? Box : Wrench) : Search;
   return (
     <View
       style={{
@@ -44,14 +44,14 @@ function RowMark({ row }: { row: SearchTypeaheadRow }) {
 }
 
 // A completion or a recent search with the part not yet typed emphasised and
-// the part typed plain (searchTypedRuns). The runs are one Text: the row's
+// the part typed plain (searchTypeaheadTextRuns). The runs are one Text: the row's
 // accessible name, set on its button, stays whole.
 function TypedRuns({ text, query }: { text: string; query: string | null }) {
   const theme = useAppTheme();
   return (
     // Two lines at most, so a long search still reads whole at the largest text sizes.
     <Text numberOfLines={2} style={{ color: theme.colors.text, fontSize: 15 }}>
-      {searchTypedRuns(text, query).map((run, index) => (
+      {searchTypeaheadTextRuns(text, query).map((run, index) => (
         <Text
           key={index}
           style={run.typed ? { color: theme.colors.textSecondary, fontWeight: '400' } : { color: theme.colors.text, fontWeight: '700' }}
@@ -65,7 +65,7 @@ function TypedRuns({ text, query }: { text: string; query: string | null }) {
 
 function RowWords({ row, query }: { row: SearchTypeaheadRow; query: string | null }) {
   const theme = useAppTheme();
-  if (row.kind === 'completion' || row.kind === 'recent') {
+  if (row.kind === 'completion') {
     return (
       <View style={{ minWidth: 0, flex: 1 }}>
         <TypedRuns text={row.text} query={query} />

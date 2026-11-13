@@ -10,6 +10,11 @@ import suggestFixture from './fixtures/search-suggestions.json';
 // an answer with nothing in it, at a phone's width; and one request through
 // the real proxy and the real /api/search/suggest for the headers of its 200.
 //
+// On the search page the box offers only what changes the query, the recent
+// searches the text matches and the completions: the results under it draw the
+// creators and the models live. The top bar's field on another page offers
+// every kind (the last tests).
+//
 // The page's requests are answered here (page.route); the last test's is
 // answered by the dev server's own route, whose two database calls the
 // server's Supabase stub answers (tests/e2e/support/supabase-server-stub.cjs).
@@ -76,8 +81,12 @@ test.describe('search typeahead', () => {
   let searches: string[];
   let suggests: string[];
 
-  /** Opens /search with a query already searched, so the results on screen say the page's script has run. */
-  async function openSearch(page: Page, suggest: (route: Route, query: string) => Promise<void> | void) {
+  /**
+   * Opens /search with a query already searched, so the results on screen say
+   * the page's script has run. `recents`: this browser's recent searches, kept
+   * before the page loads.
+   */
+  async function openSearch(page: Page, suggest: (route: Route, query: string) => Promise<void> | void, recents: string[] = []) {
     searches = [];
     suggests = [];
     await page.route(SEARCH_API, async (route) => {
@@ -90,13 +99,18 @@ test.describe('search typeahead', () => {
       suggests.push(query);
       await suggest(route, query);
     });
+    if (recents.length) {
+      await page.addInitScript((kept) => {
+        window.localStorage.setItem('magicbooklet:public-search-history:v1', JSON.stringify(kept));
+      }, recents);
+    }
     await page.goto('/search?q=luna');
     await expect(page.getByText('Luna Studio')).toBeVisible();
     // On arrival the box does not have the focus: nothing was asked.
     expect(suggests).toEqual([]);
   }
 
-  test('offers creators, models and tools, and completions, and follows the keys', async ({ page }) => {
+  test('offers only the completions over the results, never a creator or a model they draw, and follows the keys', async ({ page }) => {
     await openSearch(page, (route, query) => route.fulfill(json(suggestions(query))));
     const box = page.getByRole('combobox');
     await expect(box).toHaveAttribute('aria-expanded', 'false');
@@ -109,16 +123,10 @@ test.describe('search typeahead', () => {
     // One request, for what the box holds.
     expect(suggests).toEqual(['lum']);
 
-    // Creators, then models and tools, then completions.
-    await expect(list.getByRole('option')).toHaveText([
-      /E2E Creator.*@e2e-creator/,
-      /Lumen Works.*@lumen/,
-      /Luma Ray 2.*Model · 14 posts/,
-      'luminous portrait',
-      'lumen glow',
-    ]);
-    await expect(list.getByRole('group')).toHaveCount(3);
-    await expect(page.locator('[data-search-typeahead-status]')).toHaveText('5 suggestions');
+    // The answer offers two creators and a model too; the results under the box draw those.
+    await expect(list.getByRole('option')).toHaveText(['luminous portrait', 'lumen glow']);
+    await expect(list.getByRole('group')).toHaveCount(1);
+    await expect(page.locator('[data-search-typeahead-status]')).toHaveText('2 suggestions');
     await shot(page, 'desktop-list');
 
     // The arrows move the highlight; the focus stays in the box.
@@ -127,14 +135,14 @@ test.describe('search typeahead', () => {
     await expect(options.nth(0)).toHaveAttribute('aria-selected', 'true');
     await expect(box).toHaveAttribute('aria-activedescendant', (await options.nth(0).getAttribute('id')) ?? 'no id');
     await box.press('End');
-    await expect(options.nth(4)).toHaveAttribute('aria-selected', 'true');
+    await expect(options.nth(1)).toHaveAttribute('aria-selected', 'true');
     await box.press('Home');
     await expect(options.nth(0)).toHaveAttribute('aria-selected', 'true');
     await box.press('ArrowUp');
     await expect(list.locator('[aria-selected="true"]')).toHaveCount(0);
     await expect(box).toBeFocused();
     await box.press('ArrowUp');
-    await expect(options.nth(4)).toHaveAttribute('aria-selected', 'true');
+    await expect(options.nth(1)).toHaveAttribute('aria-selected', 'true');
     await shot(page, 'desktop-highlight');
 
     // Escape closes the list and keeps the text.
@@ -147,10 +155,6 @@ test.describe('search typeahead', () => {
     await box.press('ArrowDown');
     await expect(list).toBeVisible();
     await expect(options.nth(0)).toHaveAttribute('aria-selected', 'true');
-    await box.press('ArrowDown');
-    await box.press('ArrowDown');
-    await box.press('ArrowDown');
-    await expect(options.nth(3)).toHaveAttribute('aria-selected', 'true');
     await box.press('Enter');
     await expect(box).toHaveValue('luminous portrait');
     await expect.poll(() => searches.some((search) => search.includes('q=luminous+portrait'))).toBe(true);
@@ -169,40 +173,58 @@ test.describe('search typeahead', () => {
     await expect(page).toHaveURL(/[?&]q=lume(&|$)/);
   });
 
-  test('takes a press on each kind of row', async ({ page }) => {
-    await openSearch(page, (route, query) => route.fulfill(json(suggestions(query))));
+  test('takes a press on a recent search and on a completion, and draws what a row adds heavier', async ({ page }) => {
+    await openSearch(page, (route, query) => route.fulfill(json(suggestions(query))), ['neon harbor', 'glowing lumen', 'Lumen city']);
     const box = page.getByRole('combobox');
     const list = page.getByRole('listbox', { name: 'Search suggestions' });
 
-    // A model or tool: Posts for what is typed, narrowed to it.
+    // The recent searches the text begins (as a whole or at a word) come
+    // first, most recent first, with a clock; then the completions.
     await box.fill('lum');
-    await list.getByRole('option', { name: /Luma Ray 2/ }).click();
-    await expect(list).toBeHidden();
-    await expect(page.getByRole('tab', { name: 'Posts' })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('button', { name: 'Remove filter: made with Luma Ray 2' })).toBeVisible();
-    await expect(page).toHaveURL(/[?&]q=lum&type=posts&madeWith=model%3Aluma-ray-2/);
-    await expect(box).toHaveValue('lum');
-    // The press did not take the focus from the box.
-    await expect(box).toBeFocused();
+    await expect(list.getByRole('option')).toHaveText(['glowing lumen', 'Lumen city', 'luminous portrait', 'lumen glow']);
+    await expect(list.getByRole('group')).toHaveCount(2);
+    await expect(list.locator('[data-typeahead-row]')).toHaveCount(4);
+    expect(await list.locator('[data-typeahead-row]').evaluateAll((rows) => rows.map((row) => row.getAttribute('data-typeahead-row'))))
+      .toEqual(['recent', 'recent', 'completion', 'completion']);
+    // What was typed is drawn plain and what the row adds heavier; the row's name is whole.
+    const weights = await list.getByRole('option', { name: 'Search for luminous portrait' }).locator('span.truncate > span')
+      .evaluateAll((runs) => runs.map((run) => [run.textContent, getComputedStyle(run).fontWeight]));
+    expect(weights).toEqual([['lum', '400'], ['inous portrait', '600']]);
+    await shot(page, 'desktop-recents-and-completions');
 
-    // A completion: the box is filled and searched. The rows of "lum" stay on
-    // show until the answer for "lumi" lands and puts the model back among
-    // them, moving the rows under the pointer. A row that has just moved takes
-    // no press for a moment, and the list says it is busy until it does.
-    await box.fill('lumi');
-    await expect.poll(() => suggests.at(-1)).toBe('lumi');
-    await expect(list.getByRole('option')).toHaveCount(5);
+    // A completion: the box is filled and searched, the press keeping the focus
+    // in the box. The completions came with the answer, under the recent
+    // searches drawn before it: new rows, which take a press once they have stood.
     await expect(list).not.toHaveAttribute('aria-busy', 'true');
     await list.getByRole('option', { name: 'Search for lumen glow' }).click();
     await expect(box).toHaveValue('lumen glow');
+    await expect(box).toBeFocused();
     await expect.poll(() => searches.some((search) => search.includes('q=lumen+glow'))).toBe(true);
     await expect(list).toBeHidden();
 
-    // A creator: their profile.
+    // A recent search: the same. The search just pressed joins the recent ones
+    // when its answer lands, which can be after the list for "lum" is drawn:
+    // the rows then move, and a moved row takes no press for a moment.
     await box.fill('lum');
-    await page.request.get('/creators/e2e-creator', { timeout: 0 });
-    await list.getByRole('option', { name: /E2E Creator/ }).click();
-    await expect(page).toHaveURL(/\/creators\/e2e-creator$/, { timeout: 30_000 });
+    await expect(list.getByRole('option')).toHaveText(['lumen glow', 'glowing lumen', 'Lumen city', 'luminous portrait']);
+    await expect(list).not.toHaveAttribute('aria-busy', 'true');
+    await list.getByRole('option', { name: 'Search again for glowing lumen' }).click();
+    await expect(box).toHaveValue('glowing lumen');
+    await expect.poll(() => searches.some((search) => search.includes('q=glowing+lumen'))).toBe(true);
+    await expect(page).toHaveURL(/[?&]q=glowing\+lumen/);
+    await expect(list).toBeHidden();
+  });
+
+  test('offers nothing where the answer holds only creators and models: the results draw them', async ({ page }) => {
+    await openSearch(page, (route, query) => route.fulfill(json({ ...suggestions(query), completions: [] })));
+    const box = page.getByRole('combobox');
+    await box.fill('lum');
+    await expect.poll(() => suggests).toEqual(['lum']);
+    await expect(page.locator('p[role="status"]')).toContainText('1 result for lum');
+    await expect(page.getByRole('listbox')).toHaveCount(0);
+    await expect(box).toHaveAttribute('aria-expanded', 'false');
+    // The creator the answer offered is on the page once: as a result.
+    await expect(page.getByText('Luna Studio')).toHaveCount(1);
   });
 
   test('keeps the rows of the text before on show, busy, until this text’s answer lands, with the results’ region silent meanwhile', async ({ page }) => {
@@ -227,42 +249,36 @@ test.describe('search typeahead', () => {
     const resultsSaid = page.locator('p[role="status"]');
 
     await box.fill('lum');
-    await expect(list.getByRole('option')).toHaveCount(5);
-    await expect(said).toHaveText('5 suggestions');
+    await expect(list.getByRole('option')).toHaveCount(2);
+    await expect(said).toHaveText('2 suggestions');
     // The page searches as the box is typed into; its outcome is not said over the list.
     await expect.poll(() => searches.some((search) => search.includes('q=lum&'))).toBe(true);
     await expect(resultsSaid).toHaveText('');
 
     // The next letter, its answer held: the list never goes. It keeps what it
-    // had, less the model "lumi" no longer names, and says it is busy.
+    // had and says it is busy.
     await box.press('End');
     await box.press('i');
     await expect(box).toHaveValue('lumi');
     await expect(list).toBeVisible();
     await expect(list).toHaveAttribute('aria-busy', 'true');
-    await expect(list.getByRole('option')).toHaveText([
-      /E2E Creator.*@e2e-creator/,
-      /Lumen Works.*@lumen/,
-      'luminous portrait',
-      'lumen glow',
-    ]);
+    await expect(list.getByRole('option')).toHaveText(['luminous portrait', 'lumen glow']);
     await expect.poll(() => suggests).toEqual(['lum', 'lumi']);
     // Past the pause a count waits for: a stale list is not announced.
     await page.waitForTimeout(900);
     await expect(list).toHaveAttribute('aria-busy', 'true');
-    await expect(said).toHaveText('5 suggestions');
+    await expect(said).toHaveText('2 suggestions');
     await expect(resultsSaid).toHaveText('');
     await shot(page, 'desktop-stale-list');
 
     // The highlight is put on a stale row that the answer keeps: it stays on that row.
     await box.press('ArrowDown');
-    await box.press('ArrowDown');
-    await expect(list.getByRole('option', { name: /Lumen Works/ })).toHaveAttribute('aria-selected', 'true');
+    await expect(list.getByRole('option', { name: 'Search for luminous portrait' })).toHaveAttribute('aria-selected', 'true');
     release();
-    await expect(list.getByRole('option')).toHaveText([/Lumen Works.*@lumen/, 'luminous portrait']);
+    await expect(list.getByRole('option')).toHaveText(['luminous portrait']);
     await expect(list).not.toHaveAttribute('aria-busy', 'true');
-    await expect(list.getByRole('option', { name: /Lumen Works/ })).toHaveAttribute('aria-selected', 'true');
-    await expect(said).toHaveText('2 suggestions');
+    await expect(list.getByRole('option', { name: 'Search for luminous portrait' })).toHaveAttribute('aria-selected', 'true');
+    await expect(said).toHaveText('1 suggestion');
 
     // Enter settles the search: the list goes and the results speak.
     await box.press('ArrowUp');
@@ -270,63 +286,6 @@ test.describe('search typeahead', () => {
     await box.press('Enter');
     await expect(list).toBeHidden();
     await expect(resultsSaid).toContainText('1 result for lumi');
-  });
-
-  test('opens a creator pressed inside the search’s pause, however slowly their page answers, and Back returns to the search left', async ({ page }) => {
-    // CI, #778: the press on the creator's row opened nothing and the page
-    // stayed on its own address. The search page wrote that address a pause
-    // after the last letter through Next's patched history.replaceState;
-    // Next's router read the write as a navigation, and a navigation discards
-    // the one to the creator's page while that is still loading. The write no
-    // longer reaches the router (public-search.spec.ts holds the same for a
-    // result and for a link of the sidebar). The page's clock is the test's
-    // here, so the pause passes exactly while the creator's page is held back.
-    await page.clock.install();
-    let releaseCreator: () => void = () => {};
-    const creatorHeld = new Promise<void>((resolve) => { releaseCreator = resolve; });
-    await openSearch(page, (route, query) => route.fulfill(json(suggestions(query))));
-    // The route is compiled before it is held: the hold is the page's answer, not the compiler's.
-    await page.request.get('/creators/e2e-creator', { timeout: 0 });
-    await page.route((url) => url.pathname === '/creators/e2e-creator', async (route) => {
-      await creatorHeld;
-      await route.continue();
-    });
-    const box = page.getByRole('combobox');
-    const list = page.getByRole('listbox', { name: 'Search suggestions' });
-
-    await box.fill('lum');
-    await expect(list.getByRole('option')).toHaveCount(5);
-    await expect(page).toHaveURL(/[?&]q=lum(&|$)/);
-    await expect.poll(() => searches.filter((search) => /[?&]q=lum(&|$)/.test(search)).length).toBe(1);
-
-    // Time stands still: the next letter's pauses (140 ms for its suggestions,
-    // 300 ms for its search) pass only when the test says so.
-    await page.clock.pauseAt(new Date(Date.now() + 5_000));
-    await box.press('End');
-    await box.press('i');
-    await expect(box).toHaveValue('lumi');
-    // The rows of "lum" are still on show, the creators where they stood.
-    await list.getByRole('option', { name: /E2E Creator/ }).click();
-
-    // The press wrote the search being left, ahead of the way out.
-    expect(new URL(page.url()).searchParams.get('q')).toBe('lumi');
-
-    // The search's pause passes while the creator's page has not answered:
-    // the search the page says it is running is asked, and the page is still here.
-    await page.clock.runFor(1_000);
-    expect(searches.filter((search) => /[?&]q=lumi(&|$)/.test(search))).toHaveLength(1);
-    expect(new URL(page.url()).pathname).toBe('/search');
-
-    releaseCreator();
-    await page.clock.resume();
-    await expect(page).toHaveURL(/\/creators\/e2e-creator$/, { timeout: 30_000 });
-
-    // Back: the search the person left, in the box, in the address and run again.
-    const asked = searches.length;
-    await page.goBack();
-    await expect(page).toHaveURL(/\/search\?q=lumi$/);
-    await expect(page.getByRole('combobox')).toHaveValue('lumi');
-    await expect.poll(() => searches.slice(asked)).toEqual(['?q=lumi&type=top']);
   });
 
   test('a press an answer re-lays the list under opens the row pressed or nothing, never the row that took its place', async ({ page }) => {
@@ -347,7 +306,9 @@ test.describe('search typeahead', () => {
       }
       if (query === 'lumax') await never;
       await route.fulfill(json(suggestions(query)));
-    });
+      // A recent search that "lum" and "luma" match and "lumax" does not: the
+      // letter x takes it away at once, and the rows under it move up.
+    }, ['luma beam']);
     const box = page.getByRole('combobox');
     const list = page.getByRole('listbox', { name: 'Search suggestions' });
     const options = list.getByRole('option');
@@ -357,12 +318,12 @@ test.describe('search typeahead', () => {
     );
 
     await box.fill('lum');
-    await expect(options).toHaveCount(5);
-    // The next letter, its answer held: every row is still named by "luma", and stands where it stood.
+    await expect(options).toHaveCount(3);
+    // The next letter, its answer held: every row is still offered for "luma", and stands where it stood.
     await box.press('End');
     await box.press('a');
     await expect(box).toHaveValue('luma');
-    await expect(options).toHaveText([/E2E Creator/, /Lumen Works/, /Luma Ray 2/, 'luminous portrait', 'lumen glow']);
+    await expect(options).toHaveText(['luma beam', 'luminous portrait', 'lumen glow']);
 
     // The pointer goes down on "luminous portrait"; the answer lands before it
     // comes up and puts "luma dream" where it stood, in the same group. The
@@ -379,7 +340,7 @@ test.describe('search typeahead', () => {
     expect(await rowUnder(x, y)).toBe('Search for luminous portrait');
     await page.mouse.down();
     release();
-    await expect(options).toHaveCount(6);
+    await expect(options).toHaveCount(4);
     expect(await rowUnder(x, y)).toBe('Search for luma dream');
     await expect(list).not.toHaveAttribute('aria-busy', 'true');
     await page.mouse.up();
@@ -391,20 +352,17 @@ test.describe('search typeahead', () => {
 
     // A press that only begins after the rows have moved, before a person
     // could have seen them move. Time stands still from here, so "just after"
-    // is exact: the letter takes the model away, and the completions move up,
-    // "luma dream" into the model's place.
+    // is exact: the letter takes the recent search away, and the completions
+    // move up, "luma dream" into its place.
     await page.clock.pauseAt(new Date(Date.now() + 5_000));
     await box.press('End');
     await box.press('x');
     await expect(box).toHaveValue('lumax');
-    await expect(options).toHaveText([/E2E Creator/, /Lumen Works/, 'luma dream', 'luminous portrait', 'lumen glow']);
-    // What a sighted person has of it: the rows that moved are dimmed, and the
-    // creators above them, which stand where they stood, are not.
+    await expect(options).toHaveText(['luma dream', 'luminous portrait', 'lumen glow']);
+    // What a sighted person has of it: the rows that moved are dimmed.
     const moved = list.getByRole('option', { name: 'Search for luminous portrait' });
     await expect(moved).toHaveCSS('opacity', '0.6');
     await expect(list.getByRole('option', { name: 'Search for luma dream' })).toHaveCSS('opacity', '0.6');
-    await expect(list.getByRole('option', { name: /E2E Creator/ })).toHaveCSS('opacity', '1');
-    await expect(list.getByRole('option', { name: /Lumen Works/ })).toHaveCSS('opacity', '1');
     await moved.click();
     await expect(box).toHaveValue('lumax');
     await expect(list).toBeVisible();
@@ -503,7 +461,7 @@ test.describe('search typeahead', () => {
     await expect(list).toBeHidden();
   });
 
-  test('offers the same from the top bar’s field on another page, and a row goes where the search page would', async ({ page }) => {
+  test('offers every kind from the top bar’s field on another page, recent searches first, and a row goes where the search page would', async ({ page }) => {
     const searched: string[] = [];
     await page.route(SEARCH_API, async (route) => {
       const url = new URL(route.request().url());
@@ -512,6 +470,9 @@ test.describe('search typeahead', () => {
     });
     await page.route(SUGGEST_API, async (route) => {
       await route.fulfill(json(suggestions(new URL(route.request().url()).searchParams.get('q') ?? '')));
+    });
+    await page.addInitScript(() => {
+      window.localStorage.setItem('magicbooklet:public-search-history:v1', JSON.stringify(['lumen city', 'neon harbor']));
     });
     // No timeout of its own: the run's first request for the page waits for its compile.
     await page.goto('/contact');
@@ -530,13 +491,22 @@ test.describe('search typeahead', () => {
     await expect(page.getByRole('banner').getByRole('button', { name: 'Clear search' })).toBeVisible();
     const list = page.getByRole('listbox', { name: 'Search suggestions' });
     await expect(list).toBeVisible();
-    await expect(list.getByRole('option')).toHaveCount(5);
+    // No results under it: the recent search the text matches, then creators, models and tools, and completions.
+    await expect(list.getByRole('option')).toHaveText([
+      'lumen city',
+      /E2E Creator.*@e2e-creator/,
+      /Lumen Works.*@lumen/,
+      /Luma Ray 2.*Model · 14 posts/,
+      'luminous portrait',
+      'lumen glow',
+    ]);
+    await expect(list.getByRole('group')).toHaveCount(4);
     await shot(page, 'desktop-top-bar');
 
     // Down to the first completion, and Enter: the search page, searching for it.
     await page.request.get('/search', { timeout: 0 });
-    for (let presses = 0; presses < 4; presses += 1) await box.press('ArrowDown');
-    await expect(list.getByRole('option').nth(3)).toHaveAttribute('aria-selected', 'true');
+    for (let presses = 0; presses < 5; presses += 1) await box.press('ArrowDown');
+    await expect(list.getByRole('option').nth(4)).toHaveAttribute('aria-selected', 'true');
     await box.press('Enter');
     await expect(page).toHaveURL(/\/search\?q=luminous\+portrait$/, { timeout: 60_000 });
     await expect.poll(() => searched.some((search) => search.includes('q=luminous+portrait')), { timeout: 30_000 }).toBe(true);
@@ -546,6 +516,43 @@ test.describe('search typeahead', () => {
     await expect(pageBox).toBeFocused();
     await expect(pageBox).toHaveValue('luminous portrait');
     await expect(page.getByRole('listbox', { name: 'Search suggestions' })).toHaveCount(0);
+  });
+
+  test('takes a press on a creator row and on a model row in the top bar’s field', async ({ page }) => {
+    await page.route(SEARCH_API, async (route) => {
+      const url = new URL(route.request().url());
+      await route.fulfill(json(searchResponse(url.searchParams.get('q') ?? '', url.searchParams.get('type') ?? 'top')));
+    });
+    await page.route(SUGGEST_API, (route) => route.fulfill(json(suggestions(new URL(route.request().url()).searchParams.get('q') ?? ''))));
+    const openContact = async () => {
+      await page.goto('/contact');
+      await expect.poll(() => page.evaluate(() => {
+        const key = Object.keys(document).find((name) => name.startsWith('__reactContainer$'));
+        const root = key ? (document as unknown as Record<string, { stateNode?: { current?: { memoizedState?: { isDehydrated?: boolean } } } }>)[key] : undefined;
+        return root?.stateNode?.current?.memoizedState?.isDehydrated === false;
+      }), { timeout: 60_000, message: 'React commits the page’s hydration' }).toBe(true);
+      const box = page.getByRole('banner').getByRole('combobox', { name: 'Search creators, posts, and recipes' });
+      await box.click();
+      await box.pressSequentially('lum', { delay: 30 });
+      const list = page.getByRole('listbox', { name: 'Search suggestions' });
+      await expect(list.getByRole('option')).toHaveCount(5);
+      await expect(list).not.toHaveAttribute('aria-busy', 'true');
+      return list;
+    };
+
+    // A model or tool: the search page's Posts for what was typed, narrowed to it.
+    await page.request.get('/search', { timeout: 0 });
+    let list = await openContact();
+    await list.getByRole('option', { name: /Luma Ray 2/ }).click();
+    await expect(page).toHaveURL(/\/search\?q=lum&type=posts&madeWith=model%3Aluma-ray-2$/, { timeout: 60_000 });
+    // Named by its key until an answer names it (this file's answers do not).
+    await expect(page.getByRole('button', { name: /^Remove filter: made with / })).toBeVisible();
+
+    // A creator: their profile.
+    await page.request.get('/creators/e2e-creator', { timeout: 0 });
+    list = await openContact();
+    await list.getByRole('option', { name: /E2E Creator/ }).click();
+    await expect(page).toHaveURL(/\/creators\/e2e-creator$/, { timeout: 60_000 });
   });
 
   test('keeps Vary: Authorization on a visitor’s cacheable answer beside the proxy’s CORS headers', async ({ page }) => {

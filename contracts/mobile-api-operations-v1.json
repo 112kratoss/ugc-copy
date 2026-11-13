@@ -176,6 +176,11 @@
       "path": "/api/search/suggest",
       "auth": "optional"
     },
+    "searchStarter": {
+      "method": "GET",
+      "path": "/api/search/starter",
+      "auth": "optional"
+    },
     "recordShowcaseFeedEvent": {
       "method": "POST",
       "path": "/api/showcase/feed/events",

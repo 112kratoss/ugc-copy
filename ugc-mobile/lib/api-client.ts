@@ -80,6 +80,7 @@ import type {
   GenerationShareSourceSurface,
   ProfileShareSourceSurface,
   PublicSearchResponse,
+  SearchStarterResponse,
   SearchSuggestResponse,
   PublicSearchSort,
   PublicSearchType,
@@ -1424,6 +1425,15 @@ export function createApiClient({
      */
     suggestSearch: (params: { query: string }, signal?: AbortSignal) =>
       request<SearchSuggestResponse>('/api/search/suggest' + buildQuery({ q: params.query }), { signal }, { auth: true }),
+    /**
+     * What a search screen shows before anything is typed, and on a search
+     * that finds nothing: popular models and tools, creators to follow and
+     * searches to try. Read with parseSearchStarterResponse; a failure is
+     * drawn as nothing. A token leaves out whom the viewer is blocked with or
+     * follows; without one the answer is the edge's to keep for a few minutes.
+     */
+    searchStarter: (signal?: AbortSignal) =>
+      request<SearchStarterResponse>('/api/search/starter', { signal }, { auth: true }),
     recordShowcaseFeedEvent: (body: ShowcaseFeedEventRequest) =>
       request<ShowcaseFeedEventResponse>('/api/showcase/feed/events', {
         method: 'POST',

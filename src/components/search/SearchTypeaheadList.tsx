@@ -1,4 +1,4 @@
-import { Box, Search, Wrench } from 'lucide-react';
+import { Box, Clock3, Search, Wrench } from 'lucide-react';
 
 import { getUserInitials } from '@/lib/profile';
 
@@ -6,6 +6,7 @@ import { searchEntityCountLabel, searchEntityKindLabel } from '../../../ugc-mobi
 import {
   SEARCH_TYPEAHEAD_LIST_LABEL,
   searchTypeaheadRowLabel,
+  searchTypeaheadTextRuns,
   type SearchTypeaheadRow,
   type SearchTypeaheadSection,
 } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
@@ -15,7 +16,22 @@ const NO_ROWS: readonly string[] = [];
 
 const ICON_FRAME_CLASS = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06]';
 
-function RowBody({ row }: { row: SearchTypeaheadRow }) {
+/**
+ * A query row's text: what the person typed plain, what the row adds heavier
+ * (searchTypeaheadTextRuns). The row's accessible name is its whole label, so
+ * the runs are drawing only.
+ */
+function QueryText({ text, query }: { text: string; query: string | null }) {
+  return (
+    <span className="min-w-0 flex-1 truncate text-sm text-zinc-300">
+      {searchTypeaheadTextRuns(text, query).map((run, index) => (
+        <span key={index} className={run.typed ? undefined : 'font-semibold text-white'}>{run.text}</span>
+      ))}
+    </span>
+  );
+}
+
+function RowBody({ row, query }: { row: SearchTypeaheadRow; query: string | null }) {
   if (row.kind === 'creator') {
     const { creator } = row;
     return (
@@ -56,12 +72,14 @@ function RowBody({ row }: { row: SearchTypeaheadRow }) {
       </>
     );
   }
+  // A recent search wears a clock, a suggested one a magnifier.
+  const Icon = row.recent ? Clock3 : Search;
   return (
     <>
       <span className={`${ICON_FRAME_CLASS} text-zinc-400`}>
-        <Search className="h-4 w-4" aria-hidden="true" />
+        <Icon className="h-4 w-4" aria-hidden="true" />
       </span>
-      <span className="min-w-0 flex-1 truncate text-sm text-zinc-100">{row.text}</span>
+      <QueryText text={row.text} query={query} />
     </>
   );
 }
@@ -76,6 +94,7 @@ function RowBody({ row }: { row: SearchTypeaheadRow }) {
 export function SearchTypeaheadList({
   listId,
   sections,
+  query = null,
   activeIndex,
   stale = false,
   busy = stale,
@@ -86,6 +105,8 @@ export function SearchTypeaheadList({
 }: {
   listId: string;
   sections: readonly SearchTypeaheadSection[];
+  /** What the box asks about (searchTypeaheadQuery): the part of a query row it holds is drawn plain. */
+  query?: string | null;
   /** The highlighted row, as an index across every section, or null. */
   activeIndex: number | null;
   /**
@@ -145,13 +166,13 @@ export function SearchTypeaheadList({
                   role="option"
                   aria-selected={active}
                   aria-label={searchTypeaheadRowLabel(row)}
-                  data-typeahead-row={row.kind}
+                  data-typeahead-row={row.kind === 'completion' && row.recent ? 'recent' : row.kind}
                   data-settling={settling || undefined}
                   onClick={() => onPick(row)}
                   onMouseMove={() => { if (!active) onHighlight(rowIndex); }}
                   className={`flex min-h-12 cursor-pointer items-center gap-3 rounded-2xl px-3 py-1.5 ${active ? 'bg-white/[0.09]' : 'hover:bg-white/[0.05]'} ${settling ? 'opacity-60' : 'transition-opacity duration-150'}`}
                 >
-                  <RowBody row={row} />
+                  <RowBody row={row} query={query} />
                 </div>
               );
             })}

@@ -1,0 +1,30 @@
+{
+  "rows": {
+    "entities": [
+      {
+        "kind": "tool",
+        "key": "e2e-tool",
+        "label": "E2E Tool",
+        "post_count": 2,
+        "post_count_capped": false,
+        "query": "e2e tool"
+      }
+    ],
+    "creators": [
+      {
+        "id": "workflow-user",
+        "username": "e2e-creator",
+        "display_name": "E2E Creator",
+        "bio": null,
+        "avatar_url": null,
+        "public_post_count": 2,
+        "is_following": false
+      }
+    ],
+    "searches": [
+      {
+        "text": "portrait"
+      }
+    ]
+  }
+}

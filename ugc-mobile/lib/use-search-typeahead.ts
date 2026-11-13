@@ -7,18 +7,19 @@ import {
   SEARCH_TYPEAHEAD_DEBOUNCE_MS,
   SEARCH_TYPEAHEAD_KEPT_ANSWERS,
   SEARCH_TYPEAHEAD_KEPT_ANSWER_MS,
+  SEARCH_TYPEAHEAD_OFFER_ALL,
   SEARCH_TYPEAHEAD_PRESS_SETTLE_MS,
   isSearchTypeaheadPressAccepted,
   isSearchTypeaheadShown,
   parseSearchSuggestResponse,
   placeSearchTypeaheadRows,
   searchTypeaheadAction,
+  searchTypeaheadAsks,
   searchTypeaheadDrawn,
   searchTypeaheadQuery,
   searchTypeaheadRows,
   searchTypeaheadStatus,
   searchTypeaheadUnsettledRows,
-  searchTypingRecents,
   searchTypingSections,
   type SearchSuggestResponse,
   type SearchTypeaheadAction,
@@ -84,7 +85,7 @@ export function useSearchTypeahead({ api, text, active, viewerKey, history, runs
       kept.current.clear();
       return;
     }
-    if (query === null) return;
+    if (query === null || !searchTypeaheadAsks(query, SEARCH_TYPEAHEAD_OFFER_ALL)) return;
     const keptAnswer = kept.current.get(query);
     if (keptAnswer && Date.now() - keptAnswer.at < SEARCH_TYPEAHEAD_KEPT_ANSWER_MS) {
       setAnswer({ query, response: keptAnswer.response });
@@ -146,13 +147,17 @@ export function useSearchTypeahead({ api, text, active, viewerKey, history, runs
 
   // This text's answer, or until it arrives the one before it, marked stale,
   // under the rows that need no answer: "Search for" and the recents it begins.
-  const drawn = useMemo(() => searchTypeaheadDrawn(answer, query), [answer, query]);
+  // A recent search too short for the picked tab is not offered: pressed, it would search nothing.
+  const runningHistory = useMemo(() => history.filter((item) => runs(item)), [history, runs]);
+  const drawn = useMemo(
+    () => searchTypeaheadDrawn(answer, query, { recents: runningHistory, offer: SEARCH_TYPEAHEAD_OFFER_ALL }),
+    [answer, query, runningHistory],
+  );
   const stale = drawn.stale;
-  const recents = useMemo(() => searchTypingRecents(history.filter((item) => runs(item)), query), [history, query, runs]);
   const searchable = query !== null && runs(query);
   const sections = useMemo(
-    () => searchTypingSections({ query, sections: drawn.sections, recents, searchable }),
-    [drawn.sections, query, recents, searchable],
+    () => searchTypingSections({ query, sections: drawn.sections, searchable }),
+    [drawn.sections, query, searchable],
   );
   const rows = useMemo(() => searchTypeaheadRows(sections), [sections]);
   // The list is the typing screen: never closed while the typing lasts.
@@ -243,7 +248,7 @@ export function useSearchTypeahead({ api, text, active, viewerKey, history, runs
   // answer's rows count: "Search for" and the recents are there for any text,
   // and an answer with nothing in it is no "1 suggestion".
   const [status, setStatus] = useState('');
-  const rowCount = rows.filter((row) => row.kind !== 'search' && row.kind !== 'recent').length;
+  const rowCount = rows.filter((row) => row.kind !== 'search' && !(row.kind === 'completion' && row.recent)).length;
   useEffect(() => {
     if (shown && stale) return;
     const next = shown ? searchTypeaheadStatus(rowCount) : '';

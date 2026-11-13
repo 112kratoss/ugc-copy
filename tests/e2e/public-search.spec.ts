@@ -97,6 +97,66 @@ test.describe('public search', () => {
     await expect(page.getByText('Find creators, posts and recipes')).toBeVisible();
   });
 
+  test('draws blocks in the shape of the results while the first answer loads, and the cards arrive without moving anything', async ({ page }) => {
+    const post = (id: string, title: string) => ({
+      id, title, saveCount: 2, commentCount: 1, creator: { name: 'Luna Studio' }, mediaItems: [], mediaKind: null, mediaUrl: null,
+    });
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route(SEARCH_API, async (route) => {
+      const url = new URL(route.request().url());
+      await held;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...searchResponse(url.searchParams.get('q') ?? '', 'posts'),
+          creators: emptyPage,
+          posts: { items: Array.from({ length: 6 }, (_, index) => post(`post-${index}`, `Portrait ${index + 1}`)), nextCursor: null },
+        }),
+      });
+    });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    // Every layout shift from the first paint on, as the browser scores them.
+    await page.addInitScript(() => {
+      const shifts: number[] = [];
+      (window as unknown as { __shifts: number[] }).__shifts = shifts;
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries() as Array<PerformanceEntry & { value: number; hadRecentInput: boolean }>) {
+          if (!entry.hadRecentInput) shifts.push(entry.value);
+        }
+      }).observe({ type: 'layout-shift', buffered: true });
+    });
+    await page.goto('/search?q=portrait&type=posts');
+
+    // No centred card: blocks in the shape of Posts, hidden from assistive
+    // technology; the status line alone says the page is searching.
+    const placeholder = page.locator('[data-search-placeholder="posts"]');
+    await expect(placeholder).toBeVisible();
+    await expect(placeholder).toHaveAttribute('aria-hidden', 'true');
+    await expect(page.locator('p[role="status"]')).toHaveText('Searching…');
+    await expect(page.getByText('Searching…')).toHaveCount(1);
+    // Under reduced motion the blocks stand still.
+    const shimmers = placeholder.locator('.motion-reduce\\:hidden');
+    await expect(shimmers.first()).toBeHidden();
+    const firstBlock = await placeholder.locator('.grid > span').first().boundingBox();
+    const before = await page.evaluate(() => (window as unknown as { __shifts: number[] }).__shifts.length);
+
+    release();
+    await expect(page.getByText('Portrait 6')).toBeVisible();
+    await expect(placeholder).toHaveCount(0);
+    // The first card stands where the first block stood.
+    const firstCard = await page.getByRole('link', { name: /Portrait 1/ }).boundingBox();
+    expect(Math.abs(firstCard!.y - firstBlock!.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(firstCard!.x - firstBlock!.x)).toBeLessThanOrEqual(1);
+    // Nothing on the page moved as the cards came in.
+    await page.waitForTimeout(300);
+    const after = await page.evaluate((from) => (window as unknown as { __shifts: number[] }).__shifts.slice(from), before);
+    const shifted = after.reduce((sum, value) => sum + value, 0);
+    test.info().annotations.push({ type: 'layout shift as the cards arrived', description: String(shifted) });
+    expect(shifted).toBeLessThan(0.01);
+  });
+
   test('reads Posts as Best match or Latest, keeps the choice in the address, and pages the order it shows', async ({ page }) => {
     const post = (id: string, title: string) => ({
       id,
