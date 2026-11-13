@@ -386,6 +386,154 @@ describe('useRemixSourceRead', () => {
 
 // The session rule and the fetch both of a remix page's readers go through: the form's one read and
 // the renewal of its links (`useRemixLinkRenewal`).
+// Owner, 2026-11-13: a shelf card (and any link to a remix) whose post keeps its remix behind a
+// free recipe opens a creator that takes the recipe on the way, as the feed card's Remix and the
+// post page's do: the read is refused for the recipe, the recipe is taken, and the read is asked again.
+describe('useRemixSourceRead, for a remix behind a free recipe', () => {
+  const UNLOCK_REQUIRED = { status: 403, body: { error: 'Unlock this post to remix it.', code: 'REMIX_UNLOCK_REQUIRED' } };
+
+  /** The remix source and the free claim, each answering from its own queue; every request in order. */
+  function stubSourceAndClaim({ source, claim }: { source: Answer[]; claim: Answer[] }) {
+    const sources = [...source];
+    const claims = [...claim];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      void _init;
+      const queue = String(input).endsWith('/unlock-free') ? claims : sources;
+      const answer = queue.shift() ?? { status: 200, body: BUNDLE };
+      if (answer instanceof Error) throw answer;
+      return { ok: answer.status >= 200 && answer.status < 300, status: answer.status, json: async () => answer.body } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+  const requestsOf = (fetchMock: ReturnType<typeof stubSourceAndClaim>) => fetchMock.mock.calls
+    .map(([input, init]) => `${init?.method ?? 'GET'} ${String(input)}`);
+
+  beforeEach(() => {
+    browser.session = { access_token: 'page-token', user: { id: 'user-1' } };
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('takes the free recipe, reads again, and puts that answer on the form, once', async () => {
+    const fetchMock = stubSourceAndClaim({ source: [UNLOCK_REQUIRED], claim: [{ status: 200, body: { success: true } }] });
+    const { result, taken } = renderRead();
+
+    await waitFor(() => expect(taken).toHaveLength(1));
+    expect(requestsOf(fetchMock)).toEqual([
+      'GET /api/remix-source?id=gen-1&postId=post-1',
+      'POST /api/posts/post-1/resource-bundle/unlock-free',
+      'GET /api/remix-source?id=gen-1&postId=post-1',
+    ]);
+    // Under the form's account, as the reads are.
+    expect(tokensOf(fetchMock as never)).toEqual(['Bearer page-token', 'Bearer page-token', 'Bearer page-token']);
+    expect(taken[0].bundle).toEqual(BUNDLE);
+    expect(result.current.loading).toBe(false);
+    expect(result.current.failureWarning).toBeNull();
+  });
+
+  it('holds the notice’s placeholder until the second read answers', async () => {
+    const claim = held();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/unlock-free')) {
+        await claim.hold;
+        return { ok: true, status: 200, json: async () => ({ success: true }) } as Response;
+      }
+      const first = fetchMock.mock.calls.filter(([asked]) => String(asked).startsWith('/api/remix-source')).length === 1;
+      return (first
+        ? { ok: false, status: 403, json: async () => UNLOCK_REQUIRED.body }
+        : { ok: true, status: 200, json: async () => BUNDLE }) as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { result, taken } = renderRead();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(result.current.loading).toBe(true);
+    expect(result.current.failureWarning).toBeNull();
+
+    await claim.release();
+    await waitFor(() => expect(taken).toHaveLength(1));
+    expect(result.current.loading).toBe(false);
+  });
+
+  // A paid recipe, a blocked pair, a recipe since retired: the claim is refused, and the remix
+  // stays refused as it was, with no Try again (a later read would answer the same).
+  it('says the remix’s own refusal when the recipe cannot be taken, and reads no third time', async () => {
+    const fetchMock = stubSourceAndClaim({
+      source: [UNLOCK_REQUIRED],
+      claim: [{ status: 400, body: { error: 'This bundle requires payment.' } }],
+    });
+    const { result, taken } = renderRead();
+
+    await waitFor(() => expect(result.current.failureWarning).toBe(REMIX_RESTORE_WARNING));
+    expect(result.current.canRetry).toBe(false);
+    expect(taken).toEqual([]);
+    expect(requestsOf(fetchMock)).toEqual([
+      'GET /api/remix-source?id=gen-1&postId=post-1',
+      'POST /api/posts/post-1/resource-bundle/unlock-free',
+    ]);
+  });
+
+  it('takes the recipe once: a second refusal after the claim is final', async () => {
+    const fetchMock = stubSourceAndClaim({
+      source: [UNLOCK_REQUIRED, UNLOCK_REQUIRED],
+      claim: [{ status: 200, body: { success: true } }],
+    });
+    const { result, taken } = renderRead();
+
+    await waitFor(() => expect(result.current.failureWarning).toBe(REMIX_RESTORE_WARNING));
+    expect(result.current.canRetry).toBe(false);
+    expect(taken).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('takes nothing for any other refusal, or for a remix that names no post', async () => {
+    const forbidden = stubSourceAndClaim({ source: [{ status: 403, body: { error: 'Forbidden' } }], claim: [] });
+    const first = renderRead();
+    await waitFor(() => expect(first.result.current.failureWarning).toBe(REMIX_RESTORE_WARNING));
+    expect(requestsOf(forbidden)).toEqual(['GET /api/remix-source?id=gen-1&postId=post-1']);
+    first.unmount();
+
+    const noPost = stubSourceAndClaim({ source: [UNLOCK_REQUIRED], claim: [] });
+    const promptRef = { current: '' };
+    const second = renderHook(() => useRemixSourceRead<Field>({
+      remixId: 'gen-1',
+      remixPostId: null,
+      pageToken: 'page-token',
+      formAccount: 'user-1',
+      promptRef,
+      onSource: () => undefined,
+    }));
+    await waitFor(() => expect(second.result.current.failureWarning).toBe(REMIX_RESTORE_WARNING));
+    expect(requestsOf(noPost)).toEqual(['GET /api/remix-source?id=gen-1']);
+  });
+
+  it('drops the second read’s answer once the form has left the page', async () => {
+    const claim = held();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/unlock-free')) {
+        await claim.hold;
+        return { ok: true, status: 200, json: async () => ({ success: true }) } as Response;
+      }
+      return { ok: false, status: 403, json: async () => UNLOCK_REQUIRED.body } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { taken, unmount } = renderRead();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    unmount();
+    await claim.release();
+    await settle();
+
+    // Nothing read for a form that is gone, and nothing put on it.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(taken).toEqual([]);
+  });
+});
+
 describe('readRemixSource', () => {
   beforeEach(() => {
     browser.session = { access_token: 'browser-token', user: { id: 'user-1' } };

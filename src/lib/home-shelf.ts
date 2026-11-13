@@ -1,4 +1,5 @@
 import { getPublicPostQualityError } from '@/lib/marketplace-trust';
+import { getPostFeedRemixAccess } from '@/lib/post-feed-presentation';
 import { remixToolCreatePath, type RemixTool } from '@/lib/remix-tools';
 import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
 
@@ -110,11 +111,25 @@ export function buildHomeShelfMakeHref(tool: RemixTool, generationId: string, po
 }
 
 /**
+ * Whether the post's remix sits behind a free recipe, as the shelf's shared
+ * read sees it (no viewer, so nobody holds the recipe): a card for it opens a
+ * creator that takes the recipe on the way (`useRemixSourceRead`), as the feed
+ * card's Remix and the post page's do. The app is not sent such a card until
+ * it can do the same for someone who signs up from it (`loadHomeShelfForApi`).
+ */
+export function homeShelfPostTakesFreeRecipe(
+  item: Pick<ShowcaseFeedItem, 'canRemix' | 'remixCapability' | 'remixTarget' | 'asset'>,
+): boolean {
+  return item.remixCapability === 'unlock_required'
+    && getPostFeedRemixAccess({ ...item, asset: item.asset ?? null }) === 'free-unlock';
+}
+
+/**
  * One pinned post as a shelf card, or null when it should not be on the shelf.
  *
  * A pin is checked again on every build rather than trusted: a post can be
- * archived, hidden by moderation, or have its remix put behind a recipe after
- * it was pinned, and a card that cannot be made is worse than no card. The
+ * archived, hidden by moderation, or have its remix put behind a paid recipe
+ * after it was pinned, and a card that cannot be made is worse than no card. The
  * read it comes from (`getShowcaseFeedItemsByPostIds`) already drops posts that
  * are not public, archived or hidden by moderation. The tool is the one the
  * remix endpoint opens (`remixTarget`, motion included through creation mode).
@@ -125,9 +140,11 @@ export function toHomeShelfCreation(
   facts: HomeShelfCreationFacts,
 ): HomeShelfCreation | null {
   if (item.id !== pin.postId || item.isNsfw || !item.generationId) return null;
-  // Only a remix that is open to everyone: a recipe sold with its remix needs
-  // the unlock sheet, which a one-tap card cannot offer.
-  if (item.remixCapability !== 'public') return null;
+  // A remix that is open to everyone, or one behind a recipe that costs
+  // nothing, which the creator page takes as it opens the remix (owner,
+  // 2026-11-13). A recipe that is paid for needs the unlock sheet, which a
+  // one-tap card cannot offer.
+  if (item.remixCapability !== 'public' && !homeShelfPostTakesFreeRecipe(item)) return null;
   const tool = item.remixTarget;
   if (!tool || !SHELF_TOOLS.has(tool)) return null;
 

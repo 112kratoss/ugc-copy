@@ -562,6 +562,52 @@ describe('loadHomeShelf', () => {
     await expect(loadHomeShelf({ viewerUserId: 'user-2', isAnonymous: false })).resolves.toEqual([]);
   });
 
+  // Owner, 2026-11-13: a pinned post whose remix comes with a free recipe is on the web's shelf.
+  // The app's shelf keeps it out until the app can take the recipe for someone who signs up from
+  // the card: an installed app's guest lands in its creator, which cannot take it yet.
+  describe('a pinned post whose remix comes with a free recipe', () => {
+    const freeRecipe = { accessMode: 'free', allowRemix: true, priceUsdCents: 0 } as NonNullable<ShowcaseFeedItem['asset']>;
+    const withFreeRecipe = (id: string) => post(id, { canRemix: false, remixCapability: 'unlock_required', asset: freeRecipe });
+
+    beforeEach(() => {
+      pinsMock.pins = [{ postId: 'free' }, { postId: 'a' }, { postId: 'b' }, { postId: 'c' }];
+      tableResults.set('generations', { data: [generation('free'), generation('a'), generation('b'), generation('c')], error: null });
+      getShowcaseFeedItemsByPostIdsMock.mockResolvedValue([withFreeRecipe('free'), post('a'), post('b'), post('c')]);
+    });
+
+    it('is on the shelf the web pages draw, signed out and signed in, in its pinned place', async () => {
+      const { loadHomeShelf, loadHomeShelfCreationsWithPosts } = await import('@/lib/home-shelf-server');
+
+      expect((await loadHomeShelf()).map((item) => item.id)).toEqual(['free', 'a', 'b', 'c']);
+      const member = await loadHomeShelf({ viewerUserId: 'user-2', isAnonymous: false });
+      expect(member.filter((item) => item.kind === 'creation').map((item) => item.id)).toEqual(['free', 'a', 'b', 'c']);
+      // The creators' "Start from a post" reads the same shelf.
+      const startPosts = await loadHomeShelfCreationsWithPosts({ viewerUserId: 'user-2', isAnonymous: false });
+      expect(startPosts.map((creation) => creation.id)).toEqual(['free', 'a', 'b', 'c']);
+    });
+
+    it('is left off the shelf the app is sent, for a member, a guest and a signed-out reader alike', async () => {
+      const { loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
+      const creationIds = async (identity: { viewerUserId: string | null; isAnonymous: boolean }) => (
+        (await loadHomeShelfForApi(identity)).filter((item) => item.kind === 'creation').map((item) => item.id)
+      );
+
+      expect(await creationIds({ viewerUserId: 'user-2', isAnonymous: false })).toEqual(['a', 'b', 'c']);
+      expect(await creationIds({ viewerUserId: 'guest-1', isAnonymous: true })).toEqual(['a', 'b', 'c']);
+      expect(await creationIds({ viewerUserId: null, isAnonymous: false })).toEqual(['a', 'b', 'c']);
+    });
+
+    it('does not count toward the app’s shelf: too few other pins and the app draws none', async () => {
+      pinsMock.pins = [{ postId: 'free' }, { postId: 'a' }, { postId: 'b' }];
+      getShowcaseFeedItemsByPostIdsMock.mockResolvedValue([withFreeRecipe('free'), post('a'), post('b')]);
+      const { loadHomeShelf, loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
+
+      expect(await loadHomeShelfForApi({ viewerUserId: null, isAnonymous: false })).toEqual([]);
+      expect(await loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false })).toEqual([]);
+      expect((await loadHomeShelf()).map((item) => item.id)).toEqual(['free', 'a', 'b']);
+    });
+  });
+
   it('sends the app each creation with its post', async () => {
     const { loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
     tableResults.set('posts', { data: [], error: null });

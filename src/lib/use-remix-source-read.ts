@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useEffectEvent, useRef, useState, type RefObject } from 'react';
 
+import { claimFreeRecipe } from '@/lib/free-recipe-claim-client';
 import { hasCreatorEditedPromptDuringRemix, type RemixSourceBundle } from '@/lib/remix-source';
 import { fetchRemixSource, REMIX_RESTORE_WARNING } from '@/lib/remix-source-client';
+import { REMIX_UNLOCK_REQUIRED_CODE } from '@/lib/showcase-remix-client';
 import { supabase } from '@/lib/supabase';
 import { useUnmountSignal } from '@/lib/use-unmount-signal';
 
@@ -61,6 +63,23 @@ export type RemixReader = {
   pageToken: string | null;
 };
 
+/** The session a remix page asks as: the browser's own where it is the form's account, else the page's. */
+async function remixReaderToken({ formAccount, pageToken }: RemixReader): Promise<string | null> {
+  const { data: { session } } = await supabase.auth.getSession();
+  return session && session.user.id === formAccount ? session.access_token : pageToken;
+}
+
+/**
+ * Takes the post's free recipe for the form's account, under the session its reads go out under
+ * (`claimFreeRecipe`, with the funnel events of every free unlock). False where the recipe is not
+ * one to take for nothing (paid, retired, withheld from this reader) or the claim could not be made.
+ */
+async function takeFreeRecipe(postId: string, reader: RemixReader): Promise<boolean> {
+  const accessToken = await remixReaderToken(reader).catch(() => null);
+  if (!accessToken) return false;
+  return claimFreeRecipe(postId, accessToken).then(() => true, () => false);
+}
+
 /**
  * The remix's original as the form's account reads it (`fetchRemixSource`): with the browser client's
  * own session where it is that account, renewed as it nears its end, else with the page's. Back can draw
@@ -73,11 +92,10 @@ export type RemixReader = {
  */
 export async function readRemixSource(
   remix: { id: string; postId: string | null },
-  { formAccount, pageToken }: RemixReader,
+  reader: RemixReader,
   signal?: AbortSignal,
 ): Promise<RemixSourceBundle> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const accessToken = session && session.user.id === formAccount ? session.access_token : pageToken;
+  const accessToken = await remixReaderToken(reader);
   if (!accessToken) throw new Error('No session to read the remix with');
   if (signal?.aborted) throw new Error('The read was given up');
   return fetchRemixSource(remix, accessToken, signal);
@@ -96,6 +114,9 @@ export async function readRemixSource(
  * - **Its answer** is the form's while the form is on the page (`useUnmountSignal`, read when the
  *   answer lands), whichever run of the effect is the latest. An answer gated on an effect cleanup
  *   never fills the form under Strict Mode, which unmounts the first run before the read is back.
+ * - **A remix behind a free recipe** (a 403 with `REMIX_UNLOCK_REQUIRED`, for a remix that names its
+ *   post) is not a failure yet: the recipe is taken for the form's account and the remix read once
+ *   more, the notice's placeholder held throughout. A claim the server refuses leaves the refusal.
  * - **A failed read** (a 5xx, a 429, the network, a revoked session, or an answer the form could not
  *   take) is final until the creator asks again (`retry`): the token-driven re-read that #664 ended
  *   put the original over their work, up to an hour later. A refusal of the remix itself (a 403, a
@@ -150,7 +171,23 @@ export function useRemixSourceRead<Field extends string>({
       let answered = false;
       let retryable = false;
       try {
-        const bundle = await readRemixSource({ id: remixId, postId: remixPostId }, { formAccount, pageToken });
+        const remix = { id: remixId, postId: remixPostId };
+        const reader = { formAccount, pageToken };
+        let bundle: RemixSourceBundle;
+        try {
+          bundle = await readRemixSource(remix, reader);
+        } catch (refusal) {
+          // The remix is behind its post's recipe. Where that recipe costs nothing the page takes
+          // it and reads once more: opening a remix of a free recipe takes the recipe on the way,
+          // from a shelf card as from the feed card's Remix and the post page's (owner, 2026-11-12
+          // and 13). The server decides what is free: a paid, retired or withheld recipe refuses
+          // the claim, and the remix stays refused as it was.
+          const behindRecipe = (refusal as { code?: unknown } | null)?.code === REMIX_UNLOCK_REQUIRED_CODE;
+          if (!remixPostId || !behindRecipe || isGone()) throw refusal;
+          if (!(await takeFreeRecipe(remixPostId, reader))) throw refusal;
+          if (isGone()) return;
+          bundle = await readRemixSource(remix, reader);
+        }
         if (isGone()) return;
         takeSource(bundle, promptAtFirstRead);
         answered = true;
