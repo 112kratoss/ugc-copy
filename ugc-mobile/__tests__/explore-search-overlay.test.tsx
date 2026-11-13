@@ -174,7 +174,9 @@ const searchPublicContent = vi.fn<MagicbookletApiClient['searchPublicContent']>(
 // The typeahead's request. Nothing is asked until the field has the focus,
 // which only the typeahead's own cases give it.
 const suggestSearch = vi.fn<MagicbookletApiClient['suggestSearch']>();
-const api = { searchPublicContent, suggestSearch } as unknown as MagicbookletApiClient;
+// The starter (ideas before anything is typed): nothing, unless a case gives some.
+const searchStarter = vi.fn<MagicbookletApiClient['searchStarter']>(async () => ({ entities: [], creators: [], searches: [] }));
+const api = { searchPublicContent, suggestSearch, searchStarter } as unknown as MagicbookletApiClient;
 
 async function render(props: { visible: boolean; onClose: () => void }) {
   let tree: renderer.ReactTestRenderer | null = null;
@@ -865,7 +867,8 @@ describe('ExploreSearchOverlay search', () => {
 
       await press(instead);
       await advance(0);
-      expect(asked().at(-1)).toMatchObject({ type: 'posts', exact: true });
+      // (Then Top, once, for what an empty Posts would point to: finding 8.)
+      expect(asked().filter((params) => params.type === 'posts').at(-1)).toMatchObject({ type: 'posts', exact: true });
       expect(shownTexts(tree)).toContain('Showing results for “portriat” as typed');
       expect(shownTexts(tree)).not.toContain('Showing results for “portrait”');
       expect(saysNoResults(tree)).toBe(true);
@@ -1033,7 +1036,8 @@ describe('ExploreSearchOverlay search', () => {
     expect(searchPublicContent).not.toHaveBeenCalled();
     await typeQuery(tree, '\u{1F600}\u{1F600}\u{1F600}');
     await advance(300);
-    expect(requested()).toEqual([{ query: '\u{1F600}\u{1F600}\u{1F600}', type: 'posts' }]);
+    // Posts found nothing: Top is asked once for what another tab holds.
+    expect(requested()).toEqual([{ query: '\u{1F600}\u{1F600}\u{1F600}', type: 'posts' }, { query: '\u{1F600}\u{1F600}\u{1F600}', type: 'top' }]);
 
     await act(async () => tree.unmount());
   });
@@ -1052,7 +1056,7 @@ describe('ExploreSearchOverlay search', () => {
 
     await typeQuery(tree, '@abc');
     await advance(300);
-    expect(requested()).toEqual([{ query: '@abc', type: 'posts' }]);
+    expect(requested()).toEqual([{ query: '@abc', type: 'posts' }, { query: '@abc', type: 'top' }]);
     expect(tab(tree, 'Posts').props.accessibilityState).toEqual({ selected: true });
 
     await act(async () => tree.unmount());
@@ -1069,7 +1073,7 @@ describe('ExploreSearchOverlay search', () => {
 
     await typeQuery(tree, 'abc');
     await advance(300);
-    expect(requested()).toEqual([{ query: 'abc', type: 'posts' }]);
+    expect(requested()).toEqual([{ query: 'abc', type: 'posts' }, { query: 'abc', type: 'top' }]);
     expect(tab(tree, 'Posts').props.accessibilityState.selected).toBe(true);
 
     // A new word passes through two characters again and still lands on Posts.
@@ -1078,7 +1082,7 @@ describe('ExploreSearchOverlay search', () => {
     await advance(300);
     await typeQuery(tree, 'lake');
     await advance(300);
-    expect(requested().at(-1)).toEqual({ query: 'lake', type: 'posts' });
+    expect(requested().slice(-2)).toEqual([{ query: 'lake', type: 'posts' }, { query: 'lake', type: 'top' }]);
 
     await act(async () => tree.unmount());
   });
@@ -2442,7 +2446,8 @@ describe('ExploreSearchOverlay typeahead', () => {
     expect(list(tree)).toBeNull();
     await act(async () => { searchInput(tree).props.onChangeText('lum'); });
     expect(list(tree)).toBeNull();
-    expect(searchPublicContent.mock.calls.map(([params]) => `${params.query}|${params.type}`)).toEqual(['lum|posts']);
+    // Posts holds nothing here: Top is asked once for what another tab holds, and nothing more.
+    expect(searchPublicContent.mock.calls.map(([params]) => `${params.query}|${params.type}`)).toEqual(['lum|posts', 'lum|top']);
     // A real change is typing again.
     await typeQuery(tree, 'lumi');
     expect(list(tree)).not.toBeNull();

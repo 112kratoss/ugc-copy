@@ -457,6 +457,45 @@ export function searchSeeAllLabel(section: SearchTopSection): string {
   return `See all ${section}`;
 }
 
+/**
+ * An empty tab says what another tab holds, with a button to it (search UX
+ * audit 2026-11-13, finding 8): "No recipes for “nano”", "12 posts match",
+ * "See posts". The counts are Top's for the same query, which shows at most
+ * a section's size of each kind (SEARCH_TOP_SECTION_SIZES): a full section
+ * has more, said as "12+". The other tab is the first of posts, creators and
+ * recipes, other than this one, that holds something; none, and the tab says
+ * nothing found anywhere (searchNoResultsTitle).
+ */
+export function searchEmptyTabTitle(tab: SearchTopSection, query: string): string {
+  return `No ${tab} for “${query}”`;
+}
+
+const SEARCH_TAB_NOUNS: Readonly<Record<SearchTopSection, [string, string]>> = {
+  creators: ['creator', 'creators'],
+  posts: ['post', 'posts'],
+  recipes: ['recipe', 'recipes'],
+};
+
+export function searchOtherTabLine(tab: SearchTopSection, count: number): string {
+  const more = searchTopSectionHasMore(tab, count);
+  const [one, many] = SEARCH_TAB_NOUNS[tab];
+  return more ? `${count}+ ${many} match` : count === 1 ? `1 ${one} matches` : `${count} ${many} match`;
+}
+
+export function searchSeeTabLabel(tab: SearchTopSection): string {
+  return `See ${tab}`;
+}
+
+export const SEARCH_OTHER_TAB_ORDER: readonly SearchTopSection[] = ['posts', 'creators', 'recipes'];
+
+export function searchOtherTabPointer(
+  tab: SearchTopSection,
+  topCounts: Readonly<Record<SearchTopSection, number>>,
+): { tab: SearchTopSection; line: string; label: string } | null {
+  const other = SEARCH_OTHER_TAB_ORDER.find((kind) => kind !== tab && topCounts[kind] > 0);
+  return other ? { tab: other, line: searchOtherTabLine(other, topCounts[other]), label: searchSeeTabLabel(other) } : null;
+}
+
 function countWords(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }

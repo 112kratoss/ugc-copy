@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { SearchPostMasonry } from '@/components/search-post-masonry';
+import { SearchStarterSections } from '@/components/search-starter-sections';
 import { SearchTypeaheadList } from '@/components/search-typeahead-list';
 import { ChoiceChip, CreatorAvatar, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
 import { MotionView, useOverlayPresence } from '@/lib/motion';
@@ -73,7 +74,9 @@ import {
   searchInsteadLabel,
   searchMadeWithChipLabel,
   searchMadeWithRemoveLabel,
+  searchEmptyTabTitle,
   searchNoResultsTitle,
+  searchOtherTabPointer,
   searchRecentAgainLabel,
   searchRecentRemoveLabel,
   searchRecipeCardLabel,
@@ -90,6 +93,14 @@ import {
   type SearchFilters,
   type SearchTopSection,
 } from '@/lib/public-search-policy/public-search-policy';
+import {
+  SEARCH_STARTER_NO_RESULTS_HEADING,
+  searchStarterEntityAction,
+  type SearchStarterCreator,
+  type SearchStarterEntity,
+  type SearchStarterSearch,
+} from '@/lib/public-search-policy/search-starter';
+import { useSearchStarter } from '@/lib/use-search-starter';
 import { searchTypeaheadQuery, type SearchTypeaheadRow } from '@/lib/public-search-policy/search-typeahead';
 import {
   clearSearchHistory,
@@ -152,6 +163,14 @@ function offeredEntities(response: PublicSearchResponse, type: PublicSearchType,
   if (type !== 'top') return [];
   if (!searchTabRuns('posts', searchQueryLength(normalizeCreatorSearchQuery(query)))) return [];
   return response.entities ?? [];
+}
+
+// Top's results by kind, and the query and reading they are for.
+function topCountsOf(response: PublicSearchResponse): Record<SearchTopSection, number> {
+  return { creators: response.creators.items.length, posts: response.posts.items.length, recipes: response.recipes.items.length };
+}
+function topCountsKey(query: string, exact: boolean) {
+  return `${exact ? 'exact' : 'read'}:${query}`;
 }
 
 // Top draws every kind, the models and tools the query names among them; a
@@ -623,6 +642,11 @@ export function ExploreSearchOverlay({
   const [answer, setAnswer] = useState<SearchAnswer | null>(null);
   const [failure, setFailure] = useState<SearchFailure | null>(null);
   const [history, setHistory] = useState<string[]>([]);
+  // What Top found for a query, by kind: what an empty tab points to
+  // (searchOtherTabPointer). Kept from the Top answer on hand, or from the
+  // one request an empty tab may make for it (`askedTopFor`).
+  const [topCounts, setTopCounts] = useState<{ key: string; counts: Record<SearchTopSection, number> } | null>(null);
+  const askedTopFor = useRef<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const normalizedQuery = useMemo(() => normalizeSearchHistoryQuery(query), [query]);
   // What the screen draws: the start (nothing typed), the typing list, or the committed search's results.
@@ -803,6 +827,7 @@ export function ExploreSearchOverlay({
         return;
       }
       setAnswer({ key, scope, response: next, relatedAsked: askRelated });
+      if (type === 'top') setTopCounts({ key: topCountsKey(normalizedQuery, exact), counts: topCountsOf(next) });
       if (rememberOnAnswer.current === key) {
         rememberOnAnswer.current = null;
         if (shownResultCount(next, type, normalizedQuery) > 0) {
@@ -975,6 +1000,51 @@ export function ExploreSearchOverlay({
     if (announcedNotice && Platform.OS === 'ios') AccessibilityInfo.announceForAccessibility(announcedNotice);
   }, [announcedNotice]);
 
+  // Ideas to start from: before anything is typed, and when a search finds
+  // nothing. Asked once each time the search opens.
+  const starter = useSearchStarter(api, visible);
+  const startFromEntity = (entity: SearchStarterEntity) => {
+    // The search the starter counted: the entity's own query, on Posts, narrowed to it.
+    const action = searchStarterEntityAction(entity);
+    if (action.type !== 'entity') return;
+    setEntityLabels((current) => ({ ...current, [action.madeWith]: entity.label }));
+    setFiltersOffered(true);
+    setPickedFilters({ ...NO_SEARCH_FILTERS, madeWith: action.madeWith });
+    setPickedType('posts');
+    commitSearch(action.query);
+  };
+  const startFromCreator = (creator: SearchStarterCreator) => {
+    router.push(`/creators/${encodeURIComponent(creator.username)}` as never);
+  };
+  const startFromSearch = (search: SearchStarterSearch) => commitSearch(search.text);
+
+  // A search that found nothing on its tab says what another tab holds
+  // (finding 8), from Top's answer for the same query: the one on hand, or
+  // one request made for it, once. A filtered search keeps its own words.
+  const shownTab = type === 'top' ? null : type;
+  const emptyTab = showingResults
+    && response !== null
+    && shownResultCount(response, type, normalizedQuery) === 0
+    && searchSaysNoResults(countedLength)
+    && !hasSearchFilters(filters);
+  const countsKey = topCountsKey(normalizedQuery, exact);
+  const pointerCounts = topCounts?.key === countsKey ? topCounts.counts : null;
+  const asksTopCounts = emptyTab && shownTab !== null && pointerCounts === null;
+  useEffect(() => {
+    if (!asksTopCounts || askedTopFor.current === countsKey) return;
+    askedTopFor.current = countsKey;
+    // Not aborted with the screen's next render: its answer is kept by key, so
+    // coming back to the tab finds it.
+    api.searchPublicContent({ query: normalizedQuery, type: 'top', sort: 'top', filters: NO_SEARCH_FILTERS, exact, cursor: null, related: false })
+      .then((next) => setTopCounts({ key: countsKey, counts: topCountsOf(next) }))
+      .catch(() => {
+        // The pointer is an extra: the tab's own "No …" stands.
+      });
+  }, [api, asksTopCounts, countsKey, exact, normalizedQuery]);
+  const otherTab = emptyTab && shownTab !== null && pointerCounts ? searchOtherTabPointer(shownTab, pointerCounts) : null;
+  // Nothing anywhere: Top found nothing, or this tab and every other did.
+  const nothingFound = emptyTab && (shownTab === null || (pointerCounts !== null && otherTab === null));
+
   if (!mounted) return null;
 
   return (
@@ -1095,41 +1165,54 @@ export function ExploreSearchOverlay({
         ) : body !== 'results' || !requestKey ? (
           // Recent searches under an empty field only, as on the web: under a
           // typed query that is not searched they would read as its results.
-          history.length && body === 'start' ? (
-            <View style={{ gap: 12 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                {/* Gives way to the clear button at the largest text sizes, which it pushed off the screen. */}
-                <Text accessibilityRole="header" style={{ flexShrink: 1, color: theme.colors.text, fontSize: 17, fontWeight: '800' }}>{SEARCH_RECENTS_HEADING}</Text>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={SEARCH_RECENTS_CLEAR_ACTION_LABEL}
-                  onPress={() => void clearSearchHistory().then(() => setHistory([]))}
-                  style={{ minHeight: 44, justifyContent: 'center' }}
-                >
-                  <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '700' }}>{SEARCH_RECENTS_CLEAR_LABEL}</Text>
-                </Pressable>
-              </View>
-              {history.map((item) => (
-                <View key={item} style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={searchRecentAgainLabel(item)}
-                    onPress={() => searchAgain(item)}
-                    style={{ minHeight: 46, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}
-                  >
-                    <Clock3 size={appTheme.icon.sm} color={theme.colors.faint} />
-                    <Text numberOfLines={1} style={{ flex: 1, color: theme.colors.textSecondary, fontSize: 15 }}>{item}</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={searchRecentRemoveLabel(item)}
-                    onPress={() => void forgetSearchQuery(item).then(setHistory)}
-                    style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}
-                  >
-                    <X size={appTheme.icon.sm} color={theme.colors.faint} />
-                  </Pressable>
+          // Under them, the ideas to start from; with neither, the invitation.
+          body === 'start' && (history.length || starter) ? (
+            <View style={{ gap: 28 }}>
+              {history.length ? (
+                <View style={{ gap: 12 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                    {/* Gives way to the clear button at the largest text sizes, which it pushed off the screen. */}
+                    <Text accessibilityRole="header" style={{ flexShrink: 1, color: theme.colors.text, fontSize: 17, fontWeight: '800' }}>{SEARCH_RECENTS_HEADING}</Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={SEARCH_RECENTS_CLEAR_ACTION_LABEL}
+                      onPress={() => void clearSearchHistory().then(() => setHistory([]))}
+                      style={{ minHeight: 44, justifyContent: 'center' }}
+                    >
+                      <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '700' }}>{SEARCH_RECENTS_CLEAR_LABEL}</Text>
+                    </Pressable>
+                  </View>
+                  {history.map((item) => (
+                    <View key={item} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={searchRecentAgainLabel(item)}
+                        onPress={() => searchAgain(item)}
+                        style={{ minHeight: 46, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}
+                      >
+                        <Clock3 size={appTheme.icon.sm} color={theme.colors.faint} />
+                        <Text numberOfLines={1} style={{ flex: 1, color: theme.colors.textSecondary, fontSize: 15 }}>{item}</Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={searchRecentRemoveLabel(item)}
+                        onPress={() => void forgetSearchQuery(item).then(setHistory)}
+                        style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}
+                      >
+                        <X size={appTheme.icon.sm} color={theme.colors.faint} />
+                      </Pressable>
+                    </View>
+                  ))}
                 </View>
-              ))}
+              ) : null}
+              {starter ? (
+                <SearchStarterSections
+                  answer={starter}
+                  onEntity={startFromEntity}
+                  onCreator={startFromCreator}
+                  onSearch={startFromSearch}
+                />
+              ) : null}
             </View>
           ) : (
             <StatusBlock title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
@@ -1201,11 +1284,28 @@ export function ExploreSearchOverlay({
           <StatusBlock title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
         ) : response ? (
           <View style={{ gap: 25 }}>
-            <StatusBlock
-              title={searchNoResultsTitle(normalizedQuery)}
-              body={hasSearchFilters(filters) ? SEARCH_FILTERED_EMPTY_BODY : SEARCH_NO_RESULTS_BODY}
-            />
+            {otherTab && shownTab ? (
+              // This tab is empty, another is not: said, with the way there.
+              <View style={{ gap: 12 }}>
+                <StatusBlock title={searchEmptyTabTitle(shownTab, normalizedQuery)} body={otherTab.line} />
+                <SecondaryButton label={otherTab.label} onPress={() => setPickedType(otherTab.tab)} />
+              </View>
+            ) : (
+              <StatusBlock
+                title={shownTab && !nothingFound && !hasSearchFilters(filters) ? searchEmptyTabTitle(shownTab, normalizedQuery) : searchNoResultsTitle(normalizedQuery)}
+                body={hasSearchFilters(filters) ? SEARCH_FILTERED_EMPTY_BODY : SEARCH_NO_RESULTS_BODY}
+              />
+            )}
             <RelatedPosts posts={relatedPosts} columns={postColumns} onOpen={openPost} />
+            {nothingFound && starter ? (
+              <SearchStarterSections
+                answer={starter}
+                heading={SEARCH_STARTER_NO_RESULTS_HEADING}
+                onEntity={startFromEntity}
+                onCreator={startFromCreator}
+                onSearch={startFromSearch}
+              />
+            ) : null}
           </View>
         ) : (
           <View style={{ minHeight: 260, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
