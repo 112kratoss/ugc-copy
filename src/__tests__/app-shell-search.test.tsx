@@ -6,6 +6,7 @@ import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppShellSearch } from '@/components/AppShellSearch';
+import { clearSearchFieldHandoff, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
 
 // The top bar's search field: Enter searches on the search page as it always
 // did, and while the person types it offers what the search page's own box
@@ -90,6 +91,62 @@ describe('top bar search', () => {
     fireEvent.submit(box().closest('form')!);
     expect(submitted).toEqual(['/search?q=neon+city']);
     expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it('hands the focus on to the search page\'s field: Enter and a row that opens the search page mark it', async () => {
+    clearSearchFieldHandoff();
+    render(<AppShellSearch />);
+    expect(box()).toHaveAttribute('placeholder', 'Search');
+    fireEvent.change(box(), { target: { value: 'neon city' } });
+    fireEvent.submit(box().closest('form')!);
+    expect(searchFieldHandoffPending()).toBe(true);
+
+    clearSearchFieldHandoff();
+    await typeFocused('lum');
+    fireEvent.keyDown(box(), { key: 'ArrowDown' });
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(pushMock).toHaveBeenLastCalledWith('/creators/luma-studio');
+    // A profile is not the search page: nothing is handed on.
+    expect(searchFieldHandoffPending()).toBe(false);
+    clearSearchFieldHandoff();
+  });
+
+  it('hands nothing on for a leave the person cancels (review of #784)', () => {
+    clearSearchFieldHandoff();
+    // A page with unsaved work holds the leave and asks its question.
+    let leave: (() => void) | null = null;
+    holdMock.mockImplementation((navigate: () => void) => { leave = navigate; return true; });
+    render(<AppShellSearch />);
+    fireEvent.change(box(), { target: { value: 'neon city' } });
+    fireEvent.submit(box().closest('form')!);
+    expect(submitted).toEqual([]);
+    expect(searchFieldHandoffPending()).toBe(false);
+
+    // Confirmed, the leave submits again and is marked then.
+    holdMock.mockImplementation(() => false);
+    expect(leave).not.toBeNull();
+    leave!();
+    expect(submitted).toEqual(['/search?q=neon+city']);
+    expect(searchFieldHandoffPending()).toBe(true);
+    clearSearchFieldHandoff();
+  });
+
+  it('draws its own clear button, the browser\'s being hidden: it empties the field and keeps the focus there (review of #784)', () => {
+    render(<AppShellSearch />);
+    expect(screen.queryByRole('button', { name: 'Clear search' })).toBeNull();
+    box().focus();
+    fireEvent.change(box(), { target: { value: 'neon' } });
+    const clear = screen.getByRole('button', { name: 'Clear search' });
+    // A finger's target, and a button the keyboard reaches.
+    expect(clear.className).toContain('h-11');
+    expect(clear.className).toContain('w-11');
+    expect(clear.tabIndex).toBe(0);
+    // A pointer press does not take the focus from the field first.
+    expect(fireEvent.mouseDown(clear)).toBe(false);
+    fireEvent.click(clear);
+    expect(box()).toHaveValue('');
+    expect(box()).toHaveFocus();
+    expect(screen.queryByRole('button', { name: 'Clear search' })).toBeNull();
   });
 
   it('is a combobox that offers creators, models and tools, and completions while it has the focus', async () => {

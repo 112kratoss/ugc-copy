@@ -81,6 +81,7 @@
 @source "../components/RecoverableMediaVideo.tsx";
 @source "../components/ResourceMediaPreview.tsx";
 @source "../components/RouteAuthBoundary.tsx";
+@source "../components/search/search-field-handoff.ts";
 @source "../components/search/SearchTypeaheadList.tsx";
 @source "../components/search/use-search-typeahead.ts";
 @source "../components/SignInAgreement.tsx";

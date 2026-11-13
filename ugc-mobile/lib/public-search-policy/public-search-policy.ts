@@ -87,6 +87,53 @@ export function searchHistoryWith(current: readonly string[], query: string): st
     .slice(0, SEARCH_HISTORY_LIMIT);
 }
 
+/** What a person opened from a search's results: a kept search follows the reading that showed it. */
+export type SearchOpenedResult = 'creator' | 'post' | 'recipe';
+
+/**
+ * The query a search is kept under among the recent ones.
+ *
+ * The rule, in one sentence: the typed query, unless what the person
+ * committed to or opened was shown under the corrected spelling and found
+ * something ("portrait" for a search typed "portriat").
+ *
+ * - Opened a creator: creators are never corrected, so the typed query (the
+ *   one that finds that creator again).
+ * - Opened a post or a recipe: that section's correction, if it had one.
+ * - Committed (Enter, the Search key, a completion, leaving with results):
+ *   the section the tab leads with. On Top that is the posts when there are
+ *   any, else the recipes; Posts and Recipes are their own. A section read as
+ *   typed keeps the typed query: another section's correction never stands in.
+ * - Asked for as typed: always the typed query.
+ */
+export function searchHistoryQueryFor(search: {
+  /** The query as the client normalizes it. */
+  query: string;
+  type: SearchTabId;
+  /** The answer the search was committed on or opened from, or null while none has come. */
+  answer: {
+    correctedQuery?: SearchCorrectedQuery | null;
+    posts: { items: readonly unknown[] };
+    recipes: { items: readonly unknown[] };
+  } | null | undefined;
+  /** The person asked for the query as typed. */
+  exact: boolean;
+  /** What was opened, or null for a search committed without opening anything. */
+  opened?: SearchOpenedResult | null;
+}): string {
+  const { answer } = search;
+  if (search.exact || !answer?.correctedQuery) return search.query;
+  const section: 'posts' | 'recipes' | null = search.opened
+    ? (search.opened === 'creator' ? null : search.opened === 'post' ? 'posts' : 'recipes')
+    : search.type === 'posts' || search.type === 'recipes'
+      ? search.type
+      : search.type === 'top'
+        ? (answer.posts.items.length > 0 ? 'posts' : answer.recipes.items.length > 0 ? 'recipes' : null)
+        : null;
+  if (!section || answer[section].items.length === 0) return search.query;
+  return answer.correctedQuery[section] ?? search.query;
+}
+
 /** The list without one search, whatever its case. */
 export function searchHistoryWithout(current: readonly string[], query: string): string[] {
   const lowered = normalizeSearchHistoryQuery(query).toLocaleLowerCase();
@@ -307,11 +354,162 @@ export function searchExactNotice(query: string): string {
 /** The control beside that line, which goes back to the corrected reading. */
 export const SEARCH_CORRECTED_AGAIN_LABEL = 'Use suggested spelling';
 
+// ─── Tabs, orders and how long a query must be ───────────────────────────────
+
+/** The tabs of a search, in the order both clients draw them. */
+export const SEARCH_TABS = [
+  { id: 'top', label: 'Top' },
+  { id: 'creators', label: 'Creators' },
+  { id: 'posts', label: 'Posts' },
+  { id: 'recipes', label: 'Recipes' },
+] as const;
+export type SearchTabId = (typeof SEARCH_TABS)[number]['id'];
+
+/**
+ * The orders of a Posts or Recipes search. The values are the `sort`
+ * parameter's and do not change; "Best match" names the ranked order, which
+ * was called "Top" beside a tab of the same name.
+ */
+export const SEARCH_SORT_OPTIONS = [
+  { value: 'top', label: 'Best match' },
+  { value: 'latest', label: 'Latest' },
+] as const;
+
+/** The server's minimums (src/lib/public-search.ts), counted as searchQueryLength counts. */
+export const SEARCH_MIN_CREATOR_QUERY_LENGTH = 2;
+export const SEARCH_MIN_CONTENT_QUERY_LENGTH = 3;
+
+/**
+ * Whether a tab is searched for a query of this length, counted without a
+ * leading "@" (normalizeCreatorSearchQuery): Top and Creators from two
+ * characters, Posts and Recipes from three. Below that the tab shows the idle
+ * state and asks nothing: no tab is dimmed, and none is switched for another.
+ */
+export function searchTabRuns(type: SearchTabId, queryLength: number): boolean {
+  return queryLength >= (type === 'posts' || type === 'recipes'
+    ? SEARCH_MIN_CONTENT_QUERY_LENGTH
+    : SEARCH_MIN_CREATOR_QUERY_LENGTH);
+}
+
+/**
+ * Whether an answer that found nothing is said to have found nothing. Under
+ * three characters only creators are looked for, and half a word is no
+ * verdict: the idle state stands instead of "No results".
+ */
+export function searchSaysNoResults(queryLength: number): boolean {
+  return queryLength >= SEARCH_MIN_CONTENT_QUERY_LENGTH;
+}
+
+/**
+ * How many of each kind a Top answer holds at most (the server's takes,
+ * public-search-service.ts reads them from here). Top carries no cursor, so a
+ * full section is the sign it has more on its own tab.
+ */
+export const SEARCH_TOP_SECTION_SIZES = { creators: 5, posts: 12, recipes: 6 } as const;
+export type SearchTopSection = keyof typeof SEARCH_TOP_SECTION_SIZES;
+
+export function searchTopSectionHasMore(section: SearchTopSection, shown: number): boolean {
+  return shown >= SEARCH_TOP_SECTION_SIZES[section];
+}
+
 // ─── What the clients say around them ────────────────────────────────────────
+
+/**
+ * The text in every search field: the web page's, the top bar's and the app's.
+ * Plain "Search": it names no product, so the clients agree without the
+ * question of how the app's wordmark is spelled (hig-branding.test.ts).
+ */
+export const SEARCH_PLACEHOLDER = 'Search';
+/** What every search field is called to a screen reader. */
+export const SEARCH_FIELD_LABEL = 'Search creators, posts, and recipes';
+export const SEARCH_CLEAR_FIELD_LABEL = 'Clear search';
+
+/** Before a search: an invitation, never a rule about how much to type. */
+export const SEARCH_IDLE_TITLE = 'Find creators, posts and recipes';
+export const SEARCH_IDLE_BODY = 'Try a creator’s name, a model, or an idea like “neon portrait”.';
+
+export function searchNoResultsTitle(query: string): string {
+  return `No results for “${query}”`;
+}
+export const SEARCH_NO_RESULTS_BODY = 'Try a shorter phrase, check the spelling, or search for a creator handle.';
+
+/** A search that failed: the title says what happened, the body what to do, the button does it. */
+export const SEARCH_FAILED_TITLE = 'Search did not load';
+export const SEARCH_FAILED_BODY = 'Something went wrong.';
+export const SEARCH_OFFLINE_BODY = 'Check your connection.';
+export function searchBusyBody(retryAfterSeconds: number | null): string {
+  return retryAfterSeconds ? `Too many searches at once. Wait ${retryAfterSeconds} s.` : 'Too many searches at once. Wait a moment.';
+}
+export const SEARCH_RETRY_LABEL = 'Try again';
+/** A failure under results still on screen: one line, title and body together. */
+export function searchFailedLine(body: string): string {
+  return `${SEARCH_FAILED_TITLE}. ${body}`;
+}
+
+export const SEARCH_SEARCHING_LABEL = 'Searching…';
+export const SEARCH_SHOW_MORE_LABEL = 'Show more';
+export const SEARCH_LOADING_MORE_LABEL = 'Loading…';
+
+/** Beside a Top section's heading: opens the section's own tab. */
+export const SEARCH_SEE_ALL_LABEL = 'See all';
+/** What both "See all" controls of a Top section say: the link by its heading and the button under its last row. */
+export function searchSeeAllLabel(section: SearchTopSection): string {
+  return `See all ${section}`;
+}
+
+function countWords(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+function sentence(text: string | null | undefined): string {
+  const clean = (text ?? '').replace(/\s+/g, ' ').trim();
+  return clean ? `. ${clean}` : '';
+}
+
+/**
+ * What a result says to a screen reader: everything its card shows a sighted
+ * person, in an order and with pauses that read as words, where the card's
+ * text run together read "Untitled Creationlibath4 saves1".
+ */
+export function searchPostCardLabel(post: { title: string; creatorName: string; saveCount: number; commentCount: number }): string {
+  return `Open post ${post.title} by ${post.creatorName}, ${countWords(post.saveCount, 'save', 'saves')}, ${countWords(post.commentCount, 'comment', 'comments')}`;
+}
+export function searchRecipeCardLabel(recipe: { title: string; sellerName: string; price: string; summary?: string | null }): string {
+  return `Open recipe ${recipe.title} by ${recipe.sellerName}, ${recipe.price}${sentence(recipe.summary)}`;
+}
+export function searchCreatorCardLabel(creator: {
+  displayName: string;
+  username: string;
+  isFollowing: boolean;
+  publicPostCount: number;
+  bio?: string | null;
+}): string {
+  return `Open ${creator.displayName}'s profile, @${creator.username}${creator.isFollowing ? ', following' : ''}, ${countWords(creator.publicPostCount, 'post', 'posts')}${sentence(creator.bio)}`;
+}
+
+/**
+ * The page's title while a query is searched: "nano · Search", from the two
+ * characters a search starts at (counted as searchQueryLength counts, without a
+ * leading "@"), so the server's title and the page's agree. The site's own
+ * suffix is the page's to add.
+ */
+export function searchDocumentTitle(query: string): string {
+  const normalized = normalizeSearchHistoryQuery(query);
+  return searchQueryLength(normalizeCreatorSearchQuery(normalized)) >= SEARCH_MIN_CREATOR_QUERY_LENGTH
+    ? `${normalized} · Search`
+    : 'Search';
+}
 
 export const SEARCH_ENTITIES_HEADING = 'Models and tools';
 export const SEARCH_RECENTS_HEADING = 'Recent searches';
 export const SEARCH_RECENTS_CLEAR_LABEL = 'Clear all';
+export const SEARCH_RECENTS_CLEAR_ACTION_LABEL = 'Clear all recent searches';
+export function searchRecentAgainLabel(query: string): string {
+  return `Search again for ${query}`;
+}
+export function searchRecentRemoveLabel(query: string): string {
+  return `Remove ${query} from recent searches`;
+}
 export const SEARCH_FILTERS_GROUP_LABEL = 'Filter posts';
 export const SEARCH_FILTERS_CLEAR_LABEL = 'Clear filters';
 /** A filtered Posts search that found nothing: the filters are the first thing to try without. */

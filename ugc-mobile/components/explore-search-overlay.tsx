@@ -28,12 +28,31 @@ import { ApiError, type MagicbookletApiClient } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import {
   NO_SEARCH_FILTERS,
+  SEARCH_CLEAR_FIELD_LABEL,
   SEARCH_CORRECTED_AGAIN_LABEL,
   SEARCH_ENTITIES_HEADING,
+  SEARCH_FAILED_BODY,
+  SEARCH_FAILED_TITLE,
+  SEARCH_FIELD_LABEL,
   SEARCH_FILTERED_EMPTY_BODY,
   SEARCH_FILTERS_CLEAR_LABEL,
   SEARCH_FILTERS_GROUP_LABEL,
   SEARCH_FILTER_SWITCHES,
+  SEARCH_IDLE_BODY,
+  SEARCH_IDLE_TITLE,
+  SEARCH_LOADING_MORE_LABEL,
+  SEARCH_NO_RESULTS_BODY,
+  SEARCH_OFFLINE_BODY,
+  SEARCH_PLACEHOLDER,
+  SEARCH_RECENTS_CLEAR_ACTION_LABEL,
+  SEARCH_RECENTS_CLEAR_LABEL,
+  SEARCH_RECENTS_HEADING,
+  SEARCH_RETRY_LABEL,
+  SEARCH_SEARCHING_LABEL,
+  SEARCH_SEE_ALL_LABEL,
+  SEARCH_SHOW_MORE_LABEL,
+  SEARCH_SORT_OPTIONS,
+  SEARCH_TABS,
   hasSearchFilters,
   isSearchFilterSwitchOn,
   parseSearchEntityId,
@@ -44,18 +63,33 @@ import {
   searchEntityCountLabel,
   searchEntityId,
   searchEntityKindLabel,
+  searchBusyBody,
+  searchCreatorCardLabel,
   searchExactNotice,
+  searchFailedLine,
   searchFilterKey,
+  searchHistoryQueryFor,
+  type SearchOpenedResult,
   searchInsteadLabel,
   searchMadeWithChipLabel,
   searchMadeWithRemoveLabel,
+  searchNoResultsTitle,
+  searchPostCardLabel,
+  searchRecentAgainLabel,
+  searchRecentRemoveLabel,
+  searchRecipeCardLabel,
   searchRelatedApplies,
   searchRelatedFollowUpDelay,
   searchRelatedPosts,
   searchRelatedStatus,
+  searchSaysNoResults,
+  searchSeeAllLabel,
+  searchTabRuns,
+  searchTopSectionHasMore,
   toggleSearchFilterSwitch,
   type SearchEntity,
   type SearchFilters,
+  type SearchTopSection,
 } from '@/lib/public-search-policy/public-search-policy';
 import type { SearchTypeaheadRow } from '@/lib/public-search-policy/search-typeahead';
 import {
@@ -67,6 +101,7 @@ import {
   rememberSearchQuery,
   searchQueryLength,
 } from '@/lib/search-history';
+import { searchPostGridCellWidth, searchPostGridColumns } from '@/lib/search-post-grid';
 import { isTextOnlyShowcasePost } from '@/lib/showcase-display';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { buildTextPostPlate, textPostPlateUnderCaption } from '@/lib/text-post-plate-view-model';
@@ -84,25 +119,7 @@ import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useSearchTypeahead } from '@/lib/use-search-typeahead';
 import { formatUnlockCreditPrice } from '@/lib/pricing';
 
-const SEARCH_TYPES: Array<{ id: PublicSearchType; label: string }> = [
-  { id: 'top', label: 'Top' },
-  { id: 'creators', label: 'Creators' },
-  { id: 'posts', label: 'Posts' },
-  { id: 'recipes', label: 'Recipes' },
-];
-
-// The server's minimums, counted in characters (searchQueryLength: an emoji
-// is one) on the query without its leading @ (normalizeCreatorSearchQuery):
-// creators from two characters, posts and recipes from three.
-const MIN_CREATOR_QUERY_LENGTH = 2;
-const MIN_CONTENT_QUERY_LENGTH = 3;
-// The order of a Posts or Recipes search, as the web's search page offers it.
-const SEARCH_SORTS: Array<{ value: PublicSearchSort; label: string }> = [
-  { value: 'top', label: 'Top' },
-  { value: 'latest', label: 'Latest' },
-];
 const SEARCH_DEBOUNCE_MS = 300;
-const SEARCH_LENGTH_HINT = 'Search creators from two characters, or use three characters to discover posts and recipes.';
 
 // `scope` is the query and tab an answer was asked for, whatever the order.
 // `relatedAsked`: the answer was asked for with related posts, or has been
@@ -130,7 +147,7 @@ function searchScope(query: string, type: PublicSearchType) {
 // is searched for (three characters), since pressing one opens Posts.
 function offeredEntities(response: PublicSearchResponse, type: PublicSearchType, query: string) {
   if (type !== 'top') return [];
-  if (searchQueryLength(normalizeCreatorSearchQuery(query)) < MIN_CONTENT_QUERY_LENGTH) return [];
+  if (!searchTabRuns('posts', searchQueryLength(normalizeCreatorSearchQuery(query)))) return [];
   return response.entities ?? [];
 }
 
@@ -158,18 +175,14 @@ function describeSearchFailure(error: unknown): Omit<SearchFailure, 'key'> {
     // Retry waits it out.
     if (error.status === 429) {
       const retryAfterSeconds = retryAfterSecondsOf(error.details);
-      return {
-        message: retryAfterSeconds ? `Search is busy. Try again in ${retryAfterSeconds} s.` : 'Search is busy. Try again shortly.',
-        retryAfterSeconds,
-      };
+      return { message: searchBusyBody(retryAfterSeconds), retryAfterSeconds };
     }
-    if (error.status === 400) return { message: SEARCH_LENGTH_HINT, retryAfterSeconds: null };
     // Status 0 is the client's own: no answer at all, its timeout included.
     if (error.status === 0 || error.status >= 500) {
-      return { message: 'Search could not be loaded. Check your connection and try again.', retryAfterSeconds: null };
+      return { message: SEARCH_OFFLINE_BODY, retryAfterSeconds: null };
     }
   }
-  return { message: 'Search could not be loaded.', retryAfterSeconds: null };
+  return { message: SEARCH_FAILED_BODY, retryAfterSeconds: null };
 }
 
 function postPreview(item: ShowcaseFeedItem) {
@@ -181,12 +194,10 @@ function postPreview(item: ShowcaseFeedItem) {
 
 function SearchTab({
   active,
-  disabled,
   label,
   onPress,
 }: {
   active: boolean;
-  disabled: boolean;
   label: string;
   onPress: () => void;
 }) {
@@ -194,15 +205,14 @@ function SearchTab({
   return (
     <Pressable
       accessibilityRole="tab"
-      accessibilityState={{ selected: active, disabled }}
-      disabled={disabled}
+      accessibilityState={{ selected: active }}
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: 44,
         justifyContent: 'center',
         borderRadius: appTheme.radii.pill,
         backgroundColor: active ? theme.colors.text : 'transparent',
-        opacity: disabled ? 0.35 : pressed ? appTheme.opacity.pressed : 1,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: 17,
       })}
     >
@@ -215,16 +225,19 @@ function SearchTab({
 
 // A kind's heading and, on its own tab, the order its results are in. The
 // control is the app's segmented control as tabs, each order sized to its
-// word, as the comment order is beside its sheet's title.
+// word, as the comment order is beside its sheet's title. On Top, "See all"
+// opens the kind's own tab, as on the web.
 function ResultsHeading({
   title,
   sort,
   onSortChange,
+  seeAll,
 }: {
   title: 'Creators' | 'Posts' | 'Recipes' | typeof SEARCH_ENTITIES_HEADING | typeof SEARCH_RELATED_HEADING;
   /** Null where the results have one order, or the server has not said it reads another. */
   sort: PublicSearchSort | null;
   onSortChange: (sort: PublicSearchSort) => void;
+  seeAll?: { section: SearchTopSection; onPress: () => void } | null;
 }) {
   const theme = useAppTheme();
   return (
@@ -235,13 +248,29 @@ function ResultsHeading({
           role="tab"
           fill={false}
           accessibilityLabel={`Sort ${title.toLowerCase()}`}
-          options={SEARCH_SORTS}
+          options={SEARCH_SORT_OPTIONS}
           value={sort}
           onChange={onSortChange}
         />
+      ) : seeAll ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={searchSeeAllLabel(seeAll.section)}
+          onPress={seeAll.onPress}
+          hitSlop={4}
+          style={({ pressed }) => ({ minHeight: 44, justifyContent: 'center', paddingHorizontal: 4, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+        >
+          <Text style={{ color: theme.colors.primary, fontSize: 14, fontWeight: '700' }}>{SEARCH_SEE_ALL_LABEL}</Text>
+        </Pressable>
       ) : null}
     </View>
   );
+}
+
+// Under a full Top section, which is when its tab has more (Top carries no
+// cursor: searchTopSectionHasMore): the way to the rest, the width of the results.
+function SeeAllButton({ section, onPress }: { section: SearchTopSection; onPress: () => void }) {
+  return <SecondaryButton label={searchSeeAllLabel(section)} onPress={onPress} />;
 }
 
 // A state, not a control: the row opens the profile, where Follow lives. It
@@ -416,7 +445,7 @@ function CreatorRow({ creator, onOpen }: { creator: CreatorSearchResult; onOpen:
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Open ${creator.displayName}'s profile${creator.isFollowing ? ', following' : ''}`}
+      accessibilityLabel={searchCreatorCardLabel(creator)}
       // Their page is read once the finger has rested here, never for a scroll
       // of the results that starts on the row (`creatorProfilePress`).
       {...creatorProfilePress(creator.username, () => {
@@ -459,7 +488,7 @@ function PostRow({ item, onOpen }: { item: ShowcaseFeedItem; onOpen: () => void 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Open post ${item.title}`}
+      accessibilityLabel={searchPostCardLabel({ title: item.title, creatorName: item.creator.name, saveCount: item.saveCount, commentCount: item.commentCount })}
       onPress={() => {
         onOpen();
         router.push(`/post/${encodeURIComponent(item.id)}` as never);
@@ -518,10 +547,11 @@ function RecipeRow({ recipe, onOpen }: { recipe: RecipeSearchResult; onOpen: () 
   // Only an image post may fall back to its media URL: a video's is not an image.
   const preview = recipe.post?.mediaPreviewUrl
     ?? (recipe.post?.mediaKind === 'image' ? recipe.post.mediaUrl : null);
+  const price = recipe.accessMode === 'free' ? 'Free' : formatUnlockCreditPrice(recipe.priceUsdCents);
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Open recipe ${recipe.title}`}
+      accessibilityLabel={searchRecipeCardLabel({ title: recipe.title, sellerName: recipe.seller.name, price, summary: recipe.summary || recipe.previewText })}
       onPress={() => {
         onOpen();
         // A recipe is read and bought on its post, as on the web, whose search
@@ -559,9 +589,7 @@ function RecipeRow({ recipe, onOpen }: { recipe: RecipeSearchResult; onOpen: () 
         {/* Who sells it, on the price's line, as the web card has it. */}
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.faint, fontSize: 12 }}>{recipe.seller.name}</Text>
-          <Text style={{ color: theme.colors.success, fontSize: 12, fontWeight: '800' }}>
-            {recipe.accessMode === 'free' ? 'Free' : formatUnlockCreditPrice(recipe.priceUsdCents)}
-          </Text>
+          <Text style={{ color: theme.colors.success, fontSize: 12, fontWeight: '800' }}>{price}</Text>
         </View>
       </View>
     </Pressable>
@@ -572,13 +600,13 @@ const NO_RELATED_POSTS: readonly ShowcaseFeedItem[] = [];
 
 // Posts that mean what the query says without holding its words: the cards
 // the search's own posts are, under everything the search itself found.
-function RelatedPosts({ posts, onOpen }: { posts: readonly ShowcaseFeedItem[]; onOpen: () => void }) {
+function RelatedPosts({ posts, cellWidth, onOpen }: { posts: readonly ShowcaseFeedItem[]; cellWidth: '100%' | '48%'; onOpen: () => void }) {
   if (posts.length === 0) return null;
   return (
     <View testID="search-related-posts" style={{ gap: 10 }}>
       <ResultsHeading title={SEARCH_RELATED_HEADING} sort={null} onSortChange={noSortChange} />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-        {posts.map((post) => <View key={post.id} style={{ width: '48%' }}><PostRow item={post} onOpen={onOpen} /></View>)}
+        {posts.map((post) => <View key={post.id} style={{ width: cellWidth }}><PostRow item={post} onOpen={onOpen} /></View>)}
       </View>
     </View>
   );
@@ -600,7 +628,9 @@ export function ExploreSearchOverlay({
   const { user } = useAuth();
   const canFollow = Boolean(user);
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width, fontScale } = useWindowDimensions();
+  // Two posts across, one at the accessibility text sizes (search-post-grid.ts).
+  const postCellWidth = searchPostGridCellWidth(searchPostGridColumns(fontScale));
   const isFocused = useIsFocused();
   // The floating tab bar stays mounted above this overlay, so the results list
   // needs the same clearance the feed itself uses or the last row never
@@ -632,8 +662,8 @@ export function ExploreSearchOverlay({
   const [query, setQuery] = useState('');
   // The field has the focus, which on a phone is the keyboard being up.
   const [inputFocused, setInputFocused] = useState(false);
-  // The tab the person picked. A query long enough for creators but not for
-  // posts and recipes runs, and shows, as Creators; the pick comes back after.
+  // The tab the person picked. It stays picked whatever the length of the
+  // query: a tab not searched yet shows the idle state (searchTabRuns).
   const [pickedType, setPickedType] = useState<PublicSearchType>('top');
   // The order picked for Posts and Recipes, kept across the two tabs.
   const [pickedSort, setPickedSort] = useState<PublicSearchSort>('top');
@@ -654,8 +684,7 @@ export function ExploreSearchOverlay({
   const [loadingMore, setLoadingMore] = useState(false);
   const normalizedQuery = useMemo(() => normalizeSearchHistoryQuery(query), [query]);
   const countedLength = searchQueryLength(normalizeCreatorSearchQuery(normalizedQuery));
-  const creatorsOnly = countedLength >= MIN_CREATOR_QUERY_LENGTH && countedLength < MIN_CONTENT_QUERY_LENGTH;
-  const type: PublicSearchType = creatorsOnly && isContentType(pickedType) ? 'creators' : pickedType;
+  const type: PublicSearchType = pickedType;
   // The Top tab and Creators have one order, whatever was picked on another tab.
   const sort: PublicSearchSort = isContentType(type) ? pickedSort : 'top';
   // A visitor or a guest follows nobody, and the server would leave the filter
@@ -669,8 +698,8 @@ export function ExploreSearchOverlay({
   // Creators are never corrected: there the exact reading changes nothing and is not asked for.
   const exact = type !== 'creators' && exactQuery !== null && exactQuery === normalizedQuery;
   const narrowing = searchFilterKey(filters, exact);
-  // From the creator minimum on, the tab in effect always meets its own.
-  const requestKey = countedLength >= MIN_CREATOR_QUERY_LENGTH ? searchKey(normalizedQuery, type, sort, narrowing) : null;
+  // Top and Creators from two characters, Posts and Recipes from three.
+  const requestKey = searchTabRuns(type, countedLength) ? searchKey(normalizedQuery, type, sort, narrowing) : null;
   const response = answer && answer.key === requestKey ? answer.response : null;
   const shownFailure = failure && failure.key === requestKey ? failure : null;
   // The answer on hand for this query and tab in the other order, or under
@@ -729,16 +758,26 @@ export function ExploreSearchOverlay({
   const rememberQuery = useCallback((value: string) => {
     void rememberSearchQuery(value).then(setHistory);
   }, []);
+  // Kept under the typed query, unless what the person committed to or
+  // opened was shown under the corrected spelling (searchHistoryQueryFor).
+  const historyQueryFor = (opened: SearchOpenedResult | null) => searchHistoryQueryFor({
+    query: normalizedQuery,
+    type,
+    answer: response,
+    exact,
+    opened,
+  });
+  const historyQuery = historyQueryFor(null);
 
   const requestClose = useCallback(() => {
     // Leaving with results on screen keeps the query; one that found nothing,
     // or is still unanswered, is not kept.
-    if (shownResponse && resultCount > 0) rememberQuery(normalizedQuery);
+    if (shownResponse && resultCount > 0) rememberQuery(historyQuery);
     // Dismissing the keyboard alongside the fade keeps close reading as one
     // gesture instead of two staggered ones.
     Keyboard.dismiss();
     onClose();
-  }, [normalizedQuery, onClose, rememberQuery, resultCount, shownResponse]);
+  }, [historyQuery, onClose, rememberQuery, resultCount, shownResponse]);
 
   // Android's back key closes the search only while this screen is the one
   // showing. A result tap pushes the post over the tabs with the search still
@@ -811,7 +850,9 @@ export function ExploreSearchOverlay({
       setAnswer({ key, scope, response: next, relatedAsked: askRelated });
       if (rememberOnAnswer.current === key) {
         rememberOnAnswer.current = null;
-        if (shownResultCount(next, type, normalizedQuery) > 0) rememberQuery(normalizedQuery);
+        if (shownResultCount(next, type, normalizedQuery) > 0) {
+          rememberQuery(searchHistoryQueryFor({ query: normalizedQuery, type, answer: next, exact }));
+        }
       }
     } catch (requestError) {
       if (controller.signal.aborted || (requestError instanceof Error && requestError.name === 'AbortError')) return;
@@ -873,10 +914,13 @@ export function ExploreSearchOverlay({
       rememberOnAnswer.current = requestKey;
       return;
     }
-    if (resultCount > 0) rememberQuery(normalizedQuery);
+    if (resultCount > 0) rememberQuery(historyQuery);
   };
 
-  const openResult = () => rememberQuery(normalizedQuery);
+  const openResult = (opened: SearchOpenedResult) => rememberQuery(historyQueryFor(opened));
+  const openCreator = () => openResult('creator');
+  const openPost = () => openResult('post');
+  const openRecipe = () => openResult('recipe');
 
   // An entity pressed among the results: Posts, narrowed to it and to nothing
   // else, named at once. Its count is of the posts this query finds with it,
@@ -987,7 +1031,7 @@ export function ExploreSearchOverlay({
             <Search size={appTheme.icon.default} color={theme.colors.muted} />
             <TextInput
               ref={inputRef}
-              accessibilityLabel="Search creators, posts, and recipes"
+              accessibilityLabel={SEARCH_FIELD_LABEL}
               autoCapitalize="none"
               autoCorrect={false}
               enterKeyHint="search"
@@ -996,7 +1040,7 @@ export function ExploreSearchOverlay({
               onChangeText={setQuery}
               onFocus={() => setInputFocused(true)}
               onSubmitEditing={submitSearch}
-              placeholder="Search Magicbooklet"
+              placeholder={SEARCH_PLACEHOLDER}
               placeholderTextColor={theme.colors.faint}
               returnKeyType="search"
               value={query}
@@ -1005,7 +1049,7 @@ export function ExploreSearchOverlay({
             {query ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Clear search"
+                accessibilityLabel={SEARCH_CLEAR_FIELD_LABEL}
                 onPress={() => setQuery('')}
                 style={{ minWidth: 44, minHeight: 44, marginRight: -13, alignItems: 'center', justifyContent: 'center' }}
               >
@@ -1015,11 +1059,10 @@ export function ExploreSearchOverlay({
           </View>
         </View>
         <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 3, paddingTop: 10 }} accessibilityRole="tablist">
-          {SEARCH_TYPES.map((item) => (
+          {SEARCH_TABS.map((item) => (
             <SearchTab
               key={item.id}
               active={type === item.id}
-              disabled={creatorsOnly && isContentType(item.id)}
               label={item.label}
               onPress={() => setPickedType(item.id)}
             />
@@ -1060,24 +1103,26 @@ export function ExploreSearchOverlay({
           <ReadingNotice line={exactNotice} actionLabel={SEARCH_CORRECTED_AGAIN_LABEL} onAction={() => setExactQuery(null)} />
         ) : null}
         {!requestKey ? (
-          history.length ? (
+          // Recent searches under an empty field only, as on the web: under a
+          // typed query that is not searched yet they read as its results.
+          history.length && query === '' ? (
             <View style={{ gap: 12 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text style={{ color: theme.colors.text, fontSize: 17, fontWeight: '800' }}>Recent searches</Text>
+                <Text accessibilityRole="header" style={{ color: theme.colors.text, fontSize: 17, fontWeight: '800' }}>{SEARCH_RECENTS_HEADING}</Text>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Clear all recent searches"
+                  accessibilityLabel={SEARCH_RECENTS_CLEAR_ACTION_LABEL}
                   onPress={() => void clearSearchHistory().then(() => setHistory([]))}
                   style={{ minHeight: 44, justifyContent: 'center' }}
                 >
-                  <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '700' }}>Clear</Text>
+                  <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '700' }}>{SEARCH_RECENTS_CLEAR_LABEL}</Text>
                 </Pressable>
               </View>
               {history.map((item) => (
                 <View key={item} style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel={`Search again for ${item}`}
+                    accessibilityLabel={searchRecentAgainLabel(item)}
                     onPress={() => { settleOn(normalizeSearchHistoryQuery(item)); setQuery(item); }}
                     style={{ minHeight: 46, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}
                   >
@@ -1086,7 +1131,7 @@ export function ExploreSearchOverlay({
                   </Pressable>
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel={`Remove ${item} from recent searches`}
+                    accessibilityLabel={searchRecentRemoveLabel(item)}
                     onPress={() => void forgetSearchQuery(item).then(setHistory)}
                     style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}
                   >
@@ -1096,7 +1141,7 @@ export function ExploreSearchOverlay({
               ))}
             </View>
           ) : (
-            <StatusBlock title="Find your next idea" body={SEARCH_LENGTH_HINT} />
+            <StatusBlock title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
           )
         ) : shownResponse && resultCount > 0 ? (
           <View style={{ gap: 25 }}>
@@ -1110,32 +1155,41 @@ export function ExploreSearchOverlay({
             ) : null}
             {(type === 'top' || type === 'creators') && shownResponse.creators.items.length ? (
               <View style={{ gap: 10 }}>
-                <ResultsHeading title="Creators" sort={null} onSortChange={setPickedSort} />
-                {shownResponse.creators.items.map((creator) => <CreatorRow key={creator.id} creator={creator} onOpen={openResult} />)}
+                <ResultsHeading title="Creators" sort={null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'creators', onPress: () => setPickedType('creators') } : null} />
+                {shownResponse.creators.items.map((creator) => <CreatorRow key={creator.id} creator={creator} onOpen={openCreator} />)}
+                {type === 'top' && searchTopSectionHasMore('creators', shownResponse.creators.items.length)
+                  ? <SeeAllButton section="creators" onPress={() => setPickedType('creators')} />
+                  : null}
               </View>
             ) : null}
             {(type === 'top' || type === 'posts') && shownResponse.posts.items.length ? (
               <View style={{ gap: 10 }}>
-                <ResultsHeading title="Posts" sort={type === 'posts' ? shownSort : null} onSortChange={setPickedSort} />
+                <ResultsHeading title="Posts" sort={type === 'posts' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'posts', onPress: () => setPickedType('posts') } : null} />
                 <View
                   accessibilityState={{ busy: reordering }}
                   style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, opacity: reordering ? appTheme.opacity.disabled : 1 }}
                 >
-                  {shownResponse.posts.items.map((post) => <View key={post.id} style={{ width: '48%' }}><PostRow item={post} onOpen={openResult} /></View>)}
+                  {shownResponse.posts.items.map((post) => <View key={post.id} style={{ width: postCellWidth }}><PostRow item={post} onOpen={openPost} /></View>)}
                 </View>
+                {type === 'top' && searchTopSectionHasMore('posts', shownResponse.posts.items.length)
+                  ? <SeeAllButton section="posts" onPress={() => setPickedType('posts')} />
+                  : null}
               </View>
             ) : null}
             {(type === 'top' || type === 'recipes') && shownResponse.recipes.items.length ? (
               <View style={{ gap: 10 }}>
-                <ResultsHeading title="Recipes" sort={type === 'recipes' ? shownSort : null} onSortChange={setPickedSort} />
+                <ResultsHeading title="Recipes" sort={type === 'recipes' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'recipes', onPress: () => setPickedType('recipes') } : null} />
                 <View accessibilityState={{ busy: reordering }} style={{ gap: 10, opacity: reordering ? appTheme.opacity.disabled : 1 }}>
-                  {shownResponse.recipes.items.map((recipe) => <RecipeRow key={recipe.id} recipe={recipe} onOpen={openResult} />)}
+                  {shownResponse.recipes.items.map((recipe) => <RecipeRow key={recipe.id} recipe={recipe} onOpen={openRecipe} />)}
                 </View>
+                {type === 'top' && searchTopSectionHasMore('recipes', shownResponse.recipes.items.length)
+                  ? <SeeAllButton section="recipes" onPress={() => setPickedType('recipes')} />
+                  : null}
               </View>
             ) : null}
-            {nextCursor ? <SecondaryButton disabled={loadingMore || retryBlocked} label={loadingMore ? 'Loading…' : 'Show more'} onPress={() => void runSearch(nextCursor)} /> : null}
-            <RelatedPosts posts={relatedPosts} onOpen={openResult} />
-            {shownFailure ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center', fontSize: 13 }}>{shownFailure.message}</Text> : null}
+            {nextCursor ? <SecondaryButton disabled={loadingMore || retryBlocked} label={loadingMore ? SEARCH_LOADING_MORE_LABEL : SEARCH_SHOW_MORE_LABEL} onPress={() => void runSearch(nextCursor)} /> : null}
+            <RelatedPosts posts={relatedPosts} cellWidth={postCellWidth} onOpen={openPost} />
+            {shownFailure ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center', fontSize: 13 }}>{searchFailedLine(shownFailure.message)}</Text> : null}
           </View>
         ) : shownFailure ? (
           <View style={{ gap: 12 }}>
@@ -1144,23 +1198,25 @@ export function ExploreSearchOverlay({
             {shownSort && (type === 'posts' || type === 'recipes') ? (
               <ResultsHeading title={type === 'posts' ? 'Posts' : 'Recipes'} sort={shownSort} onSortChange={setPickedSort} />
             ) : null}
-            <StatusBlock tone="danger" title="Search did not load" body={shownFailure.message} />
-            <SecondaryButton disabled={retryBlocked} label="Retry search" onPress={() => void runSearch()} />
+            <StatusBlock tone="danger" title={SEARCH_FAILED_TITLE} body={shownFailure.message} />
+            <SecondaryButton disabled={retryBlocked} label={SEARCH_RETRY_LABEL} onPress={() => void runSearch()} />
           </View>
+        ) : response && !searchSaysNoResults(countedLength) ? (
+          // Half a word is no verdict: a two-character search that finds no
+          // creator leaves the screen as it was before typing.
+          <StatusBlock title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
         ) : response ? (
           <View style={{ gap: 25 }}>
             <StatusBlock
-              title={`No results for “${normalizedQuery}”`}
-              body={hasSearchFilters(filters)
-                ? SEARCH_FILTERED_EMPTY_BODY
-                : 'Try a shorter phrase, check the spelling, or search for a creator handle.'}
+              title={searchNoResultsTitle(normalizedQuery)}
+              body={hasSearchFilters(filters) ? SEARCH_FILTERED_EMPTY_BODY : SEARCH_NO_RESULTS_BODY}
             />
-            <RelatedPosts posts={relatedPosts} onOpen={openResult} />
+            <RelatedPosts posts={relatedPosts} cellWidth={postCellWidth} onOpen={openPost} />
           </View>
         ) : (
           <View style={{ minHeight: 260, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
             <ActivityIndicator color={theme.colors.primary} />
-            <Text style={{ color: theme.colors.muted, fontSize: 13 }}>Searching…</Text>
+            <Text style={{ color: theme.colors.muted, fontSize: 13 }}>{SEARCH_SEARCHING_LABEL}</Text>
           </View>
         )}
       </ScrollView>

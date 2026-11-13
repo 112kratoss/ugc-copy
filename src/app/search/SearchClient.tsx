@@ -10,6 +10,7 @@ import { CreatorSearchResult } from '@/components/search/CreatorSearchResult';
 import { SearchField } from '@/components/search/SearchField';
 import { SearchStateBlock } from '@/components/search/SearchStateBlock';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
+import { clearSearchFieldHandoff, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
 import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
 import {
   NO_PUBLIC_SEARCH_FILTERS,
@@ -39,14 +40,28 @@ import { supabase } from '@/lib/supabase';
 import {
   SEARCH_CORRECTED_AGAIN_LABEL,
   SEARCH_ENTITIES_HEADING,
+  SEARCH_FAILED_BODY,
+  SEARCH_FAILED_TITLE,
   SEARCH_FILTERED_EMPTY_BODY,
   SEARCH_FILTERS_CLEAR_LABEL,
   SEARCH_FILTERS_GROUP_LABEL,
   SEARCH_FILTER_SWITCHES,
+  SEARCH_IDLE_BODY,
+  SEARCH_IDLE_TITLE,
+  SEARCH_LOADING_MORE_LABEL,
+  SEARCH_NO_RESULTS_BODY,
+  SEARCH_OFFLINE_BODY,
+  SEARCH_RECENTS_CLEAR_ACTION_LABEL,
   SEARCH_RECENTS_CLEAR_LABEL,
   SEARCH_RECENTS_HEADING,
   SEARCH_RELATED_HEADING,
   SEARCH_RELATED_PARAM,
+  SEARCH_RETRY_LABEL,
+  SEARCH_SEARCHING_LABEL,
+  SEARCH_SEE_ALL_LABEL,
+  SEARCH_SHOW_MORE_LABEL,
+  SEARCH_SORT_OPTIONS,
+  SEARCH_TABS,
   isSearchAnswerThin,
   isSearchFilterSwitchOn,
   parseSearchEntityId,
@@ -54,15 +69,31 @@ import {
   searchEntityActionLabel,
   searchEntityCountLabel,
   searchEntityKindLabel,
+  searchBusyBody,
+  searchCreatorCardLabel,
+  searchDocumentTitle,
   searchExactNotice,
+  searchFailedLine,
+  searchHistoryQueryFor,
+  type SearchOpenedResult,
   searchInsteadLabel,
   searchMadeWithChipLabel,
   searchMadeWithRemoveLabel,
+  searchNoResultsTitle,
+  searchPostCardLabel,
+  searchRecentAgainLabel,
+  searchRecentRemoveLabel,
+  searchRecipeCardLabel,
   searchRelatedApplies,
   searchRelatedFollowUpDelay,
   searchRelatedPosts,
   searchRelatedStatus,
+  searchSaysNoResults,
+  searchSeeAllLabel,
+  searchTabRuns,
+  searchTopSectionHasMore,
   toggleSearchFilterSwitch,
+  type SearchTopSection,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import type { SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
 import {
@@ -74,22 +105,7 @@ import {
 } from './search-address';
 import { clearSearchHistory, forgetSearchQuery, readSearchHistory, rememberSearchQuery } from './search-history';
 
-const SEARCH_TABS: Array<{ id: PublicSearchType; label: string }> = [
-  { id: 'top', label: 'Top' },
-  { id: 'creators', label: 'Creators' },
-  { id: 'posts', label: 'Posts' },
-  { id: 'recipes', label: 'Recipes' },
-];
-
-// The order of a Posts or Recipes search. The Top tab and Creators have one.
-const SEARCH_SORTS: Array<{ value: PublicSearchSort; label: string }> = [
-  { value: 'top', label: 'Top' },
-  { value: 'latest', label: 'Latest' },
-];
-
 const SEARCH_DEBOUNCE_MS = 300;
-const SEARCH_FAILED_MESSAGE = 'Search could not be loaded.';
-const SEARCH_OFFLINE_MESSAGE = 'Search could not be loaded. Check your connection and try again.';
 
 // What a request asked for. Its answer or error is drawn only while the page
 // still asks the same thing, so a change never reads as the old outcome.
@@ -111,20 +127,14 @@ class SearchRequestError extends Error {
 // A 429 names how long the limit lasts and an earlier retry is refused again,
 // so Retry waits that long.
 async function failedResponseError(response: Response): Promise<SearchRequestError> {
-  if (response.status !== 429) return new SearchRequestError(SEARCH_FAILED_MESSAGE);
+  if (response.status !== 429) return new SearchRequestError(SEARCH_FAILED_BODY);
   const body = await response.json().catch(() => null) as { retryAfterSeconds?: unknown } | null;
   const seconds = typeof body?.retryAfterSeconds === 'number'
     && Number.isFinite(body.retryAfterSeconds)
     && body.retryAfterSeconds > 0
     ? Math.ceil(body.retryAfterSeconds)
     : null;
-  return seconds === null
-    ? new SearchRequestError('Search is busy. Try again shortly.')
-    : new SearchRequestError(`Search is busy. Try again in ${seconds} s.`, seconds);
-}
-
-function isContentType(type: PublicSearchType) {
-  return type === 'posts' || type === 'recipes';
+  return new SearchRequestError(searchBusyBody(seconds), seconds);
 }
 
 function isSameRequest(
@@ -173,7 +183,8 @@ function searchPath(
   return `${SEARCH_PAGE_PATH}${params.size ? `?${params.toString()}` : ''}`;
 }
 
-const CHIP_CLASS = 'ui-focus-ring inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full border px-4 text-sm font-semibold transition';
+// 44 px tall at every width: the chips are pressed by finger on a phone.
+const CHIP_CLASS = 'ui-focus-ring inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-4 text-sm font-semibold transition';
 const CHIP_OFF_CLASS = 'border-white/10 bg-white/[0.04] text-zinc-300 hover:border-white/20 hover:bg-white/[0.08] hover:text-white';
 const CHIP_ON_CLASS = 'border-white bg-white text-black';
 
@@ -249,7 +260,7 @@ function SearchFilterBar({
         <button
           type="button"
           onClick={() => onChange(NO_PUBLIC_SEARCH_FILTERS)}
-          className="ui-focus-ring inline-flex min-h-10 items-center rounded-full px-3 text-sm text-zinc-400 hover:text-white"
+          className="ui-focus-ring inline-flex min-h-11 items-center rounded-full px-3 text-sm text-zinc-400 hover:text-white"
         >
           {SEARCH_FILTERS_CLEAR_LABEL}
         </button>
@@ -270,11 +281,12 @@ function SearchSortControl({
   return (
     <SegmentedControl
       ariaLabel={`Sort ${kind}`}
-      options={SEARCH_SORTS}
+      options={SEARCH_SORT_OPTIONS}
       value={sort}
       onChange={onChange}
       fill={false}
-      size="compact"
+      // The full size: 46 px tall, pressed by finger on a phone.
+      size="default"
     />
   );
 }
@@ -285,6 +297,8 @@ function PostSearchCard({ item, returnTo }: { item: ShowcaseFeedItem; returnTo: 
   return (
     <Link
       href={buildShowcaseDetailPath(item.id, { from: 'search', returnTo })}
+      data-search-result="post"
+      aria-label={searchPostCardLabel({ title: item.title, creatorName: item.creator.name, saveCount: item.saveCount, commentCount: item.commentCount })}
       className="ui-focus-ring group overflow-hidden rounded-3xl border border-white/8 bg-white/[0.035] transition hover:-translate-y-0.5 hover:border-white/15 hover:bg-white/[0.055]"
     >
       {preview ? (
@@ -298,9 +312,9 @@ function PostSearchCard({ item, returnTo }: { item: ShowcaseFeedItem; returnTo: 
       <div className="p-4">
         <div className="truncate text-sm font-semibold text-white">{item.title}</div>
         <div className="mt-1 truncate text-xs text-zinc-400">{item.creator.name}</div>
-        <div className="mt-3 flex items-center gap-4 text-xs text-zinc-500">
+        <div className="mt-3 flex items-center gap-4 text-xs text-zinc-400">
           <span>{item.saveCount} {item.saveCount === 1 ? 'save' : 'saves'}</span>
-          <span className="inline-flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" />{item.commentCount}</span>
+          <span className="inline-flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" aria-hidden="true" />{item.commentCount}</span>
         </div>
       </div>
     </Link>
@@ -312,9 +326,13 @@ function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; re
   // media URL is not an image, so only an image post falls back to it.
   const preview = recipe.post?.mediaPreviewUrl
     ?? (recipe.post?.mediaKind === 'image' ? recipe.post.mediaUrl : null);
+  // In credits, as the app's search row and every recipe chip price it (decision 2).
+  const price = recipe.accessMode === 'free' ? 'Free' : formatRecipeCreditPrice(recipe.priceUsdCents);
   return (
     <Link
       href={buildShowcaseDetailPath(recipe.postId, { from: 'search', returnTo, section: 'resources' })}
+      data-search-result="recipe"
+      aria-label={searchRecipeCardLabel({ title: recipe.title, sellerName: recipe.seller.name, price, summary: recipe.summary || recipe.previewText })}
       className="ui-focus-ring group flex min-h-32 overflow-hidden rounded-2xl border border-white/8 bg-white/[0.035] transition hover:border-white/15 hover:bg-white/[0.06]"
     >
       {preview ? (
@@ -322,21 +340,46 @@ function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; re
         <img src={preview} alt="" className="w-28 shrink-0 object-cover sm:w-36" />
       ) : (
         <span className="flex w-28 shrink-0 items-center justify-center bg-emerald-400/8 text-emerald-300 sm:w-36">
-          <BookOpen className="h-6 w-6" />
+          <BookOpen className="h-6 w-6" aria-hidden="true" />
         </span>
       )}
       <span className="min-w-0 flex-1 p-4">
         <span className="block truncate text-sm font-semibold text-white">{recipe.title}</span>
         <span className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-400">{recipe.summary || recipe.previewText}</span>
         <span className="mt-3 flex items-center justify-between gap-3 text-xs">
-          <span className="truncate text-zinc-500">{recipe.seller.name}</span>
-          <span className="shrink-0 font-semibold text-emerald-300">
-            {/* In credits, as the app's search row and every recipe chip price it (decision 2). */}
-            {recipe.accessMode === 'free' ? 'Free' : formatRecipeCreditPrice(recipe.priceUsdCents)}
-          </span>
+          <span className="truncate text-zinc-400">{recipe.seller.name}</span>
+          <span className="shrink-0 font-semibold text-emerald-300">{price}</span>
         </span>
       </span>
     </Link>
+  );
+}
+
+// A Top section's way to its own tab: "See all" by its heading, always, and a
+// full-width button under its last row when the section is full, which is
+// when its tab has more (Top carries no cursor: searchTopSectionHasMore).
+function SeeAllLink({ section, onPress }: { section: SearchTopSection; onPress: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={searchSeeAllLabel(section)}
+      onClick={onPress}
+      className="ui-focus-ring inline-flex min-h-11 items-center rounded-full px-3 text-sm text-zinc-400 hover:text-white"
+    >
+      {SEARCH_SEE_ALL_LABEL}
+    </button>
+  );
+}
+
+function SeeAllButton({ section, onPress }: { section: SearchTopSection; onPress: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onPress}
+      className="ui-focus-ring mt-4 inline-flex min-h-12 w-full items-center justify-center rounded-full border border-white/10 bg-white/[0.05] px-6 text-sm font-semibold text-white transition hover:bg-white/[0.09]"
+    >
+      {searchSeeAllLabel(section)}
+    </button>
   );
 }
 
@@ -380,8 +423,8 @@ export default function SearchClient({
     exact: initialExact,
   });
   const [query, setQuery] = useState(opening.query);
-  // The tab the user chose. Below three characters only creators can be
-  // searched, so a content tab shows as Creators and comes back at three.
+  // The tab the user chose. It stays chosen whatever the length of the query:
+  // a tab that is not searched yet shows the idle state (searchTabRuns).
   const [pickedType, setPickedType] = useState(opening.type);
   // The order the user chose for Posts and Recipes. It is kept across tabs,
   // and read only on the two that have another order than the ranked one.
@@ -404,6 +447,10 @@ export default function SearchClient({
   const [recentsOpen, setRecentsOpen] = useState(false);
   // The focus is in the search form: the typeahead asks and draws only then.
   const [fieldFocused, setFieldFocused] = useState(false);
+  // Opened by a search from the top bar's field: the focus comes on into this
+  // page's field, with the typeahead closed for the text it brought
+  // (search-field-handoff.ts). Read without taking it, as a render may run twice.
+  const [handedOff] = useState(() => typeof window !== 'undefined' && searchFieldHandoffPending());
   const router = useRouter();
   const recentsRef = useRef<HTMLDivElement | null>(null);
   const searchFormRef = useRef<HTMLFormElement | null>(null);
@@ -436,25 +483,26 @@ export default function SearchClient({
   // and counts characters, an emoji as one, so the gates count the same;
   // "@j" would be refused with a 400.
   const gatedQueryLength = publicSearchQueryLength(normalizeCreatorSearchQuery(normalizedQuery));
-  const canSearch = gatedQueryLength >= PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH;
-  const contentTabsDisabled = canSearch && gatedQueryLength < PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH;
-  const activeType: PublicSearchType = contentTabsDisabled && isContentType(pickedType) ? 'creators' : pickedType;
+  const activeType: PublicSearchType = pickedType;
+  // The tab in front is searched for this query: Top and Creators from two
+  // characters, Posts and Recipes from three. No tab is dimmed meanwhile.
+  const canSearch = searchTabRuns(activeType, gatedQueryLength);
   const activeSort: PublicSearchSort = publicSearchTypeHasSorts(activeType) ? pickedSort : 'top';
   const activeFilters = publicSearchTypeHasFilters(activeType) ? pickedFilters : NO_PUBLIC_SEARCH_FILTERS;
   // Creators are never corrected: there the exact reading changes nothing and is not named.
   const activeExact = activeType !== 'creators' && exactQuery !== null && exactQuery === normalizedQuery;
   const narrowing = publicSearchFilterKey(activeFilters, activeExact);
   const returnTo = searchPath(normalizedQuery, activeType, activeSort, activeFilters, activeExact);
-  // The page's address: the search's, once there is one to run.
-  const address = canSearch ? returnTo : SEARCH_PAGE_PATH;
+  // The page's address: the search's, once the query is one any tab searches
+  // for, so a Posts tab waiting for its third character keeps its place.
+  const address = gatedQueryLength >= PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH ? returnTo : SEARCH_PAGE_PATH;
 
   const onTabListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
-    const enabledTabs = SEARCH_TABS.filter((tab) => !(contentTabsDisabled && isContentType(tab.id)));
-    const currentIndex = Math.max(0, enabledTabs.findIndex((tab) => tab.id === activeType));
-    const step = event.key === 'ArrowRight' ? 1 : enabledTabs.length - 1;
-    const nextTab = enabledTabs[(currentIndex + step) % enabledTabs.length];
+    const currentIndex = Math.max(0, SEARCH_TABS.findIndex((tab) => tab.id === activeType));
+    const step = event.key === 'ArrowRight' ? 1 : SEARCH_TABS.length - 1;
+    const nextTab = SEARCH_TABS[(currentIndex + step) % SEARCH_TABS.length];
     setPickedType(nextTab.id);
     tabRefs.current[nextTab.id]?.focus();
   };
@@ -512,7 +560,7 @@ export default function SearchClient({
       }).catch((fetchError: unknown) => {
         // A rejected fetch never reached the server. An abort keeps its own
         // error so the guards below drop it without a message.
-        throw controller.signal.aborted ? fetchError : new SearchRequestError(SEARCH_OFFLINE_MESSAGE);
+        throw controller.signal.aborted ? fetchError : new SearchRequestError(SEARCH_OFFLINE_BODY);
       });
       if (!response.ok) throw await failedResponseError(response);
       const next = await response.json() as PublicSearchResponse;
@@ -531,7 +579,14 @@ export default function SearchClient({
       const requestKey = `${request.type}:${request.sort}:${request.narrowing}:${request.query}`;
       if (!append && rememberOnAnswer.current === requestKey) {
         rememberOnAnswer.current = null;
-        if (shownResultCount(next, request.type, request.query) > 0) setHistory(rememberSearchQuery(request.query));
+        if (shownResultCount(next, request.type, request.query) > 0) {
+          setHistory(rememberSearchQuery(searchHistoryQueryFor({
+            query: request.query,
+            type: request.type,
+            answer: next,
+            exact: activeExact,
+          })));
+        }
       }
       setAnswer((current) => {
         if (!append) return { ...request, result: next, relatedAsked: askRelated };
@@ -558,7 +613,7 @@ export default function SearchClient({
         ));
         return;
       }
-      const error = requestError instanceof SearchRequestError ? requestError : new SearchRequestError(SEARCH_FAILED_MESSAGE);
+      const error = requestError instanceof SearchRequestError ? requestError : new SearchRequestError(SEARCH_FAILED_BODY);
       setFailure({ ...request, message: error.message });
       if (error.retryAfterSeconds !== null) {
         if (retryUnblockTimer.current !== null) window.clearTimeout(retryUnblockTimer.current);
@@ -575,6 +630,12 @@ export default function SearchClient({
 
   // The traversal that brought the page back, if one did, has been read above.
   useEffect(() => forgetSearchPageTraversal(), []);
+
+  useEffect(() => {
+    clearSearchFieldHandoff();
+    if (handedOff) searchFormRef.current?.querySelector('input')?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as the page mounts
+  }, []);
 
   useEffect(() => {
     setHistory(readSearchHistory());
@@ -605,7 +666,7 @@ export default function SearchClient({
       requestSequence.current += 1;
       setAnswer(null);
       setFailure(null);
-      writeSearchPageAddress(SEARCH_PAGE_PATH);
+      writeSearchPageAddress(address);
       return;
     }
     // Cleared now rather than when the request starts, so an old error never
@@ -630,6 +691,14 @@ export default function SearchClient({
     const timer = window.setTimeout(search, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [address, canSearch, normalizedQuery, requestSearch]);
+
+  // History and the browser's tabs tell searches apart: "nano · Search |
+  // Magic Booklet". Written from here, after Next's metadata has set the
+  // route's own title, and again at each search the page runs.
+  const documentTitle = `${searchDocumentTitle(normalizedQuery)} | Magic Booklet`;
+  useEffect(() => {
+    document.title = documentTitle;
+  }, [documentTitle]);
 
   // The address waits for the pause the search waits for, and a press can
   // leave the page inside that pause: a result, a link of the header, a
@@ -683,10 +752,14 @@ export default function SearchClient({
   const statusMessage = !canSearch
     ? ''
     : pending
-      ? 'Searching…'
+      ? SEARCH_SEARCHING_LABEL
       : currentFailure
         ? ''
-        : `${correctionNotice ?? exactNotice ? `${correctionNotice ?? exactNotice}. ` : ''}${resultCount} ${resultCount === 1 ? 'result' : 'results'} for ${normalizedQuery}${relatedStatus ? `. ${relatedStatus}` : ''}`;
+        // Half a word that found no creator draws the idle invitation, and
+        // the live region gives no verdict either (review of #784).
+        : resultCount === 0 && !searchSaysNoResults(gatedQueryLength)
+          ? ''
+          : `${correctionNotice ?? exactNotice ? `${correctionNotice ?? exactNotice}. ` : ''}${resultCount} ${resultCount === 1 ? 'result' : 'results'} for ${normalizedQuery}${relatedStatus ? `. ${relatedStatus}` : ''}`;
   // The filters as the page shows them: the made-with entity by the name an
   // answer or a pressed result gave it, by its key until then.
   const madeWithLabel = !activeFilters.madeWith
@@ -709,18 +782,30 @@ export default function SearchClient({
 
   // Recent searches keep what the person acted on, never each pause in
   // typing: a search committed with Enter, and one a result was opened from.
+  // It is kept under the typed query, unless what the person committed to or
+  // opened was shown under the corrected spelling (searchHistoryQueryFor).
+  const rememberCurrentSearch = (current: SearchAnswer, opened: SearchOpenedResult | null = null) => setHistory(rememberSearchQuery(searchHistoryQueryFor({
+    query: normalizedQuery,
+    type: activeType,
+    answer: current.result,
+    exact: activeExact,
+    opened,
+  })));
   const commitSearch = () => {
     if (!canSearch) return;
     settleOn(normalizedQuery);
     if (currentAnswer) {
-      if (resultCount > 0) setHistory(rememberSearchQuery(normalizedQuery));
+      if (resultCount > 0) rememberCurrentSearch(currentAnswer);
       return;
     }
     rememberOnAnswer.current = `${activeType}:${activeSort}:${narrowing}:${normalizedQuery}`;
   };
   const rememberOpenedResult = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!(event.target instanceof Element) || !event.target.closest('a[href]')) return;
-    if (currentAnswer && resultCount > 0) setHistory(rememberSearchQuery(normalizedQuery));
+    const link = event.target instanceof Element ? event.target.closest('a[href]') : null;
+    if (!link) return;
+    const kind = link.getAttribute('data-search-result');
+    const opened = kind === 'creator' || kind === 'post' || kind === 'recipe' ? kind : null;
+    if (currentAnswer && resultCount > 0) rememberCurrentSearch(currentAnswer, opened);
   };
   const recentsShown = recentsOpen && query === '' && history.length > 0;
 
@@ -728,7 +813,7 @@ export default function SearchClient({
   // results, which load as they did. Its list is drawn only for the text the
   // box holds, and is closed by Escape, by Enter and by choosing a row, so it
   // never stands over a search the person has committed.
-  const typeahead = useSearchTypeahead({ text: query, focused: fieldFocused });
+  const typeahead = useSearchTypeahead({ text: query, focused: fieldFocused, closedFor: handedOff ? opening.query : null });
   const runTypeaheadAction = (action: SearchTypeaheadAction | null) => {
     if (!action) return;
     if (action.type === 'creator') {
@@ -824,24 +909,20 @@ export default function SearchClient({
             aria-label="Search result type"
             onKeyDown={onTabListKeyDown}
           >
-            {SEARCH_TABS.map((tab) => {
-              const disabled = contentTabsDisabled && isContentType(tab.id);
-              return (
-                <button
-                  key={tab.id}
-                  ref={(element) => { tabRefs.current[tab.id] = element; }}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeType === tab.id}
-                  tabIndex={activeType === tab.id ? 0 : -1}
-                  disabled={disabled}
-                  onClick={() => setPickedType(tab.id)}
-                  className={`ui-focus-ring min-h-11 shrink-0 rounded-full px-5 text-sm font-semibold transition ${activeType === tab.id ? 'bg-white text-black' : 'text-zinc-400 hover:bg-white/8 hover:text-white disabled:cursor-not-allowed disabled:opacity-35'}`}
-                >
-                  {tab.label}
-                </button>
-              );
-            })}
+            {SEARCH_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                ref={(element) => { tabRefs.current[tab.id] = element; }}
+                type="button"
+                role="tab"
+                aria-selected={activeType === tab.id}
+                tabIndex={activeType === tab.id ? 0 : -1}
+                onClick={() => setPickedType(tab.id)}
+                className={`ui-focus-ring min-h-11 shrink-0 rounded-full px-5 text-sm font-semibold transition ${activeType === tab.id ? 'bg-white text-black' : 'text-zinc-400 hover:bg-white/8 hover:text-white'}`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -876,6 +957,7 @@ export default function SearchClient({
               <h2 id="search-recents-heading" className="text-base font-semibold text-white">{SEARCH_RECENTS_HEADING}</h2>
               <button
                 type="button"
+                aria-label={SEARCH_RECENTS_CLEAR_ACTION_LABEL}
                 onClick={() => setHistory(clearSearchHistory())}
                 className="ui-focus-ring inline-flex min-h-11 items-center rounded-full px-3 text-sm text-zinc-400 hover:text-white"
               >
@@ -887,18 +969,18 @@ export default function SearchClient({
                 <li key={item} className="flex items-center gap-1">
                   <button
                     type="button"
-                    aria-label={`Search again for ${item}`}
+                    aria-label={searchRecentAgainLabel(item)}
                     onClick={() => { settleOn(normalizePublicSearchQuery(item)); setQuery(item); setRecentsOpen(false); }}
                     className="ui-focus-ring flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-xl px-2 text-left text-sm text-zinc-200 hover:bg-white/[0.06]"
                   >
-                    <Clock3 className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />
+                    <Clock3 className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />
                     <span className="truncate">{item}</span>
                   </button>
                   <button
                     type="button"
-                    aria-label={`Remove ${item} from recent searches`}
+                    aria-label={searchRecentRemoveLabel(item)}
                     onClick={() => setHistory(forgetSearchQuery(item))}
-                    className="ui-focus-ring inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-500 hover:bg-white/10 hover:text-white"
+                    className="ui-focus-ring inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:bg-white/10 hover:text-white"
                   >
                     <X className="h-4 w-4" aria-hidden="true" />
                   </button>
@@ -923,7 +1005,7 @@ export default function SearchClient({
               <button
                 type="button"
                 onClick={() => setExactQuery(normalizedQuery)}
-                className="ui-focus-ring inline-flex min-h-10 items-center rounded-full px-2 text-sm font-semibold text-[var(--ui-primary)] hover:underline"
+                className="ui-focus-ring inline-flex min-h-11 items-center rounded-full px-2 text-sm font-semibold text-[var(--ui-primary)] hover:underline"
               >
                 {searchInsteadLabel(normalizedQuery)}
               </button>
@@ -934,7 +1016,7 @@ export default function SearchClient({
               <button
                 type="button"
                 onClick={() => setExactQuery(null)}
-                className="ui-focus-ring inline-flex min-h-10 items-center rounded-full px-2 text-sm font-semibold text-[var(--ui-primary)] hover:underline"
+                className="ui-focus-ring inline-flex min-h-11 items-center rounded-full px-2 text-sm font-semibold text-[var(--ui-primary)] hover:underline"
               >
                 {SEARCH_CORRECTED_AGAIN_LABEL}
               </button>
@@ -942,30 +1024,32 @@ export default function SearchClient({
           ) : null}
           {staleResultsShown ? (
             <div className="mb-6 flex items-center gap-2 text-sm text-zinc-400">
-              <LoaderCircle className="h-4 w-4 animate-spin" /> Searching…
+              <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> {SEARCH_SEARCHING_LABEL}
             </div>
           ) : null}
           {!canSearch ? (
-            <SearchStateBlock tone="initial" title="Start with a creator or idea" body="Type at least two characters. Posts and recipes become available after three." />
+            <SearchStateBlock tone="initial" title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
           ) : currentFailure && !currentAnswer ? (
             <SearchStateBlock
               tone="error"
-              title="Search did not load"
+              title={SEARCH_FAILED_TITLE}
               body={currentFailure.message}
-              action={<button type="button" disabled={retryBlocked} onClick={() => void requestSearch()} className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"><RefreshCcw className="h-4 w-4" /> Retry</button>}
+              action={<button type="button" disabled={retryBlocked} onClick={() => void requestSearch()} className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"><RefreshCcw className="h-4 w-4" aria-hidden="true" /> {SEARCH_RETRY_LABEL}</button>}
             />
           ) : !shownAnswer || resultCount === 0 ? (
             pending ? (
               <div className="flex min-h-72 items-center justify-center rounded-3xl border border-white/8 bg-white/[0.025] text-sm text-zinc-400">
-                <LoaderCircle className="mr-2 h-5 w-5 animate-spin" /> Searching…
+                <LoaderCircle className="mr-2 h-5 w-5 animate-spin" aria-hidden="true" /> {SEARCH_SEARCHING_LABEL}
               </div>
+            ) : !searchSaysNoResults(gatedQueryLength) ? (
+              // Half a word is no verdict: a two-character search that finds
+              // no creator leaves the page as it was before typing.
+              <SearchStateBlock tone="initial" title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
             ) : (
               <div className="space-y-10">
                 <SearchStateBlock
-                  title={`No results for “${normalizedQuery}”`}
-                  body={hasPublicSearchFilters(activeFilters)
-                    ? SEARCH_FILTERED_EMPTY_BODY
-                    : 'Try a shorter phrase, check the spelling, or search for a creator handle.'}
+                  title={searchNoResultsTitle(normalizedQuery)}
+                  body={hasPublicSearchFilters(activeFilters) ? SEARCH_FILTERED_EMPTY_BODY : SEARCH_NO_RESULTS_BODY}
                 />
                 <RelatedPosts posts={relatedPosts} returnTo={returnTo} />
               </div>
@@ -985,9 +1069,12 @@ export default function SearchClient({
                 <section aria-labelledby="search-creators-heading">
                   <div className="mb-4 flex items-center justify-between">
                     <h2 id="search-creators-heading" className="text-xl font-semibold text-white">Creators</h2>
-                    {activeType === 'top' ? <button type="button" onClick={() => setPickedType('creators')} className="ui-focus-ring rounded-full px-3 py-2 text-sm text-zinc-400 hover:text-white">See all</button> : null}
+                    {activeType === 'top' ? <SeeAllLink section="creators" onPress={() => setPickedType('creators')} /> : null}
                   </div>
-                  <div className="grid gap-3 lg:grid-cols-2">{shownAnswer.result.creators.items.map((creator) => <CreatorSearchResult key={creator.id} creator={creator} />)}</div>
+                  <div className="grid gap-3 lg:grid-cols-2">{shownAnswer.result.creators.items.map((creator) => <CreatorSearchResult key={creator.id} creator={creator} label={searchCreatorCardLabel(creator)} />)}</div>
+                  {activeType === 'top' && searchTopSectionHasMore('creators', shownAnswer.result.creators.items.length)
+                    ? <SeeAllButton section="creators" onPress={() => setPickedType('creators')} />
+                    : null}
                 </section>
               ) : null}
 
@@ -996,10 +1083,13 @@ export default function SearchClient({
                   <div className="mb-4 flex items-center justify-between">
                     <h2 id="search-posts-heading" className="text-xl font-semibold text-white">Posts</h2>
                     {activeType === 'top'
-                      ? <button type="button" onClick={() => setPickedType('posts')} className="ui-focus-ring rounded-full px-3 py-2 text-sm text-zinc-400 hover:text-white">See all</button>
+                      ? <SeeAllLink section="posts" onPress={() => setPickedType('posts')} />
                       : <SearchSortControl kind="posts" sort={activeSort} onChange={setPickedSort} />}
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{shownAnswer.result.posts.items.map((item) => <PostSearchCard key={item.id} item={item} returnTo={returnTo} />)}</div>
+                  {activeType === 'top' && searchTopSectionHasMore('posts', shownAnswer.result.posts.items.length)
+                    ? <SeeAllButton section="posts" onPress={() => setPickedType('posts')} />
+                    : null}
                 </section>
               ) : null}
 
@@ -1008,10 +1098,13 @@ export default function SearchClient({
                   <div className="mb-4 flex items-center justify-between">
                     <h2 id="search-recipes-heading" className="text-xl font-semibold text-white">Recipes</h2>
                     {activeType === 'top'
-                      ? <button type="button" onClick={() => setPickedType('recipes')} className="ui-focus-ring rounded-full px-3 py-2 text-sm text-zinc-400 hover:text-white">See all</button>
+                      ? <SeeAllLink section="recipes" onPress={() => setPickedType('recipes')} />
                       : <SearchSortControl kind="recipes" sort={activeSort} onChange={setPickedSort} />}
                   </div>
                   <div className="grid gap-4 lg:grid-cols-2">{shownAnswer.result.recipes.items.map((recipe) => <RecipeSearchCard key={recipe.id} recipe={recipe} returnTo={returnTo} />)}</div>
+                  {activeType === 'top' && searchTopSectionHasMore('recipes', shownAnswer.result.recipes.items.length)
+                    ? <SeeAllButton section="recipes" onPress={() => setPickedType('recipes')} />
+                    : null}
                 </section>
               ) : null}
 
@@ -1023,15 +1116,15 @@ export default function SearchClient({
                     onClick={() => void requestSearch({ append: true, cursor: nextCursor })}
                     className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-6 text-sm font-semibold text-white transition hover:bg-white/[0.09] disabled:opacity-50"
                   >
-                    {loadingMore ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
-                    {loadingMore ? 'Loading…' : 'Show more'}
+                    {loadingMore ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
+                    {loadingMore ? SEARCH_LOADING_MORE_LABEL : SEARCH_SHOW_MORE_LABEL}
                   </button>
                 </div>
               ) : null}
 
               <RelatedPosts posts={relatedPosts} returnTo={returnTo} />
 
-              {currentFailure ? <p role="alert" className="text-center text-sm text-rose-300">{currentFailure.message}</p> : null}
+              {currentFailure ? <p role="alert" className="text-center text-sm text-rose-300">{searchFailedLine(currentFailure.message)}</p> : null}
             </div>
           )}
         </div>
