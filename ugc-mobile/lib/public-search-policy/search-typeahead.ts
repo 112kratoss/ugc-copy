@@ -242,28 +242,36 @@ function foldedQuery(query: string): string {
 }
 
 /**
- * The recent searches a text matches, in the order to offer them: the ones
- * that begin with what is typed first, then (from two characters, where one
- * letter would match nearly every search) the ones that hold it anywhere,
- * each group most recent first, at most SEARCH_TYPEAHEAD_MAX_RECENTS. A recent
- * search that is exactly what the box holds is not offered back.
+ * The recent searches a text matches: the ones the typed text begins, as a
+ * whole or at one of its words ("por" finds "neon portrait"), most recent
+ * first, at most SEARCH_TYPEAHEAD_MAX_RECENTS. A recent search that is exactly
+ * what the box holds is not offered back. The same rule as the app's typing
+ * list (`searchTypingRecents` on the app track's branch): one of the two goes
+ * when both are on main.
  */
 export function searchTypeaheadMatchingRecents(recents: readonly string[], query: string | null): string[] {
   if (query === null) return [];
   const typed = foldedQuery(query);
   if (!typed) return [];
-  const beginning: string[] = [];
-  const holding: string[] = [];
+  const found: string[] = [];
   const seen = new Set<string>([typed]);
   for (const recent of recents) {
     const text = normalizeSearchHistoryQuery(recent);
     const folded = text.toLowerCase();
     if (!text || seen.has(folded)) continue;
     seen.add(folded);
-    if (folded.startsWith(typed)) beginning.push(text);
-    else if (searchQueryLength(typed) >= 2 && folded.includes(typed)) holding.push(text);
+    if (wordStartOf(folded, typed) < 0) continue;
+    found.push(text);
+    if (found.length === SEARCH_TYPEAHEAD_MAX_RECENTS) break;
   }
-  return [...beginning, ...holding].slice(0, SEARCH_TYPEAHEAD_MAX_RECENTS);
+  return found;
+}
+
+/** Where `typed` first stands in `folded` at its start or at the start of a word, or -1. */
+function wordStartOf(folded: string, typed: string): number {
+  let at = folded.indexOf(typed);
+  while (at > 0 && /\S/.test(folded[at - 1])) at = folded.indexOf(typed, at + 1);
+  return at;
 }
 
 /**
@@ -400,8 +408,9 @@ export interface SearchTypeaheadTextRun {
  * A completion's or a recent search's text in runs, as Instagram, X and Reddit
  * draw a suggestion: the part the person typed plain, the part they have not
  * typed heavier, so the eye goes to what the row adds. The typed text is found
- * where it first stands in the row, ignoring case; a row that does not hold it
- * (a completion of another word) is all heavier. The row's accessible name is
+ * where it first stands at the start of the row or of one of its words,
+ * ignoring case (the app track's `searchTypedRuns` reads it the same way); a
+ * row that does not hold it so is all heavier. The row's accessible name is
  * its whole text: this is drawing only.
  */
 export function searchTypeaheadTextRuns(text: string, query: string | null): SearchTypeaheadTextRun[] {
@@ -410,7 +419,7 @@ export function searchTypeaheadTextRuns(text: string, query: string | null): Sea
   const folded = text.toLowerCase();
   // Lower case can change a string's length (a dotted capital I): then the
   // places found in the folded text are not the text's own, and nothing is marked typed.
-  const at = typed && folded.length === text.length ? folded.indexOf(typed) : -1;
+  const at = typed && folded.length === text.length ? wordStartOf(folded, typed) : -1;
   if (at < 0) return [{ text, typed: false }];
   return [
     { text: text.slice(0, at), typed: false },

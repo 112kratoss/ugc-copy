@@ -178,10 +178,10 @@ test.describe('search typeahead', () => {
     const box = page.getByRole('combobox');
     const list = page.getByRole('listbox', { name: 'Search suggestions' });
 
-    // The recent searches the text matches come first, with a clock: the one
-    // that begins with it, then the one that holds it; then the completions.
+    // The recent searches the text begins (as a whole or at a word) come
+    // first, most recent first, with a clock; then the completions.
     await box.fill('lum');
-    await expect(list.getByRole('option')).toHaveText(['Lumen city', 'glowing lumen', 'luminous portrait', 'lumen glow']);
+    await expect(list.getByRole('option')).toHaveText(['glowing lumen', 'Lumen city', 'luminous portrait', 'lumen glow']);
     await expect(list.getByRole('group')).toHaveCount(2);
     await expect(list.locator('[data-typeahead-row]')).toHaveCount(4);
     expect(await list.locator('[data-typeahead-row]').evaluateAll((rows) => rows.map((row) => row.getAttribute('data-typeahead-row'))))

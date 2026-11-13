@@ -443,13 +443,16 @@ describe('search typeahead: the shared module', () => {
 describe('search typeahead: recent searches, and what a box offers', () => {
   const history = ['neon harbor', 'Luminous', 'glowing lumen', 'lum', 'portrait', 'lumen city', 'lumberjack', 'a lumen'];
 
-  it('offers the recent searches that begin with the text, then the ones that hold it, most recent first, three at most', () => {
+  it('offers the recent searches the text begins, as a whole or at a word, most recent first, three at most', () => {
     expect(SEARCH_TYPEAHEAD_MAX_RECENTS).toBe(3);
     // "lum" itself is what the box holds: not offered back.
-    expect(searchTypeaheadMatchingRecents(history, 'lum')).toEqual(['Luminous', 'lumen city', 'lumberjack']);
+    expect(searchTypeaheadMatchingRecents(history, 'lum')).toEqual(['Luminous', 'glowing lumen', 'lumen city']);
     expect(searchTypeaheadMatchingRecents(['neon harbor', 'glowing lumen', 'a lumen'], 'lum')).toEqual(['glowing lumen', 'a lumen']);
-    // One letter would match nearly every search: only a beginning counts there.
+    // Inside a word is not a beginning.
     expect(searchTypeaheadMatchingRecents(['neon harbor', 'portrait', 'anime'], 'a')).toEqual(['anime']);
+    expect(searchTypeaheadMatchingRecents(['illuminate'], 'lum')).toEqual([]);
+    // Several words typed: from a word on.
+    expect(searchTypeaheadMatchingRecents(['a neon harbor at dusk'], 'neon h')).toEqual(['a neon harbor at dusk']);
     expect(searchTypeaheadMatchingRecents(['Neon  Harbor', 'neon harbor'], 'NEON h')).toEqual(['Neon Harbor']);
     expect(searchTypeaheadMatchingRecents(history, null)).toEqual([]);
     expect(searchTypeaheadMatchingRecents([], 'lum')).toEqual([]);
@@ -501,6 +504,9 @@ describe('search typeahead: which part of a row is drawn heavier', () => {
 
   it('draws the whole row heavier where it does not hold the text, or where lower case moves its letters', () => {
     expect(searchTypeaheadTextRuns('portrait', 'lum')).toEqual([{ text: 'portrait', typed: false }]);
+    // Inside a word is not where it was typed; a later word's start is.
+    expect(searchTypeaheadTextRuns('illuminated lumen', 'lum')).toEqual([{ text: 'illuminated ', typed: false }, { text: 'lum', typed: true }, { text: 'en', typed: false }]);
+    expect(searchTypeaheadTextRuns('illuminate', 'lum')).toEqual([{ text: 'illuminate', typed: false }]);
     expect(searchTypeaheadTextRuns('portrait', null)).toEqual([{ text: 'portrait', typed: false }]);
     // "İ" lower-cases to two characters: the places found would not be the text's own.
     expect(searchTypeaheadTextRuns('İstanbul night', 'night')).toEqual([{ text: 'İstanbul night', typed: false }]);
