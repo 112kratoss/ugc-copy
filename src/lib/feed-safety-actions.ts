@@ -7,6 +7,7 @@ import {
   type SafetySurface,
 } from '@/lib/moderation-client';
 import { forgetBlockedCreatorForVisit, takeBlockedCreatorOffClientFeeds } from '@/lib/showcase-client-cache';
+import { forgetKeptSearchPages } from '@/lib/search-kept-pages';
 
 /**
  * The three safety rows of a post's menu, each asked for, sent and answered one
@@ -75,6 +76,8 @@ export async function reportPostAfterConfirmation({
   onSend?.();
   try {
     await reportPostContent({ postId, accessToken, surface, deliveryId });
+    // A search Back would redraw from what it kept may hold the post: asked again instead.
+    forgetKeptSearchPages();
     return {
       status: 'done',
       message: KEEPS_REPORTED_POST.has(surface)
@@ -102,6 +105,7 @@ export async function reportCreatorAfterConfirmation({
   onSend?.();
   try {
     await reportCreator({ userId, accessToken, surface });
+    forgetKeptSearchPages();
     return { status: 'done', message: 'Creator reported. Our moderation team will take a look.' };
   } catch (error) {
     return failed('Could not report this creator.', error);
@@ -128,6 +132,8 @@ export async function blockCreatorAfterConfirmation({
     // posts again: not from the copy it kept (Explore, the home feed), and
     // not from Explore's first page, which the server builds for everyone.
     takeBlockedCreatorOffClientFeeds(userId);
+    // Nor a search Back would redraw from what it kept.
+    forgetKeptSearchPages();
     return { status: 'done', message: `${creatorName} is blocked. Their posts are gone from your feed.` };
   } catch (error) {
     return failed('Could not block this creator.', error);

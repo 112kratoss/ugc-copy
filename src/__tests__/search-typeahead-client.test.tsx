@@ -134,6 +134,7 @@ const dimmed = () => screen.getAllByRole('option')
 describe('search page typeahead', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    window.sessionStorage.clear();
     window.history.replaceState(null, '', '/search');
     pushMock.mockReset();
     getSessionMock.mockReset();

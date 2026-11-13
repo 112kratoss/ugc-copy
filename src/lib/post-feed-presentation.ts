@@ -1,5 +1,6 @@
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
+import { isAppSourceToolLabel } from '@/lib/source-tools';
 import {
     OWN_RECIPE_LABEL,
     RECIPE_UNLOCKED_LABEL,
@@ -256,6 +257,24 @@ export function getPostModelDisplayName(model: string | null | undefined): strin
         ?? (MOTION_MODELS as Record<string, { displayName: string }>)[model];
 
     return catalogEntry?.displayName ?? null;
+}
+
+/**
+ * What a post was made with, by the name a person reads: its model by the
+ * name the feed card gives it (`getPostModelDisplayName`), else an outside
+ * tool its creator named (never the app's own name, which says nothing on its
+ * own page). Nothing on a text post, whose card names no model either. The
+ * post page's "Made with" and the search card's line read it.
+ */
+export function getPostMadeWithLabel(
+    item: Pick<ShowcaseFeedItem, 'model' | 'sourceTool' | 'postFormat' | 'category' | 'mediaUrl'>,
+): string | null {
+    if ((item.postFormat === 'text' || item.category === 'text') && !item.mediaUrl) return null;
+    // Posts made here record the app as their tool; the app's post Details
+    // leave it out the same way (`isOwnTool` in ugc-mobile/lib/post-details-view-model.ts).
+    const outsideTool = item.sourceTool?.trim();
+    return getPostModelDisplayName(item.model)
+        ?? (outsideTool && !isAppSourceToolLabel(outsideTool) ? outsideTool : null);
 }
 
 /**

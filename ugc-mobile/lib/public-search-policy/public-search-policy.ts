@@ -471,9 +471,47 @@ function sentence(text: string | null | undefined): string {
  * person, in an order and with pauses that read as words, where the card's
  * text run together read "Untitled Creationlibath4 saves1".
  */
-export function searchPostCardLabel(post: { title: string; creatorName: string; saveCount: number; commentCount: number }): string {
-  return `Open post ${post.title} by ${post.creatorName}, ${countWords(post.saveCount, 'save', 'saves')}, ${countWords(post.commentCount, 'comment', 'comments')}`;
+export function searchPostCardLabel(post: {
+  title: string;
+  /** The creator as the card names them: by handle (searchPostCreatorName). */
+  creatorName: string;
+  saveCount: number;
+  commentCount: number;
+  /** The card's cover is a clip. */
+  video?: boolean;
+  /** What it was made with, as the card's line says it (searchPostMadeWithLine's label). */
+  madeWith?: string | null;
+  /** The card's badges, in their order: "Free recipe", "250 credits", "Remixable". */
+  badges?: readonly string[];
+  /** The card's date, as drawn. */
+  date?: string | null;
+}): string {
+  const details = [
+    post.video ? 'video' : null,
+    post.madeWith ? `made with ${post.madeWith}` : null,
+    ...(post.badges ?? []),
+    post.date ?? null,
+  ].filter((detail): detail is string => Boolean(detail));
+  return `Open post ${post.title} by ${post.creatorName}, ${details.map((detail) => `${detail}, `).join('')}${countWords(post.saveCount, 'save', 'saves')}, ${countWords(post.commentCount, 'comment', 'comments')}`;
 }
+
+/**
+ * The creator as a post card names them: by handle, as the post page, Home and
+ * Explore do (the audit saw "Sassy23b" on a card whose post said "@batman");
+ * by name only where there is no handle.
+ */
+export function searchPostCreatorName(creator: { name: string; username?: string | null }): string {
+  const handle = creator.username?.trim();
+  return handle ? `@${handle}` : creator.name;
+}
+
+/** A card's quiet line for the model or tool a post was made with: "Made with Nano Banana 2.0". */
+export function searchPostMadeWithLine(label: string): string {
+  return `Made with ${label}`;
+}
+
+/** A card's badge for a post that can be remixed, beside its recipe's price. */
+export const SEARCH_POST_REMIXABLE_BADGE = 'Remixable';
 export function searchRecipeCardLabel(recipe: { title: string; sellerName: string; price: string; summary?: string | null }): string {
   return `Open recipe ${recipe.title} by ${recipe.sellerName}, ${recipe.price}${sentence(recipe.summary)}`;
 }
@@ -500,6 +538,8 @@ export function searchDocumentTitle(query: string): string {
     : 'Search';
 }
 
+/** The search page's one heading, for a screen reader: the field is what a sighted person sees first. */
+export const SEARCH_PAGE_HEADING = 'Search';
 export const SEARCH_ENTITIES_HEADING = 'Models and tools';
 export const SEARCH_RECENTS_HEADING = 'Recent searches';
 export const SEARCH_RECENTS_CLEAR_LABEL = 'Clear all';

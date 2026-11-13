@@ -36,16 +36,19 @@ function Heading({ height = 'h-11' }: { height?: string }) {
   );
 }
 
-function PostCard() {
+// The wall's cards keep their pictures' shapes: the blocks stand in a few of them.
+const POST_SHAPES = ['4 / 5', '1 / 1', '3 / 4', '4 / 5', '16 / 9', '3 / 4', '1 / 1', '4 / 5'];
+
+function PostCard({ shape }: { shape: string }) {
   return (
-    <span className={`${BLOCK_CLASS} block rounded-3xl`}>
-      <span className="block aspect-[4/3] bg-white/[0.03]" />
-      <span className="block p-4">
-        <Line className="h-3.5 w-3/4" />
-        <Line className="mt-2.5 h-3 w-1/3" />
-        <Line className="mt-4 h-3 w-1/4" />
+    <span className="block">
+      <span className={`${BLOCK_CLASS} block rounded-3xl`} style={{ aspectRatio: shape }}>
+        <Shimmer />
       </span>
-      <Shimmer />
+      <span className="mt-2.5 block px-1.5">
+        <Line className="h-3.5 w-3/4" />
+        <Line className="mt-2.5 h-3 w-1/2" />
+      </span>
     </span>
   );
 }
@@ -78,12 +81,13 @@ function RecipeCard() {
   );
 }
 
-const POST_GRID_CLASS = 'grid gap-4 sm:grid-cols-2 lg:grid-cols-3';
-
+/** The posts wall's columns before it is measured (SearchPostWall): two, three, four as it widens. */
 function Posts({ count }: { count: number }) {
   return (
-    <span className={POST_GRID_CLASS}>
-      {Array.from({ length: count }, (_, index) => <PostCard key={index} />)}
+    <span className="block @container">
+      <span className="grid grid-cols-2 items-start gap-3 @min-[600px]:grid-cols-3 @min-[600px]:gap-4 @min-[900px]:grid-cols-4">
+        {Array.from({ length: count }, (_, index) => <PostCard key={index} shape={POST_SHAPES[index % POST_SHAPES.length]} />)}
+      </span>
     </span>
   );
 }
@@ -115,7 +119,7 @@ export function SearchResultsPlaceholder({ type, creatorsOnly = false }: { type:
       ) : type === 'posts' ? (
         <span className="block">
           <Heading height="h-12" />
-          <Posts count={6} />
+          <Posts count={8} />
         </span>
       ) : (
         <>
@@ -129,7 +133,7 @@ export function SearchResultsPlaceholder({ type, creatorsOnly = false }: { type:
           {creatorsOnly ? null : (
             <span className="block">
               <Heading />
-              <Posts count={3} />
+              <Posts count={4} />
             </span>
           )}
         </>
