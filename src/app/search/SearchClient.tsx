@@ -45,6 +45,9 @@ import {
   SEARCH_FILTER_SWITCHES,
   SEARCH_RECENTS_CLEAR_LABEL,
   SEARCH_RECENTS_HEADING,
+  SEARCH_RELATED_HEADING,
+  SEARCH_RELATED_PARAM,
+  isSearchAnswerThin,
   isSearchFilterSwitchOn,
   parseSearchEntityId,
   searchCorrectionNotice,
@@ -55,6 +58,10 @@ import {
   searchInsteadLabel,
   searchMadeWithChipLabel,
   searchMadeWithRemoveLabel,
+  searchRelatedApplies,
+  searchRelatedFollowUpDelay,
+  searchRelatedPosts,
+  searchRelatedStatus,
   toggleSearchFilterSwitch,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import type { SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
@@ -83,7 +90,9 @@ const SEARCH_OFFLINE_MESSAGE = 'Search could not be loaded. Check your connectio
 // `narrowing` is the filters and the exact reading as one string
 // (publicSearchFilterKey), '' for none.
 type SearchRequest = { query: string; type: PublicSearchType; sort: PublicSearchSort; narrowing: string };
-type SearchAnswer = SearchRequest & { result: PublicSearchResponse };
+// `relatedAsked`: the answer was asked for with related posts, or has been
+// asked about them since. They are asked about once per answer.
+type SearchAnswer = SearchRequest & { result: PublicSearchResponse; relatedAsked: boolean };
 type SearchFailure = SearchRequest & { message: string };
 
 class SearchRequestError extends Error {
@@ -325,6 +334,20 @@ function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; re
   );
 }
 
+// Posts that mean what the query says without holding its words: the same
+// cards as the search's own posts, under everything the search itself found.
+function RelatedPosts({ posts, returnTo }: { posts: readonly ShowcaseFeedItem[]; returnTo: string }) {
+  if (posts.length === 0) return null;
+  return (
+    <section aria-labelledby="search-related-heading">
+      <h2 id="search-related-heading" className="mb-4 text-xl font-semibold text-white">{SEARCH_RELATED_HEADING}</h2>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {posts.map((item) => <PostSearchCard key={item.id} item={item} returnTo={returnTo} />)}
+      </div>
+    </section>
+  );
+}
+
 export default function SearchClient({
   initialQuery,
   initialType,
@@ -390,6 +413,17 @@ export default function SearchClient({
   // The query of the last scheduled search. A URL query arrives already typed
   // and a tab change keeps the query, so only a new query waits for a pause.
   const scheduledQuery = useRef(opening.query);
+  // The query the person settled on: Enter, a suggestion pressed, a recent
+  // search opened. A search for it is asked with related posts
+  // (public-search-policy.ts, "Related posts"); one still being typed is not.
+  // The ref is read as a request is sent, the state by the wait after an
+  // answer: a request that read the state would be made again when it changed.
+  const settledQueryAtSend = useRef<string | null>(null);
+  const [settledQuery, setSettledQuery] = useState<string | null>(null);
+  const settleOn = (settled: string) => {
+    settledQueryAtSend.current = settled;
+    setSettledQuery(settled);
+  };
   const tabRefs = useRef<Partial<Record<PublicSearchType, HTMLButtonElement | null>>>({});
   const normalizedQuery = useMemo(() => normalizePublicSearchQuery(query), [query]);
   // The server strips leading "@" (a handle search) before its length checks
@@ -419,16 +453,35 @@ export default function SearchClient({
     tabRefs.current[nextTab.id]?.focus();
   };
 
-  const requestSearch = useCallback(async ({ append = false, cursor = null }: { append?: boolean; cursor?: string | null } = {}) => {
+  // Related posts can come with the search in front (the first page of it).
+  const relatedApplies = canSearch && searchRelatedApplies({
+    type: activeType,
+    sort: activeSort,
+    narrowing,
+    queryLength: gatedQueryLength,
+    laterPage: false,
+  });
+
+  // `relatedFollowUp`: the search in front asked again for its related posts,
+  // over the answer on hand. That answer stays whatever becomes of the
+  // request: its failure is not the search's, and is drawn as nothing.
+  const requestSearch = useCallback(async ({
+    append = false,
+    cursor = null,
+    relatedFollowUp = false,
+  }: { append?: boolean; cursor?: string | null; relatedFollowUp?: boolean } = {}) => {
     const request: SearchRequest = { query: normalizedQuery, type: activeType, sort: activeSort, narrowing };
+    // Asked for with the search a person has settled on, and by the follow-up; never for a later page.
+    const askRelated = relatedApplies && !cursor && (relatedFollowUp || settledQueryAtSend.current === request.query);
     const sequence = ++requestSequence.current;
     requestController.current?.abort();
     const controller = new AbortController();
     requestController.current = controller;
     if (append) setLoadingMore(true);
-    setFailure(null);
+    if (!relatedFollowUp) setFailure(null);
     try {
       const params = new URLSearchParams({ q: request.query, type: request.type });
+      if (askRelated) params.set(SEARCH_RELATED_PARAM, '1');
       // A cursor pages the order it was issued for, so a later page names it too.
       if (request.sort !== 'top') params.set('sort', request.sort);
       // A cursor pages the filters and the reading it was issued under, so a later page names them too.
@@ -474,7 +527,7 @@ export default function SearchClient({
         if (shownResultCount(next, request.type, request.query) > 0) setHistory(rememberSearchQuery(request.query));
       }
       setAnswer((current) => {
-        if (!append) return { ...request, result: next };
+        if (!append) return { ...request, result: next, relatedAsked: askRelated };
         if (!current || !isSameRequest(current, request.query, request.type, request.sort, request.narrowing)) return current;
         return {
           ...current,
@@ -489,6 +542,15 @@ export default function SearchClient({
     } catch (requestError) {
       if (sequence !== requestSequence.current) return;
       if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
+      if (relatedFollowUp) {
+        // The answer on hand stands, and is not asked about again.
+        setAnswer((current) => (
+          current && isSameRequest(current, request.query, request.type, request.sort, request.narrowing)
+            ? { ...current, relatedAsked: true }
+            : current
+        ));
+        return;
+      }
       const error = requestError instanceof SearchRequestError ? requestError : new SearchRequestError(SEARCH_FAILED_MESSAGE);
       setFailure({ ...request, message: error.message });
       if (error.retryAfterSeconds !== null) {
@@ -502,7 +564,7 @@ export default function SearchClient({
     } finally {
       if (sequence === requestSequence.current) setLoadingMore(false);
     }
-  }, [activeExact, activeFilters, activeSort, activeType, narrowing, normalizedQuery]);
+  }, [activeExact, activeFilters, activeSort, activeType, narrowing, normalizedQuery, relatedApplies]);
 
   useEffect(() => {
     setHistory(readSearchHistory());
@@ -585,15 +647,36 @@ export default function SearchClient({
     ? searchCorrectionNotice(currentAnswer.result.correctedQuery, activeType)
     : null;
   const exactNotice = currentAnswer && activeExact ? searchExactNotice(normalizedQuery) : null;
+  // Related posts: the group the answer in front brings, and when to ask for
+  // it over an answer that came without (the shared rule,
+  // searchRelatedFollowUpDelay): at once for a search the person has settled
+  // on, after a pause with the search left alone otherwise, only where the
+  // answer is thin, and once.
+  const relatedPosts = shownAnswer ? searchRelatedPosts(activeType, shownAnswer.result) : [];
+  const relatedFollowUpDelay = currentAnswer
+    ? searchRelatedFollowUpDelay({
+      applies: relatedApplies,
+      relatedAsked: currentAnswer.relatedAsked,
+      thin: isSearchAnswerThin(activeType, currentAnswer.result.posts),
+      settled: settledQuery === normalizedQuery,
+    })
+    : null;
+  useEffect(() => {
+    if (relatedFollowUpDelay === null) return;
+    const timer = window.setTimeout(() => void requestSearch({ relatedFollowUp: true }), relatedFollowUpDelay);
+    return () => window.clearTimeout(timer);
+  }, [relatedFollowUpDelay, requestSearch]);
+  const relatedStatus = currentAnswer ? searchRelatedStatus(searchRelatedPosts(activeType, currentAnswer.result).length) : '';
   // One live region says the settled outcome, the reading first: "Showing
-  // results for “portrait”. 12 results for portriat".
+  // results for “portrait”. 12 results for portriat", and the related posts
+  // after it: "0 results for ocean at dusk. 3 related posts".
   const statusMessage = !canSearch
     ? ''
     : pending
       ? 'Searching…'
       : currentFailure
         ? ''
-        : `${correctionNotice ?? exactNotice ? `${correctionNotice ?? exactNotice}. ` : ''}${resultCount} ${resultCount === 1 ? 'result' : 'results'} for ${normalizedQuery}`;
+        : `${correctionNotice ?? exactNotice ? `${correctionNotice ?? exactNotice}. ` : ''}${resultCount} ${resultCount === 1 ? 'result' : 'results'} for ${normalizedQuery}${relatedStatus ? `. ${relatedStatus}` : ''}`;
   // The filters as the page shows them: the made-with entity by the name an
   // answer or a pressed result gave it, by its key until then.
   const madeWithLabel = !activeFilters.madeWith
@@ -618,6 +701,7 @@ export default function SearchClient({
   // typing: a search committed with Enter, and one a result was opened from.
   const commitSearch = () => {
     if (!canSearch) return;
+    settleOn(normalizedQuery);
     if (currentAnswer) {
       if (resultCount > 0) setHistory(rememberSearchQuery(normalizedQuery));
       return;
@@ -656,6 +740,7 @@ export default function SearchClient({
     const nextSort: PublicSearchSort = publicSearchTypeHasSorts(pickedType) ? pickedSort : 'top';
     scheduledQuery.current = next;
     rememberOnAnswer.current = `${pickedType}:${nextSort}:${publicSearchFilterKey(nextFilters, false)}:${next}`;
+    settleOn(next);
     setQuery(action.query);
   };
   const nextCursor = !currentAnswer
@@ -793,7 +878,7 @@ export default function SearchClient({
                   <button
                     type="button"
                     aria-label={`Search again for ${item}`}
-                    onClick={() => { setQuery(item); setRecentsOpen(false); }}
+                    onClick={() => { settleOn(normalizePublicSearchQuery(item)); setQuery(item); setRecentsOpen(false); }}
                     className="ui-focus-ring flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-xl px-2 text-left text-sm text-zinc-200 hover:bg-white/[0.06]"
                   >
                     <Clock3 className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />
@@ -865,12 +950,15 @@ export default function SearchClient({
                 <LoaderCircle className="mr-2 h-5 w-5 animate-spin" /> Searching…
               </div>
             ) : (
-              <SearchStateBlock
-                title={`No results for “${normalizedQuery}”`}
-                body={hasPublicSearchFilters(activeFilters)
-                  ? SEARCH_FILTERED_EMPTY_BODY
-                  : 'Try a shorter phrase, check the spelling, or search for a creator handle.'}
-              />
+              <div className="space-y-10">
+                <SearchStateBlock
+                  title={`No results for “${normalizedQuery}”`}
+                  body={hasPublicSearchFilters(activeFilters)
+                    ? SEARCH_FILTERED_EMPTY_BODY
+                    : 'Try a shorter phrase, check the spelling, or search for a creator handle.'}
+                />
+                <RelatedPosts posts={relatedPosts} returnTo={returnTo} />
+              </div>
             )
           ) : (
             <div className={`space-y-10 transition-opacity${staleResultsShown ? ' opacity-60' : ''}`}>
@@ -930,6 +1018,8 @@ export default function SearchClient({
                   </button>
                 </div>
               ) : null}
+
+              <RelatedPosts posts={relatedPosts} returnTo={returnTo} />
 
               {currentFailure ? <p role="alert" className="text-center text-sm text-rose-300">{currentFailure.message}</p> : null}
             </div>

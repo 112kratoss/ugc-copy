@@ -325,7 +325,7 @@ describe('search page typeahead', () => {
     expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true');
     fireEvent.click(screen.getByRole('option', { name: 'Search for lumina' }));
     expect((box() as HTMLInputElement).value).toBe('lumina');
-    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lumina&type=top'));
+    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lumina&type=top&related=1'));
     noList();
   });
 
@@ -717,7 +717,7 @@ describe('search page typeahead', () => {
     key('Enter');
     expect((box() as HTMLInputElement).value).toBe('luminous');
     // No pause for typing: the person chose this search.
-    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=luminous&type=top'));
+    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=luminous&type=top&related=1'));
     expect(Date.now() - before).toBeLessThan(280);
     // The completion's own suggestions are not drawn over the results it asked for.
     await pastThePause();
@@ -763,7 +763,7 @@ describe('search page typeahead', () => {
     expect(fireEvent.mouseDown(listbox)).toBe(false);
     fireEvent.click(within(listbox).getByRole('option', { name: 'Search for lumen glow' }));
     expect((box() as HTMLInputElement).value).toBe('lumen glow');
-    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lumen+glow&type=top'));
+    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lumen+glow&type=top&related=1'));
     noList();
 
     type('lum');

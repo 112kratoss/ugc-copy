@@ -1066,7 +1066,7 @@ describe('SearchClient', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Search again for kling portrait' }));
         await settle(300);
         expect(field).toHaveValue('kling portrait');
-        expect(requestedUrls().at(-1)).toBe('/api/search?q=kling+portrait&type=top');
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=kling+portrait&type=top&related=1');
         expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
 
         // Cleared, the box shows them again; Clear all empties the list and the store.

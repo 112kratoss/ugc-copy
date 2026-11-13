@@ -523,6 +523,82 @@ test.describe('public search', () => {
     expect(requests.every((search) => search.includes('type=creators'))).toBe(true);
   });
 
+  test('asks for related posts only for a search left alone or settled on, and draws them under its own results', async ({ page }) => {
+    // Each new query asked about with related=1 spends one of the viewer's
+    // forty a day, so the page never asks at a step of the typing. The page's
+    // clock is the test's: a second and a half passes when the test says so.
+    await page.clock.install();
+    const card = (id: string, title: string) => ({
+      id, title, saveCount: 0, commentCount: 0, creator: { name: 'Luna Studio' }, mediaItems: [], mediaKind: null, mediaUrl: null,
+    });
+    const requests: string[] = [];
+    await page.route(SEARCH_API, async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url.search);
+      const query = url.searchParams.get('q') ?? '';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...searchResponse(query, url.searchParams.get('type') ?? 'top'),
+          sort: 'top',
+          creators: emptyPage,
+          posts: { items: query === 'ocean at dusk' ? [card('own-1', 'Ocean at dusk, long exposure')] : [], nextCursor: null },
+          // The server looks for them only when asked.
+          ...(url.searchParams.get('related') === '1'
+            ? { related: { posts: [card('related-1', 'Sea after sunset'), card('related-2', 'Cliffs in mist')] } }
+            : {}),
+        }),
+      });
+    });
+    await page.goto('/search');
+    const box = page.getByRole('combobox');
+    await expect(page.getByText('Start with a creator or idea')).toBeVisible();
+    const related = page.getByRole('region', { name: 'Related posts' });
+    const status = page.locator('p[role="status"]');
+
+    // Typed and left: the search is asked without the parameter, and its answer drawn.
+    await page.clock.pauseAt(new Date(Date.now() + 5_000));
+    await box.fill('ocean at dusk');
+    await page.clock.runFor(300);
+    await expect(page.getByRole('link', { name: /Ocean at dusk, long exposure/ })).toBeVisible();
+    expect(requests).toEqual(['?q=ocean+at+dusk&type=top']);
+    await expect(related).toHaveCount(0);
+    // Not while the answer has stood for less than the settle time.
+    await page.clock.runFor(1_499);
+    expect(requests).toHaveLength(1);
+    await page.clock.runFor(1);
+    await expect(related.getByRole('link')).toHaveText([/Sea after sunset/, /Cliffs in mist/]);
+    expect(requests).toEqual(['?q=ocean+at+dusk&type=top', '?q=ocean+at+dusk&type=top&related=1']);
+    // Under the search's own posts, with the same cards, which come back to this search.
+    await expect(page.getByRole('heading', { level: 2 })).toHaveText(['Posts', 'Related posts']);
+    const href = await related.getByRole('link').first().getAttribute('href');
+    expect(new URL(href ?? '', 'http://127.0.0.1').searchParams.get('returnTo')).toBe('/search?q=ocean+at+dusk');
+    // Said after the search's own count, once the box is left.
+    await page.getByRole('heading', { level: 1 }).click();
+    await expect(status).toHaveText('1 result for ocean at dusk. 2 related posts');
+    // Once per answer.
+    await page.clock.runFor(10_000);
+    expect(requests).toHaveLength(2);
+
+    // Enter inside the pause: the person has settled on it, so the search itself asks.
+    await box.fill('quiet harbour');
+    await box.press('Enter');
+    await page.clock.runFor(300);
+    await expect(related.getByRole('link')).toHaveCount(2);
+    await expect(page.getByText('No results for “quiet harbour”')).toBeVisible();
+    expect(requests.slice(2)).toEqual(['?q=quiet+harbour&type=top&related=1']);
+    await page.clock.runFor(10_000);
+    expect(requests).toHaveLength(3);
+
+    // Recipes bring none: the parameter is not sent there, settled or not.
+    await page.getByRole('tab', { name: 'Recipes' }).click();
+    await page.clock.runFor(10_000);
+    expect(requests.slice(3)).toEqual(['?q=quiet+harbour&type=recipes']);
+    await expect(related).toHaveCount(0);
+    await page.clock.resume();
+  });
+
   // The page writes its address a pause after the last letter. It used to do
   // so through Next's patched history.replaceState, which Next's router takes
   // for a navigation, and a navigation discards the one still loading: any
