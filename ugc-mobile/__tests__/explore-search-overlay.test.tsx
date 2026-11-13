@@ -1904,7 +1904,7 @@ describe('ExploreSearchOverlay typeahead', () => {
     expect(searchPublicContent).not.toHaveBeenCalled();
     expect(statusTitles(tree)).toEqual([]);
     expect(shownTexts(tree)).not.toContain('Searching…');
-    expect(mocks.announce.mock.calls).toEqual([['6 suggestions']]);
+    expect(mocks.announce.mock.calls).toEqual([['5 suggestions']]);
     await act(async () => tree.unmount());
   });
 
@@ -1973,7 +1973,7 @@ describe('ExploreSearchOverlay typeahead', () => {
     await typeQuery(tree, 'lum');
     await advance(PAUSE);
     await advance(ANNOUNCE_PAUSE);
-    expect(mocks.announce.mock.calls).toEqual([['6 suggestions']]);
+    expect(mocks.announce.mock.calls).toEqual([['5 suggestions']]);
 
     // The next letter: nothing goes. What was offered stays, less the model
     // the text no longer names (pressing it would search "lumi" narrowed to it).
@@ -2008,7 +2008,7 @@ describe('ExploreSearchOverlay typeahead', () => {
     expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
     expect(mocks.announce).toHaveBeenCalledTimes(1);
     await advance(ANNOUNCE_PAUSE - SETTLE);
-    expect(mocks.announce.mock.calls).toEqual([['6 suggestions'], ['3 suggestions']]);
+    expect(mocks.announce.mock.calls).toEqual([['5 suggestions'], ['2 suggestions']]);
 
     // The same count on the next text is not said again.
     suggestSearch.mockResolvedValueOnce(suggestions({ creators: [], entities: [], completions: [{ text: 'luminal' }, { text: 'luminar' }] }));
@@ -2123,6 +2123,39 @@ describe('ExploreSearchOverlay typeahead', () => {
     await act(async () => tree.unmount());
   });
 
+  it('holds a tap on a row an answer adds where another row stood a moment before (review of #786, M1)', async () => {
+    // "ne": "Search for", two recents, then the answer's "neon lights" at the
+    // fourth place. "neo" drops "nebula", so "neon lights" moves up a place
+    // and the fourth place is empty; the answer for "neo" lands 140 ms later
+    // and adds "neon sign" there. A finger aimed at "neon lights" lands on it.
+    mocks.readSearchHistory.mockResolvedValue(['neon portrait', 'nebula']);
+    suggestSearch.mockResolvedValueOnce(suggestions({ query: 'ne', normalizedQuery: 'ne', creators: [], entities: [], completions: [{ text: 'neon lights' }] }));
+    const later = deferred<SearchSuggestResponse>();
+    const tree = await open();
+    await typeQuery(tree, 'ne');
+    await advance(PAUSE);
+    await advance(SETTLE);
+    expect(rowLabels(tree)).toEqual([searchFor('ne'), 'Search again for neon portrait', 'Search again for nebula', 'Search for neon lights']);
+    suggestSearch.mockReturnValueOnce(later.promise);
+    await typeQuery(tree, 'neo');
+    expect(rowLabels(tree)).toEqual([searchFor('neo'), 'Search again for neon portrait', 'Search for neon lights']);
+    await advance(PAUSE);
+    await act(async () => {
+      later.resolve(suggestions({ query: 'neo', normalizedQuery: 'neo', creators: [], entities: [], completions: [{ text: 'neon lights' }, { text: 'neon sign' }] }));
+      await later.promise;
+    });
+    expect(rowLabels(tree)[3]).toBe('Search for neon sign');
+    expect(dimmedRows(tree)).toContain('Search for neon sign');
+    await press(pressableLabelled(tree, 'Search for neon sign'));
+    expect(searchInput(tree).props.value).toBe('neo');
+    expect(searchPublicContent).not.toHaveBeenCalled();
+    await advance(SETTLE);
+    expect(dimmedRows(tree)).toEqual([]);
+    await press(pressableLabelled(tree, 'Search for neon sign'));
+    expect(searchInput(tree).props.value).toBe('neon sign');
+    await act(async () => tree.unmount());
+  });
+
   it('takes a tap at once on a row that stands where it stood, while the rows under another one move', async () => {
     const tree = await open();
     await typeQuery(tree, 'lum');
@@ -2152,9 +2185,10 @@ describe('ExploreSearchOverlay typeahead', () => {
     // What is typed next starts from nothing, not from the list of "lum".
     suggestSearch.mockResolvedValueOnce(suggestions({ creators: [], entities: [], completions: [{ text: 'veo' }] }));
     await typeQuery(tree, 'v');
-    expect(rowLabels(tree)).toEqual([searchFor('v')]);
+    // One letter is searched on no tab: no "Search for" (review of #786, S2).
+    expect(rowLabels(tree)).toEqual([]);
     await advance(PAUSE);
-    expect(rowLabels(tree)).toEqual([searchFor('v'), 'Search for veo']);
+    expect(rowLabels(tree)).toEqual(['Search for veo']);
     // Stale on the next letter, then gone when that letter's own answer is empty.
     suggestSearch.mockResolvedValueOnce(suggestions({ creators: [], entities: [], completions: [] }));
     await typeQuery(tree, 'vq');
@@ -2400,8 +2434,8 @@ describe('ExploreSearchOverlay typeahead', () => {
     await typeQuery(tree, 'l');
     await advance(PAUSE);
     expect(asked()).toEqual(['l']);
+    // No "Search for": one letter is searched on no tab.
     expect(rowLabels(tree)).toEqual([
-      searchFor('l'),
       'Luma Studio, @luma-studio, following. Open profile',
       '@lumen. Open profile',
     ]);
@@ -2429,6 +2463,96 @@ describe('ExploreSearchOverlay typeahead', () => {
     expect(asked()).toEqual(['lum', 'lum']);
     expect(shownTexts(tree)).not.toContain('@luma-studio · Following');
     expect(shownTexts(tree)).toContain('@luma-studio');
+    await act(async () => tree.unmount());
+  });
+
+  it('opens again in typing, with no search sent and no old results drawn, after closing on results (review of #786, S1)', async () => {
+    const onClose = vi.fn();
+    const tree = await open();
+    await typeQuery(tree, 'lum');
+    await commit(tree);
+    expect(searchPublicContent).toHaveBeenCalledTimes(1);
+    expect(shownTexts(tree)).toContain('Creator found');
+    await update(tree, { visible: false, onClose });
+    await update(tree, { visible: true, onClose });
+    // Before the field takes the focus, and after.
+    expect(shownTexts(tree)).not.toContain('Creator found');
+    expect(list(tree)).not.toBeNull();
+    await advance(PAUSE * 2);
+    await focusField(tree);
+    expect(searchPublicContent).toHaveBeenCalledTimes(1);
+    expect(shownTexts(tree)).not.toContain('Creator found');
+    await act(async () => tree.unmount());
+  });
+
+  it('drops a search still on its way when the screen goes back to typing (review of #786, S1)', async () => {
+    const tree = await open();
+    let signal: AbortSignal | undefined;
+    searchPublicContent.mockImplementationOnce((_params, given) => {
+      signal = given;
+      return deferred<never>().promise;
+    });
+    await typeQuery(tree, 'lum');
+    await commit(tree);
+    expect(signal?.aborted).toBe(false);
+    await focusField(tree);
+    expect(signal?.aborted).toBe(true);
+    await act(async () => tree.unmount());
+  });
+
+  it('offers no search a tab would not run: no "Search for" row, and the Search key keeps typing (review of #786, S2)', async () => {
+    mocks.readSearchHistory.mockResolvedValue(['lu', 'lumen glow']);
+    suggestSearch.mockResolvedValue(suggestions({ query: 'l', normalizedQuery: 'l', creators: [], entities: [], completions: [] }));
+    const tree = await open();
+    // One letter: below every tab's minimum.
+    await typeQuery(tree, 'l');
+    await advance(PAUSE);
+    expect(rowLabels(tree)).not.toContain(searchFor('l'));
+    expect(searchInput(tree).props.submitBehavior).toBe('submit');
+    await commit(tree);
+    expect(searchPublicContent).not.toHaveBeenCalled();
+    expect(mocks.keyboardDismiss).not.toHaveBeenCalled();
+    expect(shownTexts(tree)).not.toContain(SEARCH_IDLE_TITLE);
+    // Two letters: Top runs them, so "Search for" is back.
+    await typeQuery(tree, 'lu');
+    expect(rowLabels(tree)[0]).toBe(searchFor('lu'));
+    expect(searchInput(tree).props.submitBehavior).toBe('blurAndSubmit');
+    // Posts asks for three: pressing it picks it and keeps typing; the rows
+    // that would commit "lu" go, and a longer recent search stays.
+    await press(tab(tree, 'Posts'));
+    expect(tab(tree, 'Posts').props.accessibilityState).toMatchObject({ selected: true });
+    expect(searchPublicContent).not.toHaveBeenCalled();
+    expect(list(tree)).not.toBeNull();
+    expect(rowLabels(tree)).toEqual(['Search again for lumen glow']);
+    await commit(tree);
+    expect(searchPublicContent).not.toHaveBeenCalled();
+    // A third letter runs on Posts.
+    await typeQuery(tree, 'lum');
+    await commit(tree);
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'lum', type: 'posts' });
+    await act(async () => tree.unmount());
+  });
+
+  it('keeps "Search for" to one line however long the text, its name whole (review of #786, S3)', async () => {
+    const long = 'a neon portrait of a lighthouse keeper at dusk in the rain';
+    const tree = await open();
+    await typeQuery(tree, long);
+    const row = pressableLabelled(tree, searchFor(long));
+    const lines = row.findAll((node) => isHost(node, 'text')).map((node) => node.props.numberOfLines);
+    expect(lines).toEqual([1]);
+    await act(async () => tree.unmount());
+  });
+
+  it('counts only the answer\'s rows when it says how many suggestions there are (review of #786, N3)', async () => {
+    mocks.readSearchHistory.mockResolvedValue(['lumen glow']);
+    suggestSearch.mockResolvedValue(suggestions({ creators: [], entities: [], completions: [] }));
+    const tree = await open();
+    await typeQuery(tree, 'lum');
+    await advance(PAUSE);
+    await advance(ANNOUNCE_PAUSE);
+    // "Search for" and a recent search are on show; the answer held nothing.
+    expect(rowLabels(tree)).toEqual([searchFor('lum'), 'Search again for lumen glow']);
+    expect(mocks.announce).not.toHaveBeenCalled();
     await act(async () => tree.unmount());
   });
 

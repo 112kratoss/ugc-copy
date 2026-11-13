@@ -417,12 +417,15 @@ export interface SearchTypingSection {
  * The typing list for the text in the box (`query`, searchTypeaheadQuery of
  * it): the "Search for" row, the recent searches it begins, then `sections`
  * (searchTypeaheadDrawn's) with any completion that repeats a row above left
- * out. Empty when the box asks about nothing.
+ * out. Empty when the box asks about nothing. `searchable` false leaves the
+ * "Search for" row out: the text is too short for the search it would commit
+ * (the picked tab's minimum), and a row that leads nowhere is not offered.
  */
 export function searchTypingSections(input: {
   query: string | null;
   sections: readonly SearchTypeaheadSection[];
   recents: readonly string[];
+  searchable?: boolean;
 }): SearchTypingSection[] {
   if (input.query === null) return [];
   const shown = new Set<string>([foldedText(input.query)]);
@@ -438,7 +441,7 @@ export function searchTypingSections(input: {
     if (rows.length) answered.push({ id: section.id, heading: section.heading, rows });
   }
   return [
-    { id: 'search', heading: null, rows: [{ kind: 'search', key: SEARCH_TYPING_SEARCH_ROW_KEY, text: input.query }] },
+    ...(input.searchable === false ? [] : [{ id: 'search' as const, heading: null, rows: [{ kind: 'search' as const, key: SEARCH_TYPING_SEARCH_ROW_KEY, text: input.query }] }]),
     ...(recents.length ? [{ id: 'recents' as const, heading: null, rows: recents }] : []),
     ...answered,
   ];

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  SEARCH_TYPEAHEAD_PRESS_SETTLE_MS,
   SEARCH_TYPING_MAX_RECENTS,
   searchForRowLabel,
   searchTypeaheadAction,
@@ -16,6 +17,7 @@ import {
   searchScreenBody,
   searchTabPressCommits,
   searchTypingAppendedFrom,
+  searchTypingHeldLength,
 } from '../lib/search-typing-mode';
 
 // The app's typing list (search UX audit 2026-11-13, findings 1 and 9).
@@ -57,6 +59,12 @@ describe('the typing list', () => {
     expect(searchTypingSections({ query: 'lu', sections: [], recents: [] }).flatMap((section) => section.rows))
       .toEqual([{ kind: 'search', key: 'search', text: 'lu' }]);
     expect(searchTypingSections({ query: null, sections: answer, recents: ['lumen'] })).toEqual([]);
+  });
+
+  it('leaves "Search for" out for a text the search would not run (review of #786, S2)', () => {
+    const rows = searchTypingSections({ query: 'l', sections: answer, recents: [], searchable: false }).flatMap((section) => section.rows);
+    expect(rows.some((row) => row.kind === 'search')).toBe(false);
+    expect(rows.length).toBeGreaterThan(0);
   });
 
   it('names the "Search for" row with the text in quotes, and a recent as searching again', () => {
@@ -127,5 +135,23 @@ describe('the search screen\'s two modes', () => {
     expect(searchTypingAppendedFrom(['search', 'creator:a'], ['search', 'recent:x', 'creator:a'])).toBeNull();
     expect(searchTypingAppendedFrom(['search', 'creator:a'], ['search', 'creator:a'])).toBeNull();
     expect(searchTypingAppendedFrom([], ['search'])).toBe(0);
+  });
+
+  it('does not count a row added where another stood a moment before as added under the list (review of #786, M1)', () => {
+    // Four rows, a letter shortens the list to three, and the answer adds one
+    // in the fourth place again: something stood there 140 ms ago.
+    expect(searchTypingAppendedFrom(['search', 'recent:a', 'completion:b'], ['search', 'recent:a', 'completion:b', 'completion:c'], 4)).toBeNull();
+    // Rows past the place that was held still count as added.
+    expect(searchTypingAppendedFrom(['search', 'recent:a', 'completion:b'], ['search', 'recent:a', 'completion:b', 'completion:c', 'completion:d'], 4)).toBe(4);
+  });
+
+  it('keeps the places held until the order has stood still for the press rule', () => {
+    const SETTLE = SEARCH_TYPEAHEAD_PRESS_SETTLE_MS;
+    expect(searchTypingHeldLength(null, 3, 1000)).toEqual({ length: 3, changedAt: 1000 });
+    // A letter takes a row away 140 ms after a change: the fourth place still counts.
+    expect(searchTypingHeldLength({ length: 3, changedAt: 1000 }, 4, 1140)).toEqual({ length: 4, changedAt: 1140 });
+    expect(searchTypingHeldLength({ length: 4, changedAt: 1140 }, 3, 1280)).toEqual({ length: 4, changedAt: 1280 });
+    // Once the order has stood, only the rows on show count.
+    expect(searchTypingHeldLength({ length: 4, changedAt: 1280 }, 3, 1280 + SETTLE)).toEqual({ length: 3, changedAt: 1280 + SETTLE });
   });
 });

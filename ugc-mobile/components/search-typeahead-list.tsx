@@ -75,8 +75,12 @@ function RowWords({ row, query }: { row: SearchTypeaheadRow; query: string | nul
   if (row.kind === 'search') {
     return (
       <View style={{ minWidth: 0, flex: 1 }}>
-        {/* The text it searches is the row's point: never cut off for the words before it. */}
-        <Text numberOfLines={3} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '700' }}>
+        {/* One line at every size: the row's text changes with each letter
+            while its key stays, so a row that grew a line would move every
+            row under it with no change the press rule sees (review of #786).
+            Cut in the middle, so the start and the latest letters both show;
+            its accessible name holds the whole text. */}
+        <Text numberOfLines={1} ellipsizeMode="middle" style={{ color: theme.colors.text, fontSize: 15, fontWeight: '700' }}>
           {searchForRowLabel(row.text)}
         </Text>
       </View>

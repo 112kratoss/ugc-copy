@@ -667,6 +667,15 @@ export function ExploreSearchOverlay({
   // Typing (suggestions in place of results) or results (lib/search-typing-mode.ts).
   const [mode, setMode] = useState<SearchScreenMode>('typing');
   const moveMode = (event: SearchModeEvent) => setMode((current) => searchModeAfter(current, event));
+  // Each opening starts in typing, as the field takes the focus: a search
+  // closed on its results would otherwise send its search again and draw the
+  // old results until then. Adjusted while rendering, so the opening's first
+  // frame is already the typing list (and the closing keeps what it showed).
+  const [openFor, setOpenFor] = useState(visible);
+  if (openFor !== visible) {
+    setOpenFor(visible);
+    if (visible) moveMode('focus');
+  }
   // The tab the person picked. It stays picked whatever the length of the
   // query: a tab not searched yet shows the idle state (searchTabRuns).
   const [pickedType, setPickedType] = useState<PublicSearchType>('top');
@@ -756,12 +765,20 @@ export function ExploreSearchOverlay({
   // Typeahead: what the field offers while the person types, drawn in place
   // of results until a search is committed. The keyboard put away by a drag
   // does not end it.
+  // Whether the picked tab searches a text this long (searchTabRuns): a
+  // commit of a shorter one is not offered and the Search key does nothing,
+  // so typing goes on (review of #786: it led to the idle invitation).
+  const tabRunsText = useCallback(
+    (text: string, onType: PublicSearchType = type) => searchTabRuns(onType, searchQueryLength(normalizeCreatorSearchQuery(normalizeSearchHistoryQuery(text)))),
+    [type],
+  );
   const typeahead = useSearchTypeahead({
     api,
     text: query,
     active: visible && mode === 'typing',
     viewerKey: user?.id ?? null,
     history,
+    runs: tabRunsText,
   });
 
   // Recent searches keep what the person acted on, never each pause in typing.
@@ -893,7 +910,9 @@ export function ExploreSearchOverlay({
     // A commit belongs to the query it was made on.
     if (rememberOnAnswer.current !== requestKey) rememberOnAnswer.current = null;
     if (!asksForResults || !requestKey) {
+      // A search still on its way is dropped, not only left unread.
       requestSequence.current += 1;
+      requestController.current?.abort();
       // A page still loading is dropped with its query; the answer kept for
       // that query must not come back with a stuck Show more.
       setLoadingMore(false);
@@ -916,9 +935,10 @@ export function ExploreSearchOverlay({
   // a recent search, a model or tool, a tab pressed while typing. The field
   // holds `text`, the keyboard goes, and the results are asked for at once;
   // they are kept among the recent searches when the answer finds something.
-  const commitSearch = (text: string) => {
+  // `onType` is the tab it is searched on, when a press picks it with the commit.
+  const commitSearch = (text: string, onType: PublicSearchType = type) => {
     const next = normalizeSearchHistoryQuery(text);
-    if (searchTypeaheadQuery(next) === null) return;
+    if (searchTypeaheadQuery(next) === null || !tabRunsText(next, onType)) return;
     pendingCommit.current = next;
     settleOn(next);
     if (text !== query) setQuery(text);
@@ -960,7 +980,7 @@ export function ExploreSearchOverlay({
       // server that narrows by them.
       setFiltersOffered(true);
       pickEntity(action.entity);
-      commitSearch(query);
+      commitSearch(query, 'posts');
       return;
     }
     // "Search for", a recent search or a completion: the field holds its
@@ -986,7 +1006,9 @@ export function ExploreSearchOverlay({
   // it over an answer that came without (the shared rule,
   // searchRelatedFollowUpDelay): at once for a search the person has settled
   // on, after a pause with the search left alone otherwise, only where the
-  // answer is thin, and once.
+  // answer is thin, and once. In the app every search sent is a commit, so
+  // asked with them already: this follow-up is kept for the shared rule (the
+  // web's live results reach it) and for an answer that came without them.
   const relatedPosts = shownResponse ? searchRelatedPosts(type, shownResponse) : NO_RELATED_POSTS;
   const relatedFollowUpDelay = answer !== null && answer.key === requestKey && visible && showingResults
     ? searchRelatedFollowUpDelay({
@@ -1049,6 +1071,9 @@ export function ExploreSearchOverlay({
               // Tapping the field goes back to typing for the text it holds.
               onFocus={() => moveMode('focus')}
               onSubmitEditing={submitSearch}
+              // Below the picked tab's minimum the Search key commits
+              // nothing, and the keyboard stays for the typing to go on.
+              submitBehavior={tabRunsText(query) ? 'blurAndSubmit' : 'submit'}
               placeholder={SEARCH_PLACEHOLDER}
               placeholderTextColor={theme.colors.faint}
               returnKeyType="search"
@@ -1080,7 +1105,7 @@ export function ExploreSearchOverlay({
               onPress={() => {
                 setPickedType(item.id);
                 // While typing, a tab opens on the results for what is typed.
-                if (searchTabPressCommits({ mode, text: query })) commitSearch(query);
+                if (searchTabPressCommits({ mode, text: query })) commitSearch(query, item.id);
               }}
             />
           ))}
@@ -1115,9 +1140,11 @@ export function ExploreSearchOverlay({
         ) : exactNotice ? (
           <ReadingNotice line={exactNotice} actionLabel={SEARCH_CORRECTED_AGAIN_LABEL} onAction={() => setExactQuery(null)} />
         ) : null}
-        {body === 'suggestions' ? (
+        {body === 'suggestions' && typeahead.shown ? (
           // While typing: suggestions only, in place of results. The list
-          // stays when a drag puts the keyboard away; a commit ends it.
+          // stays when a drag puts the keyboard away; a commit ends it. A
+          // text too short to search, with nothing suggested for it, has no
+          // list: the invitation stands in for it.
           <SearchTypeaheadList
             sections={typeahead.sections}
             query={query}
@@ -1125,7 +1152,7 @@ export function ExploreSearchOverlay({
             settlingRows={typeahead.settlingRows}
             onPick={pickSuggestion}
           />
-        ) : body === 'start' || !requestKey ? (
+        ) : body !== 'results' || !requestKey ? (
           // Recent searches under an empty field only, as on the web: under a
           // typed query that is not searched they would read as its results.
           history.length && body === 'start' ? (

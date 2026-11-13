@@ -1,4 +1,4 @@
-import { searchTypeaheadQuery } from './public-search-policy/search-typeahead';
+import { SEARCH_TYPEAHEAD_PRESS_SETTLE_MS, searchTypeaheadQuery } from './public-search-policy/search-typeahead';
 
 /**
  * The app's search has two modes (search UX audit 2026-11-13, finding 1):
@@ -61,18 +61,44 @@ export function searchTabPressCommits(state: { mode: SearchScreenMode; text: str
 }
 
 /**
- * Where a typing list only grew at its end: every row drawn before stands
- * where it stood and the new ones come after the last of them. Returns the
- * index of the first new row, or null when anything above moved.
+ * Where a typing list only grew at its end into places nothing stood in a
+ * moment ago: every row drawn before stands where it stood, and the new rows
+ * come after the last of them and after `heldLength`, the most rows the list
+ * has drawn since its order last stood still (searchTypingHeldLength).
+ * Returns the index from which the new rows stand where nothing stood, or null
+ * when anything above moved or every new row fills a place a row has just left.
  *
  * The app's list starts with rows that need no answer ("Search for", the
- * matching recent searches) and an answer then adds rows under them. Below the
- * last row there was nothing to aim at (the list is the screen's whole body
- * while typing), so a row appended there takes a press at once and is not
- * drawn dimmed. A row that came between, or a row that moved, keeps the shared
- * rule (`isSearchTypeaheadPressAccepted`).
+ * matching recent searches) and an answer then adds rows under them. Where no
+ * row has stood for a while there was nothing to aim at (the list is the
+ * screen's whole body while typing), so a row appended there takes a press at
+ * once and is not drawn dimmed. A row that came between, a row that moved, and
+ * a row added where another stood a moment before (a letter shortened the
+ * list, then an answer lengthened it again) keep the shared rule
+ * (`isSearchTypeaheadPressAccepted`): a finger may be on its way to that place.
  */
-export function searchTypingAppendedFrom(before: readonly string[], order: readonly string[]): number | null {
+export function searchTypingAppendedFrom(
+  before: readonly string[],
+  order: readonly string[],
+  heldLength: number = before.length,
+): number | null {
   if (order.length <= before.length) return null;
-  return before.every((key, index) => order[index] === key) ? before.length : null;
+  if (!before.every((key, index) => order[index] === key)) return null;
+  const from = Math.max(before.length, heldLength);
+  return from < order.length ? from : null;
+}
+
+/** The most rows a typing list has drawn since its order last stood still, and when its order last changed. */
+export type SearchTypingHeld = { length: number; changedAt: number };
+
+/**
+ * The record searchTypingAppendedFrom reads, after the order changes at `now`
+ * from a list of `beforeLength` rows: a place a row stood in counts as held
+ * until the order has stood still for SEARCH_TYPEAHEAD_PRESS_SETTLE_MS (as
+ * long as the press rule holds a row back). `held` is null when the list was
+ * not on show.
+ */
+export function searchTypingHeldLength(held: SearchTypingHeld | null, beforeLength: number, now: number): SearchTypingHeld {
+  const stood = held === null || now - held.changedAt >= SEARCH_TYPEAHEAD_PRESS_SETTLE_MS;
+  return { length: stood ? beforeLength : Math.max(held.length, beforeLength), changedAt: now };
 }
