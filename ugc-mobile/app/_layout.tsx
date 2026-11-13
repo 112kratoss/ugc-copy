@@ -430,6 +430,9 @@ function RootLayoutNav() {
                 {/* Keep the library and its card feed opaque while navigating. A
                     fade composites two dense media surfaces and briefly makes
                     cards from the grid look stacked over feed cards. */}
+                {/* Search, opened from Home and Explore: the platform's own push
+                    and back swipe (search UX audit 2026-11-13, finding 7). */}
+                <Stack.Screen name="search" options={{ headerShown: false }} />
                 <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="showcase" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 {/* Where UIKit's zoom runs the page draws its own bar, which a

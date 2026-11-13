@@ -144,3 +144,14 @@ describe('the search screen\'s two modes', () => {
     expect(searchTypingHeldLength({ length: 4, changedAt: 1280 }, 3, 1280 + SETTLE)).toEqual({ length: 3, changedAt: 1280 + SETTLE });
   });
 });
+
+describe('the search screen\'s address', () => {
+  it('opens on a link\'s q and type, an empty field without q, Top for an unknown type', async () => {
+    const { searchScreenParams, SEARCH_SCREEN_HREF } = await import('../lib/search-screen-route');
+    expect(SEARCH_SCREEN_HREF).toBe('/search');
+    expect(searchScreenParams({ q: 'nano  banana ', type: 'posts' })).toEqual({ query: 'nano banana', type: 'posts' });
+    expect(searchScreenParams({ q: ['portrait', 'x'], type: 'reels' })).toEqual({ query: 'portrait', type: null });
+    expect(searchScreenParams({})).toEqual({ query: null, type: null });
+    expect(searchScreenParams({ q: '   ', type: 'posts' })).toEqual({ query: null, type: null });
+  });
+});

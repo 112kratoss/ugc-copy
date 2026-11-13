@@ -1,4 +1,3 @@
-import { useIsFocused } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { BookOpen, Box, Clock3, Search, Wrench, X } from 'lucide-react-native';
@@ -22,7 +21,6 @@ import { SearchPostMasonry } from '@/components/search-post-masonry';
 import { SearchStarterSections } from '@/components/search-starter-sections';
 import { SearchTypeaheadList } from '@/components/search-typeahead-list';
 import { ChoiceChip, CreatorAvatar, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
-import { MotionView, useOverlayPresence } from '@/lib/motion';
 import { BackGlyph } from '@/lib/platform-glyphs';
 import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { ApiError, type MagicbookletApiClient } from '@/lib/api-client';
@@ -123,7 +121,6 @@ import {
   type SearchModeEvent,
   type SearchScreenMode,
 } from '@/lib/search-typing-mode';
-import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type {
@@ -134,7 +131,6 @@ import type {
   RecipeSearchResult,
   ShowcaseFeedItem,
 } from '@/lib/types';
-import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useSearchTypeahead } from '@/lib/use-search-typeahead';
 import { formatUnlockCreditPrice } from '@/lib/pricing';
 
@@ -571,14 +567,27 @@ function RelatedPosts({ posts, columns, onOpen }: { posts: readonly ShowcaseFeed
 }
 const noSortChange = () => {};
 
+/**
+ * The search screen's body: the field, its tabs, and what it draws under them
+ * (typing, results, the start and the dead ends). Drawn by the pushed
+ * `/search` route (`app/search.tsx`), which Home and Explore open: the
+ * navigator gives it its entrance and exit, the back swipe and Android's back
+ * key, and covers the tab bar (search UX audit 2026-11-13, finding 7).
+ * `initialQuery` and `initialType` open it on a search, as a shared search
+ * link would; without them it opens on an empty field.
+ */
 export function ExploreSearchOverlay({
   api,
   onClose,
   visible,
+  initialQuery = null,
+  initialType = null,
 }: {
   api: MagicbookletApiClient;
   onClose: () => void;
   visible: boolean;
+  initialQuery?: string | null;
+  initialType?: PublicSearchType | null;
 }) {
   const theme = useAppTheme();
   // The registered account, null for a visitor and for a guest session: the
@@ -586,15 +595,11 @@ export function ExploreSearchOverlay({
   const { user } = useAuth();
   const canFollow = Boolean(user);
   const insets = useSafeAreaInsets();
-  const { width, fontScale } = useWindowDimensions();
+  const { fontScale } = useWindowDimensions();
   // Two posts across, one at the accessibility text sizes (search-post-grid.ts).
   const postColumns = searchPostGridColumns(fontScale);
-  const isFocused = useIsFocused();
-  // The floating tab bar stays mounted above this overlay, so the results list
-  // needs the same clearance the feed itself uses or the last row never
-  // scrolls out from underneath it.
-  const tabBarMetrics = getMagicTabBarMetrics(width, insets.bottom);
-  const { mounted, animatedStyle } = useOverlayPresence(visible);
+  // Opened on a search (a shared link): committed from the first render.
+  const openedOn = initialQuery ? normalizeSearchHistoryQuery(initialQuery) : '';
   const inputRef = useRef<TextInput>(null);
   const resultsScrollRef = useRef<ScrollView>(null);
   const requestSequence = useRef(0);
@@ -603,21 +608,21 @@ export function ExploreSearchOverlay({
   // recent searches when that answer finds something.
   const rememberOnAnswer = useRef<string | null>(null);
   // The query just committed: its key is known once it is drawn.
-  const pendingCommit = useRef<string | null>(null);
+  const pendingCommit = useRef<string | null>(openedOn || null);
   // The query the person settled on: every search the app sends is one
   // committed, so it is asked with related posts (public-search-policy.ts,
   // "Related posts").
   // The ref is read as a request is sent, the state by the wait after an
   // answer: a request that read the state would be made again when it changed.
-  const settledQueryAtSend = useRef<string | null>(null);
-  const [settledQuery, setSettledQuery] = useState<string | null>(null);
+  const settledQueryAtSend = useRef<string | null>(openedOn || null);
+  const [settledQuery, setSettledQuery] = useState<string | null>(openedOn || null);
   const settleOn = (settled: string) => {
     settledQueryAtSend.current = settled;
     setSettledQuery(settled);
   };
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(openedOn);
   // Typing (suggestions in place of results) or results (lib/search-typing-mode.ts).
-  const [mode, setMode] = useState<SearchScreenMode>('typing');
+  const [mode, setMode] = useState<SearchScreenMode>(openedOn ? 'results' : 'typing');
   const moveMode = (event: SearchModeEvent) => setMode((current) => searchModeAfter(current, event));
   // Each opening starts in typing, as the field takes the focus: a search
   // closed on its results would otherwise send its search again and draw the
@@ -630,7 +635,7 @@ export function ExploreSearchOverlay({
   }
   // The tab the person picked. It stays picked whatever the length of the
   // query: a tab not searched yet shows the idle state (searchTabRuns).
-  const [pickedType, setPickedType] = useState<PublicSearchType>('top');
+  const [pickedType, setPickedType] = useState<PublicSearchType>(initialType ?? 'top');
   // The order picked for Posts and Recipes, kept across the two tabs.
   const [pickedSort, setPickedSort] = useState<PublicSearchSort>('top');
   // What narrows Posts, kept across tabs as the order is and read only on Posts.
@@ -757,17 +762,22 @@ export function ExploreSearchOverlay({
     // Leaving with results on screen keeps the query; one that found nothing,
     // or is still unanswered, is not kept.
     if (showingResults && shownResponse && resultCount > 0) rememberQuery(historyQuery);
+    keptOnLeave.current = null;
     // Dismissing the keyboard alongside the fade keeps close reading as one
     // gesture instead of two staggered ones.
     Keyboard.dismiss();
     onClose();
   }, [historyQuery, onClose, rememberQuery, resultCount, showingResults, shownResponse]);
 
-  // Android's back key closes the search only while this screen is the one
-  // showing. A result tap pushes the post over the tabs with the search still
-  // open underneath, and an unfocused claim would run ahead of the navigator,
-  // close the search out of sight, and swallow the press meant for the post.
-  useHardwareBack(visible && isFocused, requestClose);
+  // Leaving by the navigator (the back swipe, Android's back key) keeps the
+  // search on screen as the close button does: read as it leaves.
+  const keptOnLeave = useRef<string | null>(null);
+  useEffect(() => {
+    keptOnLeave.current = showingResults && shownResponse && resultCount > 0 ? historyQuery : null;
+  });
+  useEffect(() => () => {
+    if (keptOnLeave.current) void rememberSearchQuery(keptOnLeave.current);
+  }, []);
 
   useEffect(() => {
     if (!visible) {
@@ -776,9 +786,11 @@ export function ExploreSearchOverlay({
       return;
     }
     void readSearchHistory().then(setHistory);
+    // Opened on a search, it shows the results; else the field is ready to type in.
+    if (openedOn) return;
     const focusTimer = setTimeout(() => inputRef.current?.focus(), 120);
     return () => clearTimeout(focusTimer);
-  }, [visible]);
+  }, [openedOn, visible]);
 
   // Related posts can come with the search in front (the first page of it).
   const relatedApplies = requestKey !== null && searchRelatedApplies({
@@ -1085,13 +1097,9 @@ export function ExploreSearchOverlay({
   // Nothing anywhere: Top found nothing, or this tab and every other did.
   const nothingFound = emptyTab && (shownTab === null || (pointerCounts !== null && otherTab === null));
 
-  if (!mounted) return null;
+  if (!visible) return null;
 
   return (
-    <MotionView
-      pointerEvents={visible ? 'auto' : 'none'}
-      style={[{ position: 'absolute', inset: 0, zIndex: 20 }, animatedStyle]}
-    >
     <KeyboardAvoidingArea
       style={{ flex: 1, backgroundColor: theme.colors.background }}
     >
@@ -1170,7 +1178,8 @@ export function ExploreSearchOverlay({
           flexGrow: 1,
           gap: 22,
           padding: appTheme.spacing.screen,
-          paddingBottom: tabBarMetrics.contentBottomOverlapPadding + appTheme.spacing.section,
+          // A pushed screen: the tab bar is under it, not over it.
+          paddingBottom: insets.bottom + appTheme.spacing.section,
         }}
       >
         {showingResults && filtersShown ? (
@@ -1363,6 +1372,5 @@ export function ExploreSearchOverlay({
         )}
       </ScrollView>
     </KeyboardAvoidingArea>
-    </MotionView>
   );
 }

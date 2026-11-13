@@ -1277,7 +1277,7 @@ describe('Showcase screen', () => {
 
   // Product decision E2: Explore's only search entry is in the list header,
   // which scrolls away with the grid.
-  it('keeps a compact search button at the top once the list header has scrolled off', () => {
+  it('keeps a compact search button at the top once the list header has scrolled off', async () => {
     queryState.pages = [lanePage([{ id: 'post-1' }])];
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
@@ -1303,8 +1303,11 @@ describe('Showcase screen', () => {
       scrollTo(118);
       expect(compactSearch()).toHaveLength(1);
 
+      // Search is a screen pushed over the tabs (app/search.tsx).
+      const { router } = await import('expo-router');
+      vi.mocked(router.push).mockClear();
       renderer.act(() => compactSearch()[0].props.onPress());
-      expect(hostElement(tree!, 'explore-search-overlay').props.visible).toBe(true);
+      expect(router.push).toHaveBeenCalledWith('/search');
 
       // Back up, the header's own button is in view again: one entry at a time.
       scrollTo(60);
