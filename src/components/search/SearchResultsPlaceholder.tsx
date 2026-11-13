@@ -25,8 +25,8 @@ function Line({ className }: { className: string }) {
 
 /**
  * A section's heading row, the height of the drawn one: an h2 of text-xl
- * beside Top's 44px "See all" (`h-11`), beside the 46px order control on Posts
- * and Recipes, or alone on Creators (`h-7`).
+ * beside Top's 44px "See all" (`h-11`), beside the 48px order control on Posts
+ * and Recipes (`h-12`), or alone on Creators (`h-7`).
  */
 function Heading({ height = 'h-11' }: { height?: string }) {
   return (
@@ -52,11 +52,12 @@ function PostCard() {
 
 function CreatorRow() {
   return (
-    <span className={`${BLOCK_CLASS} flex min-h-20 items-center gap-4 px-4 py-3`}>
-      <span className="h-12 w-12 shrink-0 rounded-full bg-white/[0.07]" />
+    <span className={`${BLOCK_CLASS} flex min-h-20 items-center gap-4 rounded-2xl p-3`}>
+      <span className="h-13 w-13 shrink-0 rounded-full bg-white/[0.07]" />
       <span className="min-w-0 flex-1">
         <Line className="h-3.5 w-1/3" />
         <Line className="mt-2.5 h-3 w-1/4" />
+        <Line className="mt-2.5 h-3 w-1/2" />
       </span>
       <Shimmer />
     </span>
@@ -99,14 +100,14 @@ export function SearchResultsPlaceholder({ type }: { type: PublicSearchType }) {
         </span>
       ) : type === 'recipes' ? (
         <span className="block">
-          <Heading height="h-[46px]" />
+          <Heading height="h-12" />
           <span className="grid gap-4 lg:grid-cols-2">
             {Array.from({ length: 4 }, (_, index) => <RecipeCard key={index} />)}
           </span>
         </span>
       ) : type === 'posts' ? (
         <span className="block">
-          <Heading height="h-[46px]" />
+          <Heading height="h-12" />
           <Posts count={6} />
         </span>
       ) : (
