@@ -3,10 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
     DELETED_COMMENT_LABEL,
     adjustReplyCount,
+    applyOwnCommentReaction,
     buildCommentThreads,
     buildCommentsQuery,
     buildReplyDraftPrefix,
     canDeleteComment,
+    canEditComment,
+    canHeartComment,
+    canPinComment,
     canRemoveComment,
     canReportComment,
     describeCommentRequestFailure,
@@ -15,7 +19,9 @@ import {
     isPostCreatorComment,
     markCommentRemoved,
     mergeCommentPage,
+    nextCommentReaction,
     prependComment,
+    replaceComment,
     withPendingComments,
     type PostComment,
 } from '@/lib/post-comments-client';
@@ -34,6 +40,11 @@ function comment(overrides: Partial<PostComment> = {}): PostComment {
             displayName: 'Batman',
             avatarUrl: null,
         },
+        likeCount: 0,
+        viewerReaction: null,
+        editedAt: null,
+        hearted: false,
+        pinned: false,
         ...overrides,
     };
 }
@@ -149,12 +160,19 @@ describe('post comments client', () => {
 
         it('keeps a removed comment that still anchors replies, stripped of content', () => {
             const [kept] = markCommentRemoved(
-                [comment({ id: 'a', replyCount: 2 })],
+                [comment({
+                    id: 'a', replyCount: 2, likeCount: 5, viewerReaction: 'like',
+                    editedAt: '2026-11-01T00:00:00.000Z', hearted: true, pinned: true,
+                })],
                 'a',
                 'removed_by_owner'
             );
 
             expect(kept).toMatchObject({ id: 'a', status: 'removed_by_owner', body: '', author: null, replyCount: 2 });
+            // As the server sends it: "[deleted]" holds no likes, heart, pin or edit stamp.
+            expect(kept).toMatchObject({
+                likeCount: 0, viewerReaction: null, editedAt: null, hearted: false, pinned: false,
+            });
         });
 
         it('leaves other comments untouched', () => {
@@ -234,6 +252,63 @@ describe('post comments client', () => {
                 .toBe('We could not load this conversation.');
             expect(describeCommentRequestFailure('post', 502, {}).message).toBe('Could not post comment.');
             expect(describeCommentRequestFailure('remove', null).message).toBe('Could not remove comment.');
+        });
+    });
+
+    describe('likes, the heart, the pin and edits', () => {
+        it('takes back the reaction pressed twice and replaces it with the other', () => {
+            expect(nextCommentReaction(null, 'like')).toBe('like');
+            expect(nextCommentReaction('like', 'like')).toBeNull();
+            expect(nextCommentReaction('like', 'dislike')).toBe('dislike');
+            expect(nextCommentReaction('dislike', 'like')).toBe('like');
+        });
+
+        it('moves the like count by the reader\'s own like alone, never below zero', () => {
+            const liked = applyOwnCommentReaction(comment({ likeCount: 4 }), 'like');
+            expect(liked).toMatchObject({ likeCount: 5, viewerReaction: 'like' });
+            expect(applyOwnCommentReaction(liked, 'dislike')).toMatchObject({ likeCount: 4, viewerReaction: 'dislike' });
+            expect(applyOwnCommentReaction(liked, null)).toMatchObject({ likeCount: 4, viewerReaction: null });
+            // A dislike shows nowhere but on the reader's own button.
+            expect(applyOwnCommentReaction(comment({ likeCount: 4 }), 'dislike').likeCount).toBe(4);
+            expect(applyOwnCommentReaction(comment({ likeCount: 0, viewerReaction: 'like' }), null).likeCount).toBe(0);
+        });
+
+        it('swaps in the comment the server answered and leaves the rest', () => {
+            const list = [comment({ id: 'a' }), comment({ id: 'b' })];
+            const fresh = comment({ id: 'b', body: 'reworded', editedAt: '2026-11-13T00:00:00.000Z' });
+            expect(replaceComment(list, fresh)).toEqual([list[0], fresh]);
+        });
+
+        it('lets only its author edit a comment that is still there', () => {
+            expect(canEditComment(comment(), 'user-1')).toBe(true);
+            expect(canEditComment(comment(), 'user-2')).toBe(false);
+            expect(canEditComment(comment(), null)).toBe(false);
+            expect(canEditComment(comment({ status: 'removed_by_author', author: null }), 'user-1')).toBe(false);
+        });
+
+        it('gives the heart to the post\'s creator, on other people\'s comments and replies', () => {
+            expect(canHeartComment(comment(), 'owner', 'owner')).toBe(true);
+            expect(canHeartComment(comment({ parentId: 'root' }), 'owner', 'owner')).toBe(true);
+            // Not their own comment, and nobody else's to give.
+            expect(canHeartComment(comment({ author: { id: 'owner', username: 'o', displayName: 'O', avatarUrl: null } }), 'owner', 'owner')).toBe(false);
+            expect(canHeartComment(comment(), 'owner', 'user-1')).toBe(false);
+            expect(canHeartComment(comment(), 'owner', null)).toBe(false);
+        });
+
+        it('gives the pin to the post\'s creator, on a top-level comment, their own included', () => {
+            expect(canPinComment(comment(), 'owner', 'owner')).toBe(true);
+            expect(canPinComment(comment({ author: { id: 'owner', username: 'o', displayName: 'O', avatarUrl: null } }), 'owner', 'owner')).toBe(true);
+            expect(canPinComment(comment({ parentId: 'root' }), 'owner', 'owner')).toBe(false);
+            expect(canPinComment(comment(), 'owner', 'user-1')).toBe(false);
+            expect(canPinComment(comment({ status: 'removed_by_owner', author: null }), 'owner', 'owner')).toBe(false);
+        });
+
+        it('names what failed for each of them', () => {
+            expect(describeCommentRequestFailure('react', 500, {}).message).toBe('Could not save your reaction.');
+            expect(describeCommentRequestFailure('edit', null).message).toBe('Could not save your edit.');
+            expect(describeCommentRequestFailure('heart', 403, { error: 'Only the post\'s creator can heart a comment.' }).message)
+                .toBe('Only the post\'s creator can heart a comment.');
+            expect(describeCommentRequestFailure('pin', 404, {}).message).toBe('That comment is no longer available.');
         });
     });
 

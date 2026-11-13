@@ -6,6 +6,7 @@ import {
   BackendRateLimitError,
   POST_COMMENT_CREATE_RATE_LIMIT,
   POST_COMMENT_MUTATION_RATE_LIMIT,
+  POST_COMMENT_REACTION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
@@ -52,6 +53,8 @@ export type PostCommentAuthor = {
   avatarUrl: string | null;
 };
 
+export type PostCommentReaction = 'like' | 'dislike';
+
 export type PostCommentItem = {
   id: string;
   parentId: string | null;
@@ -60,6 +63,16 @@ export type PostCommentItem = {
   createdAt: string;
   replyCount: number;
   author: PostCommentAuthor | null;
+  /** Likes only: how many readers disliked a comment never leaves the server. */
+  likeCount: number;
+  /** The reader's own like or dislike; null for a visitor and for none. */
+  viewerReaction: PostCommentReaction | null;
+  /** When its author last changed its words; null for a comment as first posted. */
+  editedAt: string | null;
+  /** The post's creator marked it. */
+  hearted: boolean;
+  /** The post's creator pinned it: the first comment of the thread, in either order. */
+  pinned: boolean;
 };
 
 export type PostCommentsPage = {
@@ -84,7 +97,15 @@ type CommentRow = {
   status: PostCommentStatus;
   reply_count: number;
   created_at: string;
+  like_count?: number | null;
+  edited_at?: string | null;
+  hearted_at?: string | null;
+  pinned_at?: string | null;
 };
+
+/** What a thread read selects of a comment: every column but the count of dislikes. */
+const COMMENT_ROW_COLUMNS =
+  'id, post_id, user_id, parent_comment_id, body, status, reply_count, created_at, like_count, edited_at, hearted_at, pinned_at';
 
 type ProfileRow = {
   id: string;
@@ -210,6 +231,7 @@ async function loadCommentAuthors(
 export function toPostCommentItem(
   row: CommentRow,
   profiles: Map<string, ProfileRow>,
+  viewerReactions: ReadonlyMap<string, PostCommentReaction> = new Map(),
 ): PostCommentItem {
   const removed = row.status !== 'active' || !row.user_id;
   const profile = removed || !row.user_id ? undefined : profiles.get(row.user_id);
@@ -232,7 +254,44 @@ export function toPostCommentItem(
           }),
           avatarUrl: profile?.avatar_url ?? null,
         },
+    // A removed comment is "[deleted]": it shows no likes, heart, pin or edit.
+    likeCount: removed ? 0 : Math.max(0, row.like_count ?? 0),
+    viewerReaction: removed ? null : viewerReactions.get(row.id) ?? null,
+    editedAt: removed ? null : row.edited_at ?? null,
+    hearted: !removed && Boolean(row.hearted_at),
+    pinned: !removed && Boolean(row.pinned_at),
   };
+}
+
+/**
+ * The reader's own reactions to the comments about to be answered. A failed
+ * read answers none: the thread still loads, with no like shown as pressed.
+ */
+async function loadViewerReactions(
+  adminSupabase: SupabaseClient,
+  viewerUserId: string | null,
+  commentIds: string[],
+): Promise<Map<string, PostCommentReaction>> {
+  if (!viewerUserId || !commentIds.length) return new Map();
+
+  const { data, error } = await adminSupabase
+    .from('post_comment_reactions')
+    .select('comment_id, reaction')
+    .eq('user_id', viewerUserId)
+    .in('comment_id', commentIds);
+
+  if (error) {
+    logBackendError('failed_to_load_post_comment_viewer_reactions', { error });
+    return new Map();
+  }
+
+  const reactions = new Map<string, PostCommentReaction>();
+  for (const row of data ?? []) {
+    if (row.reaction === 'like' || row.reaction === 'dislike') {
+      reactions.set(String(row.comment_id), row.reaction);
+    }
+  }
+  return reactions;
 }
 
 export async function listPostCommentsForRoute({
@@ -282,7 +341,7 @@ export async function listPostCommentsForRoute({
   const buildQuery = () => {
     let query = adminSupabase
       .from('post_comments')
-      .select('id, post_id, user_id, parent_comment_id, body, status, reply_count, created_at')
+      .select(COMMENT_ROW_COLUMNS)
       .eq('post_id', normalizedPostId);
 
     if (normalizedParentId) {
@@ -294,10 +353,19 @@ export async function listPostCommentsForRoute({
     } else {
       // Removed top-level comments stay in the thread only while they still hold
       // replies, so the conversation underneath them does not disappear.
-      query = query.is('parent_comment_id', null).or('status.eq.active,reply_count.gt.0');
+      // The pinned comment is read on its own and leads the first page (below),
+      // so it is left out here: every offset then counts the same rows.
+      query = query
+        .is('parent_comment_id', null)
+        .is('pinned_at', null)
+        .or('status.eq.active,reply_count.gt.0');
 
       if (sort === 'top') {
-        query = query.order('reply_count', { ascending: false });
+        // The most liked first, then the most replied to
+        // (post_comments_toplevel_liked_idx).
+        query = query
+          .order('like_count', { ascending: false })
+          .order('reply_count', { ascending: false });
       }
 
       query = query
@@ -426,10 +494,44 @@ export async function listPostCommentsForRoute({
     });
   }
 
-  const profiles = await loadCommentAuthors(
-    adminSupabase,
-    visibleRows.map((row) => row.user_id),
-  );
+  // The post's one pinned comment leads the thread's first page, in either
+  // order. It is extra to the page's `limit`, and no offset counts it.
+  if (!normalizedParentId && offset === 0) {
+    const { data: pinnedRow, error: pinnedError } = await adminSupabase
+      .from('post_comments')
+      .select(COMMENT_ROW_COLUMNS)
+      .eq('post_id', normalizedPostId)
+      .is('parent_comment_id', null)
+      .eq('status', 'active')
+      .not('pinned_at', 'is', null)
+      .maybeSingle();
+
+    if (pinnedError) {
+      logBackendError('failed_to_load_pinned_post_comment', { error: pinnedError });
+      return { ok: false, status: 500, body: { error: 'Failed to load comments.' } };
+    }
+
+    const pinned = pinnedRow as CommentRow | null;
+    if (pinned) {
+      let pinnedAuthorBlocked = Boolean(pinned.user_id && blockedIds.has(pinned.user_id));
+      if (useExactPerBatchBlockFilter && viewerUserId && pinned.user_id) {
+        try {
+          pinnedAuthorBlocked = (await loadBlockedCreatorIds({
+            adminSupabase, viewerUserId, creatorIds: [pinned.user_id],
+          })).has(pinned.user_id);
+        } catch (blockError) {
+          logBackendError('failed_to_filter_blocked_post_comments', { error: blockError });
+          return { ok: false, status: 500, body: { error: 'Failed to load comments.' } };
+        }
+      }
+      if (!pinnedAuthorBlocked) visibleRows.unshift(pinned);
+    }
+  }
+
+  const [profiles, viewerReactions] = await Promise.all([
+    loadCommentAuthors(adminSupabase, visibleRows.map((row) => row.user_id)),
+    loadViewerReactions(adminSupabase, viewerUserId, visibleRows.map((row) => row.id)),
+  ]);
 
   return {
     ok: true,
@@ -438,7 +540,7 @@ export async function listPostCommentsForRoute({
       postId: post.id,
       postCreatorId: post.user_id ?? null,
       commentCount: Math.max(0, post.comment_count ?? 0),
-      comments: visibleRows.map((row) => toPostCommentItem(row, profiles)),
+      comments: visibleRows.map((row) => toPostCommentItem(row, profiles, viewerReactions)),
       pageInfo: {
         hasMore,
         nextOffset,
@@ -722,6 +824,248 @@ export async function removePostCommentForRoute({
       success: true,
       status: nextStatus,
       commentCount: Math.max(0, row?.comment_count ?? 0),
+    },
+  };
+}
+
+export type PostCommentUpdate =
+  | { kind: 'edit'; body: string }
+  | { kind: 'reaction'; reaction: PostCommentReaction | null }
+  | { kind: 'heart'; hearted: boolean }
+  | { kind: 'pin'; pinned: boolean };
+
+/**
+ * One change per request: the comment's words (its author), the reader's own
+ * like or dislike (any account), the heart or the pin (the post's creator).
+ * Anything else, and two at once, is refused rather than guessed at.
+ */
+export function parsePostCommentUpdate(raw: unknown): PostCommentUpdate | { error: string } {
+  const payload = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  const named = (['body', 'reaction', 'hearted', 'pinned'] as const)
+    .filter((key) => payload[key] !== undefined);
+
+  if (named.length !== 1) {
+    return { error: 'Send one change: body, reaction, hearted or pinned.' };
+  }
+
+  switch (named[0]) {
+    case 'body': {
+      const body = normalizePostCommentBody(payload.body);
+      return body ? { kind: 'edit', body } : { error: 'Write a comment before saving.' };
+    }
+    case 'reaction': {
+      const reaction = payload.reaction;
+      if (reaction === null || reaction === 'like' || reaction === 'dislike') {
+        return { kind: 'reaction', reaction };
+      }
+      return { error: 'Choose like, dislike or no reaction.' };
+    }
+    case 'hearted':
+      return typeof payload.hearted === 'boolean'
+        ? { kind: 'heart', hearted: payload.hearted }
+        : { error: 'Say whether the comment is hearted.' };
+    default:
+      return typeof payload.pinned === 'boolean'
+        ? { kind: 'pin', pinned: payload.pinned }
+        : { error: 'Say whether the comment is pinned.' };
+  }
+}
+
+type UpdatableCommentRow = CommentRow & {
+  posts:
+    | { user_id: string | null; visibility: string; archived_at: string | null; review_status: string }
+    | Array<{ user_id: string | null; visibility: string; archived_at: string | null; review_status: string }>;
+};
+
+const UPDATE_FAILURE: Record<PostCommentUpdate['kind'], string> = {
+  edit: 'Failed to save comment.',
+  reaction: 'Failed to save your reaction.',
+  heart: 'Failed to update the heart.',
+  pin: 'Failed to update the pin.',
+};
+
+export async function updatePostCommentForRoute({
+  postId,
+  commentId,
+  actorUserId,
+  readBody,
+  createAdminSupabase,
+  checkRelationshipBlocked = isUserRelationshipBlocked,
+}: {
+  postId: string;
+  commentId: string;
+  actorUserId: string;
+  readBody: () => Promise<unknown>;
+  createAdminSupabase: () => SupabaseClient;
+  checkRelationshipBlocked?: typeof isUserRelationshipBlocked;
+}): Promise<
+  PostCommentsRouteResult<{
+    success: true;
+    comment: PostCommentItem;
+    /** The comment a new pin took the post's one pin from, if any. */
+    unpinnedCommentId: string | null;
+  }>
+> {
+  const normalizedPostId = normalizePostCommentId(postId);
+  const normalizedCommentId = normalizePostCommentId(commentId);
+  if (!normalizedPostId || !normalizedCommentId) {
+    return { ok: false, status: 400, body: { error: 'Choose a valid comment.' } };
+  }
+
+  let raw: unknown;
+  try {
+    raw = await readBody();
+  } catch {
+    return { ok: false, status: 400, body: { error: 'Request body must be valid JSON.' } };
+  }
+  const update = parsePostCommentUpdate(raw);
+  if ('error' in update) {
+    return { ok: false, status: 400, body: { error: update.error } };
+  }
+
+  const adminSupabase = createAdminSupabase();
+  const failure = UPDATE_FAILURE[update.kind];
+
+  try {
+    // A like is pressed far more often than a comment is edited or pinned,
+    // and must not spend the budget a delete draws on.
+    await enforceBackendRateLimit(adminSupabase, {
+      ...(update.kind === 'reaction' ? POST_COMMENT_REACTION_RATE_LIMIT : POST_COMMENT_MUTATION_RATE_LIMIT),
+      key: actorUserId,
+    });
+  } catch (error) {
+    if (error instanceof BackendRateLimitError) {
+      return createRateLimitResult(error);
+    }
+
+    logBackendError('post_comment_update_rate_limit_check_failed', { error });
+    return { ok: false, status: 500, body: { error: 'Failed to check comment limits.' } };
+  }
+
+  const { data: found, error: commentError } = await adminSupabase
+    .from('post_comments')
+    .select(`${COMMENT_ROW_COLUMNS}, posts!inner(user_id, visibility, archived_at, review_status)`)
+    .eq('id', normalizedCommentId)
+    .eq('post_id', normalizedPostId)
+    .maybeSingle();
+
+  if (commentError) {
+    logBackendError('failed_to_load_post_comment_for_update', { error: commentError });
+    return { ok: false, status: 500, body: { error: failure } };
+  }
+
+  const comment = found as unknown as UpdatableCommentRow | null;
+  const post = comment
+    ? (Array.isArray(comment.posts) ? comment.posts[0] : comment.posts) ?? null
+    : null;
+  // The same test a new comment's post must pass: public, live, not taken down.
+  const postTakesComments = Boolean(
+    post && post.visibility === 'public' && !post.archived_at && post.review_status === 'visible',
+  );
+  if (!comment || !post || !postTakesComments) {
+    return { ok: false, status: 404, body: { error: 'Comment not found.' } };
+  }
+  if (comment.status !== 'active' || !comment.user_id) {
+    return { ok: false, status: 404, body: { error: 'That comment is no longer available.' } };
+  }
+
+  const isAuthor = String(comment.user_id) === actorUserId;
+  const isPostOwner = Boolean(post.user_id && String(post.user_id) === actorUserId);
+
+  if (update.kind === 'edit' && !isAuthor) {
+    return { ok: false, status: 403, body: { error: 'You can only edit your own comment.' } };
+  }
+  if ((update.kind === 'heart' || update.kind === 'pin') && !isPostOwner) {
+    return {
+      ok: false,
+      status: 403,
+      body: {
+        error: update.kind === 'heart'
+          ? 'Only the post\'s creator can heart a comment.'
+          : 'Only the post\'s creator can pin a comment.',
+      },
+    };
+  }
+  if (update.kind === 'heart' && update.hearted && isAuthor) {
+    return { ok: false, status: 400, body: { error: 'You cannot heart your own comment.' } };
+  }
+  if (update.kind === 'pin' && update.pinned && comment.parent_comment_id) {
+    return { ok: false, status: 400, body: { error: 'Only a top-level comment can be pinned.' } };
+  }
+  if (update.kind === 'reaction' && update.reaction !== null) {
+    // The thread hides a blocked pair from each other, so the page never
+    // offers this; a request made by hand is refused the same as a reply is.
+    // Taking a reaction back is always allowed.
+    for (const counterpartUserId of [comment.user_id, post.user_id]) {
+      if (await isCommentInteractionBlocked({
+        actorUserId,
+        counterpartUserId,
+        adminSupabase,
+        checkRelationshipBlocked,
+      })) {
+        return { ok: false, status: 403, body: { error: 'Reacting is unavailable on this comment.' } };
+      }
+    }
+  }
+
+  const call = update.kind === 'edit'
+    ? adminSupabase.rpc('edit_post_comment', {
+        p_comment_id: normalizedCommentId, p_actor_user_id: actorUserId, p_body: update.body,
+      })
+    : update.kind === 'reaction'
+      ? adminSupabase.rpc('set_post_comment_reaction', {
+          p_comment_id: normalizedCommentId, p_user_id: actorUserId, p_reaction: update.reaction ?? 'none',
+        })
+      : update.kind === 'heart'
+        ? adminSupabase.rpc('set_post_comment_heart', {
+            p_comment_id: normalizedCommentId, p_actor_user_id: actorUserId, p_hearted: update.hearted,
+          })
+        : adminSupabase.rpc('set_post_comment_pin', {
+            p_comment_id: normalizedCommentId, p_actor_user_id: actorUserId, p_pinned: update.pinned,
+          });
+  const { data: changed, error: updateError } = await call;
+
+  if (updateError) {
+    // The checks above are repeated inside each function under the row's
+    // lock. One that fails here lost a race: the comment was removed, or the
+    // post taken down, between the read and the write.
+    logBackendError('failed_to_update_post_comment', { error: updateError, kind: update.kind });
+    return { ok: false, status: 500, body: { error: failure } };
+  }
+
+  const changedRow = (Array.isArray(changed) ? changed[0] : changed) as
+    | { unpinned_comment_id?: string | null }
+    | null;
+
+  // Answered from the row as it now is, not from what was asked for: an edit
+  // takes the heart off, and a like moves a count another reader may have
+  // moved too.
+  const { data: fresh, error: freshError } = await adminSupabase
+    .from('post_comments')
+    .select(COMMENT_ROW_COLUMNS)
+    .eq('id', normalizedCommentId)
+    .maybeSingle();
+
+  if (freshError || !fresh) {
+    logBackendError('failed_to_reload_updated_post_comment', { error: freshError });
+    return { ok: false, status: 500, body: { error: failure } };
+  }
+
+  const freshRow = fresh as CommentRow;
+  const [profiles, viewerReactions] = await Promise.all([
+    loadCommentAuthors(adminSupabase, [freshRow.user_id]),
+    loadViewerReactions(adminSupabase, actorUserId, [freshRow.id]),
+  ]);
+
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      success: true,
+      comment: toPostCommentItem(freshRow, profiles, viewerReactions),
+      unpinnedCommentId: update.kind === 'pin' ? changedRow?.unpinned_comment_id ?? null : null,
     },
   };
 }

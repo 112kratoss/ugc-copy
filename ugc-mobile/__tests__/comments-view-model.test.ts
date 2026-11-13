@@ -52,6 +52,11 @@ function comment(overrides: Partial<PostComment> = {}): PostComment {
     createdAt: '2026-07-27T10:00:00.000Z',
     replyCount: 0,
     author: { id: VIEWER_ID, username: 'viewer', displayName: 'Viewer', avatarUrl: null },
+    likeCount: 0,
+    viewerReaction: null,
+    editedAt: null,
+    hearted: false,
+    pinned: false,
     ...overrides,
   };
 }

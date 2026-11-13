@@ -4,10 +4,16 @@ import {
     ChevronDown,
     ChevronUp,
     Flag,
+    Heart,
     ListFilter,
     Loader2,
     MessageSquare,
     MoreVertical,
+    Pencil,
+    Pin,
+    PinOff,
+    ThumbsDown,
+    ThumbsUp,
     Trash2,
     X,
 } from 'lucide-react';
@@ -23,10 +29,14 @@ import {
     POST_COMMENTS_MAX_PAGE_SIZE,
     POST_COMMENTS_PAGE_SIZE,
     adjustReplyCount,
+    applyOwnCommentReaction,
     buildCommentThreads,
     buildReplyDraftPrefix,
     buildCommentsQuery,
     canDeleteComment,
+    canEditComment,
+    canHeartComment,
+    canPinComment,
     canRemoveComment,
     canReportComment,
     describeCommentRequestFailure,
@@ -35,11 +45,13 @@ import {
     isPostCreatorComment,
     markCommentRemoved,
     mergeCommentPage,
+    nextCommentReaction,
     prependComment,
     withPendingComments,
     type CommentRequestFailure,
     type CommentRequestKind,
     type PostComment,
+    type PostCommentReaction,
     type PostCommentSort,
     type PostCommentsPage,
 } from '@/lib/post-comments-client';
@@ -47,8 +59,8 @@ import { formatCompactCount, formatRelativeTime } from '@/lib/post-feed-presenta
 import { getCurrentInternalPath } from '@/lib/share';
 
 const SORT_OPTIONS: Array<{ value: PostCommentSort; label: string; description: string }> = [
-    // Top is the server's order: the comments with the most replies first.
-    { value: 'top', label: 'Top', description: 'Most discussed first' },
+    // Top is the server's order: the most liked first, then the most replied to.
+    { value: 'top', label: 'Top', description: 'Most liked first' },
     { value: 'newest', label: 'Newest', description: 'Latest comments first' },
 ];
 
@@ -177,6 +189,9 @@ export default function PostComments({
     // The handle a reply to a reply opened its draft with. Kept so that a
     // change of target replaces it, and so that it alone is nothing to send.
     const [replyPrefix, setReplyPrefix] = useState('');
+    // The comment being reworded in place, and its draft.
+    const [editing, setEditing] = useState<{ id: string; draft: string } | null>(null);
+    const [savingEdit, setSavingEdit] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [busyCommentId, setBusyCommentId] = useState<string | null>(null);
     const [reportTarget, setReportTarget] = useState<PostComment | null>(null);
@@ -204,6 +219,12 @@ export default function PostComments({
     const scrollRef = useRef<HTMLDivElement | null>(null);
     // The Reply button a reply was started from: Cancel returns focus to it.
     const replyOpenerRef = useRef<HTMLElement | null>(null);
+    // The row menu an edit was opened from: closing the editor returns focus to it.
+    const editOpenerRef = useRef<HTMLElement | null>(null);
+    const editorRef = useRef<HTMLTextAreaElement | null>(null);
+    // Comments with a like, a dislike or a heart on its way to the server: a
+    // second press waits for the first one's answer.
+    const updatingIdsRef = useRef(new Set<string>());
     // Cancel puts focus back on the composer without opening its buttons again.
     const keepComposerFoldedRef = useRef(false);
 
@@ -439,6 +460,7 @@ export default function PostComments({
         setReportTarget(null);
         setReportDetails('');
         setReportReason('spam');
+        setEditing(null);
         setStatusMessage('');
     }, [postId]);
 
@@ -698,6 +720,142 @@ export default function PostComments({
             setBusyCommentId(null);
         }
     }, [askToConfirm, authHeaders, postId, publishCount, readReplies, readTopLevel, replyPages, totalCount]);
+
+    /** Changes one comment wherever the thread holds it: the lists read and the ones just posted. */
+    const mapComment = useCallback((id: string, change: (comment: PostComment) => PostComment) => {
+        const inList = (list: PostComment[]) => list.map((item) => (item.id === id ? change(item) : item));
+        const inThreads = (threads: Record<string, PostComment[]>) => Object.fromEntries(
+            Object.entries(threads).map(([parentId, list]) => [parentId, inList(list)])
+        );
+        setComments(inList);
+        setPendingComments(inList);
+        setRepliesByParent(inThreads);
+        setPendingRepliesByParent(inThreads);
+    }, []);
+
+    /** One change to a comment, answered with the comment as the server now has it. */
+    const sendCommentUpdate = useCallback(async (
+        commentId: string,
+        kind: Extract<CommentRequestKind, 'react' | 'edit' | 'heart' | 'pin'>,
+        change: Record<string, unknown>
+    ) => {
+        const response = await fetch(
+            `/api/showcase/posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+            { method: 'PATCH', headers: authHeaders(true), body: JSON.stringify(change) }
+        );
+        // Not JSON from a gateway: see submitComment.
+        const data = await response.json().catch(() => ({})) as CommentErrorBody & {
+            comment?: PostComment;
+            unpinnedCommentId?: string | null;
+        };
+        if (!response.ok || !data.comment) {
+            throw new CommentRequestError(describeCommentRequestFailure(kind, response.status, data));
+        }
+        return { comment: data.comment, unpinnedCommentId: data.unpinnedCommentId ?? null };
+    }, [authHeaders, postId]);
+
+    // A like, a dislike and the creator's heart show at once and are put back
+    // if the server refuses. The answer replaces the guess: another reader may
+    // have moved the count meanwhile.
+    const reactToComment = useCallback(async (comment: PostComment, pressed: PostCommentReaction) => {
+        if (updatingIdsRef.current.has(comment.id)) return;
+        updatingIdsRef.current.add(comment.id);
+        const next = nextCommentReaction(comment.viewerReaction, pressed);
+        mapComment(comment.id, (current) => applyOwnCommentReaction(current, next));
+        setActionError(null);
+        try {
+            const { comment: fresh } = await sendCommentUpdate(comment.id, 'react', { reaction: next });
+            mapComment(comment.id, () => fresh);
+        } catch (reactionError) {
+            mapComment(comment.id, (current) => ({
+                ...current,
+                viewerReaction: comment.viewerReaction,
+                likeCount: comment.likeCount,
+            }));
+            setActionError(toFailure('react', reactionError));
+        } finally {
+            updatingIdsRef.current.delete(comment.id);
+        }
+    }, [mapComment, sendCommentUpdate]);
+
+    const heartComment = useCallback(async (comment: PostComment) => {
+        if (updatingIdsRef.current.has(comment.id)) return;
+        updatingIdsRef.current.add(comment.id);
+        const hearted = !comment.hearted;
+        mapComment(comment.id, (current) => ({ ...current, hearted }));
+        setActionError(null);
+        setStatusMessage('');
+        try {
+            const { comment: fresh } = await sendCommentUpdate(comment.id, 'heart', { hearted });
+            mapComment(comment.id, () => fresh);
+            setStatusMessage(hearted ? 'Comment hearted.' : 'Heart removed.');
+        } catch (heartError) {
+            mapComment(comment.id, (current) => ({ ...current, hearted: comment.hearted }));
+            setActionError(toFailure('heart', heartError));
+        } finally {
+            updatingIdsRef.current.delete(comment.id);
+        }
+    }, [mapComment, sendCommentUpdate]);
+
+    const pinComment = useCallback(async (comment: PostComment) => {
+        const pinned = !comment.pinned;
+        setBusyCommentId(comment.id);
+        setActionError(null);
+        setStatusMessage('');
+        try {
+            const { comment: fresh, unpinnedCommentId } = await sendCommentUpdate(comment.id, 'pin', { pinned });
+            mapComment(comment.id, () => fresh);
+            if (unpinnedCommentId) {
+                mapComment(unpinnedCommentId, (current) => ({ ...current, pinned: false }));
+            }
+            setStatusMessage(pinned ? 'Comment pinned.' : 'Comment unpinned.');
+            // The pinned comment leads the thread and no offset counts it, so
+            // a pin moves every later offset: the loaded range is read again,
+            // for the same reasons as after a post.
+            await readTopLevel({ kind: 'loaded-range', count: commentsRef.current.length });
+        } catch (pinError) {
+            setActionError(toFailure('pin', pinError));
+        } finally {
+            setBusyCommentId(null);
+        }
+    }, [mapComment, readTopLevel, sendCommentUpdate]);
+
+    const closeEditor = useCallback(() => {
+        setEditing(null);
+        const opener = editOpenerRef.current;
+        editOpenerRef.current = null;
+        window.requestAnimationFrame(() => {
+            if (opener?.isConnected) opener.focus();
+        });
+    }, []);
+
+    const saveEdit = useCallback(async () => {
+        if (!editing || savingEdit) return;
+        const body = editing.draft.trim();
+        if (!body) return;
+        setSavingEdit(true);
+        setActionError(null);
+        setStatusMessage('');
+        try {
+            const { comment: fresh } = await sendCommentUpdate(editing.id, 'edit', { body });
+            mapComment(editing.id, () => fresh);
+            setStatusMessage('Comment edited.');
+            closeEditor();
+        } catch (editError) {
+            setActionError(toFailure('edit', editError));
+        } finally {
+            setSavingEdit(false);
+        }
+    }, [closeEditor, editing, mapComment, savingEdit, sendCommentUpdate]);
+
+    useEffect(() => {
+        if (!editing) return;
+        // Once, when the editor opens: the caret goes after the words to change.
+        const editor = editorRef.current;
+        if (!editor || document.activeElement === editor) return;
+        editor.focus();
+        editor.setSelectionRange(editor.value.length, editor.value.length);
+    }, [editing]);
 
     const submitReport = useCallback(async () => {
         if (!reportTarget || busyCommentId) return;
@@ -1121,6 +1279,32 @@ export default function PostComments({
                                 },
                             });
                         }
+                        if (canPinComment(comment, resolvedCreatorId, user?.id)) {
+                            menuItems.push({
+                                key: 'pin',
+                                label: comment.pinned ? 'Unpin' : 'Pin',
+                                icon: comment.pinned
+                                    ? <PinOff className="h-4 w-4" aria-hidden="true" />
+                                    : <Pin className="h-4 w-4" aria-hidden="true" />,
+                                onSelect: () => void pinComment(comment),
+                            });
+                        }
+                        if (canEditComment(comment, user?.id)) {
+                            menuItems.push({
+                                key: 'edit',
+                                label: 'Edit',
+                                icon: <Pencil className="h-4 w-4" aria-hidden="true" />,
+                                onSelect: () => {
+                                    // The menu has put focus back on its trigger,
+                                    // where a closed editor returns it.
+                                    editOpenerRef.current = document.activeElement instanceof HTMLElement
+                                        ? document.activeElement
+                                        : null;
+                                    setEditing({ id: comment.id, draft: comment.body });
+                                    setActionError(null);
+                                },
+                            });
+                        }
                         if (isOwn) {
                             menuItems.push({
                                 key: 'delete',
@@ -1150,6 +1334,12 @@ export default function PostComments({
                                     isReply ? 'ml-4 border-l border-[var(--ui-border-subtle)] pl-5' : ''
                                 } ${busyCommentId === comment.id ? 'opacity-60' : ''}`}
                             >
+                                {comment.pinned && !display.isDeleted ? (
+                                    <p className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[var(--ui-text-muted)]">
+                                        <Pin className="h-3.5 w-3.5" aria-hidden="true" />
+                                        Pinned by the creator
+                                    </p>
+                                ) : null}
                                 <div className="flex items-start gap-3">
                                     <PostCommentAvatar
                                         avatarUrl={comment.author?.avatarUrl ?? null}
@@ -1182,18 +1372,124 @@ export default function PostComments({
                                             ) : null}
                                             <span className="text-[var(--ui-text-faint)]">
                                                 {formatRelativeTime(comment.createdAt)}
+                                                {comment.editedAt && !display.isDeleted ? ' (edited)' : ''}
                                             </span>
                                         </div>
-                                        <CommentBody text={display.bodyText} deleted={display.isDeleted} />
-                                        {!display.isDeleted && user ? (
-                                            <div className="-ml-3 flex flex-wrap items-center gap-1">
-                                                <CommentAction
-                                                    label="Reply"
-                                                    accessibleLabel={`Reply to ${display.authorLabel}`}
-                                                    onClick={(event) => startReply(comment, event.currentTarget)}
+                                        {editing?.id === comment.id ? (
+                                            <div className="mt-1">
+                                                <textarea
+                                                    ref={editorRef}
+                                                    value={editing.draft}
+                                                    onChange={(event) => setEditing({ id: comment.id, draft: event.target.value })}
+                                                    onKeyDown={(event) => {
+                                                        if (event.key === 'Escape') {
+                                                            event.preventDefault();
+                                                            closeEditor();
+                                                        }
+                                                        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                                                            event.preventDefault();
+                                                            void saveEdit();
+                                                        }
+                                                    }}
+                                                    maxLength={POST_COMMENT_MAX_LENGTH}
+                                                    rows={3}
+                                                    aria-label="Edit your comment"
+                                                    className="ui-focus-ring block w-full resize-y rounded-xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-3 py-2 text-sm leading-6 text-[var(--ui-text-primary)]"
                                                 />
+                                                <div className="mt-2 flex items-center justify-end gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={closeEditor}
+                                                        aria-label="Cancel edit"
+                                                        className="ui-focus-ring min-h-9 rounded-full px-4 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-2)]"
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void saveEdit()}
+                                                        disabled={
+                                                            savingEdit
+                                                            || !editing.draft.trim()
+                                                            || editing.draft.trim() === comment.body
+                                                        }
+                                                        className="ui-focus-ring inline-flex min-h-9 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:opacity-50"
+                                                    >
+                                                        {savingEdit
+                                                            ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                                                            : null}
+                                                        Save
+                                                    </button>
+                                                </div>
                                             </div>
-                                        ) : null}
+                                        ) : (
+                                            <CommentBody text={display.bodyText} deleted={display.isDeleted} />
+                                        )}
+                                        {display.isDeleted || editing?.id === comment.id ? null : (
+                                            <div className="-ml-2 mt-0.5 flex flex-wrap items-center gap-0.5">
+                                                {user ? (
+                                                    <>
+                                                        <CommentReaction
+                                                            kind="like"
+                                                            pressed={comment.viewerReaction === 'like'}
+                                                            count={comment.likeCount}
+                                                            accessibleLabel={`Like ${display.authorLabel}'s comment`}
+                                                            onClick={() => void reactToComment(comment, 'like')}
+                                                        />
+                                                        <CommentReaction
+                                                            kind="dislike"
+                                                            pressed={comment.viewerReaction === 'dislike'}
+                                                            accessibleLabel={`Dislike ${display.authorLabel}'s comment`}
+                                                            onClick={() => void reactToComment(comment, 'dislike')}
+                                                        />
+                                                    </>
+                                                ) : (
+                                                    // A visitor reads the likes; the press is an account's.
+                                                    <Link
+                                                        href={loginHref}
+                                                        aria-label={`Sign in to like ${display.authorLabel}'s comment`}
+                                                        className="ui-focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full px-2 text-xs font-bold text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
+                                                    >
+                                                        <ThumbsUp className="h-4 w-4" aria-hidden="true" />
+                                                        {comment.likeCount > 0 ? formatCompactCount(comment.likeCount) : null}
+                                                    </Link>
+                                                )}
+                                                {canHeartComment(comment, resolvedCreatorId, user?.id) ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void heartComment(comment)}
+                                                        aria-pressed={comment.hearted}
+                                                        aria-label={`Heart ${display.authorLabel}'s comment`}
+                                                        title={comment.hearted ? 'Remove your heart' : 'Heart this comment'}
+                                                        className={`ui-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-full transition hover:bg-[var(--ui-surface-2)] ${
+                                                            comment.hearted
+                                                                ? 'text-[var(--ui-primary)]'
+                                                                : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
+                                                        }`}
+                                                    >
+                                                        <Heart
+                                                            className={`h-4 w-4 ${comment.hearted ? 'fill-current' : ''}`}
+                                                            aria-hidden="true"
+                                                        />
+                                                    </button>
+                                                ) : comment.hearted ? (
+                                                    <span
+                                                        title="Loved by the creator"
+                                                        className="inline-flex h-9 items-center gap-1 px-2 text-[var(--ui-primary)]"
+                                                    >
+                                                        <Heart className="h-4 w-4 fill-current" aria-hidden="true" />
+                                                        <span className="sr-only">Loved by the creator</span>
+                                                    </span>
+                                                ) : null}
+                                                {user ? (
+                                                    <CommentAction
+                                                        label="Reply"
+                                                        accessibleLabel={`Reply to ${display.authorLabel}`}
+                                                        onClick={(event) => startReply(comment, event.currentTarget)}
+                                                    />
+                                                ) : null}
+                                            </div>
+                                        )}
                                     </div>
                                     {display.isDeleted || menuItems.length === 0 ? null : (
                                         <StudioOverflowMenu
@@ -1288,6 +1584,40 @@ function CommentBody({ text, deleted }: { text: string; deleted: boolean }) {
                 </button>
             ) : null}
         </>
+    );
+}
+
+/** A like or a dislike: a toggle that shows the likes, and never how many disliked. */
+function CommentReaction({
+    kind,
+    pressed,
+    count = 0,
+    accessibleLabel,
+    onClick,
+}: {
+    kind: PostCommentReaction;
+    pressed: boolean;
+    count?: number;
+    /** Names the comment as well; a screen reader otherwise hears a column of identical buttons. */
+    accessibleLabel: string;
+    onClick: () => void;
+}) {
+    const Icon = kind === 'like' ? ThumbsUp : ThumbsDown;
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            aria-pressed={pressed}
+            aria-label={accessibleLabel}
+            className={`ui-focus-ring inline-flex min-h-9 min-w-9 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-bold tabular-nums transition hover:bg-[var(--ui-surface-2)] ${
+                pressed
+                    ? 'text-[var(--ui-text-primary)]'
+                    : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
+            }`}
+        >
+            <Icon className={`h-4 w-4 ${pressed ? 'fill-current' : ''}`} aria-hidden="true" />
+            {count > 0 ? formatCompactCount(count) : null}
+        </button>
     );
 }
 

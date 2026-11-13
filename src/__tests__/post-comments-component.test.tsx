@@ -40,6 +40,11 @@ function comment(overrides: Partial<PostComment> = {}): PostComment {
             displayName: 'Creator',
             avatarUrl: null,
         },
+        likeCount: 0,
+        viewerReaction: null,
+        editedAt: null,
+        hearted: false,
+        pinned: false,
         ...overrides,
     };
 }
@@ -617,6 +622,218 @@ describe('PostComments', () => {
         expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
         fireEvent.keyDown(composer, { key: 'Enter', metaKey: true });
         await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
+    });
+
+    describe('likes, the heart, the pin and edits', () => {
+        type Init = RequestInit | undefined;
+        /** A thread whose PATCH answers come from `answer`, and every change the page sent. */
+        function serveThread(
+            comments: PostComment[],
+            answer: (change: Record<string, unknown>, target: PostComment) => Response,
+            extra: Partial<{ postCreatorId: string }> = {}
+        ) {
+            const sent: Array<{ id: string; change: Record<string, unknown> }> = [];
+            let thread = comments;
+            const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: Init) => {
+                if (init?.method === 'PATCH') {
+                    const id = decodeURIComponent(new URL(String(input), 'http://localhost').pathname.split('/').pop() ?? '');
+                    const change = JSON.parse(String(init.body)) as Record<string, unknown>;
+                    sent.push({ id, change });
+                    const response = answer(change, thread.find((item) => item.id === id) as PostComment);
+                    if (response.ok) {
+                        const body = await response.clone().json() as { comment: PostComment };
+                        thread = thread.map((item) => (item.id === id ? body.comment : item));
+                    }
+                    return response;
+                }
+                return jsonResponse({ ...page(thread), ...extra });
+            });
+            vi.stubGlobal('fetch', fetchMock);
+            return { sent, fetchMock };
+        }
+        const answered = (fresh: PostComment, unpinnedCommentId: string | null = null) => jsonResponse({
+            success: true, comment: fresh, unpinnedCommentId,
+        });
+
+        it('shows a like at once, keeps the server\'s count, and never a count of dislikes', async () => {
+            signIn();
+            const { sent } = serveThread(
+                [comment({ likeCount: 4 })],
+                // Another reader liked it meanwhile: the answer says 6, not the page's guess of 5.
+                (change, target) => answered({
+                    ...target,
+                    viewerReaction: change.reaction as PostComment['viewerReaction'],
+                    likeCount: change.reaction === 'like' ? 6 : 5,
+                }),
+            );
+            render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />);
+
+            const like = await screen.findByRole('button', { name: "Like @creator's comment" });
+            const dislike = screen.getByRole('button', { name: "Dislike @creator's comment" });
+            expect(like).toHaveAttribute('aria-pressed', 'false');
+            expect(like).toHaveTextContent('4');
+            expect(dislike).toHaveTextContent('');
+
+            fireEvent.click(like);
+            // At once, before any answer.
+            expect(like).toHaveAttribute('aria-pressed', 'true');
+            expect(like).toHaveTextContent('5');
+            await waitFor(() => expect(like).toHaveTextContent('6'));
+            expect(sent).toEqual([{ id: 'comment-1', change: { reaction: 'like' } }]);
+
+            // The other one replaces it; a dislike moves no count the page shows.
+            fireEvent.click(dislike);
+            await waitFor(() => expect(dislike).toHaveAttribute('aria-pressed', 'true'));
+            expect(like).toHaveAttribute('aria-pressed', 'false');
+            expect(like).toHaveTextContent('5');
+            expect(dislike).toHaveTextContent('');
+            // Pressed again, it is taken back.
+            fireEvent.click(dislike);
+            await waitFor(() => expect(sent.at(-1)?.change).toEqual({ reaction: null }));
+        });
+
+        it('puts a like back when the server refuses it, and says why', async () => {
+            signIn();
+            serveThread(
+                [comment({ likeCount: 4 })],
+                () => jsonResponse({ error: 'Reacting is unavailable on this comment.' }, 403),
+            );
+            render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />);
+
+            const like = await screen.findByRole('button', { name: "Like @creator's comment" });
+            fireEvent.click(like);
+            expect(like).toHaveTextContent('5');
+
+            expect(await screen.findByRole('alert')).toHaveTextContent('Reacting is unavailable on this comment.');
+            expect(like).toHaveAttribute('aria-pressed', 'false');
+            expect(like).toHaveTextContent('4');
+        });
+
+        it('shows a visitor the likes, the heart, the pin and the edit mark, and sends a press to sign-in', async () => {
+            vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(page([comment({
+                likeCount: 12, hearted: true, pinned: true, editedAt: '2026-11-01T00:00:00.000Z',
+            })]))));
+            render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />);
+
+            const row = (await screen.findByText('A thoughtful comment')).closest('li') as HTMLElement;
+            expect(within(row).getByText('Pinned by the creator')).toBeInTheDocument();
+            expect(within(row).getByText(/\(edited\)/)).toBeInTheDocument();
+            expect(within(row).getByText('Loved by the creator')).toBeInTheDocument();
+            const signInToLike = within(row).getByRole('link', { name: "Sign in to like @creator's comment" });
+            expect(signInToLike).toHaveTextContent('12');
+            expect(signInToLike.getAttribute('href')).toMatch(/^\/login\?returnUrl=/);
+            // Nothing a visitor could press as if it were theirs.
+            expect(within(row).queryByRole('button', { name: /^(Like|Dislike|Heart) / })).not.toBeInTheDocument();
+        });
+
+        it('gives the post\'s creator the heart on other people\'s comments, and the pin behind the menu', async () => {
+            signIn();
+            const mine = comment({ id: 'mine', body: 'From the creator', author: viewerAuthor });
+            const theirs = comment({ id: 'theirs', body: 'From a reader' });
+            const { sent } = serveThread(
+                [mine, theirs],
+                (change, target) => answered({ ...target, ...change } as PostComment),
+                { postCreatorId: 'viewer-1' },
+            );
+            render(<PostComments postId="post-1" postCreatorId="viewer-1" commentCount={2} />);
+            await screen.findByText('From a reader');
+
+            // The heart is for someone else's comment.
+            expect(screen.queryByRole('button', { name: "Heart @viewer's comment" })).not.toBeInTheDocument();
+            const heart = screen.getByRole('button', { name: "Heart @creator's comment" });
+            expect(heart).toHaveAttribute('aria-pressed', 'false');
+            fireEvent.click(heart);
+            expect(heart).toHaveAttribute('aria-pressed', 'true');
+            await waitFor(() => expect(sent).toEqual([{ id: 'theirs', change: { hearted: true } }]));
+            expect(await screen.findByText('Comment hearted.')).toHaveClass('sr-only');
+
+            // The pin: on any top-level comment, the creator's own included.
+            chooseFromMenu(screen.getByRole('button', { name: 'More actions for your comment' }), 'Pin');
+            await waitFor(() => expect(sent.at(-1)).toEqual({ id: 'mine', change: { pinned: true } }));
+            const row = (await screen.findByText('Pinned by the creator')).closest('li') as HTMLElement;
+            expect(within(row).getByText('From the creator')).toBeInTheDocument();
+            // Pinned, its menu offers the way back.
+            fireEvent.click(screen.getByRole('button', { name: 'More actions for your comment' }));
+            expect(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument();
+            expect(within(screen.getByRole('menu')).queryByRole('menuitem', { name: 'Pin' })).not.toBeInTheDocument();
+        });
+
+        it('offers no heart and no pin to a reader who is not the post\'s creator', async () => {
+            signIn();
+            serveThread([comment()], (_change, target) => answered(target));
+            render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />);
+
+            await screen.findByText('A thoughtful comment');
+            expect(screen.queryByRole('button', { name: /^Heart / })).not.toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', { name: "More actions for @creator's comment" }));
+            expect(within(screen.getByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent))
+                .toEqual(['Report']);
+        });
+
+        it('rewords a comment in place: its author only, saved as an edit, focus back on its menu', async () => {
+            signIn();
+            const { sent } = serveThread(
+                [comment({ id: 'mine', body: 'First words', author: viewerAuthor, hearted: true })],
+                (change, target) => answered({
+                    ...target, body: String(change.body), editedAt: '2026-11-13T12:00:00.000Z', hearted: false,
+                }),
+            );
+            render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />);
+
+            const menu = await screen.findByRole('button', { name: 'More actions for your comment' });
+            chooseFromMenu(menu, 'Edit');
+            const editor = screen.getByRole('textbox', { name: 'Edit your comment' });
+            expect(editor).toHaveValue('First words');
+            expect(editor).toHaveFocus();
+            // The same words are nothing to save; neither is nothing at all.
+            expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+            fireEvent.change(editor, { target: { value: '   ' } });
+            expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+            // Escape drops the edit and leaves the comment as it was.
+            fireEvent.change(editor, { target: { value: 'Half an edit' } });
+            fireEvent.keyDown(editor, { key: 'Escape' });
+            expect(screen.queryByRole('textbox', { name: 'Edit your comment' })).not.toBeInTheDocument();
+            expect(screen.getByText('First words')).toBeInTheDocument();
+            expect(menu).toHaveFocus();
+            expect(sent).toEqual([]);
+
+            chooseFromMenu(menu, 'Edit');
+            fireEvent.change(screen.getByRole('textbox', { name: 'Edit your comment' }), {
+                target: { value: '  Better words  ' },
+            });
+            fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+            // The editor closes on the answer and the row reads the new words.
+            await waitFor(() => (
+                expect(screen.queryByRole('textbox', { name: 'Edit your comment' })).not.toBeInTheDocument()
+            ));
+            expect(screen.getByText('Better words')).toBeInTheDocument();
+            expect(sent).toEqual([{ id: 'mine', change: { body: 'Better words' } }]);
+            expect(screen.getByText(/\(edited\)/)).toBeInTheDocument();
+            // The creator hearted other words: the answer took the heart off.
+            expect(screen.queryByText('Loved by the creator')).not.toBeInTheDocument();
+            expect(await screen.findByText('Comment edited.')).toHaveClass('sr-only');
+            expect(menu).toHaveFocus();
+        });
+
+        it('keeps the editor open with the draft when a save fails', async () => {
+            signIn();
+            serveThread(
+                [comment({ id: 'mine', body: 'First words', author: viewerAuthor })],
+                () => new Response('<html>Bad gateway</html>', { status: 502, headers: { 'Content-Type': 'text/html' } }),
+            );
+            render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />);
+
+            chooseFromMenu(await screen.findByRole('button', { name: 'More actions for your comment' }), 'Edit');
+            fireEvent.change(screen.getByRole('textbox', { name: 'Edit your comment' }), {
+                target: { value: 'Better words' },
+            });
+            fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+            expect(await screen.findByRole('alert')).toHaveTextContent('Could not save your edit.');
+            expect(screen.getByRole('textbox', { name: 'Edit your comment' })).toHaveValue('Better words');
+        });
     });
 
     // 04-2: a delete deep in a long thread keeps every page the reader opened.

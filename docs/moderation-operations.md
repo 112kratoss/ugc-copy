@@ -89,7 +89,21 @@ Emailed complaints do not enter the queue or its 24-hour alerts: answer them fro
 ## Comment reports
 
 The queue includes the comment id, post id, current status, and a short body
-preview. After confirming a violation, resolve the report:
+preview. The preview is of the comment as it reads now. Its author can edit a
+comment (since 20261113191038), so a comment reported for words it no longer
+holds is checked against what each edit replaced, kept append-only in
+`public.post_comment_edits` and read with the service role:
+
+```sql
+select previous_body, replaced_at
+from public.post_comment_edits
+where comment_id = '<comment-uuid>'
+order by replaced_at;
+```
+
+`post_comments.edited_at` says whether there is anything to look for. After
+confirming a violation, in the current words or in replaced ones, resolve the
+report:
 
 ```sh
 npm run ops:moderation -- resolve-subject \

@@ -146,6 +146,11 @@ const creatorsComment: PostComment = {
   createdAt: '2026-03-27T11:00:00.000Z',
   replyCount: 0,
   author: { id: 'creator-1', username: 'creator-name', displayName: 'Creator Name', avatarUrl: null },
+  likeCount: 0,
+  viewerReaction: null,
+  editedAt: null,
+  hearted: false,
+  pinned: false,
 };
 
 function renderCreatorPage() {

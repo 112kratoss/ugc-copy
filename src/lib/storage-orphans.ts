@@ -113,6 +113,8 @@ export const ORPHAN_SCANNED_TABLES: ReadonlyArray<{ table: string; key: readonly
   { table: 'mobile_store_products', key: ['product_id'] },
   { table: 'mobile_store_transactions', key: ['id'] },
   { table: 'moderation_reports', key: ['id'] },
+  // The words a comment's edits replaced: text a person typed, as the comment is.
+  { table: 'post_comment_edits', key: ['id'] },
   { table: 'post_comments', key: ['id'] },
   { table: 'post_deletion_audits', key: ['id'] },
   { table: 'post_media', key: ['id'] },
@@ -167,6 +169,7 @@ const NO_TEXT = 'no text or JSON column';
 const SEARCH_DICTIONARY = 'single words of letters, held to that by a check: never a path';
 const SEARCH_ENTITIES = 'model and tool names and their keys, at most 80 characters, copied from Made with: never a stored path';
 const SEARCH_DENYLIST = 'single words an operator withdrew from suggestions, each with a note: never a path';
+const COMMENT_REACTIONS = 'a like or a dislike, one of two words held to that by a check: never a path';
 const UPLOAD_BOOKKEEPING = 'upload bookkeeping: read for the exclusions, never a reference';
 const RECIPE_SWEEP = "the recipe-copy sweep's own bookkeeping: its folders are excluded";
 const RECIPE_COPY_SOURCES = 'where passed-on recipe copies came from: it names only copies, whose folders are excluded';
@@ -201,6 +204,7 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   onboarding_events: TELEMETRY,
   playback_metrics: TELEMETRY,
   playback_metrics_daily_rollup: TELEMETRY,
+  post_comment_reactions: COMMENT_REACTIONS,
   post_content_embeddings: TELEMETRY,
   post_feed_stats: TELEMETRY,
   post_media_object_cleanup: UPLOAD_BOOKKEEPING,

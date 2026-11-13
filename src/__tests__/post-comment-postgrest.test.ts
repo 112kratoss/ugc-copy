@@ -3,7 +3,12 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createPostCommentForRoute, listPostCommentsForRoute, removePostCommentForRoute } from '@/lib/post-comments-service';
+import {
+  createPostCommentForRoute,
+  listPostCommentsForRoute,
+  removePostCommentForRoute,
+  updatePostCommentForRoute,
+} from '@/lib/post-comments-service';
 
 const configPath = process.env.AUDIT_STORAGE_CONFIG;
 const connectionString = process.env.SUPABASE_TEST_DB_URL;
@@ -24,6 +29,21 @@ describe.skipIf(!configPath || !connectionString)('comment services with actual 
   const remove = (commentId: string, actorUserId = author) => removePostCommentForRoute({
     postId: post, commentId, actorUserId, createAdminSupabase: () => admin,
   });
+  const update = (commentId: string, actorUserId: string, change: Record<string, unknown>) => updatePostCommentForRoute({
+    postId: post, commentId, actorUserId, readBody: async () => change, createAdminSupabase: () => admin,
+  });
+  const created = async (userId = author, body = 'Audit comment', parentId?: string) => {
+    const result = await create(userId, body, parentId);
+    if (!result.ok) throw new Error('Fixture comment failed');
+    return result.body.comment.id;
+  };
+  const listed = async (userId: string | null = viewer, sort: 'top' | 'newest' = 'top') => {
+    const result = await listPostCommentsForRoute({
+      postId: post, viewerUserId: userId, sort, createAdminSupabase: () => admin,
+    });
+    if (!result.ok) throw new Error('Fixture thread failed');
+    return result.body.comments;
+  };
 
   beforeAll(async () => {
     const config = JSON.parse(readFileSync(configPath!, 'utf8')) as { API_URL: string; SERVICE_ROLE_KEY: string };
@@ -89,5 +109,106 @@ describe.skipIf(!configPath || !connectionString)('comment services with actual 
     if (mode === 'hidden') await db.query("update public.posts set review_status='hidden' where id=$1", [post]);
     expect(await list()).toMatchObject({ ok: false, status: 404 });
     expect(await create()).toMatchObject({ ok: false, status: 404 });
+  });
+
+  // 20261113191038: likes and dislikes, the creator's heart, the pin and edits,
+  // through the service and the real functions, counters and constraints.
+  it('counts a like once a reader, answers each reader their own reaction, and orders Top by likes', async () => {
+    const first = await created(author, 'First');
+    const second = await created(author, 'Second');
+    expect(await update(second, viewer, { reaction: 'like' })).toMatchObject({
+      ok: true, body: { comment: { id: second, likeCount: 1, viewerReaction: 'like' }, unpinnedCommentId: null },
+    });
+    // The same like again is the same like.
+    expect(await update(second, viewer, { reaction: 'like' })).toMatchObject({ ok: true, body: { comment: { likeCount: 1 } } });
+    expect(await update(second, owner, { reaction: 'like' })).toMatchObject({ ok: true, body: { comment: { likeCount: 2 } } });
+    expect(await update(first, owner, { reaction: 'dislike' })).toMatchObject({
+      ok: true, body: { comment: { likeCount: 0, viewerReaction: 'dislike' } },
+    });
+
+    // Top: the liked comment first, though it is not the newest... it is, so Newest agrees; a like on the older one flips Top only.
+    expect((await listed(viewer)).map((item) => [item.id, item.likeCount, item.viewerReaction]))
+      .toEqual([[second, 2, 'like'], [first, 0, null]]);
+    expect((await listed(owner)).map((item) => item.viewerReaction)).toEqual(['like', 'dislike']);
+    expect((await listed(null)).map((item) => item.viewerReaction)).toEqual([null, null]);
+    await update(second, viewer, { reaction: null });
+    await update(second, owner, { reaction: null });
+    await update(first, viewer, { reaction: 'like' });
+    expect((await listed(null, 'top')).map((item) => item.id)).toEqual([first, second]);
+    expect((await listed(null, 'newest')).map((item) => item.id)).toEqual([second, first]);
+    // No answer anywhere carries how many disliked.
+    expect(JSON.stringify(await listed(owner))).not.toMatch(/dislike_?count/i);
+    const counts = await db.query('select like_count, dislike_count from public.post_comments where id=$1', [first]);
+    expect(counts.rows[0]).toEqual({ like_count: 1, dislike_count: 1 });
+  });
+
+  it('refuses a reaction across a block and on a removed comment', async () => {
+    const comment = await created();
+    await db.query('insert into public.user_blocks(blocker_user_id,blocked_user_id) values($1,$2)', [author, viewer]);
+    expect(await update(comment, viewer, { reaction: 'like' })).toMatchObject({ ok: false, status: 403 });
+    await db.query('delete from public.user_blocks where blocker_user_id=$1', [author]);
+    expect(await update(comment, viewer, { reaction: 'like' })).toMatchObject({ ok: true });
+    await remove(comment);
+    expect(await update(comment, viewer, { reaction: 'dislike' })).toMatchObject({ ok: false, status: 404 });
+  });
+
+  it('keeps the heart and the pin for the post owner, moves the one pin, and leads the thread with it', async () => {
+    const first = await created(author, 'First');
+    const second = await created(viewer, 'Second');
+    const reply = await created(viewer, 'Reply', first);
+    const own = await created(owner, 'From the owner');
+
+    expect(await update(first, author, { hearted: true })).toMatchObject({ ok: false, status: 403 });
+    expect(await update(first, viewer, { pinned: true })).toMatchObject({ ok: false, status: 403 });
+    expect(await update(own, owner, { hearted: true })).toMatchObject({ ok: false, status: 400 });
+    expect(await update(reply, owner, { pinned: true })).toMatchObject({ ok: false, status: 400 });
+
+    expect(await update(reply, owner, { hearted: true })).toMatchObject({ ok: true, body: { comment: { hearted: true } } });
+    expect(await update(first, owner, { pinned: true })).toMatchObject({
+      ok: true, body: { comment: { pinned: true }, unpinnedCommentId: null },
+    });
+    // The oldest comment, pinned, leads both orders.
+    expect((await listed(null, 'newest')).map((item) => [item.id, item.pinned]))
+      .toEqual([[first, true], [own, false], [second, false]]);
+    expect((await listed(null, 'top'))[0]).toMatchObject({ id: first, pinned: true });
+
+    expect(await update(own, owner, { pinned: true })).toMatchObject({
+      ok: true, body: { comment: { id: own, pinned: true }, unpinnedCommentId: first },
+    });
+    expect((await listed(null, 'newest')).map((item) => [item.id, item.pinned]))
+      .toEqual([[own, true], [second, false], [first, false]]);
+
+    // A reader who blocked the pinned comment's author does not get it.
+    await db.query('insert into public.user_blocks(blocker_user_id,blocked_user_id) values($1,$2)', [author, owner]);
+    await update(own, owner, { pinned: false });
+    await update(first, owner, { pinned: true });
+    await db.query('delete from public.user_blocks where blocker_user_id=$1', [author]);
+    await db.query('insert into public.user_blocks(blocker_user_id,blocked_user_id) values($1,$2)', [viewer, author]);
+    expect((await listed(viewer, 'newest')).map((item) => item.id)).toEqual([own, second]);
+
+    // Removed, a comment keeps neither mark, and the post can pin again.
+    await remove(first);
+    const marks = await db.query('select pinned_at, hearted_at from public.post_comments where id=$1', [first]);
+    expect(marks.rows[0]).toEqual({ pinned_at: null, hearted_at: null });
+    expect(await update(second, owner, { pinned: true })).toMatchObject({ ok: true, body: { unpinnedCommentId: null } });
+  });
+
+  it('lets only its author edit a comment, keeps the words replaced, and takes the heart off', async () => {
+    const comment = await created(author, 'First words');
+    await update(comment, owner, { hearted: true });
+
+    expect(await update(comment, owner, { body: 'The owner rewrites it' })).toMatchObject({ ok: false, status: 403 });
+    // The same words: not an edit, and the heart stays.
+    expect(await update(comment, author, { body: '  First words ' })).toMatchObject({
+      ok: true, body: { comment: { body: 'First words', editedAt: null, hearted: true } },
+    });
+    const edited = await update(comment, author, { body: 'Better words' });
+    expect(edited).toMatchObject({ ok: true, body: { comment: { body: 'Better words', hearted: false } } });
+    if (!edited.ok) throw new Error('Fixture edit failed');
+    expect(edited.body.comment.editedAt).toEqual(expect.any(String));
+    expect((await listed(null))[0]).toMatchObject({ body: 'Better words', editedAt: edited.body.comment.editedAt });
+
+    const history = await db.query('select previous_body from public.post_comment_edits where comment_id=$1', [comment]);
+    expect(history.rows).toEqual([{ previous_body: 'First words' }]);
   });
 });
