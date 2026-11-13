@@ -34,8 +34,9 @@ export const SEARCH_STARTER_MAX_SEARCHES = 8;
 
 /**
  * A model or tool, as a search result names it, with the search pressing it
- * runs: `query`, its key's words (`qwen 3` for `qwen3`), narrowed to it by the
- * made-with filter. `postCount` is what that search finds, so a row never
+ * runs: `query`, the name most of its posts print, lowercased (`qwen3`,
+ * `kling 2.6`), narrowed to it by the made-with filter. `postCount` is what
+ * that search finds (to 200, `postCountCapped` past that), so a row never
  * opens fewer posts than it says. Not the name drawn (`label`): a catalog's
  * name ("Qwen Image 3.0") can hold words the posts do not.
  */

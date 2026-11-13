@@ -36,19 +36,18 @@
 --        or key, read as post_search_entities.name_vector reads them;
 --      - a template result has no model (post_search_entities never holds
 --        one for it), so a template's hidden model is never offered.
---    Pressing one runs a Posts search for its key's words (search_split_terms:
---    'qwen3' reads 'qwen 3', 'kling-2.6' 'kling 2 6'), returned as `query`,
---    narrowed to it with the made-with filter. The c_entity_candidates
---    strongest by window count are counted for that search as
---    search_public_entities counts it for this viewer (the posts
---    search_public_posts returns for the query narrowed to the entity, up to
---    1,000, under the name most of them print), so the count shown is the
---    list the press opens; one that search finds nothing for is not offered.
---    It is shown by that count, most first. Not the name a client draws: a
---    catalog's name ('Qwen Image 3.0' for qwen3) can hold words its posts do
---    not, and searched it opened fewer posts than the count, or none
---    (PR #785 review). Each count reads at most 1,001 rows of each entity
---    the query names, at most 10.
+--    Pressing one runs a Posts search for the name most of its posts print,
+--    lowercased ('qwen3', 'kling 2.6'), returned as `query`, narrowed to it
+--    with the made-with filter. The c_entity_candidates strongest by window
+--    count are counted for that search (search_starter_entity_offer) as
+--    search_public_entities counts an offer for this viewer: the posts
+--    search_public_posts returns for the query narrowed to the entity, by its
+--    own match, named as the query names it, to 200. So the count shown is
+--    the list the press opens, and one that search finds nothing for is not
+--    offered. It is shown by that count, most first. Not the name a client
+--    draws: a catalog's name ('Qwen Image 3.0' for qwen3) can hold words its
+--    posts do not, and searched it opened fewer posts than the count, or none
+--    (PR #785 review). Each count reads at most 201 rows of its entity.
 --
 -- 2. CREATORS (Creators to follow). Accounts with an unlabelled public post
 --    in the window posted in the last 30 days, ordered by
@@ -77,8 +76,8 @@
 --    it, so an offer never opens an empty search. At most 20 terms are read.
 --
 -- COST. The window reads at most 10,000 index entries; each entity count
--- reads at most 1,001 rows of each entity its query names (at most 10), for
--- at most 12 entities; followers are counted at most 1,000 per creator, for
+-- reads at most 1,001 rows of its own entity (never every entity its query
+-- names), for at most 12 entities; followers are counted at most 1,000 per creator, for
 -- at most 50. The searches list is NOT bounded the same way: a term's check
 -- reads the word index's posting list of each of its words, which grows with
 -- the posts that hold the word (about 2.5 ms for 'portrait' in 25,000 of
@@ -161,6 +160,149 @@ COMMENT ON FUNCTION public.search_starter_term_finds_post(text, uuid) IS
 REVOKE ALL ON FUNCTION public.search_starter_term_finds_post(text, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.search_starter_term_finds_post(text, uuid) TO service_role;
 
+-- One entity's row in the starter, for a viewer: the Posts search pressing
+-- it runs, and what that search finds.
+--
+-- THE QUERY is the name most of its posts print, lowercased with one space
+-- between words ('kling 2.6', or its key where posts print none). Search reads
+-- a query as typed and split alike, and a post's document holds that name: as
+-- written where the post's own Made with field holds it, and as written,
+-- split and joined where a Made with row or the creation names it. Not the
+-- name a client draws: a catalog's name ('Qwen Image 3.0' for qwen3) can hold
+-- words the posts do not, and searched that way opened fewer posts than the
+-- count shown, or none (PR #785 review). Not the key's words either: 'kling 2
+-- 6' misses a post whose own Made with field says 'Kling 2.6'.
+--
+-- THE COUNT is search_public_entities' for an offer: the posts
+-- search_public_posts returns for the query narrowed to the entity, for this
+-- viewer, by its own match (the same text, held equal by
+-- search-starter-migration.test.ts), offered only when one of them names it
+-- as the query does. It stops at 200 ("200+ posts" says as much on a starter
+-- row as the exact figure). No row when that search would find nothing (a
+-- name under three characters, or of no word, or no such post).
+--
+-- Read by the entity's key, not through search_public_entities(query), which
+-- first finds every entity row the query names (16,000 for 'runway' on 50,000
+-- posts, 10 to 20 ms a call). plpgsql planned for each call's own values
+-- (written into search_starter's one statement, the planner could not see
+-- the key and read every entity row for each: 265 ms on 50,000 posts; and a
+-- generic plan, which plpgsql moves to after five calls, took 12 ms a count
+-- against 3), held to nested loops as search_public_entities is (with a hash
+-- join it hashed the entity's posts against every document: 1.1 s), and to
+-- one process (a parallel Gather cost more to start, about 3 ms, than the
+-- 201 rows it read).
+CREATE FUNCTION public.search_starter_entity_offer(
+  p_kind text,
+  p_key text,
+  p_viewer_user_id uuid DEFAULT NULL
+)
+RETURNS TABLE(
+  query text,
+  label text,
+  post_count integer,
+  post_count_capped boolean
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+SET enable_hashjoin = off
+SET enable_mergejoin = off
+SET max_parallel_workers_per_gather = 0
+SET plan_cache_mode = force_custom_plan
+AS $function$
+DECLARE
+  c_count_cap CONSTANT integer := 200;
+  v_label text;
+  v_query text;
+  v_like text;
+  v_tsquery tsquery;
+  v_name_tsquery tsquery;
+  v_total integer;
+  v_named boolean;
+BEGIN
+  -- The name most of the posts the viewer may see print for it (as the
+  -- made-with filter names it), read from at most 201 of them.
+  SELECT printed.label INTO v_label
+  FROM (
+    SELECT members.label
+    FROM public.post_search_entities AS members
+    JOIN public.posts AS posts ON posts.id = members.post_id
+    WHERE members.kind = p_kind
+      AND members.key = p_key
+      AND posts.is_nsfw = false
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.user_blocks AS blocks
+        WHERE blocks.blocker_user_id = p_viewer_user_id
+          AND blocks.blocked_user_id = members.creator_user_id
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.user_blocks AS blocks
+        WHERE blocks.blocker_user_id = members.creator_user_id
+          AND blocks.blocked_user_id = p_viewer_user_id
+      )
+    LIMIT c_count_cap + 1
+  ) AS printed
+  GROUP BY printed.label
+  ORDER BY (printed.label = p_key), count(*) DESC, printed.label
+  LIMIT 1;
+  IF v_label IS NULL THEN
+    RETURN;
+  END IF;
+
+  -- Read as search_public_posts reads a query.
+  v_query := lower(btrim(regexp_replace(v_label, '[[:space:]]+', ' ', 'g')));
+  IF char_length(v_query) < 3 OR char_length(v_query) > 100 THEN
+    RETURN;
+  END IF;
+  v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_');
+  v_tsquery := public.search_query_tsquery(v_query, true);
+  v_name_tsquery := public.search_query_tsquery(v_query, false);
+  IF numnode(v_name_tsquery) = 0 THEN
+    RETURN;
+  END IF;
+
+  WITH seen AS MATERIALIZED (
+    SELECT members.name_vector @@ v_name_tsquery AS names_it
+    FROM public.post_search_entities AS members
+    JOIN public.post_search_documents AS documents ON documents.post_id = members.post_id
+    JOIN public.posts AS posts ON posts.id = documents.post_id
+    WHERE members.kind = p_kind
+      AND members.key = p_key
+      AND posts.is_nsfw = false AND ( documents.search_vector @@ v_tsquery OR documents.search_text ILIKE ('%' || v_like || '%') OR documents.title_normalized OPERATOR(extensions.%) v_query OR documents.tool_normalized OPERATOR(extensions.%) v_query )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.user_blocks AS blocks
+        WHERE blocks.blocker_user_id = p_viewer_user_id
+          AND blocks.blocked_user_id = documents.creator_user_id
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.user_blocks AS blocks
+        WHERE blocks.blocker_user_id = documents.creator_user_id
+          AND blocks.blocked_user_id = p_viewer_user_id
+      )
+    LIMIT c_count_cap + 1
+  )
+  SELECT count(*)::integer, coalesce(bool_or(seen.names_it), false)
+  INTO v_total, v_named
+  FROM seen;
+
+  IF v_total = 0 OR NOT v_named THEN
+    RETURN;
+  END IF;
+  RETURN QUERY SELECT v_query, v_label, least(v_total, c_count_cap), v_total > c_count_cap;
+END;
+$function$;
+
+COMMENT ON FUNCTION public.search_starter_entity_offer(text, text, uuid) IS
+  'For search_starter: the Posts search pressing an entity runs (the name most of its posts print, lowercased) and what that search finds for p_viewer_user_id narrowed to the entity, counted as search_public_entities counts an offer, to 200, under that name. No row when the search would find nothing. Service role only.';
+
+REVOKE ALL ON FUNCTION public.search_starter_entity_offer(text, text, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.search_starter_entity_offer(text, text, uuid) TO service_role;
+
 CREATE FUNCTION public.search_starter(
   p_viewer_user_id uuid DEFAULT NULL,
   p_terms text[] DEFAULT ARRAY[]::text[],
@@ -196,7 +338,7 @@ DECLARE
   v_creators jsonb := '[]'::jsonb;
   v_searches jsonb := '[]'::jsonb;
   v_term text;
-  v_query text;
+  v_term_query text;
   v_seen text[] := ARRAY[]::text[];
   v_offered integer := 0;
 BEGIN
@@ -253,7 +395,7 @@ BEGIN
             candidates.kind,
             candidates.key,
             candidates.window_posts,
-            asked.query,
+            counted.query,
             counted.label,
             counted.post_count,
             counted.post_count_capped
@@ -270,25 +412,13 @@ BEGIN
             ORDER BY count(*) DESC, members.kind, members.key
             LIMIT c_entity_candidates
           ) AS candidates
-          -- The search pressing it runs: its key's words, which every post
-          -- that has it holds in its document (a name's variants include its
-          -- split form), narrowed to it by the made-with filter.
-          CROSS JOIN LATERAL (
-            SELECT public.search_split_terms(candidates.key) AS query
-          ) AS asked
-          -- Counted as search counts that search for this viewer (the posts
-          -- search_public_posts returns for the query narrowed to the
-          -- entity, to 1,000), under the name most of them print. An entity
-          -- that search would not offer, or whose search finds nothing, is
-          -- not offered here either.
-          JOIN LATERAL public.search_public_entities(
-            asked.query,
-            p_viewer_user_id,
-            10,
-            NULL
+          -- The search pressing it runs and what it finds for this viewer
+          -- (search_starter_entity_offer): no row when it finds nothing.
+          CROSS JOIN LATERAL public.search_starter_entity_offer(
+            candidates.kind,
+            candidates.key,
+            p_viewer_user_id
           ) AS counted
-            ON counted.kind = candidates.kind
-           AND counted.key = candidates.key
           -- No withdrawn word in its name or key, read as name_vector reads them.
           WHERE NOT EXISTS (
             SELECT 1
@@ -378,22 +508,22 @@ BEGIN
     FOREACH v_term IN ARRAY coalesce(p_terms[1:c_term_cap], ARRAY[]::text[]) LOOP
       EXIT WHEN v_offered >= v_search_limit;
       -- Read as search_public_posts reads a query.
-      v_query := lower(btrim(regexp_replace(coalesce(v_term, ''), '[[:space:]]+', ' ', 'g')));
-      CONTINUE WHEN char_length(v_query) < 3 OR char_length(v_query) > 100;
+      v_term_query := lower(btrim(regexp_replace(coalesce(v_term, ''), '[[:space:]]+', ' ', 'g')));
+      CONTINUE WHEN char_length(v_term_query) < 3 OR char_length(v_term_query) > 100;
       -- A term listed twice, in any case or spacing, is read once.
-      CONTINUE WHEN v_query = ANY (v_seen);
-      v_seen := v_seen || v_query;
+      CONTINUE WHEN v_term_query = ANY (v_seen);
+      v_seen := v_seen || v_term_query;
       -- No withdrawn word, as written, split or joined.
       CONTINUE WHEN EXISTS (
         SELECT 1
         FROM public.search_suggestion_denylist AS denied
         WHERE denied.term = ANY (tsvector_to_array(to_tsvector(
           'pg_catalog.simple',
-          coalesce(public.search_term_variants(v_query), '')
+          coalesce(public.search_term_variants(v_term_query), '')
         )))
       );
       -- At least one post search may show this viewer holds it as typed.
-      CONTINUE WHEN NOT public.search_starter_term_finds_post(v_query, p_viewer_user_id);
+      CONTINUE WHEN NOT public.search_starter_term_finds_post(v_term_query, p_viewer_user_id);
       -- Offered as listed, one space between words.
       v_searches := v_searches || jsonb_build_array(jsonb_build_object(
         'text', btrim(regexp_replace(v_term, '[[:space:]]+', ' ', 'g'))
@@ -411,7 +541,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.search_starter(uuid, text[], integer, integer, integer) IS
-  'GET /api/search/starter in one call: {entities: [{kind, key, label, post_count, post_count_capped, query}], creators: [{id, username, display_name, bio, avatar_url, public_post_count, is_following}], searches: [{text}]}, each list in the order to show it. Entities and creators are read from the newest 2,000 posts search may show the viewer (at most 10,000 read to find them): entities two creators use there, no withdrawn word, each with the query pressing it searches (its key''s words) and the count search gives that query narrowed to it, none whose search finds nothing; creators with a post there in the last 30 days, by posts (up to 10), followers, newest post, never a guest, suspended, deleting, blocked, followed account or the viewer. Searches: p_terms, in order, each holding no withdrawn word and matching at least one post search may show. Service role only.';
+  'GET /api/search/starter in one call: {entities: [{kind, key, label, post_count, post_count_capped, query}], creators: [{id, username, display_name, bio, avatar_url, public_post_count, is_following}], searches: [{text}]}, each list in the order to show it. Entities and creators are read from the newest 2,000 posts search may show the viewer (at most 10,000 read to find them): entities two creators use there, no withdrawn word, each with the query pressing it searches (the name most of its posts print) and the count search gives that query narrowed to it (to 200), none whose search finds nothing; creators with a post there in the last 30 days, by posts (up to 10), followers, newest post, never a guest, suspended, deleting, blocked, followed account or the viewer. Searches: p_terms, in order, each holding no withdrawn word and matching at least one post search may show. Service role only.';
 
 REVOKE ALL ON FUNCTION public.search_starter(uuid, text[], integer, integer, integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.search_starter(uuid, text[], integer, integer, integer) TO service_role;

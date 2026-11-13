@@ -20,7 +20,8 @@
 // the E2E user's with one picture and no recipe (fixtures/post-composer-saved-twice.json). And
 // Pricing's referral terms: no active program, which Pricing drew from the failed read too. And
 // /api/search/suggest's two calls (its rate limit, by its scope, and its read, for one query:
-// fixtures/search-suggestions.json), a route and not a page. And the
+// fixtures/search-suggestions.json), a route and not a page. And /api/search/starter's two
+// (its rate limit, by its scope, and its read for a visitor: fixtures/search-starter.json). And the
 // E2E user's recipe sales page, /marketplace/sell: two free recipes on text posts of theirs
 // (fixtures/seller-recipes.json), with no unlock orders and no deleted posts.
 // A page added here brings each of its reads, matched by method, path and the filters that name
@@ -61,6 +62,10 @@ const sellerRecipes = require('../fixtures/seller-recipes.json');
 // request through the real proxy and the real /api/search/suggest and read the headers of its 200.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const searchSuggestions = require('../fixtures/search-suggestions.json');
+// What search_starter answers a visitor, so that search-starter.spec.ts can send a request through
+// the real proxy and the real /api/search/starter and read the headers of its 200.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const searchStarter = require('../fixtures/search-starter.json');
 // In the order the page asks for them: its recipes' posts as its read lists the recipes, newest
 // first, and the posts' covers as that read answers (the fixture's posts are in the same order).
 const sellerPostIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.post_id).join(',')})`;
@@ -90,6 +95,20 @@ const READS = [
     path: '/rest/v1/rpc/search_suggestions',
     body: { p_query: searchSuggestions.query },
     answer: () => json(searchSuggestions.rows),
+  },
+  {
+    // GET /api/search/starter: its own rate limit, allowed, matched by its scope ...
+    methods: ['POST'],
+    path: '/rest/v1/rpc/check_backend_rate_limit',
+    body: { p_scope: 'public-search:starter' },
+    answer: () => json({ allowed: true, limit: 60, remaining: 59, retryAfterSeconds: 0, resetAt: '2026-11-13T12:00:00.000Z' }),
+  },
+  {
+    // ... and its one read, for a visitor (no viewer).
+    methods: ['POST'],
+    path: '/rest/v1/rpc/search_starter',
+    body: { p_viewer_user_id: null },
+    answer: () => json(searchStarter.rows),
   },
   {
     // loadCreatorProfileRow: the creator by handle. maybeSingle() asks for a list.

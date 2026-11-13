@@ -124,7 +124,7 @@ describe('search starter shared rules', () => {
       query: entity.query,
       madeWith: searchEntityId(entity),
     });
-    // Never its name: "Nano Banana Pro" is drawn, "nano banana pro" is searched.
+    // Never its drawn name: "Nano Banana Pro" is drawn, "nano-banana-pro" (what its posts print) is searched.
     expect(entity.label).not.toBe(entity.query);
     expect(searchStarterEntityAction(entity)).toMatchObject({ madeWith: 'model:nano-banana-pro' });
     const [creator] = parseSearchStarterResponse(contract.response)!.creators;

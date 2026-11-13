@@ -18,7 +18,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(74);
+select plan(80);
 
 create function pg_temp.uid(p_suffix text)
 returns uuid
@@ -74,7 +74,11 @@ $$;
 --   Deltatool    …01, …02, withdrawn by its name
 --   Blocktool    …06, …07                       two creators, both blocked with the viewer
 --   Blockertool  …07 (who blocked the viewer), …01, 40 days ago
---   Zq           …03, …04, 40 days ago: a key of two characters, which search cannot search
+--   Zq           …03, …04, 40 days ago: a name of two characters, which search cannot search
+--   Lumen 2.6    …03, …04, 40 days ago, in the posts' own Made with field only
+--   nimbus       "Nimbus Forge" on posts of …03 and …04, and the same slug under
+--                another name, "Cirrus Stratus Cumulus", on a post of …01: three
+--                posts the made-with filter counts, two the search for its name finds
 -- Models: qwen3, the creation model of posts of …01 and …02, 40 days ago, with
 -- no Made with row; the catalog names it "Qwen Image 3.0", words its posts'
 -- documents do not hold.
@@ -186,7 +190,9 @@ from (
     ('2f', '01', 'public', 'visible', false, null, 'a plain frame', 40 * 24 * 60 + 2, 'e5'),
     ('5a', '02', 'public', 'visible', false, null, 'a plain frame', 40 * 24 * 60 + 3, 'e6'),
     ('5b', '03', 'public', 'visible', false, 'Zq', 'a plain frame', 40 * 24 * 60 + 4, null),
-    ('5c', '04', 'public', 'visible', false, 'Zq', 'a plain frame', 40 * 24 * 60 + 5, null)
+    ('5c', '04', 'public', 'visible', false, 'Zq', 'a plain frame', 40 * 24 * 60 + 5, null),
+    ('5d', '03', 'public', 'visible', false, 'Lumen 2.6', 'a plain frame', 40 * 24 * 60 + 6, null),
+    ('5e', '04', 'public', 'visible', false, 'Lumen 2.6', 'a plain frame', 40 * 24 * 60 + 7, null)
 ) as post(suffix, owner, visibility, review_status, is_nsfw, tool, body, age_minutes, generation);
 
 -- …0d posts twelve times, an hour ago and before.
@@ -199,6 +205,20 @@ select
   'Plain title', 'a heavy frame', 'showcase/e5e1-3' || to_hex(n) || '.png',
   now() - make_interval(mins => 100 + n), now()
 from generate_series(0, 11) as n;
+
+insert into public.posts (
+  id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw,
+  title, body, showcase_asset_path, source_tool, source_tool_slug, created_at, updated_at
+)
+select pg_temp.uid(post.suffix), pg_temp.uid(post.owner), 'public', 'image', 'external', 'media', 'visible', false,
+       'Plain title', 'a plain frame', 'showcase/e5e1-' || post.suffix || '.png', post.tool, 'nimbus',
+       now() - make_interval(mins => post.age_minutes), now()
+from (
+  values
+    ('5f', '03', 'Nimbus Forge', 40 * 24 * 60 + 8),
+    ('6a', '04', 'Nimbus Forge', 40 * 24 * 60 + 9),
+    ('6b', '01', 'Cirrus Stratus Cumulus', 40 * 24 * 60 + 10)
+) as post(suffix, owner, tool, age_minutes);
 
 update public.profiles set identity_state = 'deleting' where id = pg_temp.uid('0a');
 
@@ -249,14 +269,14 @@ select is(
 
 -- ─── Entities ────────────────────────────────────────────────────────────────
 
-select is(pg_temp.entity_ids(), array['tool:epsilontool', 'tool:alphatool', 'model:qwen3', 'tool:blockertool', 'tool:blocktool'],
+select is(pg_temp.entity_ids(), array['tool:epsilontool', 'tool:alphatool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool', 'tool:lumen-2.6'],
   'a visitor is offered the models and tools two creators use, most posts first');
 select is(
   public.search_starter(null, '{}', 8, 0, 0) -> 'entities' -> 0,
   (select jsonb_build_object('kind', kind, 'key', key, 'label', label, 'post_count', post_count,
                              'post_count_capped', post_count_capped, 'query', 'epsilontool')
    from public.search_public_entities('epsilontool', null, 10, null) where key = 'epsilontool'),
-  'each with the search pressing it runs, counted as search counts that search narrowed to it, under the name its posts print'
+  'each with the search pressing it runs (the name its posts print, lowercased), counted as search counts an offer for that query'
 );
 select ok(
   (select bool_and(
@@ -281,14 +301,46 @@ select ok(not exists (
 select is(
   (select entity from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
    where entity ->> 'key' = 'qwen3'),
-  '{"kind": "model", "key": "qwen3", "label": "qwen3", "post_count": 2, "post_count_capped": false, "query": "qwen 3"}'::jsonb,
-  'the starter sends its key''s words, which both posts hold'
+  '{"kind": "model", "key": "qwen3", "label": "qwen3", "post_count": 2, "post_count_capped": false, "query": "qwen3"}'::jsonb,
+  'the starter sends the name its posts print, which both hold'
 );
 select is(
   (select count(*)::integer from public.search_public_posts(
-     p_query => 'qwen 3', p_viewer_user_id => null, p_limit => 25, p_made_with => 'model:qwen3', p_correct => false)),
+     p_query => 'qwen3', p_viewer_user_id => null, p_limit => 25, p_made_with => 'model:qwen3', p_correct => false)),
   2,
   'and that search, narrowed to it, opens both'
+);
+select is(
+  (select entity ->> 'query' from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
+   where entity ->> 'key' = 'lumen-2.6'),
+  'lumen 2.6',
+  'a tool its posts name only in their own Made with field is searched as they write it'
+);
+select is(
+  (select count(*)::integer from public.search_public_posts(
+     p_query => 'lumen 2.6', p_viewer_user_id => null, p_limit => 25, p_made_with => 'tool:lumen-2.6', p_correct => false)),
+  2,
+  'and that search opens both its posts'
+);
+select is((select post_count from public.search_public_entities(null, null, 1, 'tool:nimbus')), 3,
+  'fixture: the made-with filter counts three posts with the nimbus slug');
+select is(
+  (select entity - 'kind' - 'post_count_capped' from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
+   where entity ->> 'key' = 'nimbus'),
+  '{"key": "nimbus", "label": "Nimbus Forge", "post_count": 2, "query": "nimbus forge"}'::jsonb,
+  'the row says two: the search it runs, for the name most of them print, finds two, not the three the filter holds'
+);
+select is(
+  (select count(*)::integer from public.search_public_posts(
+     p_query => 'nimbus forge', p_viewer_user_id => null, p_limit => 25, p_made_with => 'tool:nimbus', p_correct => false)),
+  2,
+  'and pressing it opens those two'
+);
+select is(
+  (select (entity ->> 'post_count')::integer from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
+   where entity ->> 'key' = 'epsilontool'),
+  4,
+  'a count stops at 200, so a small one is exact'
 );
 select ok(not (pg_temp.entity_ids() @> array['tool:zq']),
   'an entity whose search would find nothing (a two-character key, which search does not search) is not offered');
@@ -311,7 +363,7 @@ select ok(not exists (
     where entity ->> 'kind' = 'model' and entity ->> 'key' like 'zorblax%'
   ),
   'a template result''s hidden model is not offered, though two creators'' results have it');
-select is(pg_temp.entity_ids(pg_temp.uid('05')), array['tool:epsilontool', 'tool:alphatool', 'model:qwen3'],
+select is(pg_temp.entity_ids(pg_temp.uid('05')), array['tool:epsilontool', 'tool:alphatool', 'tool:nimbus', 'model:qwen3', 'tool:lumen-2.6'],
   'the viewer is not offered a tool only creators on either side of a block with them use');
 select is(pg_temp.entity_ids(null, 1), array['tool:epsilontool'], 'the limit cuts the list');
 
@@ -324,10 +376,10 @@ select pg_temp.uid('4' || to_hex(n)), pg_temp.uid('02'), 'public', 'image', 'ext
        'Plain title', 'a plain frame', 'showcase/e5e1-4' || to_hex(n) || '.png', 'Alphatool', 'alphatool',
        now() - make_interval(mins => 300 + n), now()
 from generate_series(0, 1) as n;
-select is(pg_temp.entity_ids(), array['tool:alphatool', 'tool:epsilontool', 'model:qwen3', 'tool:blockertool', 'tool:blocktool'],
+select is(pg_temp.entity_ids(), array['tool:alphatool', 'tool:epsilontool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool', 'tool:lumen-2.6'],
   'two more Alphatool posts put it first, at once: nothing is rebuilt');
 delete from public.posts where id in (pg_temp.uid('40'), pg_temp.uid('41'));
-select is(pg_temp.entity_ids(), array['tool:epsilontool', 'tool:alphatool', 'model:qwen3', 'tool:blockertool', 'tool:blocktool'],
+select is(pg_temp.entity_ids(), array['tool:epsilontool', 'tool:alphatool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool', 'tool:lumen-2.6'],
   'and deleting them puts it back');
 
 -- A second creator for Betatool, then that post labelled: it counts only while a visitor can see it.
@@ -336,7 +388,7 @@ insert into public.posts (
   title, body, showcase_asset_path, source_tool, source_tool_slug, created_at, updated_at
 ) values (pg_temp.uid('50'), pg_temp.uid('03'), 'public', 'image', 'external', 'media', 'visible', false,
           'Plain title', 'a plain frame', 'showcase/e5e1-50.png', 'Betatool', 'betatool', now() - interval '5 minutes', now());
-select is(pg_temp.entity_ids(), array['tool:betatool', 'tool:epsilontool', 'tool:alphatool', 'model:qwen3', 'tool:blockertool', 'tool:blocktool'],
+select is(pg_temp.entity_ids(), array['tool:betatool', 'tool:epsilontool', 'tool:alphatool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool', 'tool:lumen-2.6'],
   'a second creator''s post offers Betatool, with its six posts first');
 update public.posts set visibility = 'private' where id = pg_temp.uid('50');
 select ok(not (pg_temp.entity_ids() @> array['tool:betatool']),
@@ -377,10 +429,10 @@ select is(
    from public.creator_search_documents as documents where documents.creator_user_id = pg_temp.uid('01')),
   'a creator in the shape a creator search result has, from their search document'
 );
-select is((public.search_starter(null, '{}', 0, 1, 0) -> 'creators' -> 0 ->> 'public_post_count')::integer, 13,
+select is((public.search_starter(null, '{}', 0, 1, 0) -> 'creators' -> 0 ->> 'public_post_count')::integer, 14,
   'whose post count is all their public posts, not the ten the order counts');
 
--- ada (eleven recent posts of thirteen, three followers) and heavy (twelve, none) both count ten.
+-- ada (eleven recent posts of fourteen, three followers) and heavy (twelve, none) both count ten.
 select ok(array_position(pg_temp.handles(), 'ada-quill') < array_position(pg_temp.handles(), 'heavy-poster'),
   'posts count to ten: past that, followers decide');
 select ok(array_position(pg_temp.handles(), 'heavy-poster') < array_position(pg_temp.handles(), 'bea-quill'),

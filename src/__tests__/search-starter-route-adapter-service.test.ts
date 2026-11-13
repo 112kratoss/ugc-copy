@@ -46,7 +46,7 @@ async function ask(
     headers,
     createUserClient = vi.fn(),
     enforceBackendRateLimit = vi.fn(allowedRateLimit),
-    starter = vi.fn(async (_options: SearchStarterOptions) => emptyAnswer()),
+    starter = vi.fn(async () => emptyAnswer()),
     env = {},
   }: {
     headers?: Record<string, string>;

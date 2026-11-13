@@ -35,7 +35,7 @@ function entityRow(index: number, overrides: Record<string, unknown> = {}) {
 }
 
 function clientAnswering(answer: { data: unknown; error: unknown }) {
-  const rpc = vi.fn(async (_name: string, _args: Record<string, unknown>) => answer);
+  const rpc = vi.fn<(name: string, args: Record<string, unknown>) => Promise<typeof answer>>(async () => answer);
   return { rpc, createServiceClient: () => ({ rpc }) as unknown as SupabaseClient };
 }
 
@@ -125,11 +125,12 @@ describe('search starter service', () => {
 
   it('keeps the query the database counted apart from the name drawn: a catalog name can hold words the posts do not', async () => {
     // PR #785's review: qwen3 is "Qwen Image 3.0" in the catalog, and a post made
-    // with it holds qwen3 / qwen 3, never "image" or "3.0". A row that searched its
-    // name would open none of the posts it counted.
+    // with it holds qwen3, never "image" or "3.0". A row that searched its
+    // name would open none of the posts it counted; the database sends the
+    // name its posts print, lowercased.
     const { createServiceClient } = clientAnswering({
       data: {
-        entities: [{ kind: 'model', key: 'qwen3', label: 'qwen3', post_count: 2, post_count_capped: false, query: 'qwen 3' }],
+        entities: [{ kind: 'model', key: 'qwen3', label: 'qwen3', post_count: 2, post_count_capped: false, query: 'qwen3' }],
         creators: [],
         searches: [],
       },
@@ -137,9 +138,9 @@ describe('search starter service', () => {
     });
     const [entity] = (await getSearchStarter({ viewerUserId: null }, { createServiceClient })).entities;
     expect(entity.label).toBe(getPostModelDisplayName('qwen3'));
-    expect(entity.label).not.toBe('qwen 3');
-    expect(entity.query).toBe('qwen 3');
-    expect(searchStarterEntityAction(entity)).toMatchObject({ query: 'qwen 3', madeWith: 'model:qwen3' });
+    expect(entity.label).not.toBe('qwen3');
+    expect(entity.query).toBe('qwen3');
+    expect(searchStarterEntityAction(entity)).toMatchObject({ query: 'qwen3', madeWith: 'model:qwen3' });
   });
 
   it('never answers more than its caps, whatever the database returns', async () => {
