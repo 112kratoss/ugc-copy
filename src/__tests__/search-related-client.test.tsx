@@ -212,6 +212,20 @@ describe('related posts on the search page', () => {
     expect(asked()).toEqual([url]);
   });
 
+  it('never asks for a handle search, settled or left alone, and asks for the same letters without the "@"', async () => {
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('@flu');
+    await tick(PAUSE + SEARCH_RELATED_SETTLE_MS * 2);
+    enter();
+    await tick(SEARCH_RELATED_SETTLE_MS * 2);
+    expect(asked()).toEqual(['/api/search?q=%40flu&type=top']);
+    // The same thin answer for the letters alone is asked about once it has stood.
+    type('flu');
+    await tick(PAUSE);
+    await tick(SEARCH_RELATED_SETTLE_MS);
+    expect(asked().slice(1)).toEqual(['/api/search?q=flu&type=top', '/api/search?q=flu&type=top&related=1']);
+  });
+
   it('never asks for a query too short to be searched for posts', async () => {
     render(<SearchClient initialQuery="" initialType="top" />);
     type('oc');
@@ -279,7 +293,7 @@ describe('related posts on the search page', () => {
 });
 
 describe('the related posts rule both clients follow', () => {
-  const search = { type: 'top', sort: 'top', narrowing: '', queryLength: 5, laterPage: false };
+  const search = { query: 'ocean', type: 'top', sort: 'top', narrowing: '', queryLength: 5, laterPage: false };
 
   it('names the server’s parameter and its thin count', () => {
     expect(SEARCH_RELATED_PARAM).toBe(PUBLIC_SEARCH_RELATED_PARAM);
@@ -296,6 +310,16 @@ describe('the related posts rule both clients follow', () => {
     expect(searchRelatedApplies({ ...search, queryLength: 2 })).toBe(false);
     expect(searchRelatedApplies({ ...search, queryLength: 3 })).toBe(true);
     expect(searchRelatedApplies({ ...search, laterPage: true })).toBe(false);
+  });
+
+  it('never applies to a handle search: a query that begins with "@" is a look for a creator', () => {
+    // Three letters after the "@", so nothing but the "@" refuses it.
+    expect(searchRelatedApplies({ ...search, query: '@flu', queryLength: 3 })).toBe(false);
+    expect(searchRelatedApplies({ ...search, query: '@fluffy studio', type: 'posts', queryLength: 13 })).toBe(false);
+    expect(searchRelatedApplies({ ...search, query: '  @flu', queryLength: 3 })).toBe(false);
+    // An "@" inside the query is part of what is searched for.
+    expect(searchRelatedApplies({ ...search, query: 'the girl from @girl', queryLength: 19 })).toBe(true);
+    expect(searchRelatedApplies({ ...search, query: 'flu', queryLength: 3 })).toBe(true);
   });
 
   it('reads an answer as thin under the server’s count, and never a Posts answer with a next page', () => {

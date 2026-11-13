@@ -1564,6 +1564,21 @@ describe('ExploreSearchOverlay related posts', () => {
     await act(async () => tree.unmount());
   });
 
+  it('never asks for a handle search, by the Search key or left alone, and asks for the same letters without the "@"', async () => {
+    // Seen on the simulator against production (2026-11-13): "@flu" left alone spent a lookup.
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, '@flu');
+    await advance(300 + SETTLE * 2);
+    await submit(tree);
+    await advance(SETTLE * 2);
+    expect(asked()).toEqual(['@flu|top|top|plain']);
+    await typeQuery(tree, 'flu');
+    await advance(300);
+    await advance(SETTLE);
+    expect(asked().slice(1)).toEqual(['flu|top|top|plain', 'flu|top|top|related']);
+    await act(async () => tree.unmount());
+  });
+
   it('keeps the answer on hand when the request for related posts fails, says nothing, and does not ask again', async () => {
     searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', { creators: [creator('jane')] }));
     const tree = await render({ visible: true, onClose: vi.fn() });

@@ -366,11 +366,18 @@ const SEARCH_RELATED_MIN_QUERY_LENGTH = 3;
  * typed, from three characters. The server's own conditions; anywhere else
  * it ignores the parameter, and a client does not send it.
  *
- * `narrowing` is the filters and the exact reading as one string
- * (`searchFilterKey`), '' for none; `queryLength` is counted as the server
- * counts it (`searchQueryLength` of the query less a leading "@").
+ * Never for a handle search (a query that begins with "@"): that is a look
+ * for a creator, which the typeahead reads the same way, and posts that mean
+ * what the handle's letters say are not what it asks for. The server would
+ * look all the same, and spend one of the viewer's lookups on it.
+ *
+ * `query` is the search as the client normalizes it. `narrowing` is the
+ * filters and the exact reading as one string (`searchFilterKey`), '' for
+ * none; `queryLength` is counted as the server counts it
+ * (`searchQueryLength` of the query less a leading "@").
  */
 export function searchRelatedApplies(search: {
+  query: string;
   type: string;
   sort: string;
   narrowing: string;
@@ -378,7 +385,8 @@ export function searchRelatedApplies(search: {
   /** A later page of the same search: `cursor` is set. */
   laterPage: boolean;
 }): boolean {
-  return (search.type === 'top' || search.type === 'posts')
+  return !search.query.trimStart().startsWith('@')
+    && (search.type === 'top' || search.type === 'posts')
     && search.sort === 'top'
     && search.narrowing === ''
     && search.queryLength >= SEARCH_RELATED_MIN_QUERY_LENGTH

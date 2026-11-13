@@ -759,6 +759,7 @@ export function ExploreSearchOverlay({
 
   // Related posts can come with the search in front (the first page of it).
   const relatedApplies = requestKey !== null && searchRelatedApplies({
+    query: normalizedQuery,
     type,
     sort,
     narrowing,
