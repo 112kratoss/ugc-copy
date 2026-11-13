@@ -26,6 +26,9 @@ import {
   searchTypeaheadAction,
   searchTypeaheadDrawn,
   searchTypeaheadMatchingRecents,
+  searchTypeaheadAsks,
+  searchTypeaheadOfferForTab,
+  SEARCH_TYPEAHEAD_OFFER_ALL,
   searchTypeaheadTextRuns,
   searchTypeaheadQuery,
   searchTypeaheadRowLabel,
@@ -468,11 +471,28 @@ describe('search typeahead: recent searches, and what a box offers', () => {
     expect(searchTypeaheadRowLabel(rows[0])).toBe('Search again for luminous');
   });
 
-  it('offers only what changes the query where the box is over its own results: recent searches and completions', () => {
-    const sections = searchTypeaheadSections(answer, 'lum', { recents: ['lumen city'], offer: 'query' });
-    expect(sections.map((section) => section.id)).toEqual(['recents', 'completions']);
+  it('leaves out on the search page what the tab in front draws live: Top creators and models, Creators creators', () => {
+    const kinds = (tab: Parameters<typeof searchTypeaheadOfferForTab>[0]) => searchTypeaheadSections(
+      answer, 'lum', { recents: ['lumen city'], offer: searchTypeaheadOfferForTab(tab) },
+    ).map((section) => section.id);
+    expect(kinds('top')).toEqual(['recents', 'completions']);
+    expect(kinds('creators')).toEqual(['recents', 'entities', 'completions']);
+    expect(kinds('posts')).toEqual(['recents', 'creators', 'entities', 'completions']);
+    expect(kinds('recipes')).toEqual(['recents', 'creators', 'entities', 'completions']);
+    expect(searchTypeaheadOfferForTab('posts')).toBe(SEARCH_TYPEAHEAD_OFFER_ALL);
+    // One object per answer: a client can compare offers by identity.
+    expect(searchTypeaheadOfferForTab('top')).toBe(searchTypeaheadOfferForTab('top'));
     // Nothing left to offer: no section, so no list.
-    expect(searchTypeaheadSections({ ...answer, completions: [] }, 'lum', { offer: 'query' })).toEqual([]);
+    expect(searchTypeaheadSections({ ...answer, completions: [] }, 'lum', { offer: searchTypeaheadOfferForTab('top') })).toEqual([]);
+  });
+
+  it('asks nothing for a handle where no creator would be drawn', () => {
+    expect(searchTypeaheadAsks('@lum', searchTypeaheadOfferForTab('top'))).toBe(false);
+    expect(searchTypeaheadAsks('@lum', searchTypeaheadOfferForTab('creators'))).toBe(false);
+    expect(searchTypeaheadAsks('@lum', searchTypeaheadOfferForTab('posts'))).toBe(true);
+    expect(searchTypeaheadAsks('@lum')).toBe(true);
+    expect(searchTypeaheadAsks('lum', searchTypeaheadOfferForTab('top'))).toBe(true);
+    expect(searchTypeaheadAsks(null)).toBe(false);
   });
 
   it('draws the matching recent searches with or without an answer, and never as stale', () => {
@@ -485,7 +505,7 @@ describe('search typeahead: recent searches, and what a box offers', () => {
     expect(typedOn.stale).toBe(true);
     expect(typedOn.sections[0].id).toBe('recents');
     // An earlier answer that adds nothing the box offers leaves a list that is not stale.
-    const queryOnly = searchTypeaheadDrawn({ query: 'lum', response: { ...answer, completions: [] } }, 'lume', { ...options, offer: 'query' });
+    const queryOnly = searchTypeaheadDrawn({ query: 'lum', response: { ...answer, completions: [] } }, 'lume', { ...options, offer: searchTypeaheadOfferForTab('top') });
     expect(queryOnly).toEqual({ sections: [expect.objectContaining({ id: 'recents' })], stale: false });
     expect(searchTypeaheadDrawn(null, null, options)).toEqual({ sections: [], stale: false });
   });

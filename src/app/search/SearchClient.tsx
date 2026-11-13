@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Box, Clock3, LoaderCircle, MessageCircle, RefreshCcw, Sparkles, Wrench, X } from 'lucide-react';
 
@@ -95,7 +96,7 @@ import {
   toggleSearchFilterSwitch,
   type SearchTopSection,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
-import type { SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
+import { searchTypeaheadOfferForTab, type SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
 import {
   SEARCH_PAGE_PATH,
   forgetSearchPageTraversal,
@@ -451,6 +452,7 @@ export default function SearchClient({
   // page's field, with the typeahead closed for the text it brought
   // (search-field-handoff.ts). Read without taking it, as a render may run twice.
   const [handedOff] = useState(() => typeof window !== 'undefined' && searchFieldHandoffPending());
+  const router = useRouter();
   const recentsRef = useRef<HTMLDivElement | null>(null);
   const searchFormRef = useRef<HTMLFormElement | null>(null);
   // A search committed with Enter before its answer landed: kept once it finds something.
@@ -811,21 +813,30 @@ export default function SearchClient({
   // Typeahead: what the box offers while the person types, ahead of the
   // results, which load as they did. Its list is drawn only for the text the
   // box holds, and is closed by Escape, by Enter and by choosing a row, so it
-  // never stands over a search the person has committed. Here it offers only
-  // what changes the query, the recent searches the text matches and then the
-  // completions: the results under it draw the creators and the models and
-  // tools live, and a row for one would repeat the result drawn under it.
+  // never stands over a search the person has committed. The recent searches
+  // the text matches come first, and it leaves out what the tab in front draws
+  // live under it (searchTypeaheadOfferForTab): on Top the creators and the
+  // models and tools, on Creators the creators.
   const typeahead = useSearchTypeahead({
     text: query,
     focused: fieldFocused,
     closedFor: handedOff ? opening.query : null,
     recents: history,
-    offer: 'query',
+    offer: searchTypeaheadOfferForTab(activeType),
   });
   const runTypeaheadAction = (action: SearchTypeaheadAction | null) => {
-    // The box here offers queries only (offer: 'query'): a recent search or a
-    // completion. A creator or a model is pressed among the results.
-    if (action?.type !== 'search') return;
+    if (!action) return;
+    if (action.type === 'creator') {
+      // Chosen with Enter there is no press to write the address first (above).
+      writeSearchPageAddress(address);
+      router.push(`/creators/${encodeURIComponent(action.username)}`);
+      return;
+    }
+    if (action.type === 'entity') {
+      // As pressing the entity among the results does: Posts for what is typed, narrowed to it.
+      pickEntity(action.entity);
+      return;
+    }
     // A completion or a recent search fills the box and is searched at once, with no pause for
     // typing, and committed as Enter commits a search: kept among the recent
     // ones once it finds something.
@@ -877,6 +888,9 @@ export default function SearchClient({
               onChange={setQuery}
               onClear={() => setQuery('')}
               autoFocus={!opening.query}
+              // The cards on show are the search before this one: the field says
+              // so, without a line that would push them down (review of #787).
+              busy={staleResultsShown}
               combobox={{
                 expanded: typeahead.shown,
                 listId: typeahead.listId,
@@ -1022,11 +1036,6 @@ export default function SearchClient({
               </button>
             </p>
           ) : null}
-          {staleResultsShown ? (
-            <div className="mb-6 flex items-center gap-2 text-sm text-zinc-400">
-              <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> {SEARCH_SEARCHING_LABEL}
-            </div>
-          ) : null}
           {!canSearch ? (
             <SearchStateBlock tone="initial" title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
           ) : currentFailure && !currentAnswer ? (
@@ -1040,7 +1049,10 @@ export default function SearchClient({
             pending ? (
               // No earlier cards to keep on show: blocks in the shape of the
               // tab's results (the status line above says "Searching…").
-              <SearchResultsPlaceholder type={activeType} />
+              <SearchResultsPlaceholder
+                type={activeType}
+                creatorsOnly={gatedQueryLength < PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH}
+              />
             ) : !searchSaysNoResults(gatedQueryLength) ? (
               // Half a word is no verdict: a two-character search that finds
               // no creator leaves the page as it was before typing.

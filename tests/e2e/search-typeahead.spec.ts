@@ -518,6 +518,43 @@ test.describe('search typeahead', () => {
     await expect(page.getByRole('listbox', { name: 'Search suggestions' })).toHaveCount(0);
   });
 
+  test('takes a press on a creator row and on a model row in the top bar’s field', async ({ page }) => {
+    await page.route(SEARCH_API, async (route) => {
+      const url = new URL(route.request().url());
+      await route.fulfill(json(searchResponse(url.searchParams.get('q') ?? '', url.searchParams.get('type') ?? 'top')));
+    });
+    await page.route(SUGGEST_API, (route) => route.fulfill(json(suggestions(new URL(route.request().url()).searchParams.get('q') ?? ''))));
+    const openContact = async () => {
+      await page.goto('/contact');
+      await expect.poll(() => page.evaluate(() => {
+        const key = Object.keys(document).find((name) => name.startsWith('__reactContainer$'));
+        const root = key ? (document as unknown as Record<string, { stateNode?: { current?: { memoizedState?: { isDehydrated?: boolean } } } }>)[key] : undefined;
+        return root?.stateNode?.current?.memoizedState?.isDehydrated === false;
+      }), { timeout: 60_000, message: 'React commits the page’s hydration' }).toBe(true);
+      const box = page.getByRole('banner').getByRole('combobox', { name: 'Search creators, posts, and recipes' });
+      await box.click();
+      await box.pressSequentially('lum', { delay: 30 });
+      const list = page.getByRole('listbox', { name: 'Search suggestions' });
+      await expect(list.getByRole('option')).toHaveCount(5);
+      await expect(list).not.toHaveAttribute('aria-busy', 'true');
+      return list;
+    };
+
+    // A model or tool: the search page's Posts for what was typed, narrowed to it.
+    await page.request.get('/search', { timeout: 0 });
+    let list = await openContact();
+    await list.getByRole('option', { name: /Luma Ray 2/ }).click();
+    await expect(page).toHaveURL(/\/search\?q=lum&type=posts&madeWith=model%3Aluma-ray-2$/, { timeout: 60_000 });
+    // Named by its key until an answer names it (this file's answers do not).
+    await expect(page.getByRole('button', { name: /^Remove filter: made with / })).toBeVisible();
+
+    // A creator: their profile.
+    await page.request.get('/creators/e2e-creator', { timeout: 0 });
+    list = await openContact();
+    await list.getByRole('option', { name: /E2E Creator/ }).click();
+    await expect(page).toHaveURL(/\/creators\/e2e-creator$/, { timeout: 60_000 });
+  });
+
   test('keeps Vary: Authorization on a visitor’s cacheable answer beside the proxy’s CORS headers', async ({ page }) => {
     // The real proxy and the real route, no page.route: an allowed origin, as the app's web build
     // sends, and no token, so this is the answer the edge may keep.

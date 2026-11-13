@@ -8,8 +8,10 @@ import {
   SEARCH_TYPEAHEAD_DEBOUNCE_MS,
   SEARCH_TYPEAHEAD_KEPT_ANSWERS,
   SEARCH_TYPEAHEAD_KEPT_ANSWER_MS,
+  SEARCH_TYPEAHEAD_OFFER_ALL,
   SEARCH_TYPEAHEAD_PRESS_SETTLE_MS,
   isSearchTypeaheadPressAccepted,
+  searchTypeaheadAsks,
   isSearchTypeaheadShown,
   moveSearchTypeaheadHighlight,
   parseSearchSuggestResponse,
@@ -57,7 +59,7 @@ const NO_ROWS: readonly string[] = [];
 // No recent search: one array, so a box without a list keeps its memo.
 const NO_RECENTS: readonly string[] = [];
 
-export function useSearchTypeahead({ text, focused, closedFor = null, recents = NO_RECENTS, offer = 'all' }: {
+export function useSearchTypeahead({ text, focused, closedFor = null, recents = NO_RECENTS, offer = SEARCH_TYPEAHEAD_OFFER_ALL }: {
   /** What the box holds. */
   text: string;
   /** The focus is in the box (or its form). */
@@ -69,11 +71,12 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
   closedFor?: string | null;
   /** This browser's recent searches, most recent first: the ones the text matches are offered first. */
   recents?: readonly string[];
-  /** Which kinds the box offers (the shared SearchTypeaheadOffer): the search page offers only what changes the query. */
+  /** Which kinds the box offers (the shared SearchTypeaheadOffer): the search page leaves out what its tab's results draw. */
   offer?: SearchTypeaheadOffer;
 }) {
   const listId = `${useId()}-search-typeahead`;
   const query = useMemo(() => searchTypeaheadQuery(text), [text]);
+  const asks = searchTypeaheadAsks(query, offer);
   const [answer, setAnswer] = useState<SearchTypeaheadAnswer | null>(null);
   // The query the list was closed for (Escape) or committed with (Enter, a row).
   const [closedQuery, setClosedQuery] = useState<string | null>(
@@ -116,6 +119,12 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
       return;
     }
     if (query === null) return;
+    // Nothing its answer could hold would be drawn here (a handle on a box
+    // that offers no creators): not asked, recorded as an answer with nothing.
+    if (!asks) {
+      setAnswer({ query, response: null });
+      return;
+    }
     const keptAnswer = kept.current.get(query);
     if (keptAnswer && Date.now() - keptAnswer.at < SEARCH_TYPEAHEAD_KEPT_ANSWER_MS) {
       setAnswer({ query, response: keptAnswer.response });
@@ -180,7 +189,7 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [focused, query]);
+  }, [asks, focused, query]);
 
   // State that follows the box, adjusted while rendering, as React asks of
   // state that follows a value (an effect would draw the stale state for a

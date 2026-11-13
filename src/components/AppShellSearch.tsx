@@ -28,7 +28,7 @@ import type { SearchTypeaheadAction } from '../../ugc-mobile/lib/public-search-p
  * always did. While the person types it offers the recent searches the text
  * matches, then creators, models and tools, and completions
  * (`useSearchTypeahead`): every kind, since no results are drawn under it, where
- * the search page's own box offers only what changes the query. A row goes
+ * the search page's own box leaves out what its tab's results draw. A row goes
  * where that page would take it.
  *
  * Every way out of here is the shell's and not a link, so each asks a page's

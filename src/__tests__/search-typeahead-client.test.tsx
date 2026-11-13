@@ -199,9 +199,8 @@ describe('search page typeahead', () => {
     // The two earlier texts never reached their pause.
     expect(suggestRequests()).toEqual(['/api/search/suggest?q=Lum']);
     expect((suggestFetchMock.mock.calls[0][1] as RequestInit).headers).toEqual({ Authorization: 'Bearer token-1' });
-    // A handle is asked for as one, and a query for one keeps its @.
-    type('@lu');
-    await waitFor(() => expect(suggestRequests()).toContain('/api/search/suggest?q=%40lu'));
+    // A handle on Top is not asked about: the list there offers no creator
+    // (below, "asks nothing for a handle on Top"); on Posts it keeps its @.
   });
 
   it('asks nothing while the box does not have the focus, as on arrival from a shared link', async () => {
@@ -871,6 +870,87 @@ describe('search page typeahead', () => {
     key('ArrowDown');
     key('Enter');
     expect(pushMock).toHaveBeenCalledWith('/search?q=lumen+city');
+  });
+
+  it('offers on Posts every kind its results do not draw, and opens a model there as Posts narrowed to it', async () => {
+    render(<SearchClient initialQuery="" initialType="posts" />);
+    type('lum');
+    const listbox = await list();
+    await waitFor(() => expect(options()).toHaveLength(5));
+    expect(within(listbox).getAllByRole('group').map((group) => document.getElementById(group.getAttribute('aria-labelledby') ?? '')?.textContent))
+      .toEqual(['Creators', 'Models and tools', 'Suggested searches']);
+    await settled();
+    fireEvent.click(screen.getByRole('option', { name: /Luma Ray 2/ }));
+    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lum&type=posts&madeWith=model%3Aluma-ray-2'));
+    expect(screen.getByRole('tab', { name: 'Posts' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Remove filter: made with Luma Ray 2' })).toBeTruthy();
+    noList();
+  });
+
+  it('offers on Creators the models and tools but not the creators its results draw', async () => {
+    render(<SearchClient initialQuery="" initialType="creators" />);
+    type('lum');
+    await list();
+    await waitFor(() => expect(options()).toHaveLength(3));
+    expect(options()).toEqual([
+      'Luma Ray 2, model, 14 posts. Show posts made with it',
+      'Search for luminous',
+      'Search for lumen glow',
+    ]);
+  });
+
+  it('asks nothing for a handle on Top, where no creator would be drawn, and asks on Posts', async () => {
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('@lum');
+    await pastThePause();
+    await pastThePause();
+    expect(suggestRequests()).toEqual([]);
+    noList();
+    fireEvent.click(screen.getByRole('tab', { name: 'Posts' }));
+    fireEvent.focus(box());
+    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=%40lum']));
+  });
+
+  it('writes its address when a creator is chosen within the search’s pause, without a word to Next’s router, and still runs the search', async () => {
+    // The page used to write its address a pause after the last letter through
+    // Next's patched history.replaceState, which Next's router reads as a
+    // navigation, and a navigation discards the one still loading (CI, #778:
+    // the press opened nothing). Now the write carries the entry's own state
+    // with Next's mark, which Next hands straight to the browser
+    // (search-address.test.ts), and a press writes it first. On Posts, whose
+    // results draw no creator, the list offers them.
+    vi.useFakeTimers();
+    const written = vi.spyOn(window.history, 'replaceState');
+    const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+    const address = () => `${window.location.pathname}${window.location.search}`;
+    render(<SearchClient initialQuery="" initialType="posts" />);
+    type('lum');
+    // Past the typeahead's pause, inside the search's: the address still waits.
+    await tick(SEARCH_TYPEAHEAD_DEBOUNCE_MS + 20);
+    expect(address()).toBe('/search');
+    fireEvent.click(screen.getByRole('option', { name: '@lumen. Open profile' }));
+    // The press wrote the search the person is leaving, ahead of the way out.
+    expect(address()).toBe('/search?q=lum&type=posts');
+    expect(pushMock).toHaveBeenCalledWith('/creators/lumen');
+    expect(written.mock.invocationCallOrder.at(-1)).toBeLessThan(pushMock.mock.invocationCallOrder[0]);
+    // The way out never completes here: the pause passes and the search is asked.
+    await tick(2000);
+    expect(searchRequests()).toEqual(['/api/search?q=lum&type=posts']);
+    for (const [state] of written.mock.calls) expect(state).toMatchObject({ __NA: true });
+  });
+
+  it('writes its address before opening a creator chosen with Enter, where no press does it', async () => {
+    vi.useFakeTimers();
+    const written = vi.spyOn(window.history, 'replaceState');
+    const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+    render(<SearchClient initialQuery="" initialType="posts" />);
+    type('lum');
+    await tick(SEARCH_TYPEAHEAD_DEBOUNCE_MS + 20);
+    key('ArrowDown');
+    key('Enter');
+    expect(pushMock).toHaveBeenCalledWith('/creators/luma-studio');
+    expect(`${window.location.pathname}${window.location.search}`).toBe('/search?q=lum&type=posts');
+    expect(written.mock.invocationCallOrder.at(-1)).toBeLessThan(pushMock.mock.invocationCallOrder[0]);
   });
 
   it('leaves recent searches as they were while the box is empty', async () => {

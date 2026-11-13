@@ -40,6 +40,7 @@ import {
   searchQueryLength,
   type SearchEntity,
   type SearchEntityKind,
+  type SearchTabId,
 } from './public-search-policy';
 
 // ─── The answer ──────────────────────────────────────────────────────────────
@@ -220,14 +221,45 @@ export const SEARCH_TYPEAHEAD_HEADINGS: Readonly<Record<SearchTypeaheadSectionId
 export const SEARCH_TYPEAHEAD_MAX_RECENTS = 3;
 
 /**
- * What a box offers:
- *   - `all`: every kind (the top bar's field, the app's search);
- *   - `query`: only what changes the query, the recent searches the text
- *     matches and the completions. The web's search page draws its own results
- *     live under the box, creators and models first, so a creator or a model
- *     row there would repeat the result drawn under it.
+ * Which kinds a box offers besides recent searches and completions, which
+ * every box offers: creators, and models and tools. A box over results that
+ * draw a kind live leaves that kind out, since a row for it would repeat the
+ * result drawn under it (search UX audit 2026-11-13, finding 1).
  */
-export type SearchTypeaheadOffer = 'all' | 'query';
+export interface SearchTypeaheadOffer {
+  creators: boolean;
+  entities: boolean;
+}
+
+/** Every kind: a box with no results under it (the web's top bar, the app's typing list). */
+export const SEARCH_TYPEAHEAD_OFFER_ALL: SearchTypeaheadOffer = Object.freeze({ creators: true, entities: true });
+
+/**
+ * What the web's search page offers over each tab, by what that tab's results
+ * draw: Top draws creators and models and tools, so it offers neither; Creators
+ * draws creators, so it offers models and tools (a press opens Posts narrowed
+ * to one); Posts and Recipes draw neither, so they offer every kind.
+ */
+const SEARCH_TYPEAHEAD_OFFER_QUERIES: SearchTypeaheadOffer = Object.freeze({ creators: false, entities: false });
+const SEARCH_TYPEAHEAD_OFFER_ENTITIES: SearchTypeaheadOffer = Object.freeze({ creators: false, entities: true });
+
+/** One object per answer, so a client may compare offers by identity. */
+export function searchTypeaheadOfferForTab(tab: SearchTabId): SearchTypeaheadOffer {
+  if (tab === 'top') return SEARCH_TYPEAHEAD_OFFER_QUERIES;
+  if (tab === 'creators') return SEARCH_TYPEAHEAD_OFFER_ENTITIES;
+  return SEARCH_TYPEAHEAD_OFFER_ALL;
+}
+
+/**
+ * Whether a box asks the server about a text at all: not when nothing its
+ * answer could hold would be drawn. A text typed as a handle is answered with
+ * creators only, so a box that offers no creators does not ask about one, and
+ * spends none of the viewer's rate limit on it.
+ */
+export function searchTypeaheadAsks(query: string | null, offer: SearchTypeaheadOffer = SEARCH_TYPEAHEAD_OFFER_ALL): boolean {
+  if (query === null) return false;
+  return !query.startsWith('@') || offer.creators;
+}
 
 /** What a list is drawn with besides the server's answer. */
 export interface SearchTypeaheadOptions {
@@ -236,7 +268,7 @@ export interface SearchTypeaheadOptions {
   offer?: SearchTypeaheadOffer;
 }
 
-/** A query folded as rows are compared: lower case, no leading "@" (searchTypeaheadQuery keeps it). */
+/** A query folded as rows are compared: lower case, as typed (a leading "@" kept, as searchTypeaheadQuery keeps it). */
 function foldedQuery(query: string): string {
   return normalizeSearchHistoryQuery(query).toLowerCase();
 }
@@ -281,19 +313,19 @@ function wordStartOf(folded: string, typed: string): number {
  * and need no answer; a completion one of them already offers is not offered
  * twice. Entities are drawn only from three characters and never for a query
  * typed as a handle, whatever an answer carries; a completion that is what the
- * box already holds is not offered back. With `offer: 'query'` only the
- * recent searches and the completions are drawn.
+ * box already holds is not offered back. `offer` leaves out creators, or
+ * models and tools, where the box does not offer them (SearchTypeaheadOffer).
  */
 export function searchTypeaheadSections(
   answer: SearchSuggestResponse | null,
   query: string | null,
-  { recents = [], offer = 'all' }: SearchTypeaheadOptions = {},
+  { recents = [], offer = SEARCH_TYPEAHEAD_OFFER_ALL }: SearchTypeaheadOptions = {},
 ): SearchTypeaheadSection[] {
   if (query === null) return [];
   const asHandle = query.startsWith('@');
   const read = normalizeCreatorSearchQuery(query).trim();
   const typed = read.toLowerCase();
-  const entitiesOffered = offer === 'all' && !asHandle && searchQueryLength(read) >= SEARCH_TYPEAHEAD_MIN_ENTITY_QUERY_LENGTH;
+  const entitiesOffered = offer.entities && !asHandle && searchQueryLength(read) >= SEARCH_TYPEAHEAD_MIN_ENTITY_QUERY_LENGTH;
 
   const recentRows: SearchTypeaheadRow[] = searchTypeaheadMatchingRecents(recents, query)
     .map((text) => ({ kind: 'completion' as const, key: `recent:${text.toLowerCase()}`, text, recent: true as const }));
@@ -314,7 +346,7 @@ export function searchTypeaheadSections(
     {
       id: 'creators',
       heading: SEARCH_TYPEAHEAD_HEADINGS.creators,
-      rows: (offer === 'all' && answer ? answer.creators : []).slice(0, SEARCH_TYPEAHEAD_MAX_CREATORS)
+      rows: (offer.creators && answer ? answer.creators : []).slice(0, SEARCH_TYPEAHEAD_MAX_CREATORS)
         .map((creator) => ({ kind: 'creator' as const, key: `creator:${creator.id}`, creator })),
     },
     {

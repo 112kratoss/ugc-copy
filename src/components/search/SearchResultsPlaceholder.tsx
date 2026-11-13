@@ -9,7 +9,7 @@ import type { PublicSearchType } from '@/lib/public-search';
  * shimmer is motion: under reduced motion the blocks stand still.
  */
 
-const BLOCK_CLASS = 'relative overflow-hidden rounded-3xl border border-white/8 bg-white/[0.035]';
+const BLOCK_CLASS = 'relative overflow-hidden border border-white/8 bg-white/[0.035]';
 
 function Shimmer() {
   return (
@@ -38,7 +38,7 @@ function Heading({ height = 'h-11' }: { height?: string }) {
 
 function PostCard() {
   return (
-    <span className={`${BLOCK_CLASS} block`}>
+    <span className={`${BLOCK_CLASS} block rounded-3xl`}>
       <span className="block aspect-[4/3] bg-white/[0.03]" />
       <span className="block p-4">
         <Line className="h-3.5 w-3/4" />
@@ -66,7 +66,7 @@ function CreatorRow() {
 
 function RecipeCard() {
   return (
-    <span className={`${BLOCK_CLASS} flex min-h-32`}>
+    <span className={`${BLOCK_CLASS} flex min-h-32 rounded-2xl`}>
       <span className="w-28 shrink-0 bg-white/[0.03] sm:w-36" />
       <span className="min-w-0 flex-1 p-4">
         <Line className="h-3.5 w-2/3" />
@@ -88,7 +88,14 @@ function Posts({ count }: { count: number }) {
   );
 }
 
-export function SearchResultsPlaceholder({ type }: { type: PublicSearchType }) {
+/**
+ * `creatorsOnly`: the query is too short for posts and recipes (under three
+ * characters only creators are searched), so Top draws the creators' block
+ * alone: blocks for posts that can never come flashed and collapsed at every
+ * search that passed through two characters. Models and tools are not drawn
+ * ahead: whether an answer leads with them cannot be known before it lands.
+ */
+export function SearchResultsPlaceholder({ type, creatorsOnly = false }: { type: PublicSearchType; creatorsOnly?: boolean }) {
   return (
     <div aria-hidden="true" data-search-placeholder={type} className="space-y-10">
       {type === 'creators' ? (
@@ -119,10 +126,12 @@ export function SearchResultsPlaceholder({ type }: { type: PublicSearchType }) {
               <CreatorRow />
             </span>
           </span>
-          <span className="block">
-            <Heading />
-            <Posts count={3} />
-          </span>
+          {creatorsOnly ? null : (
+            <span className="block">
+              <Heading />
+              <Posts count={3} />
+            </span>
+          )}
         </>
       )}
     </div>
