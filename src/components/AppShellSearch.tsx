@@ -2,7 +2,7 @@
 
 import Form from 'next/form';
 import { useRouter } from 'next/navigation';
-import { Search } from 'lucide-react';
+import { Search, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 
 import { markSearchFieldHandoff } from '@/components/search/search-field-handoff';
@@ -13,6 +13,7 @@ import { holdForLeaveGuard } from '@/lib/use-leave-guard';
 
 import {
   NO_SEARCH_FILTERS,
+  SEARCH_CLEAR_FIELD_LABEL,
   SEARCH_FIELD_LABEL,
   SEARCH_PLACEHOLDER,
   normalizeSearchHistoryQuery,
@@ -42,9 +43,14 @@ export function AppShellSearch() {
   const typeahead = useSearchTypeahead({ text, focused });
 
   const leaveFor = (path: string) => {
-    // A search lands with the focus in the search page's field (search-field-handoff.ts).
-    if (path.startsWith('/search')) markSearchFieldHandoff();
-    if (!holdForLeaveGuard(() => router.push(path))) router.push(path);
+    const leave = () => {
+      // A search lands with the focus in the search page's field
+      // (search-field-handoff.ts). Marked only as the leave happens: a leave
+      // the person cancels hands nothing on.
+      if (path.startsWith('/search')) markSearchFieldHandoff();
+      router.push(path);
+    };
+    if (!holdForLeaveGuard(leave)) leave();
   };
 
   const runTypeaheadAction = (action: SearchTypeaheadAction | null) => {
@@ -77,9 +83,13 @@ export function AppShellSearch() {
       // unsaved work asks first, and a leave submits the search again.
       onSubmit={(event) => {
         const form = event.currentTarget;
-        // Enter: the search page takes the focus on in its own field.
+        if (holdForLeaveGuard(() => form.requestSubmit())) {
+          // Held for the page's question; a leave submits again, and is marked then.
+          event.preventDefault();
+          return;
+        }
+        // Enter, leaving: the search page takes the focus on in its own field.
         markSearchFieldHandoff();
-        if (holdForLeaveGuard(() => form.requestSubmit())) event.preventDefault();
       }}
       onFocus={() => setFocused(true)}
       onBlur={(event) => {
@@ -95,7 +105,7 @@ export function AppShellSearch() {
       >
         <Search className="h-4 w-4" aria-hidden />
       </button>
-      {/* The browser's own clear button is hidden: Chrome and Safari drew it in every search field. */}
+      {/* The browser's own clear button is hidden (Chrome and Safari drew it); the field draws its own below. */}
       <input
         ref={fieldRef}
         type="search"
@@ -114,6 +124,21 @@ export function AppShellSearch() {
         autoComplete="off"
         className="h-12 min-w-0 flex-1 bg-transparent text-sm text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)] [&::-webkit-search-cancel-button]:hidden"
       />
+      {text ? (
+        <button
+          type="button"
+          aria-label={SEARCH_CLEAR_FIELD_LABEL}
+          // A press keeps the focus in the field, so the bar stays open under the pointer.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            setText('');
+            fieldRef.current?.focus();
+          }}
+          className="ui-focus-ring -mr-2 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--ui-text-faint)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
+        >
+          <X className="h-4 w-4" aria-hidden />
+        </button>
+      ) : null}
       {/* Said politely when the list opens or changes. */}
       <div aria-live="polite" aria-atomic="true" className="sr-only" data-search-typeahead-status="">{typeahead.status}</div>
       {typeahead.shown ? (

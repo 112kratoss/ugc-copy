@@ -333,9 +333,19 @@ describe('SearchClient', () => {
     expect(screen.getByText('See all posts')).toBeInTheDocument();
 
     // A card's link is named in words, not its text run together.
-    expect(screen.getByRole('link', { name: 'Open post Lantern 0 by Luna Studio' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open recipe Cinematic light by Luna Studio, Free' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: "Open Luna Studio's profile, @luna-studio" })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open post Lantern 0 by Luna Studio, 1 save, 0 comments' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open recipe Cinematic light by Luna Studio, Free. Lighting, lens and grade' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: "Open Luna Studio's profile, @luna-studio, 3 posts" })).toBeInTheDocument();
+    // And it leaves out nothing the card shows a sighted person (review of #784).
+    for (const link of document.querySelectorAll('a[data-search-result]')) {
+      const label = (link.getAttribute('aria-label') ?? '').toLowerCase();
+      const walker = document.createTreeWalker(link, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (node.parentElement?.closest('[aria-hidden="true"]')) continue;
+        const text = node.textContent?.trim().toLowerCase();
+        if (text) expect(label, `${label} holds “${text}”`).toContain(text);
+      }
+    }
 
     fetchMock.mockResolvedValue(jsonResponse(searchResponse({ type: 'posts', posts: { items: posts, nextCursor: null } })));
     fireEvent.click(screen.getByText('See all posts'));
@@ -357,6 +367,9 @@ describe('SearchClient', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled(), { timeout: 2000 });
     await waitFor(() => expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeInTheDocument());
     expect(screen.queryByText(/No results/)).not.toBeInTheDocument();
+    // The live region gives no verdict either: no "0 results for na" (review of #784).
+    const status = Array.from(document.querySelectorAll('p[role="status"]'));
+    expect(status.map((node) => node.textContent)).toEqual(['']);
   });
 
   it('clears the query with Escape and returns to the initial state', async () => {
@@ -1171,6 +1184,26 @@ describe('SearchClient', () => {
         await settle();
         fireEvent.submit(screen.getByRole('search'));
         expect(JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]')).toEqual(['portriat', 'portrait']);
+      });
+
+      it('keeps the typed query for a creator opened, the corrected one for a post opened (review of #784)', async () => {
+        fetchMock.mockResolvedValue(jsonResponse(searchResponse({
+          query: 'joshh',
+          normalizedQuery: 'joshh',
+          correctedQuery: { posts: 'josh', recipes: null },
+          creators: { items: [creator('Joshh')], nextCursor: null },
+          posts: { items: [post('post-1', 'Josh at dusk', 1)], nextCursor: null },
+        })));
+        render(<SearchClient initialQuery="joshh" initialType="top" />);
+        await settle();
+        const kept = () => JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]');
+        const noNavigation = (event: MouseEvent) => event.preventDefault();
+        document.addEventListener('click', noNavigation);
+        fireEvent.click(screen.getByText('Joshh'));
+        expect(kept()).toEqual(['joshh']);
+        fireEvent.click(screen.getByText('Josh at dusk'));
+        expect(kept()).toEqual(['josh', 'joshh']);
+        document.removeEventListener('click', noNavigation);
       });
 
       it('keeps the corrected spelling for a search committed before its answer landed', async () => {

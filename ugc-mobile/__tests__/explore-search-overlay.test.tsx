@@ -287,8 +287,13 @@ function tab(tree: Tree, label: string) {
   return match;
 }
 
+// A result's label goes on to say all its card shows ("…, 3 posts. Films and
+// stills"): a label given up to a comma or a full stop finds it, as an exact one does.
 function pressableLabelled(tree: Tree, label: string) {
-  const match = hostNodes(tree, 'pressable').find((node) => node.props.accessibilityLabel === label);
+  const match = hostNodes(tree, 'pressable').find((node) => {
+    const given = node.props.accessibilityLabel as string | undefined;
+    return given === label || Boolean(given?.startsWith(`${label},`) || given?.startsWith(`${label}.`));
+  });
   if (!match) throw new Error(`Nothing labelled ${label}`);
   return match;
 }
@@ -558,6 +563,37 @@ describe('ExploreSearchOverlay search', () => {
       await advance(200);
       expect(shownTexts(tree)).toContain('Clear all');
       expect(() => pressableLabelled(tree, 'Clear all recent searches')).not.toThrow();
+      await act(async () => tree.unmount());
+    });
+
+    it('shows recent searches under an empty field only, as the web does (review of #784)', async () => {
+      mocks.readSearchHistory.mockResolvedValue(['portrait']);
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await advance(200);
+      expect(shownTexts(tree)).toContain('Recent searches');
+      await press(tab(tree, 'Posts'));
+      await typeQuery(tree, 'ab');
+      await advance(300);
+      expect(searchPublicContent).not.toHaveBeenCalled();
+      expect(shownTexts(tree)).not.toContain('Recent searches');
+      expect(statusTitles(tree)).toEqual([SEARCH_IDLE_TITLE]);
+      await typeQuery(tree, '');
+      expect(shownTexts(tree)).toContain('Recent searches');
+      mocks.readSearchHistory.mockResolvedValue([]);
+      await act(async () => tree.unmount());
+    });
+
+    it('keeps the typed query for a creator opened, the corrected one for a post (review of #784)', async () => {
+      const corrected = { entities: [], correctedQuery: { posts: 'josh', recipes: null }, exact: false };
+      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { creators: [creator('joshh')], posts: [post('p1')] }, corrected));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'joshh');
+      await advance(300);
+      await press(pressableLabelled(tree, "Open Creator joshh's profile, @joshh, 3 posts"));
+      await advance(CREATOR_PROFILE_PRESS_DELAY_MS + 10);
+      expect(mocks.rememberSearchQuery.mock.calls.at(-1)).toEqual(['joshh']);
+      await press(pressableLabelled(tree, 'Open post Post p1 by Ana, 0 saves, 0 comments'));
+      expect(mocks.rememberSearchQuery.mock.calls.at(-1)).toEqual(['josh']);
       await act(async () => tree.unmount());
     });
   });
@@ -1221,6 +1257,13 @@ describe('ExploreSearchOverlay search', () => {
   });
 
   // What each result card reads, top to bottom: the web's search cards read the same.
+  function exactLabel(tree: Tree, label: string) {
+    return pressableLabelled(tree, label).props.accessibilityLabel as string;
+  }
+  function expectLabelHoldsCard(tree: Tree, label: string) {
+    const said = exactLabel(tree, label).toLowerCase();
+    for (const text of cardTexts(tree, label)) expect(said, `${said} holds “${text}”`).toContain(text.toLowerCase());
+  }
   function cardTexts(tree: Tree, label: string) {
     return pressableLabelled(tree, label).findAll((node) => node.type === 'text').map(textOf);
   }
@@ -1237,13 +1280,18 @@ describe('ExploreSearchOverlay search', () => {
     await advance(300);
 
     // A screen reader hears the mark too: the row reads as its label.
-    expect(cardTexts(tree, "Open Creator jane's profile, @jane, following"))
+    expect(cardTexts(tree, "Open Creator jane's profile, @jane, following, 3 posts. Films and stills"))
       .toEqual(['Creator jane', 'Following', '@jane', 'Films and stills', '3 posts']);
+    expect(exactLabel(tree, "Open Creator jane's profile, @jane, following")).toBe("Open Creator jane's profile, @jane, following, 3 posts. Films and stills");
     const bio = pressableLabelled(tree, "Open Creator jane's profile, @jane, following")
       .find((node) => node.type === 'text' && textOf(node) === 'Films and stills');
     expect(bio.props.numberOfLines).toBe(1);
     // No bio leaves no empty line, and no follow leaves no mark.
     expect(cardTexts(tree, "Open Creator janet's profile, @janet")).toEqual(['Creator janet', '@janet', '2 posts']);
+    expect(exactLabel(tree, "Open Creator janet's profile, @janet")).toBe("Open Creator janet's profile, @janet, 2 posts");
+    // Nothing the row shows is missing from what a screen reader hears (review of #784).
+    expectLabelHoldsCard(tree, "Open Creator jane's profile");
+    expectLabelHoldsCard(tree, "Open Creator janet's profile");
 
     await act(async () => tree.unmount());
   });
@@ -1257,6 +1305,9 @@ describe('ExploreSearchOverlay search', () => {
     await advance(300);
 
     expect(cardTexts(tree, 'Open post Post p1 by Ana')).toEqual(['Post p1', 'Ana', '1 save', '4']);
+    expect(exactLabel(tree, 'Open post Post p1 by Ana')).toBe('Open post Post p1 by Ana, 1 save, 4 comments');
+    expect(exactLabel(tree, 'Open post Post p2 by Ana')).toBe('Open post Post p2 by Ana, 12 saves, 0 comments');
+    expectLabelHoldsCard(tree, 'Open post Post p1 by Ana');
     expect(cardTexts(tree, 'Open post Post p2 by Ana')).toEqual(['Post p2', 'Ana', '12 saves', '0']);
 
     await act(async () => tree.unmount());
@@ -1297,6 +1348,8 @@ describe('ExploreSearchOverlay search', () => {
     await advance(300);
 
     expect(cardTexts(tree, 'Open recipe Recipe r1 by Luna Studio, Free')).toEqual(['Recipe r1', 'Lighting, lens and grade', 'Luna Studio', 'Free']);
+    expect(exactLabel(tree, 'Open recipe Recipe r1 by Luna Studio, Free')).toBe('Open recipe Recipe r1 by Luna Studio, Free. Lighting, lens and grade');
+    expectLabelHoldsCard(tree, 'Open recipe Recipe r1 by Luna Studio, Free');
     // The app prices an unlock in credits where the web quotes cash; the seller reads the same.
     expect(cardTexts(tree, 'Open recipe Recipe r2 by Noor, 900 credits')).toEqual(['Recipe r2', 'Lighting, lens and grade', 'Noor', '900 credits']);
 
@@ -1341,7 +1394,7 @@ describe('ExploreSearchOverlay search', () => {
       return hostNodes(tree, 'pressable')
         .map((node) => node.props.accessibilityLabel as string | undefined)
         .filter((label): label is string => Boolean(label?.startsWith('Open post ')))
-        .map((label) => label.replace('Open post Post ', '').replace(' by Ana', ''));
+        .map((label) => label.replace('Open post Post ', '').replace(/ by Ana.*$/, ''));
     }
 
     async function pickSort(tree: Tree, sort: PublicSearchSort) {
@@ -1604,7 +1657,7 @@ describe('ExploreSearchOverlay related posts', () => {
     expect(asked()).toEqual(['ocean|top|top|plain', 'ocean at dusk|top|top|plain', 'ocean at dusk|top|top|related']);
 
     // Drawn under the search's own outcome with the cards its posts use, and said.
-    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana', 'Open post Post cliffs by Ana']);
+    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana, 0 saves, 0 comments', 'Open post Post cliffs by Ana, 0 saves, 0 comments']);
     expect(shownTexts(tree)).toContain(SEARCH_RELATED_HEADING);
     expect(saysNoResults(tree)).toBe(true);
     expect(mocks.announce).toHaveBeenCalledWith('2 related posts');
@@ -1747,7 +1800,7 @@ describe('ExploreSearchOverlay related posts', () => {
     expect(lines.filter((line) => line === SEARCH_RELATED_HEADING)).toHaveLength(1);
     expect(lines.indexOf(SEARCH_RELATED_HEADING)).toBeGreaterThan(lines.lastIndexOf('Posts'));
     expect(lines.indexOf(SEARCH_RELATED_HEADING)).toBeGreaterThan(lines.indexOf('Post own'));
-    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana', 'Open post Post cliffs by Ana']);
+    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana, 0 saves, 0 comments', 'Open post Post cliffs by Ana, 0 saves, 0 comments']);
 
     // Looked for and none found, and a server that says nothing: no group, no words.
     mocks.announce.mockClear();
@@ -2317,7 +2370,7 @@ describe('ExploreSearchOverlay typeahead', () => {
     await act(async () => tree.unmount());
   });
 
-  it('offers handles alone at one character, over the recent searches, which stay as they were', async () => {
+  it('offers handles alone at one character, over the idle state, and the recent searches under an empty field only', async () => {
     mocks.readSearchHistory.mockResolvedValue(['neon harbor']);
     suggestSearch.mockResolvedValue(suggestions({ entities: [], completions: [] }));
     const tree = await open();
@@ -2331,8 +2384,10 @@ describe('ExploreSearchOverlay typeahead', () => {
       'Luma Studio, @luma-studio, following. Open profile',
       '@lumen. Open profile',
     ]);
-    // One character is not yet a search: the idle state is still under the list.
-    expect(shownTexts(tree)).toContain('Recent searches');
+    // One character is not yet a search: the idle state is under the list. The
+    // recent searches stay for an empty field, as on the web (review of #784).
+    expect(shownTexts(tree)).not.toContain('Recent searches');
+    expect(statusTitles(tree)).toEqual([SEARCH_IDLE_TITLE]);
     expect(searchPublicContent).not.toHaveBeenCalled();
     await act(async () => tree.unmount());
   });

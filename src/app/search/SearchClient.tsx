@@ -75,6 +75,7 @@ import {
   searchExactNotice,
   searchFailedLine,
   searchHistoryQueryFor,
+  type SearchOpenedResult,
   searchInsteadLabel,
   searchMadeWithChipLabel,
   searchMadeWithRemoveLabel,
@@ -296,7 +297,8 @@ function PostSearchCard({ item, returnTo }: { item: ShowcaseFeedItem; returnTo: 
   return (
     <Link
       href={buildShowcaseDetailPath(item.id, { from: 'search', returnTo })}
-      aria-label={searchPostCardLabel({ title: item.title, creatorName: item.creator.name })}
+      data-search-result="post"
+      aria-label={searchPostCardLabel({ title: item.title, creatorName: item.creator.name, saveCount: item.saveCount, commentCount: item.commentCount })}
       className="ui-focus-ring group overflow-hidden rounded-3xl border border-white/8 bg-white/[0.035] transition hover:-translate-y-0.5 hover:border-white/15 hover:bg-white/[0.055]"
     >
       {preview ? (
@@ -329,7 +331,8 @@ function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; re
   return (
     <Link
       href={buildShowcaseDetailPath(recipe.postId, { from: 'search', returnTo, section: 'resources' })}
-      aria-label={searchRecipeCardLabel({ title: recipe.title, sellerName: recipe.seller.name, price })}
+      data-search-result="recipe"
+      aria-label={searchRecipeCardLabel({ title: recipe.title, sellerName: recipe.seller.name, price, summary: recipe.summary || recipe.previewText })}
       className="ui-focus-ring group flex min-h-32 overflow-hidden rounded-2xl border border-white/8 bg-white/[0.035] transition hover:border-white/15 hover:bg-white/[0.06]"
     >
       {preview ? (
@@ -580,7 +583,7 @@ export default function SearchClient({
           setHistory(rememberSearchQuery(searchHistoryQueryFor({
             query: request.query,
             type: request.type,
-            correctedQuery: next.correctedQuery,
+            answer: next,
             exact: activeExact,
           })));
         }
@@ -692,7 +695,7 @@ export default function SearchClient({
   // History and the browser's tabs tell searches apart: "nano · Search |
   // Magic Booklet". Written from here, after Next's metadata has set the
   // route's own title, and again at each search the page runs.
-  const documentTitle = `${searchDocumentTitle(gatedQueryLength >= PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH ? normalizedQuery : '')} | Magic Booklet`;
+  const documentTitle = `${searchDocumentTitle(normalizedQuery)} | Magic Booklet`;
   useEffect(() => {
     document.title = documentTitle;
   }, [documentTitle]);
@@ -752,7 +755,11 @@ export default function SearchClient({
       ? SEARCH_SEARCHING_LABEL
       : currentFailure
         ? ''
-        : `${correctionNotice ?? exactNotice ? `${correctionNotice ?? exactNotice}. ` : ''}${resultCount} ${resultCount === 1 ? 'result' : 'results'} for ${normalizedQuery}${relatedStatus ? `. ${relatedStatus}` : ''}`;
+        // Half a word that found no creator draws the idle invitation, and
+        // the live region gives no verdict either (review of #784).
+        : resultCount === 0 && !searchSaysNoResults(gatedQueryLength)
+          ? ''
+          : `${correctionNotice ?? exactNotice ? `${correctionNotice ?? exactNotice}. ` : ''}${resultCount} ${resultCount === 1 ? 'result' : 'results'} for ${normalizedQuery}${relatedStatus ? `. ${relatedStatus}` : ''}`;
   // The filters as the page shows them: the made-with entity by the name an
   // answer or a pressed result gave it, by its key until then.
   const madeWithLabel = !activeFilters.madeWith
@@ -775,13 +782,14 @@ export default function SearchClient({
 
   // Recent searches keep what the person acted on, never each pause in
   // typing: a search committed with Enter, and one a result was opened from.
-  // A search the answer read as something else is kept as it was read
-  // ("portrait" for "portriat"), unless the person asked for it as typed.
-  const rememberCurrentSearch = (current: SearchAnswer) => setHistory(rememberSearchQuery(searchHistoryQueryFor({
+  // It is kept under the typed query, unless what the person committed to or
+  // opened was shown under the corrected spelling (searchHistoryQueryFor).
+  const rememberCurrentSearch = (current: SearchAnswer, opened: SearchOpenedResult | null = null) => setHistory(rememberSearchQuery(searchHistoryQueryFor({
     query: normalizedQuery,
     type: activeType,
-    correctedQuery: current.result.correctedQuery,
+    answer: current.result,
     exact: activeExact,
+    opened,
   })));
   const commitSearch = () => {
     if (!canSearch) return;
@@ -793,8 +801,11 @@ export default function SearchClient({
     rememberOnAnswer.current = `${activeType}:${activeSort}:${narrowing}:${normalizedQuery}`;
   };
   const rememberOpenedResult = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!(event.target instanceof Element) || !event.target.closest('a[href]')) return;
-    if (currentAnswer && resultCount > 0) rememberCurrentSearch(currentAnswer);
+    const link = event.target instanceof Element ? event.target.closest('a[href]') : null;
+    if (!link) return;
+    const kind = link.getAttribute('data-search-result');
+    const opened = kind === 'creator' || kind === 'post' || kind === 'recipe' ? kind : null;
+    if (currentAnswer && resultCount > 0) rememberCurrentSearch(currentAnswer, opened);
   };
   const recentsShown = recentsOpen && query === '' && history.length > 0;
 

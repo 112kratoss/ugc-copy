@@ -33,7 +33,10 @@ describe('the search words the app shows', () => {
 
   it('live in the shared module, not in a copy of the overlay\'s own', () => {
     const overlay = readFileSync(join(__dirname, '../components/explore-search-overlay.tsx'), 'utf8');
-    for (const word of ['Search Magicbooklet', 'Search Magic Booklet', 'Find your next idea', 'Search did not load', 'Retry search', "label: 'Top'", 'two characters, or']) {
+    // The scan reads the file it means to (its own control): the words come from the shared module.
+    expect(overlay).toContain("from '@/lib/public-search-policy/public-search-policy'");
+    expect(overlay).toContain('placeholder={SEARCH_PLACEHOLDER}');
+    for (const word of ['Search Magicbooklet', 'Search Magic Booklet', 'Find your next idea', 'Search did not load', 'Retry search', "label: 'Top'", "label: 'Best match'", 'Clear all', 'two characters, or']) {
       expect(overlay.includes(word), word).toBe(false);
     }
   });
@@ -45,8 +48,10 @@ describe('the search words the app shows', () => {
   });
 
   it('keep a search among the recent ones as it was read', () => {
-    expect(searchHistoryQueryFor({ query: 'portriat', type: 'top', correctedQuery: { posts: 'portrait', recipes: null }, exact: false }))
-      .toBe('portrait');
+    const found = { correctedQuery: { posts: 'portrait', recipes: null }, posts: { items: [1] }, recipes: { items: [] } };
+    expect(searchHistoryQueryFor({ query: 'portriat', type: 'top', answer: found, exact: false })).toBe('portrait');
+    // A creator opened keeps the typed query, which finds them again.
+    expect(searchHistoryQueryFor({ query: 'portriat', type: 'top', answer: found, exact: false, opened: 'creator' })).toBe('portriat');
   });
 });
 

@@ -111,6 +111,44 @@ describe('top bar search', () => {
     clearSearchFieldHandoff();
   });
 
+  it('hands nothing on for a leave the person cancels (review of #784)', () => {
+    clearSearchFieldHandoff();
+    // A page with unsaved work holds the leave and asks its question.
+    let leave: (() => void) | null = null;
+    holdMock.mockImplementation((navigate: () => void) => { leave = navigate; return true; });
+    render(<AppShellSearch />);
+    fireEvent.change(box(), { target: { value: 'neon city' } });
+    fireEvent.submit(box().closest('form')!);
+    expect(submitted).toEqual([]);
+    expect(searchFieldHandoffPending()).toBe(false);
+
+    // Confirmed, the leave submits again and is marked then.
+    holdMock.mockImplementation(() => false);
+    expect(leave).not.toBeNull();
+    leave!();
+    expect(submitted).toEqual(['/search?q=neon+city']);
+    expect(searchFieldHandoffPending()).toBe(true);
+    clearSearchFieldHandoff();
+  });
+
+  it('draws its own clear button, the browser\'s being hidden: it empties the field and keeps the focus there (review of #784)', () => {
+    render(<AppShellSearch />);
+    expect(screen.queryByRole('button', { name: 'Clear search' })).toBeNull();
+    box().focus();
+    fireEvent.change(box(), { target: { value: 'neon' } });
+    const clear = screen.getByRole('button', { name: 'Clear search' });
+    // A finger's target, and a button the keyboard reaches.
+    expect(clear.className).toContain('h-11');
+    expect(clear.className).toContain('w-11');
+    expect(clear.tabIndex).toBe(0);
+    // A pointer press does not take the focus from the field first.
+    expect(fireEvent.mouseDown(clear)).toBe(false);
+    fireEvent.click(clear);
+    expect(box()).toHaveValue('');
+    expect(box()).toHaveFocus();
+    expect(screen.queryByRole('button', { name: 'Clear search' })).toBeNull();
+  });
+
   it('is a combobox that offers creators, models and tools, and completions while it has the focus', async () => {
     render(<AppShellSearch />);
     expect(box().getAttribute('aria-expanded')).toBe('false');

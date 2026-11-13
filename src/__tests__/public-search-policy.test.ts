@@ -279,7 +279,14 @@ describe('the words both search clients show', () => {
     expect(SEARCH_SORT_OPTIONS).toEqual([{ value: 'top', label: 'Best match' }, { value: 'latest', label: 'Latest' }]);
     expect(searchSeeAllLabel('posts')).toBe('See all posts');
     expect(searchDocumentTitle('nano')).toBe('nano · Search');
+    expect(searchDocumentTitle('  nano  ')).toBe('nano · Search');
     expect(searchDocumentTitle('')).toBe('Search');
+    // From the two characters a search starts at, on the server and the page alike (review of #784).
+    expect(searchDocumentTitle('a')).toBe('Search');
+    expect(searchDocumentTitle('@j')).toBe('Search');
+    expect(searchDocumentTitle('na')).toBe('na · Search');
+    const page = readFileSync(join(__dirname, '../app/search/page.tsx'), 'utf8');
+    expect(page).toContain('title: searchDocumentTitle(opening.query)');
   });
 
   it('says a failure once: the title what happened, the body what to do', () => {
@@ -293,19 +300,49 @@ describe('the words both search clients show', () => {
   });
 
   it('names a result card in words', () => {
-    expect(searchPostCardLabel({ title: 'Mahabali', creatorName: 'Sassy23b' })).toBe('Open post Mahabali by Sassy23b');
-    expect(searchRecipeCardLabel({ title: 'Neon grade', sellerName: 'Luna', price: '10 credits' }))
-      .toBe('Open recipe Neon grade by Luna, 10 credits');
-    expect(searchCreatorCardLabel({ displayName: 'Luna', username: 'luna', isFollowing: true }))
-      .toBe("Open Luna's profile, @luna, following");
+    // Everything the card shows a sighted person, nothing less (review of #784).
+    expect(searchPostCardLabel({ title: 'Mahabali', creatorName: 'Sassy23b', saveCount: 1, commentCount: 4 }))
+      .toBe('Open post Mahabali by Sassy23b, 1 save, 4 comments');
+    expect(searchRecipeCardLabel({ title: 'Neon grade', sellerName: 'Luna', price: '10 credits', summary: 'Lighting,\n lens and grade' }))
+      .toBe('Open recipe Neon grade by Luna, 10 credits. Lighting, lens and grade');
+    expect(searchRecipeCardLabel({ title: 'Neon grade', sellerName: 'Luna', price: 'Free', summary: '' }))
+      .toBe('Open recipe Neon grade by Luna, Free');
+    expect(searchCreatorCardLabel({ displayName: 'Luna', username: 'luna', isFollowing: true, publicPostCount: 12, bio: 'Films and stills' }))
+      .toBe("Open Luna's profile, @luna, following, 12 posts. Films and stills");
+    expect(searchCreatorCardLabel({ displayName: 'Luna', username: 'luna', isFollowing: false, publicPostCount: 1, bio: null }))
+      .toBe("Open Luna's profile, @luna, 1 post");
+  });
+
+  // A shared word written into a client's own code, as a string, a template
+  // or JSX text, comments aside (they may quote the words they explain).
+  const holdsCopy = (source: string, word: string) => source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+    .includes(word);
+
+  it('finds a copy however it is written, and ignores one in a comment (the scan\'s own control)', () => {
+    expect(holdsCopy("placeholder='Search did not load'", 'Search did not load')).toBe(true);
+    expect(holdsCopy('<p>\n  Search did not load\n</p>', 'Search did not load')).toBe(true);
+    expect(holdsCopy('title={`Search did not load`}', 'Search did not load')).toBe(true);
+    expect(holdsCopy('// Search did not load is the shared title', 'Search did not load')).toBe(false);
+    expect(holdsCopy('/* Search did not load */', 'Search did not load')).toBe(false);
+    expect(holdsCopy("href='https://x.test'", 'x.test')).toBe(true);
   });
 
   it('holds no copy of a shared word in the web clients', () => {
     const root = join(__dirname, '..');
-    for (const file of ['app/search/SearchClient.tsx', 'components/search/SearchField.tsx', 'components/AppShellSearch.tsx']) {
+    const files = {
+      'app/search/SearchClient.tsx': 'SEARCH_IDLE_TITLE',
+      'components/search/SearchField.tsx': 'SEARCH_FIELD_LABEL',
+      'components/AppShellSearch.tsx': 'SEARCH_PLACEHOLDER',
+    };
+    for (const [file, sharedName] of Object.entries(files)) {
       const source = readFileSync(join(root, file), 'utf8');
-      for (const word of ['Search Magic Booklet', 'Search Magicbooklet', 'Search creators, posts, and recipes', 'Search did not load', 'Clear all', 'characters.']) {
-        expect(source.includes(`'${word}`) || source.includes(`"${word}`) || source.includes(`>${word}`), `${file}: ${word}`).toBe(false);
+      // The scan reads the file it means to: each takes its words from the shared module.
+      expect(source, file).toContain('ugc-mobile/lib/public-search-policy/public-search-policy');
+      expect(holdsCopy(source, sharedName), `${file}: ${sharedName}`).toBe(true);
+      for (const word of ['Search Magic Booklet', 'Search Magicbooklet', 'Search creators, posts, and recipes', 'Search did not load', 'Clear all', 'Clear search', 'Best match', 'characters.']) {
+        expect(holdsCopy(source, word), `${file}: ${word}`).toBe(false);
       }
     }
   });
@@ -340,16 +377,53 @@ describe('when a tab is searched, and when a search says it found nothing', () =
   });
 });
 
-describe('the query a committed search is kept under', () => {
-  const corrected = { posts: 'portrait', recipes: 'portraits' };
-  it('keeps the reading the results were shown for, unless the person asked for the query as typed', () => {
-    expect(searchHistoryQueryFor({ query: 'portriat', type: 'top', correctedQuery: corrected, exact: false })).toBe('portrait');
-    expect(searchHistoryQueryFor({ query: 'portriat', type: 'posts', correctedQuery: corrected, exact: false })).toBe('portrait');
-    expect(searchHistoryQueryFor({ query: 'portriat', type: 'recipes', correctedQuery: corrected, exact: false })).toBe('portraits');
-    expect(searchHistoryQueryFor({ query: 'portriat', type: 'top', correctedQuery: corrected, exact: true })).toBe('portriat');
-    // Creators are never corrected.
-    expect(searchHistoryQueryFor({ query: 'portriat', type: 'creators', correctedQuery: corrected, exact: false })).toBe('portriat');
-    expect(searchHistoryQueryFor({ query: 'portrait', type: 'top', correctedQuery: { posts: null, recipes: null }, exact: false })).toBe('portrait');
-    expect(searchHistoryQueryFor({ query: 'portrait', type: 'top', correctedQuery: undefined, exact: false })).toBe('portrait');
+describe('the query a search is kept under among the recent ones', () => {
+  // The typed query, unless what the person committed to or opened was shown
+  // under the corrected spelling and found something.
+  const answer = (correctedQuery: { posts: string | null; recipes: string | null } | undefined, posts: number, recipes: number) => ({
+    correctedQuery,
+    posts: { items: Array.from({ length: posts }) },
+    recipes: { items: Array.from({ length: recipes }) },
+  });
+  const keep = (
+    type: 'top' | 'creators' | 'posts' | 'recipes',
+    found: ReturnType<typeof answer> | null,
+    extra: { exact?: boolean; opened?: 'creator' | 'post' | 'recipe' } = {},
+  ) => searchHistoryQueryFor({ query: 'portriat', type, answer: found, exact: extra.exact ?? false, opened: extra.opened ?? null });
+
+  it('keeps the reading of the section a commit leads with, when that section found something', () => {
+    const both = answer({ posts: 'portrait', recipes: 'portraits' }, 3, 2);
+    expect(keep('top', both)).toBe('portrait');
+    expect(keep('posts', both)).toBe('portrait');
+    expect(keep('recipes', both)).toBe('portraits');
+    // Top with no posts leads with its recipes.
+    expect(keep('top', answer({ posts: 'portrait', recipes: 'portraits' }, 0, 2))).toBe('portraits');
+  });
+
+  it('never lets another section\'s correction stand in for a section read as typed (review of #784)', () => {
+    // Posts read as typed and shown; only the recipes were corrected.
+    expect(keep('top', answer({ posts: null, recipes: 'portraits' }, 4, 2))).toBe('portriat');
+  });
+
+  it('keeps the typed query when the corrected section found nothing (review of #784)', () => {
+    expect(keep('top', answer({ posts: 'portrait', recipes: null }, 0, 0))).toBe('portriat');
+    expect(keep('posts', answer({ posts: 'portrait', recipes: null }, 0, 0))).toBe('portriat');
+  });
+
+  it('follows what was opened: a creator keeps the typed query that finds them again (review of #784)', () => {
+    const both = answer({ posts: 'portrait', recipes: 'portraits' }, 3, 2);
+    expect(keep('top', both, { opened: 'creator' })).toBe('portriat');
+    expect(keep('top', both, { opened: 'post' })).toBe('portrait');
+    expect(keep('top', both, { opened: 'recipe' })).toBe('portraits');
+    expect(keep('top', answer({ posts: null, recipes: 'portraits' }, 3, 2), { opened: 'post' })).toBe('portriat');
+  });
+
+  it('keeps the typed query when asked for as typed, on Creators, and with no answer or no correction', () => {
+    const both = answer({ posts: 'portrait', recipes: 'portraits' }, 3, 2);
+    expect(keep('top', both, { exact: true })).toBe('portriat');
+    expect(keep('creators', both)).toBe('portriat');
+    expect(keep('top', null)).toBe('portriat');
+    expect(keep('top', answer(undefined, 3, 2))).toBe('portriat');
+    expect(keep('top', answer({ posts: null, recipes: null }, 3, 2))).toBe('portriat');
   });
 });

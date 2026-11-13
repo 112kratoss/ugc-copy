@@ -526,6 +526,8 @@ test.describe('search typeahead', () => {
     await expect(box).toHaveAttribute('placeholder', 'Search');
     await box.click();
     await box.pressSequentially('lum', { delay: 30 });
+    // Its own clear button, the browser's being hidden.
+    await expect(page.getByRole('banner').getByRole('button', { name: 'Clear search' })).toBeVisible();
     const list = page.getByRole('listbox', { name: 'Search suggestions' });
     await expect(list).toBeVisible();
     await expect(list.getByRole('option')).toHaveCount(5);

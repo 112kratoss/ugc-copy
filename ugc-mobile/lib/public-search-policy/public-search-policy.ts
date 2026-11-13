@@ -87,28 +87,51 @@ export function searchHistoryWith(current: readonly string[], query: string): st
     .slice(0, SEARCH_HISTORY_LIMIT);
 }
 
+/** What a person opened from a search's results: a kept search follows the reading that showed it. */
+export type SearchOpenedResult = 'creator' | 'post' | 'recipe';
+
 /**
- * The query a committed search is kept under: the reading the answer showed
- * results for, when it read the query as something else ("portrait" for a
- * search typed "portriat"), and the query as typed when it did not, or when
- * the person asked for it as typed. Where posts and recipes were read as two
- * different queries the posts' reading is kept: it is the one Top leads
- * with. Only the reading of what the tab draws counts, as in the notice
- * (searchCorrectionNotice): Creators are never corrected.
+ * The query a search is kept under among the recent ones.
+ *
+ * The rule, in one sentence: the typed query, unless what the person
+ * committed to or opened was shown under the corrected spelling and found
+ * something ("portrait" for a search typed "portriat").
+ *
+ * - Opened a creator: creators are never corrected, so the typed query (the
+ *   one that finds that creator again).
+ * - Opened a post or a recipe: that section's correction, if it had one.
+ * - Committed (Enter, the Search key, a completion, leaving with results):
+ *   the section the tab leads with. On Top that is the posts when there are
+ *   any, else the recipes; Posts and Recipes are their own. A section read as
+ *   typed keeps the typed query: another section's correction never stands in.
+ * - Asked for as typed: always the typed query.
  */
 export function searchHistoryQueryFor(search: {
   /** The query as the client normalizes it. */
   query: string;
   type: SearchTabId;
-  /** The answer the search was committed on, or null while none has come. */
-  correctedQuery: SearchCorrectedQuery | null | undefined;
+  /** The answer the search was committed on or opened from, or null while none has come. */
+  answer: {
+    correctedQuery?: SearchCorrectedQuery | null;
+    posts: { items: readonly unknown[] };
+    recipes: { items: readonly unknown[] };
+  } | null | undefined;
   /** The person asked for the query as typed. */
   exact: boolean;
+  /** What was opened, or null for a search committed without opening anything. */
+  opened?: SearchOpenedResult | null;
 }): string {
-  if (search.exact || !search.correctedQuery) return search.query;
-  const posts = search.type === 'top' || search.type === 'posts' ? search.correctedQuery.posts : null;
-  const recipes = search.type === 'top' || search.type === 'recipes' ? search.correctedQuery.recipes : null;
-  return posts ?? recipes ?? search.query;
+  const { answer } = search;
+  if (search.exact || !answer?.correctedQuery) return search.query;
+  const section: 'posts' | 'recipes' | null = search.opened
+    ? (search.opened === 'creator' ? null : search.opened === 'post' ? 'posts' : 'recipes')
+    : search.type === 'posts' || search.type === 'recipes'
+      ? search.type
+      : search.type === 'top'
+        ? (answer.posts.items.length > 0 ? 'posts' : answer.recipes.items.length > 0 ? 'recipes' : null)
+        : null;
+  if (!section || answer[section].items.length === 0) return search.query;
+  return answer.correctedQuery[section] ?? search.query;
 }
 
 /** The list without one search, whatever its case. */
@@ -434,20 +457,47 @@ export function searchSeeAllLabel(section: SearchTopSection): string {
   return `See all ${section}`;
 }
 
-/** What a result says to a screen reader, in place of its text run together. */
-export function searchPostCardLabel(post: { title: string; creatorName: string }): string {
-  return `Open post ${post.title} by ${post.creatorName}`;
-}
-export function searchRecipeCardLabel(recipe: { title: string; sellerName: string; price: string }): string {
-  return `Open recipe ${recipe.title} by ${recipe.sellerName}, ${recipe.price}`;
-}
-export function searchCreatorCardLabel(creator: { displayName: string; username: string; isFollowing: boolean }): string {
-  return `Open ${creator.displayName}'s profile, @${creator.username}${creator.isFollowing ? ', following' : ''}`;
+function countWords(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
 }
 
-/** The page's title while a query is searched: "nano · Search". The site's own suffix is the page's to add. */
+function sentence(text: string | null | undefined): string {
+  const clean = (text ?? '').replace(/\s+/g, ' ').trim();
+  return clean ? `. ${clean}` : '';
+}
+
+/**
+ * What a result says to a screen reader: everything its card shows a sighted
+ * person, in an order and with pauses that read as words, where the card's
+ * text run together read "Untitled Creationlibath4 saves1".
+ */
+export function searchPostCardLabel(post: { title: string; creatorName: string; saveCount: number; commentCount: number }): string {
+  return `Open post ${post.title} by ${post.creatorName}, ${countWords(post.saveCount, 'save', 'saves')}, ${countWords(post.commentCount, 'comment', 'comments')}`;
+}
+export function searchRecipeCardLabel(recipe: { title: string; sellerName: string; price: string; summary?: string | null }): string {
+  return `Open recipe ${recipe.title} by ${recipe.sellerName}, ${recipe.price}${sentence(recipe.summary)}`;
+}
+export function searchCreatorCardLabel(creator: {
+  displayName: string;
+  username: string;
+  isFollowing: boolean;
+  publicPostCount: number;
+  bio?: string | null;
+}): string {
+  return `Open ${creator.displayName}'s profile, @${creator.username}${creator.isFollowing ? ', following' : ''}, ${countWords(creator.publicPostCount, 'post', 'posts')}${sentence(creator.bio)}`;
+}
+
+/**
+ * The page's title while a query is searched: "nano · Search", from the two
+ * characters a search starts at (counted as searchQueryLength counts, without a
+ * leading "@"), so the server's title and the page's agree. The site's own
+ * suffix is the page's to add.
+ */
 export function searchDocumentTitle(query: string): string {
-  return query ? `${query} · Search` : 'Search';
+  const normalized = normalizeSearchHistoryQuery(query);
+  return searchQueryLength(normalizeCreatorSearchQuery(normalized)) >= SEARCH_MIN_CREATOR_QUERY_LENGTH
+    ? `${normalized} · Search`
+    : 'Search';
 }
 
 export const SEARCH_ENTITIES_HEADING = 'Models and tools';

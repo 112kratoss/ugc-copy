@@ -69,6 +69,7 @@ import {
   searchFailedLine,
   searchFilterKey,
   searchHistoryQueryFor,
+  type SearchOpenedResult,
   searchInsteadLabel,
   searchMadeWithChipLabel,
   searchMadeWithRemoveLabel,
@@ -487,7 +488,7 @@ function PostRow({ item, onOpen }: { item: ShowcaseFeedItem; onOpen: () => void 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={searchPostCardLabel({ title: item.title, creatorName: item.creator.name })}
+      accessibilityLabel={searchPostCardLabel({ title: item.title, creatorName: item.creator.name, saveCount: item.saveCount, commentCount: item.commentCount })}
       onPress={() => {
         onOpen();
         router.push(`/post/${encodeURIComponent(item.id)}` as never);
@@ -550,7 +551,7 @@ function RecipeRow({ recipe, onOpen }: { recipe: RecipeSearchResult; onOpen: () 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={searchRecipeCardLabel({ title: recipe.title, sellerName: recipe.seller.name, price })}
+      accessibilityLabel={searchRecipeCardLabel({ title: recipe.title, sellerName: recipe.seller.name, price, summary: recipe.summary || recipe.previewText })}
       onPress={() => {
         onOpen();
         // A recipe is read and bought on its post, as on the web, whose search
@@ -757,14 +758,16 @@ export function ExploreSearchOverlay({
   const rememberQuery = useCallback((value: string) => {
     void rememberSearchQuery(value).then(setHistory);
   }, []);
-  // A search the answer read as something else is kept as it was read
-  // ("portrait" for "portriat"), unless the person asked for it as typed.
-  const historyQuery = searchHistoryQueryFor({
+  // Kept under the typed query, unless what the person committed to or
+  // opened was shown under the corrected spelling (searchHistoryQueryFor).
+  const historyQueryFor = (opened: SearchOpenedResult | null) => searchHistoryQueryFor({
     query: normalizedQuery,
     type,
-    correctedQuery: response?.correctedQuery,
+    answer: response,
     exact,
+    opened,
   });
+  const historyQuery = historyQueryFor(null);
 
   const requestClose = useCallback(() => {
     // Leaving with results on screen keeps the query; one that found nothing,
@@ -848,7 +851,7 @@ export function ExploreSearchOverlay({
       if (rememberOnAnswer.current === key) {
         rememberOnAnswer.current = null;
         if (shownResultCount(next, type, normalizedQuery) > 0) {
-          rememberQuery(searchHistoryQueryFor({ query: normalizedQuery, type, correctedQuery: next.correctedQuery, exact }));
+          rememberQuery(searchHistoryQueryFor({ query: normalizedQuery, type, answer: next, exact }));
         }
       }
     } catch (requestError) {
@@ -914,7 +917,10 @@ export function ExploreSearchOverlay({
     if (resultCount > 0) rememberQuery(historyQuery);
   };
 
-  const openResult = () => rememberQuery(historyQuery);
+  const openResult = (opened: SearchOpenedResult) => rememberQuery(historyQueryFor(opened));
+  const openCreator = () => openResult('creator');
+  const openPost = () => openResult('post');
+  const openRecipe = () => openResult('recipe');
 
   // An entity pressed among the results: Posts, narrowed to it and to nothing
   // else, named at once. Its count is of the posts this query finds with it,
@@ -1097,7 +1103,9 @@ export function ExploreSearchOverlay({
           <ReadingNotice line={exactNotice} actionLabel={SEARCH_CORRECTED_AGAIN_LABEL} onAction={() => setExactQuery(null)} />
         ) : null}
         {!requestKey ? (
-          history.length ? (
+          // Recent searches under an empty field only, as on the web: under a
+          // typed query that is not searched yet they read as its results.
+          history.length && query === '' ? (
             <View style={{ gap: 12 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Text accessibilityRole="header" style={{ color: theme.colors.text, fontSize: 17, fontWeight: '800' }}>{SEARCH_RECENTS_HEADING}</Text>
@@ -1148,7 +1156,7 @@ export function ExploreSearchOverlay({
             {(type === 'top' || type === 'creators') && shownResponse.creators.items.length ? (
               <View style={{ gap: 10 }}>
                 <ResultsHeading title="Creators" sort={null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'creators', onPress: () => setPickedType('creators') } : null} />
-                {shownResponse.creators.items.map((creator) => <CreatorRow key={creator.id} creator={creator} onOpen={openResult} />)}
+                {shownResponse.creators.items.map((creator) => <CreatorRow key={creator.id} creator={creator} onOpen={openCreator} />)}
                 {type === 'top' && searchTopSectionHasMore('creators', shownResponse.creators.items.length)
                   ? <SeeAllButton section="creators" onPress={() => setPickedType('creators')} />
                   : null}
@@ -1161,7 +1169,7 @@ export function ExploreSearchOverlay({
                   accessibilityState={{ busy: reordering }}
                   style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, opacity: reordering ? appTheme.opacity.disabled : 1 }}
                 >
-                  {shownResponse.posts.items.map((post) => <View key={post.id} style={{ width: postCellWidth }}><PostRow item={post} onOpen={openResult} /></View>)}
+                  {shownResponse.posts.items.map((post) => <View key={post.id} style={{ width: postCellWidth }}><PostRow item={post} onOpen={openPost} /></View>)}
                 </View>
                 {type === 'top' && searchTopSectionHasMore('posts', shownResponse.posts.items.length)
                   ? <SeeAllButton section="posts" onPress={() => setPickedType('posts')} />
@@ -1172,7 +1180,7 @@ export function ExploreSearchOverlay({
               <View style={{ gap: 10 }}>
                 <ResultsHeading title="Recipes" sort={type === 'recipes' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'recipes', onPress: () => setPickedType('recipes') } : null} />
                 <View accessibilityState={{ busy: reordering }} style={{ gap: 10, opacity: reordering ? appTheme.opacity.disabled : 1 }}>
-                  {shownResponse.recipes.items.map((recipe) => <RecipeRow key={recipe.id} recipe={recipe} onOpen={openResult} />)}
+                  {shownResponse.recipes.items.map((recipe) => <RecipeRow key={recipe.id} recipe={recipe} onOpen={openRecipe} />)}
                 </View>
                 {type === 'top' && searchTopSectionHasMore('recipes', shownResponse.recipes.items.length)
                   ? <SeeAllButton section="recipes" onPress={() => setPickedType('recipes')} />
@@ -1180,7 +1188,7 @@ export function ExploreSearchOverlay({
               </View>
             ) : null}
             {nextCursor ? <SecondaryButton disabled={loadingMore || retryBlocked} label={loadingMore ? SEARCH_LOADING_MORE_LABEL : SEARCH_SHOW_MORE_LABEL} onPress={() => void runSearch(nextCursor)} /> : null}
-            <RelatedPosts posts={relatedPosts} cellWidth={postCellWidth} onOpen={openResult} />
+            <RelatedPosts posts={relatedPosts} cellWidth={postCellWidth} onOpen={openPost} />
             {shownFailure ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center', fontSize: 13 }}>{searchFailedLine(shownFailure.message)}</Text> : null}
           </View>
         ) : shownFailure ? (
@@ -1203,7 +1211,7 @@ export function ExploreSearchOverlay({
               title={searchNoResultsTitle(normalizedQuery)}
               body={hasSearchFilters(filters) ? SEARCH_FILTERED_EMPTY_BODY : SEARCH_NO_RESULTS_BODY}
             />
-            <RelatedPosts posts={relatedPosts} cellWidth={postCellWidth} onOpen={openResult} />
+            <RelatedPosts posts={relatedPosts} cellWidth={postCellWidth} onOpen={openPost} />
           </View>
         ) : (
           <View style={{ minHeight: 260, alignItems: 'center', justifyContent: 'center', gap: 12 }}>

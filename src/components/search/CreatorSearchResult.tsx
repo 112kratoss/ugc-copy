@@ -11,6 +11,8 @@ export function CreatorSearchResult({ creator, label }: {
   return (
     <Link
       href={`/creators/${encodeURIComponent(creator.username)}`}
+      // Search keeps the typed query for a creator opened from it.
+      data-search-result="creator"
       aria-label={label}
       className="ui-focus-ring flex min-h-20 items-center gap-4 rounded-2xl border border-white/8 bg-white/[0.035] p-3 transition hover:border-white/15 hover:bg-white/[0.065]"
     >
@@ -22,7 +24,8 @@ export function CreatorSearchResult({ creator, label }: {
           className="h-13 w-13 shrink-0 rounded-full border border-white/10 object-cover"
         />
       ) : (
-        <span className="flex h-13 w-13 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-sm font-bold text-zinc-200">
+        // The initials stand in for a picture, which says nothing to a screen reader either.
+        <span aria-hidden="true" className="flex h-13 w-13 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-sm font-bold text-zinc-200">
           {getUserInitials(creator.displayName)}
         </span>
       )}

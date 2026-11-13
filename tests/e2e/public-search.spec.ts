@@ -546,8 +546,11 @@ test.describe('public search', () => {
 
     await page.goto('/search?q=na');
     await expect.poll(() => requests.length).toBeGreaterThan(0);
-    await expect(page.locator('p[role="status"]')).toContainText('0 results for na');
+    // The answer has landed: the results are no longer busy.
+    await expect(page.locator('[aria-busy="false"]')).toHaveCount(1);
     await expect(page.getByText('Find creators, posts and recipes')).toBeVisible();
+    // The live region gives no verdict on half a word either (review of #784).
+    await expect(page.locator('p[role="status"]')).toHaveText('');
     await expect(page.getByText(/No results/)).toHaveCount(0);
 
     // From three characters a search that finds nothing says so.
