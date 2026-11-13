@@ -231,8 +231,11 @@ async function handlePublicSearchGET(
       filters,
       exact: filterParams.exact,
       related: rawRelated === '1',
-      // A new query's vector is counted against the same key as the request.
+      // A new query's vector is counted against the same key as the request,
+      // and a guest session's against its network too: a guest's id is new
+      // with every anonymous sign-in, so its own key alone is no limit.
       viewerKey,
+      guestNetworkKey: actor.isGuest ? dependencies.getFeedNetworkKeyHash(request) : null,
       cursor,
       limit,
       viewerUserId: actor.viewerUserId,

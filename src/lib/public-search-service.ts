@@ -121,6 +121,11 @@ export type PublicSearchOptions = {
    * looked for only with one, since a new query is counted against it.
    */
   viewerKey?: string;
+  /**
+   * For a guest session only: the hashed network it asks from, which a new
+   * query's vector is counted against as well. Null or left out otherwise.
+   */
+  guestNetworkKey?: string | null;
   cursor: PublicSearchCursor | null;
   limit: number;
   viewerUserId: string | null;
@@ -406,7 +411,14 @@ async function relatedPostRows({
   try {
     const rows = await dependencies.findRelatedPostRows(
       adminSupabase,
-      { query, viewerUserId: options.viewerUserId, viewerKey, excludePostIds, limit: SEARCH_RELATED_MAX_POSTS },
+      {
+        query,
+        viewerUserId: options.viewerUserId,
+        viewerKey,
+        guestNetworkKey: options.guestNetworkKey ?? null,
+        excludePostIds,
+        limit: SEARCH_RELATED_MAX_POSTS,
+      },
       { logEvent: dependencies.logEvent, runAfterResponse: dependencies.runAfterResponse },
     );
     if (rows === null) return null;

@@ -72,21 +72,43 @@ export const SEARCH_QUERY_EMBEDDING_BACKGROUND_TIMEOUT_MS = 10_000;
  * New query embeddings asked of the edge function per UTC day by everyone,
  * counted in the database (`reserve_search_query_embedding`, which never
  * allows more than 5,000 whatever is sent). Past it searches go without
- * related posts until the next day.
+ * related posts until the next day. A request that brought no vector (the
+ * function down, slow past its ten seconds, or answering something else)
+ * gives its place back (`release_search_query_embedding`), at most this many
+ * times a day, so a failing function cannot spend the day and is still asked
+ * no more than twice this number of times.
  */
 export const SEARCH_QUERY_EMBEDDING_DAILY_CAP = 2_000;
 /**
  * New query embeddings one viewer may cause per UTC day: the account, or the
  * network of a visitor, by the key search's own rate limit counts. Checked
- * before the day's cap, so one client cannot spend it for everyone: twelve
- * guest sessions at search's own 180 requests per ten minutes would spend
- * 2,000 in ten minutes. A query already in the cache is free and uncounted.
- * Past it that viewer's searches go without related posts until the next
- * UTC day (the window is the rate limit's own, aligned to the day).
+ * before the day's cap, so one client cannot spend it for everyone. A query
+ * already in the cache is free and uncounted. Past it that viewer's searches
+ * go without related posts until the next UTC day (the window is the rate
+ * limit's own, aligned to the day). The rate limit has no way to give a
+ * place back, so a viewer's place stays spent when the function fails.
  */
 export const SEARCH_QUERY_EMBEDDING_VIEWER_DAILY_LIMIT = {
   scope: 'public-search:related-embedding',
   limit: 40,
+  windowSeconds: 86_400,
+} as const;
+/**
+ * New query embeddings the guest sessions of one network may cause per UTC
+ * day, counted beside each guest's own 40. A guest session is an account id
+ * anyone can mint again, so its own allowance alone is a fresh 40 per
+ * sign-in: fifty sign-ins from one machine emptied the day's 2,000 for
+ * everyone. Against the network (the hash a visitor with no token is counted
+ * by) the same machine stops at 120, and with the 40 a tokenless visitor has
+ * there, emptying the day takes thirteen networks. 120 is three guests' whole
+ * allowances: a home or an office behind one address, where a few phones
+ * search at once, is not starved by one of them, which 40 shared would do. A
+ * registered account is counted by its own key only: it cannot be minted
+ * again for free, and a shared network must not cost it its searches.
+ */
+export const SEARCH_QUERY_EMBEDDING_GUEST_NETWORK_DAILY_LIMIT = {
+  scope: 'public-search:related-embedding-guest-network',
+  limit: 120,
   windowSeconds: 86_400,
 } as const;
 /** The whole read, cache to nearest posts: past this the search answers without it. */
@@ -261,7 +283,7 @@ export async function hasSearchEmbeddingWork(
  *    request failed fails, so job health shows an unreachable function. A
  *    function from before the search mode ends the sending at once;
  * 2. the vectors of posts search can no longer return, cached query vectors
- *    older than 30 days and daily counts older than a week are deleted.
+ *    older than 7 days and daily counts older than a week are deleted.
  *
  * At most 12 function requests a run, so a fresh table of a few hundred posts
  * fills within the hour and a quiet day asks for none.
@@ -363,6 +385,7 @@ export type RelatedPostsSkipReason =
   | 'no_viewer_key'
   | 'lookup_failed'
   | 'viewer_cap_reached'
+  | 'network_cap_reached'
   | 'daily_cap_reached'
   | 'embedding_timeout'
   | 'embedding_failed'
@@ -490,19 +513,46 @@ type QueryEmbeddingDependencies = {
   queryEmbeddingTimeoutMs: number;
   /** Work that goes on behind the answer; the caller keeps the invocation alive for it. */
   background: Promise<unknown>[];
+  /** Whether the search has stopped waiting for this read. */
+  isAbandoned: () => boolean;
 };
+
+/** Who a new query is counted against, in the order they are asked. */
+type QueryEmbeddingAllowance = {
+  limit: { scope: string; limit: number; windowSeconds: number };
+  key: string;
+  reason: Extract<RelatedPostsSkipReason, 'viewer_cap_reached' | 'network_cap_reached'>;
+};
+
+/** Gives back the day's place of a request that brought no vector. Never throws. */
+async function releaseQueryEmbeddingPlace(client: SupabaseClient, logEvent: typeof logBackendEvent) {
+  try {
+    const { error } = await client.rpc('release_search_query_embedding', {
+      p_daily_cap: SEARCH_QUERY_EMBEDDING_DAILY_CAP,
+    });
+    if (error) logEvent('warn', 'public_search_related_release_failed', { error });
+  } catch (error) {
+    logEvent('warn', 'public_search_related_release_failed', { error });
+  }
+}
 
 /**
  * The query's vector. In order: the cache, which costs and counts nothing;
- * then, for a query not in it, the viewer's own daily allowance, the day's
- * cap for everyone, and the function, waited on for a short while.
+ * then, for a query not in it, the viewer's own daily allowance (and, for a
+ * guest session, its network's), the day's cap for everyone, and the
+ * function, waited on for a short while. A search that stopped waiting is
+ * asked about before each step that spends something: past the cache it
+ * takes no allowance, reserves nothing and calls nothing (`abandoned`).
  */
 async function queryEmbedding(
   client: SupabaseClient,
   embeddedQuery: string,
-  viewerKey: string,
+  allowances: readonly QueryEmbeddingAllowance[],
   dependencies: QueryEmbeddingDependencies,
-): Promise<{ ok: true; embedding: number[] } | { ok: false; reason: RelatedPostsSkipReason; error?: unknown }> {
+): Promise<
+  | { ok: true; embedding: number[] }
+  | { ok: false; reason: RelatedPostsSkipReason | 'abandoned'; error?: unknown }
+> {
   const config = getEmbedPostFunctionConfig(dependencies.env);
   if (!config) return { ok: false, reason: 'not_configured' };
 
@@ -516,31 +566,43 @@ async function queryEmbedding(
   const cached = parseEmbeddingVector(cache.data);
   if (cached) return { ok: true, embedding: cached };
 
-  // A new query. The viewer's allowance first: past it nothing is reserved
-  // of the day everyone shares, and the function is not called.
-  try {
-    await dependencies.enforceBackendRateLimit(client, {
-      ...SEARCH_QUERY_EMBEDDING_VIEWER_DAILY_LIMIT,
-      key: viewerKey,
-    });
-  } catch (error) {
-    return error instanceof BackendRateLimitError
-      ? { ok: false, reason: 'viewer_cap_reached' }
-      : { ok: false, reason: 'lookup_failed', error };
+  // A new query. The allowances first, the viewer's own before its network's
+  // (a viewer past their own never spends the network's): past either nothing
+  // is reserved of the day everyone shares, and the function is not called.
+  if (dependencies.isAbandoned()) return { ok: false, reason: 'abandoned' };
+  for (const allowance of allowances) {
+    try {
+      await dependencies.enforceBackendRateLimit(client, { ...allowance.limit, key: allowance.key });
+    } catch (error) {
+      return error instanceof BackendRateLimitError
+        ? { ok: false, reason: allowance.reason }
+        : { ok: false, reason: 'lookup_failed', error };
+    }
   }
 
+  if (dependencies.isAbandoned()) return { ok: false, reason: 'abandoned' };
   const reservation = await client.rpc('reserve_search_query_embedding', {
     p_daily_cap: SEARCH_QUERY_EMBEDDING_DAILY_CAP,
   });
   if (reservation.error) return { ok: false, reason: 'lookup_failed', error: reservation.error };
   if (reservation.data !== true) return { ok: false, reason: 'daily_cap_reached' };
 
+  // The search gave up while the place was being taken: the function is not
+  // asked for an answer nobody will read, and the place goes back.
+  if (dependencies.isAbandoned()) {
+    dependencies.background.push(releaseQueryEmbeddingPlace(client, dependencies.logEvent));
+    return { ok: false, reason: 'abandoned' };
+  }
+
   // The day's count is already one higher: this request is made whatever the
   // search does next, and its vector kept, so the place is not spent for
-  // nothing. The write to the cache waits on nobody's answer.
+  // nothing. The write to the cache waits on nobody's answer. A request that
+  // brings no vector (a refusal, the ten seconds passing, a thrown error, an
+  // unreadable body) gives the place back, once, in the same chain.
   const request = requestQueryEmbedding(embeddedQuery, { config, fetchImpl: dependencies.fetchImpl });
   dependencies.background.push(request.then(async (answer) => {
     if (answer.ok) await storeQueryEmbedding(client, queryHash, answer.embedding, dependencies.logEvent);
+    else await releaseQueryEmbeddingPlace(client, dependencies.logEvent);
   }));
   const answer = await withTimeout(request, dependencies.queryEmbeddingTimeoutMs);
   if (answer === TIMED_OUT) return { ok: false, reason: 'embedding_timeout' };
@@ -567,6 +629,13 @@ export async function findRelatedPostRows(
      * rate limit uses (the account, or the hashed network of a visitor).
      */
     viewerKey: string;
+    /**
+     * For a guest session only: the hashed network it asks from, which a new
+     * query is counted against as well (a guest's own key is new with every
+     * sign-in). Left out or null for a registered account and for a visitor,
+     * whose `viewerKey` is that hash already.
+     */
+    guestNetworkKey?: string | null;
     excludePostIds: readonly string[];
     limit?: number;
   },
@@ -576,7 +645,7 @@ export async function findRelatedPostRows(
   const skipped = (reason: RelatedPostsSkipReason, error?: unknown) => {
     // The switch is a decision and a viewer past their allowance is the
     // allowance working: neither is a fault to warn of on every search.
-    if (reason === 'viewer_cap_reached') {
+    if (reason === 'viewer_cap_reached' || reason === 'network_cap_reached') {
       logEvent('info', 'public_search_related_skipped', { reason });
     } else if (reason !== 'disabled') {
       logEvent('warn', 'public_search_related_skipped', { reason, ...(error === undefined ? {} : { error }) });
@@ -591,21 +660,38 @@ export async function findRelatedPostRows(
     if (!embeddedQuery) return null;
     const viewerKey = options.viewerKey.trim();
     if (!viewerKey) return skipped('no_viewer_key');
+    const allowances: QueryEmbeddingAllowance[] = [
+      { limit: SEARCH_QUERY_EMBEDDING_VIEWER_DAILY_LIMIT, key: viewerKey, reason: 'viewer_cap_reached' },
+    ];
+    if (options.guestNetworkKey !== undefined && options.guestNetworkKey !== null) {
+      const guestNetworkKey = options.guestNetworkKey.trim();
+      // A guest nobody can place on a network is not let past its own key alone.
+      if (!guestNetworkKey) return skipped('no_viewer_key');
+      allowances.push({
+        limit: SEARCH_QUERY_EMBEDDING_GUEST_NETWORK_DAILY_LIMIT,
+        key: guestNetworkKey,
+        reason: 'network_cap_reached',
+      });
+    }
 
-    // Set when the search stopped waiting: what is in flight finishes, and
-    // nothing more is started for an answer nobody will read.
+    // Set when the search stopped waiting: the step in flight finishes, and
+    // nothing more is started for an answer nobody will read (no allowance
+    // taken, no place of the day reserved, no call to the function, no read
+    // of the posts).
     let abandoned = false;
     const background: Promise<unknown>[] = [];
     const read = (async (): Promise<RelatedPostRow[] | null> => {
-      const vector = await queryEmbedding(client, embeddedQuery, viewerKey, {
+      const vector = await queryEmbedding(client, embeddedQuery, allowances, {
         env,
         fetchImpl: dependencyOverrides.fetchImpl ?? fetch,
         logEvent,
         enforceBackendRateLimit: dependencyOverrides.enforceBackendRateLimit ?? enforceBackendRateLimit,
         queryEmbeddingTimeoutMs: dependencyOverrides.queryEmbeddingTimeoutMs ?? SEARCH_QUERY_EMBEDDING_TIMEOUT_MS,
         background,
+        isAbandoned: () => abandoned,
       });
-      if (!vector.ok) return skipped(vector.reason, vector.error);
+      // The timeout below has said why already.
+      if (!vector.ok) return vector.reason === 'abandoned' ? null : skipped(vector.reason, vector.error);
       if (abandoned) return null;
 
       const { data, error } = await client.rpc('search_related_posts', {

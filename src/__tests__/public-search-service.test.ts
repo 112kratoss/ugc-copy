@@ -773,7 +773,14 @@ describe('public search service', () => {
       const client = { rpc } as unknown as SupabaseClient;
       const findRelatedPostRows = vi.fn<(
         client: SupabaseClient,
-        options: { query: string; viewerUserId: string | null; viewerKey: string; excludePostIds: readonly string[]; limit?: number },
+        options: {
+          query: string;
+          viewerUserId: string | null;
+          viewerKey: string;
+          guestNetworkKey?: string | null;
+          excludePostIds: readonly string[];
+          limit?: number;
+        },
         dependencies?: unknown,
       ) => Promise<typeof relatedRows | null>>(async () => {
         if (related instanceof Error) throw related;
@@ -815,6 +822,12 @@ describe('public search service', () => {
       return { search, client, findRelatedPostRows, getShowcaseFeedItemsByPostIds, loadBlockedCreatorIds, logEvent, runAfterResponse };
     }
 
+    it('says which network a guest session asks from, for the allowance counted there', async () => {
+      const { search, findRelatedPostRows } = harness();
+      await search({ viewerUserId: 'guest-1', viewerKey: 'guest-1', guestNetworkKey: 'network-key' });
+      expect(findRelatedPostRows.mock.calls[0][1]).toMatchObject({ viewerKey: 'guest-1', guestNetworkKey: 'network-key' });
+    });
+
     it('adds them beside a thin answer, nearest first, hydrated as posts are, and leaves the answer’s own posts as they were', async () => {
       const { search, client, findRelatedPostRows, getShowcaseFeedItemsByPostIds, logEvent, runAfterResponse } = harness();
       const result = await search();
@@ -825,6 +838,8 @@ describe('public search service', () => {
           viewerUserId: 'viewer-1',
           // A new query is counted against the key the request is counted against.
           viewerKey: 'viewer-1',
+          // Not a guest session: no network is counted beside the account.
+          guestNetworkKey: null,
           // The posts the search itself returned never come back as related.
           excludePostIds: [post(1), post(2)],
           limit: 8,
