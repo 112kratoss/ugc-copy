@@ -1,7 +1,7 @@
 import { useIsFocused } from '@react-navigation/native';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { BookOpen, Box, Clock3, MessageCircle, Search, Wrench, X } from 'lucide-react-native';
+import { BookOpen, Box, Clock3, Search, Wrench, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
@@ -18,8 +18,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
+import { SearchPostMasonry } from '@/components/search-post-masonry';
 import { SearchTypeaheadList } from '@/components/search-typeahead-list';
-import { TextPostPlate } from '@/components/text-post-plate';
 import { ChoiceChip, CreatorAvatar, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
 import { MotionView, useOverlayPresence } from '@/lib/motion';
 import { BackGlyph } from '@/lib/platform-glyphs';
@@ -74,7 +74,6 @@ import {
   searchMadeWithChipLabel,
   searchMadeWithRemoveLabel,
   searchNoResultsTitle,
-  searchPostCardLabel,
   searchRecentAgainLabel,
   searchRecentRemoveLabel,
   searchRecipeCardLabel,
@@ -101,7 +100,7 @@ import {
   rememberSearchQuery,
   searchQueryLength,
 } from '@/lib/search-history';
-import { searchPostGridCellWidth, searchPostGridColumns } from '@/lib/search-post-grid';
+import { searchPostGridColumns } from '@/lib/search-post-grid';
 import {
   searchAsksForResults,
   searchModeAfter,
@@ -110,9 +109,7 @@ import {
   type SearchModeEvent,
   type SearchScreenMode,
 } from '@/lib/search-typing-mode';
-import { isTextOnlyShowcasePost } from '@/lib/showcase-display';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
-import { buildTextPostPlate, textPostPlateUnderCaption } from '@/lib/text-post-plate-view-model';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type {
@@ -189,13 +186,6 @@ function describeSearchFailure(error: unknown): Omit<SearchFailure, 'key'> {
     }
   }
   return { message: SEARCH_FAILED_BODY, retryAfterSeconds: null };
-}
-
-function postPreview(item: ShowcaseFeedItem) {
-  const cover = item.mediaItems?.slice().sort((left, right) => left.sortOrder - right.sortOrder)[0];
-  return cover?.previewUrl
-    ?? (cover?.mediaKind === 'image' ? cover.url : null)
-    ?? (item.mediaKind === 'image' ? item.mediaUrl : null);
 }
 
 function SearchTab({
@@ -488,66 +478,6 @@ function CreatorRow({ creator, onOpen }: { creator: CreatorSearchResult; onOpen:
   );
 }
 
-function PostRow({ item, onOpen }: { item: ShowcaseFeedItem; onOpen: () => void }) {
-  const theme = useAppTheme();
-  const preview = postPreview(item);
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={searchPostCardLabel({ title: item.title, creatorName: item.creator.name, saveCount: item.saveCount, commentCount: item.commentCount })}
-      onPress={() => {
-        onOpen();
-        router.push(`/post/${encodeURIComponent(item.id)}` as never);
-      }}
-      style={({ pressed }) => ({
-        flex: 1,
-        overflow: 'hidden',
-        borderRadius: appTheme.radii.lg,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: theme.colors.borderSubtle,
-        backgroundColor: theme.colors.surface,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
-    >
-      {preview ? (
-        <Image source={{ uri: preview }} contentFit="cover" style={{ width: '100%', aspectRatio: 1.15 }} />
-      ) : isTextOnlyShowcasePost(item) ? (
-        // A post with no picture has its writing to show. The frame used to
-        // hold a magnifier, which read as a result that had failed to load.
-        <View style={{ width: '100%', aspectRatio: 1.15 }}>
-          <TextPostPlate
-            testID="search-text-post-plate"
-            // The title is the caption's first line, just under the frame.
-            content={textPostPlateUnderCaption(buildTextPostPlate(item))}
-            size="feature"
-            // Until the plate has been laid out and counts its own lines.
-            bodyLines={5}
-          />
-        </View>
-      ) : (
-        <View style={{ width: '100%', aspectRatio: 1.15, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panel }}>
-          <Search size={appTheme.icon.feature} color={theme.colors.primary} />
-        </View>
-      )}
-      <View style={{ gap: 3, padding: 12 }}>
-        <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800' }}>{item.title}</Text>
-        <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 12 }}>{item.creator.name}</Text>
-        {/* The web card's counts, in its order and words. */}
-        <View style={{ marginTop: 5, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.faint, fontSize: 12 }}>
-            {`${item.saveCount} ${item.saveCount === 1 ? 'save' : 'saves'}`}
-          </Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <MessageCircle size={appTheme.icon.xs} color={theme.colors.faint} />
-            <Text style={{ color: theme.colors.faint, fontSize: 12 }}>{String(item.commentCount)}</Text>
-          </View>
-        </View>
-      </View>
-    </Pressable>
-  );
-}
-
 function RecipeRow({ recipe, onOpen }: { recipe: RecipeSearchResult; onOpen: () => void }) {
   const theme = useAppTheme();
   // Only an image post may fall back to its media URL: a video's is not an image.
@@ -606,14 +536,12 @@ const NO_RELATED_POSTS: readonly ShowcaseFeedItem[] = [];
 
 // Posts that mean what the query says without holding its words: the cards
 // the search's own posts are, under everything the search itself found.
-function RelatedPosts({ posts, cellWidth, onOpen }: { posts: readonly ShowcaseFeedItem[]; cellWidth: '100%' | '48%'; onOpen: () => void }) {
+function RelatedPosts({ posts, columns, onOpen }: { posts: readonly ShowcaseFeedItem[]; columns: number; onOpen: (item: ShowcaseFeedItem) => void }) {
   if (posts.length === 0) return null;
   return (
     <View testID="search-related-posts" style={{ gap: 10 }}>
       <ResultsHeading title={SEARCH_RELATED_HEADING} sort={null} onSortChange={noSortChange} />
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-        {posts.map((post) => <View key={post.id} style={{ width: cellWidth }}><PostRow item={post} onOpen={onOpen} /></View>)}
-      </View>
+      <SearchPostMasonry items={posts} columns={columns} onOpen={onOpen} />
     </View>
   );
 }
@@ -636,7 +564,7 @@ export function ExploreSearchOverlay({
   const insets = useSafeAreaInsets();
   const { width, fontScale } = useWindowDimensions();
   // Two posts across, one at the accessibility text sizes (search-post-grid.ts).
-  const postCellWidth = searchPostGridCellWidth(searchPostGridColumns(fontScale));
+  const postColumns = searchPostGridColumns(fontScale);
   const isFocused = useIsFocused();
   // The floating tab bar stays mounted above this overlay, so the results list
   // needs the same clearance the feed itself uses or the last row never
@@ -957,7 +885,11 @@ export function ExploreSearchOverlay({
 
   const openResult = (opened: SearchOpenedResult) => rememberQuery(historyQueryFor(opened));
   const openCreator = () => openResult('creator');
-  const openPost = () => openResult('post');
+  // A post opens on its own page, over the search, which stays as it is under it.
+  const openPost = (item: ShowcaseFeedItem) => {
+    openResult('post');
+    router.push(`/post/${encodeURIComponent(item.id)}` as never);
+  };
   const openRecipe = () => openResult('recipe');
 
   // An entity pressed among the results: Posts, narrowed to it and to nothing
@@ -1224,11 +1156,14 @@ export function ExploreSearchOverlay({
             {(type === 'top' || type === 'posts') && shownResponse.posts.items.length ? (
               <View style={{ gap: 10 }}>
                 <ResultsHeading title="Posts" sort={type === 'posts' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'posts', onPress: () => setPickedType('posts') } : null} />
-                <View
-                  accessibilityState={{ busy: reordering }}
-                  style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, opacity: reordering ? appTheme.opacity.disabled : 1 }}
-                >
-                  {shownResponse.posts.items.map((post) => <View key={post.id} style={{ width: postCellWidth }}><PostRow item={post} onOpen={openPost} /></View>)}
+                <View accessibilityState={{ busy: reordering }} style={{ opacity: reordering ? appTheme.opacity.disabled : 1 }}>
+                  <SearchPostMasonry
+                    testID="search-posts"
+                    items={shownResponse.posts.items}
+                    columns={postColumns}
+                    narrowedTo={filters.madeWith && madeWithLabel ? { id: filters.madeWith, label: madeWithLabel } : null}
+                    onOpen={openPost}
+                  />
                 </View>
                 {type === 'top' && searchTopSectionHasMore('posts', shownResponse.posts.items.length)
                   ? <SeeAllButton section="posts" onPress={() => setPickedType('posts')} />
@@ -1247,7 +1182,7 @@ export function ExploreSearchOverlay({
               </View>
             ) : null}
             {nextCursor ? <SecondaryButton disabled={loadingMore || retryBlocked} label={loadingMore ? SEARCH_LOADING_MORE_LABEL : SEARCH_SHOW_MORE_LABEL} onPress={() => void runSearch(nextCursor)} /> : null}
-            <RelatedPosts posts={relatedPosts} cellWidth={postCellWidth} onOpen={openPost} />
+            <RelatedPosts posts={relatedPosts} columns={postColumns} onOpen={openPost} />
             {shownFailure ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center', fontSize: 13 }}>{searchFailedLine(shownFailure.message)}</Text> : null}
           </View>
         ) : shownFailure ? (
@@ -1270,7 +1205,7 @@ export function ExploreSearchOverlay({
               title={searchNoResultsTitle(normalizedQuery)}
               body={hasSearchFilters(filters) ? SEARCH_FILTERED_EMPTY_BODY : SEARCH_NO_RESULTS_BODY}
             />
-            <RelatedPosts posts={relatedPosts} cellWidth={postCellWidth} onOpen={openPost} />
+            <RelatedPosts posts={relatedPosts} columns={postColumns} onOpen={openPost} />
           </View>
         ) : (
           <View style={{ minHeight: 260, alignItems: 'center', justifyContent: 'center', gap: 12 }}>

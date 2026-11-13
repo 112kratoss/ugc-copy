@@ -1,3 +1,4 @@
+import { isAppSourceToolLabel } from './app-source-tool';
 import { homeModelLabel } from './home-feed-view-model';
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
 import { formatCreditAmount, formatUnlockCreditPrice } from './pricing';
@@ -53,14 +54,6 @@ export function postRemixesLink(
   };
 }
 
-/**
- * Posts made inside the app record the app as their tool. "Made with
- * Magicbooklet", read inside Magicbooklet, says nothing — only an outside
- * tool is worth naming.
- */
-function isOwnTool(label: string) {
-  return label.replace(/[\s-]+/g, '').toLowerCase() === 'magicbooklet';
-}
 
 /**
  * `commentsOnButton`: the page draws a Comments button, which carries the count ("3"), so the
@@ -94,7 +87,7 @@ export function buildPostDetailsMeta(
   const modelLabel = item.previewKind === 'text' ? null : homeModelLabel(details?.model);
   const toolLabel = details?.toolLabel?.trim();
   if (modelLabel) parts.push(`Made with ${modelLabel}`);
-  else if (toolLabel && !isOwnTool(toolLabel)) parts.push(`Made with ${toolLabel}`);
+  else if (toolLabel && !isAppSourceToolLabel(toolLabel)) parts.push(`Made with ${toolLabel}`);
 
   return {
     creatorLabel: details?.creatorLabel ?? item.creatorLabel,

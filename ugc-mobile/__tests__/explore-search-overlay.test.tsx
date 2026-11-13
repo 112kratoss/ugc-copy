@@ -130,6 +130,13 @@ vi.mock('lucide-react-native', () => ({
   MessageCircle: (props: MockProps) => React.createElement('icon', props),
   Search: (props: MockProps) => React.createElement('icon', props),
   X: (props: MockProps) => React.createElement('icon', props),
+  Play: (props: MockProps) => React.createElement('icon', props),
+  ImageIcon: (props: MockProps) => React.createElement('icon', props),
+}));
+
+// A post's picture, as the feed's pins draw it: what it is given is what the test reads.
+vi.mock('@/components/showcase-media-preview', () => ({
+  ShowcaseMediaPreview: (props: MockProps) => React.createElement('showcase-media-preview', props),
 }));
 
 vi.mock('@/components/keyboard-aware', () => ({
@@ -543,27 +550,20 @@ describe('ExploreSearchOverlay search', () => {
       await act(async () => tree.unmount());
     });
 
-    it('draws posts one across at the accessibility text sizes, two across below them', async () => {
-      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { posts: [post('p1'), post('p2')] }));
-      // The cell a card sits in: the nearest view above it with a width of its own.
-      const cellWidths = (tree: Tree) => {
-        let node = pressableLabelled(tree, 'Open post Post p1 by Ana').parent;
-        while (node && !(node.type === 'view' && node.props.style?.width)) node = node.parent;
-        return node?.props.style.width;
-      };
+    it('draws posts in two columns, one at the accessibility text sizes', async () => {
+      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { posts: [post('p1'), post('p2'), post('p3')] }));
+      const columns = (tree: Tree) => hostNodes(tree, 'view').find((node) => node.props.testID === 'search-posts')!.children.length;
 
       mocks.fontScale.value = 1.35;
       let tree = await render({ visible: true, onClose: vi.fn() });
       await typeQuery(tree, 'portrait');
-      await advance(300);
-      expect(cellWidths(tree)).toBe('48%');
+      expect(columns(tree)).toBe(2);
       await act(async () => tree.unmount());
 
       mocks.fontScale.value = 1.65;
       tree = await render({ visible: true, onClose: vi.fn() });
       await typeQuery(tree, 'portrait');
-      await advance(300);
-      expect(cellWidths(tree)).toBe('100%');
+      expect(columns(tree)).toBe(1);
       await act(async () => tree.unmount());
     });
 
@@ -602,7 +602,7 @@ describe('ExploreSearchOverlay search', () => {
       await press(pressableLabelled(tree, "Open Creator joshh's profile, @joshh, 3 posts"));
       await advance(CREATOR_PROFILE_PRESS_DELAY_MS + 10);
       expect(mocks.rememberSearchQuery.mock.calls.at(-1)).toEqual(['joshh']);
-      await press(pressableLabelled(tree, 'Open post Post p1 by Ana, 0 saves, 0 comments'));
+      await press(pressableLabelled(tree, 'Open post Post p1 by Ana'));
       expect(mocks.rememberSearchQuery.mock.calls.at(-1)).toEqual(['josh']);
       await act(async () => tree.unmount());
     });
@@ -1314,26 +1314,96 @@ describe('ExploreSearchOverlay search', () => {
     await act(async () => tree.unmount());
   });
 
-  it("counts a post's saves, in the singular and the plural, and its comments", async () => {
-    searchPublicContent.mockResolvedValueOnce(searchAnswer('portrait', 'top', {
-      posts: [post('p1', { saveCount: 1, commentCount: 4 }), post('p2', { saveCount: 12 })],
-    }));
+  // Search UX audit 2026-11-13, finding 3: a search post is drawn as Explore
+  // draws one, and says what it was made with and when.
+  it('draws a post as Explore does: its picture at its own shape, badge, video mark, @handle, made-with and date', async () => {
+    const day = 86_400_000;
+    const clip = {
+      ...post('v1'),
+      title: 'Neon portrait',
+      creator: { name: 'Luna Studio', username: 'luna', avatar: null },
+      model: 'nano-banana-2',
+      mediaKind: 'video',
+      mediaUrl: 'https://cdn.example.test/v1.mp4',
+      createdAt: new Date(Date.now() - 3 * day).toISOString(),
+      asset: { accessMode: 'free', priceUsdCents: 0, resourceKinds: ['prompt'], allowRemix: false },
+      mediaItems: [{ id: 'm1', sortOrder: 0, mediaKind: 'video', url: 'https://cdn.example.test/v1.mp4', previewUrl: 'https://cdn.example.test/v1.jpg', width: 1080, height: 1920 }],
+    } as unknown as ShowcaseFeedItem;
+    const still = {
+      ...post('i1'),
+      title: 'Harbour',
+      creator: { name: 'Noor', username: 'noor', avatar: null },
+      model: 'an-unknown-slug',
+      createdAt: new Date(Date.now() - 40 * day).toISOString(),
+    } as unknown as ShowcaseFeedItem;
+    searchPublicContent.mockResolvedValueOnce(searchAnswer('portrait', 'top', { posts: [clip, still] }));
     const tree = await render({ visible: true, onClose: vi.fn() });
     await typeQuery(tree, 'portrait');
-    await advance(300);
 
-    expect(cardTexts(tree, 'Open post Post p1 by Ana')).toEqual(['Post p1', 'Ana', '1 save', '4']);
-    expect(exactLabel(tree, 'Open post Post p1 by Ana')).toBe('Open post Post p1 by Ana, 1 save, 4 comments');
-    expect(exactLabel(tree, 'Open post Post p2 by Ana')).toBe('Open post Post p2 by Ana, 12 saves, 0 comments');
-    expectLabelHoldsCard(tree, 'Open post Post p1 by Ana');
-    expect(cardTexts(tree, 'Open post Post p2 by Ana')).toEqual(['Post p2', 'Ana', '12 saves', '0']);
+    const label = 'Open post Neon portrait by @luna';
+    expect(exactLabel(tree, label)).toBe('Open post Neon portrait by @luna, video, made with Nano Banana 2.0, Free recipe, 3d ago, 0 saves, 0 comments');
+    expect(cardTexts(tree, label)).toEqual(['Free recipe', '@luna', '· 3d ago', 'Made with Nano Banana 2.0']);
+    // Everything the card shows is in its name.
+    for (const shown of ['free recipe', '@luna', 'made with nano banana 2.0', '3d ago']) expect(exactLabel(tree, label).toLowerCase()).toContain(shown);
+    // The picture at its own shape (9:16), not cut to one frame.
+    const picture = pressableLabelled(tree, label).findAll((node) => (node.type as unknown as string) === 'showcase-media-preview')[0];
+    expect(picture.props.height / picture.props.width).toBeCloseTo(16 / 9, 1);
+    expect(picture.props.videoActivation).toBe('never');
+    // A model the feed does not name is not made up: no made-with, only the date.
+    expect(exactLabel(tree, 'Open post Harbour by @noor')).toMatch(/^Open post Harbour by @noor, [A-Z][a-z]{2} \d{1,2}, 0 saves, 0 comments$/);
 
+    await press(pressableLabelled(tree, label));
+    expect(mocks.router.push).toHaveBeenCalledWith('/post/v1');
     await act(async () => tree.unmount());
   });
 
-  // 2026-11-12: a post of writing has no picture, and its card drew a magnifier
-  // in the empty frame, which read as a result that had not loaded.
-  it('draws a text post as its writing, where a picture post has its picture', async () => {
+  // Review of #793: a post opens over the search, and Back finds the same
+  // results at the same place, with nothing asked again.
+  it('comes back from a post to the same results at the same place, asking nothing again', async () => {
+    searchPublicContent.mockResolvedValueOnce(searchAnswer('harbour', 'top', { posts: [post('v1'), post('v2')] }));
+    const onClose = vi.fn();
+    const tree = await render({ visible: true, onClose });
+    await typeQuery(tree, 'harbour');
+    const asked = searchPublicContent.mock.calls.length;
+    const shownBefore = hostNodes(tree, 'pressable').map((node) => node.props.accessibilityLabel as string | undefined).filter((label) => label?.startsWith('Open post '));
+    expect(shownBefore).toHaveLength(2);
+    mocks.scrollTo.mockClear();
+
+    await press(pressableLabelled(tree, 'Open post Post v2 by Ana'));
+    expect(mocks.router.push).toHaveBeenCalledWith('/post/v2');
+    // The post's page covers the search, which stays mounted under it; then Back.
+    mocks.focused.value = false;
+    await update(tree, { visible: true, onClose });
+    mocks.focused.value = true;
+    await update(tree, { visible: true, onClose });
+
+    expect(searchPublicContent.mock.calls.length).toBe(asked);
+    expect(hostNodes(tree, 'pressable').map((node) => node.props.accessibilityLabel as string | undefined).filter((label) => label?.startsWith('Open post '))).toEqual(shownBefore);
+    expect(searchInput(tree).props.value).toBe('harbour');
+    // Not scrolled back to the top: the place is kept.
+    expect(mocks.scrollTo).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => tree.unmount());
+  });
+
+  it('says a post was made with the model or tool the search is narrowed to', async () => {
+    const made = { ...post('p1'), model: 'luma-ray-2' } as unknown as ShowcaseFeedItem;
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { posts: [made] }, {
+      entities: [{ kind: 'model', key: 'luma-ray-2', label: 'Luma Ray 2', postCount: 1, postCountCapped: false }],
+      filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false },
+      correctedQuery: { posts: null, recipes: null },
+      exact: false,
+    }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'luma');
+    // Not a model the feed names: nothing is said of it on Top.
+    expect(exactLabel(tree, 'Open post Post p1 by Ana')).not.toContain('made with');
+    await press(pressableLabelled(tree, 'Luma Ray 2, model, 1 post. Show posts made with it'));
+    expect(exactLabel(tree, 'Open post Post p1 by Ana')).toContain('made with Luma Ray 2');
+    await act(async () => tree.unmount());
+  });
+
+  it('draws a text post as its writing, title and all, at a fixed shape', async () => {
     const note = {
       ...post('n1'),
       title: 'Creative Idea',
@@ -1346,10 +1416,11 @@ describe('ExploreSearchOverlay search', () => {
     searchPublicContent.mockResolvedValueOnce(searchAnswer('creative', 'top', { posts: [note] }));
     const tree = await render({ visible: true, onClose: vi.fn() });
     await typeQuery(tree, 'creative');
-    await advance(300);
 
-    // The writing in the frame, on one run of lines; the title once, in the caption under it.
-    expect(cardTexts(tree, 'Open post Creative Idea by Ana')).toEqual(['Exploring the app features.', 'Creative Idea', 'Ana', '0 saves', '0']);
+    // No caption under the pin names it, so the plate holds the title and the writing.
+    const plate = pressableLabelled(tree, 'Open post Creative Idea by Ana').findAll((node) => node.props.testID === 'search-text-post-plate')[0];
+    expect(plate.props.content).toMatchObject({ title: 'Creative Idea' });
+    expect(cardTexts(tree, 'Open post Creative Idea by Ana')).toEqual(expect.arrayContaining(['Exploring the app features.', 'Creative Idea', 'Ana']));
 
     await act(async () => tree.unmount());
   });
@@ -1670,7 +1741,7 @@ describe('ExploreSearchOverlay related posts', () => {
     expect(asked()).toEqual(['ocean at dusk|top|top|related']);
 
     // Drawn under the search's own outcome with the cards its posts use, and said.
-    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana, 0 saves, 0 comments', 'Open post Post cliffs by Ana, 0 saves, 0 comments']);
+    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana, Just now, 0 saves, 0 comments', 'Open post Post cliffs by Ana, Just now, 0 saves, 0 comments']);
     expect(shownTexts(tree)).toContain(SEARCH_RELATED_HEADING);
     expect(saysNoResults(tree)).toBe(true);
     expect(mocks.announce).toHaveBeenCalledWith('2 related posts');
@@ -1761,7 +1832,7 @@ describe('ExploreSearchOverlay related posts', () => {
     expect(lines.filter((line) => line === SEARCH_RELATED_HEADING)).toHaveLength(1);
     expect(lines.indexOf(SEARCH_RELATED_HEADING)).toBeGreaterThan(lines.lastIndexOf('Posts'));
     expect(lines.indexOf(SEARCH_RELATED_HEADING)).toBeGreaterThan(lines.indexOf('Post own'));
-    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana, 0 saves, 0 comments', 'Open post Post cliffs by Ana, 0 saves, 0 comments']);
+    expect(relatedLabels(tree)).toEqual(['Open post Post sea by Ana, Just now, 0 saves, 0 comments', 'Open post Post cliffs by Ana, Just now, 0 saves, 0 comments']);
 
     // Looked for and none found, and a server that says nothing: no group, no words.
     mocks.announce.mockClear();

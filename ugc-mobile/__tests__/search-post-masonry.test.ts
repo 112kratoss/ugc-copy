@@ -1,0 +1,177 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  SEARCH_TEXT_PIN_ASPECT_RATIO,
+  buildSearchPostPin,
+  searchPostPinFooterHeight,
+  searchPostMadeWithLabel,
+  searchPostPinMediaHeight,
+  splitSearchPostColumns,
+} from '../lib/search-post-masonry';
+import type { ShowcaseFeedItem } from '../lib/types';
+
+const NOW = new Date('2026-11-13T12:00:00.000Z');
+const DAY = 86_400_000;
+
+function item(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {
+  return {
+    id: 'p1',
+    title: 'Neon portrait',
+    prompt: '',
+    body: '',
+    category: 'image',
+    postFormat: 'media',
+    mediaKind: 'image',
+    mediaUrl: 'https://cdn.example.test/p1.jpg',
+    mediaItems: [{ id: 'm1', sortOrder: 0, mediaKind: 'image', url: 'https://cdn.example.test/p1.jpg', previewUrl: null, width: 1000, height: 1500 }],
+    model: 'nano-banana-2',
+    saveCount: 0,
+    remixCount: 0,
+    commentCount: 0,
+    createdAt: new Date(NOW.getTime() - 3 * DAY).toISOString(),
+    creator: { id: 'c1', name: 'Luna Studio', username: 'luna', avatar: null },
+    generationId: null,
+    asset: null,
+    canRemix: false,
+    ...overrides,
+  } as unknown as ShowcaseFeedItem;
+}
+
+describe('a search post drawn as a feed pin', () => {
+  it('names the creator by handle, the model it was made with and when, all in its label', () => {
+    const pin = buildSearchPostPin(item(), { now: NOW });
+    expect(pin.handle).toBe('@luna');
+    expect(pin.madeWith).toBe('Made with Nano Banana 2.0');
+    expect(pin.date).toBe('3d ago');
+    expect(pin.badge).toBeNull();
+    expect(pin.video).toBe(false);
+    expect(pin.label).toBe('Open post Neon portrait by @luna, made with Nano Banana 2.0, 3d ago, 0 saves, 0 comments');
+  });
+
+  it('wears Explore\'s badge and the video mark, and says them', () => {
+    const pin = buildSearchPostPin(item({
+      mediaKind: 'video',
+      mediaUrl: 'https://cdn.example.test/p1.mp4',
+      asset: { accessMode: 'paid', priceUsdCents: 40, resourceKinds: ['prompt'], allowRemix: false } as ShowcaseFeedItem['asset'],
+    }), { now: NOW });
+    expect(pin.video).toBe(true);
+    expect(pin.badge).toMatch(/credits?$/);
+    expect(pin.label).toBe(`Open post Neon portrait by @luna, video, made with Nano Banana 2.0, ${pin.badge}, 3d ago, 0 saves, 0 comments`);
+  });
+
+  it('falls back to the display name for a creator with no handle', () => {
+    expect(buildSearchPostPin(item({ creator: { id: 'c1', name: 'Luna Studio', username: null, avatar: null } as unknown as ShowcaseFeedItem['creator'] }), { now: NOW }).handle)
+      .toBe('Luna Studio');
+  });
+
+  it('says what a post was made with only where the post says it: the narrowed entity, a named model, a tool, else nothing', () => {
+    // The model or tool the search is narrowed to, when the post carries it, by the name the filter shows.
+    expect(searchPostMadeWithLabel(item({ model: 'luma-ray-2' }), { id: 'model:luma-ray-2', label: 'Luma Ray 2' })).toBe('Luma Ray 2');
+    expect(searchPostMadeWithLabel(
+      item({ model: 'manual', sourceTools: [{ toolLabel: 'Midjourney', toolSlug: 'midjourney' }] }),
+      { id: 'tool:midjourney', label: 'Midjourney v7' },
+    )).toBe('Midjourney v7');
+    // Narrowed to another one: the post's own model.
+    expect(searchPostMadeWithLabel(item(), { id: 'model:luma-ray-2', label: 'Luma Ray 2' })).toBe('Nano Banana 2.0');
+    // An outside tool the creator named.
+    expect(searchPostMadeWithLabel(item({ model: 'manual', sourceTools: [{ toolLabel: 'Midjourney', toolSlug: 'midjourney' }] }))).toBe('Midjourney');
+    expect(searchPostMadeWithLabel(item({ model: 'manual', sourceTool: 'Photoshop' }))).toBe('Photoshop');
+    // A slug the feed does not name is never shown.
+    expect(searchPostMadeWithLabel(item({ model: 'magicbooklet' }))).toBeNull();
+    expect(buildSearchPostPin(item({ model: 'an-unknown-slug' }), { now: NOW }).madeWith).toBeNull();
+  });
+
+  it('draws a picture at its own shape and a text post at a fixed one', () => {
+    const portrait = buildSearchPostPin(item(), { now: NOW });
+    expect(searchPostPinMediaHeight(portrait, 180)).toBe(270);
+    const note = buildSearchPostPin(item({ category: 'text', postFormat: 'text', mediaKind: null, mediaUrl: null, mediaItems: [], body: 'Words' }), { now: NOW });
+    expect(note.card).toBeNull();
+    expect(searchPostPinMediaHeight(note, 180)).toBe(Math.round(180 / SEARCH_TEXT_PIN_ASPECT_RATIO));
+  });
+
+  it('names a pin with the web\'s card words: everything it shows, its saves and comments', () => {
+    const pin = buildSearchPostPin(item({ saveCount: 1, commentCount: 4 }), { now: NOW });
+    expect(pin.label).toMatch(/^Open post .+ by @.+, .*1 save, 4 comments$/);
+    expect(pin.label).toContain(pin.date);
+    if (pin.madeWith) expect(pin.label).toContain(`made with ${pin.madeWith.replace(/^Made with /, '')}`);
+    if (pin.badge) expect(pin.label).toContain(pin.badge);
+  });
+});
+
+describe('a post made in the app (review of #793, must-fix)', () => {
+  // A post made here records the app as its tool (showcase-publish-service:
+  // source_tool 'magicbooklet'; generation-post-source-tools: sourceTools[0]).
+  const madeHere = { sourceTool: 'magicbooklet', sourceTools: [{ toolLabel: 'magicbooklet', toolSlug: 'magicbooklet' }] } as Partial<ShowcaseFeedItem>;
+
+  it('never says it was made with the app: a template result, a model the app has no name for', () => {
+    for (const model of ['template-workflow', 'a-model-newer-than-this-app']) {
+      expect(searchPostMadeWithLabel(item({ model, ...madeHere }))).toBeNull();
+      const pin = buildSearchPostPin(item({ model, ...madeHere }), { now: NOW });
+      expect(pin.madeWith).toBeNull();
+      expect(pin.label.toLowerCase()).not.toContain('made with');
+    }
+  });
+
+  it('reads the app\'s name as the shared rule does, its old name too, and still names an outside tool beside it', () => {
+    for (const label of ['Magic Booklet', 'magic-booklet', 'MAGICBOOKLET', 'emptybooklet', 'Empty Booklet']) {
+      expect(searchPostMadeWithLabel(item({ model: 'template-workflow', sourceTool: label, sourceTools: [{ toolLabel: label, toolSlug: 'x' }] }))).toBeNull();
+    }
+    expect(searchPostMadeWithLabel(item({
+      model: 'template-workflow',
+      sourceTools: [{ toolLabel: 'magicbooklet', toolSlug: 'magicbooklet' }, { toolLabel: 'Photoshop', toolSlug: 'photoshop' }],
+    }))).toBe('Photoshop');
+  });
+
+  it('says nothing of a text post, as the web\'s cards do', () => {
+    expect(searchPostMadeWithLabel(item({ category: 'text', postFormat: 'text', mediaKind: null, mediaUrl: null, mediaItems: [], model: 'nano-banana-2' } as Partial<ShowcaseFeedItem>))).toBeNull();
+  });
+});
+
+describe('the search masonry', () => {
+  it('puts each pin in the shortest column so far, the first on a tie, keeping the answer\'s order', () => {
+    const heights: Record<string, number> = { a: 300, b: 100, c: 100, d: 100, e: 50 };
+    const split = splitSearchPostColumns(['a', 'b', 'c', 'd', 'e'], 2, (pin) => heights[pin]);
+    expect(split).toEqual([['a', 'e'], ['b', 'c', 'd']]);
+  });
+
+  it('counts the lines each pin draws under its picture, so the shorter column is the one that is (review of #793)', () => {
+    const none = { madeWith: null };
+    const short = { madeWith: 'Made with Kling' };
+    const long = { madeWith: 'Made with Nano Banana 2.0 and a long outside tool name' };
+    // Gap, the handle line beside its avatar, then the made-with line (one or two).
+    expect(searchPostPinFooterHeight(none, 170)).toBe(28);
+    expect(searchPostPinFooterHeight(short, 170)).toBe(47);
+    expect(searchPostPinFooterHeight(long, 170)).toBe(64);
+    // At a larger text size the lines grow, and a line wraps sooner.
+    expect(searchPostPinFooterHeight(short, 170, 1.35)).toBeGreaterThan(searchPostPinFooterHeight(short, 170));
+    expect(searchPostPinFooterHeight({ madeWith: 'Made with Nano Banana 2.0' }, 170, 1.35))
+      .toBe(searchPostPinFooterHeight({ madeWith: 'Made with Nano Banana 2.0 and more' }, 170, 1.35));
+
+    // Pins of one picture height that differ only in their lines. A fixed
+    // allowance alternates them and the columns end far apart; counted, the
+    // split follows the real heights and the columns end closer.
+    type Pin = { id: string; footer: { madeWith: string | null } };
+    const pins: Pin[] = [
+      { id: 'a', footer: long },
+      { id: 'b', footer: none },
+      { id: 'c', footer: long },
+      { id: 'd', footer: none },
+      { id: 'e', footer: none },
+    ];
+    const real = (pin: Pin) => 200 + searchPostPinFooterHeight(pin.footer, 170);
+    const counted = splitSearchPostColumns(pins, 2, real);
+    const fixed = splitSearchPostColumns(pins, 2, () => 200 + 52);
+    expect(counted.map((column) => column.map((pin) => pin.id))).toEqual([['a', 'd', 'e'], ['b', 'c']]);
+    expect(fixed.map((column) => column.map((pin) => pin.id))).toEqual([['a', 'c', 'e'], ['b', 'd']]);
+    const apart = (split: Pin[][]) => {
+      const [left, right] = split.map((column) => column.reduce((sum, pin) => sum + real(pin), 0));
+      return Math.abs(left - right);
+    };
+    expect(apart(counted)).toBeLessThan(apart(fixed));
+  });
+
+  it('keeps every pin in order in one column', () => {
+    expect(splitSearchPostColumns(['a', 'b', 'c'], 1, () => 100)).toEqual([['a', 'b', 'c']]);
+    expect(splitSearchPostColumns(['a'], 0, () => 100)).toEqual([['a']]);
+  });
+});

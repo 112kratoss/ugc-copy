@@ -271,7 +271,7 @@ export function getPostMadeWithLabel(
 ): string | null {
     if ((item.postFormat === 'text' || item.category === 'text') && !item.mediaUrl) return null;
     // Posts made here record the app as their tool; the app's post Details
-    // leave it out the same way (`isOwnTool` in ugc-mobile/lib/post-details-view-model.ts).
+    // leave it out the same way (`isAppSourceToolLabel` in ugc-mobile/lib/app-source-tool.ts).
     const outsideTool = item.sourceTool?.trim();
     return getPostModelDisplayName(item.model)
         ?? (outsideTool && !isAppSourceToolLabel(outsideTool) ? outsideTool : null);

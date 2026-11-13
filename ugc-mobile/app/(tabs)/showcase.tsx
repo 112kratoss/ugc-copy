@@ -1,7 +1,7 @@
 import { FlashList, type FlashListRef, type ListRenderItem, type ViewToken } from '@shopify/flash-list';
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ImageIcon, MoreVertical, Play, RefreshCw, Search, X } from 'lucide-react-native';
+import { MoreVertical, RefreshCw, Search, X } from 'lucide-react-native';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -27,7 +27,7 @@ import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo
 import { NativeMenu } from '@/components/native-menu';
 import { NewPostsPill } from '@/components/new-posts-pill';
 import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
-import { FeedMediaPlate } from '@/components/feed-media-plate';
+import { PinBadge, VideoCornerPlay, VideoPinPreview, VisualFallbackPreview } from '@/components/showcase-pin-marks';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { TopScrim } from '@/components/top-scrim';
 import { CreatorAvatar, SecondaryButton, StatusBlock } from '@/components/ui';
@@ -114,8 +114,7 @@ import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { haptic } from '@/lib/haptics';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { MotionView, useOverlayPresence, usePressMotion } from '@/lib/motion';
-import { hexWithAlpha } from '@/lib/eased-fade';
-import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
+import { accentColor, appTheme, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedEventType, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
@@ -1514,90 +1513,3 @@ function formatCreatorLabel(label: string) {
   return clean.startsWith('@') ? clean : `@${clean}`;
 }
 
-function PinBadge({ label, accent }: { label: string; accent: string }) {
-  return (
-    <View
-      pointerEvents="none"
-      style={{
-        position: 'absolute',
-        left: 10,
-        top: 10,
-        maxWidth: '82%',
-        borderRadius: appTheme.radii.pill,
-        backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.78),
-        paddingHorizontal: 9,
-        // The caption ramp's own line box is 17pt; the padding is what keeps the
-        // pill the height it has always been rather than an override on the type.
-        paddingVertical: 3,
-      }}
-    >
-      <Text numberOfLines={1} style={{ color: accent, ...appTheme.type.caption, fontWeight: '800' }}>
-        {label}
-      </Text>
-    </View>
-  );
-}
-
-function VideoCornerPlay() {
-  return (
-    <View
-      pointerEvents="none"
-      style={{
-        position: 'absolute',
-        top: 10,
-        right: 10,
-        width: 31,
-        height: 31,
-        borderRadius: appTheme.radii.pill,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.42),
-      }}
-    >
-      <Play size={16} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
-    </View>
-  );
-}
-
-function VisualFallbackPreview({ accent, height, radius }: { accent: string; height: number; radius: number }) {
-  const theme = useAppTheme();
-  return (
-    <View
-      style={{
-        height,
-        borderRadius: radius,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: theme.colors.borderSubtle,
-        backgroundColor: theme.colors.surfaceInset,
-        overflow: 'hidden',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      <FeedMediaPlate accent={accent} glyph={ImageIcon} />
-    </View>
-  );
-}
-
-function VideoPinPreview({ accent, height, radius }: { accent: string; height: number; radius: number }) {
-  const theme = useAppTheme();
-  return (
-    <View
-      style={{
-        height,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: radius,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: `${accent}4d`,
-        backgroundColor: theme.colors.mediaPlaceholder,
-        overflow: 'hidden',
-      }}
-    >
-      <View style={{ position: 'absolute', inset: 0, backgroundColor: `${accent}12` }} />
-      <FeedMediaPlate accent={accent} glyph={Play} filled />
-    </View>
-  );
-}
