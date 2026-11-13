@@ -635,6 +635,7 @@ const extendedOperationCases: Array<{
   },
   { key: 'getCreatorProfile', call: (api) => api.getCreatorProfile('creator-one') },
   { key: 'searchPublicContent', call: (api) => api.searchPublicContent({ query: 'product', type: 'top' }) },
+  { key: 'suggestSearch', call: (api) => api.suggestSearch({ query: 'lu' }) },
   { key: 'reportPost', call: (api) => api.reportPost('post-1', { reason: 'unsafe_content' }) },
   {
     key: 'reportUser',

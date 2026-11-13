@@ -415,7 +415,7 @@ describe('AppShellClient', () => {
       'Profile',
       'Help & feedback',
     ]);
-    expect(within(screen.getByRole('banner')).getByRole('searchbox', { name: 'Search creators, posts, and recipes' })).toBeInTheDocument();
+    expect(within(screen.getByRole('banner')).getByRole('combobox', { name: 'Search creators, posts, and recipes' })).toBeInTheDocument();
     expect(within(screen.getByRole('banner')).getByRole('link', { name: 'Open alerts' })).toBeInTheDocument();
     expect(
       within(screen.getByRole('navigation', { name: 'Primary mobile navigation' }))
@@ -1080,7 +1080,7 @@ describe('AppShellClient', () => {
 
     it('asks before the top bar search leaves, and searches on a leave', async () => {
       renderPostDraft();
-      const searchField = screen.getByRole('searchbox', { name: 'Search creators, posts, and recipes' });
+      const searchField = screen.getByRole('combobox', { name: 'Search creators, posts, and recipes' });
       const searchForm = searchField.closest('form')!;
       fireEvent.change(searchField, { target: { value: 'neon city' } });
 

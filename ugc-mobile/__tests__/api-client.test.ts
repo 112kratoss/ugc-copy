@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import { parseSearchSuggestResponse } from '../lib/public-search-policy/search-typeahead';
 import {
   ACCOUNT_DELETION_TIMEOUT_MS,
   AccountDeletingError,
@@ -353,6 +354,32 @@ describe('mobile api client caching', () => {
       '?q=portrait&type=posts',
       '?q=portrait&type=posts',
     ]);
+  });
+
+  it('asks the typeahead route for what is typed, with the session’s token, and answers what the contract pins', async () => {
+    const contract = mobileApiContract.endpoints.suggestSearch;
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(contract.response));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    const caller = new AbortController();
+
+    const answer = await api.suggestSearch({ query: contract.query.q }, caller.signal);
+    await api.suggestSearch({ query: '@lu' });
+    await api.suggestSearch({ query: 'cinematic po' });
+
+    const asked = fetcher.mock.calls.map(([url]) => new URL(String(url)));
+    expect(asked.map((url) => url.pathname)).toEqual([contract.path, contract.path, contract.path]);
+    // The text alone, as typed: no type, no order, no cursor.
+    expect(asked.map((url) => url.search)).toEqual(['?q=Lum', '?q=%40lu', '?q=cinematic+po']);
+    expect(new Headers(fetcher.mock.calls[0][1]?.headers).get('Authorization')).toBe('Bearer token-1');
+    expect(fetcher.mock.calls[0][1]?.method ?? 'GET').toBe(contract.method);
+    // What both search boxes draw from: read as it is, and a server from before entities as none.
+    expect(parseSearchSuggestResponse(answer)).toEqual(contract.response);
+    expect(parseSearchSuggestResponse(contract.responseVariants.beforeEntities.response)?.entities).toEqual([]);
+    expect(parseSearchSuggestResponse(contract.responseVariants.switchedOff.response)).toEqual(contract.responseVariants.switchedOff.response);
   });
 
   it('names what narrows a search and the exact reading only when they are on, before the cursor', async () => {

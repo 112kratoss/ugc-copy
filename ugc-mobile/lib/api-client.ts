@@ -80,6 +80,7 @@ import type {
   GenerationShareSourceSurface,
   ProfileShareSourceSurface,
   PublicSearchResponse,
+  SearchSuggestResponse,
   PublicSearchSort,
   PublicSearchType,
   ShareChannel,
@@ -1409,6 +1410,13 @@ export function createApiClient({
       cursor: params.cursor,
       limit: params.limit,
     }), { signal }, { auth: true }),
+    /**
+     * What the search box offers while a person types: creators, models and
+     * tools, and completions. Read with parseSearchSuggestResponse; a failure
+     * is drawn as nothing.
+     */
+    suggestSearch: (params: { query: string }, signal?: AbortSignal) =>
+      request<SearchSuggestResponse>('/api/search/suggest' + buildQuery({ q: params.query }), { signal }, { auth: true }),
     recordShowcaseFeedEvent: (body: ShowcaseFeedEventRequest) =>
       request<ShowcaseFeedEventResponse>('/api/showcase/feed/events', {
         method: 'POST',

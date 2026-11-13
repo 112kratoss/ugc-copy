@@ -45,6 +45,7 @@
 @source "../components/AppShellAccountFallback.tsx";
 @source "../components/AppShellClient.tsx";
 @source "../components/AppShellCreateMenu.tsx";
+@source "../components/AppShellSearch.tsx";
 @source "../components/AppleLogo.tsx";
 @source "../components/AuthProvider.tsx";
 @source "../components/BrandWordmark.tsx";
@@ -80,6 +81,8 @@
 @source "../components/RecoverableMediaVideo.tsx";
 @source "../components/ResourceMediaPreview.tsx";
 @source "../components/RouteAuthBoundary.tsx";
+@source "../components/search/SearchTypeaheadList.tsx";
+@source "../components/search/use-search-typeahead.ts";
 @source "../components/SignInAgreement.tsx";
 @source "../components/SignInWorkspaceCard.tsx";
 @source "../components/SkeletonLoader.tsx";

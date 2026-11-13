@@ -4,7 +4,6 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendEvent } from '@/lib/backend-logger';
 import { loadBlockedCreatorIds } from '@/lib/moderation-service';
-import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
 import {
   getMarketplaceResourceList,
   type MarketplaceResourceListItem,
@@ -31,6 +30,7 @@ import {
   type RecipeSearchResult,
   type SearchEntityResult,
 } from '@/lib/public-search';
+import { searchEntityLabel } from '@/lib/search-entity-label';
 import { createServiceClient } from '@/lib/server-helpers';
 import { getShowcaseFeedItemsByPostIds } from '@/lib/showcase-feed';
 
@@ -58,7 +58,7 @@ type PostSearchRpcRow = {
   corrected_query?: string | null;
 };
 
-type EntitySearchRpcRow = {
+export type EntitySearchRpcRow = {
   kind: 'model' | 'tool';
   key: string;
   label: string;
@@ -127,15 +127,15 @@ function creatorResult(row: CreatorSearchRpcRow): CreatorSearchResult {
 
 /**
  * An entity as an answer names it. A model made here is named as posts name
- * it (getPostModelDisplayName), whatever name the database first saw it
+ * it (searchEntityLabel), whatever name the database first saw it
  * under: a creation stored without a Made with row is known there by its
  * key alone.
  */
-function entityResult(row: EntitySearchRpcRow): SearchEntityResult {
+export function entityResult(row: EntitySearchRpcRow): SearchEntityResult {
   return {
     kind: row.kind,
     key: row.key,
-    label: (row.kind === 'model' ? getPostModelDisplayName(row.key) : null) ?? row.label,
+    label: searchEntityLabel(row),
     postCount: Math.max(0, row.post_count ?? 0),
     postCountCapped: Boolean(row.post_count_capped),
   };

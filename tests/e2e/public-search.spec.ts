@@ -2,6 +2,12 @@ import { expect, test } from '@playwright/test';
 
 const emptyPage = { items: [], nextCursor: null };
 
+// /api/search alone: the typeahead's /api/search/suggest (search-typeahead.spec.ts) is answered
+// apart, with nothing to offer, so each test's `requests` holds the searches and only the searches.
+const SEARCH_API = (url: URL) => url.pathname === '/api/search';
+const SUGGEST_API = (url: URL) => url.pathname === '/api/search/suggest';
+const NO_SUGGESTIONS = { query: '', normalizedQuery: '', creators: [], entities: [], completions: [] };
+
 function searchResponse(query: string, type: string) {
   return {
     query,
@@ -34,9 +40,17 @@ function searchResponse(query: string, type: string) {
 test.describe.configure({ retries: 2 });
 
 test.describe('public search', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route(SUGGEST_API, (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(NO_SUGGESTIONS),
+    }));
+  });
+
   test('searches from the shareable URL, switches tabs, and shows the zero state', async ({ page }) => {
     const requests: string[] = [];
-    await page.route('**/api/search**', async (route) => {
+    await page.route(SEARCH_API, async (route) => {
       const url = new URL(route.request().url());
       requests.push(url.search);
       const query = url.searchParams.get('q') ?? '';
@@ -70,7 +84,7 @@ test.describe('public search', () => {
     await expect(page).toHaveURL(/type=creators/);
 
     // A query with no matches lands on the explicit zero state.
-    const field = page.getByRole('searchbox');
+    const field = page.getByRole('combobox');
     await field.fill('zzzznope');
     await expect(page.getByText('No results for “zzzznope”')).toBeVisible();
 
@@ -93,7 +107,7 @@ test.describe('public search', () => {
     const top = [post('post-saved', 'Most saved portrait'), post('post-new', 'Newest portrait')];
     const latest = [post('post-new', 'Newest portrait'), post('post-saved', 'Most saved portrait')];
     const requests: string[] = [];
-    await page.route('**/api/search**', async (route) => {
+    await page.route(SEARCH_API, async (route) => {
       const url = new URL(route.request().url());
       requests.push(url.search);
       const sort = url.searchParams.get('sort') ?? 'top';
@@ -156,7 +170,7 @@ test.describe('public search', () => {
 
   test('opens a shared Latest link on Latest and comes back to it', async ({ page }) => {
     const requests: string[] = [];
-    await page.route('**/api/search**', async (route) => {
+    await page.route(SEARCH_API, async (route) => {
       const url = new URL(route.request().url());
       requests.push(url.search);
       await route.fulfill({
@@ -197,7 +211,7 @@ test.describe('public search', () => {
       id, title, saveCount: 0, commentCount: 0, creator: { name: 'Luna Studio' }, mediaItems: [], mediaKind: null, mediaUrl: null,
     });
     const requests: string[] = [];
-    await page.route('**/api/search**', async (route) => {
+    await page.route(SEARCH_API, async (route) => {
       const url = new URL(route.request().url());
       requests.push(url.search);
       const type = url.searchParams.get('type') ?? 'top';
@@ -282,7 +296,7 @@ test.describe('public search', () => {
 
   test('opens a shared filtered link filtered and comes back to it', async ({ page }) => {
     const requests: string[] = [];
-    await page.route('**/api/search**', async (route) => {
+    await page.route(SEARCH_API, async (route) => {
       const url = new URL(route.request().url());
       requests.push(url.search);
       await route.fulfill({
@@ -325,7 +339,7 @@ test.describe('public search', () => {
 
   test('reads a shared link’s "following" for a visitor as not there, and offers no entity for two characters', async ({ page }) => {
     const requests: string[] = [];
-    await page.route('**/api/search**', async (route) => {
+    await page.route(SEARCH_API, async (route) => {
       const url = new URL(route.request().url());
       requests.push(url.search);
       const type = url.searchParams.get('type') ?? 'top';
@@ -364,13 +378,13 @@ test.describe('public search', () => {
     await page.goto('/search?q=kl');
     await expect(page.getByText('Luna Studio')).toBeVisible();
     await expect(page.getByRole('region', { name: 'Models and tools' })).toHaveCount(0);
-    await page.getByRole('searchbox').fill('kli');
+    await page.getByRole('combobox').fill('kli');
     await expect(page.getByRole('region', { name: 'Models and tools' })).toBeVisible();
   });
 
   test('says when it read the query as something else, and searches for it as typed on request', async ({ page }) => {
     const requests: string[] = [];
-    await page.route('**/api/search**', async (route) => {
+    await page.route(SEARCH_API, async (route) => {
       const url = new URL(route.request().url());
       requests.push(url.search);
       const exact = url.searchParams.get('exact') === '1';
@@ -419,7 +433,7 @@ test.describe('public search', () => {
   });
 
   test('keeps recent searches in this browser and offers them when the empty box is focused', async ({ page }) => {
-    await page.route('**/api/search**', async (route) => {
+    await page.route(SEARCH_API, async (route) => {
       const url = new URL(route.request().url());
       await route.fulfill({
         status: 200,
@@ -430,7 +444,7 @@ test.describe('public search', () => {
 
     await page.goto('/search?q=luna');
     await expect(page.getByText('Luna Studio')).toBeVisible();
-    const field = page.getByRole('searchbox');
+    const field = page.getByRole('combobox');
     // Enter commits the search: it found something, so it is kept.
     await field.press('Enter');
     await expect
@@ -488,7 +502,7 @@ test.describe('public search', () => {
 
   test('keeps two-character queries on creator search only', async ({ page }) => {
     const requests: string[] = [];
-    await page.route('**/api/search**', async (route) => {
+    await page.route(SEARCH_API, async (route) => {
       const url = new URL(route.request().url());
       requests.push(url.search);
       await route.fulfill({

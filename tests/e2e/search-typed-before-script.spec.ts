@@ -45,7 +45,10 @@ function hydrationCommitted(page: Page) {
 test(`/search: a query typed before the page's script runs is searched for, and the field keeps it`, async ({ page }) => {
   test.setTimeout(120_000);
   const searched: string[] = [];
-  await page.route('**/api/search**', async (route) => {
+  // /api/search alone: the box holds the focus here, so the typeahead asks /api/search/suggest
+  // for the same text (search-typeahead.spec.ts), which the dev server answers with a failure
+  // that is drawn as nothing.
+  await page.route((url) => url.pathname === '/api/search', async (route) => {
     const url = new URL(route.request().url());
     const query = url.searchParams.get('q') ?? '';
     searched.push(query);
@@ -58,7 +61,7 @@ test(`/search: a query typed before the page's script runs is searched for, and 
 
   // No timeout of its own: the run's first request for the route waits for its compile.
   await page.goto('/search', { waitUntil: 'commit' });
-  const field = page.getByRole('searchbox');
+  const field = page.getByRole('combobox');
   await expect(field).toBeVisible(COLD_PAGE);
   // Else the page's script was never asked for here, and the typing below would reach a live page.
   await expect.poll(chunk.requests, { ...COLD_PAGE, message: 'the page asks for its own chunk, which is held' }).toBeGreaterThan(0);

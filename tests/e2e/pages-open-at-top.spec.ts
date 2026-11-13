@@ -113,7 +113,7 @@ test('a short page opened from a scrolled one shows its top below the top bar', 
   await scrollTo(page, 1500);
   // Search is the top bar's field, not a side navigation link; an empty search
   // opens the search page itself.
-  await page.getByRole('searchbox', { name: 'Search creators, posts, and recipes' }).press('Enter');
+  await page.getByRole('combobox', { name: 'Search creators, posts, and recipes' }).press('Enter');
   await page.waitForURL(/\/search\?q=$/);
   await expect(page.getByRole('heading', { name: 'Search the creator community' })).toBeVisible();
 

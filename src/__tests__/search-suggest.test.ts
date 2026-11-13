@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { PUBLIC_SEARCH_READ_RATE_LIMIT } from '@/lib/backend-rate-limit';
-import { PUBLIC_SEARCH_MAX_QUERY_LENGTH, normalizeCreatorSearchQuery } from '@/lib/public-search';
+import {
+  PUBLIC_SEARCH_MAX_QUERY_LENGTH,
+  PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
+  normalizeCreatorSearchQuery,
+} from '@/lib/public-search';
 import {
   SEARCH_SUGGEST_MAX_COMPLETIONS,
   SEARCH_SUGGEST_MAX_CREATORS,
+  SEARCH_SUGGEST_MAX_ENTITIES,
   SEARCH_SUGGEST_MIN_QUERY_LENGTH,
   SEARCH_SUGGEST_RATE_LIMIT,
   searchSuggestQuery,
@@ -12,7 +17,7 @@ import {
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
-const contract = mobileApiContract.searchSuggest;
+const contract = mobileApiContract.endpoints.suggestSearch;
 
 describe('search suggest query', () => {
   it('reads a query as search reads it: trimmed, NFKC, one space between words', () => {
@@ -106,14 +111,19 @@ describe('search suggest query', () => {
 describe('search suggest limits', () => {
   it('holds a hard cap on each list, as the contract states it', () => {
     expect(SEARCH_SUGGEST_MAX_CREATORS).toBe(5);
+    expect(SEARCH_SUGGEST_MAX_ENTITIES).toBe(3);
     expect(SEARCH_SUGGEST_MAX_COMPLETIONS).toBe(6);
     expect(contract.limits).toEqual({
       minQueryLength: SEARCH_SUGGEST_MIN_QUERY_LENGTH,
       maxQueryLength: PUBLIC_SEARCH_MAX_QUERY_LENGTH,
       maxCreators: SEARCH_SUGGEST_MAX_CREATORS,
+      maxEntities: SEARCH_SUGGEST_MAX_ENTITIES,
       maxCompletions: SEARCH_SUGGEST_MAX_COMPLETIONS,
+      // An entity opens Posts, which are searched from three characters.
+      minEntityQueryLength: PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
     });
     expect(contract.response.creators.length).toBeLessThanOrEqual(SEARCH_SUGGEST_MAX_CREATORS);
+    expect(contract.response.entities.length).toBeLessThanOrEqual(SEARCH_SUGGEST_MAX_ENTITIES);
     expect(contract.response.completions.length).toBeLessThanOrEqual(SEARCH_SUGGEST_MAX_COMPLETIONS);
   });
 

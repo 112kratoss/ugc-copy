@@ -17,7 +17,7 @@ import { proxy } from '@/proxy';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
-const contract = mobileApiContract.searchSuggest;
+const contract = mobileApiContract.endpoints.suggestSearch;
 const VIEWER_ID = '33333333-3333-4333-8333-333333333333';
 
 const requestIdBoundary = <T>(_requestId: string, callback: () => T): T => callback();
@@ -30,7 +30,7 @@ const allowedRateLimit = () => Promise.resolve({
 });
 
 function emptyAnswer(options: SearchSuggestOptions): SearchSuggestResponse {
-  return { query: options.query, normalizedQuery: options.normalizedQuery, creators: [], completions: [] };
+  return { query: options.query, normalizedQuery: options.normalizedQuery, creators: [], entities: [], completions: [] };
 }
 
 function userClient(user: Record<string, unknown> | null, error: unknown = null) {
@@ -82,10 +82,10 @@ describe('search suggest route adapter', () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ query: 'Lu', normalizedQuery: 'Lu', creators: [], completions: [] });
+    await expect(response.json()).resolves.toEqual({ query: 'Lu', normalizedQuery: 'Lu', creators: [], entities: [], completions: [] });
     // Every visitor gets this answer, so it is the repo's viewer-aware public read.
     expect(response.headers.get('Cache-Control')).toBe(API_CACHE_CONTROL.publicShortEdge);
-    expect(response.headers.get('Cache-Control')).toBe(contract.cacheControl.withoutToken);
+    expect(response.headers.get('Cache-Control')).toBe(contract.cacheControlWithoutToken);
     // Apart from every token's answer.
     expect(response.headers.get('Vary')).toBe(contract.vary);
     expect(response.headers.get('x-request-id')).toBe('suggest-1');
@@ -109,7 +109,7 @@ describe('search suggest route adapter', () => {
     expect(response.status).toBe(200);
     // Follows and blocks are this viewer's: never stored, by anyone.
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
-    expect(response.headers.get('Cache-Control')).toBe(contract.cacheControl.withToken);
+    expect(response.headers.get('Cache-Control')).toBe(contract.cacheControl);
     expect(response.headers.get('Vary')).toBe('Authorization');
     expect(enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       scope: 'public-search:suggest',
@@ -223,7 +223,7 @@ describe('search suggest route adapter', () => {
       );
       // The answer a query with no match gets: a client draws nothing and carries on.
       expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toEqual({ query: 'Lu', normalizedQuery: 'Lu', creators: [], completions: [] });
+      await expect(response.json()).resolves.toEqual({ query: 'Lu', normalizedQuery: 'Lu', creators: [], entities: [], completions: [] });
       // No token verified, no rate-limit row, no read.
       expect(createUserClient).not.toHaveBeenCalled();
       expect(enforceBackendRateLimit).not.toHaveBeenCalled();
@@ -231,6 +231,14 @@ describe('search suggest route adapter', () => {
       // Never stored: the switch is felt when thrown and gone when lifted.
       expect(response.headers.get('Cache-Control')).toBe('private, no-store');
       expect(response.headers.get('x-request-id')).toBe('suggest-off');
+    });
+
+    it('answers as the contract says a switched-off route does: no creators, no models or tools, no words', async () => {
+      const off = contract.responseVariants.switchedOff;
+      const { response } = await ask(`http://localhost/api/search/suggest?q=${off.query.q}`, {
+        env: { SEARCH_SUGGEST_DISABLED: '1' },
+      });
+      await expect(response.json()).resolves.toEqual(off.response);
     });
 
     it('is private for a visitor too, whose answer the edge would otherwise keep', async () => {
@@ -308,6 +316,13 @@ describe('search suggest route adapter', () => {
         avatar_url: creator.avatarUrl,
         is_following: creator.isFollowing,
       })),
+      entities: contract.response.entities.map((entity) => ({
+        kind: entity.kind,
+        key: entity.key,
+        label: entity.label,
+        post_count: entity.postCount,
+        post_count_capped: entity.postCountCapped,
+      })),
       completions: contract.response.completions,
     };
     const rpc = vi.fn(async () => ({ data: rows, error: null }));
@@ -330,6 +345,7 @@ describe('search suggest route adapter', () => {
           avatar_url: creator.avatarUrl,
           is_following: creator.isFollowing,
         })),
+        entities: [],
         completions: [],
       },
       error: null,
@@ -339,7 +355,7 @@ describe('search suggest route adapter', () => {
     expect(rpc).toHaveBeenLastCalledWith('search_suggestions', expect.objectContaining({ p_query: 'lu', p_handles_only: true }));
 
     const phrase = contract.responseVariants.lastWordOfSeveral;
-    rpc.mockResolvedValueOnce({ data: { creators: [], completions: phrase.response.completions }, error: null });
+    rpc.mockResolvedValueOnce({ data: { creators: [], entities: [], completions: phrase.response.completions }, error: null });
     const lastWord = await ask(`http://localhost/api/search/suggest?q=${encodeURIComponent(phrase.query.q)}`, { suggest: viaService });
     await expect(lastWord.response.json()).resolves.toEqual(phrase.response);
   });

@@ -6,6 +6,13 @@ import type {
   SearchMediaKind,
 } from './public-search-policy/public-search-policy';
 import type { SeedanceAssetCollections, SeedanceAssetKind, SeedanceAssetStatus } from './model-catalog/seedance-assets';
+
+// What the search box is offered while a person types (GET /api/search/suggest).
+export type {
+  SearchSuggestCompletion,
+  SearchSuggestCreator,
+  SearchSuggestResponse,
+} from './public-search-policy/search-typeahead';
 import type { RemixInputSlot } from './remix-input-slots/remix-input-slots';
 import type { RemixCredit } from './remix-credit/remix-credit';
 
