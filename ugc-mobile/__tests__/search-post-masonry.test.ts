@@ -97,6 +97,35 @@ describe('a search post drawn as a feed pin', () => {
   });
 });
 
+describe('a post made in the app (review of #793, must-fix)', () => {
+  // A post made here records the app as its tool (showcase-publish-service:
+  // source_tool 'magicbooklet'; generation-post-source-tools: sourceTools[0]).
+  const madeHere = { sourceTool: 'magicbooklet', sourceTools: [{ toolLabel: 'magicbooklet', toolSlug: 'magicbooklet' }] } as Partial<ShowcaseFeedItem>;
+
+  it('never says it was made with the app: a template result, a model the app has no name for', () => {
+    for (const model of ['template-workflow', 'a-model-newer-than-this-app']) {
+      expect(searchPostMadeWithLabel(item({ model, ...madeHere }))).toBeNull();
+      const pin = buildSearchPostPin(item({ model, ...madeHere }), { now: NOW });
+      expect(pin.madeWith).toBeNull();
+      expect(pin.label.toLowerCase()).not.toContain('made with');
+    }
+  });
+
+  it('reads the app\'s name as the shared rule does, its old name too, and still names an outside tool beside it', () => {
+    for (const label of ['Magic Booklet', 'magic-booklet', 'MAGICBOOKLET', 'emptybooklet', 'Empty Booklet']) {
+      expect(searchPostMadeWithLabel(item({ model: 'template-workflow', sourceTool: label, sourceTools: [{ toolLabel: label, toolSlug: 'x' }] }))).toBeNull();
+    }
+    expect(searchPostMadeWithLabel(item({
+      model: 'template-workflow',
+      sourceTools: [{ toolLabel: 'magicbooklet', toolSlug: 'magicbooklet' }, { toolLabel: 'Photoshop', toolSlug: 'photoshop' }],
+    }))).toBe('Photoshop');
+  });
+
+  it('says nothing of a text post, as the web\'s cards do', () => {
+    expect(searchPostMadeWithLabel(item({ category: 'text', postFormat: 'text', mediaKind: null, mediaUrl: null, mediaItems: [], model: 'nano-banana-2' } as Partial<ShowcaseFeedItem>))).toBeNull();
+  });
+});
+
 describe('the search masonry', () => {
   it('puts each pin in the shortest column so far, the first on a tie, keeping the answer\'s order', () => {
     const heights: Record<string, number> = { a: 300, b: 100, c: 100, d: 100, e: 50 };

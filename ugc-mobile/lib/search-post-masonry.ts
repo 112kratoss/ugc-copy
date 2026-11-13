@@ -1,3 +1,4 @@
+import { isAppSourceToolLabel } from './app-source-tool';
 import { homeModelLabel } from './home-feed-view-model';
 import { formatRelativeTime } from './home-view-model';
 import {
@@ -40,12 +41,17 @@ export interface SearchPostPin {
  * What a post was made with, as the reason a search shows it: the model or
  * tool the search is narrowed to, when the post carries it; else the model the
  * feed names on its cards (`homeModelLabel`), else an outside tool the creator
- * named. Never invented: a post that names neither has no line.
+ * named. Never invented: a post that names neither has no line, and never
+ * the app itself, which every post made here records as its tool (a template
+ * result, or a model newer than this app's names, would otherwise read "Made
+ * with magicbooklet"). A text post has no line, as on the web's cards
+ * (`getPostMadeWithLabel`).
  */
 export function searchPostMadeWithLabel(
-  item: Pick<ShowcaseFeedItem, 'model' | 'sourceTool' | 'sourceToolSlug' | 'sourceTools'>,
+  item: Pick<ShowcaseFeedItem, 'model' | 'sourceTool' | 'sourceToolSlug' | 'sourceTools' | 'postFormat' | 'category' | 'mediaUrl'>,
   narrowedTo: { id: string; label: string } | null = null,
 ): string | null {
+  if ((item.postFormat === 'text' || item.category === 'text') && !item.mediaUrl) return null;
   const narrowed = narrowedTo ? parseSearchEntityId(narrowedTo.id) : null;
   if (narrowed && narrowedTo) {
     const carries = narrowed.kind === 'model'
@@ -55,8 +61,11 @@ export function searchPostMadeWithLabel(
   }
   const model = homeModelLabel(item.model);
   if (model) return model;
-  const tool = item.sourceTools?.find((entry) => entry.toolLabel?.trim())?.toolLabel.trim() ?? item.sourceTool?.trim();
-  return tool || null;
+  const named = (label: string | null | undefined) => {
+    const text = label?.trim();
+    return text && !isAppSourceToolLabel(text) ? text : null;
+  };
+  return item.sourceTools?.map((entry) => named(entry.toolLabel)).find(Boolean) ?? named(item.sourceTool);
 }
 
 export function buildSearchPostPin(
