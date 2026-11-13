@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError, type MagicbookletApiClient } from '@/lib/api-client';
+import { searchTypingAppendedFrom } from '@/lib/search-typing-mode';
 import {
   SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS,
   SEARCH_TYPEAHEAD_DEBOUNCE_MS,
@@ -162,7 +163,22 @@ export function useSearchTypeahead({ api, text, active, viewerKey, history }: {
   // in between was judged by the places before: a row that had only just
   // moved under the finger took it.)
   useLayoutEffect(() => {
-    placement.current = shown ? placeSearchTypeaheadRows(placement.current, rows, Date.now()) : null;
+    if (!shown) {
+      placement.current = null;
+      return;
+    }
+    const before = placement.current;
+    const next = new Map(placeSearchTypeaheadRows(before, rows, Date.now()));
+    // Rows only added under the list as it stood: nothing was there to aim at
+    // (searchTypingAppendedFrom), so they take a press at once.
+    const beforeOrder = before ? [...before.entries()].sort((a, b) => a[1].index - b[1].index).map(([key]) => key) : [];
+    const appendedFrom = before ? searchTypingAppendedFrom(beforeOrder, rows.map((row) => row.key)) : null;
+    if (appendedFrom !== null) {
+      for (const [key, place] of next) {
+        if (place.index >= appendedFrom) next.set(key, { index: place.index, since: Number.NEGATIVE_INFINITY });
+      }
+    }
+    placement.current = next;
   }, [rows, shown]);
 
   // What the panel shows of that moment: the rows that do not take a press
@@ -176,11 +192,15 @@ export function useSearchTypeahead({ api, text, active, viewerKey, history }: {
   const drawnOrder = shown ? rowOrder : null;
   const [order, setOrder] = useState<{ drawn: string | null; unsettled: readonly string[] }>({ drawn: null, unsettled: NO_ROWS });
   if (order.drawn !== drawnOrder) {
+    const beforeOrder = order.drawn === null ? [] : order.drawn.split('\n');
+    const keys = rows.map((row) => row.key);
+    const appendedFrom = searchTypingAppendedFrom(beforeOrder, keys);
     setOrder({
       drawn: drawnOrder,
       unsettled: order.drawn === null || drawnOrder === null
         ? NO_ROWS
-        : searchTypeaheadUnsettledRows({ order: order.drawn.split('\n'), unsettled: order.unsettled }, rows.map((row) => row.key)),
+        : searchTypeaheadUnsettledRows({ order: beforeOrder, unsettled: order.unsettled }, keys)
+          .filter((key) => appendedFrom === null || keys.indexOf(key) < appendedFrom),
     });
   }
   const settlingRows = shown && order.drawn === drawnOrder ? order.unsettled : NO_ROWS;

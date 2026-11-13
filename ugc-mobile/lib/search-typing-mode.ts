@@ -59,3 +59,20 @@ export function searchAsksForResults(mode: SearchScreenMode): boolean {
 export function searchTabPressCommits(state: { mode: SearchScreenMode; text: string }): boolean {
   return state.mode === 'typing' && searchTypeaheadQuery(state.text) !== null;
 }
+
+/**
+ * Where a typing list only grew at its end: every row drawn before stands
+ * where it stood and the new ones come after the last of them. Returns the
+ * index of the first new row, or null when anything above moved.
+ *
+ * The app's list starts with rows that need no answer ("Search for", the
+ * matching recent searches) and an answer then adds rows under them. Below the
+ * last row there was nothing to aim at (the list is the screen's whole body
+ * while typing), so a row appended there takes a press at once and is not
+ * drawn dimmed. A row that came between, or a row that moved, keeps the shared
+ * rule (`isSearchTypeaheadPressAccepted`).
+ */
+export function searchTypingAppendedFrom(before: readonly string[], order: readonly string[]): number | null {
+  if (order.length <= before.length) return null;
+  return before.every((key, index) => order[index] === key) ? before.length : null;
+}
