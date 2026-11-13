@@ -1,9 +1,7 @@
-import { ImageIcon } from 'lucide-react-native';
 import { useMemo } from 'react';
 import { Pressable, Text, useWindowDimensions, View } from 'react-native';
 
-import { FeedMediaPlate } from '@/components/feed-media-plate';
-import { PinBadge, VideoCornerPlay } from '@/components/showcase-pin-marks';
+import { PinBadge, VideoCornerPlay, VideoPinPreview, VisualFallbackPreview } from '@/components/showcase-pin-marks';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { TextPostPlate } from '@/components/text-post-plate';
 import { CreatorAvatar } from '@/components/ui';
@@ -82,10 +80,11 @@ function SearchPostPinCard({
             videoContentFit="cover"
             onPress={open}
           />
+        ) : pin.video ? (
+          // No poster yet: Explore's video plate, not a picture's (review of #793).
+          <VideoPinPreview accent={accent} height={height} radius={appTheme.radii.md} />
         ) : (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <FeedMediaPlate accent={accent} glyph={ImageIcon} />
-          </View>
+          <VisualFallbackPreview accent={accent} height={height} radius={appTheme.radii.md} />
         )}
         {/* Explore's marks, on dark glass over the picture in both schemes. */}
         {pin.badge && card?.unlock ? <PinBadge label={pin.badge} accent={accentColor(card.unlock.accent, themes.dark.colors)} /> : null}

@@ -1,7 +1,7 @@
 import { FlashList, type FlashListRef, type ListRenderItem, type ViewToken } from '@shopify/flash-list';
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ImageIcon, MoreVertical, Play, RefreshCw, Search, X } from 'lucide-react-native';
+import { MoreVertical, RefreshCw, Search, X } from 'lucide-react-native';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -27,8 +27,7 @@ import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo
 import { NativeMenu } from '@/components/native-menu';
 import { NewPostsPill } from '@/components/new-posts-pill';
 import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
-import { FeedMediaPlate } from '@/components/feed-media-plate';
-import { PinBadge, VideoCornerPlay } from '@/components/showcase-pin-marks';
+import { PinBadge, VideoCornerPlay, VideoPinPreview, VisualFallbackPreview } from '@/components/showcase-pin-marks';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { TopScrim } from '@/components/top-scrim';
 import { CreatorAvatar, SecondaryButton, StatusBlock } from '@/components/ui';
@@ -1514,45 +1513,3 @@ function formatCreatorLabel(label: string) {
   return clean.startsWith('@') ? clean : `@${clean}`;
 }
 
-function VisualFallbackPreview({ accent, height, radius }: { accent: string; height: number; radius: number }) {
-  const theme = useAppTheme();
-  return (
-    <View
-      style={{
-        height,
-        borderRadius: radius,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: theme.colors.borderSubtle,
-        backgroundColor: theme.colors.surfaceInset,
-        overflow: 'hidden',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      <FeedMediaPlate accent={accent} glyph={ImageIcon} />
-    </View>
-  );
-}
-
-function VideoPinPreview({ accent, height, radius }: { accent: string; height: number; radius: number }) {
-  const theme = useAppTheme();
-  return (
-    <View
-      style={{
-        height,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderRadius: radius,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: `${accent}4d`,
-        backgroundColor: theme.colors.mediaPlaceholder,
-        overflow: 'hidden',
-      }}
-    >
-      <View style={{ position: 'absolute', inset: 0, backgroundColor: `${accent}12` }} />
-      <FeedMediaPlate accent={accent} glyph={Play} filled />
-    </View>
-  );
-}
