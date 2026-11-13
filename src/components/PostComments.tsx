@@ -1,12 +1,22 @@
 'use client';
 
-import { Flag, Loader2, MessageSquare, Trash2 } from 'lucide-react';
+import {
+    ChevronDown,
+    ChevronUp,
+    Flag,
+    ListFilter,
+    Loader2,
+    MessageSquare,
+    MoreVertical,
+    Trash2,
+    X,
+} from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import PostCommentAvatar from '@/components/PostCommentAvatar';
-import { SegmentedControl } from '@/components/DesignSystem';
 import { useAuth } from '@/components/AuthProvider';
+import StudioOverflowMenu, { type StudioOverflowMenuItem } from '@/components/StudioOverflowMenu';
 import { useConfirmation } from '@/components/useConfirmation';
 import {
     POST_COMMENT_MAX_LENGTH,
@@ -14,12 +24,15 @@ import {
     POST_COMMENTS_PAGE_SIZE,
     adjustReplyCount,
     buildCommentThreads,
+    buildReplyDraftPrefix,
     buildCommentsQuery,
     canDeleteComment,
     canRemoveComment,
     canReportComment,
     describeCommentRequestFailure,
     getCommentDisplay,
+    isLongComment,
+    isPostCreatorComment,
     markCommentRemoved,
     mergeCommentPage,
     prependComment,
@@ -30,13 +43,17 @@ import {
     type PostCommentSort,
     type PostCommentsPage,
 } from '@/lib/post-comments-client';
-import { formatRelativeTime } from '@/lib/post-feed-presentation';
+import { formatCompactCount, formatRelativeTime } from '@/lib/post-feed-presentation';
 import { getCurrentInternalPath } from '@/lib/share';
 
-const SORT_OPTIONS: Array<{ value: PostCommentSort; label: string }> = [
-    { value: 'top', label: 'Top' },
-    { value: 'newest', label: 'New' },
+const SORT_OPTIONS: Array<{ value: PostCommentSort; label: string; description: string }> = [
+    // Top is the server's order: the comments with the most replies first.
+    { value: 'top', label: 'Top', description: 'Most discussed first' },
+    { value: 'newest', label: 'Newest', description: 'Latest comments first' },
 ];
+
+/** The composer grows with its draft up to this height, then scrolls. */
+const COMPOSER_MAX_HEIGHT_PX = 160;
 
 const REPORT_REASONS = [
     { value: 'spam', label: 'Spam' },
@@ -77,6 +94,17 @@ interface PostCommentsProps {
      * Absent wherever the post was not reached through a ranked feed.
      */
     deliveryId?: string | null;
+    /**
+     * `panel` is the thread as a card of its own beside the post: a header
+     * row, the list, and the composer, each padded to the card's edge. Where
+     * the page gives the card a height (`.post-comments--panel` in
+     * globals.css), the list scrolls inside it and the composer keeps the
+     * bottom edge. `flow`, the default, is the thread laid in a column that
+     * already has its padding: a feed card, the reel.
+     */
+    layout?: 'flow' | 'panel';
+    /** Draws a close button in the header; the caller hides the thread. */
+    onClose?: () => void;
 }
 
 function emptyReplyPageState(): ReplyPageState {
@@ -118,6 +146,8 @@ export default function PostComments({
     commentCount,
     onCommentCountChange,
     deliveryId = null,
+    layout = 'flow',
+    onClose,
 }: PostCommentsProps) {
     const { session, user } = useAuth();
     const accessToken = session?.access_token ?? null;
@@ -143,6 +173,10 @@ export default function PostComments({
     const [statusMessage, setStatusMessage] = useState('');
     const [draft, setDraft] = useState('');
     const [replyTo, setReplyTo] = useState<PostComment | null>(null);
+    const [composerOpen, setComposerOpen] = useState(false);
+    // The handle a reply to a reply opened its draft with. Kept so that a
+    // change of target replaces it, and so that it alone is nothing to send.
+    const [replyPrefix, setReplyPrefix] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [busyCommentId, setBusyCommentId] = useState<string | null>(null);
     const [reportTarget, setReportTarget] = useState<PostComment | null>(null);
@@ -166,7 +200,12 @@ export default function PostComments({
     const authRef = useRef({ accessToken, viewerId });
     const composerRef = useRef<HTMLTextAreaElement | null>(null);
     const reportReasonRef = useRef<HTMLSelectElement | null>(null);
-    const reportOpenerRef = useRef<HTMLButtonElement | null>(null);
+    const reportOpenerRef = useRef<HTMLElement | null>(null);
+    const scrollRef = useRef<HTMLDivElement | null>(null);
+    // The Reply button a reply was started from: Cancel returns focus to it.
+    const replyOpenerRef = useRef<HTMLElement | null>(null);
+    // Cancel puts focus back on the composer without opening its buttons again.
+    const keepComposerFoldedRef = useRef(false);
 
     const authHeaders = useCallback((json = false) => {
         const headers: Record<string, string> = {};
@@ -395,6 +434,8 @@ export default function PostComments({
     useEffect(() => {
         setDraft('');
         setReplyTo(null);
+        setReplyPrefix('');
+        setComposerOpen(false);
         setReportTarget(null);
         setReportDetails('');
         setReportReason('spam');
@@ -408,12 +449,15 @@ export default function PostComments({
 
     useEffect(() => {
         if (reportTarget) {
+            // The form opens at the top of the thread; a panel that scrolls
+            // inside its card may be anywhere down it.
+            if (scrollRef.current) scrollRef.current.scrollTop = 0;
             window.requestAnimationFrame(() => reportReasonRef.current?.focus());
             return;
         }
-        // The form opens at the top of the thread. Closing it (Cancel, or a
-        // sent report) puts focus back on the Report button it came from, so a
-        // keyboard or screen-reader user keeps their place.
+        // Closing it (Cancel, or a sent report) puts focus back on the menu
+        // button its Report came from, so a keyboard or screen-reader user
+        // keeps their place.
         const opener = reportOpenerRef.current;
         reportOpenerRef.current = null;
         if (!opener) return;
@@ -421,6 +465,53 @@ export default function PostComments({
             if (opener.isConnected) opener.focus();
         });
     }, [reportTarget]);
+
+    // The composer is one line until its draft needs more, as the reference
+    // thread's is. jsdom lays nothing out and reports no height: left alone.
+    useEffect(() => {
+        const composer = composerRef.current;
+        if (!composer) return;
+        composer.style.height = 'auto';
+        if (composer.scrollHeight > 0) {
+            // The height is the border box's and scrollHeight leaves the
+            // border out: without it the one line overflowed by a pixel and
+            // drew a scrollbar wherever scrollbars are always shown.
+            const border = composer.offsetHeight - composer.clientHeight;
+            composer.style.height = `${Math.min(composer.scrollHeight + border, COMPOSER_MAX_HEIGHT_PX)}px`;
+        }
+    }, [draft]);
+
+    const startReply = useCallback((comment: PostComment, opener: HTMLElement) => {
+        replyOpenerRef.current = opener;
+        setReplyTo(comment);
+        setComposerOpen(true);
+        // A reply to a reply opens by naming who it answers. A draft under way
+        // is kept; one that is still only the last target's handle is not, or
+        // "Replying to @bob" would sit over a draft that starts "@alice".
+        const prefix = buildReplyDraftPrefix(comment);
+        setDraft((current) => (current.trim() === '' || current === replyPrefix ? prefix : current));
+        setReplyPrefix(prefix);
+        window.requestAnimationFrame(() => composerRef.current?.focus());
+    }, [replyPrefix]);
+
+    const cancelDraft = useCallback(() => {
+        const opener = replyOpenerRef.current;
+        replyOpenerRef.current = null;
+        setDraft('');
+        setReplyTo(null);
+        setReplyPrefix('');
+        setComposerOpen(false);
+        // Cancel is about to leave the page with focus on it. A cancelled
+        // reply goes back to the Reply it came from; a cancelled comment stays
+        // on the composer, folded to its one line.
+        if (opener?.isConnected) {
+            opener.focus();
+            return;
+        }
+        keepComposerFoldedRef.current = true;
+        composerRef.current?.focus();
+        keepComposerFoldedRef.current = false;
+    }, []);
 
     const retryFailedRead = useCallback(() => {
         void readTopLevel(failedReadRef.current ?? { kind: 'first-page' });
@@ -475,6 +566,8 @@ export default function PostComments({
 
             setDraft('');
             setReplyTo(null);
+            setReplyPrefix('');
+            replyOpenerRef.current = null;
 
             let loadedCount = commentsRef.current.length;
             if (parentId) {
@@ -662,88 +755,94 @@ export default function PostComments({
         [expandedIds, repliesForDisplay, topLevelForDisplay]
     );
 
-    const canSubmit = draft.trim().length > 0 && !submitting && Boolean(accessToken);
+    const isPanel = layout === 'panel';
+    // A reply's opening handle alone is nothing to send.
+    const hasSomethingToSend = draft.trim().length > 0
+        && (replyPrefix === '' || draft.trim() !== replyPrefix.trim());
+    const canSubmit = hasSomethingToSend && !submitting && Boolean(accessToken);
+    // The composer's buttons come with the first focus and stay until Cancel,
+    // so a draft is never left without its way to send or drop it.
+    const composerActive = composerOpen || draft.length > 0 || replyTo !== null;
     const showInitialLoading = loading && !hasLoaded && rows.length === 0;
     const showEmpty = hasLoaded
         && rows.length === 0
         && nextOffset === null
         && !loadError;
+    const sortItems: StudioOverflowMenuItem[] = SORT_OPTIONS.map((option) => ({
+        key: option.value,
+        label: option.label,
+        description: option.description,
+        checked: sort === option.value,
+        onSelect: () => setSort(option.value),
+    }));
 
-    return (
-        <section
-            id={`comments-${postId}`}
-            className="flex flex-col gap-4"
-            aria-label="Comments"
-            aria-busy={loading}
-        >
-            <p className="sr-only" role="status" aria-live="polite">{statusMessage}</p>
-
-            <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-sm font-bold text-[var(--ui-text-primary)]">
-                    {totalCount > 0
-                        ? `${totalCount} ${totalCount === 1 ? 'comment' : 'comments'}`
-                        : 'Comments'}
-                </h2>
-                {/* Sorting nothing is noise — the pills appear with the first comment. */}
-                {totalCount > 0 ? (
-                // Toggle buttons, not tabs: in the reel ← and → step through posts, so
-                // the order takes no arrow keys, as its buttons took none before.
-                <SegmentedControl
-                    role="toggle"
-                    fill={false}
-                    ariaLabel="Sort comments"
-                    options={SORT_OPTIONS}
-                    value={sort}
-                    onChange={setSort}
-                />
-                ) : null}
-            </div>
-
+    // The composer leads a thread laid in a column (a feed card, the reel) and
+    // ends a panel, where it is drawn on the bottom edge: its place in the
+    // document is its place on the page, so Tab follows what the eye sees.
+    const composer = (
+        <div className={`post-comments__composer ${isPanel ? 'px-4 py-3' : ''}`}>
             {user ? (
                 <div className="flex flex-col gap-2">
                     {replyTo ? (
-                        <div className="flex items-center justify-between gap-2 text-xs text-[var(--ui-text-muted)]">
-                            <span className="truncate">
-                                {`Replying to ${getCommentDisplay(replyTo).authorLabel}`}
-                            </span>
-                            <button
-                                type="button"
-                                onClick={() => setReplyTo(null)}
-                                className="ui-focus-ring min-h-11 rounded-full px-3 font-bold text-[var(--ui-primary)] hover:bg-[var(--ui-surface-2)]"
-                            >
-                                Cancel reply
-                            </button>
-                        </div>
+                        <p className="truncate text-xs text-[var(--ui-text-muted)]">
+                            {`Replying to ${getCommentDisplay(replyTo).authorLabel}`}
+                        </p>
                     ) : null}
                     <div className="flex items-start gap-3">
                         <PostCommentAvatar
                             avatarUrl={(user.user_metadata?.avatar_url as string | undefined) ?? null}
                             name={(user.user_metadata?.full_name as string | undefined) || user.email || 'You'}
+                            size={replyTo ? 24 : 32}
                         />
-                        <div className="flex-1">
+                        <div className="min-w-0 flex-1">
                             <textarea
                                 ref={composerRef}
                                 value={draft}
                                 onChange={(event) => setDraft(event.target.value)}
+                                onFocus={() => {
+                                    if (!keepComposerFoldedRef.current) setComposerOpen(true);
+                                }}
+                                onKeyDown={(event) => {
+                                    // Enter is a new line; with Cmd or Ctrl it sends.
+                                    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                                        event.preventDefault();
+                                        void submitComment();
+                                    }
+                                }}
                                 maxLength={POST_COMMENT_MAX_LENGTH}
-                                rows={replyTo || draft ? 3 : 1}
-                                placeholder={replyTo ? 'Write a reply…' : 'Add a comment…'}
+                                rows={1}
+                                placeholder={replyTo ? 'Add a reply…' : 'Add a comment…'}
                                 aria-label={replyTo ? 'Write a reply' : 'Write a comment'}
-                                className="ui-focus-ring w-full resize-y rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 text-sm leading-6 text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)]"
+                                className="ui-focus-ring block max-h-40 min-h-9 w-full resize-none rounded-lg border-b border-[var(--ui-border-default)] bg-transparent px-1 py-1.5 text-sm leading-6 text-[var(--ui-text-primary)] outline-none transition-colors placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-text-primary)]"
                             />
-                            <div className="mt-2 flex justify-end">
-                                <button
-                                    type="button"
-                                    onClick={() => void submitComment()}
-                                    disabled={!canSubmit}
-                                    className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:opacity-50"
-                                >
-                                    {submitting
-                                        ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                                        : null}
-                                    {replyTo ? 'Reply' : 'Comment'}
-                                </button>
-                            </div>
+                            {composerActive ? (
+                                <div className="mt-2 flex items-center justify-end gap-2">
+                                    {draft.length >= POST_COMMENT_MAX_LENGTH - 200 ? (
+                                        <span className="mr-auto text-xs tabular-nums text-[var(--ui-text-faint)]">
+                                            {`${draft.length}/${POST_COMMENT_MAX_LENGTH}`}
+                                        </span>
+                                    ) : null}
+                                    <button
+                                        type="button"
+                                        onClick={cancelDraft}
+                                        aria-label={replyTo ? 'Cancel reply' : 'Cancel comment'}
+                                        className="ui-focus-ring min-h-9 rounded-full px-4 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-2)]"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => void submitComment()}
+                                        disabled={!canSubmit}
+                                        className="ui-focus-ring inline-flex min-h-9 items-center gap-2 rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:opacity-50"
+                                    >
+                                        {submitting
+                                            ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                                            : null}
+                                        {replyTo ? 'Reply' : 'Comment'}
+                                    </button>
+                                </div>
+                            ) : null}
                         </div>
                     </div>
                 </div>
@@ -756,7 +855,61 @@ export default function PostComments({
                     Sign in to join the conversation
                 </Link>
             )}
+        </div>
+    );
 
+    return (
+        <section
+            id={`comments-${postId}`}
+            className={`post-comments flex min-w-0 flex-col ${isPanel ? 'post-comments--panel' : 'gap-4'}`}
+            aria-label="Comments"
+            aria-busy={loading}
+        >
+            <p className="sr-only" role="status" aria-live="polite">{statusMessage}</p>
+
+            <div className={`post-comments__header flex items-center justify-between gap-3 ${
+                isPanel ? 'border-b border-[var(--ui-border-subtle)] py-2 pl-4 pr-2' : ''
+            }`}
+            >
+                <h2 className="flex min-h-9 items-baseline gap-2 text-base font-bold leading-9 text-[var(--ui-text-primary)]">
+                    Comments
+                    {totalCount > 0 ? (
+                        <span className="text-sm font-medium text-[var(--ui-text-muted)]">
+                            {formatCompactCount(totalCount)}
+                        </span>
+                    ) : null}
+                </h2>
+                <div className="flex items-center gap-1">
+                    {/* Sorting nothing is noise: the order appears with the first comment.
+                        A menu, not arrow-keyed tabs: in the reel ← and → step through posts. */}
+                    {totalCount > 0 ? (
+                        <StudioOverflowMenu
+                            label="Sort comments"
+                            trigger="quiet"
+                            triggerIcon={<ListFilter className="h-4 w-4" aria-hidden="true" />}
+                            items={sortItems}
+                        />
+                    ) : null}
+                    {onClose ? (
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            aria-label="Close comments"
+                            title="Close comments"
+                            className="ui-focus-ring inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-400 transition hover:bg-white/[0.08] hover:text-zinc-100"
+                        >
+                            <X className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                    ) : null}
+                </div>
+            </div>
+
+            {isPanel ? null : composer}
+
+            <div
+                ref={scrollRef}
+                className={`post-comments__scroll flex min-w-0 flex-col gap-4 ${isPanel ? 'px-4 py-3' : ''}`}
+            >
             {reportTarget ? (
                 <div
                     role="dialog"
@@ -884,12 +1037,16 @@ export default function PostComments({
                             const parentId = row.parentId as string;
                             const replyPage = replyPages[parentId] ?? emptyReplyPageState();
                             return (
-                                <li key={row.key} className="pl-10">
+                                // Under the comment's text, past its avatar.
+                                <li key={row.key} className="pl-8">
                                     <div className="flex flex-wrap items-center gap-1">
                                         <button
                                             type="button"
                                             onClick={() => void toggleReplies(parentId)}
                                             aria-expanded={row.expanded}
+                                            aria-label={row.expanded
+                                                ? undefined
+                                                : `View ${row.replyCount} ${row.replyCount === 1 ? 'reply' : 'replies'}`}
                                             className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-bold text-[var(--ui-primary)] hover:bg-[var(--ui-surface-2)]"
                                         >
                                             {replyPage.loading && !replyPage.hasLoaded
@@ -897,7 +1054,10 @@ export default function PostComments({
                                                 : null}
                                             {row.expanded
                                                 ? 'Hide replies'
-                                                : `View ${row.replyCount} ${row.replyCount === 1 ? 'reply' : 'replies'}`}
+                                                : `${row.replyCount} ${row.replyCount === 1 ? 'reply' : 'replies'}`}
+                                            {row.expanded
+                                                ? <ChevronUp className="h-4 w-4" aria-hidden="true" />
+                                                : <ChevronDown className="h-4 w-4" aria-hidden="true" />}
                                         </button>
                                         {row.expanded && replyPage.nextOffset !== null && replyPage.hasLoaded ? (
                                             <button
@@ -941,24 +1101,67 @@ export default function PostComments({
                         const comment = row.comment as PostComment;
                         const display = getCommentDisplay(comment);
                         const isReply = row.kind === 'reply';
+                        const isOwn = canDeleteComment(comment, user?.id);
+                        // Everything but Reply sits behind the row's menu, so a
+                        // thread reads as comments, not as columns of buttons.
+                        const menuItems: StudioOverflowMenuItem[] = [];
+                        if (canReportComment(comment, user?.id)) {
+                            menuItems.push({
+                                key: 'report',
+                                label: 'Report',
+                                icon: <Flag className="h-4 w-4" aria-hidden="true" />,
+                                onSelect: () => {
+                                    // The menu has put focus back on its trigger,
+                                    // where a closed report form returns it.
+                                    reportOpenerRef.current = document.activeElement instanceof HTMLElement
+                                        ? document.activeElement
+                                        : null;
+                                    setReportTarget(comment);
+                                    setActionError(null);
+                                },
+                            });
+                        }
+                        if (isOwn) {
+                            menuItems.push({
+                                key: 'delete',
+                                label: 'Delete',
+                                icon: <Trash2 className="h-4 w-4" aria-hidden="true" />,
+                                tone: 'danger',
+                                onSelect: () => void removeComment(comment, false),
+                            });
+                        }
+                        if (canRemoveComment(comment, resolvedCreatorId, user?.id)) {
+                            menuItems.push({
+                                key: 'remove',
+                                label: 'Remove',
+                                icon: <Trash2 className="h-4 w-4" aria-hidden="true" />,
+                                tone: 'danger',
+                                onSelect: () => void removeComment(comment, true),
+                            });
+                        }
 
                         return (
                             <li
                                 key={row.key}
                                 aria-label={isReply ? `Reply from ${display.authorLabel}` : undefined}
                                 aria-level={isReply ? 2 : 1}
-                                className={isReply
-                                    ? 'ml-3.5 border-l border-[var(--ui-border-subtle)] py-2.5 pl-6'
-                                    : 'py-2.5'}
+                                aria-busy={busyCommentId === comment.id}
+                                className={`py-2 transition-opacity ${
+                                    isReply ? 'ml-4 border-l border-[var(--ui-border-subtle)] pl-5' : ''
+                                } ${busyCommentId === comment.id ? 'opacity-60' : ''}`}
                             >
                                 <div className="flex items-start gap-3">
                                     <PostCommentAvatar
                                         avatarUrl={comment.author?.avatarUrl ?? null}
-                                        name={display.authorLabel}
-                                        size={isReply ? 24 : 28}
+                                        // The initials under a missing picture: the handle's
+                                        // "@" gave every such avatar the same one.
+                                        name={comment.author?.displayName
+                                            || comment.author?.username
+                                            || display.authorLabel}
+                                        size={isReply ? 24 : 32}
                                     />
                                     <div className="min-w-0 flex-1">
-                                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                                        <div className="flex min-h-6 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
                                             {display.authorHref ? (
                                                 <Link
                                                     href={display.authorHref}
@@ -972,65 +1175,37 @@ export default function PostComments({
                                                     {display.authorLabel}
                                                 </span>
                                             )}
+                                            {isPostCreatorComment(comment, resolvedCreatorId) ? (
+                                                <span className="rounded-full bg-[var(--ui-surface-3)] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[var(--ui-text-secondary)]">
+                                                    Creator
+                                                </span>
+                                            ) : null}
                                             <span className="text-[var(--ui-text-faint)]">
                                                 {formatRelativeTime(comment.createdAt)}
                                             </span>
                                         </div>
-                                        <p className={`mt-1 whitespace-pre-wrap text-sm leading-6 ${
-                                            display.isDeleted
-                                                ? 'italic text-[var(--ui-text-faint)]'
-                                                : 'text-[var(--ui-text-primary)]'
-                                        }`}>
-                                            {display.bodyText}
-                                        </p>
-                                        {display.isDeleted ? null : (
-                                            <div className="mt-1 flex flex-wrap items-center gap-1">
-                                                {user && !isReply ? (
-                                                    <CommentAction
-                                                        label="Reply"
-                                                        accessibleLabel={`Reply to ${display.authorLabel}`}
-                                                        onClick={() => {
-                                                            setReplyTo(comment);
-                                                            window.requestAnimationFrame(() => {
-                                                                composerRef.current?.focus();
-                                                            });
-                                                        }}
-                                                    />
-                                                ) : null}
-                                                {canDeleteComment(comment, user?.id) ? (
-                                                    <CommentAction
-                                                        label="Delete"
-                                                        accessibleLabel="Delete your comment"
-                                                        icon={<Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
-                                                        busy={busyCommentId === comment.id}
-                                                        onClick={() => void removeComment(comment, false)}
-                                                    />
-                                                ) : null}
-                                                {canRemoveComment(comment, resolvedCreatorId, user?.id) ? (
-                                                    <CommentAction
-                                                        label="Remove"
-                                                        accessibleLabel={`Remove ${display.authorLabel}'s comment`}
-                                                        icon={<Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
-                                                        busy={busyCommentId === comment.id}
-                                                        onClick={() => void removeComment(comment, true)}
-                                                    />
-                                                ) : null}
-                                                {canReportComment(comment, user?.id) ? (
-                                                    <CommentAction
-                                                        label="Report"
-                                                        accessibleLabel={`Report ${display.authorLabel}'s comment`}
-                                                        icon={<Flag className="h-3.5 w-3.5" aria-hidden="true" />}
-                                                        busy={busyCommentId === comment.id}
-                                                        onClick={(event) => {
-                                                            reportOpenerRef.current = event.currentTarget;
-                                                            setReportTarget(comment);
-                                                            setActionError(null);
-                                                        }}
-                                                    />
-                                                ) : null}
+                                        <CommentBody text={display.bodyText} deleted={display.isDeleted} />
+                                        {!display.isDeleted && user ? (
+                                            <div className="-ml-3 flex flex-wrap items-center gap-1">
+                                                <CommentAction
+                                                    label="Reply"
+                                                    accessibleLabel={`Reply to ${display.authorLabel}`}
+                                                    onClick={(event) => startReply(comment, event.currentTarget)}
+                                                />
                                             </div>
-                                        )}
+                                        ) : null}
                                     </div>
+                                    {display.isDeleted || menuItems.length === 0 ? null : (
+                                        <StudioOverflowMenu
+                                            label={isOwn
+                                                ? 'More actions for your comment'
+                                                : `More actions for ${display.authorLabel}'s comment`}
+                                            trigger="quiet"
+                                            triggerIcon={<MoreVertical className="h-4 w-4" aria-hidden="true" />}
+                                            disabled={busyCommentId === comment.id}
+                                            items={menuItems}
+                                        />
+                                    )}
                                 </div>
                             </li>
                         );
@@ -1052,6 +1227,9 @@ export default function PostComments({
                     Load more comments
                 </button>
             ) : null}
+            </div>
+
+            {isPanel ? composer : null}
         </section>
     );
 }
@@ -1067,31 +1245,69 @@ function SignInLink({ href }: { href: string }) {
     );
 }
 
+/**
+ * A comment's text. A long one opens folded to four lines behind "Read more",
+ * so one essay cannot push the rest of the thread out of a short panel.
+ */
+function CommentBody({ text, deleted }: { text: string; deleted: boolean }) {
+    const long = !deleted && isLongComment(text);
+    const [unfolded, setUnfolded] = useState(false);
+    // The text decides which comments may fold; the page decides which do. A
+    // paragraph of 400 characters is four lines in a narrow panel and three in
+    // a wide column, where "Read more" would toggle nothing. jsdom lays nothing
+    // out and reports no height: the fold stays, as the text alone decided.
+    const [fits, setFits] = useState(false);
+    const bodyRef = useRef<HTMLParagraphElement | null>(null);
+    useLayoutEffect(() => {
+        const body = bodyRef.current;
+        if (!long || unfolded || !body || body.clientHeight === 0) return;
+        setFits(body.scrollHeight <= body.clientHeight + 1);
+    }, [long, text, unfolded]);
+    const foldable = long && !fits;
+
+    return (
+        <>
+            <p
+                ref={bodyRef}
+                className={`whitespace-pre-wrap text-sm leading-6 [overflow-wrap:anywhere] ${
+                deleted
+                    ? 'italic text-[var(--ui-text-faint)]'
+                    : 'text-[var(--ui-text-primary)]'
+            } ${long && !unfolded ? 'line-clamp-4' : ''}`}
+            >
+                {text}
+            </p>
+            {foldable ? (
+                <button
+                    type="button"
+                    onClick={() => setUnfolded((current) => !current)}
+                    aria-expanded={unfolded}
+                    className="ui-focus-ring -ml-2 min-h-9 rounded-full px-2 text-xs font-bold text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]"
+                >
+                    {unfolded ? 'Show less' : 'Read more'}
+                </button>
+            ) : null}
+        </>
+    );
+}
+
 function CommentAction({
     label,
     accessibleLabel,
-    icon,
-    busy,
     onClick,
 }: {
     label: string;
     /** Names the comment as well; a screen reader otherwise hears a column of identical buttons. */
     accessibleLabel: string;
-    icon?: React.ReactNode;
-    busy?: boolean;
     onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
     return (
         <button
             type="button"
             onClick={onClick}
-            disabled={busy}
             aria-label={accessibleLabel}
-            className="ui-focus-ring inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-xs font-bold text-[var(--ui-text-faint)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-secondary)] disabled:opacity-60"
+            className="ui-focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
         >
-            {busy
-                ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                : icon}
             {label}
         </button>
     );

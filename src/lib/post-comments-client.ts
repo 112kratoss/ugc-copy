@@ -128,6 +128,42 @@ export function buildCommentThreads({
     return rows;
 }
 
+/** A comment longer than this many characters, or lines, opens folded. */
+export const COMMENT_FOLD_MAX_LENGTH = 320;
+export const COMMENT_FOLD_MAX_LINES = 4;
+
+/**
+ * Whether a comment opens folded behind "Read more": a long one would
+ * otherwise push every comment after it out of a panel a few hundred pixels
+ * tall. Counted on the text, not measured on the page, so the server's render
+ * and the browser's agree.
+ */
+export function isLongComment(body: string): boolean {
+    return body.length > COMMENT_FOLD_MAX_LENGTH
+        || body.split('\n').length > COMMENT_FOLD_MAX_LINES;
+}
+
+/** The post's own creator, marked in the thread so their answers stand out. */
+export function isPostCreatorComment(
+    comment: PostComment,
+    postCreatorId: string | null | undefined
+): boolean {
+    return comment.status === 'active'
+        && Boolean(postCreatorId)
+        && comment.author?.id === postCreatorId;
+}
+
+/**
+ * What a reply's draft opens with. A reply to a reply joins the same thread
+ * (the product keeps one reply level), so it names who it answers; a reply to
+ * the top comment needs no name, and neither does an author without a handle.
+ */
+export function buildReplyDraftPrefix(target: PostComment): string {
+    if (!target.parentId) return '';
+    const username = target.author?.username?.trim();
+    return username ? `@${username} ` : '';
+}
+
 export function canDeleteComment(comment: PostComment, viewerUserId: string | null | undefined) {
     return comment.status === 'active'
         && Boolean(viewerUserId)

@@ -256,7 +256,40 @@ describe('Showcase detail page', () => {
       authorization: null,
     }]));
     expect(requestTimeRead).not.toHaveBeenCalled();
-    expect(screen.getByTestId('canonical-post-comments')).toBeInTheDocument();
+    // The conversation is a panel in the rail, beside the post, and a post
+    // with no recipe shows its prompt under the post, where a recipe would
+    // show its own: the rail's card held it, so the same words sat beside
+    // the picture on one post and under it on the next (owner, 2026-11-13).
+    const rail = screen.getByTestId('canonical-post-actions');
+    const column = screen.getByTestId('canonical-post-media');
+    expect(within(rail).getByTestId('canonical-post-comments')).toBeInTheDocument();
+    // Drawn as a panel with a close button, which folds it to one row; the
+    // thread stays mounted under the fold, so its draft and pages survive.
+    const threadProps = postCommentsPropsMock.mock.lastCall?.[0] as { layout?: string; onClose?: () => void };
+    expect(threadProps.layout).toBe('panel');
+    act(() => threadProps.onClose?.());
+    const panel = within(rail).getByTestId('canonical-post-comments');
+    expect(panel).toHaveAttribute('data-open', 'false');
+    expect(within(panel).getByTestId('post-comments-component')).not.toBeVisible();
+    // Close hid the button it was pressed on: focus is on the row that opens
+    // the panel again, which names what it opens.
+    const unfold = within(panel).getByRole('button', { name: /^Comments/ });
+    expect(unfold).toHaveFocus();
+    expect(unfold).toHaveAttribute('aria-expanded', 'false');
+    expect(document.getElementById(unfold.getAttribute('aria-controls') ?? ''))
+      .toContainElement(within(panel).getByTestId('post-comments-component'));
+    fireEvent.click(unfold);
+    expect(panel).toHaveAttribute('data-open', 'true');
+    expect(within(panel).getByTestId('post-comments-component')).toBeVisible();
+    expect(within(column).queryByTestId('canonical-post-comments')).not.toBeInTheDocument();
+    const prompt = within(column).getByTestId('canonical-post-prompt');
+    expect(within(prompt).getByRole('heading', { level: 2, name: 'Prompt' })).toBeInTheDocument();
+    expect(prompt).toHaveTextContent('A creator holds the product by a bright window.');
+    expect(rail).not.toHaveTextContent('A creator holds the product by a bright window.');
+    expect(
+      screen.getByTestId('showcase-detail-engagement-row').compareDocumentPosition(prompt)
+        & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     // No bundle on this post — the rail offers no recipe pointer.
     expect(screen.queryByTestId('recipe-jump-link')).not.toBeInTheDocument();
   });
@@ -964,8 +997,8 @@ describe('Showcase detail page', () => {
     const engagement = screen.getByTestId('showcase-detail-engagement-row');
     const mediaViewport = container.querySelector('[data-showcase-media-viewport]');
 
-    // No identity side card. The masthead is its own grid row, which is what
-    // lets the rail start level with the media instead of the byline.
+    // No identity side card. The masthead is its own grid row, above the
+    // post; the rail runs beside both.
     expect(screen.queryByTestId('canonical-post-identity')).not.toBeInTheDocument();
     expect(head).toContainElement(heading);
     expect(head).toHaveTextContent('@creator-name');
@@ -1453,10 +1486,14 @@ describe('Showcase detail page', () => {
     // The chip bar is media furniture; a written note carries its own byline.
     expect(screen.queryByText(/shared post/i)).not.toBeInTheDocument();
 
-    // Reddit reading order: the conversation flows in the document column,
-    // directly under the writing, not in a full-width block below the rail.
+    // A text post's conversation is in the rail too, beside the writing, and
+    // its workflow notes are under the writing.
     expect(
-      within(screen.getByTestId('canonical-post-media')).getByTestId('canonical-post-comments')
+      within(screen.getByTestId('canonical-post-actions')).getByTestId('canonical-post-comments')
+    ).toBeInTheDocument();
+    expect(
+      within(within(screen.getByTestId('canonical-post-media')).getByTestId('canonical-post-prompt'))
+        .getByRole('heading', { level: 2, name: 'Workflow notes' })
     ).toBeInTheDocument();
   });
 

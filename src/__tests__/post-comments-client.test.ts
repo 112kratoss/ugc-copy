@@ -5,11 +5,14 @@ import {
     adjustReplyCount,
     buildCommentThreads,
     buildCommentsQuery,
+    buildReplyDraftPrefix,
     canDeleteComment,
     canRemoveComment,
     canReportComment,
     describeCommentRequestFailure,
     getCommentDisplay,
+    isLongComment,
+    isPostCreatorComment,
     markCommentRemoved,
     mergeCommentPage,
     prependComment,
@@ -231,6 +234,32 @@ describe('post comments client', () => {
                 .toBe('We could not load this conversation.');
             expect(describeCommentRequestFailure('post', 502, {}).message).toBe('Could not post comment.');
             expect(describeCommentRequestFailure('remove', null).message).toBe('Could not remove comment.');
+        });
+    });
+
+    describe('the thread as a reader sees it', () => {
+        it('folds a comment past 320 characters or four lines, and no shorter one', () => {
+            expect(isLongComment('Short and sweet.')).toBe(false);
+            expect(isLongComment('a'.repeat(320))).toBe(false);
+            expect(isLongComment('a'.repeat(321))).toBe(true);
+            expect(isLongComment('one\ntwo\nthree\nfour')).toBe(false);
+            expect(isLongComment('one\ntwo\nthree\nfour\nfive')).toBe(true);
+        });
+
+        it("marks the post's creator, and nobody on a removed comment or an unknown post", () => {
+            const byCreator = comment({ author: { id: 'owner', username: 'owner', displayName: 'Owner', avatarUrl: null } });
+            expect(isPostCreatorComment(byCreator, 'owner')).toBe(true);
+            expect(isPostCreatorComment(byCreator, 'someone-else')).toBe(false);
+            expect(isPostCreatorComment(byCreator, null)).toBe(false);
+            expect(isPostCreatorComment({ ...byCreator, status: 'removed_by_author', author: null }, 'owner')).toBe(false);
+        });
+
+        it('opens a reply to a reply with the name it answers, and a reply to a comment with nothing', () => {
+            const author = { id: 'u', username: 'lena', displayName: 'Lena', avatarUrl: null };
+            expect(buildReplyDraftPrefix(comment({ parentId: 'root', author }))).toBe('@lena ');
+            expect(buildReplyDraftPrefix(comment({ parentId: null, author }))).toBe('');
+            // No handle to name: the reply opens empty.
+            expect(buildReplyDraftPrefix(comment({ parentId: 'root', author: { ...author, username: null } }))).toBe('');
         });
     });
 
