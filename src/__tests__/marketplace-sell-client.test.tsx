@@ -2,7 +2,7 @@ import { act } from 'react';
 import { hydrateRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The payout panel on this page reads the browser Supabase singleton, which
 // needs real env vars to construct. The dashboard assertions below are about
@@ -119,6 +119,11 @@ function rowOf(name: string) {
 }
 
 describe('MarketplaceSellClient', () => {
+  // The recipe list keeps its filter and order in the address: one case's choice must not open the next.
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+  });
+
   it('lists each recipe under its post, with its price, counts and where it opens', () => {
     render(<MarketplaceSellClient initialDashboard={dashboard} />);
 

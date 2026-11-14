@@ -1259,14 +1259,49 @@ describe('CreationsPage', () => {
 
     render(<CreationsPage />);
 
-    const allFilter = await screen.findByRole('button', { name: 'All (1)' });
+    const allFilter = await screen.findByRole('link', { name: 'All (1)' });
     expect(allFilter).toHaveClass('shrink-0', 'whitespace-nowrap');
     expect(allFilter.parentElement).toHaveClass('overflow-x-auto');
     // "Audio (0)" and "Videos (0)" were filters that could only ever show nothing.
-    expect(within(allFilter.parentElement!).getAllByRole('button').map((button) => button.textContent)).toEqual([
+    expect(within(allFilter.parentElement!).getAllByRole('link').map((link) => link.textContent)).toEqual([
       'All (1)',
       'Images (1)',
     ]);
+  });
+
+  // A filter left by Back or a refresh came back as All (owner's report, 2026-11-15): the
+  // media filter is the address's, as the view and the post filters are.
+  it('keeps the creations media filter in the address', async () => {
+    navigationState.searchParams = new URLSearchParams('media=images');
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.startsWith('/api/generations')) {
+        return Promise.resolve(jsonResponse({ generations: [makeGeneration()] }));
+      }
+
+      if (url.startsWith('/api/posts')) {
+        return Promise.resolve(jsonResponse({ posts: [] }));
+      }
+
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      }
+
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    }));
+
+    try {
+      render(<CreationsPage />);
+
+      const images = await screen.findByRole('link', { name: 'Images (1)' });
+      expect(images).toHaveAttribute('aria-current', 'true');
+      expect(images).toHaveAttribute('href', '/creations?media=images');
+      expect(screen.getByRole('link', { name: 'All (1)' })).toHaveAttribute('href', '/creations');
+      expect(screen.getByRole('link', { name: 'All (1)' })).not.toHaveAttribute('aria-current');
+    } finally {
+      navigationState.searchParams = new URLSearchParams();
+    }
   });
 
   // A photo is never required to sell. The card said "Your selling identity is

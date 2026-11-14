@@ -7,6 +7,7 @@ import { flushSync } from 'react-dom';
 import { ChevronDown, CircleAlert, Copy, PencilLine, Plus } from 'lucide-react';
 
 import { Button, IconButton, StatusCallout, Surface, Text, getAccentClasses, type UiAccent } from '@/components/DesignSystem';
+import { useAddressParam, writeAddressParam } from '@/lib/address-param';
 import { buildShowcaseDetailPath, buildShowcaseDetailUrl } from '@/lib/share';
 import { withSharersInvite } from '@/lib/share-client';
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
@@ -69,10 +70,25 @@ const CHIP_IDLE = 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] tex
 // tables take only a fixed list of surfaces.
 const COPIED_LINK_SURFACE = 'my-creations';
 
+// The list's filter and order are the address's (`?recipes=live&sort=newest`), so a refresh and
+// Back from a recipe keep them; the defaults go unsaid.
+const FILTER_PARAM = 'recipes';
+const SORT_PARAM = 'sort';
+
+function parseSellerRecipeFilter(value: string | null): SellerRecipeFilter {
+  return value === 'live' || value === 'not-live' ? value : 'all';
+}
+
+function parseSellerRecipeSort(value: string | null): SellerRecipeSort {
+  return SELLER_RECIPE_SORTS.find((option) => option.value === value)?.value ?? 'unlocks';
+}
+
 export default function SellerRecipeList({ recipes }: { recipes: SellerRecipe[] }) {
   const titleId = useId();
-  const [filter, setFilter] = useState<SellerRecipeFilter>('all');
-  const [sort, setSort] = useState<SellerRecipeSort>('unlocks');
+  // The address's, read once the page is live: Back draws the render Next kept, from before the
+  // filter or the order last changed.
+  const filter = parseSellerRecipeFilter(useAddressParam(FILTER_PARAM));
+  const sort = parseSellerRecipeSort(useAddressParam(SORT_PARAM));
   const [showAll, setShowAll] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
@@ -80,12 +96,16 @@ export default function SellerRecipeList({ recipes }: { recipes: SellerRecipe[] 
   const copyTimer = useRef<number | null>(null);
   const sortRef = useRef<HTMLSelectElement | null>(null);
 
+  const chooseSort = (value: SellerRecipeSort) => {
+    writeAddressParam(SORT_PARAM, value === 'unlocks' ? null : value);
+  };
+
   // A sort picked in the server's HTML before this page's script ran, where no React heard it.
   useFieldValueBeforeHydration(sortRef, {
     drawn: sort,
     onValue: (value) => {
       const picked = SELLER_RECIPE_SORTS.find((option) => option.value === value);
-      if (picked) setSort(picked.value);
+      if (picked) chooseSort(picked.value);
     },
   });
 
@@ -105,8 +125,8 @@ export default function SellerRecipeList({ recipes }: { recipes: SellerRecipe[] 
   }, []);
 
   const showFilter = (value: SellerRecipeFilter) => {
-    setFilter(value);
     setShowAll(false);
+    writeAddressParam(FILTER_PARAM, value === 'all' ? null : value);
   };
 
   const copyRecipeLink = async (postId: string) => {
@@ -149,7 +169,7 @@ export default function SellerRecipeList({ recipes }: { recipes: SellerRecipe[] 
           <select
             ref={sortRef}
             value={sort}
-            onChange={(event) => setSort(event.target.value as SellerRecipeSort)}
+            onChange={(event) => chooseSort(event.target.value as SellerRecipeSort)}
             className={clsx(CHIP, CHIP_IDLE, 'cursor-pointer appearance-none pr-8')}
           >
             {SELLER_RECIPE_SORTS.map((option) => (

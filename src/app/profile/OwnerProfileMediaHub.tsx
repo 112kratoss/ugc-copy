@@ -46,6 +46,7 @@ import {
   replaceReelEntry,
   type ReelHistoryMode,
 } from '@/lib/reel-history-entry';
+import { releaseReelOpening } from '@/lib/reel-opening-restore';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import type {
@@ -653,6 +654,15 @@ export default function OwnerProfileMediaHub({
   const activeCount = activeTab === 'posts' ? ownerPosts.length : savedSaveState.items.length;
   const hasMore = activePageInfo.hasMore;
   const isLoading = loadingTabs.has(activeTab);
+  const isReelPostLoaded = selectedPostId !== null && viewerItems.some((item) => item.id === selectedPostId);
+
+  // A load on a post's reel address covers the page with the reel's stage until the reel
+  // attaches (src/lib/reel-opening-restore.ts). This reel opens only on a post its tab has
+  // loaded, so once the tab has loaded without it (a post from a later page, or one gone), no
+  // reel is coming: the page shows at once, not after the cover's longest wait.
+  useEffect(() => {
+    if (!isLoading && !isReelPostLoaded) releaseReelOpening();
+  }, [isLoading, isReelPostLoaded]);
 
   return (
     <>

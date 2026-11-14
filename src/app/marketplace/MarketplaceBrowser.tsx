@@ -20,6 +20,7 @@ import {
   type MarketplaceRecipeTileLinkProps,
 } from '@/app/marketplace/MarketplaceRecipeTile';
 import { useAuth } from '@/components/AuthProvider';
+import { hasNavigatedInThisDocument } from '@/components/navigation-progress-state';
 import {
   getPostResourceKindLabel,
   type MarketplaceResourceFilter,
@@ -35,6 +36,7 @@ import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
 
 import { MarketplaceListingFailed, MarketplaceListingSkeleton } from './MarketplaceListingStates';
 import { isPlainLinkClick } from './marketplace-address';
+import { buildMarketplacePagesKey, recallMarketplacePages, rememberMarketplacePages } from './marketplace-pages-memory';
 import type { MarketplaceListingStatus } from './useMarketplaceListing';
 
 interface MarketplacePageInfo {
@@ -104,11 +106,17 @@ export default function MarketplaceBrowser({
   onRetry,
 }: MarketplaceBrowserProps) {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, user } = useAuth();
   // The signed-in viewer's own recipes, read apart from the cached catalog.
   const viewer = useViewerRecipeState();
-  const [items, setItems] = useState(initialPage.items);
-  const [pageInfo, setPageInfo] = useState(initialPage.pageInfo);
+  // What "Load more" brought to this listing, kept for the tab: Back from a recipe draws it again,
+  // and the page's height with it, so the reader lands where they were (marketplace-pages-memory).
+  const pagesKey = buildMarketplacePagesKey(buildMarketplacePath(initialFilters), user?.id ?? null);
+  // Read in the first render only on a page the app navigated to: a document's first render is
+  // hydrated against the server's, which drew the first page alone (the effect below reads it then).
+  const [recalledAtMount] = useState(() => (hasNavigatedInThisDocument() ? recallMarketplacePages(pagesKey, initialPage) : null));
+  const [items, setItems] = useState(recalledAtMount?.items ?? initialPage.items);
+  const [pageInfo, setPageInfo] = useState(recalledAtMount?.pageInfo ?? initialPage.pageInfo);
   const [searchInput, setSearchInput] = useState(initialFilters.q || shortQuery);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -118,9 +126,11 @@ export default function MarketplaceBrowser({
   useEffect(() => {
     loadMoreAbortControllerRef.current?.abort();
     loadMoreAbortControllerRef.current = null;
-    // Navigation supplies a new result page; discard state from the previous query.
-    setItems(initialPage.items);
-    setPageInfo(initialPage.pageInfo);
+    // Navigation supplies a new result page; discard state from the previous query, keeping the
+    // later pages this listing loaded before behind a first page that still starts the same.
+    const recalled = recallMarketplacePages(pagesKey, initialPage);
+    setItems(recalled?.items ?? initialPage.items);
+    setPageInfo(recalled?.pageInfo ?? initialPage.pageInfo);
     setSearchInput(initialFilters.q || shortQuery);
     setIsLoadingMore(false);
     setLoadError(null);
@@ -130,7 +140,7 @@ export default function MarketplaceBrowser({
       loadMoreAbortControllerRef.current?.abort();
       loadMoreAbortControllerRef.current = null;
     };
-  }, [initialPage, initialFilters, shortQuery]);
+  }, [initialPage, initialFilters, pagesKey, shortQuery]);
 
   const activeFilterLabels = useMemo(() => [
     initialFilters.access !== 'all' ? (initialFilters.access === 'free' ? 'Free' : 'Paid') : null,
@@ -205,20 +215,19 @@ export default function MarketplaceBrowser({
         return;
       }
 
-      setItems((current) => {
-        const nextItems = [...current];
-        const seenIds = new Set(current.map((item) => item.id));
-        for (const item of payload.items ?? []) {
-          if (!seenIds.has(item.id)) {
-            seenIds.add(item.id);
-            nextItems.push(item);
-          }
+      // From the list as drawn: one Load more runs at a time, and nothing else adds to it meanwhile.
+      const nextItems = [...items];
+      const seenIds = new Set(items.map((item) => item.id));
+      for (const item of payload.items ?? []) {
+        if (!seenIds.has(item.id)) {
+          seenIds.add(item.id);
+          nextItems.push(item);
         }
-        return nextItems;
-      });
-      if (payload.pageInfo) {
-        setPageInfo(payload.pageInfo);
       }
+      const nextPageInfo = payload.pageInfo ?? pageInfo;
+      setItems(nextItems);
+      setPageInfo(nextPageInfo);
+      rememberMarketplacePages(pagesKey, initialPage, { items: nextItems, pageInfo: nextPageInfo });
     } catch (error) {
       if (!controller.signal.aborted && loadMoreAbortControllerRef.current === controller) {
         setLoadError(error instanceof Error ? error.message : 'Could not load more recipes.');

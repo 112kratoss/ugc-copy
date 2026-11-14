@@ -121,6 +121,35 @@ describe('WorkflowLibraryClient', () => {
     expect(mockPush).toHaveBeenCalledWith('/create-workflow?canvas=canvas-2');
   });
 
+  // An order left by Back from a canvas or a refresh came back as Recently edited (owner's
+  // report, 2026-11-15): the library's order is the address's.
+  it('opens on the order the address names, and writes the order chosen into it', async () => {
+    // Product launch edited last, so the two orders differ.
+    canvases['canvas-1'] = { ...canvases['canvas-1'], updated_at: '2026-07-13T10:00:00.000Z' };
+    window.history.replaceState(null, '', '/create-workflow?sort=name');
+    const titles = ['Avatar motion test', 'Product launch flow'];
+    const shownOrder = () => screen.getAllByRole('heading')
+      .map((heading) => heading.textContent)
+      .filter((title) => titles.includes(title ?? ''));
+    try {
+      render(<WorkflowLibraryClient />);
+
+      const sort = screen.getByRole('combobox', { name: 'Sort workflows' });
+      expect(sort).toHaveValue('name');
+      await screen.findByRole('heading', { name: 'Avatar motion test' });
+      expect(shownOrder()).toEqual(['Avatar motion test', 'Product launch flow']);
+
+      fireEvent.change(sort, { target: { value: 'recent' } });
+      expect(window.location.search).toBe('');
+      expect(shownOrder()).toEqual(['Product launch flow', 'Avatar motion test']);
+
+      fireEvent.change(sort, { target: { value: 'name' } });
+      expect(window.location.search).toBe('?sort=name');
+    } finally {
+      window.history.replaceState(null, '', '/');
+    }
+  });
+
   it('renames with an accessible dialog and restores focus when Escape closes it', async () => {
     render(<WorkflowLibraryClient />);
     const actions = await screen.findByRole('button', { name: 'Actions for Product launch flow' });

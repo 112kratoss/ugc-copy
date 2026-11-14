@@ -67,6 +67,7 @@ import {
   verifyRazorpayCheckoutUntilSettled,
   type RazorpayCheckoutVerificationResult,
 } from '@/lib/razorpay-checkout-client';
+import { releaseReelOpening } from '@/lib/reel-opening-restore';
 import { getCurrentInternalPath } from '@/lib/share';
 import { displaySourceToolLabel } from '@/lib/source-tools';
 import { type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
@@ -291,6 +292,9 @@ export default function ShowcaseReelViewer({
   const attachReelDialog = useCallback((node: HTMLDivElement | null) => {
     reelDialogRef.current = node;
     setToastHost(node);
+    // The reel is drawn: a page loaded on its address stops covering itself with the reel's
+    // stage (src/lib/reel-opening-restore.ts), in the commit that draws the reel.
+    if (node) releaseReelOpening();
   }, []);
   const [transitionDirection, setTransitionDirection] = useState<ReelTransitionDirection>('neutral');
   const [activeMediaIndex, setActiveMediaIndex] = useState(initialMediaIndex);

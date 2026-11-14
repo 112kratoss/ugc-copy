@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
 import MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
+import { publishNavigationStart } from '@/components/navigation-progress-state';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 // One router for every render, so the browser's effects never see a new one.
@@ -49,6 +50,8 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     pushMock.mockReset();
     authState.session = null;
     authState.user = null;
+    // A listing keeps what Load more brought for the tab: one case's pages must not reach the next.
+    window.sessionStorage.clear();
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -212,6 +215,7 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     }));
     vi.mocked(fetch).mockImplementation(async () => nextPage());
     authState.session = { access_token: 'token-1' };
+    authState.user = { id: 'viewer-1' };
     const { unmount } = renderMarketplace(createPage(3, true, 0, 3));
 
     fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
@@ -226,6 +230,7 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     unmount();
 
     authState.session = null;
+    authState.user = null;
     renderMarketplace(createPage(3, true, 0, 3));
     fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
     await screen.findByText('Unlock 4');
@@ -491,6 +496,74 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     expect(shellTiles).toHaveLength(3);
     expect(shellTiles[2]).toContain('<video');
     expect(drawnTiles(list.container)).toEqual(shellTiles);
+  });
+});
+
+// Back from a recipe drew the first four recipes alone (owner's report, 2026-11-15): opening a
+// recipe unmounts the listing, so what "Load more" brought lived in its state only. The listing now
+// keeps it for the tab and draws it again, behind a fresh first page that still starts the same.
+describe('MarketplaceBrowser drawn again after a recipe', () => {
+  beforeEach(() => {
+    pushMock.mockReset();
+    authState.session = null;
+    authState.user = null;
+    window.sessionStorage.clear();
+    // The app has navigated in this document, as it has when Back returns to the listing.
+    publishNavigationStart();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.sessionStorage.clear();
+  });
+
+  async function loadSecondPage() {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(createPage(12, false, 4, 12))));
+    vi.stubGlobal('fetch', fetchMock);
+    const listing = renderMarketplace(createPage(4, true, 0, 4));
+    fireEvent.click(screen.getByRole('button', { name: 'Load more recipes' }));
+    expect(await screen.findByText('Unlock 16')).toBeInTheDocument();
+    return { listing, fetchMock };
+  }
+
+  it('draws the recipes "Load more" brought in its first render, and asks for none of them again', async () => {
+    const { listing, fetchMock } = await loadSecondPage();
+    listing.unmount();
+    fetchMock.mockClear();
+
+    renderMarketplace(createPage(4, true, 0, 4));
+
+    expect(screen.getByText('Unlock 16')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: /Unlock \d+$/ })).toHaveLength(16);
+    expect(screen.queryByRole('button', { name: 'Load more recipes' })).not.toBeInTheDocument();
+    await act(async () => Promise.resolve());
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('draws the first page alone when the listing no longer starts the same', async () => {
+    const { listing } = await loadSecondPage();
+    listing.unmount();
+
+    // A recipe published since: the listing's top has moved.
+    const changed = createPage(4, true, 0, 4);
+    changed.items[0] = { ...createMarketplaceItem(99), title: 'Unlock new' };
+    renderMarketplace(changed);
+
+    expect(screen.getByText('Unlock new')).toBeInTheDocument();
+    expect(screen.queryByText('Unlock 16')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load more recipes' })).toBeInTheDocument();
+  });
+
+  it('keeps a listing apart for each viewer, whose blocks it leaves out', async () => {
+    const { listing } = await loadSecondPage();
+    listing.unmount();
+
+    authState.session = { access_token: 'token-1' };
+    authState.user = { id: 'viewer-1' };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ items: [] }))));
+    renderMarketplace(createPage(4, true, 0, 4));
+
+    expect(screen.queryByText('Unlock 16')).not.toBeInTheDocument();
   });
 });
 
