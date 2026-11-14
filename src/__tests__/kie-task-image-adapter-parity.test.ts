@@ -184,6 +184,18 @@ describe('kie-task-v1 image adapter parity with the legacy payload ladder', () =
     });
   });
 
+  it('minimax h3 image asks for jpeg, says the prompt rewrite, and edits with references', () => {
+    // docs/model-api-references/minimax-h3-image.md, read 2026-11-14.
+    expect(build('minimax-h3-image', { ...BASE_SETTINGS, aspectRatio: 'auto', resolution: '4K' }).body).toEqual({
+      model: 'minimax-h3/text-to-image',
+      input: { prompt: PROMPT, aspect_ratio: 'auto', resolution: '4K', output_format: 'jpeg', expand_prompt: true },
+    });
+    expect(build('minimax-h3-image', { ...BASE_SETTINGS, outputFormat: 'png' }, [REF_URL, REF_URL_2]).body).toEqual({
+      model: 'minimax-h3/image-edit',
+      input: { prompt: PROMPT, aspect_ratio: '1:1', resolution: '1K', output_format: 'png', expand_prompt: true, image_urls: [REF_URL, REF_URL_2] },
+    });
+  });
+
   it('flux 3 klein asks for jpeg, says the prompt rewrite and checker, and edits with references', () => {
     // docs/model-api-references/flux-3-klein.md, read 2026-11-05.
     expect(build('flux-3-klein', { ...BASE_SETTINGS, aspectRatio: '9:21', resolution: '4K' }).body).toEqual({

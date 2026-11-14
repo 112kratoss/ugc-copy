@@ -76,6 +76,7 @@ export const PROVIDER_PROMPT_RULES: Readonly<Record<string, ProviderPromptRule>>
   'kling-4.0-flash': { maxLength: 8000 }, // kling/v4-flash-reference-to-video:166-192; v4-flash-keyframe-to-video:119-139 (read 2026-11-14)
   'wan-2.7': { maxLength: 5000 }, // wan/2-7-text-to-video:82; 2-7-image-to-video:111; 2-7-r2v:90
   'minimax-h3': { maxLength: 7000 }, // minimax-h3/text-to-video:94; image-to-video:93; reference-to-video:104
+  'minimax-h3-image': { maxLength: 5000 }, // minimax-h3/text-to-image:178-189; image-edit:192-205 (read 2026-11-14)
 };
 
 /** The rule a model's provider sets on its prompt, or null where only the shared limit applies. */

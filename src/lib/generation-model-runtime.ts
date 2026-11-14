@@ -353,6 +353,12 @@ const IMAGE_PROVIDER_MODELS: Record<ImageModelId, Record<string, string>> = {
     text: 'gpt-image-2-6/economy-text-to-image',
     reference: 'gpt-image-2-6/economy-image-to-image',
   },
+  // Verified 2026-11-14 against docs.kie.ai/market/minimax-h3/{text-to-image,image-edit}.md: the
+  // H3 video model's vendor segment.
+  'minimax-h3-image': {
+    text: 'minimax-h3/text-to-image',
+    reference: 'minimax-h3/image-edit',
+  },
 };
 
 /**
@@ -496,6 +502,19 @@ const KIE_TASK_IMAGE_ADAPTER_CONFIGS: Partial<Record<ImageModelId, Record<string
   'gpt-image-2.6': {
     settings: { aspectRatio: { field: 'aspect_ratio' } },
     slots: { imageReferences: { field: 'input_urls', cardinality: 'many', source: 'url' } },
+    variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
+  },
+  // docs/model-api-references/minimax-h3-image.md: `output_format` defaults to png, so the
+  // app's jpg goes as jpeg; `expand_prompt` is Kie's recommended default, sent so the request
+  // says what runs. `seed`, `width` and `height` are not sent.
+  'minimax-h3-image': {
+    settings: {
+      aspectRatio: { field: 'aspect_ratio' },
+      resolution: { field: 'resolution' },
+      outputFormat: { field: 'output_format', transform: 'jpg-to-jpeg' },
+    },
+    constants: { expand_prompt: true },
+    slots: { imageReferences: { field: 'image_urls', cardinality: 'many', source: 'url' } },
     variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
   },
 };

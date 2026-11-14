@@ -11,10 +11,10 @@ import {
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 
 /**
- * Release 2026-11-14-kie-models: Seedream 5.5 and GPT Image 2.6 (images), Kling 4.0 Flash and
- * Gemini Omni 1.2 Flash (videos) join the catalog (evidence: docs/model-api-references/
- * seedream-5-5.md, gpt-image-2-6.md, kling-4-0-flash.md, gemini-omni-1-2-flash.md, read
- * 2026-11-14). Every entry must equal the code build byte for byte, since the shadow verifier
+ * Release 2026-11-14-kie-models: Seedream 5.5, GPT Image 2.6 and MiniMax H3 Image (images),
+ * Kling 4.0 Flash and Gemini Omni 1.2 Flash (videos) join the catalog (evidence:
+ * docs/model-api-references/seedream-5-5.md, gpt-image-2-6.md, minimax-h3-image.md,
+ * kling-4-0-flash.md, gemini-omni-1-2-flash.md, read 2026-11-14). Every entry must equal the code build byte for byte, since the shadow verifier
  * diffs projections, so entries are compared against buildGenerationModelCatalog and
  * buildCodeGenerationModelOperations, while provider ids, prices and each spec's catches are
  * pinned to the evidence files.
@@ -53,8 +53,8 @@ function read(name: string): Manifest {
 const manifest = read('2026-11-14-kie-models.json');
 const base = read('2026-11-05-kie-models.json');
 
-const ADDED = ['seedream-5.5', 'gpt-image-2.6', 'kling-4.0-flash', 'gemini-omni-1.2-flash'];
-const IMAGES = ['seedream-5.5', 'gpt-image-2.6'];
+const ADDED = ['seedream-5.5', 'gpt-image-2.6', 'minimax-h3-image', 'kling-4.0-flash', 'gemini-omni-1.2-flash'];
+const IMAGES = ['seedream-5.5', 'gpt-image-2.6', 'minimax-h3-image'];
 const VIDEOS = ['kling-4.0-flash', 'gemini-omni-1.2-flash'];
 
 const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
@@ -132,7 +132,7 @@ describe('kie-models-20261114 release', () => {
     expect(manifest.mode).toBe('clone-active');
   });
 
-  it('adds the four models and replaces no existing model', () => {
+  it('adds the five models and replaces no existing model', () => {
     expect(manifest.entries.map((entry) => entry.modelId).sort()).toEqual([...ADDED].sort());
     expect([...(manifest.addsModelIds ?? [])].sort()).toEqual([...ADDED].sort());
     // expectedModelIds guards the release being cloned: production's inventory.
@@ -176,6 +176,10 @@ describe('kie-models-20261114 release', () => {
     });
     // Economy's schema refuses a field it does not name, and it names no resolution.
     expect(JSON.stringify(entryFor('gpt-image-2.6').adapterConfig)).not.toContain('"resolution"');
+    expect(entryFor('minimax-h3-image')).toMatchObject({
+      adapterKey: 'kie-task-v1',
+      providerModelMap: { text: 'minimax-h3/text-to-image', reference: 'minimax-h3/image-edit' },
+    });
     expect(entryFor('kling-4.0-flash').providerModelMap).toEqual({
       default: 'kling-4.0/flash-reference-to-video',
       text: 'kling-4.0/flash-reference-to-video',
@@ -248,6 +252,19 @@ describe('kie-models-20261114 release', () => {
     expect(() => credits(imageQuote('gpt-image-2.6', { aspectRatio: '1:1', resolution: '2K' }))).toThrow();
     expect(() => credits(imageQuote('gpt-image-2.6', { aspectRatio: '3:4', resolution: '1K' }))).toThrow();
     expect(() => credits(imageQuote('gpt-image-2.6', { aspectRatio: '1:1', resolution: '1K' }, 17))).toThrow();
+  });
+
+  it('quotes MiniMax H3 Image at 1.8 / 1.8 / 5.5 plus 0.5 for every input picture, rounded up', () => {
+    // docs/model-api-references/minimax-h3-image.md.
+    expect(options('minimax-h3-image', 'resolution')).toEqual(['1K', '2K', '4K']);
+    expect(options('minimax-h3-image', 'outputFormat')).toEqual(['jpg', 'png']);
+    expect(options('minimax-h3-image', 'aspectRatio')).toEqual(['auto', '1:1', '5:4', '4:3', '3:2', '16:9', '21:9', '4:5', '3:4', '2:3', '9:16']);
+    expect(credits(imageQuote('minimax-h3-image', { aspectRatio: 'auto', resolution: '1K' }))).toBe(2);
+    expect(credits(imageQuote('minimax-h3-image', { aspectRatio: '1:1', resolution: '2K' }))).toBe(2);
+    expect(credits(imageQuote('minimax-h3-image', { aspectRatio: '21:9', resolution: '4K' }))).toBe(6);
+    expect(credits(imageQuote('minimax-h3-image', { aspectRatio: '16:9', resolution: '2K' }, 1))).toBe(3);
+    expect(credits(imageQuote('minimax-h3-image', { aspectRatio: '9:16', resolution: '4K', outputFormat: 'png' }, 16))).toBe(14);
+    expect(() => credits(imageQuote('minimax-h3-image', { aspectRatio: '1:1', resolution: '1K' }, 17))).toThrow();
   });
 
   it('quotes Kling 4.0 Flash at 17 per second for text, a start frame or ten pictures, 720p, 3–20 s', () => {

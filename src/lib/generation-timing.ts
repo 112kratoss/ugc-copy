@@ -73,6 +73,7 @@ const IMAGE_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   // 2.6, until real runs give each its own.
   'seedream-5.5': 90_000,
   'gpt-image-2.6': 120_000,
+  'minimax-h3-image': 105_000,
   // Registration audit 2026-08-16: these models had no estimate, which silently
   // disabled their progress bars (estimateGenerationDurationMs returns null).
   'seedream-5-lite': 105_000,

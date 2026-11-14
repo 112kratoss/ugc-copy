@@ -86,6 +86,12 @@ const VERIFIED_PROVIDER_IDS: Partial<Record<ImageModelId, { text: string; refere
     text: 'gpt-image-2-6/economy-text-to-image',
     reference: 'gpt-image-2-6/economy-image-to-image',
   },
+  // Verified 2026-11-14 against docs.kie.ai/market/minimax-h3/{text-to-image,image-edit}.md and a
+  // zero-cost probe (docs/model-api-references/minimax-h3-image.md).
+  'minimax-h3-image': {
+    text: 'minimax-h3/text-to-image',
+    reference: 'minimax-h3/image-edit',
+  },
   // UNVERIFIED. No published spec was found for z-image under any probed path
   // on docs.kie.ai, so this records current behaviour rather than a confirmed
   // provider id. It is listed so the completeness check below still forces a

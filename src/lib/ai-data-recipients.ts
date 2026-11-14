@@ -70,6 +70,7 @@ export const AI_MODEL_MAKER_BY_MODEL_ID = {
   'flux-3-klein': 'Black Forest Labs',
   'seedream-5.5': 'ByteDance',
   'gpt-image-2.6': 'OpenAI',
+  'minimax-h3-image': 'MiniMax',
   // Video
   'kling-3.0-video': 'Kuaishou',
   'kling-3.0-turbo': 'Kuaishou',

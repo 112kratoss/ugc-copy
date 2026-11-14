@@ -61,6 +61,7 @@ export const MODEL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   'vidu-q4': 'Vidu Q4',
   'seedream-5.5': 'Seedream 5.5',
   'gpt-image-2.6': 'GPT Image 2.6',
+  'minimax-h3-image': 'MiniMax H3 Image',
   'kling-4.0-flash': 'Kling 4.0 Flash',
   'gemini-omni-1.2-flash': 'Gemini Omni 1.2 Flash',
 };

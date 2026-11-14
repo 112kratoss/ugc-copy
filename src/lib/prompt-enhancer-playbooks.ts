@@ -669,6 +669,39 @@ const IMAGE_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
       defaultSafeguards: [PRESERVE_INTENT_SAFEGUARD],
     },
   },
+  // docs/model-api-references/minimax-h3-image.md: 1–5,000 characters, Kie's own prompt rewrite
+  // on (`expand_prompt`), and edit references named `<Picture N>` in upload order.
+  'minimax-h3-image': {
+    modelId: 'minimax-h3-image',
+    label: 'MiniMax H3 Image',
+    medium: 'image',
+    plannerMode: 'structured-image',
+    compilerProfile: 'design-brief',
+    budget: { targetWords: [60, 180], maxChars: 4800 },
+    strategyRules: [
+      'Write a natural-language brief in the order subject, setting, composition, lighting, then one named style; default to realistic photography when no style is given.',
+      'For edits, state the change as one imperative (place, replace, remove, restyle) and close with a keep-clause naming what must not change (product shape, label text, identity).',
+      'Address references in upload order ("the product from Picture 1", "the room in Picture 2"), and keep every @name the user wrote exactly as written.',
+      'Fold avoidances into positive phrasing; there is no negative-prompt field.',
+    ],
+    workflowRules: [
+      'If stillImageModel is minimax-h3-image, write a concise subject-scene-light-style brief and, for edits, an imperative with a keep-clause.',
+    ],
+    plannerNotes: [
+      'A server-side rewriter expands the prompt into detailed English before generating — give it precise facts, not padding.',
+    ],
+    textRenderingRules: [
+      'Put in-image text in quotes with its position and type style; never translate or reword quoted text.',
+    ],
+    agent: {
+      id: 'minimax-h3-image-art-director',
+      label: 'MiniMax H3 Image art director',
+      strategyRules: [
+        'Describe the image itself, never meta-instructions ("generate an image of…").',
+      ],
+      defaultSafeguards: [PRESERVE_INTENT_SAFEGUARD],
+    },
+  },
 };
 
 // ─── Video playbooks ─────────────────────────────────────────────────────────

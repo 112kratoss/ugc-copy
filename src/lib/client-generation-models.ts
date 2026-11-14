@@ -352,6 +352,20 @@ export const IMAGE_MODELS = {
     resolutions: ['1K'] as const,
     outputFormats: ['jpg'] as const,
   },
+  'minimax-h3-image': {
+    id: 'minimax-h3-image' as const,
+    displayName: 'MiniMax H3 Image',
+    description: 'Low-cost MiniMax generation and edits from up to sixteen pictures, up to 4K',
+    badge: 'New',
+    badgeColor: 'from-sky-500 to-indigo-500',
+    accentColor: 'blue',
+    maxImages: 16,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: true,
+    aspectRatios: ['auto', '1:1', '5:4', '4:3', '3:2', '16:9', '21:9', '4:5', '3:4', '2:3', '9:16'] as const,
+    resolutions: ['1K', '2K', '4K'] as const,
+    outputFormats: ['jpg', 'png'] as const,
+  },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;

@@ -18,6 +18,7 @@ answered 422; the Kie balance stayed at 2375.9). Raw copies:
 | --- | --- | --- | --- | --- |
 | **Seedream 5.5** (11-10) | `seedream-5.5` | `seedream/5-5-{text,image}-to-image` | 3.6 / 6.3 at 1K / 2K, + 1.44 per input picture | `seedream-5-5.md` |
 | **GPT Image 2.6** (11-05) | `gpt-image-2.6` | `gpt-image-2-6/economy-{text,image}-to-image` | 5 a 1K picture | `gpt-image-2-6.md` |
+| **MiniMax H3 Image** (11-10) | `minimax-h3-image` | `minimax-h3/text-to-image`, `minimax-h3/image-edit` | 1.8 / 1.8 / 5.5 at 1K / 2K / 4K, + 0.5 per input picture | `minimax-h3-image.md` |
 | **Kling 4.0 Flash** (listed 09-29, priced by 11-14) | `kling-4.0-flash` | `kling-4.0/flash-{reference,keyframe}-to-video` | 17 per second, 720p | `kling-4-0-flash.md` |
 | **Gemini Omni 1.2 Flash** (11-06) | `gemini-omni-1.2-flash` | `google/gemini-omni-flash-1-2` | 4 / 9 / 10 / 22 per second, 360p–4K | `gemini-omni-1-2-flash.md` |
 
@@ -29,11 +30,10 @@ No paid run yet: each evidence file says what the release leaves out and why.
   bills `rate × (output + max(output, input))`).
 - **Gemini Omni 1.2 Flash**: the video edit (billed by the input clip's length, with no output
   duration), `character_ids`, and the `-extend` endpoint.
+- **MiniMax H3 Image**: a custom `width` × `height`, and `seed`.
 
 ## Listed, not shipped
 
-- **MiniMax H3 Image** (11-10): `minimax-h3/text-to-image`, `minimax-h3/image-edit`; 1.8 credits
-  up to 2K, 5.5 at 4K, plus 0.5 a reference. A new image model, not an upgrade; not scoped here.
 - **Kie Image Upscaler** (11-10, `kie/image-upscale`) and **Video Upscaler** (11-09,
   `video/upscale`): utilities, which the creators have no surface for.
 - **OmniHuman 2.0**: left out at the owner's word on 2026-11-05 (needs an audio input).

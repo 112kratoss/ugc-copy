@@ -120,6 +120,7 @@ const APP_SOURCE_TOOL: SourceToolOption = sourceTool({
     { slug: 'vidu-q4', label: 'Vidu Q4' },
     { slug: 'seedream-5.5', label: 'Seedream 5.5' },
     { slug: 'gpt-image-2.6', label: 'GPT Image 2.6' },
+    { slug: 'minimax-h3-image', label: 'MiniMax H3 Image' },
     { slug: 'kling-4.0-flash', label: 'Kling 4.0 Flash' },
     { slug: 'gemini-omni-1.2-flash', label: 'Gemini Omni 1.2 Flash' },
   ],

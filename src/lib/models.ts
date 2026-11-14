@@ -569,6 +569,30 @@ export const IMAGE_MODELS = {
             '1K': 5,
         },
     },
+    // docs/model-api-references/minimax-h3-image.md (read 2026-11-14): 1.8 credits a picture at
+    // 1K and 2K, 5.5 at 4K, and 0.5 for every input picture, the first included; Kie's own
+    // prompt rewrite on. Width and height are not offered.
+    'minimax-h3-image': {
+        id: 'minimax-h3-image' as const,
+        displayName: 'MiniMax H3 Image',
+        description: 'Low-cost MiniMax generation and edits from up to sixteen pictures, up to 4K',
+        badge: 'New',
+        badgeColor: 'from-sky-500 to-indigo-500',
+        accentColor: 'blue',
+        maxImages: 16,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: true,
+        aspectRatios: ['auto', '1:1', '5:4', '4:3', '3:2', '16:9', '21:9', '4:5', '3:4', '2:3', '9:16'] as const,
+        resolutions: ['1K', '2K', '4K'] as const,
+        outputFormats: ['jpg', 'png'] as const,
+        pricing: {
+            '1K': 1.8,
+            '2K': 1.8,
+            '4K': 5.5,
+        },
+        additionalReferenceCredit: 0.5,
+        referenceCreditIncludesFirst: true,
+    },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
@@ -1663,11 +1687,17 @@ export function getImageCost(
         return pricing[qualityMode];
     }
 
-    if (modelId === 'seedream-5-pro' || modelId === 'seedream-5.5' || modelId === 'qwen3' || modelId === 'qwen3-pro') {
+    if (
+        modelId === 'seedream-5-pro'
+        || modelId === 'seedream-5.5'
+        || modelId === 'qwen3'
+        || modelId === 'qwen3-pro'
+        || modelId === 'minimax-h3-image'
+    ) {
         const model = IMAGE_MODELS[modelId];
         const baseCost = (model.pricing as Partial<Record<ImageResolution, number>>)[resolution] ?? model.pricing['1K'];
-        // Seedream 5 Pro bundles the first reference into the base price; Qwen and Seedream 5.5
-        // bill every one.
+        // Seedream 5 Pro bundles the first reference into the base price; Qwen, Seedream 5.5 and
+        // MiniMax H3 Image bill every one.
         const freeReferences = 'referenceCreditIncludesFirst' in model && model.referenceCreditIncludesFirst ? 0 : 1;
         const chargeableReferences = Math.max(0, (options.referenceCount ?? 0) - freeReferences);
         return Math.ceil(baseCost + (chargeableReferences * model.additionalReferenceCredit));

@@ -38,6 +38,7 @@ const KIE_PROMPT_CAPS: Record<string, number> = {
   'seedream-5-flash': 5000,
   'seedream-5-pro': 5000,
   'seedream-5.5': 5000,
+  'minimax-h3-image': 5000,
   'wan-2.7': 5000,
   'wan-2.7-image': 5000,
   'wan-2.7-image-pro': 5000,

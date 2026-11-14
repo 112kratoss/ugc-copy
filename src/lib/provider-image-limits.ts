@@ -101,6 +101,9 @@ const PROVIDER_IMAGE_LIMITS: Readonly<Record<string, readonly ProviderImageField
   // Gemini Omni 1.2 Flash: image_urls "Each file must be no larger than `20MB`"
   // (google/gemini-omni-flash-1-2:249-273, read 2026-11-14); its frames name no size (:289-319).
   'google/gemini-omni-flash-1-2': [limit('image_urls', 'reference', 20)],
+  // MiniMax H3 Image: image_urls "Each image ≤ 20 MB and ≤ 64 MP" (minimax-h3/image-edit:351-373,
+  // read 2026-11-14).
+  'minimax-h3/image-edit': [limit('image_urls', 'reference', 20)],
   // HappyHorse 1.1: the first frame "File size: Up to 20 MB" (happyhorse-1-1/image-to-video:106-123),
   // reference_image "Maximum file size: 20 MB" (happyhorse-1-1/reference-to-video:109-127).
   'happyhorse-1-1/image-to-video': [limit('image_urls', 'frame', 20)],

@@ -59,6 +59,7 @@ const RULES_ADDED_SINCE = {
   // 2026-11-14: seedream-5-5.md (5–5,000, where 5 Flash and Pro ask 4), kling-4-0-flash.md.
   'seedream-5.5': { maxLength: 5000, minLength: 5 },
   'kling-4.0-flash': { maxLength: 8000 },
+  'minimax-h3-image': { maxLength: 5000 }, // minimax-h3-image.md
 };
 
 const MODELS = { ...IMAGE_MODELS, ...VIDEO_MODELS, ...MOTION_MODELS } as Record<string, { displayName: string }>;

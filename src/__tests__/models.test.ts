@@ -361,6 +361,15 @@ describe('Model Pricing', () => {
             expect(getImageCost('gpt-image-2.6', '1K', { referenceCount: 16 })).toBe(5);
             expect(getImageResolutionOptions('gpt-image-2.6', 'auto')).toEqual(['1K']);
         });
+        it('prices MiniMax H3 Image by tier with 0.5 for every input picture, rounded up', () => {
+            // docs/model-api-references/minimax-h3-image.md, read 2026-11-14.
+            expect(getImageCost('minimax-h3-image', '1K')).toBe(2);
+            expect(getImageCost('minimax-h3-image', '2K')).toBe(2);
+            expect(getImageCost('minimax-h3-image', '4K')).toBe(6);
+            expect(getImageCost('minimax-h3-image', '2K', { referenceCount: 1 })).toBe(3);
+            expect(getImageCost('minimax-h3-image', '4K', { referenceCount: 1 })).toBe(6);
+            expect(getImageCost('minimax-h3-image', '4K', { referenceCount: 16 })).toBe(14);
+        });
         it('prices Kling 4.0 Flash and Gemini Omni 1.2 Flash per second of output', () => {
             // docs/model-api-references/kling-4-0-flash.md and gemini-omni-1-2-flash.md (2026-11-14).
             expect(getVideoCost('kling-4.0-flash', { resolution: '720p', durationSeconds: 5 })).toBe(85);

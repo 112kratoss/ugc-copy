@@ -1747,6 +1747,11 @@ export function getKieImageModelId(model: ImageModelId, referenceCount: number):
     return referenceCount > 0 ? 'gpt-image-2-6/economy-image-to-image' : 'gpt-image-2-6/economy-text-to-image';
   }
 
+  // Verified 2026-11-14 against docs.kie.ai/market/minimax-h3/{text-to-image,image-edit}.md.
+  if (model === 'minimax-h3-image') {
+    return referenceCount > 0 ? 'minimax-h3/image-edit' : 'minimax-h3/text-to-image';
+  }
+
   // Everything else sends the app id unchanged, which is correct only because
   // those ids are byte-identical to the provider's (nano-banana-2,
   // nano-banana-2-lite, nano-banana-pro, z-image). Adding a model whose
@@ -2387,6 +2392,20 @@ export async function startImageGeneration(params: {
 
       if (resolvedImageUrls.length > 0) {
         input.input_urls = resolvedImageUrls;
+      }
+    } else if (model === 'minimax-h3-image') {
+      // docs/model-api-references/minimax-h3-image.md: jpeg rather than the png default, and
+      // Kie's own prompt rewrite (its recommended default) said out loud.
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+        resolution,
+        output_format: outputFormat === 'jpg' ? 'jpeg' : outputFormat,
+        expand_prompt: true,
+      };
+
+      if (resolvedImageUrls.length > 0) {
+        input.image_urls = resolvedImageUrls;
       }
     } else if (model === 'seedream-5.5') {
       // docs/model-api-references/seedream-5-5.md: Seedream 5 Flash's body, the resolution as
