@@ -1296,6 +1296,10 @@ export default function PostComments({
                         const display = getCommentDisplay(comment);
                         const isReply = row.kind === 'reply';
                         const isOwn = canDeleteComment(comment, user?.id);
+                        // While a delete, pin or report runs, the row's content
+                        // dims but its piece of the thread's line does not: a
+                        // dimmed piece reads as a break in the line.
+                        const isBusy = busyCommentId === comment.id;
                         // Everything but Reply sits behind the row's menu, so a
                         // thread reads as comments, not as columns of buttons.
                         const menuItems: StudioOverflowMenuItem[] = [];
@@ -1365,10 +1369,8 @@ export default function PostComments({
                                 key={row.key}
                                 aria-label={isReply ? `Reply from ${display.authorLabel}` : undefined}
                                 aria-level={isReply ? 2 : 1}
-                                aria-busy={busyCommentId === comment.id}
-                                className={`py-2 transition-opacity ${
-                                    isReply ? 'relative pl-11' : ''
-                                } ${busyCommentId === comment.id ? 'opacity-60' : ''}`}
+                                aria-busy={isBusy}
+                                className={`py-2 ${isReply ? 'relative pl-11' : ''}`}
                             >
                                 {isReply ? (
                                     <>
@@ -1377,12 +1379,16 @@ export default function PostComments({
                                     </>
                                 ) : null}
                                 {comment.pinned && !display.isDeleted ? (
-                                    <p className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[var(--ui-text-muted)]">
+                                    <p className={`mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[var(--ui-text-muted)] transition-opacity ${
+                                        isBusy ? 'opacity-60' : ''
+                                    }`}>
                                         <Pin className="h-3.5 w-3.5" aria-hidden="true" />
                                         Pinned by the creator
                                     </p>
                                 ) : null}
-                                <div className="relative flex items-start gap-3">
+                                <div className={`relative flex items-start gap-3 [&>:not([data-thread-line])]:transition-opacity ${
+                                    isBusy ? '[&>:not([data-thread-line])]:opacity-60' : ''
+                                }`}>
                                     {!isReply && threadContinues ? <CommentThreadSpine from="avatar" /> : null}
                                     <PostCommentAvatar
                                         avatarUrl={comment.author?.avatarUrl ?? null}
@@ -1585,13 +1591,16 @@ export default function PostComments({
  */
 const THREAD_LINE_COLOR = 'var(--ui-border-strong)';
 
+// The spine is a border like the elbows, not a filled strip: forced-colours
+// modes (Windows High Contrast) drop backgrounds and keep borders, which left
+// the elbows floating without it.
 function CommentThreadSpine({ from }: { from: 'avatar' | 'row-top' }) {
     return (
         <span
             aria-hidden="true"
             data-thread-line="spine"
-            style={{ backgroundColor: THREAD_LINE_COLOR }}
-            className={`pointer-events-none absolute left-4 w-px ${
+            style={{ borderColor: THREAD_LINE_COLOR }}
+            className={`pointer-events-none absolute left-4 w-0 border-l ${
                 // Under the 32px avatar with a 4px gap, down through the row's
                 // bottom padding (`py-2`) to where the next row's piece starts.
                 from === 'avatar' ? 'top-9 -bottom-2' : 'inset-y-0'
