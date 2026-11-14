@@ -13,7 +13,10 @@ const previewHook = 'lib/use-native-preview-playback.ts';
 // The fingerprints of shipped Android builds that were cut with this patch in
 // patches/. Add `targets.android.fingerprint` here in the commit that moves
 // ota-targets.json to such a build (README, "Graduating").
-const androidBuildsWithThePatch: string[] = [];
+const androidBuildsWithThePatch: string[] = [
+  // 0.1.9 (79, 80, 81): graduated 2026-11-11, production 2026-11-14.
+  '121d69804e38a236cf745a008ed5af7a0143947b',
+];
 
 /**
  * On Android, expo-video's fullscreen player is an activity of its own. As

@@ -32,36 +32,30 @@ const read = (relativePath: string) => readFileSync(join(projectRoot, relativePa
  * runtime fingerprint and strands over-the-air updates anywhere else, costs
  * nothing there.
  *
- * Until then main keeps the versions every 0.1.8 binary was cut with. The
- * lockfile holds them and HELD pins it: `npm update expo` or an online
- * `expo install --fix` alone would otherwise take a bump with CI green. #180
- * said to take its bump with the next store binaries, and all nine store
- * builds since kept the hold, so once app.json leaves HELD_FOR each held
- * package must have moved past its pin. In the release-bump commit, run
- * `./node_modules/.bin/expo install --fix` in ugc-mobile (online), repin
- * android-config.test.ts's expo-dev-client range, graduate
- * experiments/fingerprint-dev-only (its README), and leave HELD as it is;
- * empty it in the commit that records the new binaries in ota-targets.json. A
- * rebuild at 0.1.8 trips none of this. One that carries a native change anyway
- * can take the bumps too, repinning HELD and android-config.test.ts's range to
- * the new versions in the same commit.
+ * Between store builds main keeps the versions the binaries in users' hands
+ * were cut with. The lockfile holds them and HELD pins any that Expo has
+ * already moved past: `npm update expo` or an online `expo install --fix`
+ * alone would otherwise take a bump with CI green. Once app.json leaves
+ * HELD_FOR, each held package must have moved past its pin. In the
+ * release-bump commit, run `./node_modules/.bin/expo install --fix` in
+ * ugc-mobile (online), repin android-config.test.ts's expo-dev-client range,
+ * and leave HELD as it is; empty it in the commit that records the new
+ * binaries in ota-targets.json. A rebuild at the same version trips none of
+ * this. One that carries a native change anyway can take the bumps too,
+ * repinning HELD and android-config.test.ts's range to the new versions in
+ * the same commit.
  *
- * What the held versions defer, to check on a device when they are taken:
- * expo 55.0.32 brings expo-modules-core 55.0.27, whose Android update log no
- * longer blocks the threads writing to it at a cold start, and @expo/cli
- * 55.0.37, which fixes the dev server's loopback check. expo-updates 55.0.32 and
- * 55.0.33 stop updates re-downloading assets the binary already embeds (iOS,
- * then both platforms). expo-auth-session 55.0.19 and expo-dev-client 55.0.41
- * change no code.
+ * HELD is empty: the 0.1.8 hold (expo 55.0.31, expo-updates 55.0.30,
+ * expo-auth-session 55.0.18, expo-dev-client 55.0.40, from #180) was taken by
+ * the 0.1.9 release bump (#763: expo 55.0.32, expo-updates 55.0.33,
+ * expo-auth-session 55.0.19, expo-dev-client 55.0.41), and ota-targets.json
+ * records those 0.1.9 builds. Fill it again, with HELD_FOR set to the version
+ * in users' hands, when Expo next ships a patch release main should not take
+ * until a store build.
  */
 const DURABLE = ['react-native', '@shopify/flash-list'];
-const HELD_FOR = '0.1.8';
-const HELD: Record<string, string> = {
-  'expo-updates': '55.0.30',
-  expo: '55.0.31',
-  'expo-auth-session': '55.0.18',
-  'expo-dev-client': '55.0.40',
-};
+const HELD_FOR = '0.1.9';
+const HELD: Record<string, string> = {};
 
 /** Whether `version` (x.y.z, any pre-release ignored) comes after `than`. */
 function isLater(version: string | undefined, than: string) {

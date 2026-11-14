@@ -18,26 +18,26 @@
   ],
   "targets": {
     "android": {
-      "fingerprint": "02b8fe85566eac2e3f61a8ed82fa350c3ee03865",
-      "appVersion": "0.1.8",
-      "buildNumber": 77,
-      "shipped": "2026-09-29",
+      "fingerprint": "121d69804e38a236cf745a008ed5af7a0143947b",
+      "appVersion": "0.1.9",
+      "buildNumber": 81,
+      "shipped": "2026-11-14",
       "tracks": [
         "production",
         "alpha"
       ],
-      "$note": "Built from main 26c017bd (EAS build 010bc000, workflow run 36534158551) for the Google Play policy notice (Sexual Content / AI-Generated Content, fix by 2026-10-05): the server-side prompt gate from 0e903fde and Android's covered NSFW posts (26c017bd). Its runtime is the same 02b8fe85 as 0.1.8 (76), built from 5837720a, so every update published at this fingerprint reaches both builds and nothing about OTA reach changed. Closed alpha and production were both approved and published on 2026-09-29 with full rollout (managed publishing is off). 76 is only whatever has not updated yet."
+      "$note": "Built from main d1c02ad68 (EAS build 8ec419e1, store run 43088144204; its alpha submit was run locally after the run's artifact step failed on GitHub 502s). Alpha 81 was approved on 2026-11-13, promoted to production with full rollout, and production was approved by Google on 2026-11-14 (managed publishing is off); the public Play listing serves 0.1.9. Builds 79 and 80 (2e3dec080, 18dd86e36) went to testers only and carry the same runtime 121d6980, so every update published at this fingerprint reaches them too. Phones still on 0.1.8 (76/77, 02b8fe85) are reached by no update from main; they move by the store update."
     },
     "ios": {
-      "fingerprint": "4babc8b439ba5309615abbbe59baf79a23014d6c",
-      "appVersion": "0.1.8",
-      "buildNumber": 59,
-      "shipped": "2026-10-13",
+      "fingerprint": "e2115703292ae0e76719c9eccc21ad8e3e73cd87",
+      "appVersion": "0.1.9",
+      "buildNumber": 62,
+      "shipped": "2026-11-12",
       "tracks": [
         "appstore",
         "testflight"
       ],
-      "$note": "Build 59 (EAS build 2a468f8c from main 35d8cb29, uploaded 2026-10-05) was approved and released to the App Store on 2026-10-13 as version 0.1.8 (READY_FOR_SALE, released on approval; submission 967bed17, resubmitted 2026-10-05 after 58's rejection). Its runtime is the same 4babc8b4 as build 58 (built from main 5837720a, #225, the first binary with the native menus), so every update published at this fingerprint reaches the App Store and TestFlight alike, and the hold on iOS updates that this note carried while the build was in review is over. Users still on 0.1.5 (54) at 835877cfddddf3644cf2e03bc8da01d7aec206d0 are reached by no update from main; they move by the store update."
+      "$note": "Build 62 (EAS build f623bfd9 from main d1c02ad68, store run 43088144204) was approved and released to the App Store on 2026-11-12 03:47 IST (2026-11-11 22:17 UTC) as version 0.1.9, named Magic Booklet, released on approval to all users. Builds 60 and 61 (2e3dec080, 18dd86e36) went to TestFlight only and carry the same runtime e2115703, so every update published at this fingerprint reaches the App Store and TestFlight alike. Phones still on 0.1.8 (58/59, 4babc8b4) are reached by no update from main; they move by the store update."
     }
   }
 }
