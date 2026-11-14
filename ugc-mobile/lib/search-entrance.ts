@@ -68,17 +68,21 @@ export const SEARCH_ENTRANCE = {
    */
   fadeMs: 200,
   /**
-   * The capsule's growth, started as the screen mounts: a spring with a
-   * damping ratio of about 0.97, nearly there by 300 ms and at rest by about
-   * 400, so it lands without a bounce. Not at the navigator's
-   * `transitionStart`: that event reached JS after the cross-fade had ended
-   * (simulator, production JS). Not on the navigator's transition progress:
-   * iOS reports a fade's progress as 1 at once (react-native-screens runs it
-   * on a UIViewPropertyAnimator its progress reader cannot follow).
+   * The capsule's growth, started as the screen mounts: a fixed 300 ms on a
+   * decelerating curve (`growEasing`, a cubic bezier, about 90% of the way by
+   * 150 ms), so it ends at a known moment with no tail. A spring's tail kept
+   * drawing sub-pixel steps for another ~150 ms, and the keyboard's setup
+   * landing on one of them made a frame late (Animation Hitches on the
+   * iPhone 16e, 2026-11-14). Not started at the navigator's `transitionStart`:
+   * that event reached JS after the cross-fade had ended (simulator,
+   * production JS). Not on the navigator's transition progress: iOS reports
+   * a fade's progress as 1 at once (react-native-screens runs it on a
+   * UIViewPropertyAnimator its progress reader cannot follow).
    */
-  spring: { stiffness: 240, damping: 30, mass: 1 },
+  growMs: 300,
+  growEasing: [0.22, 1, 0.36, 1] as const,
   /**
-   * The field takes taps, and the focus, once it has nearly arrived. The
+   * The field takes taps, and the focus, two frames after the growth ends. The
    * focus waits because the keyboard's setup holds the UI thread the growth
    * runs on: focused as the growth began, the capsule sat still and then
    * jumped half-way in one frame (simulator, 2026-11-14), while the fade,
@@ -86,7 +90,7 @@ export const SEARCH_ENTRANCE = {
    * double tap on Home's magnifier landed on the field just grown under it
    * and opened iOS's edit menu (search UX fixes 2026-11-14).
    */
-  touchesAfterMs: 280,
+  touchesAfterMs: 330,
   /**
    * Close: the same motion back into the control, quicker than the growth,
    * on a decelerating curve, so it is all but home well before its end.

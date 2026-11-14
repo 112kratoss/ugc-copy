@@ -6,7 +6,6 @@ import {
   interpolate,
   useAnimatedStyle,
   useSharedValue,
-  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 
@@ -49,7 +48,8 @@ export function useSearchEntrance({
 
   useEffect(() => {
     if (!moving) return undefined;
-    progress.set(withSpring(1, SEARCH_ENTRANCE.spring));
+    const [x1, y1, x2, y2] = SEARCH_ENTRANCE.growEasing;
+    progress.set(withTiming(1, { duration: SEARCH_ENTRANCE.growMs, easing: Easing.bezier(x1, y1, x2, y2) }));
     const timer = setTimeout(() => setTouchable(true), SEARCH_ENTRANCE.touchesAfterMs);
     return () => clearTimeout(timer);
   }, [moving, progress]);

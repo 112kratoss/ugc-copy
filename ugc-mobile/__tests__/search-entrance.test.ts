@@ -55,6 +55,9 @@ describe('search entrance geometry', () => {
 
   it('takes taps only once the field has nearly arrived, and pops only once it is back in its control', () => {
     expect(SEARCH_ENTRANCE.touchesAfterMs).toBeGreaterThanOrEqual(250);
+    // The focus (the keyboard's setup holds the UI thread) waits until the growth has ended,
+    // a frame or more, so no frame of it is drawn while the thread is held.
+    expect(SEARCH_ENTRANCE.touchesAfterMs).toBeGreaterThanOrEqual(SEARCH_ENTRANCE.growMs + 16);
     // The navigator draws a leaving screen as a still picture: a pop before the
     // shrink lands would freeze the field part-way. On the exit's ease-out
     // cubic it is at least 97% of the way home when the pop is asked for.

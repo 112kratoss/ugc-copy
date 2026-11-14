@@ -1360,8 +1360,9 @@ export function ExploreSearchOverlay({
                 </View>
               ) : null}
               {starter ? (
-                // Fades and rises in as it arrives, as iOS's suggestions do.
-                <Reveal>
+                // Fades and rises in as it arrives, as iOS's suggestions do,
+                // once it has mounted (Reveal afterMount).
+                <Reveal afterMount>
                   <SearchStarterSections
                     answer={starter}
                     onEntity={startFromEntity}
@@ -1372,7 +1373,7 @@ export function ExploreSearchOverlay({
               ) : null}
             </View>
           ) : body === 'start' ? (
-            <Reveal>
+            <Reveal afterMount>
               <StatusBlock title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
             </Reveal>
           ) : (

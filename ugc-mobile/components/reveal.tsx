@@ -26,11 +26,20 @@ function optionalNativeExport<T>(read: () => T) {
 export function Reveal({
   index = 0,
   enabled = true,
+  afterMount = false,
   children,
   style,
 }: {
   index?: number;
   enabled?: boolean;
+  /**
+   * Start the fade two frames after the content mounts, not with the mount:
+   * a large block (search's ideas to start from) took longer than a frame to
+   * mount, and the fade's first frame, waiting on it, was late (Animation
+   * Hitches on the iPhone 16e, 2026-11-14). Mounted still and unseen, it then
+   * fades with nothing else to wait for.
+   */
+  afterMount?: boolean;
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
 }) {
@@ -58,9 +67,19 @@ export function Reveal({
       easing: optionalNativeExport(() => Easing.out(Easing.cubic)),
       useNativeDriver: true,
     });
-    animation.start();
-    return () => animation.stop();
-  }, [delay, progress, reducedMotion]);
+    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null;
+    if (!afterMount || !raf) {
+      animation.start();
+      return () => animation.stop();
+    }
+    let frame = raf(() => {
+      frame = raf(() => animation.start());
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      animation.stop();
+    };
+  }, [afterMount, delay, progress, reducedMotion]);
 
   if (!progress) {
     return <View style={style}>{children}</View>;
