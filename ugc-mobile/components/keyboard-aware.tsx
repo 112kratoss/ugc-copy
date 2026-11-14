@@ -10,7 +10,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { getKeyboardLift, isTrackerMotion, resolveKeyboardHeight } from '@/lib/keyboard';
+import { getKeyboardLift, isTrackerMotion, listenToReportedKeyboard, resolveKeyboardHeight } from '@/lib/keyboard';
 
 /**
  * Keyboard avoidance that tracks the keyboard frame every frame.
@@ -83,40 +83,34 @@ const platformApi = optionalNativeExport(() => ReactNative.Platform);
  * underneath would read as a glitch rather than as calm.
  */
 function useReportedKeyboard() {
-  // Started from what React Native's module last heard, from any screen: an area
-  // that mounts with the keyboard already gone hears no hide of its own, and the
-  // tracker may yet tell it an old height (see `isTrackerMotion`). A module mocked
-  // down to `addListener` answers undefined, which leaves the tracker to lead.
-  const visibleAtMount = keyboardApi?.isVisible?.();
-  const height = useSharedValue(visibleAtMount ? (keyboardApi?.metrics?.()?.height ?? 0) : 0);
-  const hidden = useSharedValue(visibleAtMount === false);
+  // Whether the keyboard is down starts from what React Native's module last
+  // heard, from any screen: an area that mounts with the keyboard already gone
+  // hears no hide of its own, and the tracker may yet tell it an old height (see
+  // `isTrackerMotion`). Only that flag is taken, never a height: one read now may
+  // be a keyboard already leaving, whose hide this area may never hear. A module
+  // mocked down to `addListener` answers undefined, which leaves the tracker to lead.
+  const height = useSharedValue(0);
+  const hidden = useSharedValue(keyboardApi?.isVisible?.() === false);
 
   useEffect(() => {
     if (!keyboardApi?.addListener) return;
 
-    // iOS reports `will` events ahead of the animation with a matching
-    // duration; Android only offers `did`, after the fact.
-    const isIos = platformApi?.OS === 'ios';
-    const showEvent = isIos ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent = isIos ? 'keyboardWillHide' : 'keyboardDidHide';
-
-    const show = keyboardApi.addListener(showEvent, (event) => {
-      hidden.value = false;
-      height.value = withTiming(event.endCoordinates.height, {
-        duration: event.duration || FALLBACK_KEYBOARD_DURATION,
-      });
+    return listenToReportedKeyboard({
+      keyboard: keyboardApi,
+      ios: platformApi?.OS === 'ios',
+      onShow: (event) => {
+        hidden.value = false;
+        height.value = withTiming(event.endCoordinates.height, {
+          duration: event.duration || FALLBACK_KEYBOARD_DURATION,
+        });
+      },
+      onHide: (event) => {
+        hidden.value = true;
+        height.value = withTiming(0, {
+          duration: event?.duration || FALLBACK_KEYBOARD_DURATION,
+        });
+      },
     });
-    const hide = keyboardApi.addListener(hideEvent, (event) => {
-      hidden.value = true;
-      height.value = withTiming(0, {
-        duration: event?.duration || FALLBACK_KEYBOARD_DURATION,
-      });
-    });
-
-    return () => {
-      show.remove();
-      hide.remove();
-    };
   }, [height, hidden]);
 
   return { height, hidden };

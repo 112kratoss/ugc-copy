@@ -4,9 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // What React Native's own keyboard module last heard: undefined leaves the area
 // to the tracker, as a test that mocks the module down to `addListener` does.
-const reported = vi.hoisted(() => ({ visible: undefined as boolean | undefined, height: 0 }));
+// `tracker` is the Pixel 9a emulator's keyboard as Reanimated has it: 336dp with
+// the navigation bar, and OPEN.
+const reported = vi.hoisted(() => ({ visible: undefined as boolean | undefined, height: 0, tracker: 336 }));
 
-// The Pixel 9a emulator's keyboard, as the tracker has it: 336dp with the navigation bar.
 vi.mock('react-native', () => ({
   Keyboard: {
     addListener: () => ({ remove: () => undefined }),
@@ -21,13 +22,14 @@ vi.mock('react-native-reanimated', async () => {
   return {
     ...actual,
     default: actual.default,
-    useAnimatedKeyboard: () => ({ height: { value: 336 }, state: { value: actual.KeyboardState.OPEN } }),
+    useAnimatedKeyboard: () => ({ height: { value: reported.tracker }, state: { value: actual.KeyboardState.OPEN } }),
   };
 });
 
 afterEach(() => {
   reported.visible = undefined;
   reported.height = 0;
+  reported.tracker = 336;
 });
 
 import { KeyboardAvoidingArea } from '../components/keyboard-aware';
@@ -76,9 +78,18 @@ describe('KeyboardAvoidingArea', () => {
     expect(lift(<KeyboardAvoidingArea><></></KeyboardAvoidingArea>)).toBe(0);
   });
 
-  it('still gives way to a keyboard React Native says is up', () => {
+  it('lets the tracker lead while React Native says the keyboard is up', () => {
+    reported.visible = true;
+    expect(lift(<KeyboardAvoidingArea><></></KeyboardAvoidingArea>)).toBe(336);
+  });
+
+  // A height read as the area mounts may be a keyboard already leaving, whose hide
+  // the area may never hear (iOS counts it down only at keyboardDidHide), so the
+  // area takes only "up or down" from React Native at mount, never a height.
+  it('takes no height from React Native as it mounts', () => {
     reported.visible = true;
     reported.height = 312;
-    expect(lift(<KeyboardAvoidingArea><></></KeyboardAvoidingArea>)).toBe(336);
+    reported.tracker = 0;
+    expect(lift(<KeyboardAvoidingArea><></></KeyboardAvoidingArea>)).toBe(0);
   });
 });

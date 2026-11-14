@@ -3,7 +3,14 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { getKeyboardLift, isTrackerMotion, resolveKeyboardHeight } from '../lib/keyboard';
+import {
+  getKeyboardLift,
+  isTrackerMotion,
+  listenToReportedKeyboard,
+  type ReportedKeyboardApi,
+  type ReportedKeyboardEvent,
+  resolveKeyboardHeight,
+} from '../lib/keyboard';
 
 describe('keyboard lift', () => {
   it('gives way by nothing while the keyboard is closed', () => {
@@ -95,5 +102,64 @@ describe('tracker motion', () => {
 
   it('does not count the first value an area hears', () => {
     expect(isTrackerMotion({ height: 336, previousHeight: null, animating: true })).toBe(false);
+  });
+});
+
+describe('reported keyboard events', () => {
+  function fakeKeyboard(visible?: boolean) {
+    const listeners = new Map<string, (event: ReportedKeyboardEvent) => void>();
+    const removed: string[] = [];
+    const keyboard: ReportedKeyboardApi = {
+      addListener: (name, listener) => {
+        listeners.set(name, listener);
+        return { remove: () => removed.push(name) };
+      },
+      ...(visible === undefined ? {} : { isVisible: () => visible }),
+    };
+    return { keyboard, listeners, removed };
+  }
+
+  function listen(visible: boolean | undefined, ios: boolean) {
+    const fake = fakeKeyboard(visible);
+    const heard: string[] = [];
+    const stop = listenToReportedKeyboard({
+      keyboard: fake.keyboard,
+      ios,
+      onShow: (event) => heard.push(`show ${event.endCoordinates.height}`),
+      onHide: (event) => heard.push(event ? 'hide' : 'found down'),
+    });
+    return { ...fake, heard, stop };
+  }
+
+  it('hears Android by its did events alone', () => {
+    expect([...listen(true, false).listeners.keys()]).toEqual(['keyboardDidShow', 'keyboardDidHide']);
+  });
+
+  it('hears iOS by its will events and its did events', () => {
+    expect([...listen(true, true).listeners.keys()].sort()).toEqual(
+      ['keyboardDidHide', 'keyboardDidShow', 'keyboardWillHide', 'keyboardWillShow'],
+    );
+  });
+
+  // A surface mounted between iOS's willShow and didShow reads "down" from
+  // `isVisible()` and has missed the will event; the did event still lifts it.
+  it('still hears an iOS keyboard whose will event went by before it listened', () => {
+    const { listeners, heard } = listen(false, true);
+    listeners.get('keyboardDidShow')!({ endCoordinates: { height: 336 } });
+    expect(heard).toEqual(['found down', 'show 336']);
+  });
+
+  // `isVisible()` is read at render and the listeners start after it: a hide
+  // landing between the two would otherwise never reach the surface.
+  it('reports a keyboard already counted down once it starts listening', () => {
+    expect(listen(false, false).heard).toEqual(['found down']);
+    expect(listen(true, false).heard).toEqual([]);
+    expect(listen(undefined, false).heard).toEqual([]);
+  });
+
+  it('stops hearing every event it started hearing', () => {
+    const { listeners, removed, stop } = listen(true, true);
+    stop();
+    expect(removed.sort()).toEqual([...listeners.keys()].sort());
   });
 });

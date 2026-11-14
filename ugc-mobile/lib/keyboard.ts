@@ -57,7 +57,8 @@ export function getKeyboardLift({
  * since (`isTrackerMotion`); and otherwise the larger source wins, which still
  * covers a keyboard the tracker never saw open.
  *
- * The tracker's own state (OPEN, CLOSING, …) is deliberately not asked. It is
+ * The tracker's own state is asked only whether a keyboard animation is in flight
+ * (`isTrackerMotion`), never whether it has settled (OPEN, CLOSED). It is
  * settled by counting the starts and ends of keyboard animations, and
  * Reanimated stops listening when its last subscriber unmounts: a sheet that
  * closes with the keyboard up takes its area away before the keys have finished
@@ -119,4 +120,58 @@ export function isTrackerMotion({
   'worklet';
 
   return animating && previousHeight !== null && height !== previousHeight;
+}
+
+/** A React Native keyboard event, as far as a surface reads one. */
+export type ReportedKeyboardEvent = { endCoordinates: { height: number }; duration?: number };
+
+type ReportedKeyboardEventName = 'keyboardWillShow' | 'keyboardDidShow' | 'keyboardWillHide' | 'keyboardDidHide';
+
+/** React Native's `Keyboard`, as far as a surface uses it. */
+export type ReportedKeyboardApi = {
+  addListener: (
+    eventName: ReportedKeyboardEventName,
+    listener: (event: ReportedKeyboardEvent) => void,
+  ) => { remove: () => void };
+  isVisible?: () => boolean;
+};
+
+/**
+ * Hears React Native's own keyboard events for one surface, and returns what stops
+ * hearing them.
+ *
+ * iOS reports `will` events ahead of the animation with a matching duration, and
+ * those lead. Its `did` events are heard as well: React Native counts the keyboard
+ * up or down only from them, so a surface that mounts between a `will` and its
+ * `did` reads the old answer from `isVisible()` and would otherwise never hear the
+ * change. Android offers only `did`, as the keys start to move.
+ *
+ * Once listening, a keyboard React Native already counts as down is reported hidden
+ * at once: a hide that landed between the render that read `isVisible()` and these
+ * listeners would otherwise be lost.
+ */
+export function listenToReportedKeyboard({
+  keyboard,
+  ios,
+  onShow,
+  onHide,
+}: {
+  keyboard: ReportedKeyboardApi;
+  ios: boolean;
+  onShow: (event: ReportedKeyboardEvent) => void;
+  /** Called with no event for a keyboard found already down. */
+  onHide: (event?: ReportedKeyboardEvent) => void;
+}) {
+  const showEvents: ReportedKeyboardEventName[] = ios ? ['keyboardWillShow', 'keyboardDidShow'] : ['keyboardDidShow'];
+  const hideEvents: ReportedKeyboardEventName[] = ios ? ['keyboardWillHide', 'keyboardDidHide'] : ['keyboardDidHide'];
+  const subscriptions = [
+    ...showEvents.map((name) => keyboard.addListener(name, onShow)),
+    ...hideEvents.map((name) => keyboard.addListener(name, onHide)),
+  ];
+
+  if (keyboard.isVisible?.() === false) onHide();
+
+  return () => {
+    for (const subscription of subscriptions) subscription.remove();
+  };
 }
