@@ -91,6 +91,7 @@ import { BODY_MAX_LENGTH } from '@/lib/posts-server';
 import { enhancePromptForUser } from '@/lib/prompt-enhancement-service';
 import { getPromptEnhancementCost } from '@/lib/prompt-enhancer';
 import { publishGenerationToShowcaseForRoute } from '@/lib/showcase-publish-service';
+import { PROVIDER_ADMISSION_POLICY } from '@/lib/provider-admission';
 import { postUnifiedGenerationForRoute } from '@/lib/unified-generation-route-service';
 import {
   buildUnifiedGenerationQuoteInput,
@@ -797,6 +798,8 @@ const createMediaTool = defineTool({
       createUserSupabase: context.createUserSupabase,
       createAdminSupabase: context.createAdminSupabase,
       kieApiKey: context.kieApiKey,
+      // An agent's client gives a tool call less time than the app gives a start.
+      admissionWaitBudgetMs: PROVIDER_ADMISSION_POLICY.agentWaitBudgetMs,
     });
 
     if (result.ok) {

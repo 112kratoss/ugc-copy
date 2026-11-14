@@ -39,6 +39,7 @@ vi.mock('@/lib/unified-generation-start-service', async (importOriginal) => {
   };
 });
 
+import { PROVIDER_ADMISSION_POLICY, providerAdmissionWaitBudgetMs } from '@/lib/provider-admission';
 import { postUnifiedGenerationForRoute } from '@/lib/unified-generation-route-service';
 import {
   ReferenceDurationChangedError,
@@ -72,6 +73,55 @@ describe('unified generation route service', () => {
   beforeEach(() => {
     startUnifiedGenerationForRouteMock.mockReset();
     reportKieInsufficientCreditsRefusalMock.mockReset();
+  });
+
+  describe('waiting in line for the provider', () => {
+    const route = (admissionWaitBudgetMs?: number) => postUnifiedGenerationForRoute({
+      request: new Request('http://localhost/api/generations', { method: 'POST' }),
+      createUserSupabase: () => ({
+        auth: { getUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } }, error: null })) },
+      }),
+      createAdminSupabase: () => ({ kind: 'admin' }),
+      kieApiKey: 'configured',
+      readRequestBody: async () => ({ kind: 'image', modelId: 'nano-banana-2-lite' }),
+      ...(admissionWaitBudgetMs === undefined ? {} : { admissionWaitBudgetMs }),
+    });
+
+    it('starts a creator\'s run where its submission may wait its turn', async () => {
+      // This route is the one place a person waits on a start. Over the
+      // provider's limits it waits in line instead of failing; the wait is
+      // read wherever the submission is made, however deep, so it is checked
+      // from inside the start, after an await.
+      let seen: number | null = null;
+      startUnifiedGenerationForRouteMock.mockImplementationOnce(async () => {
+        await Promise.resolve();
+        seen = providerAdmissionWaitBudgetMs();
+        return { success: true, predictionId: 'task-1' };
+      });
+
+      expect(await route()).toMatchObject({ ok: true });
+      expect(seen).toBe(PROVIDER_ADMISSION_POLICY.waitBudgetMs);
+      expect(providerAdmissionWaitBudgetMs()).toBe(0);
+    });
+
+    it('uses the wait its caller names in place of the creator\'s', async () => {
+      let seen: number | null = null;
+      startUnifiedGenerationForRouteMock.mockImplementationOnce(async () => {
+        seen = providerAdmissionWaitBudgetMs();
+        return { success: true, predictionId: 'task-1' };
+      });
+
+      await route(PROVIDER_ADMISSION_POLICY.agentWaitBudgetMs);
+      expect(seen).toBe(PROVIDER_ADMISSION_POLICY.agentWaitBudgetMs);
+    });
+
+    it('answers a start that waited out its time like any busy refusal', async () => {
+      startUnifiedGenerationForRouteMock.mockRejectedValueOnce(
+        new GenerationServiceError('Too many generations are already running. No credits were charged. Please retry once some finish.', 429, 'provider_busy'),
+      );
+
+      expect(await route()).toMatchObject({ ok: false, status: 429, body: { code: 'provider_busy' } });
+    });
   });
 
   it('returns submission_pending with the held generation id after an ambiguous provider accept', async () => {

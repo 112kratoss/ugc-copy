@@ -220,6 +220,8 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   provider_circuit_breakers: TELEMETRY,
   provider_dependency_events: TELEMETRY,
   provider_fetch_attempt_counters: TELEMETRY,
+  // The line of starts waiting for the provider: ids, a model id and a reason word, a row for seconds.
+  provider_submission_waiters: TELEMETRY,
   recipe_copy_sources: RECIPE_COPY_SOURCES,
   recipe_file_sweep_cursors: RECIPE_SWEEP,
   recipe_file_sweep_deletions: RECIPE_SWEEP,
