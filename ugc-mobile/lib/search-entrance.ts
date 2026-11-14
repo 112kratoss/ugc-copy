@@ -9,8 +9,8 @@
  *
  * So the search screen cross-fades in over the page it opens from, the field's
  * capsule grows out of the pressed control's frame into its own, the
- * magnifier travels with it, the rest of the screen arrives around them, and
- * the field takes the focus at once so the keyboard rises with the capsule.
+ * magnifier travels with it and the rest of the screen arrives around them;
+ * the field takes the focus as it lands, so the keyboard follows straight on.
  * Close runs the same motion back into the control. This module is the pure
  * geometry and timing, unit-tested; `components/search-entrance.tsx` draws it.
  */
@@ -66,28 +66,32 @@ export const SEARCH_ENTRANCE = {
    * iOS; Android's fade has its own). Shorter than the capsule's growth, so the
    * page has gone before the capsule lands.
    */
-  fadeMs: 180,
+  fadeMs: 200,
   /**
    * The capsule's growth, started as the screen mounts: a spring with a
    * damping ratio of about 0.97, nearly there by 300 ms and at rest by about
-   * 400, so it lands without a bounce. It starts at mount, not at the
-   * navigator's `transitionStart`: that event reaches JS behind whatever the
-   * screen's first render left to do, and on the simulator held the capsule
-   * still on a dark screen for up to 270 ms. Started a little early, its
-   * first frames are under the cross-fade instead.
+   * 400, so it lands without a bounce. Not at the navigator's
+   * `transitionStart`: that event reached JS after the cross-fade had ended
+   * (simulator, production JS). Not on the navigator's transition progress:
+   * iOS reports a fade's progress as 1 at once (react-native-screens runs it
+   * on a UIViewPropertyAnimator its progress reader cannot follow).
    */
   spring: { stiffness: 240, damping: 30, mass: 1 },
   /**
-   * Taps wait this long: the second tap of a double tap on Home's magnifier
-   * landed on the field that had just grown under it and opened iOS's edit
-   * menu (search UX fixes 2026-11-14, from-main check).
+   * The field takes taps, and the focus, once it has nearly arrived. The
+   * focus waits because the keyboard's setup holds the UI thread the growth
+   * runs on: focused as the growth began, the capsule sat still and then
+   * jumped half-way in one frame (simulator, 2026-11-14), while the fade,
+   * drawn by the render server, ran on. Taps wait because the second tap of a
+   * double tap on Home's magnifier landed on the field just grown under it
+   * and opened iOS's edit menu (search UX fixes 2026-11-14).
    */
   touchesAfterMs: 280,
   /**
    * Close: the same motion back into the control, quicker than the growth,
    * on a decelerating curve, so it is all but home well before its end.
    */
-  exitMs: 180,
+  exitMs: 150,
   /**
    * Close asks the navigator for the pop once the field is all but back in
    * its control (98% of the way, on the exit's curve): from the pop on, the
@@ -98,7 +102,7 @@ export const SEARCH_ENTRANCE = {
    * page came back). The cross-fade then has the control in the same place
    * on both pages.
    */
-  popAfterMs: 130,
+  popAfterMs: 110,
 } as const;
 
 /** An origin that can be drawn from: measured, at least partly on screen, of a usable size. */

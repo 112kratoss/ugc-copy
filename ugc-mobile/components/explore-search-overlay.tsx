@@ -635,6 +635,8 @@ export function ExploreSearchOverlay({
     iconSize: appTheme.icon.default,
     iconInset: SEARCH_FIELD_ICON_INSET,
   });
+  // The field has (nearly) arrived: taps are taken and the focus given from then.
+  const entranceLanded = entrance.touchable;
   // Two posts across, one at the accessibility text sizes (search-post-grid.ts).
   const postColumns = searchPostGridColumns(fontScale);
   // Opened on a search (a link's `q`): its results from the first render, when
@@ -841,12 +843,13 @@ export function ExploreSearchOverlay({
   }, [visible]);
   useEffect(() => {
     // Opened on a search, it shows the results; else the field takes the focus
-    // at once, so the keyboard rises with the field as it grows out of its
-    // control, as iOS's Search does (it waited for the push to end before).
-    if (!visible || openedOn) return;
+    // as it lands from its control, and the keyboard follows straight on
+    // (lib/search-entrance.ts, touchesAfterMs; it waited for the push to end
+    // before).
+    if (!visible || openedOn || !entranceLanded) return;
     const focusTimer = setTimeout(() => inputRef.current?.focus(), 0);
     return () => clearTimeout(focusTimer);
-  }, [openedOn, visible]);
+  }, [entranceLanded, openedOn, visible]);
 
   // Related posts can come with the search in front (the first page of it).
   const relatedApplies = requestKey !== null && searchRelatedApplies({
@@ -1085,7 +1088,9 @@ export function ExploreSearchOverlay({
     const timer = setTimeout(() => setStartHoldOver(true), SEARCH_START_HOLD_MS);
     return () => clearTimeout(timer);
   }, []);
-  const startReady = historyRead && (starterSettled || startHoldOver);
+  // The recent searches are this phone's own and show as soon as they are
+  // read; only an empty start waits a moment for the ideas.
+  const startHolding = !historyRead || (!history.length && !starterAnswer && !starterSettled && !startHoldOver);
   // A model or tool row whose query no tab can search (one character: Top
   // starts at two) is not drawn: pressed, it could run nothing (review of #794).
   const starter = useMemo(() => {
@@ -1311,9 +1316,9 @@ export function ExploreSearchOverlay({
           // Recent searches under an empty field only, as on the web: under a
           // typed query that is not searched they would read as its results.
           // Under them, the ideas to start from; with neither, the invitation.
-          body === 'start' && !startReady ? (
+          body === 'start' && startHolding ? (
             // Held a moment for the recent searches and the ideas, so they
-            // arrive in place of nothing (startReady).
+            // arrive in place of nothing (startHolding).
             <View testID="search-start-holding" />
           ) : body === 'start' && (history.length || starter) ? (
             <View style={{ gap: 28 }}>

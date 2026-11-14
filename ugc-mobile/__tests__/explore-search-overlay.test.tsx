@@ -25,6 +25,7 @@ import {
   SEARCH_RELATED_SETTLE_MS,
   SEARCH_RETRY_LABEL,
   SEARCH_SORT_OPTIONS,
+  searchRecentAgainLabel,
 } from '../lib/public-search-policy/public-search-policy';
 import type {
   CreatorSearchResult,
@@ -3017,7 +3018,7 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
     await act(async () => tree.unmount());
   });
 
-  it('puts the keyboard up as it opens, so it rises with the field, not after a push (owner, 2026-11-14)', async () => {
+  it('puts the keyboard up as it opens without motion (Reduce Motion), not after a push (owner, 2026-11-14)', async () => {
     searchStarter.mockResolvedValue({ entities: [], creators: [], searches: [] });
     mocks.inputFocus.mockClear();
     let tree: renderer.ReactTestRenderer | null = null;
@@ -3075,6 +3076,20 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
       await act(async () => tree!.unmount());
     });
 
+    it('puts the keyboard up as the field lands, not as it starts to grow: its setup holds the UI thread the growth runs on', async () => {
+      mocks.inputFocus.mockClear();
+      let tree: renderer.ReactTestRenderer | null = null;
+      await act(async () => {
+        tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn(), entranceFrom: origin }));
+      });
+      await act(async () => { vi.advanceTimersByTime(SEARCH_ENTRANCE.touchesAfterMs - 1); });
+      expect(mocks.inputFocus).not.toHaveBeenCalled();
+      await act(async () => { vi.advanceTimersByTime(1); });
+      await act(async () => { vi.advanceTimersByTime(0); });
+      expect(mocks.inputFocus).toHaveBeenCalledTimes(1);
+      await act(async () => tree!.unmount());
+    });
+
     it('never pops later for a screen left another way first (the back swipe)', async () => {
       const onClose = vi.fn();
       let tree: renderer.ReactTestRenderer | null = null;
@@ -3087,6 +3102,20 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
       await act(async () => { vi.advanceTimersByTime(1000); });
       expect(onClose).not.toHaveBeenCalled();
     });
+  });
+
+  it('shows the recent searches as soon as they are read, without waiting for the ideas', async () => {
+    mocks.readSearchHistory.mockResolvedValue(['portrait']);
+    searchStarter.mockImplementation(() => new Promise(() => {}));
+    let tree: renderer.ReactTestRenderer | null = null;
+    await act(async () => {
+      tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn() }));
+    });
+    expect(tree!.root.findAll((node) => node.props.testID === 'search-start-holding')).toEqual([]);
+    expect(pressableLabelled(tree!, searchRecentAgainLabel('portrait'))).toBeTruthy();
+    await act(async () => tree!.unmount());
+    mocks.readSearchHistory.mockResolvedValue([]);
+    searchStarter.mockImplementation(async () => ({ entities: [], creators: [], searches: [] }));
   });
 
   it('holds the start a moment for the ideas, so they arrive in place of nothing, then gives way to the idle card', async () => {
