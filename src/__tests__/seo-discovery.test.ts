@@ -97,7 +97,9 @@ describe('site name', () => {
 
     // What Google prints above a result's address; it printed the domain while
     // `/` had no WebSite block (2026-11-14).
-    it('names the site Magic Booklet, with the one-word spelling and the domain as fallbacks', async () => {
+    // Not the one-word "Magicbooklet": a backup Google strongly considers
+    // would offer it the name the site dropped (review of #800).
+    it('names the site Magic Booklet, with the domain as its only fallback', async () => {
         vi.stubEnv('NEXT_PUBLIC_SITE_URL', 'https://magicbooklet.com/');
         vi.resetModules();
         const { buildWebSiteSchema } = await import('@/lib/seo');
@@ -106,7 +108,7 @@ describe('site name', () => {
             '@context': 'https://schema.org',
             '@type': 'WebSite',
             name: 'Magic Booklet',
-            alternateName: ['Magicbooklet', 'magicbooklet.com'],
+            alternateName: ['magicbooklet.com'],
             url: 'https://magicbooklet.com/',
         });
     });

@@ -225,16 +225,18 @@ export function buildOrganizationSchema() {
  * 2026-11-14); this block is the signal its site-name system weighs most,
  * ahead of `og:site_name`, the title and the headings, and it belongs on the
  * home page only (developers.google.com/search/docs/appearance/site-names).
- * `alternateName` is what Google may print instead, in order of preference:
- * the one-word spelling the apps and the site carried until the 2026-11-05
- * rename, then the domain itself.
+ * `alternateName` is the backup Google "strongly considers" when it is not
+ * confident in `name`, as it may not be just after a rename, so it holds only
+ * the domain, the backup Google's docs recommend: the one-word "Magicbooklet"
+ * the site and the apps carried until the 2026-11-05 rename would have
+ * offered Google the old name back (review of #800).
  */
 export function buildWebSiteSchema() {
     return {
         '@context': 'https://schema.org',
         '@type': 'WebSite',
         name: siteConfig.name,
-        alternateName: ['Magicbooklet', new URL(siteConfig.siteUrl).hostname],
+        alternateName: [new URL(siteConfig.siteUrl).hostname],
         url: absoluteUrl('/'),
     };
 }
