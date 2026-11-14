@@ -34,6 +34,12 @@ export type ClaimedProviderSubmission = {
   userId: string;
   task: QueuedProviderTask;
   queuedAtMs: number;
+  /**
+   * Whether the generation may still be sent: it holds its credits and has
+   * reached nothing. False for one settled, attached or marked unknown while
+   * its row waited, whose request must be dropped, never sent.
+   */
+  sendable: boolean;
 };
 
 /** A run still in the queue, without its request. */
@@ -65,6 +71,11 @@ const USER_QUEUE_FULL_MESSAGE =
  *
  * Unlike the gate, this cannot fail open. Failing open on the gate sends the
  * run; here it would answer "queued" for a run nothing holds a request for.
+ *
+ * What is left when both asks are lost: the row may exist and the start is
+ * refunded. The generation leaving `pending` deletes the row with it (a
+ * trigger), and a claim says a settled generation is not to be sent, so the
+ * only send that can follow is by a pass that claimed in the moment between.
  */
 export async function enqueueProviderSubmission(params: {
   generationId: string;
@@ -74,26 +85,38 @@ export async function enqueueProviderSubmission(params: {
   let status: string | null = null;
   let data: unknown = null;
 
-  try {
-    const client = params.client ?? createServiceClient();
-    const answer = await client.rpc('enqueue_provider_submission', {
-      p_generation_id: params.generationId,
-      p_service: KIE_PROVIDER_SERVICE,
-      p_model: params.task.modelId,
-      p_endpoint: params.task.endpoint,
-      // The callback address travels with the body, as it is sent.
-      p_request: { ...params.task.body, callBackUrl: params.task.callbackUrl },
-      p_queue_max: PROVIDER_ADMISSION_POLICY.queueMax,
-      p_user_queue_max: PROVIDER_ADMISSION_POLICY.queueUserMax,
-    });
-    if (answer.error) throw answer.error;
-    data = answer.data;
-    status = isRecord(data) && typeof data.status === 'string' ? data.status : null;
-  } catch (error) {
-    logBackendWarning('generation_submission_queue_unavailable', {
-      generationId: params.generationId,
-      error: error instanceof Error ? error.message : String(isRecord(error) ? error.message : error),
-    });
+  // Asked again, once, when the first ask was lost. The row may have been
+  // written all the same, and a start that then refunded itself would leave a
+  // request in the queue for a run nobody is paying for. Asking again is
+  // safe: a run already queued keeps its place and its request.
+  for (let attempt = 1; attempt <= 2 && status === null; attempt += 1) {
+    try {
+      const client = params.client ?? createServiceClient();
+      const answer = await client.rpc('enqueue_provider_submission', {
+        p_generation_id: params.generationId,
+        p_service: KIE_PROVIDER_SERVICE,
+        p_model: params.task.modelId,
+        p_endpoint: params.task.endpoint,
+        // The callback address travels with the body, as it is sent.
+        p_request: { ...params.task.body, callBackUrl: params.task.callbackUrl },
+        p_queue_max: PROVIDER_ADMISSION_POLICY.queueMax,
+        p_user_queue_max: PROVIDER_ADMISSION_POLICY.queueUserMax,
+      });
+      if (answer.error) throw answer.error;
+      data = answer.data;
+      status = isRecord(data) && typeof data.status === 'string' ? data.status : 'invalid_answer';
+      // The first ask did queue it, and a pass has taken it to send since:
+      // reserved or attached, it is no longer queueable because it is on its way.
+      if (attempt === 2 && status === 'not_queueable') {
+        return { queuedAtMs: Date.now(), ahead: null };
+      }
+    } catch (error) {
+      logBackendWarning('generation_submission_queue_unavailable', {
+        generationId: params.generationId,
+        attempt,
+        error: error instanceof Error ? error.message : String(isRecord(error) ? error.message : error),
+      });
+    }
   }
 
   if (status === 'queued' && isRecord(data)) {
@@ -141,6 +164,7 @@ export async function claimQueuedProviderSubmission(
       modelId: typeof data.model === 'string' ? data.model : null,
     },
     queuedAtMs: Number.isFinite(queuedAtMs) ? queuedAtMs : Date.now(),
+    sendable: data.sendable === true,
   };
 }
 

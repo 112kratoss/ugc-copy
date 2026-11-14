@@ -46,8 +46,9 @@ A start over either limit is not failed. A creator's start (the app, the web and
 stored (`generation_queued_submissions`) and it answers at once, with `status: "waiting"`,
 `queued: true` and the generation's own id as the id to follow it by. The server sends it
 when its turn comes, in the order the queue was joined (`reserve_provider_submission` counts
-the queue's rows as the line), whether or not the creator is still there. A queued run is
-sent within 10 minutes or refunded and its creator notified; the queue holds 200 runs, 4 of
+the queue's rows as the line), whether or not the creator is still there. A queued run may
+wait 10 minutes; the first pass over the queue after that (the cron's at the latest, so
+within about 20) refunds it and notifies its creator. The queue holds 200 runs, 4 of
 one creator. Past that a start answers `provider_busy` with its credits returned, as every
 over-limit start once did. Template and workflow steps are not queued; their own retry brings
 them back, behind only the runs queued before the step was first turned away. How the queue

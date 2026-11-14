@@ -151,9 +151,6 @@ export async function getMotionGenerationForRoute(
       createAdminSupabase: input.createAdminSupabase as () => SupabaseClient,
       runAfterResponse: input.runAfterResponse,
     });
-    if (handle.kind === 'missing') {
-      return { ok: false, body: { error: 'Generation not found' }, status: 404 };
-    }
     if (handle.kind === 'answered') {
       return { ok: true, body: handle.body };
     }

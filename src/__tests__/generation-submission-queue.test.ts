@@ -38,7 +38,10 @@ import {
   driveQueuedSubmissions,
   QUEUED_SUBMISSION_CANCELLED_MESSAGE,
   QUEUED_SUBMISSION_EXPIRED_MESSAGE,
+  QUEUED_SUBMISSION_PASS_BUDGET_MS,
   QUEUED_SUBMISSION_PASS_LIMIT,
+  QUEUED_SUBMISSION_PASS_SPACING_MS,
+  resetQueuedSubmissionPasses,
 } from '@/lib/generation-submission-queue';
 
 /** Queued runs `a`, `b`, `c`…, oldest first. */
@@ -83,7 +86,11 @@ function queue(queued: ReturnType<typeof run>[], options: {
   admit?: (generationId: string) => unknown;
   post?: (task: ReturnType<typeof taskOf>) => Promise<string>;
   nowMs?: number;
+  /** Generations settled, attached or marked unknown while their row waited. */
+  unsendable?: string[];
 } = {}) {
+  // A queue of its own is a server instance of its own: no pass of an earlier one to join or follow.
+  resetQueuedSubmissionPasses();
   let clock = options.nowMs ?? QUEUED_AT + 5_000;
   const waiting = [...queued];
   const pauses: number[] = [];
@@ -97,7 +104,13 @@ function queue(queued: ReturnType<typeof run>[], options: {
     const index = waiting.findIndex((candidate) => candidate.generationId === generationId);
     if (index < 0) return null;
     const [claimed] = waiting.splice(index, 1);
-    return { generationId, userId: claimed.userId, task: taskOf(generationId), queuedAtMs: claimed.queuedAtMs };
+    return {
+      generationId,
+      userId: claimed.userId,
+      task: taskOf(generationId),
+      queuedAtMs: claimed.queuedAtMs,
+      sendable: !options.unsendable?.includes(generationId),
+    };
   });
   const admit = vi.fn(async ({ generationId }: { generationId: string }) => {
     asked.push(generationId);
@@ -122,6 +135,8 @@ function queue(queued: ReturnType<typeof run>[], options: {
       post: post as never,
       now: () => clock,
       sleep: async (ms: number) => { pauses.push(ms); clock += ms; },
+      // No spread between passes, so the pauses read as the policy's own.
+      random: () => 0,
     },
   };
 }
@@ -159,7 +174,10 @@ describe('a pass over the head of the queue', () => {
 
     await driveQueuedSubmissions({ client: serviceClient().client, dependencies: served.dependencies });
 
-    expect(served.admit).toHaveBeenCalledWith({ generationId: a.generationId, model: 'nano-banana-2', mayQueue: true });
+    // And never failing open: a queued run the gate cannot be asked about waits for the next pass.
+    expect(served.admit).toHaveBeenCalledWith({
+      generationId: a.generationId, model: 'nano-banana-2', mayQueue: true, failOpen: false,
+    });
   });
 
   it('claims a run\'s request before sending it, and attaches the task it gets back', async () => {
@@ -205,6 +223,141 @@ describe('a pass over the head of the queue', () => {
     expect(served.asked).toEqual([a.generationId, b.generationId]);
     expect(summary).toEqual({ sent: 1, queued: 1, gone: 0, expired: 0, failed: 0 });
     expect(served.waiting).toEqual([a]);
+  });
+
+  it('asks once for a model whose share is full, and reaches another model\'s run behind its backlog', async () => {
+    // Six of one model queued ahead of one of another. Asking for each of the
+    // six would be six refusals for the same reason; reading only the first
+    // five would never reach the seventh, which has a place.
+    const backlog = ['a', 'b', 'c', 'd', 'e', 'f'].map((letter) => run(letter, { model: 'busy-model' }));
+    const other = run('g', { model: 'quiet-model' });
+    const served = queue([...backlog, other], {
+      admit: (generationId) => (generationId === other.generationId ? ADMITTED : noPlace('model_rate_limited')),
+    });
+
+    const summary = await driveQueuedSubmissions({ client: serviceClient().client, dependencies: served.dependencies });
+
+    expect(served.asked).toEqual([backlog[0].generationId, other.generationId]);
+    expect(served.sent).toEqual([`request of ${other.generationId}`]);
+    expect(summary).toEqual({ sent: 1, queued: 6, gone: 0, expired: 0, failed: 0 });
+  });
+
+  it('never sends a run whose generation was settled while its row waited', async () => {
+    // The start that queued it failed after the row was written, or the reaper
+    // ended it: its credits are back with the creator. The claim says so, and
+    // the request is dropped with the row.
+    const [a, b] = [run('a'), run('b')];
+    const served = queue([a, b], { unsendable: [a.generationId] });
+    const { client, rpc } = serviceClient();
+
+    const summary = await driveQueuedSubmissions({ client, dependencies: served.dependencies });
+
+    expect(served.sent).toEqual([`request of ${b.generationId}`]);
+    expect(summary).toEqual({ sent: 1, queued: 0, gone: 1, expired: 0, failed: 0 });
+    expect(served.waiting).toEqual([]);
+    expect(mocks.settle).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('does not send a run the gate could not be asked about, and goes on to the next', async () => {
+    const [a, b] = [run('a'), run('b')];
+    const served = queue([a, b], {
+      admit: (generationId) => (generationId === a.generationId ? noPlace('unavailable') : ADMITTED),
+    });
+
+    const summary = await driveQueuedSubmissions({ client: serviceClient().client, dependencies: served.dependencies });
+
+    expect(served.sent).toEqual([`request of ${b.generationId}`]);
+    expect(summary).toEqual({ sent: 1, queued: 1, gone: 0, expired: 0, failed: 0 });
+    expect(served.waiting).toEqual([a]);
+  });
+
+  it('ends the pass when the gate cannot be asked at all', async () => {
+    const queued = ['a', 'b', 'c', 'd'].map((letter) => run(letter));
+    const served = queue(queued, { admit: () => noPlace('unavailable') });
+
+    const summary = await driveQueuedSubmissions({ client: serviceClient().client, dependencies: served.dependencies });
+
+    expect(served.asked).toEqual([queued[0].generationId, queued[1].generationId]);
+    expect(summary).toMatchObject({ sent: 0, queued: 2 });
+    expect(mocks.claim).not.toHaveBeenCalled();
+  });
+
+  it('keeps the credits of a run the provider accepted when the task could not be attached', async () => {
+    // The provider is running it. A refund here would be for a task that goes
+    // on to finish: the callback attaches it when it reports, as for a start
+    // that died at this point.
+    const a = run('a');
+    const served = queue([a]);
+    mocks.attach.mockRejectedValue(new GenerationServiceError('Failed to attach provider task to generation.', 500));
+    const { client, rpc } = serviceClient();
+
+    const summary = await driveQueuedSubmissions({ client, dependencies: served.dependencies });
+
+    expect(served.sent).toEqual([`request of ${a.generationId}`]);
+    expect(summary).toEqual({ sent: 1, queued: 0, gone: 0, expired: 0, failed: 0 });
+    expect(mocks.settle).not.toHaveBeenCalled();
+    expect(mocks.notifyStartFailure).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('begins no send once its time is spent', async () => {
+    const [a, b] = [run('a'), run('b')];
+    const served = queue([a, b], {
+      post: async () => { served.advance(QUEUED_SUBMISSION_PASS_BUDGET_MS); return 'task-a'; },
+    });
+
+    const summary = await driveQueuedSubmissions({ client: serviceClient().client, dependencies: served.dependencies });
+
+    // The send that had begun is finished; the next run waits for the next pass.
+    expect(served.asked).toEqual([a.generationId]);
+    expect(summary).toMatchObject({ sent: 1 });
+    expect(served.waiting).toEqual([b]);
+  });
+});
+
+describe('passes within one server instance', () => {
+  it('skips a pass wanted straight after one found the account full', async () => {
+    const a = run('a');
+    const served = queue([a], { admit: () => noPlace() });
+    const { client } = serviceClient();
+
+    await driveQueuedSubmissions({ client, dependencies: served.dependencies });
+    await driveQueuedSubmissions({ client, dependencies: served.dependencies });
+    expect(served.asked).toHaveLength(1);
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+
+    served.advance(QUEUED_SUBMISSION_PASS_SPACING_MS);
+    await driveQueuedSubmissions({ client, dependencies: served.dependencies });
+    expect(served.asked).toHaveLength(2);
+  });
+
+  it('does not skip after a pass that sent what it asked for: the next may send more', async () => {
+    const served = queue([run('a')]);
+    const { client } = serviceClient();
+
+    await driveQueuedSubmissions({ client, dependencies: served.dependencies });
+    served.waiting.push(run('b'));
+    await driveQueuedSubmissions({ client, dependencies: served.dependencies });
+
+    expect(served.sent).toHaveLength(2);
+  });
+
+  it('joins a pass that is running instead of asking the gate beside it', async () => {
+    const a = run('a');
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const served = queue([a], { post: async () => { await held; return 'task-a'; } });
+    const { client } = serviceClient();
+
+    const first = driveQueuedSubmissions({ client, dependencies: served.dependencies });
+    await vi.waitFor(() => expect(served.post).toHaveBeenCalledTimes(1));
+    const second = driveQueuedSubmissions({ client, dependencies: served.dependencies });
+    release!();
+    await Promise.all([first, second]);
+
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+    expect(served.asked).toEqual([a.generationId]);
   });
 
   it('sends nothing for a run something else claimed first', async () => {
@@ -287,7 +440,7 @@ describe('the request that queued a run, once it has answered', () => {
     const summary = await driveQueuedSubmissions({
       client: serviceClient().client,
       untilGenerationId: b.generationId,
-      budgetMs: queueDriveBudgetMs,
+      deadlineMs: QUEUED_AT + 5_000 + queueDriveBudgetMs,
       dependencies: served.dependencies,
     });
 
@@ -304,14 +457,31 @@ describe('the request that queued a run, once it has answered', () => {
     const summary = await driveQueuedSubmissions({
       client: serviceClient().client,
       untilGenerationId: a.generationId,
-      budgetMs: 5_000,
+      deadlineMs: QUEUED_AT + 5_000 + 5_000,
       dependencies: served.dependencies,
     });
 
     // 2 s + 2 s + the 1 s that was left.
     expect(served.pauses).toEqual([2_000, 2_000, 1_000]);
     expect(served.waiting).toEqual([a]);
-    expect(summary).toMatchObject({ sent: 0, queued: 4 });
+    // Three asks: at the deadline itself none is begun.
+    expect(served.asked).toHaveLength(3);
+    expect(summary).toMatchObject({ sent: 0, queued: 3 });
+  });
+
+  it('spreads its passes, so the requests of one burst do not all come back at once', async () => {
+    const a = run('a');
+    const served = queue([a], { admit: () => noPlace() });
+    served.dependencies.random = () => 1;
+
+    await driveQueuedSubmissions({
+      client: serviceClient().client,
+      untilGenerationId: a.generationId,
+      deadlineMs: QUEUED_AT + 5_000 + 4_000,
+      dependencies: served.dependencies,
+    });
+
+    expect(served.pauses).toEqual([queuePollMs * 1.5, 1_000]);
   });
 
   it('stops at once when something else sent its run', async () => {
@@ -321,7 +491,7 @@ describe('the request that queued a run, once it has answered', () => {
     await driveQueuedSubmissions({
       client: serviceClient().client,
       untilGenerationId: b.generationId,
-      budgetMs: queueDriveBudgetMs,
+      deadlineMs: QUEUED_AT + 5_000 + queueDriveBudgetMs,
       dependencies: served.dependencies,
     });
 
@@ -332,7 +502,9 @@ describe('the request that queued a run, once it has answered', () => {
   it('makes one pass and no more when it is given no run to wait for', async () => {
     const served = queue([run('a')], { admit: () => noPlace() });
 
-    await driveQueuedSubmissions({ client: serviceClient().client, budgetMs: 60_000, dependencies: served.dependencies });
+    await driveQueuedSubmissions({
+      client: serviceClient().client, deadlineMs: QUEUED_AT + 65_000, dependencies: served.dependencies,
+    });
 
     expect(served.asked).toHaveLength(1);
     expect(served.pauses).toEqual([]);
@@ -393,6 +565,17 @@ describe('a queued start that waited too long', () => {
     expect(summary).toMatchObject({ expired: 1 });
     expect(mocks.notifyFailed).not.toHaveBeenCalled();
   });
+
+  it('is not announced again when something else had already returned its credits', async () => {
+    // The reaper, or the start's own failure, told the creator when it did.
+    const served = queue([a], { nowMs: EXPIRED_AT });
+    const { client } = serviceClient('already_failed');
+
+    const summary = await driveQueuedSubmissions({ client, dependencies: served.dependencies });
+
+    expect(summary).toMatchObject({ expired: 1 });
+    expect(mocks.notifyFailed).not.toHaveBeenCalled();
+  });
 });
 
 describe('deleting a queued start', () => {
@@ -402,7 +585,7 @@ describe('deleting a queued start', () => {
     queue([a]);
     const { client, rpc } = serviceClient();
 
-    await expect(cancelQueuedSubmission(client, a.generationId)).resolves.toBe(true);
+    await expect(cancelQueuedSubmission(client, a.generationId)).resolves.toBe('cancelled');
     expect(mocks.claim).toHaveBeenCalledWith(client, a.generationId);
     expect(rpc).toHaveBeenCalledWith('settle_generation_start_failed', {
       p_generation_id: a.generationId,
@@ -416,8 +599,24 @@ describe('deleting a queued start', () => {
     queue([]);
     const { client, rpc } = serviceClient();
 
-    await expect(cancelQueuedSubmission(client, a.generationId)).resolves.toBe(false);
+    await expect(cancelQueuedSubmission(client, a.generationId)).resolves.toBe('not_queued');
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('says so when the credits could not be returned, so the creation is kept for the reaper to settle', async () => {
+    // Out of the queue already. Deleting the row now would lose the hold with it.
+    queue([a]);
+    const { client, rpc } = serviceClient(new Error('connection reset'));
+
+    await expect(cancelQueuedSubmission(client, a.generationId)).resolves.toBe('refund_failed');
+    expect(rpc).toHaveBeenCalledTimes(3);
+  });
+
+  it('counts a hold something else settled as done: there is nothing left to lose', async () => {
+    for (const status of ['already_failed', 'provider_task_attached']) {
+      queue([a]);
+      await expect(cancelQueuedSubmission(serviceClient(status).client, a.generationId)).resolves.toBe('cancelled');
+    }
   });
 
   it('lets a failed claim reach its caller, which must not delete the creation', async () => {

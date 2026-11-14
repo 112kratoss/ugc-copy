@@ -190,6 +190,17 @@ describe('a creator\'s start over the limits', () => {
     }
   });
 
+  it('does not fail open for what sends queued runs: a gate it could not ask is no turn', async () => {
+    // A start fails open because the alternative is refusing it. A queued run
+    // waits anyway, and "could not ask" may be the database saying the
+    // generation is no longer one to send.
+    for (const down of [new Error('relation does not exist'), new Raised('Generation is already terminal')]) {
+      const { seams } = line([down]);
+      await expect(admitProviderSubmission({ generationId: GENERATION_ID, mayQueue: true, failOpen: false, ...seams }))
+        .resolves.toMatchObject({ allowed: false, reason: 'unavailable' });
+    }
+  });
+
   it('gives one ask a time limit where the client can be told to', async () => {
     const { limits, seams } = slowLine(1_000, [ADMITTED], 0);
 

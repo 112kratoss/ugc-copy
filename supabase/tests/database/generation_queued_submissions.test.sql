@@ -10,7 +10,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(27);
+select plan(32);
 
 delete from public.generations;
 delete from public.provider_admission_buckets where scope like 'pgtap-queue%';
@@ -27,14 +27,14 @@ create function pg_temp.gen(n integer) returns uuid language sql as $$
   select ('e4000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid
 $$;
 
--- Generations 1 to 6 are the first creator's, 7 to 14 the second's.
+-- Generations 1 to 6 are the first creator's, 7 to 16 the second's.
 insert into public.generations (id, user_id, model, status, category, prompt)
 select
   pg_temp.gen(series),
   case when series <= 6 then 'e1000000-0000-4000-8000-000000000004'::uuid
        else 'e1000000-0000-4000-8000-000000000005'::uuid end,
   'queue-test', 'pending', 'image', 'queue fixture'
-from generate_series(1, 14) as series;
+from generate_series(1, 16) as series;
 
 create function pg_temp.enqueue(
   n integer,
@@ -154,15 +154,15 @@ select is(
 update public.generations set status = 'failed' where id = pg_temp.gen(3);
 
 select is(
-  pg_temp.enqueue(8, 'pgtap-queue', 3, 4) ->> 'status',
-  'queued',
-  'a queued start that was settled behind the queue''s back holds no place in it'
+  (select count(*)::int from public.generation_queued_submissions where generation_id = pg_temp.gen(3)),
+  0,
+  'a queued start settled behind the queue''s back loses its request with its status, at once'
 );
 
 select is(
-  (select count(*)::int from public.generation_queued_submissions where generation_id = pg_temp.gen(3)),
-  0,
-  'and its request is removed'
+  pg_temp.enqueue(8, 'pgtap-queue', 3, 4) ->> 'status',
+  'queued',
+  'and holds no place in the queue'
 );
 
 -- ─── Claiming ────────────────────────────────────────────────────────────────
@@ -170,10 +170,19 @@ select is(
 insert into public.provider_submission_waiters (generation_id, service, waiting_since, seen_at, reason)
 values (pg_temp.gen(1), 'pgtap-queue', now(), now(), 'rate_limited');
 
+create temp table pgtap_first_claim as
+  select public.claim_queued_provider_submission(pg_temp.gen(1)) as claim;
+
 select is(
-  public.claim_queued_provider_submission(pg_temp.gen(1)) #>> '{request,input,prompt}',
+  (select claim #>> '{request,input,prompt}' from pgtap_first_claim),
   'request 1',
   'the first caller to claim a queued start is handed its request'
+);
+
+select is(
+  (select claim -> 'sendable' from pgtap_first_claim),
+  'true'::jsonb,
+  'and told the generation still holds its credits and may be sent'
 );
 
 select is(
@@ -186,6 +195,16 @@ select is(
   (select count(*)::int from public.provider_submission_waiters where generation_id = pg_temp.gen(1)),
   0,
   'a claimed start waits in line no longer'
+);
+
+-- Start 8 was marked "submission unknown" while its row waited: its hold is
+-- spoken for, and it stays pending.
+update public.generations set submission_unknown_at = now() where id = pg_temp.gen(8);
+
+select is(
+  public.claim_queued_provider_submission(pg_temp.gen(8)) -> 'sendable',
+  'false'::jsonb,
+  'a claimed start whose generation is no longer one to send is handed back to be dropped, not sent'
 );
 
 delete from public.generations where id = pg_temp.gen(7);
@@ -230,6 +249,37 @@ select is(
   'a model''s backlog in the queue does not keep another model out of the account''s places'
 );
 
+-- A callback attached a task to start 13 while it waited: it is running.
+update public.generations set status = 'processing', prediction_id = 'pgtap-queue-task-13' where id = pg_temp.gen(13);
+
+select is(
+  (select count(*)::int from public.generation_queued_submissions where generation_id = pg_temp.gen(13)),
+  0,
+  'a queued start that got its task by another road is out of the queue'
+);
+
+-- A queued start past its time is owed no place. One nothing is driving (the
+-- code rolled back to a deployment that knows no queue) must not stand ahead
+-- of every start until the reaper ends it.
+select pg_temp.enqueue(15, 'pgtap-queue-old');
+update public.generation_queued_submissions set queued_at = now() - interval '14 minutes'
+where generation_id = pg_temp.gen(15);
+
+select is(
+  pg_temp.ask(16, 'pgtap-queue-old') ->> 'reason',
+  'rate_limited',
+  'a start still inside the queue''s time keeps its place however long nothing has asked for it'
+);
+
+update public.generation_queued_submissions set queued_at = now() - interval '16 minutes'
+where generation_id = pg_temp.gen(15);
+
+select is(
+  pg_temp.ask(16, 'pgtap-queue-old') ->> 'reason',
+  'admitted',
+  'one queued past it holds the gate against nobody'
+);
+
 -- A run step is not queued. Its turn is when it was first turned away.
 select pg_temp.ask(5, 'pgtap-queue-step');
 select pg_temp.enqueue(6, 'pgtap-queue-step');
@@ -261,10 +311,12 @@ select is(
     ) order by p.proname)
    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public'
-     and p.proname in ('enqueue_provider_submission', 'claim_queued_provider_submission')),
+     and p.proname in ('enqueue_provider_submission', 'claim_queued_provider_submission',
+                       'drop_queued_submission_of_settled_generation')),
   '[{"name": "claim_queued_provider_submission", "anon": false, "authenticated": false, "service_role": true},
+    {"name": "drop_queued_submission_of_settled_generation", "anon": false, "authenticated": false, "service_role": true},
     {"name": "enqueue_provider_submission", "anon": false, "authenticated": false, "service_role": true}]'::jsonb,
-  'and so are the two functions that put a start in it and take one out'
+  'and so are the functions that put a start in it, take one out, and clear one whose generation settled'
 );
 
 select * from finish();

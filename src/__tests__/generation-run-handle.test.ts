@@ -194,9 +194,30 @@ describe('a status check made with a run handle', () => {
   });
 
   it('is nobody else\'s to ask about', async () => {
-    await expect(resolve([generation({ user_id: 'someone-else' })])).resolves.toEqual({ kind: 'missing' });
-    await expect(resolve([])).resolves.toEqual({ kind: 'missing' });
+    // Not this creator's generation, or no generation at all: the id is then
+    // looked up as a provider task id, as every id was before handles, and
+    // that lookup's own ownership check answers "not found". Nothing of the
+    // run is read or said here, and a provider whose task ids are shaped like
+    // ours is still followed.
+    await expect(resolve([generation({ user_id: 'someone-else' })]))
+      .resolves.toEqual({ kind: 'task', predictionId: HANDLE });
+    await expect(resolve([])).resolves.toEqual({ kind: 'task', predictionId: HANDLE });
     expect(mocks.readQueued).not.toHaveBeenCalled();
+  });
+
+  it('does not answer "not found" for a run it could not look up', async () => {
+    // A poll stops on a 404, and the run is there: the route answers 500 and the poll comes back.
+    const failing = {
+      from: () => ({
+        select: () => ({ eq: () => ({ in: () => ({ maybeSingle: async () => ({ data: null, error: { message: 'connection reset' } }) }) }) }),
+      }),
+    };
+
+    await expect(resolveRunHandleStatus({
+      id: HANDLE,
+      userId: 'user-1',
+      createAdminSupabase: () => failing as unknown as SupabaseClient,
+    })).rejects.toMatchObject({ message: 'connection reset' });
   });
 
   it('is found for every identity linked to the caller', async () => {

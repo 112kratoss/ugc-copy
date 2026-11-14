@@ -47,14 +47,12 @@ type RunHandleRow = {
 };
 
 export type RunHandleStatus =
-  /** Not a handle: a provider task id, to look up as before. */
+  /** Not a handle of this creator's: a provider task id, to look up as before. */
   | { kind: 'task'; predictionId: string }
   /** The handle of a run that has its provider task: follow that. */
   | { kind: 'attached'; predictionId: string }
   /** The handle's own answer: queued, about to be sent, or ended before it was. */
-  | { kind: 'answered'; body: Record<string, unknown> }
-  /** No such run of this creator's. */
-  | { kind: 'missing' };
+  | { kind: 'answered'; body: Record<string, unknown> };
 
 /** What a queued run's wait is called, for the clients that show the server's words. */
 export function queuedRunPhaseLabel(ahead: number): string {
@@ -79,10 +77,16 @@ export async function resolveRunHandleStatus(params: {
     .in('user_id', ownerUserIds)
     .maybeSingle();
   if (error) {
+    // Not "no such run": the creator's poll stops on a 404, and the run is there.
     logBackendError('generation_run_handle_lookup_failed', { error });
+    throw error;
   }
   const row = data as RunHandleRow | null;
-  if (!row || !ownerUserIds.includes(row.user_id)) return { kind: 'missing' };
+  // No generation of this creator's has this id. It is then looked up as a
+  // provider task id, as every id was before there were handles: a provider
+  // whose task ids are shaped like ours is followed all the same, and an id
+  // that is neither answers that lookup's own "not found".
+  if (!row || !ownerUserIds.includes(row.user_id)) return { kind: 'task', predictionId: params.id };
 
   // Sent: from here on the run is its provider task's, as any run is.
   if (row.prediction_id) return { kind: 'attached', predictionId: row.prediction_id };

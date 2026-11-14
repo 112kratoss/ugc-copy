@@ -95,9 +95,10 @@ export const PROVIDER_ADMISSION_POLICY = {
   queueMax: 200,
   queueUserMax: 4,
   /**
-   * How long the request that queued a run goes on asking for its place after
-   * it has answered (Next's `after`). Under the 300 s the route is given, with
-   * room to create the provider task once the place comes.
+   * How long after it came in the request that queued a run goes on serving
+   * the queue (Next's `after`). No send is begun after it. The 60 s it leaves
+   * under the route's 300 are for one begun just before: an ask of the gate
+   * (`askTimeoutMs`), the provider's answer (30 s) and the attach.
    */
   queueDriveBudgetMs: 240_000,
   /**
@@ -173,7 +174,9 @@ export type ProviderAdmissionReason =
   | 'circuit_probe_in_flight'
   | 'max_in_flight'
   | 'rate_limited'
-  | 'model_rate_limited';
+  | 'model_rate_limited'
+  /** The gate could not be asked, and the caller said not to fail open (`failOpen: false`). */
+  | 'unavailable';
 
 export type ProviderAdmissionVerdict = {
   allowed: boolean;
@@ -268,6 +271,12 @@ export async function admitProviderSubmission(params: {
   mayQueue?: boolean;
   /** When a caller that keeps no place in the queue was first turned away. Defaults to the scope's, a run step's. */
   turnSinceMs?: number | null;
+  /**
+   * False for whatever sends queued runs: a gate it could not ask is answered
+   * `unavailable`, not admitted. A start fails open because the alternative is
+   * refusing it; a queued run's alternative is waiting for the next pass.
+   */
+  failOpen?: boolean;
 }): Promise<ProviderAdmissionVerdict> {
   const service = params.service?.trim() || KIE_PROVIDER_SERVICE;
   // Only a start with a generation row can be queued: the row is what waits.
@@ -311,6 +320,12 @@ export async function admitProviderSubmission(params: {
       : String(admissionError);
     const timedOut = ASK_TIMED_OUT.test(message);
     logBackendWarning('provider_admission_unavailable', { service, timedOut, error: message });
+
+    if (!timedOut && params.failOpen === false) {
+      return {
+        allowed: false, reason: 'unavailable', state: 'unknown', retryAfterSeconds: 0, inFlight: null, waitersAhead: null,
+      };
+    }
 
     if (!timedOut) {
       // Fail *open* on an infrastructure problem. The gate protects the

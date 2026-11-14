@@ -116,6 +116,9 @@ describe('unified generation route service', () => {
         success: true, predictionId: generationId, generationId, status: 'waiting', queued: true,
       });
       const later: Array<() => Promise<unknown>> = [];
+      const cameInAt = Date.parse('2026-11-15T10:00:00.000Z');
+      // The start's own work took 20 s of the route's time before it answered.
+      const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(cameInAt).mockReturnValue(cameInAt + 20_000);
 
       const result = await route({ runAfterResponse: (task: () => Promise<unknown>) => { later.push(task); } });
 
@@ -124,9 +127,12 @@ describe('unified generation route service', () => {
       expect(later).toHaveLength(1);
 
       await later[0]();
+      clock.mockRestore();
+      // Until a time on the clock, counted from when the request came in: what
+      // the start spent is not the queue's to spend again under the route's limit.
       expect(driveQueuedSubmissionMock).toHaveBeenCalledWith({
         untilGenerationId: generationId,
-        budgetMs: PROVIDER_ADMISSION_POLICY.queueDriveBudgetMs,
+        deadlineMs: cameInAt + PROVIDER_ADMISSION_POLICY.queueDriveBudgetMs,
       });
     });
 
@@ -158,6 +164,30 @@ describe('unified generation route service', () => {
       );
 
       expect(await route()).toMatchObject({ ok: false, status: 429, body: { code: 'provider_busy' } });
+    });
+  });
+
+  it('returns submission_pending with the held generation id after an ambiguous provider accept', async () => {
+    const ambiguous = new TypeError('fetch failed');
+    markHeldProviderSubmission(ambiguous, 'generation-held-unified-1');
+    startUnifiedGenerationForRouteMock.mockRejectedValueOnce(ambiguous);
+
+    const result = await postUnifiedGenerationForRoute({
+      request: new Request('http://localhost/api/generations', { method: 'POST' }),
+      createUserSupabase: () => ({
+        auth: {
+          getUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } }, error: null })),
+        },
+      }),
+      createAdminSupabase: () => ({ kind: 'admin' }),
+      kieApiKey: 'configured',
+      readRequestBody: async () => ({ kind: 'image', modelId: 'nano-banana-2-lite' }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 409,
+      body: { code: 'submission_pending', generationId: 'generation-held-unified-1' },
     });
   });
 

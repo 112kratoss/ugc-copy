@@ -116,7 +116,8 @@ by `p_turn_since` (#810's run-step rule), here its `queued_at`.
 ### 5. What a creator can do to a queued run
 
 - **Delete it**: the delete claims the stored request first, refunds the hold, then deletes.
-  (Also fixes today's unrefunded delete of a pending row.)
+  If the refund cannot be made the creation is kept, for the reaper to settle. (A pending row
+  that is not queued, a start that died, is still deleted unrefunded, as before.)
 - **Retry with the same idempotency key** (the app's "Check again"): answers the queued run
   again, not a 409.
 - **Close the app**: nothing changes; the server sends it and the completion push arrives as
@@ -127,11 +128,11 @@ by `p_turn_since` (#810's run-step rule), here its `queued_at`.
 | Surface | Today | With the queue |
 |---|---|---|
 | Web creators | "Waiting for provider" | "Queued · N ahead of you", then the usual progress |
-| Web Studio and Home tiles | "Processing" | "Queued" |
+| Web Studio tiles (`/creations`) | "Processing" | "Queued" |
 | App creator screen (installed versions) | "Queued with the model" | the same words, correct by accident |
 | App creator screen (after an OTA) | – | "Queued · N ahead of you" |
 | App profile and library | "Queued" only for `waiting` | "Queued" for a queued run |
-| MCP `create_media` / `get_generation` | `processing` / "still pending" | `queued`, with its place |
+| MCP `create_media` | `processing` | `queued` (`get_generation` goes on reporting the row's own `pending` until the run is sent) |
 
 ### 7. What stays and what goes
 
@@ -205,3 +206,47 @@ Proof (scratch database, policy limits, tasks finishing 4 s after they are sent)
 at once across six models were all answered within 0.2 s, 18 sent at once and 62 queued, none
 refused; the 62 were sent in exact queue order, 18 per 12 s window, the last after 50 s. On
 one model: 12 at once, 68 queued, sent in order at 12 per window, the last after 75 s.
+
+### What the review changed (2026-11-15)
+
+Two fresh-context reviewers read the PR, one on the database and the credit path, one on the
+request flow, the clients and the tests. Neither found a blocker in the SQL. What they found,
+and what was done:
+
+- **A refunded generation could be sent.** The reservation raises for a settled generation,
+  and the gate failed open on any error, so a queue row left behind by a start that had
+  refunded itself was claimed and posted. Now: whatever sends queued runs never fails open
+  (`failOpen: false`, answered `unavailable`); the claim says whether the generation may still
+  be sent (`sendable`), and a request that may not is dropped; a trigger deletes a queue row
+  the moment its generation leaves `pending`; and a queueing whose answer was lost is asked
+  again once instead of being refunded with its row possibly written.
+- **A sent run was refunded when its task could not be attached.** The send and the attach
+  shared one `try`. They are apart now: after the provider has accepted, nothing is refunded,
+  and the callback attaches the task, as for a start that dies at that point.
+- **Deleting a queued run could lose its credits** when the refund failed. The delete now
+  keeps the creation.
+- **A rollback would have held the gate shut.** Queue rows nothing drives counted ahead of
+  every start until the reaper ended them. A row counts for 15 minutes at most now, and the
+  deployment runbook has the two statements that end the queue by hand.
+- **Load under a burst.** Every queued start's request asked the gate about the same head
+  every two seconds. Within one server instance a pass that is running is joined and one
+  straight after a full account is skipped; passes are spread; a pass reads 25 rows, asks
+  once for a model whose share is full, and reaches another model's run behind it.
+- **The route's time limit.** The four minutes are counted from when the request came in,
+  and no send is begun after them.
+- **False alerts.** Health counted a queued run as "pending without a provider task" after
+  five minutes. It does not while the run is waiting its turn, and does again once it is
+  overdue (20 minutes), which is a queue nothing is serving.
+- **Ids.** A UUID that is no generation of the caller's is looked up as a provider task id,
+  so a provider with UUID task ids would still be followed, and a failed lookup is a 500,
+  not a "not found" that stops a poll.
+- **Tests.** The `submission_pending` regression test deleted by mistake is back. Added: the
+  three status routes followed by a handle from queued to sent; queueing on the video, motion
+  and catalog starts; the callback serving the queue; the queued answer read by the web's
+  status reader.
+
+Known and left: 200 queued long videos cannot all start inside ten minutes when the 50
+in-flight places are what they wait on, so the tail of such a burst waits, is refunded and is
+told. `/creations` says "Queued" for every pending run, including the rare start that died
+before it was sent, until the reaper ends it. A queueing whose answer is lost twice, with a
+pass claiming the run in the same moment, can still refund a run that is being sent.

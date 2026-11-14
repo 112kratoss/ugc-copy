@@ -18,11 +18,14 @@
 -- The request is the creator's material: signed links to their inputs and, for
 -- a private recipe, the prompt, which is deliberately not kept on the
 -- generation row. It is readable by the service role alone, and it exists only
--- until it is claimed: at most the few minutes a run may stay queued.
+-- while its generation is still waiting to be sent: a claim deletes it, and so
+-- does the generation leaving `pending` by any other road (the trigger below).
+-- A run may stay queued ten minutes; the pass that finds one older ends it, so
+-- a row nothing is driving lasts until the next pass, the cron's at the latest.
 --
--- The order is still the line's. A queued run keeps its ticket alive while
--- something is asking for it, and keeps its turn by its queued_at when nothing
--- is (reserve_provider_submission's p_turn_since).
+-- The order is the queue's own: reserve_provider_submission counts the rows
+-- queued before a caller as the line ahead of it, whether or not anything is
+-- asking for them.
 
 CREATE TABLE IF NOT EXISTS public.generation_queued_submissions (
   generation_id uuid PRIMARY KEY REFERENCES public.generations(id) ON DELETE CASCADE,
@@ -179,6 +182,7 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_claim jsonb;
+  v_sendable boolean;
 BEGIN
   IF p_generation_id IS NULL THEN
     RETURN NULL;
@@ -199,7 +203,22 @@ BEGIN
   -- Sent, cancelled or expired, it waits in line no longer.
   DELETE FROM public.provider_submission_waiters WHERE generation_id = p_generation_id;
 
-  RETURN v_claim;
+  IF v_claim IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  -- The request is the caller's now, but only a generation that still holds
+  -- its credits and has reached nothing may be sent with it. One that was
+  -- settled, attached or marked unknown while its row waited must not be: its
+  -- hold is gone or spoken for, and a send would run a task nobody pays for.
+  SELECT g.status = 'pending'
+     AND g.prediction_id IS NULL
+     AND g.submission_unknown_at IS NULL
+  INTO v_sendable
+  FROM public.generations g
+  WHERE g.id = p_generation_id;
+
+  RETURN v_claim || jsonb_build_object('sendable', coalesce(v_sendable, false));
 END;
 $function$;
 
@@ -207,7 +226,41 @@ REVOKE ALL ON FUNCTION public.claim_queued_provider_submission(uuid) FROM PUBLIC
 GRANT EXECUTE ON FUNCTION public.claim_queued_provider_submission(uuid) TO service_role;
 
 COMMENT ON FUNCTION public.claim_queued_provider_submission(uuid) IS
-  'Atomically takes a queued generation''s stored provider request out of the queue. Returns it to exactly one caller; null to every other.';
+  'Atomically takes a queued generation''s stored provider request out of the queue. Returns it to exactly one caller, with whether the generation may still be sent; null to every other.';
+
+-- ─── A queued request never outlives its wait ────────────────────────────────
+--
+-- A generation can leave `pending` without its queue row being claimed: the
+-- start that queued it failed after the row was written, the reaper ended it,
+-- a callback attached a task. The row would then hold the creator's request
+-- (signed links, a private prompt) for nothing, and a pass over the queue
+-- would find a run to send whose credits had already been returned. The row
+-- goes with the status, in the same transaction.
+
+CREATE FUNCTION public.drop_queued_submission_of_settled_generation()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  DELETE FROM public.generation_queued_submissions WHERE generation_id = NEW.id;
+  RETURN NULL;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.drop_queued_submission_of_settled_generation() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.drop_queued_submission_of_settled_generation() TO service_role;
+
+COMMENT ON FUNCTION public.drop_queued_submission_of_settled_generation() IS
+  'Trigger: deletes a generation''s queued provider request when the generation leaves pending.';
+
+DROP TRIGGER IF EXISTS generations_drop_queued_submission ON public.generations;
+CREATE TRIGGER generations_drop_queued_submission
+  AFTER UPDATE OF status ON public.generations
+  FOR EACH ROW
+  WHEN (OLD.status = 'pending' AND NEW.status IS DISTINCT FROM 'pending')
+  EXECUTE FUNCTION public.drop_queued_submission_of_settled_generation();
 
 -- ─── The line ────────────────────────────────────────────────────────────────
 --
@@ -436,6 +489,12 @@ BEGIN
         AND g.status = 'pending'
         AND g.prediction_id IS NULL
         AND g.provider_submission_reserved_at IS NULL
+        -- A run queued longer than this is past its ten minutes (the app's
+        -- queueMaxAgeMs) and is only waiting for the pass that ends it. It is
+        -- owed no place. Without this bound, rows that nothing drives (the
+        -- code rolled back to a deployment that knows no queue) would stand
+        -- ahead of every start until the reaper ended them 45 minutes on.
+        AND s.queued_at > v_now - interval '15 minutes'
       GROUP BY s.model
     ) AS queued;
 

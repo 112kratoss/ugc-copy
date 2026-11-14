@@ -356,10 +356,14 @@ export async function deleteOwnerGenerationForRoute({
 
     // A queued run still holds its credits and has reached no provider.
     // Deleting it takes it out of the queue and returns them first: once the
-    // row is gone nothing could. A run that could not be taken out is not
-    // deleted, so its hold is never lost with it.
+    // row is gone nothing could. A run that could not be taken out, or whose
+    // credits could not be returned just now, is not deleted: its row is what
+    // the reaper settles the hold from.
     try {
-      await cancelQueuedSubmission(adminSupabase, generationId);
+      if (await cancelQueuedSubmission(adminSupabase, generationId) === 'refund_failed') {
+        logBackendError('failed_to_refund_queued_generation_before_delete', { generationId });
+        return { ok: false, body: { error: 'Failed to delete creation.' }, status: 500 };
+      }
     } catch (error) {
       logBackendError('failed_to_cancel_queued_generation_before_delete', { error });
       return { ok: false, body: { error: 'Failed to delete creation.' }, status: 500 };

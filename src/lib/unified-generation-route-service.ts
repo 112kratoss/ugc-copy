@@ -298,6 +298,7 @@ export function mapGenerationStartRouteError(
 export async function postUnifiedGenerationForRoute(
   input: UnifiedGenerationRouteInput,
 ): Promise<UnifiedGenerationRouteResult> {
+  const requestStartedAtMs = Date.now();
   const supabase = input.createUserSupabase() as SupabaseClient;
   const {
     data: { user },
@@ -346,7 +347,9 @@ export async function postUnifiedGenerationForRoute(
       try {
         input.runAfterResponse(() => driveQueuedSubmissions({
           untilGenerationId: generationId,
-          budgetMs: PROVIDER_ADMISSION_POLICY.queueDriveBudgetMs,
+          // Counted from when the request came in, not from here: the start's
+          // own work (staging inputs, the hold) has already spent some of it.
+          deadlineMs: requestStartedAtMs + PROVIDER_ADMISSION_POLICY.queueDriveBudgetMs,
         }));
       } catch (error) {
         logBackendError('generation_queued_submission_drive_unscheduled', { generationId, error });

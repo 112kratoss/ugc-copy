@@ -8,6 +8,11 @@ const mocks = vi.hoisted(() => ({
   processGenerationOutputImportJobs: vi.fn(),
   processTemplateRunJobs: vi.fn(),
   processWorkflowRunStepJobs: vi.fn(),
+  driveQueuedSubmissions: vi.fn(),
+}));
+
+vi.mock('@/lib/generation-submission-queue', () => ({
+  driveQueuedSubmissions: (...args: unknown[]) => mocks.driveQueuedSubmissions(...args),
 }));
 
 vi.mock('@/lib/generation-services', () => ({
@@ -77,6 +82,8 @@ describe('kie webhook service', () => {
     mocks.processGenerationOutputImportJobs.mockReset();
     mocks.processTemplateRunJobs.mockReset();
     mocks.processWorkflowRunStepJobs.mockReset();
+    mocks.driveQueuedSubmissions.mockReset();
+    mocks.driveQueuedSubmissions.mockResolvedValue({ sent: 0, queued: 0, gone: 0, expired: 0, failed: 0 });
     mocks.attachGenerationProviderTask.mockResolvedValue('attached');
     mocks.enqueueGenerationCompletionJob.mockResolvedValue('job-1');
     mocks.processGenerationCompletionJobs.mockResolvedValue({
@@ -159,6 +166,29 @@ describe('kie webhook service', () => {
       lockedBy: 'kie-webhook:task-1:1782039000000:output-import',
       limit: 1,
     });
+    // A finished task has freed a place at the provider: the queue of starts
+    // is served now, not at the next cron pass.
+    await vi.waitFor(() => {
+      expect(mocks.driveQueuedSubmissions).toHaveBeenCalledWith({ client: serviceClient });
+    });
+  });
+
+  it('does not serve the queue of starts for a callback that finished nothing', async () => {
+    // No place was freed, and callbacks arrive by the hundred.
+    mocks.processGenerationCompletionJobs.mockResolvedValue({ claimed: 1, completed: 0, retried: 1, failed: 0 });
+    const { handleKieWebhookForRoute } = await import('@/lib/kie-webhook-service');
+
+    await handleKieWebhookForRoute({
+      createServiceClient,
+      env: { KIE_WEBHOOK_HMAC_KEY: 'hmac-key' },
+      nowSeconds: 1782039000,
+      request: signedKieRequest({ data: { taskId: 'task-1', state: 'success' } }),
+      scheduleAfter,
+    });
+
+    await vi.waitFor(() => expect(mocks.processGenerationCompletionJobs).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(mocks.driveQueuedSubmissions).not.toHaveBeenCalled();
   });
 
   // Veo 3.1 moved to Kie's jobs API. Its callbacks may come in the market shape or in

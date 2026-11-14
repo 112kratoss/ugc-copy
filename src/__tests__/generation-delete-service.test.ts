@@ -68,6 +68,7 @@ function createAdminSupabaseMock({
   storageFolders = {},
   queuedRequest = null,
   queueClaimError = null,
+  queueRefundError = null,
 }: {
   generation?: GenerationRow | null;
   inputMediaRows?: Array<{ user_id: string; storage_path: string | null }>;
@@ -94,6 +95,8 @@ function createAdminSupabaseMock({
   queuedRequest?: Record<string, unknown> | null;
   /** The queue could not be asked. */
   queueClaimError?: { message: string } | null;
+  /** The credits of a run taken out of the queue could not be returned. */
+  queueRefundError?: { message: string } | null;
 } = {}) {
   const deletes: string[] = [];
   /** What the delete did to a queued run, in order, among its row deletes. */
@@ -138,7 +141,7 @@ function createAdminSupabaseMock({
 
     if (fn === 'settle_generation_start_failed') {
       queueEvents.push(`refund:${String(args?.p_generation_id)}:deleted-rows=${deletes.length}`);
-      return { data: { status: 'failed' }, error: null };
+      return queueRefundError ? { data: null, error: queueRefundError } : { data: { status: 'failed' }, error: null };
     }
 
     throw new Error(`Unexpected rpc: ${fn}`);
@@ -415,6 +418,19 @@ describe('generation delete service', () => {
       const result = await remove(admin);
 
       expect(result).toMatchObject({ ok: false, status: 500 });
+      expect(admin.deletes).toEqual([]);
+      expect(admin.storageRemovals).toEqual([]);
+    });
+
+    it('is not deleted when its credits could not be returned: its row is what the reaper settles them from', async () => {
+      // Out of the queue already, so nothing will send it. With the row gone
+      // too, nothing could ever return the hold.
+      const admin = createAdminSupabaseMock({ queuedRequest: QUEUED, queueRefundError: { message: 'connection reset' } });
+
+      const result = await remove(admin);
+
+      expect(result).toMatchObject({ ok: false, status: 500 });
+      expect(admin.queueEvents.filter((event) => event.startsWith('refund:'))).toHaveLength(3);
       expect(admin.deletes).toEqual([]);
       expect(admin.storageRemovals).toEqual([]);
     });

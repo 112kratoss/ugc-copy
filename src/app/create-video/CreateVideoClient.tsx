@@ -4670,7 +4670,8 @@ function VideoCreator({
                 }
 
                 if (data.timing) {
-                    setGenerationTiming(data.timing.estimatedTotalMs ? data.timing : {
+                    // A run still queued has not started: no estimate to count down from yet.
+                    setGenerationTiming(data.timing.estimatedTotalMs || data.queued === true ? data.timing : {
                         ...data.timing,
                         estimatedTotalMs,
                     });

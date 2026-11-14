@@ -13,8 +13,10 @@ const migration = fs.readFileSync(path.resolve(
 const enqueueStart = migration.indexOf('CREATE FUNCTION public.enqueue_provider_submission');
 const claimStart = migration.indexOf('CREATE FUNCTION public.claim_queued_provider_submission');
 const reserveStart = migration.indexOf('CREATE OR REPLACE FUNCTION public.reserve_provider_submission');
+const dropTriggerStart = migration.indexOf('CREATE FUNCTION public.drop_queued_submission_of_settled_generation');
 const enqueue = migration.slice(enqueueStart, claimStart);
-const claim = migration.slice(claimStart, reserveStart);
+const claim = migration.slice(claimStart, dropTriggerStart);
+const dropTrigger = migration.slice(dropTriggerStart, reserveStart);
 const reserve = migration.slice(reserveStart);
 
 const previous = fs.readFileSync(path.resolve(
@@ -136,23 +138,58 @@ describe('generation queued submissions migration', () => {
     // first, and a row can be deleted once.
     expect(claim).toMatch(/DELETE FROM public\.generation_queued_submissions\s+WHERE generation_id = p_generation_id\s+RETURNING jsonb_build_object\(/);
     expect(claim).toContain(') INTO v_claim;');
-    expect(claim).toContain('RETURN v_claim;');
     expect(claim).not.toMatch(/\bUPDATE public\.generation_queued_submissions\b/);
     // Out of the queue, it waits in line no longer.
     expect(claim).toContain('DELETE FROM public.provider_submission_waiters WHERE generation_id = p_generation_id;');
+  });
+
+  it('tells the claimer whether the generation may still be sent', () => {
+    // A generation settled, attached or marked unknown while its row waited
+    // has no hold for a send: the request is handed back to be dropped.
+    const sendable = claim.slice(claim.indexOf('SELECT g.status ='), claim.indexOf('RETURN v_claim ||'));
+    expect(sendable).toContain("g.status = 'pending'");
+    expect(sendable).toContain('AND g.prediction_id IS NULL');
+    expect(sendable).toContain('AND g.submission_unknown_at IS NULL');
+    // A generation that is gone is not one to send either.
+    expect(claim).toContain("RETURN v_claim || jsonb_build_object('sendable', coalesce(v_sendable, false));");
+    // Nothing to claim stays null: "sendable" is never said of no request.
+    expect(claim.indexOf('IF v_claim IS NULL THEN')).toBeLessThan(claim.indexOf('SELECT g.status ='));
+  });
+
+  it('deletes a queued request when its generation leaves pending by any road', () => {
+    // The reaper, a settlement, a callback: none of them claims. Without this
+    // the request (signed links, a private prompt) would outlive its run, and
+    // a pass would find a run to send whose credits had been returned.
+    expect(dropTrigger).toContain('DELETE FROM public.generation_queued_submissions WHERE generation_id = NEW.id;');
+    expect(dropTrigger.replace(/\s+/g, ' ')).toContain(
+      "CREATE TRIGGER generations_drop_queued_submission AFTER UPDATE OF status ON public.generations FOR EACH ROW"
+      + " WHEN (OLD.status = 'pending' AND NEW.status IS DISTINCT FROM 'pending')"
+      + ' EXECUTE FUNCTION public.drop_queued_submission_of_settled_generation();',
+    );
+  });
+
+  it('stops counting a queued start once it is past its time, so a queue nothing drives cannot hold the gate', () => {
+    // After a rollback to code that knows no queue, its rows would otherwise
+    // stand ahead of every start until the reaper ended them 45 minutes on.
+    const counted = reserve.slice(reserve.indexOf('FROM public.generation_queued_submissions s'));
+    expect(counted.slice(0, counted.indexOf('GROUP BY s.model')))
+      .toContain("AND s.queued_at > v_now - interval '15 minutes'");
+    // Longer than a run may stay queued, so no run inside its time loses its place.
+    expect(15 * 60 * 1000).toBeGreaterThan(PROVIDER_ADMISSION_POLICY.queueMaxAgeMs);
   });
 
   it('never exposes either function to anon or authenticated callers', () => {
     for (const signature of [
       'enqueue_provider_submission(uuid, text, text, text, jsonb, integer, integer)',
       'claim_queued_provider_submission(uuid)',
+      'drop_queued_submission_of_settled_generation()',
     ]) {
       expect(migration.replace(/\s+/g, ' ')).toContain(`REVOKE ALL ON FUNCTION public.${signature} FROM PUBLIC, anon, authenticated;`);
       expect(migration.replace(/\s+/g, ' ')).toContain(`GRANT EXECUTE ON FUNCTION public.${signature} TO service_role;`);
     }
     // The replaced reservation keeps its grants; it is not granted again here.
     expect(migration).not.toMatch(/GRANT EXECUTE ON FUNCTION public\.reserve_provider_submission/);
-    expect(migration.match(/SECURITY DEFINER/g)).toHaveLength(3);
-    expect(migration.match(/SET search_path = public, pg_temp/g)).toHaveLength(3);
+    expect(migration.match(/SECURITY DEFINER/g)).toHaveLength(4);
+    expect(migration.match(/SET search_path = public, pg_temp/g)).toHaveLength(4);
   });
 });
