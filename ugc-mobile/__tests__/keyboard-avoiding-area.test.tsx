@@ -1,10 +1,19 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-// The Pixel 9a emulator's keyboard, as the tracker has it: 336dp with the navigation bar.
+// What React Native's own keyboard module last heard: undefined leaves the area
+// to the tracker, as a test that mocks the module down to `addListener` does.
+// `tracker` is the Pixel 9a emulator's keyboard as Reanimated has it: 336dp with
+// the navigation bar, and OPEN.
+const reported = vi.hoisted(() => ({ visible: undefined as boolean | undefined, height: 0, tracker: 336 }));
+
 vi.mock('react-native', () => ({
-  Keyboard: { addListener: () => ({ remove: () => undefined }) },
+  Keyboard: {
+    addListener: () => ({ remove: () => undefined }),
+    isVisible: () => reported.visible,
+    metrics: () => (reported.visible ? { height: reported.height } : undefined),
+  },
   Platform: { OS: 'android' },
 }));
 
@@ -13,8 +22,14 @@ vi.mock('react-native-reanimated', async () => {
   return {
     ...actual,
     default: actual.default,
-    useAnimatedKeyboard: () => ({ height: { value: 336 }, state: { value: actual.KeyboardState.OPEN } }),
+    useAnimatedKeyboard: () => ({ height: { value: reported.tracker }, state: { value: actual.KeyboardState.OPEN } }),
   };
+});
+
+afterEach(() => {
+  reported.visible = undefined;
+  reported.height = 0;
+  reported.tracker = 336;
 });
 
 import { KeyboardAvoidingArea } from '../components/keyboard-aware';
@@ -51,5 +66,30 @@ describe('KeyboardAvoidingArea', () => {
   it('gives a keyboard nothing while it is mounted not following it', () => {
     expect(lift(<KeyboardAvoidingArea followsKeyboard={false}><></></KeyboardAvoidingArea>)).toBe(0);
     expect(lift(<KeyboardAvoidingArea followsKeyboard={false} reservedBottomInset={48}><></></KeyboardAvoidingArea>)).toBe(0);
+  });
+
+  // The tracker above says "open, 336", as Reanimated tells an area that
+  // subscribes after a keyboard left with no area listening. React Native's own
+  // module saw that keyboard go, so the area mounts believing it: the sign-in wall
+  // and Withdraw otherwise drew a keyboard-sized band with no keyboard (Pixel 9a
+  // emulator; the owner's S24, 2026-11-14).
+  it('gives nothing to a keyboard React Native last saw leave', () => {
+    reported.visible = false;
+    expect(lift(<KeyboardAvoidingArea><></></KeyboardAvoidingArea>)).toBe(0);
+  });
+
+  it('lets the tracker lead while React Native says the keyboard is up', () => {
+    reported.visible = true;
+    expect(lift(<KeyboardAvoidingArea><></></KeyboardAvoidingArea>)).toBe(336);
+  });
+
+  // A height read as the area mounts may be a keyboard already leaving, whose hide
+  // the area may never hear (iOS counts it down only at keyboardDidHide), so the
+  // area takes only "up or down" from React Native at mount, never a height.
+  it('takes no height from React Native as it mounts', () => {
+    reported.visible = true;
+    reported.height = 312;
+    reported.tracker = 0;
+    expect(lift(<KeyboardAvoidingArea><></></KeyboardAvoidingArea>)).toBe(0);
   });
 });
