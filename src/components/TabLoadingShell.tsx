@@ -1,11 +1,9 @@
 type TabLoadingShellAccent = 'blue' | 'emerald' | 'rose' | 'coral';
 
 interface TabLoadingShellProps {
+  /** Read to screen readers as "Loading <title>"; nothing on screen says it. */
   title: string;
-  eyebrow: string;
   accent?: TabLoadingShellAccent;
-  /** Drawn above the card, as the page draws it above its own header (Explore's search bar). */
-  lead?: React.ReactNode;
 }
 
 const accentClasses: Record<TabLoadingShellAccent, string> = {
@@ -15,7 +13,7 @@ const accentClasses: Record<TabLoadingShellAccent, string> = {
   coral: 'from-[#2a1b1a] via-[#202024] to-[#19191c] text-[#fff8ed] border-white/10',
 };
 
-function SkeletonBlock({ className = '' }: { className?: string }) {
+export function SkeletonBlock({ className = '' }: { className?: string }) {
   return (
     <div
       className={`relative overflow-hidden rounded-2xl border border-white/8 bg-white/[0.035] ${className}`}
@@ -28,11 +26,15 @@ function SkeletonBlock({ className = '' }: { className?: string }) {
   );
 }
 
+/**
+ * A tab's wait, drawn without words (owner, 2026-11-14): the label chip and
+ * "Loading <tab>" title it used to carry flashed past on every tab switch and
+ * said nothing the sidebar's highlighted tab did not. Placeholder bars stand
+ * where they were, and the tab's name stays in the status region's label.
+ */
 export default function TabLoadingShell({
   title,
-  eyebrow,
   accent = 'blue',
-  lead = null,
 }: TabLoadingShellProps) {
   return (
     <div className="min-h-screen bg-black text-white">
@@ -42,18 +44,13 @@ export default function TabLoadingShell({
         aria-label={`Loading ${title}`}
         className="studio-shell py-8 sm:py-10"
       >
-        {lead}
         <div
           className={`rounded-3xl border bg-gradient-to-br ${accentClasses[accent]} p-5 shadow-[0_24px_80px_rgba(0,0,0,0.42)] sm:p-6`}
         >
-          <div className="inline-flex rounded-full border border-white/10 bg-black/25 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-300">
-            {eyebrow}
-          </div>
+          <SkeletonBlock className="h-6 w-28" />
           <div className="mt-5 grid gap-5 lg:grid-cols-[0.9fr_1.1fr] lg:items-end">
             <div>
-              <h2 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                Loading {title}
-              </h2>
+              <SkeletonBlock className="h-9 w-64 max-w-full sm:h-10" />
               <div className="mt-5 space-y-3">
                 <SkeletonBlock className="h-4 max-w-lg" />
                 <SkeletonBlock className="h-4 max-w-sm" />
