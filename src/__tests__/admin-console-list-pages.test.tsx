@@ -179,6 +179,7 @@ describe('admin content page', () => {
         { ...base, id: '80000000-0000-4000-8000-000000000008', title: 'Private one', visibility: 'private' },
         { ...base, id: '90000000-0000-4000-8000-000000000009', title: 'Hidden one', reviewStatus: 'hidden' },
         { ...base, id: 'a0000000-0000-4000-8000-00000000000a', title: 'Unlisted one', visibility: 'unlisted' },
+        { ...base, id: 'b0000000-0000-4000-8000-00000000000b', title: 'Flagged one', reviewStatus: 'flagged' },
       ],
     }));
 
@@ -187,6 +188,8 @@ describe('admin content page', () => {
     expect(html).not.toContain('href="/showcase/80000000-0000-4000-8000-000000000008"');
     expect(html).not.toContain('href="/showcase/90000000-0000-4000-8000-000000000009"');
     expect(html).toContain('href="/showcase/a0000000-0000-4000-8000-00000000000a"');
+    // A flagged post awaits review; the public page reads visible posts only.
+    expect(html).not.toContain('href="/showcase/b0000000-0000-4000-8000-00000000000b"');
     expect(html).toContain('Private one');
     expect(html).toContain('Hidden one');
   });

@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(21);
+select plan(20);
 
 select ok(to_regprocedure('public.admin_search_users(text,text,integer,integer)') is not null, 'admin user search RPC exists');
 select ok(not has_function_privilege('anon','public.admin_search_users(text,text,integer,integer)','EXECUTE'), 'anonymous cannot list accounts');
@@ -22,8 +22,10 @@ insert into auth.users(id,email,aud,role,is_anonymous,created_at) values
   ('a5e10003-0000-4000-8000-000000000003',null,'authenticated','authenticated',true,now() - interval '1 minute');
 update public.profiles set username = 'kindprobe-a1', display_name = 'Kindprobe_Account'
   where id = 'a5e10001-0000-4000-8000-000000000001';
+update public.profiles set display_name = 'Kindprobe\x guest'
+  where id = 'a5e10002-0000-4000-8000-000000000002';
 update public.profiles set display_name = 'Kindprobe guest'
-  where id in ('a5e10002-0000-4000-8000-000000000002','a5e10003-0000-4000-8000-000000000003');
+  where id = 'a5e10003-0000-4000-8000-000000000003';
 
 select is(
   (select array_agg(id::text order by id) from public.admin_search_users('kindprobe','registered',25,0)),
@@ -72,15 +74,11 @@ select is(
   0::bigint,
   'a percent sign in the term is a letter, not a wildcard'
 );
--- Unescaped, a trailing backslash would end the pattern on its escape character.
-select lives_ok(
-  $$select * from public.admin_search_users('kindprobe\','all',25,0)$$,
-  'a trailing backslash in the term is a letter, not an error'
-);
+-- Unescaped, the backslash would escape the 'x' and look for "kindprobex".
 select is(
-  (select count(*) from public.admin_search_users('kindprobe\','all',25,0)),
-  0::bigint,
-  'a trailing backslash matches only itself'
+  (select array_agg(id::text) from public.admin_search_users('kindprobe\x','all',25,0)),
+  array['a5e10002-0000-4000-8000-000000000002'],
+  'a backslash in the term is a letter, not an escape'
 );
 -- With neither a term nor a kind, the list is registered accounts: the
 -- fixtures are the newest profiles, so the first page holds all three.

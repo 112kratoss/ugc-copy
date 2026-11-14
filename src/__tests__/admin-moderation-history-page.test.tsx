@@ -149,7 +149,7 @@ describe('admin moderation history page', () => {
     );
 
     expect(html).not.toContain('href="/showcase/20000000-0000-4000-8000-000000000002"');
-    expect(html).toContain('title="Private or hidden by moderation: it has no public page."');
+    expect(html).toContain('title="Private, hidden by moderation or awaiting review: it has no public page."');
     expect(html).toContain('A reported post');
   });
 

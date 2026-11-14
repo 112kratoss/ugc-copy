@@ -53,21 +53,24 @@ export function adminPostHref(postId: string): string {
 }
 
 /**
- * The post's public page, or null when it has none: a private post, or one
- * moderation hid, answers 404 there. Public and unlisted posts have one.
+ * The post's public page, or null when it has none. The page reads public and
+ * unlisted posts whose review status is `visible` (`public-posts.ts`), so a
+ * private post, one moderation hid, and one flagged for review (restored while
+ * reports were still open) answer 404 there. Unknown fields are not held
+ * against a post.
  */
 export function adminPublicPostHref(post: {
   id: string;
   visibility?: string | null;
   reviewStatus?: string | null;
 }): string | null {
-  if (post.reviewStatus === 'hidden') return null;
+  if (post.reviewStatus && post.reviewStatus !== 'visible') return null;
   if (post.visibility && post.visibility !== 'public' && post.visibility !== 'unlisted') return null;
   return adminPostHref(post.id);
 }
 
 /** Said in place of a link to a post with no public page. */
-export const NO_PUBLIC_POST_PAGE = 'Private or hidden by moderation: it has no public page.';
+export const NO_PUBLIC_POST_PAGE = 'Private, hidden by moderation or awaiting review: it has no public page.';
 
 export function StatusBadge({ status, tone }: { status: string; tone?: AdminStatusTone }) {
   return (
