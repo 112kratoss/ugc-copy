@@ -17,7 +17,8 @@ const reserveBody = migration.slice(reserveStart);
 const logic = reserveBody.slice(reserveBody.indexOf('AS $function$'));
 
 const RESERVE_SIGNATURE = `uuid, text, text, numeric, numeric, numeric, numeric,
-  integer, integer, integer, integer, integer, integer, integer, boolean, integer`;
+  integer, integer, integer, integer, integer, integer, integer, boolean, integer,
+  timestamptz, integer, integer`;
 
 describe('provider submission waiting line migration', () => {
   it('keeps the line in a table of its own, the service role\'s alone', () => {
@@ -35,7 +36,7 @@ describe('provider submission waiting line migration', () => {
 
   it('only lets a ticket say one of the three refusals a place clears', () => {
     expect(migration).toContain("CHECK (reason IN ('rate_limited', 'model_rate_limited', 'max_in_flight'))");
-    expect(logic).toContain("IF v_wait AND v_reason IN ('rate_limited', 'model_rate_limited', 'max_in_flight') THEN");
+    expect(logic).toContain("IF v_wait AND v_reason IN ('rate_limited', 'model_rate_limited', 'max_in_flight')");
   });
 
   it('replaces the reservation without leaving a second candidate, and leaves the admission alone', () => {
@@ -62,6 +63,9 @@ describe('provider submission waiting line migration', () => {
     expect(lines.filter((line) => !line.includes(' DEFAULT ')).map((line) => line.split(' ')[0]))
       .toEqual(['p_generation_id', 'p_service']);
     expect(reserveBody).toContain('p_wait boolean DEFAULT false');
+    expect(reserveBody).toContain('p_turn_since timestamptz DEFAULT NULL');
+    expect(reserveBody).toContain('p_line_max integer DEFAULT NULL');
+    expect(reserveBody).toContain('p_model_line_max integer DEFAULT NULL');
     expect(reserveBody).toContain(`p_waiter_ttl_seconds integer DEFAULT ${PROVIDER_ADMISSION_POLICY.waiterTtlSeconds}`);
   });
 
@@ -83,10 +87,30 @@ describe('provider submission waiting line migration', () => {
     expect(logic).toContain('g.provider_submission_reserved_at IS NULL');
   });
 
-  it('puts a start with no ticket behind every ticket, and one with a ticket behind the older ones', () => {
-    expect(logic).toContain('v_ticket IS NULL');
-    expect(logic).toContain('OR w.waiting_since < v_ticket');
-    expect(logic).toContain('OR (w.waiting_since = v_ticket AND w.generation_id < p_generation_id)');
+  it('puts a start with no turn behind every ticket, and one with a turn behind the older ones', () => {
+    expect(logic).toContain('v_turn IS NULL');
+    expect(logic).toContain('OR w.waiting_since < v_turn');
+    expect(logic).toContain('OR (w.waiting_since = v_turn AND w.generation_id < p_generation_id)');
+  });
+
+  it('takes a start\'s turn from its ticket, or from the date a caller without one gives', () => {
+    // A run step keeps no ticket. Its turn is when it was first turned away,
+    // never later than now, so a date in the future is no turn at all. LEAST
+    // skips a null, hence the explicit case: no date must stay no turn.
+    expect(logic).toContain('v_turn := coalesce(');
+    expect(logic).toContain('CASE WHEN p_turn_since IS NULL THEN NULL ELSE least(p_turn_since, v_now) END');
+    const turn = logic.indexOf('v_turn := coalesce(');
+    expect(turn).toBeGreaterThan(logic.indexOf('SELECT waiting_since INTO v_ticket'));
+    expect(turn).toBeLessThan(logic.indexOf('FROM public.provider_submission_waiters w'));
+  });
+
+  it('gives no ticket to a start that finds the line full, and takes none away', () => {
+    expect(logic).toContain('v_ticket IS NOT NULL\n       OR (');
+    expect(logic).toContain('(p_line_max IS NULL OR v_line < p_line_max)');
+    expect(logic).toContain('AND (p_model_line_max IS NULL OR v_model IS NULL OR v_model_ahead < p_model_line_max)');
+    // The line's length is every live ticket ahead, whatever it waits for.
+    const counts = logic.slice(logic.indexOf('SELECT\n      count(*),'), logic.indexOf('INTO v_line, v_ahead, v_model_ahead'));
+    expect(counts).toContain("count(*) FILTER (WHERE w.reason <> 'model_rate_limited')");
   });
 
   it('does not let a start waiting on its model hold an account place', () => {

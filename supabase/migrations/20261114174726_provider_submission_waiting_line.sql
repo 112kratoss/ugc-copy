@@ -22,9 +22,18 @@
 --
 -- What this is not: a queue that outlives the request. The start's own request
 -- waits, holding its credits, and gives up with a refund when its time is up.
+--
 -- Template and workflow steps keep their own durable retry and do not wait
--- here; they are still held behind the line, so they cannot pass a creator who
--- is waiting.
+-- here, so they hold no ticket. Held behind every ticket they would never get
+-- in while creators keep arriving, and a run would fail after its thirty
+-- minutes of retries. A step says instead when it was first turned away
+-- (p_turn_since) and is behind only the tickets older than that: it holds no
+-- place while it is away, and when it comes back it has waited longest.
+--
+-- The line is bounded. A start that finds p_line_max tickets already waiting,
+-- or p_model_line_max of them for its own model, is refused without one: its
+-- wait could not be served inside the time it has, and every ticket costs each
+-- later ask a row to read under the lock.
 
 CREATE TABLE IF NOT EXISTS public.provider_submission_waiters (
   generation_id uuid PRIMARY KEY REFERENCES public.generations(id) ON DELETE CASCADE,
@@ -54,10 +63,11 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.provider_submission_waiters TO se
 COMMENT ON TABLE public.provider_submission_waiters IS
   'The line of generation starts waiting for provider admission. One row per waiting start, removed when it is admitted; rows whose start stopped asking are pruned by the next reservation.';
 
--- The reservation gains two parameters, which is a new signature; the old one
--- is dropped so PostgREST has a single candidate. A call from the deployment
--- before this migration names neither and resolves here with the defaults: it
--- does not wait, and it is held behind the line like any other newcomer.
+-- The reservation gains five parameters, which is a new signature; the old
+-- one is dropped so PostgREST has a single candidate. A call from the
+-- deployment before this migration names none of them and resolves here with
+-- the defaults: it does not wait, and it is held behind the line like any
+-- other newcomer.
 DROP FUNCTION IF EXISTS public.reserve_provider_submission(
   uuid, text, text, numeric, numeric, numeric, numeric,
   integer, integer, integer, integer, integer, integer, integer
@@ -79,7 +89,10 @@ CREATE FUNCTION public.reserve_provider_submission(
   p_rate_window_max integer DEFAULT 18,
   p_model_rate_window_max integer DEFAULT NULL,
   p_wait boolean DEFAULT false,
-  p_waiter_ttl_seconds integer DEFAULT 15
+  p_waiter_ttl_seconds integer DEFAULT 15,
+  p_turn_since timestamptz DEFAULT NULL,
+  p_line_max integer DEFAULT NULL,
+  p_model_line_max integer DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -99,6 +112,8 @@ DECLARE
   v_breaker_state text;
   v_now timestamptz;
   v_ticket timestamptz;
+  v_turn timestamptz;
+  v_line integer := 0;
   v_ahead integer := 0;
   v_model_ahead integer := 0;
   v_reason text;
@@ -157,6 +172,17 @@ BEGIN
   FROM public.provider_submission_waiters
   WHERE generation_id = p_generation_id;
 
+  -- This start's turn: its ticket, or for a caller that keeps none the moment
+  -- it says it was first turned away, never later than now. With neither it is
+  -- behind every ticket.
+  v_turn := coalesce(
+    v_ticket,
+    CASE WHEN p_turn_since IS NULL THEN NULL ELSE least(p_turn_since, v_now) END
+  );
+
+  -- Read without the row's lock: the advisory lock above already puts this
+  -- reservation after the ones before it, and the admission below locks the
+  -- breaker itself before it decides anything.
   SELECT state INTO v_breaker_state
   FROM public.provider_circuit_breakers
   WHERE service = v_service;
@@ -166,21 +192,29 @@ BEGIN
   -- the breaker alone and the line is left out of it.
   IF coalesce(v_breaker_state, 'closed') = 'closed' THEN
     -- Live tickets ahead of this start: every one of them when it has no
-    -- ticket yet, the older ones when it has. A ticket is alive while its
-    -- start keeps asking and its generation is still waiting to be sent.
+    -- turn yet, the older ones when it has. A ticket is alive while its start
+    -- keeps asking and its generation is still waiting to be sent.
+    --
+    -- A ticket's reason is what its last ask was refused for, so it can be one
+    -- ask out of date: a start whose model has since freed up is not counted
+    -- for an account place until it asks again, and one it was counted for may
+    -- by then be its model's to wait on. Either way the next ask puts it right,
+    -- and the limits themselves are the admission's, which no count here can
+    -- raise.
     SELECT
+      count(*),
       count(*) FILTER (WHERE w.reason <> 'model_rate_limited'),
       count(*) FILTER (WHERE v_model IS NOT NULL AND w.model = v_model)
-    INTO v_ahead, v_model_ahead
+    INTO v_line, v_ahead, v_model_ahead
     FROM public.provider_submission_waiters w
     JOIN public.generations g ON g.id = w.generation_id
     WHERE w.service = v_service
       AND w.generation_id <> p_generation_id
       AND w.seen_at > v_now - make_interval(secs => v_ttl)
       AND (
-        v_ticket IS NULL
-        OR w.waiting_since < v_ticket
-        OR (w.waiting_since = v_ticket AND w.generation_id < p_generation_id)
+        v_turn IS NULL
+        OR w.waiting_since < v_turn
+        OR (w.waiting_since = v_turn AND w.generation_id < p_generation_id)
       )
       AND g.status = 'pending'
       AND g.prediction_id IS NULL
@@ -237,7 +271,16 @@ BEGIN
     RETURN v_verdict || jsonb_build_object('waiting', false, 'waitersAhead', v_ahead);
   END IF;
 
-  IF v_wait AND v_reason IN ('rate_limited', 'model_rate_limited', 'max_in_flight') THEN
+  IF v_wait AND v_reason IN ('rate_limited', 'model_rate_limited', 'max_in_flight')
+     -- The line is full for a start that is not in it yet. One that holds a
+     -- ticket keeps it: it was let in, and is nearer the front every ask.
+     AND (
+       v_ticket IS NOT NULL
+       OR (
+         (p_line_max IS NULL OR v_line < p_line_max)
+         AND (p_model_line_max IS NULL OR v_model IS NULL OR v_model_ahead < p_model_line_max)
+       )
+     ) THEN
     -- Take a ticket, or keep the one it has: the stamp is the first refusal's.
     INSERT INTO public.provider_submission_waiters AS w
       (generation_id, service, model, waiting_since, seen_at, reason)
@@ -248,7 +291,7 @@ BEGIN
     RETURN v_verdict || jsonb_build_object('waiting', true, 'waitersAhead', v_ahead);
   END IF;
 
-  -- Not waiting, or refused for the breaker: nothing to wait in line for.
+  -- Not waiting, refused for the breaker, or the line is full: no ticket.
   DELETE FROM public.provider_submission_waiters WHERE generation_id = p_generation_id;
 
   RETURN v_verdict || jsonb_build_object('waiting', false, 'waitersAhead', v_ahead);
@@ -257,14 +300,17 @@ $function$;
 
 REVOKE ALL ON FUNCTION public.reserve_provider_submission(
   uuid, text, text, numeric, numeric, numeric, numeric,
-  integer, integer, integer, integer, integer, integer, integer, boolean, integer
+  integer, integer, integer, integer, integer, integer, integer, boolean, integer,
+  timestamptz, integer, integer
 ) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.reserve_provider_submission(
   uuid, text, text, numeric, numeric, numeric, numeric,
-  integer, integer, integer, integer, integer, integer, integer, boolean, integer
+  integer, integer, integer, integer, integer, integer, integer, boolean, integer,
+  timestamptz, integer, integer
 ) TO service_role;
 
 COMMENT ON FUNCTION public.reserve_provider_submission(
   uuid, text, text, numeric, numeric, numeric, numeric,
-  integer, integer, integer, integer, integer, integer, integer, boolean, integer
-) IS 'Atomically applies provider admission behind the waiting line and reserves one durable in-flight slot for a local generation. With p_wait, a start refused for capacity takes or keeps its ticket in the line.';
+  integer, integer, integer, integer, integer, integer, integer, boolean, integer,
+  timestamptz, integer, integer
+) IS 'Atomically applies provider admission behind the waiting line and reserves one durable in-flight slot for a local generation. With p_wait, a start refused for capacity takes or keeps its ticket in the line, up to p_line_max tickets and p_model_line_max for its model. p_turn_since is the turn of a caller that keeps no ticket.';

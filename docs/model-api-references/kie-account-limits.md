@@ -44,9 +44,13 @@ probe or an eval run on the same key spends from the same window production does
 A start over either limit is not failed. A creator's start (the app, the web and an agent's
 `create_media`) waits in a first-come-first-served line in the database
 (`provider_submission_waiters`, `reserve_provider_submission`) and asks again until it is
-admitted or its wait is spent: 45 seconds for a creator, 25 for an agent. It then answers
-`provider_busy` with its credits returned, as every over-limit start did before. Template and
-workflow steps do not wait in the request; their own retry brings them back, behind the line.
+admitted or its wait is spent: 45 seconds for a creator, 25 for an agent, and never later
+than 75 seconds after its request began. It then answers `provider_busy` with its credits
+returned, as every over-limit start did before. The line holds at most 54 starts, 36 of one
+model: a start that finds it full is refused at once rather than after a wait that could not
+be served. Template and workflow steps do not wait in the request; their own retry brings
+them back, and they are behind only the starts that were waiting before the step was first
+turned away.
 
 When Kie changes the figures, re-capture this file, change `KIE_PUBLISHED_ACCOUNT_LIMITS`,
 and let the test say whether the policy still fits.

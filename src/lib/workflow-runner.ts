@@ -90,6 +90,7 @@ import { referenceMediaLengthViolation } from '@/lib/provider-input-limits';
 import { probeMediaDurationSeconds } from '@/lib/video-rendition';
 import { workflowVideoStepQuoteFacts, workflowVideoStepSendsReferenceMedia } from '@/lib/workflow-video-step-quote';
 import { catalogMotionInputSlots } from '../../ugc-mobile/lib/model-catalog/protocol';
+import { withProviderAdmissionTurn } from '@/lib/provider-admission';
 
 export interface WorkflowRunExecutionResult {
   runId: string;
@@ -1630,14 +1631,17 @@ async function advanceWorkflowRunProgress(params: {
 
     let result: WorkflowRunnableExecutionResult;
     try {
-      result = await executeWorkflowRunnableNode({
+      // A step that the provider turned away keeps its turn in the line by the
+      // time of that first refusal, so creators waiting in their requests
+      // cannot hold it out for as long as they keep arriving.
+      result = await withProviderAdmissionTurn(stepBusySince(queuedStep), () => executeWorkflowRunnableNode({
         supabase,
         userId: run.user_id,
         node,
         graph: workingGraph,
         catalogRevision: run.catalog_revision,
         clientRequestKeyHash: workflowGenerationIdempotencyHash(run.id, node.id),
-      });
+      }));
     } catch (error) {
       const failure = getRunStepStartFailure(error);
       const heldGenerationId = getHeldProviderSubmissionGenerationId(error);

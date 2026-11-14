@@ -10,7 +10,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(32);
+select plan(40);
 
 delete from public.generations;
 delete from public.provider_admission_buckets where scope like 'pgtap-line%';
@@ -28,7 +28,7 @@ select
   ('e3000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
   'e1000000-0000-4000-8000-000000000003'::uuid,
   'line-test', 'pending', 'image', 'waiting line fixture'
-from generate_series(1, 20) as series;
+from generate_series(1, 30) as series;
 
 -- One ask by generation number. A window of one makes every admission fill it.
 create function pg_temp.ask(
@@ -38,14 +38,20 @@ create function pg_temp.ask(
   mdl text default null,
   rate_max integer default 1,
   model_max integer default null,
-  flight_max integer default 1000
+  flight_max integer default 1000,
+  turn_since timestamptz default null,
+  line_max integer default null,
+  model_line_max integer default null
 ) returns jsonb language sql as $$
   select public.reserve_provider_submission(
     ('e3000000-0000-4000-8000-' || lpad(gen::text, 12, '0'))::uuid, svc, mdl,
     p_max_in_flight => flight_max,
     p_rate_window_max => rate_max,
     p_model_rate_window_max => model_max,
-    p_wait => waits
+    p_wait => waits,
+    p_turn_since => turn_since,
+    p_line_max => line_max,
+    p_model_line_max => model_line_max
   )
 $$;
 
@@ -216,6 +222,72 @@ select is(
   (select count(*)::int from public.provider_submission_waiters where generation_id = pg_temp.gen(16)),
   0,
   'and its ticket is gone: no place in line clears an outage'
+);
+
+-- ─── A full line ─────────────────────────────────────────────────────────────
+
+select pg_temp.ask(18, true, 'pgtap-line-cap');
+select pg_temp.ask(19, true, 'pgtap-line-cap', null, 1, null, 1000, null, 1);
+
+select is(
+  (pg_temp.ask(20, true, 'pgtap-line-cap', null, 1, null, 1000, null, 1) ->> 'waiting')::boolean,
+  false,
+  'a start that finds the line full is refused without a place in it'
+);
+
+select is(
+  (select count(*)::int from public.provider_submission_waiters where generation_id = pg_temp.gen(20)),
+  0,
+  'it holds no ticket, so its request ends at once and its credits go back'
+);
+
+select is(
+  (pg_temp.ask(19, true, 'pgtap-line-cap', null, 1, null, 1000, null, 1) ->> 'waiting')::boolean,
+  true,
+  'a start already in the line keeps its ticket however full the line is'
+);
+
+-- One model's line is bounded by itself: it is served at the model's share.
+select pg_temp.ask(26, true, 'pgtap-line-model-cap', 'm1', 100, 1);
+select pg_temp.ask(27, true, 'pgtap-line-model-cap', 'm1', 100, 1, 1000, null, null, 1);
+
+select is(
+  (pg_temp.ask(28, true, 'pgtap-line-model-cap', 'm1', 100, 1, 1000, null, null, 1) ->> 'waiting')::boolean,
+  false,
+  'a start that finds its model''s line full is refused without a place in it'
+);
+
+select is(
+  pg_temp.ask(29, true, 'pgtap-line-model-cap', 'm2', 100, 1, 1000, null, null, 1) ->> 'reason',
+  'admitted',
+  'which is no bar to a start on another model'
+);
+
+-- ─── A run step's turn ───────────────────────────────────────────────────────
+--
+-- A step does not wait in its request and holds no ticket. It says when it was
+-- first turned away, and is behind only the tickets older than that.
+
+select pg_temp.ask(21, true, 'pgtap-line-turn');
+select pg_temp.ask(22, true, 'pgtap-line-turn');
+update public.provider_admission_buckets set admitted_at = '{}' where scope = 'pgtap-line-turn';
+
+select is(
+  pg_temp.ask(23, false, 'pgtap-line-turn', null, 1, null, 1000, now() + interval '1 hour') ->> 'reason',
+  'rate_limited',
+  'a turn dated in the future is no turn: the step is behind the line'
+);
+
+select is(
+  pg_temp.ask(23, false, 'pgtap-line-turn', null, 1, null, 1000, now() - interval '10 minutes') ->> 'reason',
+  'admitted',
+  'a step first turned away before the line formed takes the place that opens'
+);
+
+select is(
+  (select count(*)::int from public.provider_submission_waiters where service = 'pgtap-line-turn'),
+  1,
+  'and held no ticket for it: the one in the line is the creator still waiting'
 );
 
 -- ─── The deployment before the line ──────────────────────────────────────────

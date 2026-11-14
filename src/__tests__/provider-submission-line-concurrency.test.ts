@@ -120,7 +120,22 @@ describe.skipIf(!connectionString)('the waiting line under concurrent callers', 
     // The app's own wait against the database's own line, on the clock both
     // run on in production: the window is full, so the next starts wait about
     // one window and are then admitted, inside the budget a creator is given.
-    const { rateWindowMax, rateWindowSeconds, waitBudgetMs, waitPollMaxMs } = PROVIDER_ADMISSION_POLICY;
+    const { maxInFlight, rateWindowMax, rateWindowSeconds, waitBudgetMs, waitPollMaxMs } = PROVIDER_ADMISSION_POLICY;
+
+    // This case runs on the policy's own limits, and the in-flight cap counts
+    // every reserved, unfinished generation in the database, not this test's
+    // alone. Rows another suite left behind would make these starts wait for a
+    // slot that never frees, and time out here looking like a broken line.
+    const { rows: [before] } = await admin.query(
+      "select count(*)::int as in_flight from public.generations"
+        + " where status in ('pending', 'waiting', 'processing')"
+        + " and (prediction_id is not null or submission_unknown_at is not null or provider_submission_reserved_at is not null)"
+        + " and created_at > now() - interval '1 hour'",
+    );
+    expect(
+      before.in_flight,
+      'reserved generations left in the test database by another suite',
+    ).toBeLessThanOrEqual(maxInFlight - rateWindowMax - 2);
     const rpcOn = (client: Client) => ({
       rpc: async (fn: string, args: Record<string, unknown>) => {
         const names = Object.keys(args);
