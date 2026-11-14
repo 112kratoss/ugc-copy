@@ -3,7 +3,6 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { readLinkedAccountIds } from '@/lib/account-identity';
-import { runPagedQuery } from '@/lib/admin-paged-query';
 import {
   CREDIT_HISTORY_MAX_LIMIT,
   decodeCreditHistoryCursor,
@@ -42,6 +41,10 @@ export type AdminUserDetail = {
   email: string | null;
   lastSignInAt: string | null;
   emailConfirmedAt: string | null;
+  /** `guest` is an anonymous identity (auth.users.is_anonymous), linked or not. */
+  accountKind: 'registered' | 'guest';
+  /** The account a linked guest now belongs to (`profiles.merged_into_user_id`). */
+  linkedToUserId: string | null;
   counts: {
     generations: number;
     posts: number;
@@ -111,15 +114,6 @@ function normalizeOffset(offset: number | undefined) {
   return offset;
 }
 
-/**
- * PostgREST `or=` takes a comma-separated filter list, so a raw comma, parenthesis
- * or wildcard in the search term would change the filter's shape. Stripping the
- * structural characters keeps the term a value rather than syntax.
- */
-function sanitizeSearchTerm(term: string): string {
-  return term.replace(/[,()*\\]/g, '').trim().slice(0, 64);
-}
-
 /** At most this many credit-history pages (50 entries each) are read for the spend figure. */
 export const LIFETIME_SPEND_MAX_HISTORY_PAGES = 20;
 
@@ -153,44 +147,66 @@ async function readLifetimeCreditsSpent(
   return { credits: Math.max(0, -net), complete: false };
 }
 
-export type AdminUserSearchResult = {
-  users: AdminUserSummary[];
-  /** Matches across the whole table, not just this page. */
-  total: number;
-  /** The window actually returned; see `runPagedQuery`. */
-  offset: number;
+/**
+ * Which identities the list shows. Most profiles are guests the app signs in on
+ * a first launch, a reinstall or a sign-out, so the list opens on registered
+ * accounts; `guests` covers linked and unlinked ones alike.
+ */
+export const ADMIN_USER_KINDS = ['registered', 'guests', 'all'] as const;
+export type AdminUserKind = (typeof ADMIN_USER_KINDS)[number];
+
+export type AdminUserListRow = AdminUserSummary & {
+  /** An anonymous identity (auth.users.is_anonymous), not an account. */
+  isGuest: boolean;
+  /** The account a linked guest now belongs to (`profiles.merged_into_user_id`). */
+  linkedToUserId: string | null;
 };
 
+export type AdminUserSearchResult = {
+  users: AdminUserListRow[];
+  /** Matches across every page, not just this one. */
+  total: number;
+  /** The window actually returned: the first page when the offset was past the end. */
+  offset: number;
+  /** The kind the list was read with, the default resolved. */
+  kind: AdminUserKind;
+};
+
+/**
+ * Lists identities through `admin_search_users`, which reads
+ * auth.users.is_anonymous (PostgREST does not expose it) and escapes the term's
+ * LIKE wildcards. Without a kind, a search covers every kind, so an id copied
+ * from a report finds its guest; the bare list shows registered accounts.
+ */
 export async function searchAdminUsers(
   client: SupabaseClient,
-  options: { term?: string; limit?: number; offset?: number } = {},
+  options: { term?: string; kind?: AdminUserKind; limit?: number; offset?: number } = {},
 ): Promise<AdminUserSearchResult> {
   const limit = normalizeSearchLimit(options.limit);
-  const term = sanitizeSearchTerm(options.term ?? '');
+  const term = (options.term ?? '').trim().slice(0, 64);
+  const kind = options.kind ?? (term ? 'all' : 'registered');
 
-  const page = await runPagedQuery<Record<string, unknown>>(
-    (from, to) => {
-      const query = client
-        .from('profiles')
-        .select(
-          'id, username, display_name, avatar_url, credits, promotional_credits, created_at',
-          { count: 'exact' },
-        )
-        .order('created_at', { ascending: false })
-        // `created_at` is not unique, so a tiebreaker keeps a row from
-        // appearing on two consecutive pages (or on neither).
-        .order('id', { ascending: false })
-        .range(from, to);
+  const read = async (offset: number) => {
+    const { data, error } = await client.rpc('admin_search_users', {
+      p_term: term || null,
+      p_kind: kind,
+      p_limit: limit,
+      p_offset: offset,
+    });
+    if (error) throw error;
+    return (Array.isArray(data) ? data : []) as Array<Record<string, unknown>>;
+  };
 
-      if (!term) return query;
-      return UUID_PATTERN.test(term)
-        ? query.eq('id', term)
-        : query.or(`username.ilike.%${term}%,display_name.ilike.%${term}%`);
-    },
-    { offset: normalizeOffset(options.offset), pageSize: limit },
-  );
+  let offset = normalizeOffset(options.offset);
+  let rows = await read(offset);
+  // A page past the end comes back empty; show the first page and its total,
+  // as every other paged admin list does (runPagedQuery).
+  if (rows.length === 0 && offset > 0) {
+    offset = 0;
+    rows = await read(0);
+  }
 
-  const users = page.rows.map((row) => ({
+  const users = rows.map((row) => ({
     id: row.id as string,
     username: (row.username as string | null) ?? null,
     displayName: (row.display_name as string | null) ?? null,
@@ -198,9 +214,11 @@ export async function searchAdminUsers(
     credits: (row.credits as number | null) ?? 0,
     promotionalCredits: (row.promotional_credits as number | null) ?? 0,
     createdAt: (row.created_at as string | null) ?? null,
+    isGuest: row.is_guest === true,
+    linkedToUserId: (row.merged_into_user_id as string | null) ?? null,
   }));
 
-  return { users, total: page.total, offset: page.offset };
+  return { users, total: rows.length > 0 ? Number(rows[0].total_count ?? rows.length) : 0, offset, kind };
 }
 
 async function countRows(
@@ -227,7 +245,7 @@ export async function getAdminUserDetail(
 
   const profileResult = await client
     .from('profiles')
-    .select('id, username, display_name, avatar_url, credits, promotional_credits, created_at, bio, location, website_url')
+    .select('id, username, display_name, avatar_url, credits, promotional_credits, created_at, bio, location, website_url, merged_into_user_id')
     .eq('id', userId)
     .maybeSingle();
   if (profileResult.error) throw profileResult.error;
@@ -356,6 +374,8 @@ export async function getAdminUserDetail(
     email: authUser?.data?.user?.email ?? null,
     lastSignInAt: authUser?.data?.user?.last_sign_in_at ?? null,
     emailConfirmedAt: authUser?.data?.user?.email_confirmed_at ?? null,
+    accountKind: authUser?.data?.user?.is_anonymous === true ? 'guest' : 'registered',
+    linkedToUserId: (profile.merged_into_user_id as string | null) ?? null,
     counts: {
       generations: generationsCount,
       posts: postsCount,

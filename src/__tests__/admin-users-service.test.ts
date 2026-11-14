@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 
-import { getAdminUserDetail } from '@/lib/admin-users-service';
+import { getAdminUserDetail, searchAdminUsers } from '@/lib/admin-users-service';
 
 const USER_ID = '3f1b7c2e-6d4a-4f8b-9c1d-2a5e7b9f0c31';
 
@@ -260,8 +260,149 @@ describe('admin user purchase history', () => {
     await expect(getAdminUserDetail(client, USER_ID)).rejects.toThrow(/list_credit_history/);
   });
 
+  it('says a guest is a guest, and which account a linked guest belongs to', async () => {
+    const accountId = '5b0e8a1c-2d3f-4a5b-8c6d-7e8f9a0b1c2d';
+    const base = createClient({
+      profiles: [{ ...PROFILE, display_name: null, merged_into_user_id: accountId }],
+      transactions: [],
+      mobile_store_transactions: [],
+      credit_grants: [],
+      creator_resource_wallets: null,
+      generations: [],
+    });
+    const client = {
+      ...base,
+      from: base.from.bind(base),
+      rpc: base.rpc.bind(base),
+      auth: { admin: { getUserById: () => Promise.resolve({ data: { user: { id: USER_ID, is_anonymous: true } } }) } },
+    } as unknown as SupabaseClient;
+
+    const detail = await getAdminUserDetail(client, USER_ID);
+
+    expect(detail?.accountKind).toBe('guest');
+    expect(detail?.linkedToUserId).toBe(accountId);
+  });
+
+  it('calls an identity with a sign-in a registered account', async () => {
+    const client = createClient({
+      profiles: [PROFILE],
+      transactions: [],
+      mobile_store_transactions: [],
+      credit_grants: [],
+      creator_resource_wallets: null,
+      generations: [],
+    });
+
+    const detail = await getAdminUserDetail(client, USER_ID);
+
+    expect(detail?.accountKind).toBe('registered');
+    expect(detail?.linkedToUserId).toBeNull();
+  });
+
   it('rejects a non-UUID user id rather than issuing a broad query', async () => {
     const client = createClient({ profiles: [PROFILE] });
     await expect(getAdminUserDetail(client, 'not-a-uuid')).rejects.toThrow(/UUID/);
+  });
+});
+
+function searchRow(id: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    username: `creator-${id.slice(0, 8)}`,
+    display_name: null,
+    avatar_url: null,
+    credits: 0,
+    promotional_credits: 0,
+    created_at: '2026-11-01T00:00:00.000Z',
+    is_guest: false,
+    merged_into_user_id: null,
+    total_count: 1,
+    ...overrides,
+  };
+}
+
+describe('admin user search', () => {
+  it('lists registered accounts by default, not every guest identity', async () => {
+    // 540 of production's 620 profiles were guests, listed as "Unnamed" people.
+    const calls: RpcCall[] = [];
+    const client = createClient({}, {}, (fn, args = {}) => {
+      calls.push({ fn, args });
+      return Promise.resolve({ data: [searchRow(USER_ID, { total_count: 80 })], error: null });
+    });
+
+    const result = await searchAdminUsers(client, { limit: 50 });
+
+    expect(calls).toEqual([{
+      fn: 'admin_search_users',
+      args: { p_term: null, p_kind: 'registered', p_limit: 50, p_offset: 0 },
+    }]);
+    expect(result.total).toBe(80);
+    expect(result.kind).toBe('registered');
+  });
+
+  it('searches every kind when a term is given, so a guest id from a report is found', async () => {
+    const calls: RpcCall[] = [];
+    const client = createClient({}, {}, (fn, args = {}) => {
+      calls.push({ fn, args });
+      return Promise.resolve({ data: [], error: null });
+    });
+
+    const result = await searchAdminUsers(client, { term: '  fluffy  ' });
+
+    expect(calls[0].args).toMatchObject({ p_term: 'fluffy', p_kind: 'all' });
+    expect(result.kind).toBe('all');
+  });
+
+  it('keeps an explicit kind over the term default', async () => {
+    const calls: RpcCall[] = [];
+    const client = createClient({}, {}, (fn, args = {}) => {
+      calls.push({ fn, args });
+      return Promise.resolve({ data: [], error: null });
+    });
+
+    await searchAdminUsers(client, { term: 'fluffy', kind: 'guests' });
+
+    expect(calls[0].args).toMatchObject({ p_term: 'fluffy', p_kind: 'guests' });
+  });
+
+  it('says which rows are guests and which account a linked guest belongs to', async () => {
+    const linkedTo = '5b0e8a1c-2d3f-4a5b-8c6d-7e8f9a0b1c2d';
+    const client = createClient({}, {}, () => Promise.resolve({
+      data: [
+        searchRow(USER_ID, { display_name: 'Creator', total_count: 3 }),
+        searchRow('6c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f', { is_guest: true, total_count: 3 }),
+        searchRow('7d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a', { is_guest: true, merged_into_user_id: linkedTo, total_count: 3 }),
+      ],
+      error: null,
+    }));
+
+    const result = await searchAdminUsers(client, { kind: 'all' });
+
+    expect(result.users.map((user) => [user.isGuest, user.linkedToUserId])).toEqual([
+      [false, null],
+      [true, null],
+      [true, linkedTo],
+    ]);
+  });
+
+  it('shows the first page when the requested one is past the end', async () => {
+    const calls: RpcCall[] = [];
+    const client = createClient({}, {}, (fn, args = {}) => {
+      calls.push({ fn, args });
+      return Promise.resolve({ data: args.p_offset === 0 ? [searchRow(USER_ID, { total_count: 1 })] : [], error: null });
+    });
+
+    const result = await searchAdminUsers(client, { offset: 500 });
+
+    expect(calls.map((call) => call.args.p_offset)).toEqual([500, 0]);
+    expect(result.offset).toBe(0);
+    expect(result.total).toBe(1);
+    expect(result.users).toHaveLength(1);
+  });
+
+  it('fails rather than show an empty list it could not read', async () => {
+    const client = createClient({}, {}, () => Promise.resolve({ data: null, error: { message: 'Isolated search outage' } }));
+
+    await expect(searchAdminUsers(client)).rejects.toMatchObject({ message: 'Isolated search outage' });
   });
 });

@@ -207,6 +207,13 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
     expect(after.counters.newUsers7d).toBe(before.counters.newUsers7d + 1);
     expect(after.counters.guestSessions).toBe(before.counters.guestSessions + 1);
     expect(after.counters.newGuestSessions7d).toBe(before.counters.newGuestSessions7d + 1);
+    // Users & credits lists accounts by default; the guest is under Guests.
+    const guestId = guest.data.user!.id;
+    expect((await searchAdminUsers(admin, { term: guestId, kind: 'registered' })).users).toEqual([]);
+    const asGuest = await searchAdminUsers(admin, { term: guestId, kind: 'guests' });
+    expect(asGuest.users.map(row => [row.id, row.isGuest])).toEqual([[guestId, true]]);
+    const asAccount = await searchAdminUsers(admin, { term: registered.data.user!.id });
+    expect(asAccount.users.map(row => [row.id, row.isGuest])).toEqual([[registered.data.user!.id, false]]);
     await anon.auth.signOut();
   });
 
@@ -322,7 +329,7 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
   });
 
   it.each([
-    ['spend aggregate', '/rest/v1/rpc/get_user_ai_usage_cost_total', ''],
+    ['credit history', '/rest/v1/rpc/list_credit_history', ''],
     ['web purchases', '/rest/v1/transactions', ''],
     ['mobile purchases', '/rest/v1/mobile_store_transactions', ''],
     ['credit grants', '/rest/v1/credit_grants', ''],
@@ -344,7 +351,8 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
         return fetch(input, init);
       } },
     });
-    await expect(getAdminUserDetail(failing, owner)).rejects.toMatchObject({ message: 'Isolated user-detail read denied' });
+    // The credit history's own reader prefixes the database's words with its name.
+    await expect(getAdminUserDetail(failing, owner)).rejects.toMatchObject({ message: expect.stringContaining('Isolated user-detail read denied') });
   });
 
   it('rejects a user detail when its authoritative Auth read fails', async () => {
@@ -367,7 +375,7 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
     { label: 'content totals', pathname: '/rest/v1/posts', collect: collectAdminContentSnapshot },
     { label: 'system catalog entries', pathname: '/rest/v1/generation_model_catalog_entries', collect: collectAdminSystemSnapshot },
     { label: 'activity source', pathname: '/rest/v1/admin_user_sanctions', collect: collectAdminActivity },
-    { label: 'user search', pathname: '/rest/v1/profiles', collect: searchAdminUsers },
+    { label: 'user search', pathname: '/rest/v1/rpc/admin_search_users', collect: searchAdminUsers },
   ])('surfaces a partial $label failure instead of an empty collector result', async ({ pathname, collect }) => {
     const config = JSON.parse(readFileSync(configPath!, 'utf8'));
     const failing = createClient(config.API_URL, config.SERVICE_ROLE_KEY, {

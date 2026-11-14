@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 const collectAdminRevenueReportMock = vi.fn();
 const collectAdminContentSnapshotMock = vi.fn();
+const searchAdminUsersMock = vi.fn();
 
 vi.mock('@/lib/admin-auth', () => ({ requireAdminIdentity: vi.fn(async () => ({ subject: 'master', username: 'admin', reviewerUserId: '10000000-0000-4000-8000-000000000001' })) }));
 
@@ -15,6 +16,15 @@ vi.mock('@/lib/admin-revenue-service', () => ({
 
 vi.mock('@/lib/admin-content-service', () => ({
   collectAdminContentSnapshot: (client: unknown, options: unknown) => collectAdminContentSnapshotMock(client, options),
+}));
+
+vi.mock('@/lib/admin-users-service', () => ({
+  ADMIN_USER_KINDS: ['registered', 'guests', 'all'],
+  searchAdminUsers: (client: unknown, options: unknown) => searchAdminUsersMock(client, options),
+}));
+
+vi.mock('@/lib/admin-user-sanction-service', () => ({
+  getAdminUserAccountStates: async () => new Map(),
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
@@ -31,6 +41,7 @@ vi.mock('@/app/admin/(console)/content/PostModerationControls', () => ({
 
 import AdminContentPage from '@/app/admin/(console)/content/page';
 import AdminRevenuePage from '@/app/admin/(console)/revenue/page';
+import AdminUsersPage from '@/app/admin/(console)/users/page';
 
 function renderPageToHtml(element: ReactElement): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -168,5 +179,71 @@ describe('admin content page', () => {
     expect(html).not.toContain('Hidden posts');
     expect(html).toContain('posts=private');
     expect(html).toContain('posts=hidden');
+  });
+});
+
+function listRow(id: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id,
+    username: `creator-${id.slice(0, 8)}`,
+    displayName: null,
+    avatarUrl: null,
+    credits: 0,
+    promotionalCredits: 0,
+    createdAt: '2026-11-13T03:40:00.000Z',
+    isGuest: false,
+    linkedToUserId: null,
+    ...overrides,
+  };
+}
+
+describe('admin users page', () => {
+  it('opens on accounts and offers guests and everyone as switches', async () => {
+    searchAdminUsersMock.mockResolvedValue({
+      users: [listRow('40000000-0000-4000-8000-000000000004', { displayName: 'Ann' })],
+      total: 1,
+      offset: 0,
+      kind: 'registered',
+    });
+
+    const html = visibleText(await renderPageToHtml(await AdminUsersPage({ searchParams: Promise.resolve({}) })));
+
+    expect(searchAdminUsersMock).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ kind: undefined }));
+    expect(html).toContain('href="/admin/users?kind=registered" aria-current="page"');
+    expect(html).toContain('href="/admin/users?kind=guests"');
+    expect(html).toContain('href="/admin/users?kind=all"');
+    expect(html).toContain('1 account');
+    expect(html).not.toContain('1 accounts');
+  });
+
+  it('names a guest a guest, links a linked one to its account, and says when an account has no name', async () => {
+    const accountId = '50000000-0000-4000-8000-000000000005';
+    searchAdminUsersMock.mockResolvedValue({
+      users: [
+        listRow('60000000-0000-4000-8000-000000000006', { isGuest: true }),
+        listRow('70000000-0000-4000-8000-000000000007', { isGuest: true, linkedToUserId: accountId }),
+        listRow(accountId),
+      ],
+      total: 3,
+      offset: 0,
+      kind: 'all',
+    });
+
+    const html = visibleText(await renderPageToHtml(await AdminUsersPage({ searchParams: Promise.resolve({ kind: 'all' }) })));
+
+    expect(html).toContain('>Guest<');
+    expect(html).toContain(`href="/admin/users/${accountId}" class="text-xs underline">Linked guest<`);
+    expect(html).toContain('No name set');
+    expect(html).not.toContain('Unnamed');
+  });
+
+  it('keeps a chosen switch when the operator searches', async () => {
+    searchAdminUsersMock.mockResolvedValue({ users: [], total: 0, offset: 0, kind: 'guests' });
+
+    const html = visibleText(await renderPageToHtml(await AdminUsersPage({ searchParams: Promise.resolve({ kind: 'guests', q: 'abc' }) })));
+
+    expect(searchAdminUsersMock).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ term: 'abc', kind: 'guests' }));
+    expect(html).toContain('<input type="hidden" name="kind" value="guests"/>');
+    expect(html).toContain('No guests match “abc”.');
   });
 });

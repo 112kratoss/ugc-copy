@@ -77,7 +77,7 @@ export default async function AdminUserDetailPage({
       </Link>
 
       <PageHeader
-        title={detail.profile.displayName || 'Unnamed user'}
+        title={detail.profile.displayName || (detail.accountKind === 'guest' ? 'Guest session' : 'No name set')}
         description={detail.profile.username ? `@${detail.profile.username}` : 'No username set'}
         actions={detail.profile.username ? (
           <Link
@@ -123,6 +123,21 @@ export default async function AdminUserDetailPage({
           <Text as="h2" variant="label" className="mb-3">Account</Text>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Detail label="User id" value={<span className="font-mono text-xs">{detail.profile.id}</span>} />
+            <Detail
+              label="Type"
+              value={detail.accountKind === 'registered'
+                ? 'Registered account'
+                : detail.linkedToUserId
+                  ? (
+                    <>
+                      Guest, linked to{' '}
+                      <Link href={`/admin/users/${detail.linkedToUserId}`} className="underline">
+                        {shortId(detail.linkedToUserId)}
+                      </Link>
+                    </>
+                  )
+                  : 'Guest session (never signed up)'}
+            />
             <Detail label="Email" value={detail.email ?? '—'} />
             <Detail label="Joined" value={formatTimestamp(detail.profile.createdAt)} />
             <Detail label="Last sign in" value={formatTimestamp(detail.lastSignInAt)} />
