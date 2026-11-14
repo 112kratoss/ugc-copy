@@ -75,14 +75,41 @@ describe('every share sheet the app opens', () => {
     expect(calls.filter((call) => !['shareLinkContent', 'shareMessageContent'].includes(call.argument))).toEqual([]);
   });
 
+  // Ways to the share sheet that the scan above would not see: React Native's
+  // Share under another name, its `share` taken out of it or read by key, and
+  // the action sheet's own share method.
+  // Comments are prose, and the helper's own describe `Share.share`. A `//`
+  // after a colon is a URL's, not a comment.
+  const withoutComments = (text: string) =>
+    text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const bypass = (text: string) => {
+    const code = withoutComments(text);
+    return /import\s*\{[^}]*\bShare\s+as\s+\w+[^}]*\}\s*from\s*['"]react-native['"]/.test(code) ||
+      /\{\s*share\b[^}]*\}\s*=\s*Share\b/.test(code) ||
+      /\bShare\.share\b(?!\s*\()/.test(code) ||
+      /\bShare\s*\[\s*['"`]share['"`]\s*\]/.test(code) ||
+      /showShareActionSheetWithOptions/.test(code);
+  };
+
+  it('tells a way around Share.share from an ordinary call', () => {
+    for (const text of [
+      "import { Platform, Share as NativeShare } from 'react-native';",
+      'const { share } = Share;',
+      'const open = Share.share;',
+      "Share['share'](content);",
+      'ActionSheetIOS.showShareActionSheetWithOptions(options, onError, onSuccess);',
+    ]) expect(bypass(text), text).toBe(true);
+    for (const text of [
+      // lucide-react-native has a Share icon of its own.
+      "import { Share as ShareIcon } from 'lucide-react-native';",
+      'await Share.share(shareLinkContent(link, Platform.OS));',
+      'if (result.action === Share.sharedAction) return;',
+      '/**\n * What `Share.share` is given for a page.\n */',
+      "const url = 'https://magicbooklet.com/showcase/post-1'; // not Share.share",
+    ]) expect(bypass(text), text).toBe(false);
+  });
+
   it('reaches the share sheet only through Share.share', () => {
-    // A renamed import, a destructured `share` or the action sheet's own share
-    // method would get past the scan above.
-    const bypasses = sources.filter(({ text }) =>
-      /\bShare\s+as\s+\w+/.test(text) ||
-      /\{\s*share\b[^}]*\}\s*=\s*Share\b/.test(text) ||
-      /showShareActionSheetWithOptions/.test(text)
-    );
-    expect(bypasses.map(({ file }) => file)).toEqual([]);
+    expect(sources.filter(({ text }) => bypass(text)).map(({ file }) => file)).toEqual([]);
   });
 });

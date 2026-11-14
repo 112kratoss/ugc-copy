@@ -5,6 +5,7 @@
 import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
+import { Share } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '@/lib/api-client';
@@ -515,6 +516,17 @@ describe('the header', () => {
     expect(texts(tree).filter((text) => ['Posts', 'Saves', 'Saves received', 'Remixes', 'Recipes'].includes(text)))
       .toEqual(['Posts', 'Saves', 'Remixes', 'Recipes']);
     expect(texts(tree)).toContain('Posts 2');
+  });
+
+  it("shares the creator's link alone on iOS, once (review of #801)", async () => {
+    mocks.api.getCreatorProfile.mockResolvedValue(creatorPage());
+    vi.mocked(Share.share).mockResolvedValueOnce({ action: 'dismissedAction' } as never);
+    const tree = await renderScreen(newQueryClient());
+
+    const share = byType(tree, 'pressable').find((node) => node.props.accessibilityLabel === 'Share profile')!;
+    await act(async () => { (share.props.onPress as () => void)(); });
+
+    expect(Share.share).toHaveBeenCalledWith({ url: expect.stringMatching(/\/creators\/luna\?s=creator-profile$/) });
   });
 
   it('holds Follow while the change is on its way, so it cannot be sent twice', async () => {
