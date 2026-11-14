@@ -44,6 +44,8 @@ import {
   SEARCH_FILTER_PARAMS,
   SEARCH_FILTER_SWITCHES,
   SEARCH_HISTORY_LIMIT,
+  SEARCH_RECENTS_SHOWN,
+  shownRecentSearches,
   hasSearchFilters,
   isSearchFilterSwitchOn,
   normalizeCreatorSearchQuery,
@@ -92,6 +94,15 @@ describe('the shared search rules, read by the web (ugc-mobile/lib/public-search
       expect(parseSearchHistory(JSON.stringify(['  Kling  portrait ', 7, null, 'x', 'neon']))).toEqual(['Kling portrait', 'neon']);
       expect(parseSearchHistory(JSON.stringify(Array.from({ length: 30 }, (_, index) => `query ${index}`)))).toHaveLength(SEARCH_HISTORY_LIMIT);
       for (const raw of [null, undefined, '', 'not json', '{"a":1}', '"text"']) expect(parseSearchHistory(raw), String(raw)).toEqual([]);
+    });
+
+    it('shows the newest five of the ten kept (owner, 2026-11-14)', () => {
+      const kept = Array.from({ length: 10 }, (_, index) => `query ${index}`);
+      expect(SEARCH_RECENTS_SHOWN).toBe(5);
+      expect(shownRecentSearches(kept)).toEqual(kept.slice(0, 5));
+      expect(shownRecentSearches(['a1', 'b2'])).toEqual(['a1', 'b2']);
+      // A removal brings the sixth kept search into the fifth place.
+      expect(shownRecentSearches(searchHistoryWithout(kept, 'query 1'))).toEqual(['query 0', 'query 2', 'query 3', 'query 4', 'query 5']);
     });
 
     it('puts a search first, drops the steps of typing it, and keeps ten', () => {

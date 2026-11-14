@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExploreSearchOverlay } from '../components/explore-search-overlay';
 import { ApiError, type MagicbookletApiClient } from '../lib/api-client';
+import { SEARCH_ENTRANCE } from '../lib/search-entrance';
+import { Reveal } from '../components/reveal';
 import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
 import {
   SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS,
@@ -24,6 +26,8 @@ import {
   SEARCH_RELATED_SETTLE_MS,
   SEARCH_RETRY_LABEL,
   SEARCH_SORT_OPTIONS,
+  searchRecentAgainLabel,
+  searchRecentRemoveLabel,
 } from '../lib/public-search-policy/public-search-policy';
 import type {
   CreatorSearchResult,
@@ -48,6 +52,8 @@ const mocks = vi.hoisted(() => {
   const listeners: Array<() => boolean> = [];
   return {
     listeners,
+    reducedMotion: { value: true },
+    forgetSearchQuery: vi.fn(async (_query: string) => [] as string[]),
     focused: { value: true },
     inputFocus: vi.fn(),
     keyboardDismiss: vi.fn(),
@@ -157,6 +163,9 @@ vi.mock('@/components/ui', () => ({
 vi.mock('@/lib/motion', () => ({
   MotionView: ({ children, ...props }: MockProps) => React.createElement('motion-view', props, children),
   useOverlayPresence: (visible: boolean) => ({ mounted: visible, animatedStyle: {} }),
+  // Reduce Motion on unless a test of the entrance turns it off: the field is
+  // where it rests, taps are taken at once and Close pops at once.
+  useReducedMotion: () => mocks.reducedMotion.value,
 }));
 
 vi.mock('@/lib/platform-glyphs', () => ({
@@ -168,7 +177,7 @@ vi.mock('@/lib/search-history', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/search-history')>()),
   readSearchHistory: mocks.readSearchHistory,
   rememberSearchQuery: mocks.rememberSearchQuery,
-  forgetSearchQuery: async () => [],
+  forgetSearchQuery: mocks.forgetSearchQuery,
   clearSearchHistory: async () => {},
 }));
 
@@ -205,7 +214,7 @@ describe('ExploreSearchOverlay as a screen', () => {
     const route = readFileSync(join(__dirname, '../app/search.tsx'), 'utf8');
     expect(route).toContain('<ExploreSearchOverlay');
     const layout = readFileSync(join(__dirname, '../app/_layout.tsx'), 'utf8');
-    expect(layout).toContain('<Stack.Screen name="search" options={{ headerShown: false }} />');
+    expect(layout).toContain("<Stack.Screen name=\"search\" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade', animationDuration: SEARCH_ENTRANCE.fadeMs }} />");
   });
 
   it('claims nothing while hidden', async () => {
@@ -556,6 +565,47 @@ describe('ExploreSearchOverlay search', () => {
       await typeQuery(tree, '');
       expect(shownTexts(tree)).toContain('Recent searches');
       mocks.readSearchHistory.mockResolvedValue([]);
+      await act(async () => tree.unmount());
+    });
+
+    it('shows the newest five recent searches, and a removal brings the sixth into the fifth place (owner, 2026-11-14)', async () => {
+      const kept = ['one', 'two', 'three', 'four', 'five', 'six', 'seven'];
+      mocks.readSearchHistory.mockResolvedValue(kept);
+      mocks.forgetSearchQuery.mockImplementation(async (query: string) => kept.filter((item) => item !== query));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await advance(200);
+      const shown = () => tree.root.findAll((node) => typeof node.props.accessibilityLabel === 'string' && node.props.accessibilityLabel.startsWith('Search again for ') && typeof node.type === 'string').map((node) => String(node.props.accessibilityLabel).replace('Search again for ', ''));
+      expect(shown()).toEqual(['one', 'two', 'three', 'four', 'five']);
+      await press(pressableLabelled(tree, searchRecentRemoveLabel('two')));
+      expect(shown()).toEqual(['one', 'three', 'four', 'five', 'six']);
+      mocks.readSearchHistory.mockResolvedValue([]);
+      mocks.forgetSearchQuery.mockImplementation(async () => []);
+      await act(async () => tree.unmount());
+    });
+
+    it('eases in every search two quick removals bring up, and none again when the start comes back (review of #812, 4)', async () => {
+      const kept = ['one', 'two', 'three', 'four', 'five', 'six', 'seven'];
+      mocks.readSearchHistory.mockResolvedValue([...kept]);
+      mocks.forgetSearchQuery.mockImplementation(async (query: string) => {
+        kept.splice(kept.indexOf(query), 1);
+        return [...kept];
+      });
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await advance(200);
+      const easing = () => tree.root.findAllByType(Reveal)
+        .filter((node) => node.props.enabled)
+        .map((node) => String(node.props.children[0].props.accessibilityLabel).replace('Search again for ', ''));
+      expect(easing()).toEqual([]);
+      await act(async () => {
+        pressableLabelled(tree, searchRecentRemoveLabel('two')).props.onPress();
+        pressableLabelled(tree, searchRecentRemoveLabel('three')).props.onPress();
+      });
+      expect(easing().sort()).toEqual(['seven', 'six']);
+      await typeOnly(tree, 'ab');
+      await typeOnly(tree, '');
+      expect(easing()).toEqual([]);
+      mocks.readSearchHistory.mockResolvedValue([]);
+      mocks.forgetSearchQuery.mockImplementation(async () => []);
       await act(async () => tree.unmount());
     });
 
@@ -3012,17 +3062,118 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
     await act(async () => tree.unmount());
   });
 
-  it('puts the keyboard up only once the screen says its entrance is over (review of #795, S2)', async () => {
+  it('puts the keyboard up as it opens without motion (Reduce Motion), not after a push (owner, 2026-11-14)', async () => {
     searchStarter.mockResolvedValue({ entities: [], creators: [], searches: [] });
     mocks.inputFocus.mockClear();
     let tree: renderer.ReactTestRenderer | null = null;
-    const props = { api, visible: true, onClose: vi.fn(), focusReady: false };
-    await act(async () => { tree = renderer.create(React.createElement(ExploreSearchOverlay, props)); });
-    await act(async () => { vi.advanceTimersByTime(1000); });
-    expect(mocks.inputFocus).not.toHaveBeenCalled();
-    await act(async () => { tree!.update(React.createElement(ExploreSearchOverlay, { ...props, focusReady: true })); });
+    await act(async () => {
+      tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn() }));
+    });
     await act(async () => { vi.advanceTimersByTime(0); });
     expect(mocks.inputFocus).toHaveBeenCalledTimes(1);
     await act(async () => tree!.unmount());
+  });
+
+  describe('growing out of the control it was opened from (owner, 2026-11-14)', () => {
+    const origin = { x: 233, y: 57, width: 48, height: 48, kind: 'button' as const };
+    beforeEach(() => {
+      mocks.reducedMotion.value = false;
+    });
+    afterEach(() => {
+      mocks.reducedMotion.value = true;
+    });
+
+    // A shield over the screen takes the taps while the field moves.
+    function shielded(tree: renderer.ReactTestRenderer) {
+      return tree.root.findAll((node) => typeof node.type === 'string' && node.props.testID === 'search-entrance-shield').length > 0;
+    }
+
+    it('takes no tap until the field has nearly arrived, so a double tap does nothing', async () => {
+      let tree: renderer.ReactTestRenderer | null = null;
+      await act(async () => {
+        tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn(), entranceFrom: origin }));
+      });
+      expect(shielded(tree!)).toBe(true);
+      await act(async () => { vi.advanceTimersByTime(SEARCH_ENTRANCE.touchesAfterMs - 1); });
+      expect(shielded(tree!)).toBe(true);
+      await act(async () => { vi.advanceTimersByTime(1); });
+      expect(shielded(tree!)).toBe(false);
+      // No part of the field is cut off from touches: on iOS that refuses it the focus.
+      expect(tree!.root.findAll((node) => typeof node.type === 'string' && node.props.pointerEvents === 'none' && node.props.testID !== undefined)).toEqual([]);
+      await act(async () => tree!.unmount());
+    });
+
+    it('goes back into its control before the pop, and pops once for two presses', async () => {
+      const onClose = vi.fn();
+      let tree: renderer.ReactTestRenderer | null = null;
+      await act(async () => {
+        tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose, entranceFrom: origin }));
+      });
+      await act(async () => { vi.advanceTimersByTime(SEARCH_ENTRANCE.touchesAfterMs); });
+      const close = pressableLabelled(tree!, 'Close search');
+      await act(async () => { close.props.onPress(); close.props.onPress(); });
+      expect(onClose).not.toHaveBeenCalled();
+      await act(async () => { vi.advanceTimersByTime(SEARCH_ENTRANCE.popAfterMs); });
+      expect(onClose).toHaveBeenCalledTimes(1);
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      expect(onClose).toHaveBeenCalledTimes(1);
+      await act(async () => tree!.unmount());
+    });
+
+    it('puts the keyboard up as the field lands, not as it starts to grow: its setup holds the UI thread the growth runs on', async () => {
+      mocks.inputFocus.mockClear();
+      let tree: renderer.ReactTestRenderer | null = null;
+      await act(async () => {
+        tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn(), entranceFrom: origin }));
+      });
+      await act(async () => { vi.advanceTimersByTime(SEARCH_ENTRANCE.touchesAfterMs - 1); });
+      expect(mocks.inputFocus).not.toHaveBeenCalled();
+      await act(async () => { vi.advanceTimersByTime(1); });
+      await act(async () => { vi.advanceTimersByTime(0); });
+      expect(mocks.inputFocus).toHaveBeenCalledTimes(1);
+      await act(async () => tree!.unmount());
+    });
+
+    it('never pops later for a screen left another way first (the back swipe)', async () => {
+      const onClose = vi.fn();
+      let tree: renderer.ReactTestRenderer | null = null;
+      await act(async () => {
+        tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose, entranceFrom: origin }));
+      });
+      await act(async () => { vi.advanceTimersByTime(SEARCH_ENTRANCE.touchesAfterMs); });
+      await act(async () => { pressableLabelled(tree!, 'Close search').props.onPress(); });
+      await act(async () => tree!.unmount());
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      expect(onClose).not.toHaveBeenCalled();
+    });
+  });
+
+  it('shows the recent searches as soon as they are read, without waiting for the ideas', async () => {
+    mocks.readSearchHistory.mockResolvedValue(['portrait']);
+    searchStarter.mockImplementation(() => new Promise(() => {}));
+    let tree: renderer.ReactTestRenderer | null = null;
+    await act(async () => {
+      tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn() }));
+    });
+    expect(tree!.root.findAll((node) => node.props.testID === 'search-start-holding')).toEqual([]);
+    expect(pressableLabelled(tree!, searchRecentAgainLabel('portrait'))).toBeTruthy();
+    await act(async () => tree!.unmount());
+    mocks.readSearchHistory.mockResolvedValue([]);
+    searchStarter.mockImplementation(async () => ({ entities: [], creators: [], searches: [] }));
+  });
+
+  it('holds the start a moment for the ideas, so they arrive in place of nothing, then gives way to the idle card', async () => {
+    mocks.readSearchHistory.mockResolvedValue([]);
+    searchStarter.mockImplementation(() => new Promise(() => {}));
+    let tree: renderer.ReactTestRenderer | null = null;
+    await act(async () => {
+      tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn() }));
+    });
+    expect(statusTitles(tree!)).toEqual([]);
+    expect(tree!.root.findAll((node) => node.props.testID === 'search-start-holding').length).toBeGreaterThan(0);
+    await act(async () => { vi.advanceTimersByTime(900); });
+    expect(statusTitles(tree!)).toEqual([SEARCH_IDLE_TITLE]);
+    await act(async () => tree!.unmount());
+    searchStarter.mockImplementation(async () => ({ entities: [], creators: [], searches: [] }));
   });
 });

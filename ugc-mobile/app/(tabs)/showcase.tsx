@@ -27,7 +27,7 @@ import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo
 import { NativeMenu } from '@/components/native-menu';
 import { NewPostsPill } from '@/components/new-posts-pill';
 import { SEARCH_FIELD_LABEL, SEARCH_PLACEHOLDER } from '@/lib/public-search-policy/public-search-policy';
-import { openSearchScreen } from '@/lib/open-search-screen';
+import { openSearchScreenFrom } from '@/lib/open-search-screen';
 import { PinBadge, VideoCornerPlay, VideoPinPreview, VisualFallbackPreview } from '@/components/showcase-pin-marks';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { TopScrim } from '@/components/top-scrim';
@@ -591,8 +591,10 @@ export default function ShowcaseScreen() {
     if (cards.length) feedRef.current?.recomputeViewableItems();
   }, [cards]);
 
-  // Search is a screen of its own, pushed over the tabs (app/search.tsx).
-  const openSearch = openSearchScreen;
+  // Search is a screen of its own, pushed over the tabs (app/search.tsx); its
+  // field grows out of the bar or the compact button pressed (lib/search-entrance.ts).
+  const openSearchFromBar = (from: View | null) => openSearchScreenFrom(from, 'field');
+  const openSearchFromButton = (from: View | null) => openSearchScreenFrom(from, 'button');
 
   const clearToolFilter = () => {
     setActiveTool(null);
@@ -1017,7 +1019,7 @@ export default function ShowcaseScreen() {
               {/* Search as a field at the top of Explore, as Instagram, Pinterest and
                   Reddit put it (search UX audit 2026-11-13, finding 11): it reads
                   "Search" and opens search. */}
-              <ExploreSearchBar onPress={openSearch} />
+              <ExploreSearchBar onPress={openSearchFromBar} />
 
               <ScrollView
                 horizontal
@@ -1101,7 +1103,7 @@ export default function ShowcaseScreen() {
         {/* Centred on the header's last control as it sat at rest. */}
         <CompactSearchButton
           visible={listHeaderScrolledOff}
-          onPress={openSearch}
+          onPress={openSearchFromButton}
           top={topInset + LIST_HEADER_TOP_GAP + (appTheme.touch.compact - COMPACT_SEARCH_SIZE) / 2}
           right={FEED_HORIZONTAL_PADDING + (appTheme.touch.compact - COMPACT_SEARCH_SIZE) / 2}
         />
@@ -1212,14 +1214,16 @@ function IconButton({
  * list header has scrolled away the compact button stands in for it
  * (`CompactSearchButton`).
  */
-function ExploreSearchBar({ onPress }: { onPress: () => void }) {
+function ExploreSearchBar({ onPress }: { onPress: (from: View | null) => void }) {
   const theme = useAppTheme();
+  const bar = useRef<View>(null);
   return (
     <Pressable
+      ref={bar}
       accessibilityRole="button"
       accessibilityLabel={SEARCH_FIELD_LABEL}
       accessibilityHint="Opens search"
-      onPress={onPress}
+      onPress={() => onPress(bar.current)}
       style={({ pressed }) => ({
         minHeight: 46,
         flexDirection: 'row',
@@ -1253,13 +1257,14 @@ function CompactSearchButton({
   top,
   visible,
 }: {
-  onPress: () => void;
+  onPress: (from: View | null) => void;
   right: number;
   top: number;
   visible: boolean;
 }) {
   const theme = useAppTheme();
   const presence = useOverlayPresence(visible);
+  const button = useRef<View>(null);
   if (!presence.mounted) return null;
 
   return (
@@ -1272,9 +1277,10 @@ function CompactSearchButton({
         accessibilityLabel="Search creators, posts, and recipes"
         accessibilityElementsHidden={!visible}
         importantForAccessibility={visible ? 'auto' : 'no-hide-descendants'}
+        ref={button}
         disabled={!visible}
         hitSlop={4}
-        onPress={onPress}
+        onPress={() => onPress(button.current)}
         style={({ pressed }) => ({
           width: COMPACT_SEARCH_SIZE,
           height: COMPACT_SEARCH_SIZE,

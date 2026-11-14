@@ -6,17 +6,18 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { SEARCH_SCREEN_FOCUS_FALLBACK_MS } from '@/lib/search-screen-route';
 
-// app/search.tsx itself (review of #795, N9): the params it reads, when the
-// field may take the focus, one pop per Close, and the shared opener told
-// while the screen is up. The search body is ExploreSearchOverlay's suite.
+// app/search.tsx itself (review of #795, N9): the params it reads, the control
+// it grows out of (owner, 2026-11-14), one pop per Close, and the shared opener
+// told while the screen is up. The search body is
+// ExploreSearchOverlay's suite.
 const mocks = vi.hoisted(() => {
   const listeners: Array<(event: { data?: { closing?: boolean } }) => void> = [];
   return {
     listeners,
     params: { value: {} as Record<string, string | string[]> },
     canGoBack: { value: true },
+    focused: { value: true },
     router: { back: vi.fn(), replace: vi.fn(), push: vi.fn() },
     overlayProps: { value: null as null | Record<string, unknown> },
   };
@@ -31,6 +32,7 @@ vi.mock('expo-router', () => ({
   },
   useLocalSearchParams: () => mocks.params.value,
   useNavigation: () => ({
+    isFocused: () => mocks.focused.value,
     addListener: (_name: string, listener: (event: { data?: { closing?: boolean } }) => void) => {
       mocks.listeners.push(listener);
       return () => {
@@ -40,6 +42,7 @@ vi.mock('expo-router', () => ({
     },
   }),
 }));
+vi.mock('react-native', () => ({ useWindowDimensions: () => ({ width: 402, height: 874, scale: 3, fontScale: 1 }) }));
 vi.mock('@/lib/auth', () => ({ useAuth: () => ({ api: { name: 'api' } }) }));
 vi.mock('@/components/explore-search-overlay', () => ({
   ExploreSearchOverlay: (props: Record<string, unknown>) => {
@@ -81,21 +84,26 @@ describe('the search route', () => {
     await act(async () => tree.unmount());
   });
 
-  it('lets the field take the focus once the push has slid in, or after a fallback', async () => {
+  it('grows out of the control the opener was pressed from, and out of nothing for a link', async () => {
+    searchScreenOpener.reset();
+    const from = { x: 233, y: 57, width: 48, height: 48, kind: 'button' as const };
+    expect(searchScreenOpener.open(from)).toBe(true);
     const tree = await render();
-    expect(props().focusReady).toBe(false);
-    // The pop's end says nothing of the entrance.
-    await act(async () => { mocks.listeners.forEach((listener) => listener({ data: { closing: true } })); });
-    expect(props().focusReady).toBe(false);
-    await act(async () => { mocks.listeners.forEach((listener) => listener({ data: { closing: false } })); });
-    expect(props().focusReady).toBe(true);
+    expect(props().entranceFrom).toEqual(from);
     await act(async () => tree.unmount());
 
-    const quiet = await render();
-    expect(props().focusReady).toBe(false);
-    await act(async () => { vi.advanceTimersByTime(SEARCH_SCREEN_FOCUS_FALLBACK_MS); });
-    expect(props().focusReady).toBe(true);
-    await act(async () => quiet.unmount());
+    // Nothing pressed (a link): no control, and none left over from before.
+    const link = await render();
+    expect(props().entranceFrom).toBeNull();
+    await act(async () => link.unmount());
+
+    // A frame off the screen is not grown out of.
+    searchScreenOpener.reset();
+    searchScreenOpener.open({ ...from, x: -400 });
+    const off = await render();
+    expect(props().entranceFrom).toBeNull();
+    await act(async () => off.unmount());
+    searchScreenOpener.reset();
   });
 
   it('pops once for two presses of Close, and lands on Home with nothing under it', async () => {
@@ -110,6 +118,22 @@ describe('the search route', () => {
     expect(mocks.router.replace).toHaveBeenCalledWith('/');
     expect(mocks.router.back).toHaveBeenCalledTimes(1);
     await act(async () => alone.unmount());
+  });
+
+  it('never pops once the screen is leaving another way, nor when it is not in front (review of #812, 1)', async () => {
+    // Android's back key or the back swipe during Close's short wait before its pop.
+    const tree = await render();
+    await act(async () => { mocks.listeners.forEach((listener) => listener({})); });
+    await act(async () => { (props().onClose as () => void)(); });
+    expect(mocks.router.back).not.toHaveBeenCalled();
+    await act(async () => tree.unmount());
+
+    mocks.focused.value = false;
+    const covered = await render();
+    await act(async () => { (props().onClose as () => void)(); });
+    expect(mocks.router.back).not.toHaveBeenCalled();
+    mocks.focused.value = true;
+    await act(async () => covered.unmount());
   });
 
   it('holds the shared opener while it is up, so no entry under it pushes another', async () => {

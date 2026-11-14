@@ -1442,6 +1442,18 @@ describe('SearchClient', () => {
         expect(window.localStorage.getItem(HISTORY_KEY)).toBeNull();
       });
 
+      it('shows the newest five recent searches, and a removal brings the sixth into the fifth place (owner, 2026-11-14)', async () => {
+        window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['one', 'two', 'three', 'four', 'five', 'six', 'seven']));
+        render(<SearchClient initialQuery="" initialType="top" />);
+        await settle();
+        fireEvent.focus(screen.getByRole('combobox'));
+        const recents = screen.getByRole('list', { name: 'Recent searches' });
+        expect(within(recents).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['one', 'two', 'three', 'four', 'five']);
+        fireEvent.click(screen.getByRole('button', { name: 'Remove two from recent searches' }));
+        expect(within(recents).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['one', 'three', 'four', 'five', 'six']);
+        expect(JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]')).toEqual(['one', 'three', 'four', 'five', 'six', 'seven']);
+      });
+
       it('offers recent searches on arrival when the empty box already has the focus, with no focus event to hear', async () => {
         window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['kling portrait']));
         // An empty search autofocuses its box, and the browser focuses it before this script runs.

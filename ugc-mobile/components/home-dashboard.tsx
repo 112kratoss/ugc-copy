@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Crown, Plus, Search } from 'lucide-react-native';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Dimensions, Linking, Platform, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -24,7 +24,7 @@ import { HomeFeedSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
-import { openSearchScreen } from '@/lib/open-search-screen';
+import { openSearchScreenFrom } from '@/lib/open-search-screen';
 import { useAuth } from '@/lib/auth';
 import { openSignUpSheet, signUpNeededToCreate } from '@/lib/join-navigation';
 import { useAutoplayPolicy } from '@/lib/autoplay-preference';
@@ -1122,7 +1122,7 @@ export function HomeDashboard() {
                 askToSignUp={signUpNeededToCreate({ credits, hasUser: Boolean(user) })}
                 promiseWelcomeCredits={welcomePromise}
                 onMenuPress={sideMenu.open}
-                onSearchPress={openSearchScreen}
+                onSearchPress={(from) => openSearchScreenFrom(from, 'button')}
               />
               {/* What became of the guest credits a sign-in carried over, under
                   the balance it changed. It showed on Pricing alone, so a
@@ -1297,9 +1297,11 @@ function HomeTopBar({
   /** Whether that way in may still promise the welcome credits on this phone (`lib/welcome-promise.ts`). */
   promiseWelcomeCredits: boolean;
   onMenuPress: () => void;
-  onSearchPress: () => void;
+  /** Opens search out of the magnifier, which it is handed (lib/search-entrance.ts). */
+  onSearchPress: (from: View | null) => void;
 }) {
   const theme = useAppTheme();
+  const searchControl = useRef<View>(null);
   return (
     <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
       <TopBarControl
@@ -1326,9 +1328,10 @@ function HomeTopBar({
             overlay focuses its field as it opens. */}
         <TopBarControl
           accessibilityLabel="Search creators, posts, and recipes"
+          pressableRef={searchControl}
           onPress={() => {
             haptic.light();
-            onSearchPress();
+            onSearchPress(searchControl.current);
           }}
           style={{ width: 48 }}
         >
@@ -1384,11 +1387,14 @@ function TopBarControl({
   accessibilityLabel,
   children,
   onPress,
+  pressableRef,
   style,
 }: {
   accessibilityLabel: string;
   children: ReactNode;
   onPress: () => void;
+  /** The control's own view, for a press that needs to say where it was. */
+  pressableRef?: Ref<View>;
   style?: ViewStyle;
 }) {
   const theme = useAppTheme();
@@ -1397,6 +1403,7 @@ function TopBarControl({
   return (
     <MotionView style={motion.animatedStyle}>
       <Pressable
+        ref={pressableRef}
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel}
         onPress={onPress}
