@@ -20,6 +20,22 @@ export function relativeLuminance(color: string) {
   return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
 }
 
+/**
+ * The solid `#rrggbb` a colour shows as over an opaque `#rrggbb` surface: an
+ * `rgba(r, g, b, a)` tint composited by its alpha, a hex colour unchanged. A
+ * mark drawn in pieces that may overlap by a pixel (where layout rounding
+ * meets them) takes the solid colour, so an overlap never draws darker.
+ */
+export function opaqueOver(color: string, surface: string) {
+  const tint = color.match(/^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/);
+  if (!tint) return color;
+  const alpha = Number(tint[4]);
+  return `#${[1, 2, 3].map((channel, index) => {
+    const under = Number.parseInt(surface.slice(1 + index * 2, 3 + index * 2), 16);
+    return Math.round(Number(tint[channel]) * alpha + under * (1 - alpha)).toString(16).padStart(2, '0');
+  }).join('')}`;
+}
+
 export function contrastRatio(foreground: string, background: string) {
   const a = relativeLuminance(foreground);
   const b = relativeLuminance(background);
