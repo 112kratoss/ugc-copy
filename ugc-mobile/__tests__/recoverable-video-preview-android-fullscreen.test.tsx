@@ -20,15 +20,16 @@ import { afterEach, beforeEach, expect, it, vi, type Mock } from 'vitest';
 //   pauses                  (AppStateModule.onHostPause). expo-video stops
 //                           every playing clip but one whose view is in
 //                           fullscreen (VideoManager.onAppBackgrounded).
-//   Home in fullscreen      FullscreenPlayerActivity.onPause stops a playing
-//                           clip. The app's activity was paused already, so
-//                           AppState says nothing.
+//   Home in fullscreen      FullscreenPlayerActivity.onPause stops a clip that
+//                           means to play, playing or waiting for data
+//                           (`playWhenReady`, patches/expo-video+55.0.21+006,
+//                           in every build from 0.1.9). The app's activity was
+//                           paused already, so AppState says nothing.
 //   BACK in fullscreen      the app's activity resumes (`active`), and only
 //                           later is the fullscreen one destroyed: its view is
 //                           then out of fullscreen and sends onFullscreenExit.
-//   a clip out of data      it wants to play and is not playing. Nothing stops
-//                           it when the app is left, and it starts when its
-//                           data comes.
+//   a clip out of data      it wants to play and is not playing, and it starts
+//                           when its data comes.
 
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 type Listener = (event?: unknown) => void;
@@ -193,9 +194,9 @@ function backFromFullscreen() {
   destroyFullscreenActivity();
 }
 
-/** Home while the fullscreen player is in front: only the player tells JS anything, and only if it was playing. */
+/** Home while the fullscreen player is in front: the player takes back every request to play, and only it tells JS anything. */
 function homeFromFullscreen() {
-  renderer.act(() => (state.players as StandInPlayer[]).forEach(player => { if (player.playing) player.native.pause(); }));
+  renderer.act(() => (state.players as StandInPlayer[]).forEach(player => { if (player.wantsToPlay) player.native.pause(); }));
 }
 
 it.each(['first', 'last'] as const)('keeps a clip playing as its fullscreen player opens (the view’s event heard %s)', async viewHeard => {
@@ -293,31 +294,31 @@ it('still stops a clip on the page when something comes over it', async () => {
   expect(player.playing).toBe(false);
 });
 
-// Seen on the emulator: a clip that had run out of data in fullscreen, Home,
-// and its data let through four seconds later. It played behind the launcher
-// until the app was opened again. Nothing tells JS that the fullscreen player
-// was left, so a clip that has waited there does not start by itself.
+// Seen on the emulator before 0.1.9: a clip that had run out of data in
+// fullscreen, Home, and its data let through four seconds later, played behind
+// the launcher until the app was opened again. Nothing tells JS that the
+// fullscreen player was left; the patched activity stops the waiting clip
+// itself (the stand-in's Home), and a press on play there starts it again.
 it('does not start behind the launcher a clip that was waiting for data in fullscreen when the app was left', async () => {
-  const now = vi.spyOn(Date, 'now').mockReturnValue(5_000_000);
   const player = await mountPlaying();
   pressFullscreen();
   renderer.act(() => player.native.runOutOfData());
   homeFromFullscreen();
-  now.mockReturnValue(5_000_000 + 4_000);
   renderer.act(() => player.native.dataArrives());
   expect(player.playing).toBe(false);
-  // And when the person is still there, a press on play starts it.
+  // Back in the fullscreen player, a press on play starts it.
   renderer.act(() => player.native.play());
   expect(player.playing).toBe(true);
-  now.mockRestore();
 });
 
-it('lets a clip in fullscreen go on by itself after a short wait for data, as after a seek', async () => {
+// Until 0.1.9 the hook held a clip that had waited over two seconds in
+// fullscreen for a press. A long wait here fails if that rule comes back.
+it('lets a clip in fullscreen go on by itself after a long wait for data', async () => {
   const now = vi.spyOn(Date, 'now').mockReturnValue(5_000_000);
   const player = await mountPlaying();
   pressFullscreen();
   renderer.act(() => player.native.runOutOfData());
-  now.mockReturnValue(5_000_000 + 400);
+  now.mockReturnValue(5_000_000 + 20_000);
   renderer.act(() => player.native.dataArrives());
   expect(player.playing).toBe(true);
   expect(player.pause).not.toHaveBeenCalled();

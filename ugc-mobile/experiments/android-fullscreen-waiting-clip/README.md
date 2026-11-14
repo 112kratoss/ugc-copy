@@ -1,4 +1,6 @@
 > **Graduated on 2026-11-11** into `patches/expo-video+55.0.21+006+android-fullscreen-waiting-clip.patch` for store build 0.1.9 (both platforms), applied like every shipped change; the copy that lived here is gone, so the apply and reverse steps below are history.
+>
+> **Shipped:** Android 0.1.9 (81) reached production on 2026-11-14 and `ota-targets.json` names it (#803). The JavaScript's two-second rule was then dropped as "What the JavaScript can drop once this ships" lists (owner, 2026-11-14: "yes do it"), and the guard test now fails if it comes back.
 
 # Android fullscreen waiting clip
 
@@ -103,6 +105,8 @@ The rig, the APKs, every log and the screenshot kept before every input are outs
 One gap of the same kind stays in JavaScript's hands. For a moment after the fullscreen player has closed (BACK, then Home before its activity is destroyed) expo-video still counts the view as in fullscreen and stops nothing there, playing or waiting. The app's own activity is the one that pauses then, so the hook hears it and pauses.
 
 ## What the JavaScript can drop once this ships
+
+**Dropped on 2026-11-14**, as listed below. What follows is the record.
 
 The JavaScript guard against this fault is a rule in `lib/use-native-preview-playback.ts`: a clip that has waited more than two seconds for data behind its own fullscreen player is not started by its data; it waits for a press on play (`LONG_WAIT_MS`). The rule comes with the change that lets a preview clip play in the fullscreen player at all ("Let a preview clip play in Android's fullscreen player", branch `fix/android-preview-fullscreen-playback`), which was not on `main` when this was written. It is a guess made without the one fact JavaScript lacks, and it costs something: after a long stall in fullscreen the clip does not go on by itself even when the person is still watching.
 

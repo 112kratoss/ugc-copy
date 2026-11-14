@@ -80,37 +80,28 @@ it('takes back a request to play when the app is left on Android, and stops a cl
   player.playing = false; leaveApp(); expect(player.pause).toHaveBeenCalledOnce();
   player.playing = true; event(); expect(player.playing).toBe(false);
 });
-// Nothing tells JS that the app was left while the fullscreen player was in
-// front: the app's own activity was paused already. expo-video stops a clip
-// there only if it is playing at that moment, so one that was waiting for data
-// started when the data came, behind the launcher (emulator, 2026-10-05).
-type Waiting = { status: string; playing: boolean; addListener: { mock: { calls: Array<[string, (event: { status: string }) => void]> } } };
+// A clip that runs out of data and waits goes on by itself when the data comes,
+// however long it waited, on the page and in fullscreen alike. Leaving the app
+// from Android's fullscreen player, which JS cannot hear, stops a waiting clip
+// natively in every build from 0.1.9 (patches/expo-video+55.0.21+006); until
+// then the hook held such a clip for a press after a two-second wait.
+type Waiting = { status: string; playing: boolean };
 const runOutOfData = (player: Waiting, stopped: () => void) => { player.status = 'loading'; player.playing = false; stopped(); };
-const dataArrives = (player: Waiting) => { player.status = 'readyToPlay'; player.addListener.mock.calls.find(([name]) => name === 'statusChange')?.[1]({ status: 'readyToPlay' }); };
-function mountWaiting(platform: string, inFullscreen: boolean, waitMs: number) {
+const dataArrives = (player: Waiting) => { player.status = 'readyToPlay'; };
+function mountWaiting(platform: string, inFullscreen: boolean) {
   state.platform = platform; const mounted = mount(); const player = mounted.player as never as Waiting;
   const stopped = () => (mounted.player.addListener.mock.calls.find(([name]) => name === 'playingChange')![1] as never as (event: { isPlaying: boolean }) => void)({ isPlaying: false });
   if (inFullscreen) { mounted.controls().onFullscreenEnter(); if (platform === 'android') leaveApp(); }
-  const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
-  runOutOfData(player, stopped); now.mockReturnValue(1_000_000 + waitMs);
-  return { ...mounted, waiting: player, restore: () => now.mockRestore() };
+  runOutOfData(player, stopped);
+  return { ...mounted, waiting: player };
 }
-it('does not let a clip start by itself behind its Android fullscreen player after a long wait for data, and lets a press start it', () => {
-  const { player, waiting, event, restore } = mountWaiting('android', true, 8000);
-  dataArrives(waiting); expect(player.pause).toHaveBeenCalledOnce();
-  player.playing = true; event(); expect(player.playing).toBe(true); restore();
+it.each([['android', true], ['android', false], ['ios', true]] as const)('lets a clip go on by itself after a wait for data (%s, fullscreen %s)', (platform, inFullscreen) => {
+  const { player, waiting, event } = mountWaiting(platform, inFullscreen);
+  dataArrives(waiting); player.playing = true; event(); expect(player.pause).not.toHaveBeenCalled();
 });
-it('stops such a clip when its start is heard before its data', () => {
-  const { player, event, restore } = mountWaiting('android', true, 8000);
-  player.playing = true; event(); expect(player.playing).toBe(false); restore();
-});
-it('lets a clip go on by itself behind its Android fullscreen player after a short wait, as after a seek', () => {
-  const { player, waiting, event, restore } = mountWaiting('android', true, 600);
-  dataArrives(waiting); player.playing = true; event(); expect(player.pause).not.toHaveBeenCalled(); restore();
-});
-it.each([['android', false], ['ios', true]] as const)('lets a clip go on by itself after a long wait where the app can tell it is in front (%s, fullscreen %s)', (platform, inFullscreen) => {
-  const { player, waiting, event, restore } = mountWaiting(platform, inFullscreen, 8000);
-  dataArrives(waiting); player.playing = true; event(); expect(player.pause).not.toHaveBeenCalled(); restore();
+it('listens for nothing but play and pause on the player', () => {
+  const { player } = mount();
+  expect(player.addListener.mock.calls.map(([name]) => name)).toEqual(['playingChange']);
 });
 it('still pauses when the app is left during iPhone fullscreen, which is in the app’s own window', () => {
   const { player, event, controls } = mount(); controls().onFullscreenEnter();
