@@ -59,6 +59,7 @@ import {
   SEARCH_RECENTS_CLEAR_ACTION_LABEL,
   SEARCH_RECENTS_CLEAR_LABEL,
   SEARCH_RECENTS_HEADING,
+  shownRecentSearches,
   SEARCH_RELATED_HEADING,
   SEARCH_RELATED_PARAM,
   SEARCH_RETRY_LABEL,
@@ -1239,7 +1240,7 @@ export default function SearchClient({
               </button>
             </div>
             <ul aria-labelledby="search-recents-heading" className="mt-1">
-              {history.map((item) => (
+              {shownRecentSearches(history).map((item) => (
                 <li key={item} className="flex items-center gap-1">
                   <button
                     type="button"

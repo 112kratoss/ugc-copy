@@ -25,6 +25,13 @@
 /** Where each client keeps its list: one key, in its own storage. */
 export const SEARCH_HISTORY_KEY = 'magicbooklet:public-search-history:v1';
 export const SEARCH_HISTORY_LIMIT = 10;
+/**
+ * How many recent searches a search screen shows under an empty field (owner,
+ * 2026-11-14: "5 is enough to show at a time"). Up to SEARCH_HISTORY_LIMIT
+ * stay kept behind them, so removing one brings the next kept search into the
+ * last place. The typeahead's matching recents read the whole kept list.
+ */
+export const SEARCH_RECENTS_SHOWN = 5;
 const SEARCH_HISTORY_MIN_LENGTH = 2;
 const SEARCH_QUERY_MAX_LENGTH = 100;
 
@@ -56,6 +63,11 @@ export function normalizeCreatorSearchQuery(value: string | null | undefined): s
  */
 export function searchQueryLength(value: string): number {
   return Array.from(value).length;
+}
+
+/** The recent searches a screen shows: the newest SEARCH_RECENTS_SHOWN of those kept. */
+export function shownRecentSearches(history: readonly string[]): string[] {
+  return history.slice(0, SEARCH_RECENTS_SHOWN);
 }
 
 /** The list a client stored, read back: only queries, normalized, at most the limit. Never throws. */

@@ -26,6 +26,7 @@ import {
   SEARCH_RETRY_LABEL,
   SEARCH_SORT_OPTIONS,
   searchRecentAgainLabel,
+  searchRecentRemoveLabel,
 } from '../lib/public-search-policy/public-search-policy';
 import type {
   CreatorSearchResult,
@@ -51,6 +52,7 @@ const mocks = vi.hoisted(() => {
   return {
     listeners,
     reducedMotion: { value: true },
+    forgetSearchQuery: vi.fn(async (_query: string) => [] as string[]),
     focused: { value: true },
     inputFocus: vi.fn(),
     keyboardDismiss: vi.fn(),
@@ -174,7 +176,7 @@ vi.mock('@/lib/search-history', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/search-history')>()),
   readSearchHistory: mocks.readSearchHistory,
   rememberSearchQuery: mocks.rememberSearchQuery,
-  forgetSearchQuery: async () => [],
+  forgetSearchQuery: mocks.forgetSearchQuery,
   clearSearchHistory: async () => {},
 }));
 
@@ -562,6 +564,21 @@ describe('ExploreSearchOverlay search', () => {
       await typeQuery(tree, '');
       expect(shownTexts(tree)).toContain('Recent searches');
       mocks.readSearchHistory.mockResolvedValue([]);
+      await act(async () => tree.unmount());
+    });
+
+    it('shows the newest five recent searches, and a removal brings the sixth into the fifth place (owner, 2026-11-14)', async () => {
+      const kept = ['one', 'two', 'three', 'four', 'five', 'six', 'seven'];
+      mocks.readSearchHistory.mockResolvedValue(kept);
+      mocks.forgetSearchQuery.mockImplementation(async (query: string) => kept.filter((item) => item !== query));
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await advance(200);
+      const shown = () => tree.root.findAll((node) => typeof node.props.accessibilityLabel === 'string' && node.props.accessibilityLabel.startsWith('Search again for ') && typeof node.type === 'string').map((node) => String(node.props.accessibilityLabel).replace('Search again for ', ''));
+      expect(shown()).toEqual(['one', 'two', 'three', 'four', 'five']);
+      await press(pressableLabelled(tree, searchRecentRemoveLabel('two')));
+      expect(shown()).toEqual(['one', 'three', 'four', 'five', 'six']);
+      mocks.readSearchHistory.mockResolvedValue([]);
+      mocks.forgetSearchQuery.mockImplementation(async () => []);
       await act(async () => tree.unmount());
     });
 

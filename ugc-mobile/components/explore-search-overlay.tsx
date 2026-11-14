@@ -57,6 +57,7 @@ import {
   SEARCH_SHOW_MORE_LABEL,
   SEARCH_SORT_OPTIONS,
   SEARCH_TABS,
+  shownRecentSearches,
   hasSearchFilters,
   isSearchFilterSwitchOn,
   parseSearchEntityId,
@@ -700,6 +701,8 @@ export function ExploreSearchOverlay({
   const [answer, setAnswer] = useState<SearchAnswer | null>(null);
   const [failure, setFailure] = useState<SearchFailure | null>(null);
   const [history, setHistory] = useState<string[]>([]);
+  // The kept search a removal just brought into the shown five: it eases in.
+  const [pulledInRecent, setPulledInRecent] = useState<string | null>(null);
   // Whether the recent searches have been read for this opening: until then
   // the start is not drawn, so the idle card never stands in for them.
   const [historyRead, setHistoryRead] = useState(false);
@@ -1343,8 +1346,10 @@ export function ExploreSearchOverlay({
                       <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '700' }}>{SEARCH_RECENTS_CLEAR_LABEL}</Text>
                     </Pressable>
                   </View>
-                  {history.map((item) => (
-                    <View key={item} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  {shownRecentSearches(history).map((item) => (
+                    // The newest five of the ten kept: one removed brings the
+                    // next into the last place, easing in (SEARCH_RECENTS_SHOWN).
+                    <Reveal key={item} enabled={item === pulledInRecent} style={{ flexDirection: 'row', alignItems: 'center' }}>
                       <Pressable
                         accessibilityRole="button"
                         accessibilityLabel={searchRecentAgainLabel(item)}
@@ -1357,12 +1362,16 @@ export function ExploreSearchOverlay({
                       <Pressable
                         accessibilityRole="button"
                         accessibilityLabel={searchRecentRemoveLabel(item)}
-                        onPress={() => void forgetSearchQuery(item).then(setHistory)}
+                        onPress={() => void forgetSearchQuery(item).then((next) => {
+                          const before = shownRecentSearches(history);
+                          setPulledInRecent(shownRecentSearches(next).find((entry) => !before.includes(entry)) ?? null);
+                          setHistory(next);
+                        })}
                         style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}
                       >
                         <X size={appTheme.icon.sm} color={theme.colors.faint} />
                       </Pressable>
-                    </View>
+                    </Reveal>
                   ))}
                 </View>
               ) : null}
