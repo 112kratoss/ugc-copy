@@ -1,6 +1,8 @@
 import { useRef } from 'react';
 import { LoaderCircle, Search, X } from 'lucide-react';
 
+import { SearchEntrancePart } from '@/components/search/SearchEntrancePart';
+import type { SearchEntranceOrigin } from '@/components/search/search-entrance';
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
 import {
@@ -34,6 +36,7 @@ export function SearchField({
   autoFocus = false,
   busy = false,
   combobox,
+  entrance = null,
   onChange,
   onClear,
   value,
@@ -48,6 +51,12 @@ export function SearchField({
    */
   busy?: boolean;
   combobox?: SearchFieldCombobox;
+  /**
+   * The control the page opened from (search-entrance.ts): the capsule, its
+   * magnifier, text and clear button are named for it, so they grow out of
+   * it as the page opens and go back into it as the page closes.
+   */
+  entrance?: SearchEntranceOrigin | null;
   onChange: (value: string) => void;
   onClear: () => void;
   value: string;
@@ -58,52 +67,65 @@ export function SearchField({
   const fieldRef = useRef<HTMLInputElement>(null);
   useFieldValueBeforeHydration(fieldRef, { drawn: value, onValue: onChange });
   return (
-    <label className="ui-focus-within-ring flex min-h-14 items-center gap-3 rounded-full border border-white/10 bg-white/[0.055] px-5 shadow-[0_18px_60px_-32px_rgba(0,0,0,0.9)] backdrop-blur-xl">
+    // The capsule's skin is an element of its own, under the rest: the parts
+    // that travel with search's entrance (magnifier, words, clear button) are
+    // its siblings, so each pairs or fades by itself and only the plain skin
+    // is ever stretched (search-entrance.ts).
+    <label className="ui-focus-within-ring relative isolate flex min-h-14 items-center gap-3 rounded-full border border-transparent px-5">
+      <SearchEntrancePart origin={entrance} part="capsule" side="field">
+        <span aria-hidden="true" className="pointer-events-none absolute -inset-px -z-10 rounded-full border border-white/10 bg-white/[0.055] shadow-[0_18px_60px_-32px_rgba(0,0,0,0.9)] backdrop-blur-xl" />
+      </SearchEntrancePart>
       {busy ? (
         <LoaderCircle data-search-field-busy="" className="h-5 w-5 shrink-0 text-zinc-400 motion-safe:animate-spin" aria-hidden="true" />
       ) : (
-        <Search className="h-5 w-5 shrink-0 text-zinc-400" aria-hidden="true" />
+        <SearchEntrancePart origin={entrance} part="icon" side="field">
+          <Search className="h-5 w-5 shrink-0 text-zinc-400" aria-hidden="true" />
+        </SearchEntrancePart>
       )}
       <span className="sr-only">{SEARCH_FIELD_LABEL}</span>
-      <input
-        ref={fieldRef}
-        autoFocus={autoFocus}
-        type="search"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        {...(combobox ? {
-          role: 'combobox',
-          'aria-autocomplete': 'list' as const,
-          'aria-haspopup': 'listbox' as const,
-          'aria-expanded': combobox.expanded,
-          // Named only while it is drawn: the id of a list that is not there points at nothing.
-          'aria-controls': combobox.expanded ? combobox.listId : undefined,
-          'aria-activedescendant': combobox.expanded ? combobox.activeOptionId : undefined,
-        } : {})}
-        onKeyDown={(event) => {
-          // The typeahead first: its Escape closes the list and keeps the
-          // text, and only with the list closed does Escape clear the field.
-          combobox?.onKeyDown(event);
-          if (event.defaultPrevented) return;
-          if (event.key === 'Escape' && value) {
-            event.preventDefault();
-            onClear();
-          }
-        }}
-        placeholder={SEARCH_PLACEHOLDER}
-        autoComplete="off"
-        // zinc-400: 4.5:1 and more on the field's surface, where zinc-500 was under it.
-        className={`min-w-0 flex-1 bg-transparent py-3 text-base text-white outline-none placeholder:text-zinc-400 ${HIDE_NATIVE_SEARCH_CLEAR_CLASS}`}
-      />
+      <SearchEntrancePart origin={entrance} part="text" side="field">
+        <input
+          ref={fieldRef}
+          autoFocus={autoFocus}
+          type="search"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          {...(combobox ? {
+            role: 'combobox',
+            'aria-autocomplete': 'list' as const,
+            'aria-haspopup': 'listbox' as const,
+            'aria-expanded': combobox.expanded,
+            // Named only while it is drawn: the id of a list that is not there points at nothing.
+            'aria-controls': combobox.expanded ? combobox.listId : undefined,
+            'aria-activedescendant': combobox.expanded ? combobox.activeOptionId : undefined,
+          } : {})}
+          onKeyDown={(event) => {
+            // The typeahead first: its Escape closes the list and keeps the
+            // text, and only with the list closed does Escape clear the field.
+            combobox?.onKeyDown(event);
+            if (event.defaultPrevented) return;
+            if (event.key === 'Escape' && value) {
+              event.preventDefault();
+              onClear();
+            }
+          }}
+          placeholder={SEARCH_PLACEHOLDER}
+          autoComplete="off"
+          // zinc-400: 4.5:1 and more on the field's surface, where zinc-500 was under it.
+          className={`min-w-0 flex-1 bg-transparent py-3 text-base text-white outline-none placeholder:text-zinc-400 ${HIDE_NATIVE_SEARCH_CLEAR_CLASS}`}
+        />
+      </SearchEntrancePart>
       {value ? (
-        <button
-          type="button"
-          onClick={onClear}
-          className="ui-focus-ring inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-400 transition hover:bg-white/10 hover:text-white"
-          aria-label={SEARCH_CLEAR_FIELD_LABEL}
-        >
-          <X className="h-5 w-5" aria-hidden="true" />
-        </button>
+        <SearchEntrancePart origin={entrance} part="clear" side="field">
+          <button
+            type="button"
+            onClick={onClear}
+            className="ui-focus-ring inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-400 transition hover:bg-white/10 hover:text-white"
+            aria-label={SEARCH_CLEAR_FIELD_LABEL}
+          >
+            <X className="h-5 w-5" aria-hidden="true" />
+          </button>
+        </SearchEntrancePart>
       ) : null}
     </label>
   );

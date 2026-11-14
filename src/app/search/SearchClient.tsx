@@ -7,6 +7,7 @@ import { BookOpen, Box, Clock3, LoaderCircle, RefreshCcw, Wrench, X } from 'luci
 
 import { SegmentedControl } from '@/components/DesignSystem';
 import { CreatorSearchResult } from '@/components/search/CreatorSearchResult';
+import { useSearchScreenCrossFade } from '@/components/search/SearchEntrancePart';
 import { SearchField } from '@/components/search/SearchField';
 import { SearchPostWall } from '@/components/search/SearchPostWall';
 import { SearchResultsPlaceholder } from '@/components/search/SearchResultsPlaceholder';
@@ -14,6 +15,7 @@ import { SearchStarter, useSearchStarter } from '@/components/search/SearchStart
 import { SearchStateBlock } from '@/components/search/SearchStateBlock';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
 import { clearSearchFieldHandoff, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
+import { SEARCH_ENTRANCE, clearSearchEntrance, searchEntranceMoves, searchEntrancePending } from '@/components/search/search-entrance';
 import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
 import {
   NO_PUBLIC_SEARCH_FILTERS,
@@ -472,15 +474,24 @@ export default function SearchClient({
   // Recent searches live in this browser alone, and are read after the first
   // paint: the server's HTML has none to agree with.
   const [history, setHistory] = useState<string[]>([]);
-  const [recentsOpen, setRecentsOpen] = useState(false);
+  // The kept searches a removal brought into the five on show: each eases in
+  // as it mounts, as the app's do (SEARCH_RECENTS_SHOWN). Forgotten once the
+  // box holds text, so a row eased in once does not ease in again.
+  const [pulledInRecents, setPulledInRecents] = useState<readonly string[]>([]);
   // The focus is in the search form: the typeahead asks and draws only then.
   const [fieldFocused, setFieldFocused] = useState(false);
   // Opened by a search from the top bar's field: the focus comes on into this
   // page's field, with the typeahead closed for the text it brought
   // (search-field-handoff.ts). Read without taking it, as a render may run twice.
   const [handedOff] = useState(() => typeof window !== 'undefined' && searchFieldHandoffPending());
+  // The control the page opens from, when one was pressed for it
+  // (search-entrance.ts): the field grows out of it, and goes back into it as
+  // the page closes. Read once, as the page mounts in that navigation.
+  const [entrance] = useState(() => (typeof window !== 'undefined' ? searchEntrancePending() : null));
+  // The field takes the focus once it has grown, not as it starts to.
+  const [focusAfterGrowth] = useState(() => entrance !== null && searchEntranceMoves());
+  useSearchScreenCrossFade();
   const router = useRouter();
-  const recentsRef = useRef<HTMLDivElement | null>(null);
   const searchFormRef = useRef<HTMLFormElement | null>(null);
   // A search committed with Enter before its answer landed: kept once it finds something.
   const rememberOnAnswer = useRef<string | null>(null);
@@ -686,7 +697,16 @@ export default function SearchClient({
 
   useEffect(() => {
     clearSearchFieldHandoff();
-    if (handedOff) searchFormRef.current?.querySelector('input')?.focus({ preventScroll: true });
+    clearSearchEntrance();
+    const focusField = () => searchFormRef.current?.querySelector('input')?.focus({ preventScroll: true });
+    // An empty search takes the focus (autoFocus below), and so does one the
+    // top bar handed on; while the field grows, once it has landed.
+    if (focusAfterGrowth && (handedOff || !opening.query)) {
+      const timer = window.setTimeout(focusField, SEARCH_ENTRANCE.focusAfterMs);
+      return () => window.clearTimeout(timer);
+    }
+    if (handedOff) focusField();
+    return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as the page mounts
   }, []);
 
@@ -694,11 +714,8 @@ export default function SearchClient({
     setHistory(readSearchHistory());
     // The box can hold the focus before this script runs (autofocus on an
     // empty search, or a press on the server's HTML), and a focus that
-    // happened then fires no event here.
-    if (searchFormRef.current?.contains(document.activeElement)) {
-      setRecentsOpen(true);
-      setFieldFocused(true);
-    }
+    // happened then fires no event here: the typeahead asks only while it has it.
+    if (searchFormRef.current?.contains(document.activeElement)) setFieldFocused(true);
     // Recent searches end at sign-out, as the app's do: a sign-out while this
     // page is open clears them here; one made anywhere else is caught by the
     // list's own check of whose it is (search-history.ts).
@@ -960,7 +977,20 @@ export default function SearchClient({
     const opened = kind === 'creator' || kind === 'post' || kind === 'recipe' ? kind : null;
     if (currentAnswer && resultCount > 0) rememberCurrentSearch(currentAnswer, opened);
   };
-  const recentsShown = recentsOpen && query === '' && history.length > 0;
+  // Recent searches show whenever the box is empty, focused or not, above the
+  // ideas to start from, as the app's start view shows them (owner,
+  // 2026-11-15): the newest five of the ten kept (shownRecentSearches).
+  const recentsShown = query === '' && history.length > 0;
+  if (query !== '' && pulledInRecents.length) setPulledInRecents([]);
+  // A removal brings the next kept search into fifth place: named, so it
+  // eases in (fades and rises) as it mounts.
+  const removeRecent = (item: string) => {
+    const next = forgetSearchQuery(item);
+    const before = shownRecentSearches(history);
+    const arrived = shownRecentSearches(next).filter((entry) => !before.includes(entry));
+    if (arrived.length) setPulledInRecents((current) => [...current, ...arrived]);
+    setHistory(next);
+  };
 
   // Typeahead: what the box offers while the person types, ahead of the
   // results, which load as they did. Its list is drawn only for the text the
@@ -1111,6 +1141,58 @@ export default function SearchClient({
     <SearchStateBlock tone="initial" title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
   );
 
+  // The newest five recent searches, each removable, with Clear all by the
+  // heading: shown on the idle page whenever the box is empty (recentsShown).
+  const recentsPanel = (
+    <section
+      aria-labelledby="search-recents-heading"
+      className="rounded-3xl border border-white/8 bg-white/[0.025] p-4 sm:p-5"
+      // A press on a row leaves the focus where it was (in the box, when it
+      // has it), so a search picked here can be refined at once and a
+      // removal does not drop the focus with its row.
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <h2 id="search-recents-heading" className="text-base font-semibold text-white">{SEARCH_RECENTS_HEADING}</h2>
+        <button
+          type="button"
+          aria-label={SEARCH_RECENTS_CLEAR_ACTION_LABEL}
+          onClick={() => setHistory(clearSearchHistory())}
+          className="ui-focus-ring inline-flex min-h-11 items-center rounded-full px-3 text-sm text-zinc-400 hover:text-white"
+        >
+          {SEARCH_RECENTS_CLEAR_LABEL}
+        </button>
+      </div>
+      <ul aria-labelledby="search-recents-heading" className="mt-1">
+        {shownRecentSearches(history).map((item) => (
+          <li
+            key={item}
+            data-search-recent-pulled-in={pulledInRecents.includes(item) ? '' : undefined}
+            className={`flex items-center gap-1${pulledInRecents.includes(item) ? ' ui-enter' : ''}`}
+          >
+            <button
+              type="button"
+              aria-label={searchRecentAgainLabel(item)}
+              onClick={() => { settleOn(normalizePublicSearchQuery(item)); setQuery(item); }}
+              className="ui-focus-ring flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-xl px-2 text-left text-sm text-zinc-200 hover:bg-white/[0.06]"
+            >
+              <Clock3 className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />
+              <span className="truncate">{item}</span>
+            </button>
+            <button
+              type="button"
+              aria-label={searchRecentRemoveLabel(item)}
+              onClick={() => removeRecent(item)}
+              className="ui-focus-ring inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:bg-white/10 hover:text-white"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+
   return (
     // The field's row, pinned under the top bar: its height is the token the
     // tabs, pinned under it from 640px, are offset by (rem, never pixels).
@@ -1131,11 +1213,10 @@ export default function SearchClient({
             role="search"
             className="relative"
             onSubmit={(event) => { event.preventDefault(); commitSearch(); }}
-            onFocus={() => { setRecentsOpen(true); setFieldFocused(true); }}
+            onFocus={() => setFieldFocused(true)}
             onBlur={(event) => {
-              const next = event.relatedTarget;
-              if (!(next instanceof Node) || !recentsRef.current?.contains(next)) setRecentsOpen(false);
               // Still focused while the focus only moves inside the form (to Clear and back).
+              const next = event.relatedTarget;
               if (!(next instanceof Node) || !event.currentTarget.contains(next)) setFieldFocused(false);
             }}
           >
@@ -1143,7 +1224,8 @@ export default function SearchClient({
               value={query}
               onChange={setQuery}
               onClear={() => setQuery('')}
-              autoFocus={!opening.query}
+              autoFocus={!opening.query && !focusAfterGrowth}
+              entrance={entrance}
               // The cards on show are the search before this one: the field says
               // so, without a line that would push them down (review of #787).
               busy={staleResultsShown}
@@ -1210,61 +1292,6 @@ export default function SearchClient({
             leaving) and whenever there is no list. */}
         <p role="status" className="sr-only">{typeahead.shown ? '' : statusMessage}</p>
 
-        {recentsShown ? (
-          <div
-            ref={recentsRef}
-            className="mt-4 rounded-3xl border border-white/8 bg-white/[0.025] p-4 sm:p-5"
-            // A press on a row must not take the focus from the field first:
-            // the list would close under the pointer before the press lands.
-            onMouseDown={(event) => event.preventDefault()}
-            onBlur={(event) => {
-              // Open while the focus is in the list or back in the box, closed once it is anywhere else.
-              const next = event.relatedTarget;
-              if (
-                !(next instanceof Node)
-                || !(event.currentTarget.contains(next) || searchFormRef.current?.contains(next))
-              ) {
-                setRecentsOpen(false);
-              }
-            }}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <h2 id="search-recents-heading" className="text-base font-semibold text-white">{SEARCH_RECENTS_HEADING}</h2>
-              <button
-                type="button"
-                aria-label={SEARCH_RECENTS_CLEAR_ACTION_LABEL}
-                onClick={() => setHistory(clearSearchHistory())}
-                className="ui-focus-ring inline-flex min-h-11 items-center rounded-full px-3 text-sm text-zinc-400 hover:text-white"
-              >
-                {SEARCH_RECENTS_CLEAR_LABEL}
-              </button>
-            </div>
-            <ul aria-labelledby="search-recents-heading" className="mt-1">
-              {shownRecentSearches(history).map((item) => (
-                <li key={item} className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    aria-label={searchRecentAgainLabel(item)}
-                    onClick={() => { settleOn(normalizePublicSearchQuery(item)); setQuery(item); setRecentsOpen(false); }}
-                    className="ui-focus-ring flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-xl px-2 text-left text-sm text-zinc-200 hover:bg-white/[0.06]"
-                  >
-                    <Clock3 className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />
-                    <span className="truncate">{item}</span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={searchRecentRemoveLabel(item)}
-                    onClick={() => setHistory(forgetSearchQuery(item))}
-                    className="ui-focus-ring inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:bg-white/10 hover:text-white"
-                  >
-                    <X className="h-4 w-4" aria-hidden="true" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
         <div className="mt-4" aria-busy={pending} onClickCapture={rememberOpenedResult}>
           {filtersShown ? (
             <SearchFilterBar
@@ -1298,7 +1325,12 @@ export default function SearchClient({
             </p>
           ) : null}
           {!canSearch ? (
-            idleBlock
+            recentsShown ? (
+              <div className="space-y-10">
+                {recentsPanel}
+                {idleBlock}
+              </div>
+            ) : idleBlock
           ) : currentFailure && !currentAnswer ? (
             <SearchStateBlock
               tone="error"

@@ -82,6 +82,8 @@
 @source "../components/RecoverableMediaVideo.tsx";
 @source "../components/ResourceMediaPreview.tsx";
 @source "../components/RouteAuthBoundary.tsx";
+@source "../components/search/search-entrance.ts";
+@source "../components/search/SearchEntrancePart.tsx";
 @source "../components/search/search-field-handoff.ts";
 @source "../components/search/SearchEntryLink.tsx";
 @source "../components/search/search-history.ts";
@@ -1417,6 +1419,202 @@ button:disabled,
 .app-shell-create,
 .app-shell-create-label {
   display: none;
+}
+
+/* Search opens out of the control that was pressed, as the app's does
+   (src/components/search/search-entrance.ts; owner, 2026-11-15). The search
+   page's field and each control that opens it (the top bar's field, its round
+   magnifier below 1024px, Explore's search bar) name their capsule, magnifier,
+   text and clear button through React's <ViewTransition>, and a navigation
+   between the two morphs each into its pair: 300 ms on the app's decelerating
+   curve as the field grows, 150 ms ease-out back into the control, while the
+   rest of the screen cross-fades in 200 ms. A browser without view
+   transitions navigates as before. The names exist only during a navigation
+   to or from search (React writes them), so these rules touch nothing else. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+}
+
+::view-transition-group(.search-open-capsule),
+::view-transition-group(.search-open-icon),
+::view-transition-group(.search-open-text),
+::view-transition-group(.search-open-clear),
+::view-transition-old(.search-open-capsule),
+::view-transition-new(.search-open-capsule),
+::view-transition-old(.search-open-icon),
+::view-transition-new(.search-open-icon),
+::view-transition-old(.search-open-text),
+::view-transition-new(.search-open-text),
+::view-transition-old(.search-open-clear),
+::view-transition-new(.search-open-clear) {
+  animation-duration: 300ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+::view-transition-group(.search-close-capsule),
+::view-transition-group(.search-close-icon),
+::view-transition-group(.search-close-text),
+::view-transition-group(.search-close-clear),
+::view-transition-old(.search-close-capsule),
+::view-transition-new(.search-close-capsule),
+::view-transition-old(.search-close-icon),
+::view-transition-new(.search-close-icon),
+::view-transition-old(.search-close-text),
+::view-transition-new(.search-close-text),
+::view-transition-old(.search-close-clear),
+::view-transition-new(.search-close-clear) {
+  animation-duration: 150ms;
+  animation-timing-function: cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+/* The capsule keeps a capsule's shape at every size: its skin is drawn on the
+   transition itself, a background and a hairline that ease from the
+   control's look to the field's (back again as it closes), clipped round. The
+   two pictures of the skin are not shown: stretched from a round button to a
+   bar, its circle drew as an ellipse inside the capsule. Every part with a
+   picture of its own (magnifier, words, clear button) is a sibling of the
+   skin, so nothing inside is stretched either. */
+::view-transition-group(.search-open-capsule),
+::view-transition-group(.search-close-capsule) {
+  overflow: clip;
+  border-radius: var(--ui-radius-pill);
+}
+
+::view-transition-old(.search-open-capsule),
+::view-transition-new(.search-open-capsule),
+::view-transition-old(.search-close-capsule),
+::view-transition-new(.search-close-capsule) {
+  display: none;
+}
+
+::view-transition-image-pair(.search-open-capsule) {
+  border-radius: var(--ui-radius-pill);
+  animation: search-capsule-skin-open 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* The top bar's field is pressed with the focus in it: its focused look. */
+::view-transition-image-pair(search-bar-capsule.search-open-capsule) {
+  animation-name: search-capsule-skin-open-focused;
+}
+
+::view-transition-image-pair(.search-close-capsule) {
+  border-radius: var(--ui-radius-pill);
+  animation: search-capsule-skin-close 150ms cubic-bezier(0.215, 0.61, 0.355, 1) both;
+}
+
+/* The control's skin (AppShellSearch, AppShellClient's magnifier,
+   SearchEntryLink) and the field's (SearchField), as each looks over the
+   app's background (--ui-bg-app, #0c0c0e, which the top bar and the search
+   row draw): their translucent fills composited, so the capsule in flight
+   hides what it passes over (the browser lends it the field's backdrop blur,
+   which smudged the top bar's buttons under a translucent one) and lands on
+   exactly the colour the field or control then draws. */
+@keyframes search-capsule-skin-open {
+  from {
+    background-color: rgb(24, 24, 25);
+    box-shadow: inset 0 0 0 1px var(--ui-border-default);
+  }
+
+  to {
+    background-color: rgb(25, 25, 27);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  }
+}
+
+@keyframes search-capsule-skin-open-focused {
+  from {
+    background-color: rgb(31, 31, 32);
+    box-shadow: inset 0 0 0 1px var(--ui-border-strong);
+  }
+
+  to {
+    background-color: rgb(25, 25, 27);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  }
+}
+
+@keyframes search-capsule-skin-close {
+  from {
+    background-color: rgb(25, 25, 27);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  }
+
+  to {
+    background-color: rgb(24, 24, 25);
+    box-shadow: inset 0 0 0 1px var(--ui-border-default);
+  }
+}
+
+/* The words travel at their own size, from the start of the control's box to
+   the start of the field's, never scaled with the box around them. */
+::view-transition-old(.search-open-text),
+::view-transition-new(.search-open-text),
+::view-transition-old(.search-close-text),
+::view-transition-new(.search-close-text) {
+  width: 100%;
+  height: 100%;
+  object-fit: none;
+  object-position: left center;
+}
+
+/* The control's words (14px) and the field's (16px) hand over rather than
+   overlap: drawn together for the whole growth they read as one smudged word.
+   The old leave in the first third, the new arrive as they go, so the words
+   never dip out of sight. */
+::view-transition-old(.search-open-text) {
+  animation: search-entrance-fade-out 100ms ease-out both;
+}
+
+/* Going back, the field's words and clear button are gone before the capsule
+   is half its size, as the app's are, so they never slide under the magnifier. */
+::view-transition-old(.search-close-text),
+::view-transition-old(.search-close-clear) {
+  animation: search-entrance-fade-out 60ms ease-out both;
+}
+
+::view-transition-new(.search-close-clear) {
+  animation: none;
+}
+
+::view-transition-new(.search-open-text) {
+  animation: search-entrance-text-handover 300ms linear both;
+}
+
+::view-transition-new(.search-close-text) {
+  animation: search-entrance-text-handover 150ms linear both;
+}
+
+@keyframes search-entrance-text-handover {
+  0%,
+  15% {
+    opacity: 0;
+  }
+
+  55%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes search-entrance-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-image-pair(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+
+  /* A recent search a removal brings into fifth place appears in it. */
+  [data-search-recent-pulled-in] {
+    animation: none;
+  }
 }
 
 /* A visitor's "Sign in · 25 free credits" (AppShellAccountFallback.tsx) keeps "25 free" on a
