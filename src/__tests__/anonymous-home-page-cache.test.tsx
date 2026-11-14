@@ -424,6 +424,28 @@ describe('Anonymous home cacheability', () => {
     expect(metadata.description).not.toMatch(/UGC ads/i);
   });
 
+  it('names the site for search results and describes the app in the brand\'s own words', async () => {
+    const { default: Home } = await import('@/app/page');
+    const { siteConfig } = await import('@/lib/seo');
+
+    const html = await renderPageToHtml(<Home />);
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    const schemas = Array.from(container.querySelectorAll('script[type="application/ld+json"]'))
+      .map((script) => JSON.parse(script.textContent ?? 'null') as Record<string, unknown>);
+
+    // With no WebSite block on `/`, Google printed the bare domain above the
+    // result instead of the site's name (2026-11-14).
+    expect(schemas.filter((schema) => schema['@type'] === 'WebSite')).toEqual([
+      expect.objectContaining({ name: 'Magic Booklet', url: `${siteConfig.siteUrl}/` }),
+    ]);
+    // The app's description outlived the rename as "helps teams generate …
+    // motion-transfer ads".
+    const app = schemas.find((schema) => schema['@type'] === 'SoftwareApplication');
+    expect(app?.description).toBe(siteConfig.description);
+    expect(app?.description).not.toMatch(/\bads\b|\bteams\b/i);
+  });
+
   it('keeps feed post titles out of the top-level document outline', async () => {
     const { default: Home } = await import('@/app/page');
 

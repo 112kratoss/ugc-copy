@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
     templates: vi.fn(),
@@ -86,5 +86,28 @@ describe('app schema', () => {
 
     it('keeps the store listings off the Organization', () => {
         expect(buildOrganizationSchema()).not.toHaveProperty('sameAs');
+    });
+});
+
+describe('site name', () => {
+    afterEach(() => {
+        vi.unstubAllEnvs();
+        vi.resetModules();
+    });
+
+    // What Google prints above a result's address; it printed the domain while
+    // `/` had no WebSite block (2026-11-14).
+    it('names the site Magic Booklet, with the one-word spelling and the domain as fallbacks', async () => {
+        vi.stubEnv('NEXT_PUBLIC_SITE_URL', 'https://magicbooklet.com/');
+        vi.resetModules();
+        const { buildWebSiteSchema } = await import('@/lib/seo');
+
+        expect(buildWebSiteSchema()).toEqual({
+            '@context': 'https://schema.org',
+            '@type': 'WebSite',
+            name: 'Magic Booklet',
+            alternateName: ['Magicbooklet', 'magicbooklet.com'],
+            url: 'https://magicbooklet.com/',
+        });
     });
 });
