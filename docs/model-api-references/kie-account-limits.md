@@ -18,8 +18,11 @@ is the account-wide limit every model's submissions share, and the input to
 Section 3 also lets a key carry its own hourly, daily and total usage caps, set in the
 dashboard. The guide gives no default numbers, and the app cannot read them.
 
-Not stated: whether the ten-second window is fixed or sliding, and whether a `Retry-After`
-header accompanies the 429.
+Not stated: whether the ten-second window is fixed or sliding, whether a `Retry-After`
+header accompanies the 429, and whether endpoints other than task creation count as "new
+generation requests". The app calls three that do not pass its admission gate: chat
+completions for the prompt enhancer and the workflow assistant, and Seedance asset creation
+(`playground/createAsset`).
 
 ## What we observed before it was published
 
@@ -32,7 +35,8 @@ header accompanies the 429.
 
 `KIE_PUBLISHED_ACCOUNT_LIMITS` holds these figures and `provider-admission.test.ts` holds the
 policy to them: the app admits at most 18 submissions in any 12 seconds (a sliding window, so
-it fits Kie's whether theirs is fixed or sliding), and runs at most 50 at once. The longer
+it fits Kie's whether theirs is fixed or sliding), and runs at most 50 at once. That is a
+burst of 18 and 1.5 per second sustained, against Kie's 20 and 2 per second. The longer
 window covers transit, since we stamp a submission before it leaves and Kie counts it on
 arrival. Everything on the account counts toward Kie's 20: a local dev server, a model
 probe or an eval run on the same key spends from the same window production does.

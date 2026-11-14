@@ -12,19 +12,20 @@
 -- that fails after its credits were held. Five in a row open the circuit for
 -- everybody.
 --
--- A bucket can only be made to fit by giving up half the limit: any capacity C
--- and refill r must satisfy C + 10r <= 20, so a burst of 10 leaves 1/s. The
--- provider's rule is a count over a window, and the gate that matches it
--- exactly is the same shape: at most p_rate_window_max admissions in any
--- p_rate_window_seconds. That admits the whole burst Kie allows and the whole
--- sustained rate, and never one request more.
+-- A bucket can only be made to fit by splitting one budget between burst and
+-- rate: any capacity C and refill r must satisfy C + 10r <= 20, so a burst of
+-- 10 leaves 1/s. The provider's rule is a count over a window, and the gate
+-- that matches it is the same shape: at most p_rate_window_max admissions in
+-- any p_rate_window_seconds. A window spends its whole count as a burst and
+-- again every window after, and never admits one request more.
 --
 -- The app passes a window longer than Kie's (12 s against 10 s) and a count
--- below it (18 against 20). The longer window is the part that matters: we
--- stamp an admission before the request leaves, Kie counts it when it arrives,
--- and two bursts exactly one window apart on our clock can land closer than
--- that on Kie's. Two seconds of slack absorbs that; the two spare requests
--- cover the calls this gate does not see.
+-- below it (18 against 20): a burst of 18 where the bucket had 15, and the
+-- same 1.5/s sustained. The longer window is the part that matters: we stamp
+-- an admission before the request leaves, Kie counts it when it arrives, and
+-- two bursts exactly one window apart on our clock can land closer than that
+-- on Kie's. Two seconds of slack absorbs that; the two spare requests are for
+-- the ones this gate does not count.
 --
 -- State: the admissions of the last window, as timestamps on the scope's row.
 -- The array is bounded by the window's count, pruned on every admission, and

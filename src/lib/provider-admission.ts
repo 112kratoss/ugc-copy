@@ -31,18 +31,27 @@ export const KIE_PUBLISHED_ACCOUNT_LIMITS = {
 /**
  * Our ceilings in front of the provider. The rate is a sliding window because
  * Kie's rule is one: at most `rateWindowMax` submissions in any
- * `rateWindowSeconds`, which admits the whole burst and the whole sustained
- * rate Kie accepts and never a request more. A token bucket cannot do both: it
- * admits capacity + refill x window, so the earlier 15 refilling at 1.5/s let
- * 30 through in ten seconds, ten more than Kie takes.
+ * `rateWindowSeconds`. A window spends its whole count as a burst and again
+ * every window after, where a token bucket has to split one budget between the
+ * two: it admits capacity + refill x window, so the earlier 15 refilling at
+ * 1.5/s let 30 through in ten seconds, ten more than Kie takes, and fitting it
+ * under 20 would have meant a burst of 10 at 1/s or 5 at 1.5/s.
+ *
+ * With the margins below this is a burst of 18 (it was 15) and 1.5/s sustained
+ * (unchanged), against Kie's 20 and 2/s. What is given up is the margin, and
+ * what is gained is that no window of Kie's can be overrun.
  *
  * Both margins are deliberate, and `provider-admission.test.ts` holds them to
  * the published figures. The window is longer than Kie's because we stamp an
  * admission before the request leaves and Kie counts it on arrival: two bursts
  * exactly one window apart on our clock can land closer than that on Kie's, so
  * the two seconds are for transit. The count is two short of Kie's for the
- * calls this gate does not see (a replayed start reusing its reservation, a
- * probe or a script on the same account).
+ * requests this gate does not count: a replayed start reusing its reservation,
+ * a start admitted while the gate's own database call failed, a model probe or
+ * a script on the same account. Kie's page does not say whether its other
+ * endpoints the app calls (chat completions for the prompt enhancer and the
+ * workflow assistant, Seedance asset creation) draw on the same 20; if a 429
+ * ever shows they do, lower `rateWindowMax` by their rate.
  */
 export const PROVIDER_ADMISSION_POLICY = {
   rateWindowSeconds: 12,

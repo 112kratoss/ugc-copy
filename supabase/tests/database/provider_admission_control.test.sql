@@ -13,7 +13,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(24);
+select plan(27);
 
 -- Isolate from anything a prior test or seed left behind.
 delete from public.provider_admission_buckets where scope like 'pgtap%';
@@ -48,8 +48,8 @@ select is(
 );
 
 select ok(
-  (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'retryAfterSeconds')::integer between 1 and 12,
-  'a refusal carries a retry hint of at least a second and at most the window'
+  (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'retryAfterSeconds')::integer between 11 and 12,
+  'with every admission just made, the next place is a whole window away'
 );
 
 -- Admission is time-based, so rewriting the stamps is equivalent to waiting.
@@ -76,6 +76,33 @@ select is(
 select ok(
   (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'retryAfterSeconds')::integer between 6 and 7,
   'a refusal says when the oldest admission in the window ages out'
+);
+
+-- More stamps than the count, as a lowered count or a recorded probe leaves
+-- behind. A place opens only once all but one of the newest two have aged
+-- out, which is when the two-second-old stamp turns twelve.
+update public.provider_admission_buckets
+set admitted_at = array[
+  now() - interval '11 seconds', now() - interval '10 seconds',
+  now() - interval '3 seconds', now() - interval '2 seconds', now() - interval '1 second'
+]
+where scope = 'pgtap-window';
+
+select ok(
+  (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'retryAfterSeconds')::integer between 9 and 10,
+  'an overfull window waits for enough admissions to age out, not just the oldest'
+);
+
+-- Half a second short of the window still holds its place, half a second past
+-- it does not: the window is twelve seconds, not roughly twelve.
+update public.provider_admission_buckets
+set admitted_at = array[now() - interval '11.5 seconds', now() - interval '1 second']
+where scope = 'pgtap-window';
+
+select is(
+  (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'reason'),
+  'rate_limited',
+  'an admission still inside the window keeps its place'
 );
 
 update public.provider_admission_buckets
@@ -115,10 +142,15 @@ select is(
   'a model at its share is refused even when the account window has room'
 );
 
+select ok(
+  (public.admit_provider_submission('pgtap-share', 'busy-model', p_max_in_flight => 1000, p_rate_window_max => 100, p_model_rate_window_max => 1) ->> 'retryAfterSeconds')::integer between 11 and 12,
+  'a model refusal says when the model''s own place opens'
+);
+
 select is(
   (select cardinality(admitted_at) from public.provider_admission_buckets where scope = 'pgtap-share'),
   1,
-  'the model refusal took no place in the account window'
+  'the model refusals took no place in the account window'
 );
 
 select is(
