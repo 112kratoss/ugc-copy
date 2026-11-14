@@ -1,89 +1,136 @@
 -- Behavioural coverage for F14's provider admission control.
 --
--- The string-level migration test pins the *shape* of these functions. What it
--- cannot prove is the arithmetic: that a bucket actually refills over time,
--- that a rejected model bucket does not silently spend a global token, and that
--- the breaker's open -> half-open -> closed cycle terminates. Those are the
--- properties that decide whether the gate protects the provider or quietly
--- throttles the account to zero, so they are exercised here against real rows.
+-- The string-level migration tests pin the *shape* of these functions. What
+-- they cannot prove is the arithmetic: that the rate window really slides,
+-- that an admission the model's share refuses takes no place in the account's
+-- window, and that the breaker's open -> half-open -> closed cycle terminates.
+-- Those are the properties that decide whether the gate protects the provider
+-- or quietly throttles the account to zero, so they are exercised here against
+-- real rows.
 
 begin;
 
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(17);
+select plan(24);
 
 -- Isolate from anything a prior test or seed left behind.
 delete from public.provider_admission_buckets where scope like 'pgtap%';
 delete from public.provider_circuit_breakers where service like 'pgtap%';
 
--- ─── Token bucket ────────────────────────────────────────────────────────────
+-- ─── Sliding rate window ─────────────────────────────────────────────────────
 
--- A fresh scope is seeded at capacity, so the first submission is always
--- admitted rather than waiting for a refill that has not started.
+-- A fresh scope starts with an empty window, so the whole burst the window
+-- holds is admitted at once.
 select is(
-  (public.admit_provider_submission('pgtap-bucket', null, 2, 1, null, null, 1000, 3600, 60, 60) ->> 'allowed')::boolean,
+  (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'allowed')::boolean,
   true,
-  'first submission on a fresh bucket is admitted'
+  'first submission on a fresh window is admitted'
 );
 
 select is(
-  (public.admit_provider_submission('pgtap-bucket', null, 2, 1, null, null, 1000, 3600, 60, 60) ->> 'allowed')::boolean,
+  (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'allowed')::boolean,
   true,
-  'burst capacity is spendable up to the configured capacity'
+  'the window admits a burst up to its count'
 );
 
 select is(
-  (public.admit_provider_submission('pgtap-bucket', null, 2, 1, null, null, 1000, 3600, 60, 60) ->> 'allowed')::boolean,
+  (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'allowed')::boolean,
   false,
-  'the bucket refuses once capacity is spent'
+  'the window refuses once its count is reached'
 );
 
 select is(
-  (public.admit_provider_submission('pgtap-bucket', null, 2, 1, null, null, 1000, 3600, 60, 60) ->> 'reason'),
+  (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'reason'),
   'rate_limited',
-  'a spent bucket reports rate_limited rather than a generic failure'
+  'a full window reports rate_limited rather than a generic failure'
 );
 
 select ok(
-  (public.admit_provider_submission('pgtap-bucket', null, 2, 1, null, null, 1000, 3600, 60, 60) ->> 'retryAfterSeconds')::integer >= 1,
-  'a rejection always carries a retry hint of at least one second'
+  (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'retryAfterSeconds')::integer between 1 and 12,
+  'a refusal carries a retry hint of at least a second and at most the window'
 );
 
--- Refill is time-based, so rewinding the stamp is equivalent to waiting.
+-- Admission is time-based, so rewriting the stamps is equivalent to waiting.
+-- One admission is now older than the window and one is five seconds old.
 update public.provider_admission_buckets
-set updated_at = now() - interval '5 seconds'
-where scope = 'pgtap-bucket';
+set admitted_at = array[now() - interval '13 seconds', now() - interval '5 seconds']
+where scope = 'pgtap-window';
 
 select is(
-  (public.admit_provider_submission('pgtap-bucket', null, 2, 1, null, null, 1000, 3600, 60, 60) ->> 'allowed')::boolean,
+  (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'allowed')::boolean,
   true,
-  'the bucket refills over elapsed time'
+  'an admission older than the window no longer counts'
 );
-
-select ok(
-  (select tokens from public.provider_admission_buckets where scope = 'pgtap-bucket') <= 2,
-  'refill never exceeds capacity, so idle time cannot bank unlimited burst'
-);
-
--- ─── The global token must not leak when the model bucket refuses ────────────
---
--- This is the property that made these one function instead of three. Drain the
--- model bucket, then confirm the rejected call left the global bucket untouched.
-
-select public.admit_provider_submission('pgtap-leak', 'slow-model', 100, 100, 1, 0.001, 1000, 3600, 60, 60);
 
 select is(
-  (public.admit_provider_submission('pgtap-leak', 'slow-model', 100, 100, 1, 0.001, 1000, 3600, 60, 60) ->> 'reason'),
-  'model_rate_limited',
-  'a drained per-model bucket rejects even when the global bucket is healthy'
+  (select cardinality(admitted_at) from public.provider_admission_buckets where scope = 'pgtap-window'),
+  2,
+  'aged admissions are pruned on write, so the row never outgrows the window'
 );
 
+-- The window holds the five-second-old admission and the one just made. The
+-- next place opens when the older of the two turns twelve, seven seconds from
+-- now: a fixed window would have said "at the next boundary" instead.
 select ok(
-  (select tokens from public.provider_admission_buckets where scope = 'pgtap-leak')
-    > (select tokens from public.provider_admission_buckets where scope = 'pgtap-leak:slow-model'),
-  'the model rejection did not spend a global token'
+  (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'retryAfterSeconds')::integer between 6 and 7,
+  'a refusal says when the oldest admission in the window ages out'
+);
+
+update public.provider_admission_buckets
+set admitted_at = array[now() - interval '12.5 seconds', now() - interval '1 second']
+where scope = 'pgtap-window';
+
+select is(
+  (public.admit_provider_submission('pgtap-window', p_max_in_flight => 1000, p_rate_window_seconds => 12, p_rate_window_max => 2) ->> 'allowed')::boolean,
+  true,
+  'a place opens exactly one window after the admission that held it'
+);
+
+-- ─── A caller from before the window still resolves ──────────────────────────
+--
+-- Migrations reach production before the code that stops sending the bucket
+-- arguments, and a rollback puts that code back. A bucket of one token that
+-- all but never refills would refuse the second call; the arguments are
+-- accepted in their old positions and decide nothing.
+select public.admit_provider_submission('pgtap-legacy', null, 1, 0.0001, 1, 0.0001, 1000, 3600, 60, 60);
+
+select is(
+  (public.admit_provider_submission('pgtap-legacy', null, 1, 0.0001, 1, 0.0001, 1000, 3600, 60, 60) ->> 'reason'),
+  'admitted',
+  'the retired bucket arguments are accepted and ignored'
+);
+
+-- ─── A model's share must not take a place in the account window ─────────────
+--
+-- This is the property that made these one function instead of three. Fill the
+-- model's share, then confirm the refused call left the account window alone.
+
+select public.admit_provider_submission('pgtap-share', 'busy-model', p_max_in_flight => 1000, p_rate_window_max => 100, p_model_rate_window_max => 1);
+
+select is(
+  (public.admit_provider_submission('pgtap-share', 'busy-model', p_max_in_flight => 1000, p_rate_window_max => 100, p_model_rate_window_max => 1) ->> 'reason'),
+  'model_rate_limited',
+  'a model at its share is refused even when the account window has room'
+);
+
+select is(
+  (select cardinality(admitted_at) from public.provider_admission_buckets where scope = 'pgtap-share'),
+  1,
+  'the model refusal took no place in the account window'
+);
+
+select is(
+  (public.admit_provider_submission('pgtap-share', 'quiet-model', p_max_in_flight => 1000, p_rate_window_max => 100, p_model_rate_window_max => 1) ->> 'reason'),
+  'admitted',
+  'another model is admitted while one model is at its share'
+);
+
+select is(
+  (public.admit_provider_submission('pgtap-share', 'busy-model', p_max_in_flight => 1000, p_rate_window_max => 100) ->> 'reason'),
+  'admitted',
+  'a caller that names no share is held to the account window only'
 );
 
 -- ─── Circuit breaker ─────────────────────────────────────────────────────────
@@ -148,6 +195,28 @@ select is(
      from public.provider_circuit_breakers where service = 'pgtap-breaker'),
   'closed:0',
   'a successful probe closes the circuit and clears the failure count'
+);
+
+-- The probe is a request the provider counts, so the admissions that follow a
+-- recovery see it in the window.
+select is(
+  (select cardinality(admitted_at) from public.provider_admission_buckets where scope = 'pgtap-breaker'),
+  1,
+  'the probe is recorded in the rate window'
+);
+
+-- A window that filled before the circuit opened must not keep the probe out,
+-- or the breaker could never close.
+select public.admit_provider_submission('pgtap-probe-full', p_max_in_flight => 1000, p_rate_window_max => 1);
+select public.record_provider_submission_outcome('pgtap-probe-full', false, 1, 60, null);
+update public.provider_circuit_breakers
+set half_open_at = now() - interval '1 second'
+where service = 'pgtap-probe-full';
+
+select is(
+  (public.admit_provider_submission('pgtap-probe-full', p_max_in_flight => 1000, p_rate_window_max => 1) ->> 'reason'),
+  'circuit_probe',
+  'the probe is admitted through a full rate window'
 );
 
 select * from finish();

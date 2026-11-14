@@ -17,19 +17,46 @@ import { isExternalServiceTimeoutError } from '@/lib/provider-fetch';
 export const KIE_PROVIDER_SERVICE = 'kie';
 
 /**
- * Conservative on purpose. Kie documents a 429 response on every model but
- * publishes no request rate and no concurrency cap anywhere in its API
- * references, so these are *our* ceilings, not the provider's. They exist to
- * make the failure mode a bounded queue-and-retry instead of a 429 storm, and
- * the right way to raise them is the certification load test, not a hunch.
+ * What Kie publishes about its own limits (kie.ai/getting-started, section 8,
+ * read 2026-11-14; captured in `docs/model-api-references/kie-account-limits.md`).
+ * Applied per account. A request over the rate is answered 429 and is not
+ * queued. The concurrency figure is Kie's "typically", not a promise.
+ */
+export const KIE_PUBLISHED_ACCOUNT_LIMITS = {
+  newRequestsPerWindow: 20,
+  windowSeconds: 10,
+  typicalConcurrentTasks: 100,
+} as const;
+
+/**
+ * Our ceilings in front of the provider. The rate is a sliding window because
+ * Kie's rule is one: at most `rateWindowMax` submissions in any
+ * `rateWindowSeconds`, which admits the whole burst and the whole sustained
+ * rate Kie accepts and never a request more. A token bucket cannot do both: it
+ * admits capacity + refill x window, so the earlier 15 refilling at 1.5/s let
+ * 30 through in ten seconds, ten more than Kie takes.
+ *
+ * Both margins are deliberate, and `provider-admission.test.ts` holds them to
+ * the published figures. The window is longer than Kie's because we stamp an
+ * admission before the request leaves and Kie counts it on arrival: two bursts
+ * exactly one window apart on our clock can land closer than that on Kie's, so
+ * the two seconds are for transit. The count is two short of Kie's for the
+ * calls this gate does not see (a replayed start reusing its reservation, a
+ * probe or a script on the same account).
  */
 export const PROVIDER_ADMISSION_POLICY = {
-  /** Burst allowed on purpose; sustained rate is the refill. */
-  globalCapacity: 15,
-  globalRefillPerSecond: 1.5,
-  /** A single model cannot consume the whole account budget. */
-  modelCapacity: 6,
-  modelRefillPerSecond: 0.6,
+  rateWindowSeconds: 12,
+  rateWindowMax: 18,
+  /**
+   * A single model cannot take the whole account window: a third of it stays
+   * open to every other model. Ours, not Kie's, whose limit is per account.
+   */
+  modelRateWindowMax: 12,
+  /**
+   * Half of what Kie typically runs at once. This one protects our side: every
+   * finished task comes back as a callback that imports media, and 48 at once
+   * is what the certification run proved. Raise it with that run, not a hunch.
+   */
   maxInFlight: 50,
   /**
    * Only recent work counts toward the concurrency cap. Counting every
@@ -124,10 +151,9 @@ export async function admitProviderSubmission(params: {
       ...(params.generationId ? { p_generation_id: params.generationId } : {}),
       p_service: service,
       p_model: params.model?.trim() || null,
-      p_global_capacity: PROVIDER_ADMISSION_POLICY.globalCapacity,
-      p_global_refill_per_second: PROVIDER_ADMISSION_POLICY.globalRefillPerSecond,
-      p_model_capacity: PROVIDER_ADMISSION_POLICY.modelCapacity,
-      p_model_refill_per_second: PROVIDER_ADMISSION_POLICY.modelRefillPerSecond,
+      p_rate_window_seconds: PROVIDER_ADMISSION_POLICY.rateWindowSeconds,
+      p_rate_window_max: PROVIDER_ADMISSION_POLICY.rateWindowMax,
+      p_model_rate_window_max: PROVIDER_ADMISSION_POLICY.modelRateWindowMax,
       p_max_in_flight: PROVIDER_ADMISSION_POLICY.maxInFlight,
       p_in_flight_window_seconds: PROVIDER_ADMISSION_POLICY.inFlightWindowSeconds,
       p_circuit_open_seconds: PROVIDER_ADMISSION_POLICY.circuitOpenSeconds,
