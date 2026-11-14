@@ -1,3 +1,4 @@
+import { readQueuedProviderSubmission } from '@/lib/generation-submission-queue-store';
 import { createHash, randomUUID } from 'node:crypto';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -188,6 +189,18 @@ async function loadExistingGeneration(
   if (!row) return null;
 
   if (!row.prediction_id) {
+    // A queued run has no provider task yet and is not "still starting": it
+    // has answered, as queued. Its start is replayed under the run's handle,
+    // the generation id, which is what that first answer gave.
+    if (row.status === 'pending' && await readQueuedProviderSubmission(client, row.id)) {
+      return {
+        predictionId: row.id,
+        generationId: row.id,
+        cost: typeof row.cost === 'number' ? row.cost : 0,
+        remainingCredits: await loadCurrentCredits(client, userId),
+        idempotentReplay: true,
+      };
+    }
     if (ACTIVE_START_STATUSES.has(row.status ?? '')) {
       throw new GenerationStartIdempotencyError(
         'A generation with this idempotency key is already starting. Retry shortly.',

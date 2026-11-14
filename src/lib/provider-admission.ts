@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { GenerationServiceError } from '@/lib/generation-service-core';
-import { logBackendInfo, logBackendWarning } from '@/lib/backend-logger';
+import { logBackendWarning } from '@/lib/backend-logger';
 import { createServiceClient } from '@/lib/server-helpers';
 import { isExternalServiceTimeoutError } from '@/lib/provider-fetch';
 
@@ -80,112 +80,75 @@ export const PROVIDER_ADMISSION_POLICY = {
   circuitOpenSeconds: 60,
   probeTimeoutSeconds: 60,
   /**
-   * How long a creator's start waits in line for a place before it is refused
-   * and refunded. The limits it waits on clear in seconds: a rate-window place
-   * within `rateWindowSeconds`, and with `maxInFlight` tasks running one ends
-   * every few seconds. The wait is spent inside the start's own request, so it
-   * has to end well before anything that would cut the request off: the app
-   * abandons a start after 120 s (`GENERATION_START_TIMEOUT_MS`).
+   * How long a run may stay queued before it is refunded and its creator told.
+   * The limits it waits on clear in seconds, so this is a safety bound, not an
+   * expected wait. It has to stay far inside the hour the signed input links
+   * in a stored request last, and inside the reaper's 45 minutes, which would
+   * otherwise settle the run from under the queue.
    */
-  waitBudgetMs: 45_000,
+  queueMaxAgeMs: 10 * 60 * 1000,
   /**
-   * The latest a start may still be waiting, counted from when the route took
-   * the start rather than from when it reached the gate. A start can spend tens of
-   * seconds preparing its inputs first (measuring reference clips, converting
-   * tracks), and after the wait it still has to create the provider task (30 s
-   * at most, `PROVIDER_TASK_CREATE_TIMEOUT_MS`) and attach it. A start that
-   * arrives late waits for what is left of this, and one that arrives after it
-   * does not wait at all. `provider-admission-wait.test.ts` holds the sum to
-   * the app's timeout.
+   * The most runs the queue holds, and the most of one creator's. Past either
+   * a start is refused and refunded at once, as every over-limit start once
+   * was: a queue that cannot drain inside `queueMaxAgeMs` only holds credits.
    */
-  waitDeadlineMs: 75_000,
+  queueMax: 200,
+  queueUserMax: 4,
   /**
-   * The same wait for a start an agent makes through the MCP server, whose
-   * clients give a tool call less time than the app gives a start.
+   * How long the request that queued a run goes on asking for its place after
+   * it has answered (Next's `after`). Under the 300 s the route is given, with
+   * room to create the provider task once the place comes.
    */
-  agentWaitBudgetMs: 25_000,
+  queueDriveBudgetMs: 240_000,
   /**
-   * A waiting start asks again when the refusal said a place opens, and never
-   * later than this: each ask is also the heartbeat that keeps its ticket
-   * alive, and a place that opens for the start at the head of the line stays
-   * empty until it asks.
+   * How often the request that queued a run looks at the head of the queue
+   * again while it waits for its run's turn.
    */
-  waitPollMaxMs: 2_000,
+  queuePollMs: 2_000,
   /**
-   * How long one ask may take before it is given up as unanswered. Without it
-   * a single stuck call could outlast the whole wait.
+   * How long one ask of the gate may take before it is given up as
+   * unanswered: a start's own request is waiting on it.
    */
   askTimeoutMs: 10_000,
-  /**
-   * A ticket nobody has asked on for this long no longer holds a place in the
-   * line: its request died. Longer than the longest gap between two asks of a
-   * live start, a pause and one ask that timed out, so a slow ask does not
-   * cost a waiting start its turn.
-   */
-  waiterTtlSeconds: 15,
-  /**
-   * The longest the line gets. A start that finds this many already waiting
-   * is refused at once: three rate windows of starts is all `waitBudgetMs` can
-   * serve, so a place further back would be credits held for a wait that
-   * cannot end well. A start with less time to wait (an agent's, or one that
-   * reached the gate late) is held to the windows its own wait spans
-   * (`lineMaxFor`). It also bounds what each ask reads under the gate's lock.
-   */
-  waitLineMax: 54,
-  /**
-   * The same bound for the starts of one model, which the line serves at the
-   * model's share of each window, not the account's.
-   */
-  waitModelLineMax: 36,
 } as const;
 
-/** The refusals a place clears by itself: worth waiting in line for. The breaker's are not. */
+/** The refusals a place clears by itself: worth queueing a run for. The breaker's are not. */
 const WAITABLE_REASONS: ReadonlySet<string> = new Set(['rate_limited', 'model_rate_limited', 'max_in_flight']);
 
 type AdmissionScope =
-  /** A creator's start: it may wait in line, for `budgetMs` and no later than its deadline. */
-  | { kind: 'wait'; budgetMs: number; openedAtMs: number }
-  /** A run step: it does not wait, and its turn dates from when it was first turned away. */
+  /** A creator's start: over the limits it is queued, not refused. */
+  | { kind: 'queue' }
+  /** A run step: it is neither queued nor held, and its turn dates from when it was first turned away. */
   | { kind: 'turn'; sinceMs: number | null };
 
 const admissionScope = new AsyncLocalStorage<AdmissionScope>();
 
 /**
- * Runs a start whose submission may wait in line for up to `budgetMs`.
+ * Runs a start that may be queued when the provider's limits are full.
  *
- * Waiting is something the caller asks for, never the default: only a request
- * a person is waiting on should be held open. A template or workflow step has
- * a durable retry of its own, with a backoff and a worker whose time is shared
- * by every step in its batch; it starts outside this scope, is refused at once
- * as before, and comes back later.
+ * Queueing is something the caller asks for, never the default: it changes
+ * what the start answers (a run that is not sent yet), so only a caller that
+ * can say so to whoever is waiting opens this. A template or workflow step
+ * has a durable retry of its own; it starts outside this scope, is refused at
+ * once as before, and comes back later.
  */
-export function withProviderAdmissionWait<T>(budgetMs: number, run: () => T): T {
-  return admissionScope.run(
-    { kind: 'wait', budgetMs: Math.max(0, Math.floor(budgetMs)), openedAtMs: Date.now() },
-    run,
-  );
+export function withProviderSubmissionQueue<T>(run: () => T): T {
+  return admissionScope.run({ kind: 'queue' }, run);
 }
 
-/**
- * How long the start running now may wait in line: zero outside
- * `withProviderAdmissionWait`, and never past `waitDeadlineMs` from when that
- * scope opened, however much of its budget is left.
- */
-export function providerAdmissionWaitBudgetMs(nowMs: number = Date.now()): number {
-  const scope = admissionScope.getStore();
-  if (scope?.kind !== 'wait') return 0;
-  const untilDeadlineMs = PROVIDER_ADMISSION_POLICY.waitDeadlineMs - (nowMs - scope.openedAtMs);
-  return Math.max(0, Math.min(scope.budgetMs, untilDeadlineMs));
+/** Whether the start running now may be queued: only inside `withProviderSubmissionQueue`. */
+export function providerSubmissionMayQueue(): boolean {
+  return admissionScope.getStore()?.kind === 'queue';
 }
 
 /**
  * Runs a run step's start, which keeps its place in the line by date rather
  * than by ticket.
  *
- * A step does not wait in its request: its worker's time is shared, and a
- * busy step is put back and retried for up to thirty minutes. With no ticket
- * it would be behind every creator who is waiting, on every retry, for as long
- * as creators keep arriving. `firstRefusedAtMs` is when the provider first
+ * A step is not queued here: its worker's time is shared, and a busy step is
+ * put back and retried for up to thirty minutes. With no ticket it would be
+ * behind every queued creator, on every retry, for as long as creators keep
+ * arriving. `firstRefusedAtMs` is when the provider first
  * turned the step away (null on its first try): the line puts it behind only
  * the tickets older than that. It holds no place while it is away, and when it
  * comes back it is the one that has waited longest.
@@ -218,19 +181,15 @@ export type ProviderAdmissionVerdict = {
   state: string;
   retryAfterSeconds: number;
   inFlight: number | null;
-  /** The start holds a ticket in the line and may ask again. */
-  waiting: boolean;
-  /** Live tickets ahead of this start when it asked. */
+  /** Starts ahead of this one in the line when it asked. */
   waitersAhead: number | null;
-  /** How long the start waited in line before this verdict. */
-  waitedMs: number;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function normalizeVerdict(value: unknown): Omit<ProviderAdmissionVerdict, 'waitedMs'> {
+function normalizeVerdict(value: unknown): ProviderAdmissionVerdict {
   if (!isRecord(value)) throw new Error('Provider admission response was invalid');
   const inFlight = Number(value.inFlight);
   const waitersAhead = Number(value.waitersAhead);
@@ -240,7 +199,6 @@ function normalizeVerdict(value: unknown): Omit<ProviderAdmissionVerdict, 'waite
     state: typeof value.state === 'string' ? value.state : 'closed',
     retryAfterSeconds: Math.max(0, Number(value.retryAfterSeconds ?? 0)),
     inFlight: Number.isFinite(inFlight) ? inFlight : null,
-    waiting: value.waiting === true,
     waitersAhead: value.waitersAhead != null && Number.isFinite(waitersAhead) ? waitersAhead : null,
   };
 }
@@ -259,16 +217,13 @@ type ProviderAdmissionClient = {
   rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<ProviderAdmissionAnswer>;
 };
 
-/** One ask, given up after `limitMs` where the client can be told to (supabase-js can). */
-function askWithTimeout(
-  call: PromiseLike<ProviderAdmissionAnswer>,
-  limitMs: number,
-): PromiseLike<ProviderAdmissionAnswer> {
+/** One ask, given up after `askTimeoutMs` where the client can be told to (supabase-js can). */
+function askWithTimeout(call: PromiseLike<ProviderAdmissionAnswer>): PromiseLike<ProviderAdmissionAnswer> {
   const abortable = call as PromiseLike<ProviderAdmissionAnswer> & {
     abortSignal?: (signal: AbortSignal) => PromiseLike<ProviderAdmissionAnswer>;
   };
   return typeof abortable.abortSignal === 'function'
-    ? abortable.abortSignal(AbortSignal.timeout(limitMs))
+    ? abortable.abortSignal(AbortSignal.timeout(PROVIDER_ADMISSION_POLICY.askTimeoutMs))
     : call;
 }
 
@@ -276,44 +231,21 @@ function askWithTimeout(
 const ASK_TIMED_OUT = /TimeoutError|AbortError|operation was aborted/i;
 
 /**
- * The time limit of the last ask a waiting start makes, as its budget runs
- * out: enough for a healthy database to answer, and the most the wait can run
- * past its budget.
- */
-const WAIT_LAST_ASK_MS = 2_000;
-
-/**
- * How long a line a start with `budgetMs` to wait may join: the starts the
- * windows inside its budget can serve, at `perWindow` a window, and never more
- * than `most`. An agent's shorter wait, or a start that reached the gate late,
- * is served by fewer windows than a creator's full budget.
- */
-function lineMaxFor(budgetMs: number, perWindow: number, most: number): number {
-  const windows = Math.max(1, Math.floor(budgetMs / (PROVIDER_ADMISSION_POLICY.rateWindowSeconds * 1000)));
-  return Math.min(most, windows * perWindow);
-}
-
-/** What the reservation raises for a generation that is gone or already settled: nothing to wait for. */
-const GENERATION_GONE = /Generation \S+ (does not exist|is already terminal)/;
-
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/** The shortest pause between two asks: a hint that rounds to nothing must not become a busy loop. */
-const WAIT_POLL_MIN_MS = 250;
-
-/**
- * Admits the submission, waiting in line for it when the caller asked to, and
- * throws when it is not admitted.
+ * Asks the gate for the submission's place, once, and throws when it has none
+ * and may not be queued.
  *
- * A start inside `withProviderAdmissionWait` that is refused for capacity (the
- * rate window, its model's share, the in-flight cap) is not failed: it takes a
- * ticket in the database's line (`reserve_provider_submission`, `p_wait`) and
- * asks again, at the moment the refusal said a place opens and no later than
- * `waitPollMaxMs`, until it is admitted or its budget is spent. The line is
- * first come, first served, so the asking order does not matter. Only a start
- * with a generation row can wait: the row is its ticket.
+ * Two answers to "the limits are full":
+ *
+ * - A start that may not be queued (a run step, or anything outside
+ *   `withProviderSubmissionQueue`) is refused: a 429 its caller refunds.
+ * - A creator's start (`mayQueue`), and whatever later asks for a queued run's
+ *   turn, gets the refusal back as a verdict, `allowed: false`, for its caller
+ *   to queue the run on or leave it queued.
+ *
+ * The line it is asked behind is the database's: the queue of starts waiting
+ * to be sent, in the order they were queued (`reserve_provider_submission`). A
+ * queued run's turn is read from its own row there. A run step keeps no place
+ * in that queue; its turn is `turnSinceMs`, when it was first turned away.
  *
  * The refusal is deliberately a `GenerationServiceError` with status 429 rather
  * than a bespoke type: the route services already map `.status` onto the HTTP
@@ -322,8 +254,7 @@ const WAIT_POLL_MIN_MS = 250;
  * exactly right here. Correct precisely because a rejected submission *is*
  * refunded — the request never left the box, so nothing will be billed and
  * retrying is safe. That is the opposite of the held-submission case, whose
- * copy must never say "retry". It holds after a wait too: a start that gave up
- * its place was never sent.
+ * copy must never say "retry".
  *
  * It must also never be an `ExternalServiceTimeoutError`, or the shared settle
  * helper would hold the credits for 45 minutes instead of refunding them.
@@ -333,167 +264,98 @@ export async function admitProviderSubmission(params: {
   model?: string | null;
   generationId?: string | null;
   client?: ProviderAdmissionClient;
-  /** How long to wait in line; defaults to the scope `withProviderAdmissionWait` set, which is none. */
-  waitBudgetMs?: number;
-  /** Test seams: the pause between two asks, and the clock the budget is measured on. */
-  sleep?: (ms: number) => Promise<void>;
-  now?: () => number;
+  /** Answer a capacity refusal as a verdict instead of throwing; defaults to the scope. */
+  mayQueue?: boolean;
+  /** When a caller that keeps no place in the queue was first turned away. Defaults to the scope's, a run step's. */
+  turnSinceMs?: number | null;
 }): Promise<ProviderAdmissionVerdict> {
   const service = params.service?.trim() || KIE_PROVIDER_SERVICE;
-  const now = params.now ?? Date.now;
-  const sleep = params.sleep ?? defaultSleep;
-  const waitBudgetMs = params.generationId
-    ? Math.max(0, params.waitBudgetMs ?? providerAdmissionWaitBudgetMs())
-    : 0;
-  const turnSinceMs = params.generationId ? providerAdmissionTurnSinceMs() : null;
-  const startedAt = now();
-  let asks = 0;
-  let refusal: Omit<ProviderAdmissionVerdict, 'waitedMs'> | null = null;
-  let gone = false;
+  // Only a start with a generation row can be queued: the row is what waits.
+  const mayQueue = Boolean(params.generationId) && (params.mayQueue ?? providerSubmissionMayQueue());
+  const turnSinceMs = params.generationId
+    ? (params.turnSinceMs !== undefined ? params.turnSinceMs : providerAdmissionTurnSinceMs())
+    : null;
+  let verdict: ProviderAdmissionVerdict;
 
-  for (;;) {
-    // The first ask gets the full limit. Each later one gets what is left of
-    // the budget, so the last ask cannot carry the wait far past its end.
-    const askLimitMs = refusal === null
-      ? PROVIDER_ADMISSION_POLICY.askTimeoutMs
-      : Math.min(
-          PROVIDER_ADMISSION_POLICY.askTimeoutMs,
-          Math.max(waitBudgetMs - (now() - startedAt), WAIT_LAST_ASK_MS),
-        );
-    let verdict: Omit<ProviderAdmissionVerdict, 'waitedMs'> | null = null;
+  try {
+    const client = params.client ?? createServiceClient();
+    const rpcName = params.generationId
+      ? 'reserve_provider_submission'
+      : 'admit_provider_submission';
+    const { data, error } = await askWithTimeout(client.rpc(rpcName, {
+      ...(params.generationId
+        ? {
+            p_generation_id: params.generationId,
+            p_turn_since: turnSinceMs === null ? null : new Date(turnSinceMs).toISOString(),
+          }
+        : {}),
+      p_service: service,
+      p_model: params.model?.trim() || null,
+      p_rate_window_seconds: PROVIDER_ADMISSION_POLICY.rateWindowSeconds,
+      p_rate_window_max: PROVIDER_ADMISSION_POLICY.rateWindowMax,
+      p_model_rate_window_max: PROVIDER_ADMISSION_POLICY.modelRateWindowMax,
+      p_max_in_flight: PROVIDER_ADMISSION_POLICY.maxInFlight,
+      p_in_flight_window_seconds: PROVIDER_ADMISSION_POLICY.inFlightWindowSeconds,
+      p_circuit_open_seconds: PROVIDER_ADMISSION_POLICY.circuitOpenSeconds,
+      p_probe_timeout_seconds: PROVIDER_ADMISSION_POLICY.probeTimeoutSeconds,
+    }));
 
-    try {
-      const client = params.client ?? createServiceClient();
-      const rpcName = params.generationId
-        ? 'reserve_provider_submission'
-        : 'admit_provider_submission';
-      const { data, error } = await askWithTimeout(client.rpc(rpcName, {
-        ...(params.generationId
-          ? {
-              p_generation_id: params.generationId,
-              p_wait: waitBudgetMs > 0,
-              p_waiter_ttl_seconds: PROVIDER_ADMISSION_POLICY.waiterTtlSeconds,
-              p_line_max: lineMaxFor(
-                waitBudgetMs, PROVIDER_ADMISSION_POLICY.rateWindowMax, PROVIDER_ADMISSION_POLICY.waitLineMax,
-              ),
-              p_model_line_max: lineMaxFor(
-                waitBudgetMs, PROVIDER_ADMISSION_POLICY.modelRateWindowMax, PROVIDER_ADMISSION_POLICY.waitModelLineMax,
-              ),
-              p_turn_since: turnSinceMs === null ? null : new Date(turnSinceMs).toISOString(),
-            }
-          : {}),
-        p_service: service,
-        p_model: params.model?.trim() || null,
-        p_rate_window_seconds: PROVIDER_ADMISSION_POLICY.rateWindowSeconds,
-        p_rate_window_max: PROVIDER_ADMISSION_POLICY.rateWindowMax,
-        p_model_rate_window_max: PROVIDER_ADMISSION_POLICY.modelRateWindowMax,
-        p_max_in_flight: PROVIDER_ADMISSION_POLICY.maxInFlight,
-        p_in_flight_window_seconds: PROVIDER_ADMISSION_POLICY.inFlightWindowSeconds,
-        p_circuit_open_seconds: PROVIDER_ADMISSION_POLICY.circuitOpenSeconds,
-        p_probe_timeout_seconds: PROVIDER_ADMISSION_POLICY.probeTimeoutSeconds,
-      }), askLimitMs);
-
-      if (error) {
-        if (error instanceof Error) throw error;
-        throw new Error(isRecord(error) && typeof error.message === 'string' ? error.message : String(error));
-      }
-      verdict = normalizeVerdict(data);
-    } catch (admissionError) {
-      const message = admissionError instanceof Error
-        ? `${admissionError.name}: ${admissionError.message}`
-        : String(admissionError);
-      const timedOut = ASK_TIMED_OUT.test(message);
-      logBackendWarning('provider_admission_unavailable', {
-        service, waiting: refusal !== null, timedOut, error: message,
-      });
-      // Something else settled or removed the generation while it waited. No
-      // place will ever be its, so the wait ends here rather than at its budget.
-      gone = refusal !== null && GENERATION_GONE.test(message);
-
-      if (refusal === null && timedOut) {
-        // The database is there and did not answer in time: the reservation is
-        // queued behind others, which is load, not an outage. Letting the
-        // start through unchecked would lift every limit at the moment the
-        // gate is busiest. It is treated as refused for now: a start that may
-        // wait asks again, and one that may not is told the provider is busy.
-        refusal = {
-          allowed: false, reason: 'rate_limited', state: 'unknown', retryAfterSeconds: 0, inFlight: null,
-          waiting: waitBudgetMs > 0, waitersAhead: null,
-        };
-      } else if (refusal === null) {
-        // Fail *open* on any other infrastructure problem. The gate protects
-        // the provider from us; it is not a correctness boundary, and refusing
-        // every generation because an admission table is unreachable — or
-        // because the service-role client cannot be constructed — would
-        // convert a monitoring problem into a full outage. The per-user
-        // limiter and the provider's own 429s still apply.
-        return {
-          allowed: true, reason: 'admitted', state: 'unknown', retryAfterSeconds: 0, inFlight: null,
-          waiting: false, waitersAhead: null, waitedMs: 0,
-        };
-      }
-      // Otherwise the start is already waiting. The gate's last word to it was
-      // "no place yet", and an ask that got no answer does not take that back:
-      // letting every waiting start through on one failed ask would send the
-      // whole line at once, at the moment the database is struggling. It keeps
-      // its refusal and asks again.
+    if (error) {
+      if (error instanceof Error) throw error;
+      throw new Error(isRecord(error) && typeof error.message === 'string' ? error.message : String(error));
     }
-    asks += 1;
-    // Read after the ask, which is part of the wait: an ask can take seconds.
-    const elapsedMs = now() - startedAt;
+    verdict = normalizeVerdict(data);
+  } catch (admissionError) {
+    const message = admissionError instanceof Error
+      ? `${admissionError.name}: ${admissionError.message}`
+      : String(admissionError);
+    const timedOut = ASK_TIMED_OUT.test(message);
+    logBackendWarning('provider_admission_unavailable', { service, timedOut, error: message });
 
-    if (verdict?.allowed) {
-      if (asks > 1) {
-        logBackendInfo('provider_admission_waited', {
-          service,
-          model: params.model ?? null,
-          generationId: params.generationId ?? null,
-          outcome: 'admitted',
-          waitedMs: elapsedMs,
-          asks,
-        });
-      }
-      return { ...verdict, waitedMs: asks > 1 ? elapsedMs : 0 };
+    if (!timedOut) {
+      // Fail *open* on an infrastructure problem. The gate protects the
+      // provider from us; it is not a correctness boundary, and refusing every
+      // generation because an admission table is unreachable — or because the
+      // service-role client cannot be constructed — would convert a monitoring
+      // problem into a full outage. The per-user limiter and the provider's own
+      // 429s still apply.
+      return {
+        allowed: true, reason: 'admitted', state: 'unknown', retryAfterSeconds: 0, inFlight: null, waitersAhead: null,
+      };
     }
 
-    // The rejection sits deliberately outside the catch above: a genuine "not
-    // admitted" verdict must never be swallowed as an infrastructure blip.
-    if (verdict) refusal = verdict;
-    const standing = refusal!;
-    const remainingMs = waitBudgetMs - elapsedMs;
-    const mayWait = standing.waiting && WAITABLE_REASONS.has(standing.reason) && remainingMs > 0 && !gone;
-
-    if (!mayWait) {
-      logBackendWarning('provider_admission_rejected', {
-        service,
-        model: params.model ?? null,
-        reason: standing.reason,
-        state: standing.state,
-        retryAfterSeconds: standing.retryAfterSeconds,
-        inFlight: standing.inFlight,
-        waitersAhead: standing.waitersAhead,
-        waitedMs: elapsedMs,
-        asks,
-      });
-
-      throw new GenerationServiceError(
-        REJECTION_MESSAGES[standing.reason] ?? REJECTION_MESSAGES.rate_limited,
-        429,
-        'provider_busy',
-      );
-    }
-
-    // Ask again when the refusal said a place opens, never later than the
-    // heartbeat the ticket needs, and once more as the budget runs out so the
-    // last moment of it is not spent asleep.
-    const hintMs = standing.retryAfterSeconds > 0
-      ? standing.retryAfterSeconds * 1000
-      : PROVIDER_ADMISSION_POLICY.waitPollMaxMs;
-    await sleep(Math.max(
-      Math.min(hintMs, PROVIDER_ADMISSION_POLICY.waitPollMaxMs, remainingMs),
-      Math.min(WAIT_POLL_MIN_MS, remainingMs),
-    ));
+    // The database is there and did not answer in time: the reservation is
+    // waiting behind others, which is load, not an outage. Letting the start
+    // through unchecked would lift every limit at the moment the gate is
+    // busiest. It is treated as having no place: queued if it may be, and told
+    // the provider is busy if it may not.
+    verdict = {
+      allowed: false, reason: 'rate_limited', state: 'unknown', retryAfterSeconds: 0, inFlight: null, waitersAhead: null,
+    };
   }
+
+  if (verdict.allowed) return verdict;
+
+  // A run with no place yet, whose caller can keep it for later: not an error.
+  if (mayQueue && WAITABLE_REASONS.has(verdict.reason)) return verdict;
+
+  // The rejection sits deliberately outside the catch above: a genuine "not
+  // admitted" verdict must never be swallowed as an infrastructure blip.
+  logBackendWarning('provider_admission_rejected', {
+    service,
+    model: params.model ?? null,
+    reason: verdict.reason,
+    state: verdict.state,
+    retryAfterSeconds: verdict.retryAfterSeconds,
+    inFlight: verdict.inFlight,
+    waitersAhead: verdict.waitersAhead,
+  });
+
+  throw new GenerationServiceError(
+    REJECTION_MESSAGES[verdict.reason] ?? REJECTION_MESSAGES.rate_limited,
+    429,
+    'provider_busy',
+  );
 }
 
 /**

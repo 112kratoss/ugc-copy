@@ -91,7 +91,6 @@ import { BODY_MAX_LENGTH } from '@/lib/posts-server';
 import { enhancePromptForUser } from '@/lib/prompt-enhancement-service';
 import { getPromptEnhancementCost } from '@/lib/prompt-enhancer';
 import { publishGenerationToShowcaseForRoute } from '@/lib/showcase-publish-service';
-import { PROVIDER_ADMISSION_POLICY } from '@/lib/provider-admission';
 import { postUnifiedGenerationForRoute } from '@/lib/unified-generation-route-service';
 import {
   buildUnifiedGenerationQuoteInput,
@@ -798,8 +797,7 @@ const createMediaTool = defineTool({
       createUserSupabase: context.createUserSupabase,
       createAdminSupabase: context.createAdminSupabase,
       kieApiKey: context.kieApiKey,
-      // An agent's client gives a tool call less time than the app gives a start.
-      admissionWaitBudgetMs: PROVIDER_ADMISSION_POLICY.agentWaitBudgetMs,
+      runAfterResponse: context.runAfterResponse,
     });
 
     if (result.ok) {
@@ -808,19 +806,23 @@ const createMediaTool = defineTool({
       const cost = numberOrNull(payload.cost) ?? args.expected_cost_credits;
       const balance = numberOrNull(payload.remainingCredits);
       const replay = payload.idempotentReplay === true;
+      // Over the provider's limits the run is queued: held, and sent by the
+      // server when its turn comes. The agent follows it the same way.
+      const queued = payload.queued === true;
       return toolSuccess(
         [
           replay
             ? `This idempotency key already started ${args.kind} run ${generationId ?? payload.predictionId}; here it is again, nothing new was charged.`
             : `Started ${args.kind} run ${generationId ?? payload.predictionId} on ${args.model_id} for ${credits(cost)}${balance === null ? '' : `; the creator has ${credits(balance)} left`}.`,
           generationId
-            ? `It is processing. Call get_generation with generation_id ${generationId} and wait_seconds ${MCP_GENERATION_WAIT_SUGGESTED_SECONDS} until its status is succeeded or failed.`
+            ? `It is ${queued ? 'queued: it starts by itself when its turn comes, within a few minutes, or its credits come back' : 'processing'}. Call get_generation with generation_id ${generationId} and wait_seconds ${MCP_GENERATION_WAIT_SUGGESTED_SECONDS} until its status is succeeded or failed.`
             : 'It is processing; find it with list_creations in a moment.',
         ].join('\n'),
         {
           generation_id: generationId,
-          prediction_id: stringOrNull(payload.predictionId),
-          status: 'processing',
+          // A queued run has no provider task yet.
+          prediction_id: queued ? null : stringOrNull(payload.predictionId),
+          status: queued ? 'queued' : 'processing',
           cost_credits: cost,
           balance_credits: balance,
           catalog_revision: stringOrNull(payload.catalogRevision) ?? args.catalog_revision,

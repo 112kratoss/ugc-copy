@@ -34,8 +34,13 @@ function run(id: string, overrides: Row = {}): Row {
   };
 }
 
-function stored(generations: Row[], canvasSteps: Row[] = []) {
-  return createStoredRows({ generations, workflow_canvas_run_steps: canvasSteps });
+function stored(generations: Row[], canvasSteps: Row[] = [], queued: string[] = []) {
+  return createStoredRows({
+    generations,
+    workflow_canvas_run_steps: canvasSteps,
+    // The runs waiting in the queue to be sent.
+    generation_queued_submissions: queued.map((id) => ({ generation_id: id })),
+  });
 }
 
 /** The `order` and `range` each read asks for; the fixture keeps the stored order. */
@@ -112,6 +117,29 @@ describe('findCreatorActiveRun', () => {
     ]);
 
     await expect(findCreatorActiveRun({ client, userIds: ['account-1'], tool: 'image' })).resolves.toMatchObject({ id: 'at-work' });
+  });
+
+  it('brings back a queued run under its own id, as waiting', async () => {
+    // A queued run has no provider task yet. It is followed by the generation's
+    // id, which the status checks accept, so a creator who reloads the page
+    // finds the run they queued instead of an empty creator.
+    const { client } = stored(
+      [run('queued', { prediction_id: null, status: 'pending' }), run('at-work')],
+      [],
+      ['queued'],
+    );
+
+    await expect(findCreatorActiveRun({ client, userIds: ['account-1'], tool: 'image' })).resolves.toMatchObject({
+      id: 'queued',
+      predictionId: 'queued',
+      status: 'waiting',
+    });
+  });
+
+  it('passes over a run that is in the middle of starting: there is nothing to follow yet', async () => {
+    const { client } = stored([run('starting', { prediction_id: null, status: 'pending' })]);
+
+    await expect(findCreatorActiveRun({ client, userIds: ['account-1'], tool: 'image' })).resolves.toBeNull();
   });
 
   it('leaves a run a workflow canvas holds to the canvas', async () => {

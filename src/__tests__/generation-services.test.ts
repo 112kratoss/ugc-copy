@@ -3307,6 +3307,111 @@ describe('generation services', () => {
     expect(JSON.stringify(consoleError.mock.calls)).toContain('gen-1');
   });
 
+  describe('a creator\'s start the provider has no place for', () => {
+    const REFUSED = {
+      allowed: false, reason: 'rate_limited', state: 'closed', retryAfterSeconds: 4, inFlight: 12, waitersAhead: 3,
+    };
+
+    /** The hub with the gate answering `admit` and the queue answering `enqueue`. */
+    async function loadWith(admit: () => Promise<unknown>, enqueue: (...args: unknown[]) => Promise<unknown>) {
+      vi.doMock('@/lib/provider-admission', async (importOriginal) => ({
+        ...await importOriginal<typeof import('@/lib/provider-admission')>(),
+        admitProviderSubmission: admit,
+      }));
+      vi.doMock('@/lib/generation-submission-queue-store', () => ({ enqueueProviderSubmission: enqueue }));
+      vi.resetModules();
+      return {
+        services: await import('@/lib/generation-services'),
+        admission: await import('@/lib/provider-admission'),
+      };
+    }
+
+    afterEach(() => {
+      vi.doUnmock('@/lib/provider-admission');
+      vi.doUnmock('@/lib/generation-submission-queue-store');
+    });
+
+    it('is queued with the request it would have sent, and answers under its own id', async () => {
+      // Nothing is sent and nothing is refunded: the run is held, and its
+      // provider request is stored for whatever sends it when its turn comes.
+      // The id it answers is the generation's own, the handle a queued run is
+      // followed by, so every caller above this gets an id as it always has.
+      const enqueue = vi.fn(async (..._args: unknown[]) => ({ queuedAtMs: 1, ahead: 3 }));
+      const { services, admission } = await loadWith(async () => REFUSED, enqueue);
+      const { supabase, generations, rpcCalls } = createSupabaseMock();
+
+      const result = await admission.withProviderSubmissionQueue(() => services.startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'A premium skincare product hero image.',
+        model: 'nano-banana-2',
+      }));
+
+      expect(result).toMatchObject({ predictionId: 'gen-1', generationId: 'gen-1' });
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+      expect(rpcCalls.some((call) => call.fn.startsWith('settle_'))).toBe(false);
+      expect(rpcCalls.some((call) => call.fn === 'attach_generation_provider_task')).toBe(false);
+      expect(generations[0]).toMatchObject({ status: 'pending', prediction_id: null });
+
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      const [queued] = enqueue.mock.calls[0] as [{ generationId: string; task: {
+        endpoint: string; body: { model: string; input: { prompt: string } }; callbackUrl: string; modelId: string;
+      } }];
+      expect(queued.generationId).toBe('gen-1');
+      expect(queued.task.endpoint).toBe('https://api.kie.ai/api/v1/jobs/createTask');
+      expect(queued.task.modelId).toBe('nano-banana-2');
+      expect(queued.task.body.input.prompt).toContain('A premium skincare product hero image.');
+      // The callback the provider will answer on names this generation.
+      expect(queued.task.callbackUrl).toContain('gen-1');
+    });
+
+    it('is refused and refunded when the queue will not take it', async () => {
+      const { GenerationServiceError } = await import('@/lib/generation-service-core');
+      const enqueue = vi.fn(async (..._args: unknown[]) => {
+        throw new GenerationServiceError('Too many generations are waiting to start right now.', 429, 'provider_busy');
+      });
+      const { services, admission } = await loadWith(async () => REFUSED, enqueue);
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { supabase, rpcCalls } = createSupabaseMock();
+
+      await expect(admission.withProviderSubmissionQueue(() => services.startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'A premium skincare product hero image.',
+        model: 'nano-banana-2',
+      }))).rejects.toMatchObject({ status: 429 });
+
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+      expect(rpcCalls.some((call) => call.fn === 'settle_generation_start_failed')).toBe(true);
+    });
+
+    it('is sent at once when there is a place, and nothing is queued', async () => {
+      const enqueue = vi.fn(async (..._args: unknown[]) => ({ queuedAtMs: 1, ahead: 0 }));
+      const { services, admission } = await loadWith(
+        async () => ({ ...REFUSED, allowed: true, reason: 'admitted' }),
+        enqueue,
+      );
+      vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-image-sent-1' } }),
+      } as Response);
+      const { supabase } = createSupabaseMock();
+
+      const result = await admission.withProviderSubmissionQueue(() => services.startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'A premium skincare product hero image.',
+        model: 'nano-banana-2',
+      }));
+
+      expect(result).toMatchObject({ predictionId: 'task-image-sent-1', generationId: 'gen-1' });
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+  });
+
   it('uses GPT Image 2 image-to-image provider payload when references are attached', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;

@@ -24,6 +24,11 @@ import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 const startUnifiedGenerationForRouteMock = vi.hoisted(() => vi.fn());
 const reportKieInsufficientCreditsRefusalMock = vi.hoisted(() => vi.fn());
+const driveQueuedSubmissionMock = vi.hoisted(() => vi.fn(async () => 'sent'));
+
+vi.mock('@/lib/generation-submission-queue', () => ({
+  driveQueuedSubmissions: (...args: unknown[]) => driveQueuedSubmissionMock(...(args as [])),
+}));
 
 vi.mock('@/lib/kie-account-balance-refusal', () => ({
   reportKieInsufficientCreditsRefusal: (...args: unknown[]) => reportKieInsufficientCreditsRefusalMock(...args),
@@ -39,7 +44,7 @@ vi.mock('@/lib/unified-generation-start-service', async (importOriginal) => {
   };
 });
 
-import { PROVIDER_ADMISSION_POLICY, providerAdmissionWaitBudgetMs } from '@/lib/provider-admission';
+import { PROVIDER_ADMISSION_POLICY, providerSubmissionMayQueue } from '@/lib/provider-admission';
 import { postUnifiedGenerationForRoute } from '@/lib/unified-generation-route-service';
 import {
   ReferenceDurationChangedError,
@@ -73,10 +78,11 @@ describe('unified generation route service', () => {
   beforeEach(() => {
     startUnifiedGenerationForRouteMock.mockReset();
     reportKieInsufficientCreditsRefusalMock.mockReset();
+    driveQueuedSubmissionMock.mockClear();
   });
 
-  describe('waiting in line for the provider', () => {
-    const route = (admissionWaitBudgetMs?: number) => postUnifiedGenerationForRoute({
+  describe('a start over the provider\'s limits', () => {
+    const route = (extra: Record<string, unknown> = {}) => postUnifiedGenerationForRoute({
       request: new Request('http://localhost/api/generations', { method: 'POST' }),
       createUserSupabase: () => ({
         auth: { getUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } }, error: null })) },
@@ -84,67 +90,74 @@ describe('unified generation route service', () => {
       createAdminSupabase: () => ({ kind: 'admin' }),
       kieApiKey: 'configured',
       readRequestBody: async () => ({ kind: 'image', modelId: 'nano-banana-2-lite' }),
-      ...(admissionWaitBudgetMs === undefined ? {} : { admissionWaitBudgetMs }),
+      ...extra,
     });
 
-    it('starts a creator\'s run where its submission may wait its turn', async () => {
-      // This route is the one place a person waits on a start. Over the
-      // provider's limits it waits in line instead of failing; the wait is
+    it('starts a creator\'s run where it may be queued', async () => {
+      // This route is the one place a person waits on a start's answer. Over
+      // the limits the run is queued in place of failing; whether it may be is
       // read wherever the submission is made, however deep, so it is checked
       // from inside the start, after an await.
-      let seen: number | null = null;
+      let mayQueue: boolean | null = null;
       startUnifiedGenerationForRouteMock.mockImplementationOnce(async () => {
         await Promise.resolve();
-        seen = providerAdmissionWaitBudgetMs();
-        return { success: true, predictionId: 'task-1' };
+        mayQueue = providerSubmissionMayQueue();
+        return { success: true, predictionId: 'task-1', generationId: 'generation-1', status: 'processing' };
       });
 
       expect(await route()).toMatchObject({ ok: true });
-      expect(seen).toBe(PROVIDER_ADMISSION_POLICY.waitBudgetMs);
-      expect(providerAdmissionWaitBudgetMs()).toBe(0);
+      expect(mayQueue).toBe(true);
+      expect(providerSubmissionMayQueue()).toBe(false);
     });
 
-    it('uses the wait its caller names in place of the creator\'s', async () => {
-      let seen: number | null = null;
-      startUnifiedGenerationForRouteMock.mockImplementationOnce(async () => {
-        seen = providerAdmissionWaitBudgetMs();
-        return { success: true, predictionId: 'task-1' };
+    it('answers a queued run at once and goes on serving the queue behind the answer, until that run has left it', async () => {
+      const generationId = '6a0c7f2e-4d1b-4f6a-9c3e-2b8d5e7f9a10';
+      startUnifiedGenerationForRouteMock.mockResolvedValueOnce({
+        success: true, predictionId: generationId, generationId, status: 'waiting', queued: true,
+      });
+      const later: Array<() => Promise<unknown>> = [];
+
+      const result = await route({ runAfterResponse: (task: () => Promise<unknown>) => { later.push(task); } });
+
+      expect(result).toMatchObject({ ok: true, body: { status: 'waiting', queued: true, predictionId: generationId } });
+      expect(driveQueuedSubmissionMock).not.toHaveBeenCalled();
+      expect(later).toHaveLength(1);
+
+      await later[0]();
+      expect(driveQueuedSubmissionMock).toHaveBeenCalledWith({
+        untilGenerationId: generationId,
+        budgetMs: PROVIDER_ADMISSION_POLICY.queueDriveBudgetMs,
+      });
+    });
+
+    it('leaves a run that was sent alone once it has answered', async () => {
+      startUnifiedGenerationForRouteMock.mockResolvedValueOnce({
+        success: true, predictionId: 'task-1', generationId: 'generation-1', status: 'processing',
+      });
+      const runAfterResponse = vi.fn();
+
+      await route({ runAfterResponse });
+
+      expect(runAfterResponse).not.toHaveBeenCalled();
+    });
+
+    it('still answers a queued run when nothing can run behind the answer', async () => {
+      // The status checks, the provider's callback and the cron send it.
+      const generationId = '6a0c7f2e-4d1b-4f6a-9c3e-2b8d5e7f9a10';
+      startUnifiedGenerationForRouteMock.mockResolvedValueOnce({
+        success: true, predictionId: generationId, generationId, status: 'waiting', queued: true,
       });
 
-      await route(PROVIDER_ADMISSION_POLICY.agentWaitBudgetMs);
-      expect(seen).toBe(PROVIDER_ADMISSION_POLICY.agentWaitBudgetMs);
+      expect(await route()).toMatchObject({ ok: true, body: { queued: true } });
+      expect(driveQueuedSubmissionMock).not.toHaveBeenCalled();
     });
 
-    it('answers a start that waited out its time like any busy refusal', async () => {
+    it('answers a start the queue would not take like any busy refusal', async () => {
       startUnifiedGenerationForRouteMock.mockRejectedValueOnce(
-        new GenerationServiceError('Too many generations are already running. No credits were charged. Please retry once some finish.', 429, 'provider_busy'),
+        new GenerationServiceError('Too many generations are waiting to start right now. No credits were charged. Please retry shortly.', 429, 'provider_busy'),
       );
 
       expect(await route()).toMatchObject({ ok: false, status: 429, body: { code: 'provider_busy' } });
-    });
-  });
-
-  it('returns submission_pending with the held generation id after an ambiguous provider accept', async () => {
-    const ambiguous = new TypeError('fetch failed');
-    markHeldProviderSubmission(ambiguous, 'generation-held-unified-1');
-    startUnifiedGenerationForRouteMock.mockRejectedValueOnce(ambiguous);
-
-    const result = await postUnifiedGenerationForRoute({
-      request: new Request('http://localhost/api/generations', { method: 'POST' }),
-      createUserSupabase: () => ({
-        auth: {
-          getUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } }, error: null })),
-        },
-      }),
-      createAdminSupabase: () => ({ kind: 'admin' }),
-      kieApiKey: 'configured',
-      readRequestBody: async () => ({ kind: 'image', modelId: 'nano-banana-2-lite' }),
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      status: 409,
-      body: { code: 'submission_pending', generationId: 'generation-held-unified-1' },
     });
   });
 

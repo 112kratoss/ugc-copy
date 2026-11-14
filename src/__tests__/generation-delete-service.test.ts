@@ -66,6 +66,8 @@ function createAdminSupabaseMock({
   storageRemoveErrors = {},
   storageRemoveThrows = {},
   storageFolders = {},
+  queuedRequest = null,
+  queueClaimError = null,
 }: {
   generation?: GenerationRow | null;
   inputMediaRows?: Array<{ user_id: string; storage_path: string | null }>;
@@ -88,8 +90,14 @@ function createAdminSupabaseMock({
   storageRemoveThrows?: Record<string, Error>;
   /** What a storage listing answers, by `bucket/folder`: entries with no id are folders. */
   storageFolders?: Record<string, Array<{ id: string | null; name: string }>>;
+  /** The creation is waiting in the queue: the claim hands back its stored provider request. */
+  queuedRequest?: Record<string, unknown> | null;
+  /** The queue could not be asked. */
+  queueClaimError?: { message: string } | null;
 } = {}) {
   const deletes: string[] = [];
+  /** What the delete did to a queued run, in order, among its row deletes. */
+  const queueEvents: string[] = [];
   const ownerFilters: Array<{ operation: 'delete' | 'select'; table: string; values: unknown[] }> = [];
   const selects: string[] = [];
   const storageRemovals: Array<{ bucket: string; paths: string[] }> = [];
@@ -122,11 +130,23 @@ function createAdminSupabaseMock({
       };
     }
 
+    // The queue of starts waiting to be sent (generation-submission-queue.ts).
+    if (fn === 'claim_queued_provider_submission') {
+      queueEvents.push(`claim:${String(args?.p_generation_id)}`);
+      return queueClaimError ? { data: null, error: queueClaimError } : { data: queuedRequest, error: null };
+    }
+
+    if (fn === 'settle_generation_start_failed') {
+      queueEvents.push(`refund:${String(args?.p_generation_id)}:deleted-rows=${deletes.length}`);
+      return { data: { status: 'failed' }, error: null };
+    }
+
     throw new Error(`Unexpected rpc: ${fn}`);
   });
 
   return {
     deletes,
+    queueEvents,
     ownerFilters,
     postReads,
     privateCleanupTickets,
@@ -351,6 +371,62 @@ describe('generation delete service', () => {
     expect(admin.deletes).toEqual([]);
     expect(admin.storageRemovals).toEqual([]);
     expect(invalidateFeedCache).not.toHaveBeenCalled();
+  });
+
+  describe('a creation still waiting in the queue', () => {
+    const QUEUED = {
+      generationId: 'gen-1',
+      userId: 'user-1',
+      service: 'kie',
+      model: 'nano-banana-2',
+      endpoint: 'https://api.kie.ai/api/v1/jobs/createTask',
+      request: { model: 'nano-banana-2', input: { prompt: 'a paper boat' }, callBackUrl: 'https://example.invalid/cb' },
+      queuedAt: '2026-11-15T10:00:00.000Z',
+    };
+
+    async function remove(admin: ReturnType<typeof createAdminSupabaseMock>) {
+      createAdminSupabase.mockReturnValueOnce(admin.client);
+      const { deleteOwnerGenerationForRoute } = await import('@/lib/generation-delete-service');
+      return deleteOwnerGenerationForRoute({
+        createAdminSupabase,
+        createUserSupabase,
+        generationId: 'gen-1',
+        invalidateFeedCache: vi.fn(),
+        request: new Request('http://localhost/api/generations/gen-1'),
+      });
+    }
+
+    it('is taken out of the queue and refunded before its row is deleted', async () => {
+      // A queued run holds its credits and has reached no provider. Once the
+      // row is gone nothing could return them, and whatever was about to send
+      // the run would send a creation that no longer exists.
+      const admin = createAdminSupabaseMock({ queuedRequest: QUEUED });
+
+      const result = await remove(admin);
+
+      expect(result.ok).toBe(true);
+      expect(admin.queueEvents).toEqual(['claim:gen-1', 'refund:gen-1:deleted-rows=0']);
+      expect(admin.deletes).toContain('generations');
+    });
+
+    it('is not deleted when the queue cannot be asked, so its hold is never lost with it', async () => {
+      const admin = createAdminSupabaseMock({ queueClaimError: { message: 'connection reset' } });
+
+      const result = await remove(admin);
+
+      expect(result).toMatchObject({ ok: false, status: 500 });
+      expect(admin.deletes).toEqual([]);
+      expect(admin.storageRemovals).toEqual([]);
+    });
+
+    it('is the only kind of creation a delete refunds: one that was sent keeps its charge', async () => {
+      const admin = createAdminSupabaseMock();
+
+      const result = await remove(admin);
+
+      expect(result.ok).toBe(true);
+      expect(admin.queueEvents).toEqual(['claim:gen-1']);
+    });
   });
 
   it('deletes the generation and only input media when linked posts must be retained', async () => {

@@ -1,3 +1,4 @@
+import { resolveRunHandleStatus } from '@/lib/generation-run-handle-status';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { isGuestUser } from '@/lib/account-identity';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -133,9 +134,24 @@ export async function getVideoGenerationForRoute(
       };
     }
 
+    // A queued run is followed by its handle, the generation's own id, until
+    // the provider task exists (generation-run-handle-status.ts).
+    const handle = await resolveRunHandleStatus({
+      id: predictionId,
+      userId,
+      createAdminSupabase: input.createAdminSupabase as () => SupabaseClient,
+      runAfterResponse: input.runAfterResponse,
+    });
+    if (handle.kind === 'missing') {
+      return { ok: false, body: { error: 'Generation not found' }, status: 404 };
+    }
+    if (handle.kind === 'answered') {
+      return { ok: true, body: handle.body };
+    }
+
     const result = await getVideoGenerationStatusForRoute({
       request: input.request,
-      predictionId,
+      predictionId: handle.predictionId,
       userId,
       supabase,
       createAdminSupabase: input.createAdminSupabase as () => VideoRouteSupabaseClient,

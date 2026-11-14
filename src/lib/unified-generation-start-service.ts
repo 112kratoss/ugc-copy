@@ -1,3 +1,4 @@
+import { isQueuedRunHandle } from '@/lib/generation-run-handle';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendEvent } from '@/lib/backend-logger';
@@ -147,7 +148,13 @@ export type UnifiedGenerationStartPayload = {
   success: true;
   predictionId: string;
   generationId: string | null;
-  status: 'processing';
+  /**
+   * `processing`: sent to the provider. `waiting`, with `queued`: held and in
+   * the queue, to be sent by the server when its turn comes. `predictionId` is
+   * then the run's handle, the generation id, which the status checks accept.
+   */
+  status: 'processing' | 'waiting';
+  queued?: true;
   remainingCredits: number;
   cost: number;
   catalogRevision: string;
@@ -1034,11 +1041,16 @@ export async function startUnifiedGenerationForRoute(
     },
   });
 
+  // A queued run is followed by its own id until the provider task exists
+  // (generation-run-handle.ts); a sent one by the task's.
+  const queued = isQueuedRunHandle(result);
+
   return {
     success: true,
     predictionId: result.predictionId,
     generationId: result.generationId ?? null,
-    status: 'processing',
+    status: queued ? 'waiting' : 'processing',
+    ...(queued ? { queued: true as const } : {}),
     remainingCredits: result.remainingCredits,
     cost: result.cost,
     // The request hash binds a replay to this original revision.

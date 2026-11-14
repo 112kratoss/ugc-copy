@@ -2108,11 +2108,16 @@ export default function CreationsPage() {
                                         <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
                                             <div className="flex flex-col items-center gap-3">
                                                 <Loader2 className="h-8 w-8 animate-spin text-yellow-400" />
-                                                <span className="text-xs text-zinc-400">{getStartedAgoLabel(gen) ?? 'Still processing in background...'}</span>
+                                                <span className="text-xs text-zinc-400">
+                                                    {/* Not sent to the model yet: held in the queue until its turn. */}
+                                                    {gen.status === 'pending'
+                                                        ? 'Starts when its turn comes'
+                                                        : getStartedAgoLabel(gen) ?? 'Still processing in background...'}
+                                                </span>
                                             </div>
                                         </div>
                                     )}
-                                    chips={<StudioChip tone="amber">Processing</StudioChip>}
+                                    chips={<StudioChip tone="amber">{gen.status === 'pending' ? 'Queued' : 'Processing'}</StudioChip>}
                                     title={getPreviewTitle(gen)}
                                     meta={[{ label: 'Started', value: formatDate(gen.created_at) }]}
                                 />

@@ -7,7 +7,6 @@ import { z } from 'zod';
 
 import type { AgentStagedUpload } from '@/lib/agent-input-upload';
 import { AGENT_POST_NO_RESOURCE, type AgentPostResource, type AgentPostView } from '@/lib/agent-post-read';
-import { PROVIDER_ADMISSION_POLICY } from '@/lib/provider-admission';
 import { AGENT_RECIPE_PREVIEW, AGENT_RECIPE_SUMMARY, agentRecipeBundle } from '@/lib/agent-publish-request';
 import { AGENT_PUBLISH_RECORD_CODES } from '@/lib/agent-tool-calls';
 import {
@@ -699,15 +698,29 @@ describe('create_media', () => {
     expect(services.postUnifiedGenerationForRoute).not.toHaveBeenCalled();
   });
 
-  it('lets an over-limit run wait in line, for less time than the app gives a creator', async () => {
-    // The start waits inside the tool call. An agent's client gives a call
-    // less time than the app gives a start, so its wait is the shorter one.
-    const { context, services } = harness();
-    await tool('create_media').handle(run, context);
+  it('says a run over the provider\'s limits is queued, and passes on the work that sends it', async () => {
+    // The start answers at once: the run is held and the server sends it when
+    // its turn comes. The agent follows it by its generation id, as any run.
+    const runAfterResponse = vi.fn();
+    const { context, services } = harness({
+      postUnifiedGenerationForRoute: vi.fn(async () => ({
+        ok: true as const,
+        body: {
+          success: true, predictionId: GENERATION_ID, generationId: GENERATION_ID, status: 'waiting', queued: true,
+          remainingCredits: 81, cost: 19, catalogRevision: 'rev-1', modelId: 'img-1',
+        },
+      })) as unknown as McpToolServices['postUnifiedGenerationForRoute'],
+    });
 
-    const [input] = vi.mocked(services.postUnifiedGenerationForRoute).mock.calls[0] as unknown as [{ admissionWaitBudgetMs?: number }];
-    expect(input.admissionWaitBudgetMs).toBe(PROVIDER_ADMISSION_POLICY.agentWaitBudgetMs);
-    expect(input.admissionWaitBudgetMs).toBeLessThan(PROVIDER_ADMISSION_POLICY.waitBudgetMs);
+    const result = await tool('create_media').handle(run, { ...context, runAfterResponse });
+
+    expect(result.isError).toBeUndefined();
+    expect(structured(result)).toMatchObject({ generation_id: GENERATION_ID, prediction_id: null, status: 'queued' });
+    expect(text(result)).toContain('It is queued');
+    expect(text(result)).toContain(`get_generation with generation_id ${GENERATION_ID}`);
+
+    const [input] = vi.mocked(services.postUnifiedGenerationForRoute).mock.calls[0] as unknown as [{ runAfterResponse?: unknown }];
+    expect(input.runAfterResponse).toBe(runAfterResponse);
   });
 
   it('starts the run through the unified start with the body the web sends, the agent\'s idempotency key, and answers the run', async () => {

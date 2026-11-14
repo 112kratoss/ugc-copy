@@ -17,7 +17,9 @@ import {
 } from '@/lib/generation-public-failure';
 import { GenerationStartIdempotencyError } from '@/lib/generation-start-idempotency';
 import { reportKieInsufficientCreditsRefusal } from '@/lib/kie-account-balance-refusal';
-import { PROVIDER_ADMISSION_POLICY, withProviderAdmissionWait } from '@/lib/provider-admission';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
+import { driveQueuedSubmissions } from '@/lib/generation-submission-queue';
+import { PROVIDER_ADMISSION_POLICY, withProviderSubmissionQueue } from '@/lib/provider-admission';
 import { SourceGenerationValidationError } from '@/lib/source-generation';
 import {
   ReferenceDurationChangedError,
@@ -40,17 +42,17 @@ export type UnifiedGenerationRouteResult =
     };
 
 export interface UnifiedGenerationRouteInput {
-  /**
-   * How long this start may wait in line for the provider before it is refused
-   * (`withProviderAdmissionWait`). Left out, a creator's own budget: someone is
-   * waiting on every start that comes through here.
-   */
-  admissionWaitBudgetMs?: number;
   createAdminSupabase: () => unknown;
   createUserSupabase: () => unknown;
   kieApiKey?: string;
   readRequestBody?: () => Promise<unknown>;
   request: Request;
+  /**
+   * Runs work once the start has answered. A start that was queued goes on
+   * asking for its place there; without one, the status checks, the provider's
+   * callback and the cron send it.
+   */
+  runAfterResponse?: RunAfterResponse;
 }
 
 async function readBody(input: UnifiedGenerationRouteInput): Promise<Record<string, unknown>> {
@@ -323,20 +325,33 @@ export async function postUnifiedGenerationForRoute(
 
   try {
     const body = await readBody(input);
-    // The one place a person waits on a start: over the provider's limits it
-    // waits its turn in line instead of failing (provider-admission.ts). Run
-    // steps start elsewhere, with their own retry, and do not wait.
-    const payload = await withProviderAdmissionWait(
-      input.admissionWaitBudgetMs ?? PROVIDER_ADMISSION_POLICY.waitBudgetMs,
-      () => startUnifiedGenerationForRoute({
-        request: input.request,
-        body,
-        userId: user.id,
-        callerIsGuest: isGuestUser(user),
-        supabase,
-        adminSupabase: input.createAdminSupabase() as SupabaseClient,
-      }),
-    );
+    // The one place a person waits on a start's answer. Over the provider's
+    // limits the run is queued and answers at once, in place of failing
+    // (provider-admission.ts). Run steps start elsewhere, with their own retry,
+    // and are never queued.
+    const payload = await withProviderSubmissionQueue(() => startUnifiedGenerationForRoute({
+      request: input.request,
+      body,
+      userId: user.id,
+      callerIsGuest: isGuestUser(user),
+      supabase,
+      adminSupabase: input.createAdminSupabase() as SupabaseClient,
+    }));
+
+    // A queued run is sent by whatever serves the queue next. The request that
+    // queued it serves it first and longest, once it has answered: it goes on
+    // passing over the head of the queue until its own run has left it.
+    if (payload.queued === true && typeof payload.generationId === 'string' && input.runAfterResponse) {
+      const generationId = payload.generationId;
+      try {
+        input.runAfterResponse(() => driveQueuedSubmissions({
+          untilGenerationId: generationId,
+          budgetMs: PROVIDER_ADMISSION_POLICY.queueDriveBudgetMs,
+        }));
+      } catch (error) {
+        logBackendError('generation_queued_submission_drive_unscheduled', { generationId, error });
+      }
+    }
     return { ok: true, body: payload };
   } catch (error) {
     return mapGenerationStartRouteError(error, {

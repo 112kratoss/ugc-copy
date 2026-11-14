@@ -38,6 +38,8 @@ export type CreatorActiveRun = {
 };
 
 const ACTIVE_RUN_STATUSES = ['processing', 'waiting'] as const;
+/** A run that has not reached the provider. Only a queued one is a run to follow. */
+const UNSENT_RUN_STATUS = 'pending';
 /** Runs at work read at a time, newest first, until one is not a workflow canvas's. */
 export const ACTIVE_RUN_PAGE = 10;
 
@@ -47,8 +49,8 @@ export function parseCreatorActiveRunTool(value: string | null): CreatorActiveRu
 
 type ActiveRunRow = {
   id: string;
-  prediction_id: string;
-  status: (typeof ACTIVE_RUN_STATUSES)[number];
+  prediction_id: string | null;
+  status: (typeof ACTIVE_RUN_STATUSES)[number] | typeof UNSENT_RUN_STATUS;
   created_at: string;
   prompt: string | null;
   cost: number | null;
@@ -63,9 +65,9 @@ async function readActiveRuns(client: SupabaseClient, userIds: string[], tool: C
     .in('user_id', userIds)
     // A motion run is a video with a creation mode of its own, as each creator saves it.
     .eq('category', tool === 'image' ? 'image' : 'video')
-    .in('status', ACTIVE_RUN_STATUSES)
-    // Without a prediction there is nothing for the page to follow yet.
-    .not('prediction_id', 'is', null)
+    // A run at the provider, or one that has not reached it: of those, only a
+    // queued run can be followed, which `readQueuedRuns` tells.
+    .in('status', [...ACTIVE_RUN_STATUSES, UNSENT_RUN_STATUS])
     // A template run's steps belong to its run page, and their prompts to the template's author.
     .is('template_run_id', null)
     .is('template_run_step_id', null)
@@ -79,6 +81,21 @@ async function readActiveRuns(client: SupabaseClient, userIds: string[], tool: C
     .range(from, from + ACTIVE_RUN_PAGE - 1);
   if (error) throw error;
   return (data ?? []) as ActiveRunRow[];
+}
+
+/**
+ * The ids among `ids` that are in the queue. A queued run has no provider task
+ * yet and is followed by its own id (generation-run-handle.ts); any other run
+ * without a task is in the middle of starting, with nothing to follow.
+ */
+async function readQueuedRuns(client: SupabaseClient, ids: string[]) {
+  if (ids.length === 0) return new Set<string>();
+  const { data, error } = await client
+    .from('generation_queued_submissions')
+    .select('generation_id')
+    .in('generation_id', ids);
+  if (error) throw error;
+  return new Set((data ?? []).map((row) => (row as { generation_id: string }).generation_id));
 }
 
 /** The ids among `ids` that a workflow canvas step holds. */
@@ -108,12 +125,19 @@ export async function findCreatorActiveRun({
     const rows = await readActiveRuns(client, userIds, tool, from);
     if (rows.length === 0) return null;
     const canvasRuns = await readCanvasRuns(client, rows.map((row) => row.id));
-    const row = rows.find((candidate) => !canvasRuns.has(candidate.id));
+    const queuedRuns = await readQueuedRuns(
+      client,
+      rows.filter((candidate) => !candidate.prediction_id).map((candidate) => candidate.id),
+    );
+    const row = rows.find((candidate) => (
+      !canvasRuns.has(candidate.id) && (candidate.prediction_id || queuedRuns.has(candidate.id))
+    ));
     if (row) {
       return {
         id: row.id,
-        predictionId: row.prediction_id,
-        status: row.status,
+        // A queued run is followed by its own id until it has a provider task.
+        predictionId: row.prediction_id ?? row.id,
+        status: row.prediction_id && row.status !== UNSENT_RUN_STATUS ? row.status : 'waiting',
         createdAt: row.created_at,
         prompt: row.prompt,
         cost: row.cost,

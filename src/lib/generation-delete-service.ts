@@ -1,3 +1,4 @@
+import { cancelQueuedSubmission } from '@/lib/generation-submission-queue';
 import { requireIdentity, resolveLinkedAccountIds } from '@/lib/account-identity';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
@@ -351,6 +352,17 @@ export async function deleteOwnerGenerationForRoute({
 
     if (!generation) {
       return { ok: false, body: { error: 'Creation not found.' }, status: 404 };
+    }
+
+    // A queued run still holds its credits and has reached no provider.
+    // Deleting it takes it out of the queue and returns them first: once the
+    // row is gone nothing could. A run that could not be taken out is not
+    // deleted, so its hold is never lost with it.
+    try {
+      await cancelQueuedSubmission(adminSupabase, generationId);
+    } catch (error) {
+      logBackendError('failed_to_cancel_queued_generation_before_delete', { error });
+      return { ok: false, body: { error: 'Failed to delete creation.' }, status: 500 };
     }
 
     const { data: linkedPosts, error: linkedPostsError } = await adminSupabase

@@ -560,8 +560,8 @@ jobs:
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
-      - name: Test provider rate window and waiting line under concurrent callers
-        run: npx vitest run src/__tests__/provider-admission-window-concurrency.test.ts src/__tests__/provider-submission-line-concurrency.test.ts
+      - name: Test provider rate window, waiting line and start queue under concurrent callers
+        run: npx vitest run src/__tests__/provider-admission-window-concurrency.test.ts src/__tests__/provider-submission-line-concurrency.test.ts src/__tests__/generation-queue-concurrency.test.ts
         env:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
