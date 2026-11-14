@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(7);
+select plan(10);
 
 delete from public.generations;
 delete from public.provider_admission_buckets where scope like 'pgtap-reservation%';
@@ -72,6 +72,38 @@ select is(
   ) ->> 'reason',
   'admitted',
   'terminal generations release capacity without a cleanup race'
+);
+
+-- The app reserves, it never calls the admission directly, so a model's share
+-- only exists if the reservation hands it on.
+insert into public.generations (id, user_id, model, status, category, prompt)
+values
+  ('e2000000-0000-4000-8000-000000000013', 'e1000000-0000-4000-8000-000000000002', 'reservation-test', 'pending', 'image', 'three'),
+  ('e2000000-0000-4000-8000-000000000014', 'e1000000-0000-4000-8000-000000000002', 'reservation-test', 'pending', 'image', 'four');
+
+select is(
+  public.reserve_provider_submission(
+    'e2000000-0000-4000-8000-000000000013', 'pgtap-reservation-share', 'shared-model',
+    p_max_in_flight => 1000, p_rate_window_max => 100, p_model_rate_window_max => 1
+  ) ->> 'reason',
+  'admitted',
+  'a reservation is admitted inside its model''s share'
+);
+
+select is(
+  public.reserve_provider_submission(
+    'e2000000-0000-4000-8000-000000000014', 'pgtap-reservation-share', 'shared-model',
+    p_max_in_flight => 1000, p_rate_window_max => 100, p_model_rate_window_max => 1
+  ) ->> 'reason',
+  'model_rate_limited',
+  'the reservation hands the model''s share on to the admission'
+);
+
+select is(
+  (select provider_submission_reserved_at::text from public.generations
+   where id = 'e2000000-0000-4000-8000-000000000014'),
+  null,
+  'a generation its model''s share refused does not retain a slot'
 );
 
 select has_index(

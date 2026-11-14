@@ -14,8 +14,9 @@
  *     -H 'content-type: application/json' $CERT_STUB_URL/stub/config \
  *     -d '{"completionDelaySeconds":0}'
  *   node scripts/certification/cert-load-test.mjs --only generation-start --rps 0.5 --duration 120
- * The 0.5 RPS priming rate stays below the configured per-model admission refill;
- * a 10 RPS priming burst mostly measures deliberate provider admission rejects.
+ * The 0.5 RPS priming rate stays below the per-model share of the admission rate
+ * window (12 in any 12 s); a 10 RPS priming burst mostly measures deliberate
+ * provider admission rejects.
  *
  * Each case reports PASS/FAIL and exits non-zero on failure, so a certification
  * run cannot be recorded as clean while one of them is broken.

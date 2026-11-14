@@ -6,6 +6,7 @@ import { ExternalServiceTimeoutError, isExternalServiceTimeoutError } from '@/li
 import {
   admitProviderSubmission,
   isProviderFaultFailure,
+  KIE_PUBLISHED_ACCOUNT_LIMITS,
   parseProviderRetryAfterSeconds,
   PROVIDER_ADMISSION_POLICY,
   recordProviderSubmissionOutcome,
@@ -17,6 +18,46 @@ function clientReturning(data: unknown, error: unknown = null) {
 }
 
 const ADMITTED = { allowed: true, reason: 'admitted', state: 'closed', retryAfterSeconds: 0, inFlight: 3 };
+
+describe('provider admission policy against the limits Kie publishes', () => {
+  const { rateWindowSeconds, rateWindowMax, modelRateWindowMax, maxInFlight } = PROVIDER_ADMISSION_POLICY;
+  const kie = KIE_PUBLISHED_ACCOUNT_LIMITS;
+
+  it('never admits more in any of Kie\'s windows than Kie accepts', () => {
+    // The regression this pins: a bucket of 15 refilling at 1.5/s admitted 30
+    // submissions in ten seconds against Kie's 20. A sliding window of
+    // `rateWindowMax` per `rateWindowSeconds` admits at most `rateWindowMax` in
+    // any shorter span, so it fits Kie's window when ours is at least as long
+    // and our count is no higher.
+    expect(rateWindowSeconds).toBeGreaterThanOrEqual(kie.windowSeconds);
+    expect(rateWindowMax).toBeLessThanOrEqual(kie.newRequestsPerWindow);
+  });
+
+  it('keeps a transit margin and a count margin, not one or the other', () => {
+    // We stamp before the request leaves and Kie counts on arrival. With equal
+    // windows, two bursts one window apart on our clock can land inside a
+    // single window on Kie's, and no count margin short of half covers that.
+    expect(rateWindowSeconds).toBeGreaterThan(kie.windowSeconds);
+    expect(rateWindowMax).toBeLessThan(kie.newRequestsPerWindow);
+  });
+
+  it('does not give away throughput Kie allows without a reason', () => {
+    // The sustained rate is rateWindowMax / rateWindowSeconds. Kie's is 2/s; a
+    // policy under two thirds of it is a typo or an unexplained retreat.
+    const ours = rateWindowMax / rateWindowSeconds;
+    const theirs = kie.newRequestsPerWindow / kie.windowSeconds;
+    expect(ours).toBeGreaterThanOrEqual(theirs * (2 / 3));
+  });
+
+  it('leaves part of the account window to other models', () => {
+    expect(modelRateWindowMax).toBeGreaterThan(0);
+    expect(modelRateWindowMax).toBeLessThan(rateWindowMax);
+  });
+
+  it('runs no more at once than Kie typically does', () => {
+    expect(maxInFlight).toBeLessThanOrEqual(kie.typicalConcurrentTasks);
+  });
+});
 
 describe('provider admission', () => {
   it('admits and reports the verdict when the gate allows the submission', async () => {
@@ -39,10 +80,27 @@ describe('provider admission', () => {
     expect(rpc).toHaveBeenCalledWith('admit_provider_submission', expect.objectContaining({
       p_service: 'kie',
       p_model: 'veo-3-1',
-      p_global_capacity: PROVIDER_ADMISSION_POLICY.globalCapacity,
+      p_rate_window_seconds: PROVIDER_ADMISSION_POLICY.rateWindowSeconds,
+      p_rate_window_max: PROVIDER_ADMISSION_POLICY.rateWindowMax,
+      p_model_rate_window_max: PROVIDER_ADMISSION_POLICY.modelRateWindowMax,
       p_max_in_flight: PROVIDER_ADMISSION_POLICY.maxInFlight,
       p_in_flight_window_seconds: PROVIDER_ADMISSION_POLICY.inFlightWindowSeconds,
     }));
+  });
+
+  it('no longer sends the retired token-bucket arguments', async () => {
+    // The database function still accepts them, for a deployment from before
+    // the window, and ignores them. Sending them from here would read as if
+    // they still decided something.
+    const { client, rpc } = clientReturning(ADMITTED);
+    await admitProviderSubmission({ generationId: 'e2000000-0000-4000-8000-000000000001', client });
+
+    const args = rpc.mock.calls[0][1] as Record<string, unknown>;
+    for (const retired of [
+      'p_global_capacity', 'p_global_refill_per_second', 'p_model_capacity', 'p_model_refill_per_second',
+    ]) {
+      expect(args).not.toHaveProperty(retired);
+    }
   });
 
   it('atomically reserves an in-flight slot when a generation already exists', async () => {

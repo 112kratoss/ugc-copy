@@ -3,6 +3,12 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+// This file reads the migration that first created the gate. The admission
+// function's body has been replaced twice since (the reservation count, then
+// the sliding rate window): what is live is pinned by
+// `provider-admission-sliding-rate-window-migration.test.ts`. The assertions on
+// the outcome function, the tables and the grants here still describe
+// production.
 const migration = fs.readFileSync(path.resolve(
   process.cwd(),
   'supabase/migrations/20260809130000_provider_admission_control.sql',
@@ -73,8 +79,9 @@ describe('provider admission control migration', () => {
   });
 
   it("honours the provider's Retry-After when it exceeds our own backoff", () => {
-    // Kie publishes no numeric limits anywhere, so a Retry-After header is the
-    // only authoritative statement about when it will accept traffic again.
+    // Kie's published limit does not say when a 429 lifts, so a Retry-After
+    // header is the only authoritative statement about when it will accept
+    // traffic again.
     expect(outcomeBody).toContain('v_open_for := greatest(v_open_seconds, v_retry_after)');
   });
 
