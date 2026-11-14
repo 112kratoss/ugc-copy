@@ -1726,6 +1726,57 @@ describe('generation services', () => {
     expect(inputMediaRows).toEqual([]);
   });
 
+  // The hand-written branches in startImageGeneration run whenever a model's loaded entry is
+  // not on kie-task-v1 (no published entry yet, or one still on image-v1). Each must send what
+  // the adapter sends: GPT Image 2.6 Economy refuses any field it does not name, and Kie judges
+  // a body only after the hold (docs/model-api-references/{seedream-5-5,gpt-image-2-6,
+  // minimax-h3-image}.md, 2026-11-14).
+  it.each([
+    ['seedream-5.5', '2K'],
+    ['gpt-image-2.6', '1K'],
+    ['minimax-h3-image', '4K'],
+  ] as const)('%s: the hand-written body is the adapter body, with and without references', async (modelId, resolution) => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const { buildCodeGenerationModelOperations } = await import('@/lib/generation-model-runtime');
+    const { buildGenerationProviderRequest } = await import('@/lib/generation-model-adapters');
+    const operation = buildCodeGenerationModelOperations().find((candidate) => candidate.modelId === modelId)!;
+    expect(operation.adapterKey).toBe('kie-task-v1');
+    const ladder = { ...operation, adapterKey: 'image-v1' as const, adapterConfig: {} };
+    const PROMPT = 'A ceramic mug on a marble counter.';
+    const settings = { aspectRatio: '1:1', resolution, outputFormat: 'jpg' as const };
+    const references = ['https://cdn.example.com/hero.jpg', 'https://cdn.example.com/reference.jpg'];
+
+    for (const imageUrls of [[], references]) {
+      let providerBody: Record<string, unknown> | null = null;
+      vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        providerBody = JSON.parse(String(init?.body));
+        return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-image-ladder-1' } }) } as Response;
+      });
+      const { supabase } = createSupabaseMock();
+      await startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: PROMPT,
+        model: modelId,
+        ...settings,
+        imageUrls,
+        persistInputMedia: false,
+        operationalConfig: ladder,
+      });
+
+      const adapted = buildGenerationProviderRequest({
+        operation,
+        prompt: PROMPT,
+        settings: { ...settings, googleSearch: false },
+        inputs: imageUrls.map((url) => ({ slot: 'imageReferences', kind: 'image' as const, url })),
+      }).body as Record<string, unknown>;
+      const sent = providerBody as unknown as Record<string, unknown>;
+      expect({ model: sent.model, input: sent.input }, `${modelId} with ${imageUrls.length} references`)
+        .toEqual({ model: adapted.model, input: adapted.input });
+    }
+  });
+
   it('sends image generations with named elements first and stores compiled prompt metadata', async () => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
