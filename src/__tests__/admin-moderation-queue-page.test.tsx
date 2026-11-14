@@ -108,6 +108,8 @@ function queue() {
           authorUserId: '90000000-0000-4000-8000-000000000009',
           body: 'A reported comment',
           status: 'active',
+          postVisibility: 'public',
+          postReviewStatus: 'visible',
         },
       }),
     ],
@@ -144,6 +146,39 @@ describe('admin moderation queue page', () => {
     expect(html).toContain('Take down template');
     expect(html).toContain('Complete any required manual safety action before resolving.');
     expect(html).toContain('A reported comment');
+    // The comment's post opens at /showcase/<id>; /post/<id> answers 404.
+    expect(html).toContain('href="/showcase/80000000-0000-4000-8000-000000000008"');
+    expect(html).not.toContain('href="/post/');
+  });
+
+  it('does not link a reported comment to a post with no public page', async () => {
+    const base = queue();
+    collectAdminModerationQueueMock.mockResolvedValue({
+      ...base,
+      subjectReports: [subjectReport({
+        id: COMMENT_REPORT_ID,
+        targetType: 'comment',
+        commentId: '70000000-0000-4000-8000-000000000007',
+        reason: 'harassment',
+        sourceSurface: 'comments',
+        comment: {
+          id: '70000000-0000-4000-8000-000000000007',
+          postId: '80000000-0000-4000-8000-000000000008',
+          parentId: null,
+          authorUserId: '90000000-0000-4000-8000-000000000009',
+          body: 'A reported comment',
+          status: 'active',
+          postVisibility: 'public',
+          postReviewStatus: 'hidden',
+        },
+      })],
+    });
+
+    const html = visibleText(await renderPageToHtml(await AdminModerationPage()));
+
+    expect(html).toContain('A reported comment');
+    expect(html).not.toContain('href="/showcase/80000000-0000-4000-8000-000000000008"');
+    expect(html).toContain('No public page');
   });
 
   it('takes the template down from the queue and says what that did', async () => {

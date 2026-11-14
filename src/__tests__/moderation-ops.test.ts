@@ -236,6 +236,7 @@ describe('moderation operations', () => {
       user_id: '60000000-0000-4000-8000-000000000006',
       body: 'Reported body',
       status: 'active',
+      post: { visibility: 'public', review_status: 'flagged' },
     }]);
     const from = vi.fn((table: string) => {
       if (table === 'post_reports') return postReports;
@@ -258,8 +259,12 @@ describe('moderation operations', () => {
         // Never edited: the edit history is not read at all.
         editedAt: null,
         earlierVersions: 0,
+        // The post's state, so the queue links it only when it has a public page.
+        postVisibility: 'public',
+        postReviewStatus: 'flagged',
       },
     });
+    expect(comments.select).toHaveBeenCalledWith(expect.stringContaining('post:posts!post_comments_post_id_fkey(visibility, review_status)'));
   });
 
   it('says a reported comment was edited, and how many earlier wordings are kept', async () => {

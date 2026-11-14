@@ -15,7 +15,9 @@ import { PostModerationControls } from './PostModerationControls';
 import {
   DataTable,
   EmptyState,
+  NO_PUBLIC_POST_PAGE,
   PageHeader,
+  adminPublicPostHref,
   Pagination,
   StatCard,
   StatusBadge,
@@ -29,7 +31,7 @@ export const dynamic = 'force-dynamic';
 
 const PAGE_SIZE = 40;
 
-const POST_FILTERS: AdminPostFilter[] = ['all', 'public', 'hidden', 'reported'];
+const POST_FILTERS: AdminPostFilter[] = ['all', 'public', 'private', 'hidden', 'reported'];
 const GENERATION_FILTERS: AdminGenerationFilter[] = ['all', 'failed', 'processing'];
 
 function FilterLinks<T extends string>({
@@ -109,7 +111,11 @@ export default async function AdminContentPage({
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Posts" value={snapshot.totals.posts} />
-        <StatCard label="Hidden posts" value={snapshot.totals.hiddenPosts} />
+        <StatCard
+          label="Private posts"
+          value={snapshot.totals.privatePosts}
+          hint={`Set by the creator · ${snapshot.totals.hiddenPosts.toLocaleString()} hidden by moderation`}
+        />
         <StatCard label="Generations 24h" value={snapshot.totals.generations24h} />
         <StatCard
           label="Failed 24h"
@@ -136,13 +142,19 @@ export default async function AdminContentPage({
           <EmptyState message="No posts match this filter." />
         ) : (
           <DataTable columns={['Created', 'Title', 'Visibility', 'Review', 'Reports', 'Saves', 'Author', 'Moderation']}>
-            {snapshot.posts.map((post) => (
+            {snapshot.posts.map((post) => {
+              const postHref = adminPublicPostHref(post);
+              return (
               <tr key={post.id}>
                 <Td>{formatTimestamp(post.createdAt)}</Td>
                 <Td truncateWidth={260}>
-                  <Link href={`/post/${post.id}`} target="_blank" rel="noreferrer" className="underline">
-                    {post.title || 'Untitled'}
-                  </Link>
+                  {postHref ? (
+                    <Link href={postHref} target="_blank" rel="noreferrer" className="underline">
+                      {post.title || 'Untitled'}
+                    </Link>
+                  ) : (
+                    <span title={NO_PUBLIC_POST_PAGE}>{post.title || 'Untitled'}</span>
+                  )}
                 </Td>
                 <Td><StatusBadge status={post.visibility} /></Td>
                 <Td><StatusBadge status={post.reviewStatus} /></Td>
@@ -159,7 +171,8 @@ export default async function AdminContentPage({
                   <PostModerationControls postId={post.id} reviewStatus={post.reviewStatus} />
                 </Td>
               </tr>
-            ))}
+              );
+            })}
           </DataTable>
         )}
 

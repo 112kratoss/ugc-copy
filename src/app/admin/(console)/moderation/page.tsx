@@ -6,7 +6,7 @@ import { Surface, Text } from '@/components/DesignSystem';
 import { collectAdminModerationQueue } from '@/lib/admin-moderation-service';
 import { createServiceClient } from '@/lib/server-helpers';
 
-import { EmptyState, PageHeader, StatCard, StatusBadge, formatRelative, formatTimestamp, shortId } from '../AdminUi';
+import { EmptyState, NO_PUBLIC_POST_PAGE, PageHeader, StatCard, StatusBadge, adminPostHref, adminPublicPostHref, formatRelative, formatTimestamp, shortId } from '../AdminUi';
 import { PostReportActions, SubjectReportActions } from './ModerationActions';
 
 export const dynamic = 'force-dynamic';
@@ -87,9 +87,9 @@ export default async function AdminModerationPage() {
                       {report.post?.title || 'Untitled post'}
                     </Text>
                   </div>
-                  {report.post ? (
+                  {report.post && adminPublicPostHref(report.post) ? (
                     <Link
-                      href={`/post/${report.postId}`}
+                      href={adminPostHref(report.postId)}
                       target="_blank"
                       rel="noreferrer"
                       className="ui-button ui-button-secondary ui-focus-ring shrink-0"
@@ -166,14 +166,24 @@ export default async function AdminModerationPage() {
                         Reported comment
                       </Text>
                       <StatusBadge status={report.comment.status} />
-                      <Link
-                        href={`/post/${report.comment.postId}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs underline"
-                      >
-                        Open post
-                      </Link>
+                      {adminPublicPostHref({
+                        id: report.comment.postId,
+                        visibility: report.comment.postVisibility,
+                        reviewStatus: report.comment.postReviewStatus,
+                      }) ? (
+                        <Link
+                          href={adminPostHref(report.comment.postId)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs underline"
+                        >
+                          Open post
+                        </Link>
+                      ) : (
+                        <span title={NO_PUBLIC_POST_PAGE}>
+                          <Text as="span" variant="caption">No public page</Text>
+                        </span>
+                      )}
                     </div>
                     <Text variant="bodySm" className="mt-1.5 whitespace-pre-wrap text-[var(--ui-text-secondary)]">
                       {report.comment.body}

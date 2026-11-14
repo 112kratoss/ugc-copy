@@ -77,6 +77,9 @@ export type SubjectModerationQueueItem = {
      */
     editedAt: string | null;
     earlierVersions: number;
+    /** The post's visibility and review status: the console links it only when it has a public page. */
+    postVisibility: string | null;
+    postReviewStatus: string | null;
   } | null;
   /** What an operator needs to judge a template: its creator-written words, its page and its state. */
   template: {
@@ -290,7 +293,18 @@ type CommentModerationRow = {
   status: string;
   edited_at?: string | null;
   earlierVersions?: number;
+  /**
+   * PostgREST embeds the many-to-one post as an object; supabase-js, without
+   * generated types, types it as an array, so both are read.
+   */
+  post?: CommentPostState | CommentPostState[] | null;
 };
+
+type CommentPostState = { visibility: string | null; review_status: string | null };
+
+function commentPostState(post: CommentModerationRow['post']): CommentPostState | null {
+  return (Array.isArray(post) ? post[0] : post) ?? null;
+}
 
 type TemplateModerationRow = {
   id: string;
@@ -597,12 +611,12 @@ async function hydrateReportedComments(
 
   const result = await supabase
     .from('post_comments')
-    .select('id, post_id, parent_comment_id, user_id, body, status, edited_at')
+    .select('id, post_id, parent_comment_id, user_id, body, status, edited_at, post:posts!post_comments_post_id_fkey(visibility, review_status)')
     .in('id', commentIds);
   if (result.error) {
     throw databaseError('Failed to hydrate reported comments', result.error);
   }
-  const comments = (result.data ?? []) as CommentModerationRow[];
+  const comments = (result.data ?? []) as unknown as CommentModerationRow[];
 
   // An author can reword a reported comment. The queue shows it as it reads
   // now, so it also has to say that earlier words exist, or the evidence in
@@ -700,6 +714,8 @@ function toSubjectReportItem(
           status: comment.status,
           editedAt: comment.edited_at ?? null,
           earlierVersions: comment.earlierVersions ?? 0,
+          postVisibility: commentPostState(comment.post)?.visibility ?? null,
+          postReviewStatus: commentPostState(comment.post)?.review_status ?? null,
         }
       : null,
     template: template
