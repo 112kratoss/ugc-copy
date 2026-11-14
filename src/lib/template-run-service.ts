@@ -82,6 +82,7 @@ import {
   type WorkflowCanvasNode,
 } from '@/lib/workflow-canvas';
 import { executeWorkflowRunnableNode } from '@/lib/workflow-runner';
+import { withProviderAdmissionTurn } from '@/lib/provider-admission';
 
 const TEMPLATE_INPUT_BUCKET = 'template_inputs' as const;
 const TEMPLATE_CATALOG_OUTDATED_MESSAGE =
@@ -1449,7 +1450,9 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
       continue;
     }
     try {
-      const result = await executeWorkflowRunnableNode({
+      // A step the provider turned away keeps its turn in the line by the time of
+      // that first refusal (provider-admission.ts).
+      const result = await withProviderAdmissionTurn(stepBusySince(step), () => executeWorkflowRunnableNode({
         supabase: client,
         userId,
         node,
@@ -1468,7 +1471,7 @@ async function advanceTemplateRun(client: SupabaseClient, runId: string, userId:
           templateId: state.snapshot.templateId,
           templateVersionId: state.snapshot.templateVersionId,
         },
-      });
+      }));
       if (result.status === 'blocked') {
         await client.from('template_run_steps').update({
           status: 'failed',

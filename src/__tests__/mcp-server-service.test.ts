@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 import type { AgentStagedUpload } from '@/lib/agent-input-upload';
 import { AGENT_POST_NO_RESOURCE, type AgentPostResource, type AgentPostView } from '@/lib/agent-post-read';
+import { PROVIDER_ADMISSION_POLICY } from '@/lib/provider-admission';
 import { AGENT_RECIPE_PREVIEW, AGENT_RECIPE_SUMMARY, agentRecipeBundle } from '@/lib/agent-publish-request';
 import { AGENT_PUBLISH_RECORD_CODES } from '@/lib/agent-tool-calls';
 import {
@@ -696,6 +697,17 @@ describe('create_media', () => {
     expect(toolFailureCode(result)).toBe('INVALID_REQUEST');
     expect(structured(result).error).toMatchObject({ field_errors: { idempotency_key: 'Required.' } });
     expect(services.postUnifiedGenerationForRoute).not.toHaveBeenCalled();
+  });
+
+  it('lets an over-limit run wait in line, for less time than the app gives a creator', async () => {
+    // The start waits inside the tool call. An agent's client gives a call
+    // less time than the app gives a start, so its wait is the shorter one.
+    const { context, services } = harness();
+    await tool('create_media').handle(run, context);
+
+    const [input] = vi.mocked(services.postUnifiedGenerationForRoute).mock.calls[0] as unknown as [{ admissionWaitBudgetMs?: number }];
+    expect(input.admissionWaitBudgetMs).toBe(PROVIDER_ADMISSION_POLICY.agentWaitBudgetMs);
+    expect(input.admissionWaitBudgetMs).toBeLessThan(PROVIDER_ADMISSION_POLICY.waitBudgetMs);
   });
 
   it('starts the run through the unified start with the body the web sends, the agent\'s idempotency key, and answers the run', async () => {

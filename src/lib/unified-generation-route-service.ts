@@ -17,6 +17,7 @@ import {
 } from '@/lib/generation-public-failure';
 import { GenerationStartIdempotencyError } from '@/lib/generation-start-idempotency';
 import { reportKieInsufficientCreditsRefusal } from '@/lib/kie-account-balance-refusal';
+import { PROVIDER_ADMISSION_POLICY, withProviderAdmissionWait } from '@/lib/provider-admission';
 import { SourceGenerationValidationError } from '@/lib/source-generation';
 import {
   ReferenceDurationChangedError,
@@ -39,6 +40,12 @@ export type UnifiedGenerationRouteResult =
     };
 
 export interface UnifiedGenerationRouteInput {
+  /**
+   * How long this start may wait in line for the provider before it is refused
+   * (`withProviderAdmissionWait`). Left out, a creator's own budget: someone is
+   * waiting on every start that comes through here.
+   */
+  admissionWaitBudgetMs?: number;
   createAdminSupabase: () => unknown;
   createUserSupabase: () => unknown;
   kieApiKey?: string;
@@ -316,14 +323,20 @@ export async function postUnifiedGenerationForRoute(
 
   try {
     const body = await readBody(input);
-    const payload = await startUnifiedGenerationForRoute({
-      request: input.request,
-      body,
-      userId: user.id,
-      callerIsGuest: isGuestUser(user),
-      supabase,
-      adminSupabase: input.createAdminSupabase() as SupabaseClient,
-    });
+    // The one place a person waits on a start: over the provider's limits it
+    // waits its turn in line instead of failing (provider-admission.ts). Run
+    // steps start elsewhere, with their own retry, and do not wait.
+    const payload = await withProviderAdmissionWait(
+      input.admissionWaitBudgetMs ?? PROVIDER_ADMISSION_POLICY.waitBudgetMs,
+      () => startUnifiedGenerationForRoute({
+        request: input.request,
+        body,
+        userId: user.id,
+        callerIsGuest: isGuestUser(user),
+        supabase,
+        adminSupabase: input.createAdminSupabase() as SupabaseClient,
+      }),
+    );
     return { ok: true, body: payload };
   } catch (error) {
     return mapGenerationStartRouteError(error, {
