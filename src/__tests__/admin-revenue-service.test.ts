@@ -275,4 +275,35 @@ describe('admin revenue report', () => {
 
     expect(report.rails.find((rail) => rail.key === 'marketplace')?.creditsIssued).toBeNull();
   });
+
+  it('counts a free unlock apart from paid orders', async () => {
+    // Free recipe unlocks settle as $0 'paid' orders. Counted as settled orders,
+    // 23 of the 26 "settled orders" in production's 90 days were free.
+    const client = createClient({
+      transactions: [],
+      mobile_store_transactions: [],
+      marketplace_orders: [
+        { id: 'm-free', status: 'paid', amount_subunits: 0, currency: 'INR', created_at: '2026-07-20T00:00:00.000Z', razorpay_payment_id: 'free_unlock_m1' },
+      ],
+      post_resource_bundle_orders: [
+        { id: 'b-free-1', status: 'paid', amount_subunits: 0, currency: 'USD', created_at: '2026-07-21T00:00:00.000Z', razorpay_payment_id: 'free_unlock_b1' },
+        { id: 'b-free-2', status: 'paid', amount_subunits: 0, currency: 'USD', created_at: '2026-07-22T00:00:00.000Z', razorpay_payment_id: 'free_unlock_b2' },
+        { id: 'b-paid', status: 'paid', amount_subunits: 499, currency: 'USD', created_at: '2026-07-23T00:00:00.000Z', razorpay_payment_id: 'pay_b3' },
+      ],
+      creator_resource_wallets: [],
+    });
+
+    const report = await collectAdminRevenueReport(client, { now: NOW });
+    const bundles = report.rails.find((rail) => rail.key === 'resource-bundles');
+    const marketplace = report.rails.find((rail) => rail.key === 'marketplace');
+
+    expect(bundles?.succeededCount).toBe(1);
+    expect(bundles?.freeCount).toBe(2);
+    expect(bundles?.totalsByCurrency).toEqual([{ currency: 'USD', grossSubunits: 499, succeededCount: 1 }]);
+    expect(marketplace?.succeededCount).toBe(0);
+    expect(marketplace?.freeCount).toBe(1);
+    expect(marketplace?.totalsByCurrency).toEqual([]);
+    // Still listed among the orders, so an operator can see one happened.
+    expect(report.orderTotal).toBe(4);
+  });
 });

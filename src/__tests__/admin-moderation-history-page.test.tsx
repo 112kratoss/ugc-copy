@@ -122,6 +122,18 @@ describe('admin moderation history page', () => {
     expect(html).toContain('2 Aug 2026');
   });
 
+  it('links a decided post to its page, which lives at /showcase/<id>', async () => {
+    // /post/<id> is only the editor's folder: every post link here answered 404.
+    collectAdminModerationHistoryMock.mockResolvedValue(history());
+
+    const html = await renderPageToHtml(
+      await AdminModerationHistoryPage({ searchParams: Promise.resolve({}) }),
+    );
+
+    expect(html).toContain('href="/showcase/20000000-0000-4000-8000-000000000002"');
+    expect(html).not.toContain('href="/post/');
+  });
+
   // A reviewer with no profile row must not drop the decision from the record.
   it('still lists a decision whose reviewer has no profile, and says a note is missing', async () => {
     collectAdminModerationHistoryMock.mockResolvedValue(history());
@@ -147,7 +159,8 @@ describe('admin moderation history page', () => {
     // Advancing posts must carry the post cursor, not reset it.
     expect(html).toContain('href="/admin/moderation/history?posts=50"');
     // The single-page subject list renders a count, not controls.
-    expect(visibleText(html)).toContain('1 subject decisions');
+    expect(visibleText(html)).toContain('1 subject decision');
+    expect(visibleText(html)).not.toContain('1 subject decisions');
   });
 
   it('asks the service for the offsets parsed from the URL', async () => {

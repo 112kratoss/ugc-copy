@@ -2,7 +2,14 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { readLinkedAccountIds } from '@/lib/account-identity';
 import { runPagedQuery } from '@/lib/admin-paged-query';
+import {
+  CREDIT_HISTORY_MAX_LIMIT,
+  decodeCreditHistoryCursor,
+  listCreditHistory,
+  type CreditHistoryCursor,
+} from '@/lib/credit-history-service';
 
 /**
  * Read models for the admin Users & credits area.
@@ -43,7 +50,15 @@ export type AdminUserDetail = {
     openReportsAgainst: number;
   };
   spend: {
+    /**
+     * Credits spent, net of refunds, over everything the person's own Credit
+     * history lists as spending: generations (deleted ones too), the prompt
+     * enhancer, reservations and credit unlocks, across the guests linked to
+     * the account.
+     */
     lifetimeCreditsSpent: number;
+    /** False when the history was longer than the pages read: the figure is then a lower bound. */
+    lifetimeCreditsSpentComplete: boolean;
     generationsLast30Days: number;
   };
   purchases: Array<{
@@ -103,6 +118,39 @@ function normalizeOffset(offset: number | undefined) {
  */
 function sanitizeSearchTerm(term: string): string {
   return term.replace(/[,()*\\]/g, '').trim().slice(0, 64);
+}
+
+/** At most this many credit-history pages (50 entries each) are read for the spend figure. */
+export const LIFETIME_SPEND_MAX_HISTORY_PAGES = 20;
+
+/**
+ * Lifetime spend from `list_credit_history`, the ledger the person's own Credit
+ * history page reads, so the two always agree. Spending and its refunds are
+ * summed; purchases, grants, reversals and operator adjustments are not
+ * spending. Reads newest first and stops after a bounded number of pages, so a
+ * very long history gives a lower bound, said as such, rather than a slow page.
+ */
+async function readLifetimeCreditsSpent(
+  client: SupabaseClient,
+  userId: string,
+): Promise<{ credits: number; complete: boolean }> {
+  const userIds = await readLinkedAccountIds(client, userId);
+  // "Only the account's own rows" would understate the figure, so an unreadable
+  // identity set fails the page like every other read here.
+  if (!userIds) throw new Error('Could not read the identities linked to this account.');
+
+  let net = 0;
+  let cursor: CreditHistoryCursor | null = null;
+  for (let page = 0; page < LIFETIME_SPEND_MAX_HISTORY_PAGES; page += 1) {
+    const result = await listCreditHistory({ client, userIds, cursor, limit: CREDIT_HISTORY_MAX_LIMIT });
+    for (const entry of result.entries) {
+      if (entry.kind === 'spend' || entry.kind === 'refund') net += entry.amount;
+    }
+    if (!result.nextCursor) return { credits: Math.max(0, -net), complete: true };
+    cursor = decodeCreditHistoryCursor(result.nextCursor);
+    if (!cursor) throw new Error('list_credit_history returned a cursor this build cannot read.');
+  }
+  return { credits: Math.max(0, -net), complete: false };
 }
 
 export type AdminUserSearchResult = {
@@ -196,7 +244,7 @@ export async function getAdminUserDetail(
     followingCount,
     openReportsCount,
     recentGenerationsCount,
-    spendResult,
+    lifetimeSpend,
     transactionsResult,
     mobileTransactionsResult,
     grantsResult,
@@ -218,10 +266,9 @@ export async function getAdminUserDetail(
       .select('id', { count: 'exact', head: true })
       .eq('user_id', userId)
       .gte('created_at', thirtyDaysAgo),
-    // Aggregated in Postgres. Selecting rows and summing them in JS silently
-    // truncated past the row cap, producing a wrong spend figure with no
-    // indication — see 20260729090100_user_ai_usage_cost_total.sql.
-    client.rpc('get_user_ai_usage_cost_total', { p_user_id: userId }),
+    // Not get_user_ai_usage_cost_total: that sums ai_usage_events alone, the
+    // prompt enhancer's charges, and left every generation out of the figure.
+    readLifetimeCreditsSpent(client, userId),
     client
       .from('transactions')
       .select('id, status, amount, credits, created_at, razorpay_payment_id')
@@ -260,15 +307,12 @@ export async function getAdminUserDetail(
 
   // A failed read is unknown support data, not an empty history or zero money.
   for (const result of [
-    authUser, openReportsCount, recentGenerationsCount, spendResult,
+    authUser, openReportsCount, recentGenerationsCount,
     transactionsResult, mobileTransactionsResult, grantsResult, walletResult,
     recentGenerationsResult,
   ]) {
     if (result.error) throw result.error;
   }
-
-  const spendTotals = (spendResult.data ?? {}) as Record<string, unknown>;
-  const lifetimeCreditsSpent = Number(spendTotals.total_cost ?? 0);
 
   const purchases: AdminUserDetail['purchases'] = [
     ...((transactionsResult.data ?? []) as Array<Record<string, unknown>>).map((row) => ({
@@ -320,7 +364,8 @@ export async function getAdminUserDetail(
       openReportsAgainst: openReportsCount.count ?? 0,
     },
     spend: {
-      lifetimeCreditsSpent,
+      lifetimeCreditsSpent: lifetimeSpend.credits,
+      lifetimeCreditsSpentComplete: lifetimeSpend.complete,
       generationsLast30Days: recentGenerationsCount.count ?? 0,
     },
     purchases,

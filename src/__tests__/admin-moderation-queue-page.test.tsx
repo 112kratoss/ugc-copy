@@ -144,6 +144,9 @@ describe('admin moderation queue page', () => {
     expect(html).toContain('Take down template');
     expect(html).toContain('Complete any required manual safety action before resolving.');
     expect(html).toContain('A reported comment');
+    // The comment's post opens at /showcase/<id>; /post/<id> answers 404.
+    expect(html).toContain('href="/showcase/80000000-0000-4000-8000-000000000008"');
+    expect(html).not.toContain('href="/post/');
   });
 
   it('takes the template down from the queue and says what that did', async () => {

@@ -9,6 +9,7 @@ import {
   listAdminUserSanctions,
 } from '@/lib/admin-user-sanction-service';
 import { getAdminUserDetail } from '@/lib/admin-users-service';
+import { formatTokenSubunitsAsUsd } from '@/lib/creator-payouts';
 import { createServiceClient } from '@/lib/server-helpers';
 
 import {
@@ -20,7 +21,9 @@ import {
   Td,
   formatSubunits,
   formatTimestamp,
+  paymentStatusLabel,
   shortId,
+  statusTone,
 } from '../../AdminUi';
 import { CreditAdjustmentForm } from './CreditAdjustmentForm';
 import { GenerationModerationControls } from './GenerationModerationControls';
@@ -127,13 +130,18 @@ export default async function AdminUserDetailPage({
             <Detail label="Posts" value={detail.counts.posts} />
             <Detail label="Followers" value={detail.counts.followers} />
             <Detail label="Following" value={detail.counts.following} />
-            <Detail label="Lifetime credits spent" value={detail.spend.lifetimeCreditsSpent.toLocaleString()} />
+            <Detail
+              label="Lifetime credits spent"
+              value={detail.spend.lifetimeCreditsSpentComplete
+                ? detail.spend.lifetimeCreditsSpent.toLocaleString()
+                : `At least ${detail.spend.lifetimeCreditsSpent.toLocaleString()} (newest history only)`}
+            />
             <Detail label="Location" value={detail.profile.location ?? '—'} />
             <Detail label="Website" value={detail.profile.websiteUrl ?? '—'} />
             <Detail
               label="Creator wallet"
               value={detail.wallet
-                ? `${formatSubunits(detail.wallet.availableTokenSubunits)} available`
+                ? `${formatTokenSubunitsAsUsd(detail.wallet.availableTokenSubunits)} available`
                 : 'No wallet'}
             />
           </div>
@@ -150,7 +158,7 @@ export default async function AdminUserDetailPage({
               <tr key={`${purchase.kind}-${purchase.id}`}>
                 <Td>{formatTimestamp(purchase.createdAt)}</Td>
                 <Td>{purchase.kind === 'razorpay' ? 'Razorpay (web)' : 'Mobile IAP'}</Td>
-                <Td><StatusBadge status={purchase.status} /></Td>
+                <Td><StatusBadge status={paymentStatusLabel(purchase.status)} tone={statusTone(purchase.status)} /></Td>
                 <Td>{formatSubunits(purchase.amountSubunits, purchase.currency)}</Td>
                 <Td>{purchase.credits?.toLocaleString() ?? '—'}</Td>
                 <Td mono>{purchase.reference ?? '—'}</Td>

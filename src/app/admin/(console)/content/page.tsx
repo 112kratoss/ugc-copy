@@ -16,6 +16,7 @@ import {
   DataTable,
   EmptyState,
   PageHeader,
+  adminPostHref,
   Pagination,
   StatCard,
   StatusBadge,
@@ -29,7 +30,7 @@ export const dynamic = 'force-dynamic';
 
 const PAGE_SIZE = 40;
 
-const POST_FILTERS: AdminPostFilter[] = ['all', 'public', 'hidden', 'reported'];
+const POST_FILTERS: AdminPostFilter[] = ['all', 'public', 'private', 'hidden', 'reported'];
 const GENERATION_FILTERS: AdminGenerationFilter[] = ['all', 'failed', 'processing'];
 
 function FilterLinks<T extends string>({
@@ -109,7 +110,11 @@ export default async function AdminContentPage({
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Posts" value={snapshot.totals.posts} />
-        <StatCard label="Hidden posts" value={snapshot.totals.hiddenPosts} />
+        <StatCard
+          label="Private posts"
+          value={snapshot.totals.privatePosts}
+          hint={`Set by the creator · ${snapshot.totals.hiddenPosts.toLocaleString()} hidden by moderation`}
+        />
         <StatCard label="Generations 24h" value={snapshot.totals.generations24h} />
         <StatCard
           label="Failed 24h"
@@ -140,7 +145,7 @@ export default async function AdminContentPage({
               <tr key={post.id}>
                 <Td>{formatTimestamp(post.createdAt)}</Td>
                 <Td truncateWidth={260}>
-                  <Link href={`/post/${post.id}`} target="_blank" rel="noreferrer" className="underline">
+                  <Link href={adminPostHref(post.id)} target="_blank" rel="noreferrer" className="underline">
                     {post.title || 'Untitled'}
                   </Link>
                 </Td>

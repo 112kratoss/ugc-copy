@@ -44,6 +44,9 @@ export type AdminContentSnapshot = {
   generations: AdminGenerationRow[];
   totals: {
     posts: number;
+    /** Not public: the creator chose private or unlisted. */
+    privatePosts: number;
+    /** Hidden by moderation (`review_status = 'hidden'`), whatever the creator chose. */
     hiddenPosts: number;
     generations24h: number;
     failedGenerations24h: number;
@@ -64,7 +67,12 @@ export type AdminContentSnapshot = {
   };
 };
 
-export type AdminPostFilter = 'all' | 'public' | 'hidden' | 'reported';
+/**
+ * `private` is the creator's choice (visibility private or unlisted); `hidden`
+ * is moderation's (review_status hidden). They were one filter, labelled
+ * Hidden, that listed private posts and none that moderation hid.
+ */
+export type AdminPostFilter = 'all' | 'public' | 'private' | 'hidden' | 'reported';
 export type AdminGenerationFilter = 'all' | 'failed' | 'processing';
 
 function normalizeLimit(limit: number | undefined) {
@@ -109,7 +117,8 @@ export async function collectAdminContentSnapshot(
       .range(from, to);
 
     if (postFilter === 'public') return query.eq('visibility', 'public');
-    if (postFilter === 'hidden') return query.neq('visibility', 'public');
+    if (postFilter === 'private') return query.neq('visibility', 'public');
+    if (postFilter === 'hidden') return query.eq('review_status', 'hidden');
     if (postFilter === 'reported') return query.gt('report_count', 0);
     return query;
   };
@@ -132,7 +141,7 @@ export async function collectAdminContentSnapshot(
     return query;
   };
 
-  const [posts, generations, postsCount, hiddenCount, generations24h, failed24h] = await Promise.all([
+  const [posts, generations, postsCount, privateCount, hiddenCount, generations24h, failed24h] = await Promise.all([
     runPagedQuery<Record<string, unknown>>(buildPostsQuery, { offset: postOffset, pageSize: limit }),
     runPagedQuery<Record<string, unknown>>(buildGenerationsQuery, {
       offset: generationOffset,
@@ -140,6 +149,7 @@ export async function collectAdminContentSnapshot(
     }),
     client.from('posts').select('id', { count: 'exact', head: true }),
     client.from('posts').select('id', { count: 'exact', head: true }).neq('visibility', 'public'),
+    client.from('posts').select('id', { count: 'exact', head: true }).eq('review_status', 'hidden'),
     client.from('generations').select('id', { count: 'exact', head: true }).gte('created_at', dayAgo),
     client
       .from('generations')
@@ -148,7 +158,7 @@ export async function collectAdminContentSnapshot(
       .gte('created_at', dayAgo),
   ]);
 
-  for (const result of [postsCount, hiddenCount, generations24h, failed24h]) {
+  for (const result of [postsCount, privateCount, hiddenCount, generations24h, failed24h]) {
     if (result.error) throw result.error;
   }
 
@@ -179,6 +189,7 @@ export async function collectAdminContentSnapshot(
     })),
     totals: {
       posts: postsCount.count ?? 0,
+      privatePosts: privateCount.count ?? 0,
       hiddenPosts: hiddenCount.count ?? 0,
       generations24h: generations24h.count ?? 0,
       failedGenerations24h: failed24h.count ?? 0,

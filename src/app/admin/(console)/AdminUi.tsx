@@ -34,6 +34,24 @@ export function statusTone(status: string): AdminStatusTone {
   return 'neutral';
 }
 
+/**
+ * A payment row's status as an operator should read it. A Razorpay order is
+ * `created` when checkout opened and stays so when the buyer never paid, so
+ * "created" read like a purchase that went through.
+ */
+export function paymentStatusLabel(status: string): string {
+  return status.toLowerCase() === 'created' ? 'not paid' : status;
+}
+
+/**
+ * A post's public page. Posts live at `/showcase/<id>`; `/post/<id>` is only
+ * the editor's folder and answers 404. A private post, or one moderation hid,
+ * has no public page, so the link 404s for those too.
+ */
+export function adminPostHref(postId: string): string {
+  return `/showcase/${encodeURIComponent(postId)}`;
+}
+
 export function StatusBadge({ status, tone }: { status: string; tone?: AdminStatusTone }) {
   return (
     <span
@@ -206,8 +224,10 @@ export function Pagination({
   total: number;
   offsetParam?: string;
   otherParams?: Record<string, string>;
+  /** Plural; a total of exactly one drops its final "s" ("1 user", not "1 users"). */
   noun?: string;
 }) {
+  const countNoun = total === 1 ? noun.replace(/s$/, '') : noun;
   // `offset` is always a window the query actually returned: each service
   // falls back to the first page when asked for one past the end, so this can
   // never render an impossible range like "showing 1001-7 of 7".
@@ -232,7 +252,7 @@ export function Pagination({
   if (!hasPrevious && !hasNext) {
     return total > 0 ? (
       <Text variant="caption" className="mt-3 block">
-        {total.toLocaleString()} {noun}
+        {total.toLocaleString()} {countNoun}
       </Text>
     ) : null;
   }
@@ -243,7 +263,7 @@ export function Pagination({
       className="mt-3 flex flex-wrap items-center justify-between gap-3"
     >
       <Text variant="caption">
-        Showing {firstShown.toLocaleString()}–{lastShown.toLocaleString()} of {total.toLocaleString()} {noun}
+        Showing {firstShown.toLocaleString()}–{lastShown.toLocaleString()} of {total.toLocaleString()} {countNoun}
       </Text>
       <div className="flex items-center gap-2">
         {hasPrevious ? (

@@ -4,6 +4,7 @@ import clsx from 'clsx';
 
 import { Surface, Text } from '@/components/DesignSystem';
 import { collectAdminRevenueReport, type AdminRevenueWindow } from '@/lib/admin-revenue-service';
+import { formatTokenSubunitsAsUsd } from '@/lib/creator-payouts';
 import { createServiceClient } from '@/lib/server-helpers';
 
 import {
@@ -17,7 +18,9 @@ import {
   formatSubunits,
   formatTimestamp,
   parseOffset,
+  paymentStatusLabel,
   shortId,
+  statusTone,
 } from '../AdminUi';
 
 export const dynamic = 'force-dynamic';
@@ -47,6 +50,7 @@ export default async function AdminRevenuePage({
   });
 
   const totalSucceeded = report.rails.reduce((total, rail) => total + rail.succeededCount, 0);
+  const totalFree = report.rails.reduce((total, rail) => total + rail.freeCount, 0);
   const totalPending = report.rails.reduce((total, rail) => total + rail.pendingCount, 0);
   const totalFailed = report.rails.reduce((total, rail) => total + rail.failedCount, 0);
 
@@ -74,13 +78,22 @@ export default async function AdminRevenuePage({
       />
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Settled orders" value={totalSucceeded} hint={`Last ${windowDays} days`} />
-        <StatCard label="Pending" value={totalPending} tone={totalPending > 0 ? 'warning' : 'neutral'} />
+        <StatCard
+          label="Paid orders"
+          value={totalSucceeded}
+          hint={`Last ${windowDays} days${totalFree > 0 ? ` · ${totalFree.toLocaleString()} free unlocks` : ''}`}
+        />
+        <StatCard
+          label="Not paid"
+          value={totalPending}
+          hint="Checkouts opened but never paid"
+          tone={totalPending > 0 ? 'warning' : 'neutral'}
+        />
         <StatCard label="Failed / refunded" value={totalFailed} tone={totalFailed > 0 ? 'danger' : 'neutral'} />
         <StatCard
           label="Creator wallets"
           value={report.creatorPayouts.walletCount}
-          hint={`${formatSubunits(report.creatorPayouts.availableTokenSubunits)} owed`}
+          hint={`${formatTokenSubunitsAsUsd(report.creatorPayouts.availableTokenSubunits)} owed`}
         />
       </section>
 
@@ -115,11 +128,17 @@ export default async function AdminRevenuePage({
 
               <dl className="mt-3 flex flex-col gap-1">
                 <div className="flex justify-between gap-2">
-                  <dt><Text as="span" variant="caption">Settled</Text></dt>
+                  <dt><Text as="span" variant="caption">Paid</Text></dt>
                   <dd className="text-xs font-semibold text-[var(--ui-text-secondary)]">{rail.succeededCount}</dd>
                 </div>
+                {rail.freeCount > 0 ? (
+                  <div className="flex justify-between gap-2">
+                    <dt><Text as="span" variant="caption">Free unlocks</Text></dt>
+                    <dd className="text-xs font-semibold text-[var(--ui-text-secondary)]">{rail.freeCount}</dd>
+                  </div>
+                ) : null}
                 <div className="flex justify-between gap-2">
-                  <dt><Text as="span" variant="caption">Pending</Text></dt>
+                  <dt><Text as="span" variant="caption">Not paid</Text></dt>
                   <dd className="text-xs font-semibold text-[var(--ui-text-secondary)]">{rail.pendingCount}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
@@ -150,7 +169,7 @@ export default async function AdminRevenuePage({
               <tr key={`${order.rail}-${order.id}`}>
                 <Td>{formatTimestamp(order.createdAt)}</Td>
                 <Td>{order.rail}</Td>
-                <Td><StatusBadge status={order.status} /></Td>
+                <Td><StatusBadge status={paymentStatusLabel(order.status)} tone={statusTone(order.status)} /></Td>
                 <Td>{formatSubunits(order.amountSubunits, order.currency)}</Td>
                 <Td>
                   {order.userId ? (

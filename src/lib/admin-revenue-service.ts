@@ -35,6 +35,11 @@ export type AdminRevenueRail = {
   key: 'razorpay-credits' | 'mobile-iap' | 'marketplace' | 'resource-bundles';
   label: string;
   succeededCount: number;
+  /**
+   * Settled at no charge: a free recipe or asset unlock writes a $0 'paid'
+   * order. Kept out of `succeededCount` and gross, which count money.
+   */
+  freeCount: number;
   pendingCount: number;
   failedCount: number;
   /**
@@ -106,6 +111,7 @@ function summarizeRail(
   }>,
 ): AdminRevenueRail {
   let succeededCount = 0;
+  let freeCount = 0;
   let pendingCount = 0;
   let failedCount = 0;
   let creditsIssued = 0;
@@ -114,7 +120,9 @@ function summarizeRail(
 
   for (const row of rows) {
     const outcome = classify(row.status);
-    if (outcome === 'succeeded') {
+    if (outcome === 'succeeded' && row.amountSubunits === 0) {
+      freeCount += 1;
+    } else if (outcome === 'succeeded') {
       succeededCount += 1;
 
       // Only settled money counts toward gross; pending intents routinely never
@@ -141,6 +149,7 @@ function summarizeRail(
     key,
     label,
     succeededCount,
+    freeCount,
     pendingCount,
     failedCount,
     // Sorted largest-first so the dominant currency leads the card.

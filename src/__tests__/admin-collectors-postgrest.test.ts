@@ -219,11 +219,20 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
     const second = await collectAdminContentSnapshot(admin, { now, limit: 2, postOffset: 2 });
     expect(first.pageTotals.posts).toBe(3);
     expect([...first.posts, ...second.posts].map(row => row.id)).toEqual([...postIds].sort().reverse());
-    expect(first.totals.hiddenPosts).toBe(1);
-    expect((await collectAdminContentSnapshot(admin, { now, postFilter: 'hidden' })).posts.map(row => row.id)).toEqual([postIds[1]]);
+    // Private is the creator's choice; hidden is moderation's, and a private post is not hidden.
+    expect(first.totals.privatePosts).toBe(1);
+    expect(first.totals.hiddenPosts).toBe(0);
+    expect((await collectAdminContentSnapshot(admin, { now, postFilter: 'private' })).posts.map(row => row.id)).toEqual([postIds[1]]);
+    expect((await collectAdminContentSnapshot(admin, { now, postFilter: 'hidden' })).posts).toEqual([]);
     const recovered = await collectAdminContentSnapshot(admin, { now, limit: 2, postOffset: 999 });
     expect(recovered.pageOffsets.posts).toBe(0);
     expect(recovered.posts.map(row => row.id)).toEqual(first.posts.map(row => row.id));
+    const hiddenId = randomUUID(); postIds.push(hiddenId);
+    await db.query("insert into public.posts(id,user_id,visibility,category,source_kind,post_format,review_status,body,created_at) values($1,$2,'public','image','magicbooklet','text','hidden','Local collector fixture',$3)", [hiddenId, owner, now]);
+    const hidden = await collectAdminContentSnapshot(admin, { now, postFilter: 'hidden' });
+    expect(hidden.posts.map(row => row.id)).toEqual([hiddenId]);
+    expect(hidden.totals.hiddenPosts).toBe(1);
+    expect(hidden.totals.privatePosts).toBe(1);
   });
 
   it('filters pending/processing generations and excludes older failures from daily counters', async () => {

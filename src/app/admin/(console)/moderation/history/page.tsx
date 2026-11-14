@@ -18,6 +18,7 @@ import {
   Pagination,
   StatusBadge,
   Td,
+  adminPostHref,
   formatTimestamp,
   parseOffset,
   shortId,
@@ -124,7 +125,7 @@ export default async function AdminModerationHistoryPage({
                   </Td>
                   <Td className="border-b-0"><StatusBadge status={report.reason} tone="warning" /></Td>
                   <Td className="border-b-0" truncateWidth={220}>
-                    <Link href={`/post/${report.postId}`} target="_blank" rel="noreferrer" className="underline">
+                    <Link href={adminPostHref(report.postId)} target="_blank" rel="noreferrer" className="underline">
                       {report.post?.title || 'Untitled post'}
                     </Link>
                   </Td>

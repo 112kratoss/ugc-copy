@@ -66,7 +66,7 @@ export default async function AdminOverviewPage() {
         <StatCard
           label="Paid orders 30d"
           value={counters.paidOrders30d}
-          hint="Razorpay credit purchases"
+          hint="Web (Razorpay) only · app store sales are under Revenue"
           icon={BadgeIndianRupee}
         />
         <Link

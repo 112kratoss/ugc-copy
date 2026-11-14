@@ -7,12 +7,57 @@ const USER_ID = '3f1b7c2e-6d4a-4f8b-9c1d-2a5e7b9f0c31';
 
 type TableRows = Record<string, Array<Record<string, unknown>> | Record<string, unknown> | null>;
 
+type HistoryRow = {
+  entry_id: string;
+  kind: string;
+  amount: number;
+  occurred_at: string;
+  title: string;
+  detail: string | null;
+};
+
+type RpcCall = { fn: string; args: Record<string, unknown> };
+
+function entryUuid(n: number): string {
+  return `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+}
+
+/** Newest first, one minute apart, as the database orders the history. */
+function historyRow(n: number, entryId: string, kind: string, amount: number): HistoryRow {
+  return {
+    entry_id: entryId,
+    kind,
+    amount,
+    occurred_at: new Date(Date.UTC(2026, 10, 1) - n * 60_000).toISOString(),
+    title: `${kind} ${n}`,
+    detail: null,
+  };
+}
+
+/**
+ * Stands in for `list_credit_history`: one keyset page of `history` after the
+ * cursor's entry, at most `p_limit` rows.
+ */
+function creditHistoryRpc(history: HistoryRow[], calls: RpcCall[] = []) {
+  return (fn: string, args: Record<string, unknown> = {}) => {
+    calls.push({ fn, args });
+    if (fn !== 'list_credit_history') return Promise.resolve({ data: null, error: null });
+    const before = args.p_before_id as string | null;
+    const start = before ? history.findIndex((row) => row.entry_id === before) + 1 : 0;
+    return Promise.resolve({ data: history.slice(start, start + Number(args.p_limit)), error: null });
+  };
+}
+
 /**
  * Minimal PostgREST stand-in. `filterLog` records the filters applied per table
  * so the tests can assert the `.is('mobile_product_id', null)` guard that keeps
  * a mobile purchase from appearing twice in a user's history.
  */
-function createClient(rows: TableRows, filterLog: Record<string, string[]> = {}) {
+function createClient(
+  rows: TableRows,
+  filterLog: Record<string, string[]> = {},
+  rpc: (fn: string, args?: Record<string, unknown>) => Promise<unknown> = creditHistoryRpc([]),
+) {
   return {
     from(table: string) {
       filterLog[table] ??= [];
@@ -38,12 +83,7 @@ function createClient(rows: TableRows, filterLog: Record<string, string[]> = {})
       });
       return builder;
     },
-    // Lifetime spend is a database aggregate, not a row scan.
-    rpc: (fn: string) => Promise.resolve(
-      fn === 'get_user_ai_usage_cost_total'
-        ? { data: { total_cost: 4242, event_count: 12, refunded_count: 1 }, error: null }
-        : { data: null, error: null },
-    ),
+    rpc,
     auth: { admin: { getUserById: () => Promise.resolve({ data: { user: null } }) } },
   } as unknown as SupabaseClient;
 }
@@ -141,21 +181,83 @@ describe('admin user purchase history', () => {
     });
   });
 
-  it('takes lifetime spend from the database aggregate, not a capped row scan', async () => {
-    // Summing rows in JS silently truncated past the 10,000-row cap, so the
-    // figure an operator uses to judge a refund could simply be wrong.
-    const client = createClient({
-      profiles: [PROFILE],
-      transactions: [],
-      mobile_store_transactions: [],
-      credit_grants: [],
-      creator_resource_wallets: null,
-      generations: [],
-    });
+  it('counts every spend in the credit history, generations included, net of refunds', async () => {
+    // It used to read only ai_usage_events, the prompt enhancer's charges: an
+    // account with 1,862 credits of generations showed "24 spent".
+    const guestId = '7a2c9e41-0b3d-4c5e-8f6a-1b2c3d4e5f60';
+    const calls: RpcCall[] = [];
+    const client = createClient(
+      {
+        profiles: [PROFILE, { id: guestId }],
+        transactions: [],
+        mobile_store_transactions: [],
+        credit_grants: [],
+        creator_resource_wallets: null,
+        generations: [],
+      },
+      {},
+      creditHistoryRpc([
+        historyRow(1, `generation:${entryUuid(1)}:refund`, 'refund', 76),
+        historyRow(2, `generation:${entryUuid(1)}`, 'spend', -76),
+        historyRow(3, `generation:${entryUuid(2)}`, 'spend', -140),
+        historyRow(4, `ai-usage:${entryUuid(3)}`, 'spend', -4),
+        historyRow(5, `purchase:${entryUuid(4)}`, 'purchase', 500),
+        historyRow(6, `grant:${entryUuid(5)}`, 'grant', 25),
+        historyRow(7, `admin-adjustment:${entryUuid(6)}`, 'adjustment', -10),
+      ], calls),
+    );
 
     const detail = await getAdminUserDetail(client, USER_ID);
 
-    expect(detail?.spend.lifetimeCreditsSpent).toBe(4242);
+    expect(detail?.spend.lifetimeCreditsSpent).toBe(144);
+    expect(detail?.spend.lifetimeCreditsSpentComplete).toBe(true);
+    // The account and the guests linked to it, as the person's own Credit history reads it.
+    const historyCalls = calls.filter((call) => call.fn === 'list_credit_history');
+    expect(historyCalls[0].args.p_user_ids).toEqual([USER_ID, guestId]);
+  });
+
+  it('stops at a bounded number of history pages and says the figure is a lower bound', async () => {
+    const history = Array.from({ length: 1_050 }, (_, index) => (
+      historyRow(index + 1, `generation:${entryUuid(index + 1)}`, 'spend', -1)
+    ));
+    const client = createClient(
+      {
+        profiles: [PROFILE],
+        transactions: [],
+        mobile_store_transactions: [],
+        credit_grants: [],
+        creator_resource_wallets: null,
+        generations: [],
+      },
+      {},
+      creditHistoryRpc(history),
+    );
+
+    const detail = await getAdminUserDetail(client, USER_ID);
+
+    expect(detail?.spend.lifetimeCreditsSpent).toBe(1_000);
+    expect(detail?.spend.lifetimeCreditsSpentComplete).toBe(false);
+  });
+
+  it('fails the page rather than show a spend figure it could not read', async () => {
+    const client = createClient(
+      {
+        profiles: [PROFILE],
+        transactions: [],
+        mobile_store_transactions: [],
+        credit_grants: [],
+        creator_resource_wallets: null,
+        generations: [],
+      },
+      {},
+      (fn: string) => Promise.resolve(
+        fn === 'list_credit_history'
+          ? { data: null, error: { message: 'statement timeout' } }
+          : { data: null, error: null },
+      ),
+    );
+
+    await expect(getAdminUserDetail(client, USER_ID)).rejects.toThrow(/list_credit_history/);
   });
 
   it('rejects a non-UUID user id rather than issuing a broad query', async () => {

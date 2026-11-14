@@ -6,7 +6,7 @@ import { Surface, Text } from '@/components/DesignSystem';
 import { collectAdminModerationQueue } from '@/lib/admin-moderation-service';
 import { createServiceClient } from '@/lib/server-helpers';
 
-import { EmptyState, PageHeader, StatCard, StatusBadge, formatRelative, formatTimestamp, shortId } from '../AdminUi';
+import { EmptyState, PageHeader, StatCard, StatusBadge, adminPostHref, formatRelative, formatTimestamp, shortId } from '../AdminUi';
 import { PostReportActions, SubjectReportActions } from './ModerationActions';
 
 export const dynamic = 'force-dynamic';
@@ -89,7 +89,7 @@ export default async function AdminModerationPage() {
                   </div>
                   {report.post ? (
                     <Link
-                      href={`/post/${report.postId}`}
+                      href={adminPostHref(report.postId)}
                       target="_blank"
                       rel="noreferrer"
                       className="ui-button ui-button-secondary ui-focus-ring shrink-0"
@@ -167,7 +167,7 @@ export default async function AdminModerationPage() {
                       </Text>
                       <StatusBadge status={report.comment.status} />
                       <Link
-                        href={`/post/${report.comment.postId}`}
+                        href={adminPostHref(report.comment.postId)}
                         target="_blank"
                         rel="noreferrer"
                         className="text-xs underline"
