@@ -36,6 +36,14 @@ type ProfileSummary = {
   credits: number | null;
 };
 
+/**
+ * The profile of a session kept while Supabase Auth could not answer: nothing read, and no read
+ * coming until a check succeeds. Not null, which means a read is on its way and holds the
+ * balance's place: the pill says "Credits" here, as it did before that place was held (review of
+ * #811: a blank pill stayed until the tab came back).
+ */
+const UNREAD_PROFILE: ProfileSummary = { display_name: null, avatar_url: null, credits: null };
+
 /** Sign-out waits this long at most for the creators' storage to clear. */
 const SIGN_OUT_CLEAR_WAIT_MS = 3000;
 /** A session check Supabase could not answer is asked once more after this. */
@@ -232,7 +240,7 @@ export default function AppShellAccount({
         if (acceptedUserId !== nextSession.user.id) {
           acceptedAccessToken = null;
           acceptedUserId = null;
-          setProfile(null);
+          setProfile(UNREAD_PROFILE);
         }
         publishAppShellAuthentication(true);
         // The account the header keeps here signed in on this browser, as a verified one did
@@ -564,7 +572,8 @@ export default function AppShellAccount({
         ) : profile ? (
           <span>Credits</span>
         ) : (
-          // The profile not read yet: the balance's place, not a word that a number then replaces.
+          // The profile's read on its way: the balance's place, not a word that a number then
+          // replaces. A read that is not coming leaves UNREAD_PROFILE, which says "Credits".
           <AppShellCreditsPendingLabel />
         )}
       </Link>

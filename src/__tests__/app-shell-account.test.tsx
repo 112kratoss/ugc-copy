@@ -240,6 +240,10 @@ describe('AppShellAccount', () => {
   // The slot keeps the signed-in shape until the session check answers, and the balance's place
   // until the profile does.
   describe('while the account loads', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it('holds the signed-in shape, never "Sign in", until the session check answers', async () => {
       mocks.onAuthStateChange.mockImplementation((callback) => {
         appShellAuthCallback = callback;
@@ -279,6 +283,26 @@ describe('AppShellAccount', () => {
 
       await waitFor(() => expect(screen.getByRole('link', { name: 'Credits' })).toHaveTextContent(/^Credits$/));
       expect(document.querySelector('.app-shell-credits-pending')).toBeNull();
+    });
+
+    // Review of #811: the session kept while Supabase Auth could not answer has no profile read
+    // coming, so a held place would stay blank until the tab came back.
+    it('says "Credits", not a blank place, while Supabase Auth cannot answer', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout'] });
+      mocks.getUser.mockResolvedValue({ data: { user: null }, error: { ...unreachable, name: 'AuthRetryableFetchError', status: 503 } });
+      render(<AppShellAccount />);
+
+      expect(await screen.findByRole('button', { name: 'Open account menu for creator' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Credits' })).toHaveTextContent(/^Credits$/);
+      expect(document.querySelector('.app-shell-credits-pending')).toBeNull();
+
+      // Nor after the second check fails too.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(mocks.getUser).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('link', { name: 'Credits' })).toHaveTextContent(/^Credits$/);
+      expect(mocks.select).not.toHaveBeenCalled();
     });
   });
 
