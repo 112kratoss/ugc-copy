@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { View } from 'react-native';
 import {
   Easing,
@@ -72,7 +72,8 @@ export function useSearchEntrance({
     // A screen left another way (the back swipe) never pops again later.
     if (popTimer.current) clearTimeout(popTimer.current);
   }, []);
-  const exit = (pop: () => void) => {
+  // One function for the screen's life, so callers can depend on it.
+  const exit = useCallback((pop: () => void) => {
     if (!moving) {
       pop();
       return;
@@ -81,7 +82,7 @@ export function useSearchEntrance({
     setTouchable(false);
     progress.set(withTiming(0, { duration: SEARCH_ENTRANCE.exitMs, easing: Easing.out(Easing.cubic) }));
     popTimer.current = setTimeout(pop, SEARCH_ENTRANCE.popAfterMs);
-  };
+  }, [moving, progress]);
 
   // The capsule: from the control's frame to the field's own.
   const capsuleStyle = useAnimatedStyle(() => {

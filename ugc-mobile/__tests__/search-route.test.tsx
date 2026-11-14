@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
     listeners,
     params: { value: {} as Record<string, string | string[]> },
     canGoBack: { value: true },
+    focused: { value: true },
     router: { back: vi.fn(), replace: vi.fn(), push: vi.fn() },
     overlayProps: { value: null as null | Record<string, unknown> },
   };
@@ -31,6 +32,7 @@ vi.mock('expo-router', () => ({
   },
   useLocalSearchParams: () => mocks.params.value,
   useNavigation: () => ({
+    isFocused: () => mocks.focused.value,
     addListener: (_name: string, listener: (event: { data?: { closing?: boolean } }) => void) => {
       mocks.listeners.push(listener);
       return () => {
@@ -116,6 +118,22 @@ describe('the search route', () => {
     expect(mocks.router.replace).toHaveBeenCalledWith('/');
     expect(mocks.router.back).toHaveBeenCalledTimes(1);
     await act(async () => alone.unmount());
+  });
+
+  it('never pops once the screen is leaving another way, nor when it is not in front (review of #812, 1)', async () => {
+    // Android's back key or the back swipe during Close's short wait before its pop.
+    const tree = await render();
+    await act(async () => { mocks.listeners.forEach((listener) => listener({})); });
+    await act(async () => { (props().onClose as () => void)(); });
+    expect(mocks.router.back).not.toHaveBeenCalled();
+    await act(async () => tree.unmount());
+
+    mocks.focused.value = false;
+    const covered = await render();
+    await act(async () => { (props().onClose as () => void)(); });
+    expect(mocks.router.back).not.toHaveBeenCalled();
+    mocks.focused.value = true;
+    await act(async () => covered.unmount());
   });
 
   it('holds the shared opener while it is up, so no entry under it pushes another', async () => {

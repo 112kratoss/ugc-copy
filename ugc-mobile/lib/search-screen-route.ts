@@ -35,6 +35,12 @@ export function searchScreenParams(params: { q?: string | string[]; type?: strin
 export const SEARCH_SCREEN_OPEN_GUARD_MS = 600;
 
 /**
+ * How long after a push the screen it mounts may grow out of the pressed
+ * control: a screen mounts within a frame or two of its push.
+ */
+export const SEARCH_SCREEN_ORIGIN_TTL_MS = 1000;
+
+/**
  * Home's magnifier, Explore's search bar and its compact button open search
  * through one opener (review of #795): a second tap while a push is on its way,
  * or while the screen is up, pushes nothing, so a quick double tap never
@@ -55,12 +61,14 @@ export function createSearchScreenOpener({ push, now }: { push: (href: typeof SE
       return true;
     },
     /**
-     * The control this opening was pressed from. Kept until the screen
-     * unmounts or another opening replaces it, so a render React repeats
-     * (Strict Mode) reads the same; a screen a link opens grows out of nothing.
+     * The control this opening was pressed from, for a screen mounting within
+     * SEARCH_SCREEN_ORIGIN_TTL_MS of the push. Not cleared by the read, so a
+     * render React repeats (Strict Mode) reads the same; a screen mounting
+     * later (a link's, or one whose push never mounted) grows out of nothing
+     * (review of #812, 3).
      */
     takeOrigin(): SearchEntranceOrigin | null {
-      return origin;
+      return now() - pushedAt <= SEARCH_SCREEN_ORIGIN_TTL_MS ? origin : null;
     },
     screenMounted() {
       mounted += 1;

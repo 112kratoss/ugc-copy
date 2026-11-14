@@ -7,7 +7,7 @@ import {
   searchFieldRestingFrame,
   usableSearchEntranceOrigin,
 } from '../lib/search-entrance';
-import { createSearchScreenOpener } from '../lib/search-screen-route';
+import { createSearchScreenOpener, SEARCH_SCREEN_ORIGIN_TTL_MS } from '../lib/search-screen-route';
 
 // Search opens out of the control that was pressed, as iOS's Search grows out
 // of the home screen's Search button (owner, 2026-11-14; lib/search-entrance.ts).
@@ -79,6 +79,17 @@ describe('the shared opener', () => {
     expect(opener.takeOrigin()).toBe(from);
     opener.screenUnmounted();
     // Nothing left for a screen a link opens next.
+    expect(opener.takeOrigin()).toBeNull();
+  });
+
+  it('gives a screen mounting long after the push no control: it grows out of nothing (review of #812, 3)', () => {
+    let clock = 0;
+    const opener = createSearchScreenOpener({ push: vi.fn(), now: () => clock });
+    const from = { x: 270, y: 72, width: 48, height: 48, kind: 'button' as const };
+    opener.open(from);
+    clock = SEARCH_SCREEN_ORIGIN_TTL_MS;
+    expect(opener.takeOrigin()).toBe(from);
+    clock = SEARCH_SCREEN_ORIGIN_TTL_MS + 1;
     expect(opener.takeOrigin()).toBeNull();
   });
 

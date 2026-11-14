@@ -638,6 +638,7 @@ export function ExploreSearchOverlay({
   });
   // The field has (nearly) arrived: taps are taken and the focus given from then.
   const entranceLanded = entrance.touchable;
+  const exitEntrance = entrance.exit;
   // Two posts across, one at the accessibility text sizes (search-post-grid.ts).
   const postColumns = searchPostGridColumns(fontScale);
   // Opened on a search (a link's `q`): its results from the first render, when
@@ -701,8 +702,22 @@ export function ExploreSearchOverlay({
   const [answer, setAnswer] = useState<SearchAnswer | null>(null);
   const [failure, setFailure] = useState<SearchFailure | null>(null);
   const [history, setHistory] = useState<string[]>([]);
-  // The kept search a removal just brought into the shown five: it eases in.
-  const [pulledInRecent, setPulledInRecent] = useState<string | null>(null);
+  // The kept searches a removal brought into the shown five: each eases in as
+  // it mounts. Read against the list last drawn (`drawnHistory`), so two quick
+  // removals each name their own arrival (review of #812, 4).
+  const [pulledInRecents, setPulledInRecents] = useState<readonly string[]>([]);
+  const drawnHistory = useRef<readonly string[]>([]);
+  useEffect(() => {
+    drawnHistory.current = history;
+  }, [history]);
+  const removeRecent = (item: string) => {
+    void forgetSearchQuery(item).then((next) => {
+      const before = shownRecentSearches(drawnHistory.current);
+      const arrived = shownRecentSearches(next).filter((entry) => !before.includes(entry));
+      if (arrived.length) setPulledInRecents((current) => [...current, ...arrived]);
+      setHistory(next);
+    });
+  };
   // Whether the recent searches have been read for this opening: until then
   // the start is not drawn, so the idle card never stands in for them.
   const [historyRead, setHistoryRead] = useState(false);
@@ -820,8 +835,8 @@ export function ExploreSearchOverlay({
     // Dismissing the keyboard alongside the field going back into its
     // control keeps close reading as one gesture instead of two staggered ones.
     Keyboard.dismiss();
-    entrance.exit(onClose);
-  }, [entrance, historyQuery, onClose, rememberQuery, resultCount, showingResults, shownResponse]);
+    exitEntrance(onClose);
+  }, [exitEntrance, historyQuery, onClose, rememberQuery, resultCount, showingResults, shownResponse]);
 
   // Leaving by the navigator (the back swipe, Android's back key) keeps the
   // search on screen as the close button does: read as it leaves.
@@ -1087,10 +1102,23 @@ export function ExploreSearchOverlay({
   // instead of replacing the idle card (filmed on the iPhone, 2026-11-14); a
   // slow answer gives way to the card after SEARCH_START_HOLD_MS.
   const [startHoldOver, setStartHoldOver] = useState(false);
+  // Each opening holds afresh and reads its recent searches afresh (review of
+  // #812, 5), adjusted while rendering as the opening's mode is.
+  const [holdFor, setHoldFor] = useState(visible);
+  if (holdFor !== visible) {
+    setHoldFor(visible);
+    if (visible) {
+      setStartHoldOver(false);
+      setHistoryRead(false);
+    }
+  }
   useEffect(() => {
+    if (!visible) return undefined;
     const timer = setTimeout(() => setStartHoldOver(true), SEARCH_START_HOLD_MS);
     return () => clearTimeout(timer);
-  }, []);
+  }, [visible]);
+  // A row eased in once does not ease in again when the start comes back.
+  if (body !== 'start' && pulledInRecents.length) setPulledInRecents([]);
   // The recent searches are this phone's own and show as soon as they are
   // read; only an empty start waits a moment for the ideas.
   const startHolding = !historyRead || (!history.length && !starterAnswer && !starterSettled && !startHoldOver);
@@ -1349,7 +1377,7 @@ export function ExploreSearchOverlay({
                   {shownRecentSearches(history).map((item) => (
                     // The newest five of the ten kept: one removed brings the
                     // next into the last place, easing in (SEARCH_RECENTS_SHOWN).
-                    <Reveal key={item} enabled={item === pulledInRecent} style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Reveal key={item} enabled={pulledInRecents.includes(item)} style={{ flexDirection: 'row', alignItems: 'center' }}>
                       <Pressable
                         accessibilityRole="button"
                         accessibilityLabel={searchRecentAgainLabel(item)}
@@ -1362,11 +1390,7 @@ export function ExploreSearchOverlay({
                       <Pressable
                         accessibilityRole="button"
                         accessibilityLabel={searchRecentRemoveLabel(item)}
-                        onPress={() => void forgetSearchQuery(item).then((next) => {
-                          const before = shownRecentSearches(history);
-                          setPulledInRecent(shownRecentSearches(next).find((entry) => !before.includes(entry)) ?? null);
-                          setHistory(next);
-                        })}
+                        onPress={() => removeRecent(item)}
                         style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}
                       >
                         <X size={appTheme.icon.sm} color={theme.colors.faint} />

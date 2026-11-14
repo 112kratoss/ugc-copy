@@ -16,21 +16,10 @@ import {
  * open: the app sends its token with every
  * request, so the answer is never kept at the edge, and the route's budget is
  * a minute's. A failure, the kill switch's empty answer, or a server from
- * before the route are all drawn as nothing: null.
- */
-export function useSearchStarter(
-  api: MagicbookletApiClient,
-  active: boolean,
-  /** Whose starter: the signed-in account's id, null for a visitor. Another one is asked again. */
-  viewerKey: string | null,
-): SearchStarterResponse | null {
-  return useSearchStarterState(api, active, viewerKey).answer;
-}
-
-/**
- * The same, with whether this opening's request has settled (answered,
- * failed or answered empty), so the screen can hold its start a moment for
- * the ideas instead of drawing the idle card they would then replace.
+ * before the route are all drawn as nothing: null. With it, whether this
+ * opening's request has settled (answered, failed or answered empty), so the
+ * screen can hold its start a moment for the ideas instead of drawing the
+ * idle card they would then replace.
  */
 export function useSearchStarterState(
   api: MagicbookletApiClient,

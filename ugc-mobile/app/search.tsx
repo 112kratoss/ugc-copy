@@ -1,4 +1,4 @@
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, useNavigation } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { useWindowDimensions } from 'react-native';
 
@@ -33,7 +33,15 @@ export default function SearchRoute() {
   }, []);
 
   // One pop per press: a second press during the pop would step back a tab.
+  // And none once the screen is leaving another way: Close pops 110 ms after
+  // the press (lib/search-entrance.ts), and Android's back key or the back
+  // swipe in that window would otherwise be followed by a second pop
+  // (review of #812, 1).
   const closing = useRef(false);
+  const navigation = useNavigation();
+  useEffect(() => navigation.addListener('beforeRemove' as never, () => {
+    closing.current = true;
+  }), [navigation]);
   return (
     <ExploreSearchOverlay
       api={api}
@@ -42,7 +50,7 @@ export default function SearchRoute() {
       initialType={params.type}
       entranceFrom={origin}
       onClose={() => {
-        if (closing.current) return;
+        if (closing.current || navigation.isFocused?.() === false) return;
         closing.current = true;
         // Opened from a link with nothing under it: Back lands on Home.
         if (router.canGoBack()) router.back();

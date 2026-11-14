@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExploreSearchOverlay } from '../components/explore-search-overlay';
 import { ApiError, type MagicbookletApiClient } from '../lib/api-client';
 import { SEARCH_ENTRANCE } from '../lib/search-entrance';
+import { Reveal } from '../components/reveal';
 import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
 import {
   SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS,
@@ -577,6 +578,32 @@ describe('ExploreSearchOverlay search', () => {
       expect(shown()).toEqual(['one', 'two', 'three', 'four', 'five']);
       await press(pressableLabelled(tree, searchRecentRemoveLabel('two')));
       expect(shown()).toEqual(['one', 'three', 'four', 'five', 'six']);
+      mocks.readSearchHistory.mockResolvedValue([]);
+      mocks.forgetSearchQuery.mockImplementation(async () => []);
+      await act(async () => tree.unmount());
+    });
+
+    it('eases in every search two quick removals bring up, and none again when the start comes back (review of #812, 4)', async () => {
+      const kept = ['one', 'two', 'three', 'four', 'five', 'six', 'seven'];
+      mocks.readSearchHistory.mockResolvedValue([...kept]);
+      mocks.forgetSearchQuery.mockImplementation(async (query: string) => {
+        kept.splice(kept.indexOf(query), 1);
+        return [...kept];
+      });
+      const tree = await render({ visible: true, onClose: vi.fn() });
+      await advance(200);
+      const easing = () => tree.root.findAllByType(Reveal)
+        .filter((node) => node.props.enabled)
+        .map((node) => String(node.props.children[0].props.accessibilityLabel).replace('Search again for ', ''));
+      expect(easing()).toEqual([]);
+      await act(async () => {
+        pressableLabelled(tree, searchRecentRemoveLabel('two')).props.onPress();
+        pressableLabelled(tree, searchRecentRemoveLabel('three')).props.onPress();
+      });
+      expect(easing().sort()).toEqual(['seven', 'six']);
+      await typeOnly(tree, 'ab');
+      await typeOnly(tree, '');
+      expect(easing()).toEqual([]);
       mocks.readSearchHistory.mockResolvedValue([]);
       mocks.forgetSearchQuery.mockImplementation(async () => []);
       await act(async () => tree.unmount());
