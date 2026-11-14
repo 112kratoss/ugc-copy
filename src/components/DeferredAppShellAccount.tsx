@@ -45,7 +45,10 @@ export default function DeferredAppShellAccount({
     // this browser's cookie before the page draws, shows one (app-shell-account-restore.ts). A
     // signed-in refresh drew "Sign in" here, then the account, and the bar moved (2026-11-14).
     // Once mounted the slot draws one shape with no mark, so a sign-out later in the visit draws
-    // "Sign in" whatever the root element says.
+    // "Sign in" whatever the root element says. The cost, accepted: a cookie with no live session
+    // behind it (signed out everywhere, a refresh token gone) draws the signed-in shape until the
+    // account's check refuses it, then "Sign in", one move where every live session's refresh
+    // made three (review of #811).
     return (
       <>
         <AppShellAccountFallback pathname={pathname} className="app-shell-when-signed-out" />
