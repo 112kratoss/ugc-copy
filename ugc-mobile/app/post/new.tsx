@@ -211,7 +211,7 @@ import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-fil
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceItemType, SourceToolOption } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
-import { shareSheetContent } from '@/lib/share-sheet-content';
+import { shareLinkContent } from '@/lib/share-sheet-content';
 import { haptic } from '@/lib/haptics';
 
 // The dimmed strip kept between the status bar and a resource sheet that the keyboard has shortened.
@@ -3061,7 +3061,7 @@ function NewPostComposer() {
             try {
               const title = (context?.submittedDraft ?? draft).title.trim() || 'My creation';
               const url = buildShareUrl(env.siteUrl, `/showcase/${targetPostId}`, 'my-creations');
-              const result = await Share.share(shareSheetContent({ title, text: title, url }, Platform.OS));
+              const result = await Share.share(shareLinkContent({ title, url }, Platform.OS));
               if (result.action === Share.sharedAction) {
                 await api
                   .shareShowcasePost(targetPostId, { sourceSurface: 'my-creations' })

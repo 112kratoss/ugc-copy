@@ -56,7 +56,7 @@ import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
-import { shareSheetContent } from '@/lib/share-sheet-content';
+import { shareLinkContent } from '@/lib/share-sheet-content';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
 import { createShowcaseFeedViewerQueryKey, createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { CreatorProfileSkeleton, SkeletonBone } from '@/components/skeleton';
@@ -257,7 +257,7 @@ export function CreatorProfileScreen({
       `/creators/${encodeURIComponent(data.profile.username)}`,
       'creator-profile'
     );
-    const result = await Share.share(shareSheetContent(
+    const result = await Share.share(shareLinkContent(
       { title: data.profile.displayName, text: `${data.profile.displayName} on Magicbooklet`, url },
       Platform.OS
     ));

@@ -83,7 +83,7 @@ import {
 import { env } from '@/lib/env';
 import { isSignedMediaUrlExpiring, preserveStableTemplateRunMedia } from '@/lib/template-run-stable-media';
 import { buildShareUrl } from '@/lib/viewer-actions';
-import { shareSheetContent } from '@/lib/share-sheet-content';
+import { shareLinkContent } from '@/lib/share-sheet-content';
 import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme, mediaColors, themes } from '@/lib/theme';
@@ -1464,7 +1464,7 @@ function ResultStage({
     const title = run.templateTitle;
     const url = buildShareUrl(env.siteUrl, `/showcase/${encodeURIComponent(linkedPost.id)}`, 'my-creations');
     // A dismissed share sheet is not an error worth surfacing.
-    const shared = await Share.share(shareSheetContent({ title, text: title, url }, Platform.OS)).catch(() => null);
+    const shared = await Share.share(shareLinkContent({ title, url }, Platform.OS)).catch(() => null);
     // Android's share intent cannot report a dismissal (it answers "shared" either way), so only iOS counts a share.
     if (Platform.OS !== 'ios' || shared?.action !== Share.sharedAction) return;
     await api.shareShowcasePost(linkedPost.id, { sourceSurface: 'my-creations' }).catch(() => null);

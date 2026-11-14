@@ -167,7 +167,7 @@ export function getViewerShareIntent(
     const url = buildShareUrl(siteUrl, item.sharePath, surface ?? getViewerShareSourceSurface(item.source));
     return {
       kind: 'share',
-      content: { title: item.title, text: item.title, url },
+      content: { title: item.title, url },
     };
   }
 

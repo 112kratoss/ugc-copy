@@ -27,7 +27,7 @@ import {
   readReferralProgram,
   saveTypedInviteCode,
 } from '@/lib/referral-attribution';
-import { shareSheetContent } from '@/lib/share-sheet-content';
+import { shareMessageContent } from '@/lib/share-sheet-content';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ReferralReward, ReferralStats } from '@/lib/types';
@@ -64,8 +64,9 @@ export default function InviteScreen() {
   const inviterBonus = bonusCreditsPhrase(program?.inviterPercent);
   const inviteeBonus = bonusCreditsPhrase(program?.inviteeFirstPurchasePercent);
   const inviterPercentLabel = formatReferralPercent(program?.inviterPercent);
-  // The words of an invite, without its link: the share sheet adds the link
-  // once (`shareSheetContent`), and Copy puts it on the line below.
+  // The words of an invite, without its link. Share and Copy both send them
+  // whole with the link once on the line below (`shareMessageContent`): the
+  // offer and the referral disclosure travel with the link.
   const inviteText = (code: string | null) => {
     const codeLine = inviteCodeShareLine(code);
     return `Try Magicbooklet and get ${inviteeBonus} on your first top-up.${codeLine ? ` ${codeLine}.` : ''} ${REFERRAL_DISCLOSURE}`;
@@ -85,10 +86,7 @@ export default function InviteScreen() {
     setNotice(null);
     try {
       const { url, code } = await ensureShareUrl();
-      const result = await Share.share(shareSheetContent(
-        { title: 'Invite & Earn with Magicbooklet', text: inviteText(code), url },
-        Platform.OS
-      ));
+      const result = await Share.share(shareMessageContent({ title: 'Invite & Earn with Magicbooklet', text: inviteText(code), url }));
       // Android's share intent cannot report a dismissal — it answers
       // "shared" either way — so only iOS may claim success. Confirming an
       // action that may not have happened is worse than staying quiet; on

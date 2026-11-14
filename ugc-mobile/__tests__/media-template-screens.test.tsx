@@ -446,8 +446,8 @@ describe('a result already posted (04-7)', () => {
 
     await press(button(tree, 'Share'));
     const link = 'https://magicbooklet.com/showcase/post-1?s=my-creations';
-    // iOS: the words as the message and the link once, as the url.
-    expect(nativeState.Share.share).toHaveBeenCalledWith({ title: 'Car reveal', message: 'Car reveal', url: link });
+    // iOS: the link alone, once.
+    expect(nativeState.Share.share).toHaveBeenCalledWith({ url: link });
     expect(authState.api.shareShowcasePost).toHaveBeenCalledWith('post-1', { sourceSurface: 'my-creations' });
   });
 
