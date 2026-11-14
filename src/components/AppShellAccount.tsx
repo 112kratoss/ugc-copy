@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
+import { rememberAppShellCreditDigits } from '@/lib/app-shell-account-restore';
 import { isSessionRefusal } from '@/lib/auth-error-copy';
 import { markBrowserSignOut } from '@/lib/browser-sign-out';
 import {
@@ -18,6 +19,12 @@ import { removeSupabaseAuthCookies } from '@/lib/supabase-auth-cookie';
 import { endWelcomePromise } from '@/lib/welcome-promise';
 
 import AppShellAccountFallback from './AppShellAccountFallback';
+import AppShellAccountPending, {
+  APP_SHELL_ACCOUNT_BUTTON_CLASS,
+  APP_SHELL_AVATAR_FRAME_CLASS,
+  APP_SHELL_CREDITS_PILL_CLASS,
+  AppShellCreditsPendingLabel,
+} from './AppShellAccountPending';
 import { OptimizedPreviewImage } from './OptimizedPreviewImage';
 import { publishAppShellAuthentication } from './app-shell-auth-state';
 import { APP_NAV_ITEMS, getActiveAppNavItem, type AppNavClickHandler } from './app-shell-nav';
@@ -102,7 +109,7 @@ function AccountAvatar({ session, profile, size = 'md' }: AccountAvatarProps) {
   return (
     <span
       aria-hidden="true"
-      className={`${className} relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-[rgba(255,122,89,0.35)] bg-[var(--ui-primary-soft)] font-extrabold text-[var(--ui-primary-strong)]`}
+      className={`${className} ${APP_SHELL_AVATAR_FRAME_CLASS}`}
     >
       {initials}
       {avatarUrl ? (
@@ -131,7 +138,9 @@ export default function AppShellAccount({
   onNavigate?: AppNavClickHandler;
 }) {
   const router = useRouter();
-  const [session, setSession] = useState<Session | null>(null);
+  // `undefined` until the first auth event answers: the slot keeps the signed-in shape meanwhile
+  // (AppShellAccountPending), since only a browser with a session cookie loads this component.
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [profile, setProfile] = useState<ProfileSummary | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
   // The menu goes with the page it opened over, as the shell's drawer does. A
@@ -409,6 +418,11 @@ export default function AppShellAccount({
     };
   }, [signedInUserId]);
 
+  // The next page's placeholder is drawn as wide as this balance (app-shell-account-restore.ts).
+  useEffect(() => {
+    if (typeof credits === 'number') rememberAppShellCreditDigits(credits);
+  }, [credits]);
+
   // Where both sign-outs leave this browser once its session is gone.
   const leaveSignedOut = () => {
     creditIdentityRef.current = null;
@@ -527,7 +541,7 @@ export default function AppShellAccount({
   };
 
   if (!session) {
-    return <AppShellAccountFallback />;
+    return session === undefined ? <AppShellAccountPending /> : <AppShellAccountFallback />;
   }
 
   return (
@@ -538,23 +552,27 @@ export default function AppShellAccount({
         href="/pricing"
         prefetch={false}
         aria-label={typeof credits === 'number' ? `${credits} credits` : 'Credits'}
-        className="ui-focus-ring inline-flex min-h-12 shrink-0 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/10 px-3 text-sm font-bold text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15"
+        className={`ui-focus-ring ${APP_SHELL_CREDITS_PILL_CLASS} transition hover:border-amber-300/35 hover:bg-amber-400/15`}
       >
         <Sparkles className="h-4 w-4" aria-hidden />
+        {/* Tabular, so the placeholder before it (one digit's width each) is as wide. */}
         {typeof credits === 'number' ? (
           <>
-            <span className="sm:hidden">{credits}</span>
-            <span className="hidden sm:inline">{credits} credits</span>
+            <span className="sm:hidden tabular-nums">{credits}</span>
+            <span className="hidden sm:inline tabular-nums">{credits} credits</span>
           </>
-        ) : (
+        ) : profile ? (
           <span>Credits</span>
+        ) : (
+          // The profile not read yet: the balance's place, not a word that a number then replaces.
+          <AppShellCreditsPendingLabel />
         )}
       </Link>
 
       <div className="relative" ref={accountMenuRef}>
         <button
           type="button"
-          className="ui-focus-ring flex min-h-12 items-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] p-1 pr-2 transition hover:bg-[var(--ui-surface-3)]"
+          className={`ui-focus-ring ${APP_SHELL_ACCOUNT_BUTTON_CLASS} transition hover:bg-[var(--ui-surface-3)]`}
           onClick={() => setAccountOpen((open) => !open)}
           aria-haspopup="menu"
           aria-expanded={accountOpen}

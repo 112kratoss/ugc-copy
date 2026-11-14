@@ -43,6 +43,7 @@
 @source "../components/AppShell.tsx";
 @source "../components/AppShellAccount.tsx";
 @source "../components/AppShellAccountFallback.tsx";
+@source "../components/AppShellAccountPending.tsx";
 @source "../components/AppShellClient.tsx";
 @source "../components/AppShellCreateMenu.tsx";
 @source "../components/AppShellSearch.tsx";
@@ -1442,6 +1443,33 @@ html[data-welcome-promise='spent'] .welcome-promise-only {
 
 html:not([data-welcome-promise='spent']) .welcome-promise-spent-only {
   display: none;
+}
+
+/* The top bar's account slot, drawn by the server both ways (DeferredAppShellAccount.tsx): the
+   root layout marks a browser that holds a session cookie on <html> before the page draws
+   (src/lib/app-shell-account-restore.ts), and only the shape that browser will keep shows. */
+html[data-auth-hint='signed-in'] .app-shell-when-signed-out {
+  display: none;
+}
+
+html:not([data-auth-hint='signed-in']) .app-shell-when-signed-in {
+  display: none;
+}
+
+/* The balance before it is read (AppShellAccountPending.tsx): a soft bar as wide as the last
+   balance this browser showed, its digits counted into --app-shell-credits-digits by the same
+   script. 1ch is a digit's width, the balance's digits drawn tabular. */
+.app-shell-credits-pending {
+  border-radius: 999px;
+  background: rgba(255, 236, 190, 0.1);
+  color: transparent;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.app-shell-credits-pending-digits {
+  display: inline-block;
+  width: calc(var(--app-shell-credits-digits, 3) * 1ch);
 }
 
 .app-shell-content {

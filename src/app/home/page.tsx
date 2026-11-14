@@ -132,7 +132,7 @@ export default async function HomeDashboardPage({ searchParams }: HomeDashboardP
         </Suspense>
       )}
       feed={(
-        <Suspense fallback={<HomeFeedSkeleton />}>
+        <Suspense fallback={<HomeFeedSkeleton activeChipId={chip.id} />}>
           <HomeFeedSection data={feedPromise} initialChipId={chip.id} />
         </Suspense>
       )}

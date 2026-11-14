@@ -20,7 +20,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from 'react';
 
 import {
@@ -32,6 +31,7 @@ import {
   getCreateMenuHref,
   getReselectableTabId,
   hidesBottomNav,
+  isHomeRoutePathname,
   isMinimalAppChromePath,
   isNotFoundRouteSegment,
   type AppNavItem,
@@ -133,10 +133,6 @@ function drawerPlace(id: DrawerPlace['id'], pathname: string): DrawerPlace | nul
   }
   return APP_NAV_ITEMS.find((item) => item.id === id) ?? null;
 }
-
-const subscribeToHydration = () => () => undefined;
-const getHydratedSnapshot = () => true;
-const getServerHydratedSnapshot = () => false;
 
 function prefersReducedMotion() {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
@@ -332,20 +328,11 @@ const AppShellFrame = memo(function AppShellFrame({
   children: React.ReactNode;
 }) {
   const routePathname = usePathname() || '/';
-  const hasMounted = useSyncExternalStore(
-    subscribeToHydration,
-    getHydratedSnapshot,
-    getServerHydratedSnapshot
-  );
-  // The statically rendered root route can be evaluated with an internal Next
-  // pathname in production, and signed-in `/` is middleware-rewritten to
-  // `/home` (src/proxy.ts), so the server sees `/home` while the hydrated
-  // browser sees `/`. Keep both neutral for the first client render so the
-  // markup matches the server shell, then activate Home.
-  const isHomeBeforeMount = (routePathname === '/' || routePathname === '/home') && !hasMounted;
   // The not-found page keeps the neutral shell it was prerendered with, before
-  // and after hydration, at every address (see AppShellClient below).
-  const pathname = isNotFoundRoute || isHomeBeforeMount ? '' : routePathname;
+  // and after hydration, at every address (see AppShellClient below). Home is
+  // `/` under every pathname the server draws it with (isHomeRoutePathname), so
+  // the server's shell and the browser's agree from the first paint.
+  const pathname = isNotFoundRoute ? '' : isHomeRoutePathname(routePathname) ? '/' : routePathname;
   const [mobileOpen, setMobileOpen] = useState(false);
   // The drawer goes with the page it opened over. A link in it closes it as
   // it navigates, but a page with unsaved work holds the click before that

@@ -6,6 +6,7 @@ import { SpeedInsights } from "@vercel/speed-insights/next";
 
 import { siteConfig } from "@/lib/seo";
 import { TYPED_BEFORE_HYDRATION_CAPTURE } from "@/lib/typed-before-hydration";
+import { buildAppShellAccountRestore } from "@/lib/app-shell-account-restore";
 import { APP_SHELL_SIDEBAR_RESTORE } from "@/lib/app-shell-sidebar-restore";
 import { WELCOME_PROMISE_RESTORE } from "@/lib/welcome-promise-restore";
 
@@ -93,6 +94,7 @@ export default function RootLayout({
     process.env.VERCEL_DEPLOYMENT_ID?.trim() ||
     process.env.VERCEL_URL?.trim() ||
     'dev';
+  const appShellAccountRestore = buildAppShellAccountRestore();
 
   return (
     <html lang="en" suppressHydrationWarning data-build-id={buildId}>
@@ -110,6 +112,8 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: APP_SHELL_SIDEBAR_RESTORE }} />
         {/* No promise of the welcome credits where an account has signed in on this browser, from the first paint (`src/lib/welcome-promise-restore.ts`). */}
         <script dangerouslySetInnerHTML={{ __html: WELCOME_PROMISE_RESTORE }} />
+        {/* A browser that holds a session, and the width of its last balance, marked on the root element so the top bar's account slot draws its signed-in shape from the first paint (`src/lib/app-shell-account-restore.ts`). */}
+        <script dangerouslySetInnerHTML={{ __html: appShellAccountRestore }} />
         <a
           href="#main-content"
           className="ui-focus-ring fixed left-4 top-3 z-[120] -translate-y-24 rounded-full bg-[var(--ui-primary)] px-4 py-3 text-sm font-bold text-[var(--ui-primary-on)] transition focus:translate-y-0"

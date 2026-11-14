@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import { useEffect } from 'react';
 
 import AppShellAccountFallback from './AppShellAccountFallback';
+import AppShellAccountPending from './AppShellAccountPending';
 import { publishAppShellAuthentication } from './app-shell-auth-state';
 import type { AppNavClickHandler } from './app-shell-nav';
 import {
@@ -13,7 +14,8 @@ import {
 
 const AppShellAccount = dynamic(() => import('./AppShellAccount'), {
   ssr: false,
-  loading: () => <AppShellAccountFallback />,
+  // Only a browser with a session cookie loads the account: it waits in the signed-in shape.
+  loading: () => <AppShellAccountPending />,
 });
 
 /**
@@ -36,6 +38,21 @@ export default function DeferredAppShellAccount({
       publishAppShellAuthentication(false);
     }
   }, [hasHydratedCookieHint, shouldLoadAccount]);
+
+  if (!hasHydratedCookieHint) {
+    // The server's HTML, and the browser's first render that adopts it. No cookie can be read on
+    // a page drawn ahead of time, so both shapes are drawn and the root element's mark, set from
+    // this browser's cookie before the page draws, shows one (app-shell-account-restore.ts). A
+    // signed-in refresh drew "Sign in" here, then the account, and the bar moved (2026-11-14).
+    // Once mounted the slot draws one shape with no mark, so a sign-out later in the visit draws
+    // "Sign in" whatever the root element says.
+    return (
+      <>
+        <AppShellAccountFallback pathname={pathname} className="app-shell-when-signed-out" />
+        <AppShellAccountPending className="app-shell-when-signed-in" />
+      </>
+    );
+  }
 
   return shouldLoadAccount ? (
     <AppShellAccount pathname={pathname} onNavigate={onNavigate} />

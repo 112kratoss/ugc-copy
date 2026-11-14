@@ -298,6 +298,23 @@ export function isNotFoundRouteSegment(segment: string | null) {
   return segment === '/_not-found' || segment === '_not-found';
 }
 
+/**
+ * The pathnames Home is drawn under, away from the not-found route: `/` in the
+ * browser; `/home` on the server for a signed-in visit (the rewrite in
+ * src/proxy.ts); `/index` where a production build prerenders the static `/`
+ * (the live page's HTML wrote `returnUrl=%2Findex` on 2026-11-14); and
+ * `/_not-found`, an internal pathname the static `/` was once evaluated with.
+ * The shell draws all of them as `/`, on the server and in the browser alike,
+ * so its first paint already reads Home. Drawn neutral until it mounted, the
+ * title read "Workspace", then "Home" with its line beneath, and the search
+ * field beside it moved 117px (owner's screen recording, 2026-11-14).
+ */
+const HOME_ROUTE_PATHNAMES = new Set(['/', '/home', '/index', '/_not-found']);
+
+export function isHomeRoutePathname(pathname: string) {
+  return HOME_ROUTE_PATHNAMES.has(pathname);
+}
+
 export interface CreateMenuItem {
   id: 'create' | 'post';
   label: string;
