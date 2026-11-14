@@ -695,7 +695,7 @@ function ownerPostBadge(item: OwnerPostListItem) {
 function generationStatusLabel(status: string | null | undefined) {
   if (status === 'succeeded') return 'Ready';
   if (status === 'processing') return 'Rendering';
-  if (status === 'waiting') return 'Queued';
+  if (status === 'waiting' || status === 'pending') return 'Queued';
   if (status === 'failed') return 'Failed';
   return status ? capitalize(status) : 'Draft';
 }

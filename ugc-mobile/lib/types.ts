@@ -449,6 +449,8 @@ export interface GenerationStartResponse {
   predictionId: string;
   generationId: string | null;
   status: string;
+  /** The start is waiting for a place at the provider; the server sends it when its turn comes. */
+  queued?: boolean;
   remainingCredits?: number;
   cost?: number;
 }
@@ -667,6 +669,9 @@ export interface GenerationStatusResponse {
   error?: string | null;
   timing?: unknown;
   retryAfterMs?: number | null;
+  /** A run the server has not sent to the provider yet (`waiting`), and its place among those. */
+  queued?: boolean;
+  queuePosition?: number | null;
 }
 
 export interface GenerationElementDescriptor {

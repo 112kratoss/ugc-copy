@@ -8,8 +8,9 @@
  * decide whether to do something else while waiting for the task to complete,
  * restart the task at a different time, or abandon the task."
  *
- * The provider reports no progress, only `waiting` → `processing`. What can
- * always be told truthfully is *which* of those two states the run is in, and
+ * The provider reports no progress, only `waiting` → `processing`, and before
+ * either the server may hold a start in its own queue. What can always be told
+ * truthfully is *which* of those states the run is in, and
  * how long it has been in them — which is the information the rule is actually
  * asking for. HIG *Generative AI* asks the same thing in its own words:
  * "instead of 'Processing…', say 'Finding substitutions for ingredients'."
@@ -24,19 +25,41 @@
  * progress. Without them it shows the phase and the time alone.
  */
 
-export type GenerationWaitPhase = 'queued' | 'running';
+/**
+ * `in_line` is a run the server has not sent to the model yet: more starts
+ * arrived than the provider takes at once, and this one is waiting its turn in
+ * the server's queue (`queued: true` on a `waiting` status). `queued` is a run
+ * the model has and has not begun. They are different waits, with different
+ * things to say: only the first has a place in a line.
+ */
+export type GenerationWaitPhase = 'in_line' | 'queued' | 'running';
 
-export function generationWaitPhase(status: string | null | undefined): GenerationWaitPhase {
-  return status === 'processing' ? 'running' : 'queued';
+export function generationWaitPhase(status: string | null | undefined, queued?: unknown): GenerationWaitPhase {
+  if (status === 'processing') return 'running';
+  return status === 'waiting' && queued === true ? 'in_line' : 'queued';
+}
+
+/**
+ * How many starts are ahead of a run in the server's queue: its place less
+ * itself. Null when the server did not say, which reads as no count, never as
+ * a wrong one.
+ */
+export function generationQueueAhead(queuePosition: unknown): number | null {
+  if (typeof queuePosition !== 'number' || !Number.isFinite(queuePosition) || queuePosition < 1) return null;
+  return Math.floor(queuePosition) - 1;
 }
 
 /**
  * `medium` is the noun the screen already uses for the tool — "image", "video",
  * "motion video" — so the wait names the thing being made rather than the verb
- * being performed.
+ * being performed. A run in the server's queue says its place, in the web
+ * creators' words (`queuedRunPhaseLabel`, `src/lib/generation-run-handle-status.ts`).
  */
-export function generationWaitTitle(phase: GenerationWaitPhase, medium: string) {
-  return phase === 'running' ? `Making your ${medium}` : `Queued with the model`;
+export function generationWaitTitle(phase: GenerationWaitPhase, medium: string, queueAhead: number | null = null) {
+  if (phase === 'running') return `Making your ${medium}`;
+  if (phase === 'queued') return 'Queued with the model';
+  if (queueAhead === null) return 'Queued';
+  return queueAhead <= 0 ? 'Queued · starting soon' : `Queued · ${queueAhead} ahead of you`;
 }
 
 /** `0` → `0:00`, `95` → `1:35`, `3725` → `62:05`. Minutes are not capped: a long run should look long. */
@@ -51,6 +74,11 @@ export function formatElapsed(seconds: number) {
  * while nothing else does, which is what tells someone the app has not frozen.
  */
 export function generationWaitDetail(phase: GenerationWaitPhase, elapsedSeconds: number | null) {
+  if (phase === 'in_line') {
+    // Not "Running for": nothing is running yet, and the clock is the wait's.
+    const waited = typeof elapsedSeconds === 'number' ? ` Waiting for ${formatElapsed(elapsedSeconds)}.` : '';
+    return `It starts by itself when its turn comes.${waited}`;
+  }
   const elapsed = typeof elapsedSeconds === 'number' ? `Running for ${formatElapsed(elapsedSeconds)}` : null;
   const phaseText = phase === 'running'
     ? 'The model is working on it now.'
