@@ -394,9 +394,11 @@ describe("the profile feed's Share", () => {
       feedState.callbacksFor!(publicPost).onShare();
     });
 
-    expect(Share.share).toHaveBeenCalledWith(expect.objectContaining({
-      url: expect.stringContaining('/showcase/post-1'),
-    }));
+    // The link goes out once: iOS gets it alone, Android in the message.
+    const link = expect.stringContaining('/showcase/post-1');
+    expect(Share.share).toHaveBeenCalledWith(os === 'ios'
+      ? { url: link }
+      : { title: expect.any(String), message: link });
     expect(authState.api.shareShowcasePost.mock.calls).toEqual(
       counted ? [['post-1', { sourceSurface: 'my-creations' }]] : []
     );

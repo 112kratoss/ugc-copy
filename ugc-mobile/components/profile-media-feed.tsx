@@ -55,6 +55,7 @@ import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
 import { PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS } from '@/lib/profile-media-query';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { shareLinkContent } from '@/lib/share-sheet-content';
 import { MotionView, useReducedMotion } from '@/lib/motion';
 import { BackGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
@@ -453,7 +454,7 @@ export function ProfileMediaFeedScreen() {
     }
 
     // A dismissed share sheet is not an error worth surfacing.
-    const result = await Share.share({ ...intent.content }).catch(() => null);
+    const result = await Share.share(shareLinkContent(intent.content, Platform.OS)).catch(() => null);
     // Android's share intent cannot report a dismissal (it answers "shared" either way), so only iOS counts a share.
     if (Platform.OS !== 'ios' || result?.action !== Share.sharedAction || !item.showcasePostId) return;
     await api

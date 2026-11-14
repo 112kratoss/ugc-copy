@@ -43,6 +43,7 @@ import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
+import { shareLinkContent } from '@/lib/share-sheet-content';
 import { buildTextPostPage } from '@/lib/text-post-page-view-model';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -366,7 +367,7 @@ export default function PostScreen() {
       return;
     }
 
-    const result = await Share.share({ ...intent.content });
+    const result = await Share.share(shareLinkContent(intent.content, Platform.OS));
     if (result.action === Share.sharedAction && item.showcasePostId) {
       await api.shareShowcasePost(item.showcasePostId, { sourceSurface: 'detail-page' }).catch(() => null);
     }

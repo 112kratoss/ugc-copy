@@ -1805,9 +1805,10 @@ describe('mobile external post composer', () => {
     it('opens the share sheet, records the share, then navigates', async () => {
       await publishWithShareIntent({ postId: 'post-123', visibility: 'public' });
 
-      expect(shareState.share).toHaveBeenCalledWith(expect.objectContaining({
+      // iOS: the post's link alone, once.
+      expect(shareState.share).toHaveBeenCalledWith({
         url: 'https://magicbooklet.com/showcase/post-123?s=my-creations',
-      }));
+      });
       expect(authState.api.shareShowcasePost).toHaveBeenCalledWith('post-123', { sourceSurface: 'my-creations' });
       expect(routerState.replace).toHaveBeenCalledWith({
         pathname: '/(tabs)/profile',

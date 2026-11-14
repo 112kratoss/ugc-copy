@@ -139,6 +139,28 @@ describe('Invite & Earn prints the program the server runs (03-7)', () => {
     renderer.act(() => tree.unmount());
   });
 
+  it('shares and copies the whole invite with its referral link once (review of #801)', async () => {
+    harness.auth.api.getReferralOverview.mockResolvedValue(overview(PROGRAM));
+    const tree = await renderScreen();
+    const link = 'https://magicbooklet.com/r/creator1';
+
+    const share = tree.root.find((node) => String(node.type) === 'primary-button' && node.props.label === 'Share invite');
+    await renderer.act(async () => { (share.props.onPress as () => void)(); });
+    // One text item on iOS too: a url item would repeat the link, and the
+    // words alone would arrive without it in anything that reads only the text.
+    const sent = harness.share.mock.calls[0][0] as { title?: string; message: string; url?: string };
+    expect(sent).toEqual({ title: 'Invite & Earn with Magicbooklet', message: expect.any(String) });
+    expect(sent.message.startsWith('Try Magicbooklet and get 3% bonus credits on your first top-up. Invite code: K7P2QX.')).toBe(true);
+    expect(sent.message).toContain('I may earn bonus credits if you top up.');
+    expect(sent.message.endsWith(`\n${link}`)).toBe(true);
+    expect(sent.message.split(link)).toHaveLength(2);
+
+    const copy = tree.root.find((node) => String(node.type) === 'secondary-button' && node.props.label === 'Copy referral link');
+    await renderer.act(async () => { (copy.props.onPress as () => void)(); });
+    expect(harness.copyToClipboard).toHaveBeenCalledWith(sent.message, expect.any(String));
+    renderer.act(() => tree.unmount());
+  });
+
   it('shows the six-character code and copies it alone (owner 11-11)', async () => {
     harness.auth.api.getReferralOverview.mockResolvedValue(overview(PROGRAM));
     const tree = await renderScreen();

@@ -572,9 +572,13 @@ describe("the reel's Share", () => {
     });
     await settle();
 
-    expect(Share.share).toHaveBeenCalledWith(expect.objectContaining({
-      url: expect.stringContaining('/showcase/post-b'),
-    }));
+    // The link goes out once: iOS gets it alone (a message as well would be a
+    // second item), Android gets it in the message, which is all it sends
+    // (owner's report, 2026-11-14: Copy pasted it twice).
+    const link = expect.stringContaining('/showcase/post-b');
+    expect(Share.share).toHaveBeenCalledWith(os === 'ios'
+      ? { url: link }
+      : { title: expect.any(String), message: link });
     expect(authState.api.shareShowcasePost.mock.calls).toEqual(
       counted ? [['post-b', { sourceSurface: 'showcase-reel' }]] : []
     );

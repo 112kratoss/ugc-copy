@@ -3112,9 +3112,10 @@ describe('ProfileDashboard public page and handle', () => {
       findPressableByText(tree.root, 'Share profile').props.onPress();
       for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
     });
-    expect(shareState.share).toHaveBeenCalledWith(expect.objectContaining({
+    // iOS: the profile link alone, once.
+    expect(shareState.share).toHaveBeenCalledWith({
       url: expect.stringMatching(/\/creators\/luna-dreams\?s=profile$/),
-    }));
+    });
     expect(authState.api.shareCreatorProfile).toHaveBeenCalledWith('luna-dreams', { sourceSurface: 'profile' });
   });
 

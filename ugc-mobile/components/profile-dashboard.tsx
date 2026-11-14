@@ -25,13 +25,14 @@ import {
   Wallet,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, PanResponder, Pressable, Share, Text, useWindowDimensions, View, type PanResponderGestureState } from 'react-native';
+import { ActivityIndicator, PanResponder, Platform, Pressable, Share, Text, useWindowDimensions, View, type PanResponderGestureState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { StableMediaImage } from '@/components/media-preview';
 import { ReturnedVideoPreview } from '@/components/returned-video-preview';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { getShowcasePlaybackUrl } from '@/lib/showcase-media';
+import { shareLinkContent } from '@/lib/share-sheet-content';
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { PushOfferCard } from '@/components/push-offer-card';
 import { Reveal } from '@/components/reveal';
@@ -170,7 +171,7 @@ export function ProfileDashboard({
   // /profile has both). Filed as the owner's own share, not a visitor's.
   const shareOwnProfile = async (username: string, name: string) => {
     const url = ownProfileShareUrl(env.siteUrl, username);
-    const result = await Share.share({ message: `${name} on Magicbooklet\n${url}`, url, title: name });
+    const result = await Share.share(shareLinkContent({ title: name, text: `${name} on Magicbooklet`, url }, Platform.OS));
     if (result.action !== Share.sharedAction) return;
     await api.shareCreatorProfile(username, { sourceSurface: OWN_PROFILE_SHARE_SOURCE }).catch(() => null);
   };

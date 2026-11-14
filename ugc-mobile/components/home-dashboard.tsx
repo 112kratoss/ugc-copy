@@ -59,6 +59,7 @@ import { MotionView, usePressMotion } from '@/lib/motion';
 import { announceRecipeUnlocked } from '@/lib/recipe-unlocked-notice';
 import { launchShowcaseRemix, showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { shareLinkContent } from '@/lib/share-sheet-content';
 import { getShowcaseRemixAccess } from '@/lib/showcase-remix-access';
 import { useWorkspaceSideMenuState } from '@/lib/side-menu-host';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
@@ -715,7 +716,7 @@ export function HomeDashboard() {
     const url = buildShareUrl(env.siteUrl, `/showcase/${item.id}`, 'feed');
     // A dismissed share sheet is not an error worth surfacing. `.catch` rather
     // than try…catch, which React Compiler cannot compile around the check below.
-    const result = await Share.share({ title: item.title, message: `${item.title}\n${url}`, url }).catch(() => null);
+    const result = await Share.share(shareLinkContent({ title: item.title, url }, Platform.OS)).catch(() => null);
     // Android's share intent cannot report a dismissal (it answers "shared" either way), so only iOS counts a share.
     if (Platform.OS !== 'ios' || result?.action !== Share.sharedAction) return;
     void api.shareShowcasePost(item.id, { sourceSurface: 'feed' }).catch(() => null);
