@@ -193,7 +193,26 @@ describe('the offer now that the app keeps the invite', () => {
     render(<InviteHandoffBar handoff={SHARED} />);
     expect(screen.getByRole('link', { name: 'Get the app' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'or join here' })).toBeNull();
-    expect(screen.getByText(/To join on the web instead/)).toBeInTheDocument();
+    expect(screen.getByText(/Google sign-in doesn’t work inside this app\. To join on the web instead/)).toBeInTheDocument();
+  });
+
+  it('copies the invite’s link inside Instagram on an iPhone, and says where to join if it cannot', async () => {
+    onDevice(UA.iphoneInstagram);
+    const first = render(<InviteHandoffBar handoff={SHARED} />);
+    expect(screen.getByText('Get the app and keep your invite')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'or join here' })).toBeNull();
+    expect(screen.getByText(/Google sign-in doesn’t work inside this app\. To join on the web instead/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Get the app' }));
+    await waitFor(() => expect(store.open).toHaveBeenCalledWith('https://apps.apple.com/app/id6773286115'));
+    expect(writeText).toHaveBeenCalledWith(`${origin()}/creators/mira?r=${CODE}`);
+    first.unmount();
+
+    store.open.mockClear();
+    writeText.mockRejectedValue(new Error('NotAllowedError'));
+    render(<InviteHandoffBar handoff={SHARED} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Get the app' }));
+    expect(await screen.findByText('Your invite link could not be copied here. Join on this page to keep it, after opening it in Safari.')).toBeInTheDocument();
+    expect(store.open).not.toHaveBeenCalled();
   });
 
   it('draws no preview note for a link opened with the preview switch', () => {

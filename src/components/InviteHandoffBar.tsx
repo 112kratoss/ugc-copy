@@ -142,7 +142,7 @@ function InviteHandoffOfferBody({ handoff, variant }: { handoff: StoredInviteHan
 
   const openInBrowserNote = (
     <p className="text-xs leading-5 text-[var(--ui-text-muted)]">
-      {offer === 'open-in-browser' ? 'Google sign-in doesn’t work inside this app. ' : 'To join on the web instead, '}
+      {offer === 'open-in-browser' ? 'Google sign-in doesn’t work inside this app. ' : 'Google sign-in doesn’t work inside this app. To join on the web instead, '}
       {chromeUrl ? (
         <><a href={chromeUrl} className={LINK_CLASS}>Open in Chrome</a>, or use this app’s menu and choose “Open in browser”.</>
       ) : (
