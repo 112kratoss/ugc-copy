@@ -1188,43 +1188,102 @@ describe('comments sheet', () => {
       comment({ id: 'comment-1', replyCount: 2 }),
       comment({ id: 'comment-2', replyCount: 0, author: { id: 'creator-4', username: 'alfred', displayName: 'Alfred', avatarUrl: null } }),
     ], 4)];
+    const robin = { id: 'creator-3', username: 'robin', displayName: 'Robin', avatarUrl: null };
     replyPages = [page([
-      comment({ id: 'reply-1', parentId: 'comment-1' }),
-      comment({ id: 'reply-2', parentId: 'comment-1' }),
+      comment({ id: 'reply-1', parentId: 'comment-1', author: robin }),
+      comment({ id: 'reply-2', parentId: 'comment-1', author: robin }),
     ], 4)];
     const tree = renderSheet();
+    type Node = renderer.ReactTestInstance;
     const flat = (style: unknown) => (Array.isArray(style) ? Object.assign({}, ...style) : style ?? {}) as Record<string, unknown>;
-    const lineViews = () => tree.root.findAll(
-      (node) => String(node.type) === 'view' && flat(node.props.style).borderLeftWidth === 1
-    ).map((node) => flat(node.props.style));
-    const stems = () => lineViews().filter((style) => style.borderBottomWidth === undefined);
-    const elbows = () => lineViews().filter((style) => style.borderBottomWidth === 1);
+    const isView = (node: Node) => String(node.type) === 'view';
+    const stems = () => tree.root.findAll(
+      (node) => isView(node) && flat(node.props.style).borderLeftWidth === 1 && flat(node.props.style).borderBottomWidth === undefined
+    );
+    const elbows = () => tree.root.findAll(
+      (node) => isView(node) && flat(node.props.style).borderBottomWidth === 1 && flat(node.props.style).borderLeftWidth === 1
+    );
+    const ancestors = (node: Node) => {
+      const found: Node[] = [];
+      for (let up = node.parent; up; up = up.parent) found.push(up);
+      return found;
+    };
+    // Whose row a piece is drawn in: the avatar in the nearest view around it that holds one.
+    const rowAuthor = (node: Node) => {
+      for (const up of ancestors(node)) {
+        const avatars = up.findAll((child) => String(child.type) === 'avatar');
+        if (avatars.length) return avatars.map((avatar) => avatar.props.name).join();
+      }
+      return null;
+    };
+    const everyPiece = () => [...stems(), ...elbows()];
+    const takesNoTouch = (node: Node) => [node, ...ancestors(node)].some(
+      (each) => flat(each.props.style).pointerEvents === 'none'
+    );
+    // A press dims what its button holds; a piece inside a button would dim with the label.
+    const insideButton = (node: Node) => ancestors(node).some((each) => String(each.type) === 'pressable');
 
-    // Folded: a line from under the comment's avatar into "View 2 replies".
-    // The comment without replies draws none.
-    expect(stems()).toHaveLength(1);
-    expect(stems()[0]).toMatchObject({ position: 'absolute', top: 41, bottom: 0, pointerEvents: 'none' });
+    // Folded: a line from under @batman's avatar into "View 2 replies". The
+    // comment without replies draws none.
+    expect(stems().map(rowAuthor)).toEqual(['@batman']);
+    expect(flat(stems()[0].props.style)).toMatchObject({ position: 'absolute', top: 41, bottom: 0 });
     expect(elbows()).toHaveLength(1);
-    expect(elbows()[0]).toMatchObject({ height: '50%', pointerEvents: 'none' });
+    expect(flat(elbows()[0].props.style)).toMatchObject({ left: 32, width: 17, top: -1, bottom: '50%' });
 
     renderer.act(() => {
       pressable(tree.root, 'View 2 replies').props.onPress();
     });
-    // Open: an elbow into each reply's avatar and one into "Hide replies",
-    // with the line running on through both replies to reach it.
-    expect(stems()).toHaveLength(3);
+    // Open: the stem, then a run through each reply on the way to "Hide
+    // replies"; an elbow into each reply's avatar, in that reply's own row,
+    // and one into the toggle, which ends the line.
+    expect(stems().map(rowAuthor)).toEqual(['@batman', '@robin', '@robin']);
     expect(elbows()).toHaveLength(3);
-    // Beside a run, a reply's elbow is clipped to its curve, so the
-    // translucent line is never drawn twice; it turns at the avatar's middle.
-    const clipped = tree.root.findAll(
-      (node) => String(node.type) === 'view' && flat(node.props.style).overflow === 'hidden'
-    ).map((node) => flat(node.props.style));
-    expect(clipped).toEqual([
-      expect.objectContaining({ left: 33, width: 16, height: 25 }),
-      expect.objectContaining({ left: 33, width: 16, height: 25 }),
+    expect(elbows().slice(0, 2).map(rowAuthor)).toEqual(['@robin', '@robin']);
+    // Every piece under the stem reaches a point up into the one above, so
+    // layout rounding never opens a gap; a reply's elbow still turns at its
+    // avatar's middle (24.5 under the row's top), the toggle's at its middle.
+    expect(stems().slice(1).map((node) => flat(node.props.style))).toEqual([
+      expect.objectContaining({ left: 32, top: -1, bottom: 0 }),
+      expect.objectContaining({ left: 32, top: -1, bottom: 0 }),
     ]);
-    // The toggle ends the line, on an elbow of its own.
-    expect(elbows()[2]).toMatchObject({ left: 32, width: 17, height: '50%' });
+    expect(elbows().map((node) => flat(node.props.style))).toEqual([
+      expect.objectContaining({ left: 32, width: 17, top: -1, height: 26 }),
+      expect.objectContaining({ left: 32, width: 17, top: -1, height: 26 }),
+      expect.objectContaining({ left: 32, width: 17, top: -1, bottom: '50%' }),
+    ]);
+    // One solid colour, borderStrong on the sheet's panel, so an overlap never
+    // draws darker.
+    expect(new Set(everyPiece().map((node) => flat(node.props.style).borderColor))).toEqual(new Set(['#484747']));
+    // No piece takes a touch, or sits inside a button whose press would dim it.
+    expect(everyPiece().length).toBe(6);
+    expect(everyPiece().filter((node) => !takesNoTouch(node))).toEqual([]);
+    expect(everyPiece().filter(insideButton)).toEqual([]);
+  });
+
+  it("reads a thread's replies only while they are open", () => {
+    pages = [page([
+      comment({ id: 'comment-1', replyCount: 2 }),
+      comment({ id: 'comment-2', replyCount: 1, author: { id: 'creator-4', username: 'alfred', displayName: 'Alfred', avatarUrl: null } }),
+    ], 5)];
+    replyPages = [page([comment({ id: 'reply-1', parentId: 'comment-1' })], 5)];
+    const tree = renderSheet();
+    // The latest render's replies query for one comment.
+    const repliesQuery = (parentId: string) => queryOptions.mock.calls
+      .map(([options]) => options as { queryKey: readonly unknown[]; enabled?: boolean })
+      .filter((options) => options.queryKey[0] === 'post-comment-replies' && options.queryKey[2] === parentId)
+      .at(-1);
+
+    expect(repliesQuery('comment-1')).toMatchObject({ enabled: false });
+    expect(repliesQuery('comment-2')).toMatchObject({ enabled: false });
+    renderer.act(() => {
+      pressable(tree.root, 'View 2 replies').props.onPress();
+    });
+    expect(repliesQuery('comment-1')).toMatchObject({ enabled: true });
+    expect(repliesQuery('comment-2')).toMatchObject({ enabled: false });
+    renderer.act(() => {
+      pressable(tree.root, 'Hide replies').props.onPress();
+    });
+    expect(repliesQuery('comment-1')).toMatchObject({ enabled: false });
   });
 
   it('labels the composer for the reply being written', () => {

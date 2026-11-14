@@ -3,7 +3,7 @@ import { router } from 'expo-router';
 import { Check, Heart, MoreHorizontal, Pin, SendHorizontal, ThumbsDown, ThumbsUp } from 'lucide-react-native';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { AccessibilityInfo, ActivityIndicator, Animated, Easing, FlatList, type LayoutChangeEvent, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, type AccessibilityState, ActivityIndicator, Animated, Easing, FlatList, type LayoutChangeEvent, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { NativeMenu } from '@/components/native-menu';
@@ -69,6 +69,7 @@ import {
   type CommentUpdateKind,
   type PostCommentSort,
 } from '@/lib/comments-view-model';
+import { opaqueOver } from '@/lib/color-contrast';
 import { buildCommentMenu } from '@/lib/comment-menu';
 import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { useReducedMotion } from '@/lib/motion';
@@ -921,9 +922,17 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     [commentMenu]
   );
 
+  // The thread's line in a solid colour: `borderStrong` as it shows on the
+  // surface the thread is drawn on (the sheet's panel, the post page's ground).
+  const threadLineColor = opaqueOver(
+    theme.colors.borderStrong,
+    presentation === 'sheet' ? theme.colors.panel : theme.colors.app
+  );
+
   const renderTopLevelComment = useCallback(({ item: comment }: { item: PostComment }) => (
     <CommentThread
       comment={comment}
+      lineColor={threadLineColor}
       expanded={expandedIds.has(comment.id)}
       pendingReplies={pendingRepliesByParent[comment.id] ?? NO_PENDING_REPLIES}
       postId={postId}
@@ -934,7 +943,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       onToggleReplies={toggleReplies}
       rowActions={rowActions}
     />
-  ), [expandedIds, commentMenu, hasCommentActions, openAuthorProfile, openCommentActions, pendingRepliesByParent, postId, rowActions, toggleReplies]);
+  ), [expandedIds, commentMenu, hasCommentActions, openAuthorProfile, openCommentActions, pendingRepliesByParent, postId, rowActions, threadLineColor, toggleReplies]);
 
   const canSubmit = hasCommentToSend(draft, replyPrefix, editing ? editing.body : null)
     && !submitting
@@ -1271,13 +1280,19 @@ const NO_PENDING_REPLIES: PostComment[] = [];
  * The thread's line (`getCommentThreadLines`) runs down the middle of the
  * comment's avatar and turns on a rounded elbow into the middle of a reply's
  * avatar or of a control, stopping 4pt short of either, as the web's does.
- * Every piece is a border, as on the web. Its colour, `borderStrong`, is
- * translucent, so the pieces meet edge to edge and never overlap: a stretch
- * drawn twice shows as a darker blot on the line.
+ * Every piece is a border, as on the web. Each row draws its own pieces, and
+ * at a fractional density (2.625 on the Pixel 9a) layout rounding put a
+ * neighbouring row's piece a device pixel apart from or into the one above:
+ * a gap in the line, or a darker pixel where the translucent `borderStrong`
+ * was drawn twice. So the line is solid (`borderStrong` flattened onto the
+ * surface it is drawn on) and every piece below the comment's stem reaches
+ * `THREAD_LINE_OVERLAP` up into the piece above, where a solid overlap shows
+ * as nothing.
  */
 const THREAD_AVATAR_SIZE = 25;
 const THREAD_REPLY_INSET = appTheme.spacing.panel + 33;
 const THREAD_LINE_WIDTH = 1;
+const THREAD_LINE_OVERLAP = 1;
 // The 1pt line's middle on the avatar's: 32–33 under an avatar across 20–45.
 const THREAD_SPINE_LEFT = appTheme.spacing.panel + Math.floor(THREAD_AVATAR_SIZE / 2);
 const THREAD_ELBOW_WIDTH = THREAD_REPLY_INSET - 4 - THREAD_SPINE_LEFT;
@@ -1286,8 +1301,8 @@ const THREAD_ELBOW_RADIUS = appTheme.radii.sm;
 // under it, and an elbow's bottom edge, 24–25, turns into a reply's at 24.5.
 const THREAD_STEM_TOP = appTheme.spacing.gap + THREAD_AVATAR_SIZE + 4;
 const THREAD_REPLY_TURN = appTheme.spacing.gap + Math.ceil(THREAD_AVATAR_SIZE / 2);
-// A control's label is centred in its row.
-const THREAD_CONTROL_TURN = '50%';
+// A control's label is centred in its row, whatever the text size makes its height.
+const THREAD_CONTROL_TURN = 'middle';
 
 /**
  * One top-level comment and everything under it, drawn from one list of rows
@@ -1297,6 +1312,7 @@ const THREAD_CONTROL_TURN = '50%';
  */
 function CommentThread({
   comment,
+  lineColor,
   expanded,
   pendingReplies,
   postId,
@@ -1308,6 +1324,8 @@ function CommentThread({
   rowActions,
 }: {
   comment: PostComment;
+  /** The line's solid colour on the surface the thread is drawn on. */
+  lineColor: string;
   expanded: boolean;
   pendingReplies: PostComment[];
   postId: string;
@@ -1356,30 +1374,18 @@ function CommentThread({
         const line = lines[index];
         switch (row.kind) {
           case 'comment':
+          case 'reply':
             return (
               <CommentRowView
                 key={row.key}
                 comment={row.comment}
-                threadStem={line.spine === 'from-avatar'}
+                isReply={row.kind === 'reply'}
+                thread={{ line, color: lineColor }}
                 actionsMenu={actionsMenu}
                 onActions={hasActions(row.comment) ? onActions : undefined}
                 onAuthorOpen={onAuthorOpen}
                 rowActions={rowActions}
               />
-            );
-          case 'reply':
-            return (
-              <View key={row.key}>
-                <CommentThreadLinePieces line={line} turn={THREAD_REPLY_TURN} />
-                <CommentRowView
-                  comment={row.comment}
-                  isReply
-                  actionsMenu={actionsMenu}
-                  onActions={hasActions(row.comment) ? onActions : undefined}
-                  onAuthorOpen={onAuthorOpen}
-                  rowActions={rowActions}
-                />
-              </View>
             );
           case 'replies-loading':
             return (
@@ -1388,14 +1394,14 @@ function CommentThread({
                 accessibilityLabel="Loading replies"
                 style={{ minHeight: 48, paddingLeft: THREAD_REPLY_INSET, justifyContent: 'center' }}
               >
-                <CommentThreadLinePieces line={line} turn={THREAD_CONTROL_TURN} />
+                <CommentThreadLinePieces line={line} color={lineColor} turn={THREAD_CONTROL_TURN} />
                 <ActivityIndicator color={theme.colors.faint} />
               </View>
             );
           case 'replies-error':
             return (
               <View key={row.key}>
-                <CommentThreadLinePieces line={line} turn={THREAD_CONTROL_TURN} />
+                <CommentThreadLinePieces line={line} color={lineColor} turn={THREAD_CONTROL_TURN} />
                 <View
                   style={{
                     paddingLeft: THREAD_REPLY_INSET,
@@ -1427,56 +1433,26 @@ function CommentThread({
             );
           case 'load-more-replies':
             return (
-              // The line sits beside the button, not in it, so a press dims
-              // the label and leaves the line whole.
-              <View key={row.key}>
-                <CommentThreadLinePieces line={line} turn={THREAD_CONTROL_TURN} />
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Load more replies"
-                  accessibilityState={{ busy: repliesQuery.isFetchingNextPage }}
-                  disabled={repliesQuery.isFetchingNextPage}
-                  onPress={() => void repliesQuery.fetchNextPage()}
-                  style={({ pressed }) => ({
-                    minHeight: 48,
-                    justifyContent: 'center',
-                    paddingLeft: THREAD_REPLY_INSET,
-                    paddingRight: appTheme.spacing.panel,
-                    opacity: pressed ? appTheme.opacity.pressed : 1,
-                  })}
-                >
-                  {repliesQuery.isFetchingNextPage ? (
-                    <ActivityIndicator color={theme.colors.faint} />
-                  ) : (
-                    <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
-                      Load more replies
-                    </Text>
-                  )}
-                </Pressable>
-              </View>
+              <CommentThreadControl
+                key={row.key}
+                line={line}
+                lineColor={lineColor}
+                label="Load more replies"
+                accessibilityState={{ busy: repliesQuery.isFetchingNextPage }}
+                busy={repliesQuery.isFetchingNextPage}
+                onPress={() => void repliesQuery.fetchNextPage()}
+              />
             );
           case 'replies-toggle':
             return (
-              <View key={row.key}>
-                <CommentThreadLinePieces line={line} turn={THREAD_CONTROL_TURN} />
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={repliesToggleLabel}
-                  accessibilityState={{ expanded }}
-                  onPress={() => onToggleReplies(parentId)}
-                  style={({ pressed }) => ({
-                    minHeight: 48,
-                    justifyContent: 'center',
-                    paddingLeft: THREAD_REPLY_INSET,
-                    paddingRight: appTheme.spacing.panel,
-                    opacity: pressed ? appTheme.opacity.pressed : 1,
-                  })}
-                >
-                  <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
-                    {repliesToggleLabel}
-                  </Text>
-                </Pressable>
-              </View>
+              <CommentThreadControl
+                key={row.key}
+                line={line}
+                lineColor={lineColor}
+                label={repliesToggleLabel}
+                accessibilityState={{ expanded }}
+                onPress={() => onToggleReplies(parentId)}
+              />
             );
         }
       })}
@@ -1485,63 +1461,94 @@ function CommentThread({
 }
 
 /**
- * A row's piece of the thread's line below the comment (the comment's own
- * stem is drawn in `CommentRowView`): a straight run through the row when the
- * line goes on past it, and an elbow from the row's top that turns at `turn`.
- * Decoration only: it takes no touch and no screen reader reads it.
+ * A control that hangs off the thread: Load more replies, and the toggle that
+ * ends it. Its piece of the line sits beside the button, not in it, so a press
+ * dims the label and leaves the line whole; while `busy` the label gives way
+ * to a spinner and the button takes no press.
  */
-function CommentThreadLinePieces({ line, turn }: { line: CommentThreadLine; turn: number | `${number}%` }) {
+function CommentThreadControl({
+  line,
+  lineColor,
+  label,
+  accessibilityState,
+  busy = false,
+  onPress,
+}: {
+  line: CommentThreadLine;
+  lineColor: string;
+  label: string;
+  accessibilityState: AccessibilityState;
+  busy?: boolean;
+  onPress: () => void;
+}) {
   const theme = useAppTheme();
-  const through = line.spine === 'through';
-  const elbow = {
-    borderColor: theme.colors.borderStrong,
-    borderLeftWidth: THREAD_LINE_WIDTH,
-    borderBottomWidth: THREAD_LINE_WIDTH,
-    borderBottomLeftRadius: THREAD_ELBOW_RADIUS,
-  } as const;
+  return (
+    <View>
+      <CommentThreadLinePieces line={line} color={lineColor} turn={THREAD_CONTROL_TURN} />
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityState={accessibilityState}
+        disabled={busy}
+        onPress={onPress}
+        style={({ pressed }) => ({
+          minHeight: 48,
+          justifyContent: 'center',
+          paddingLeft: THREAD_REPLY_INSET,
+          paddingRight: appTheme.spacing.panel,
+          opacity: pressed ? appTheme.opacity.pressed : 1,
+        })}
+      >
+        {busy ? (
+          <ActivityIndicator color={theme.colors.faint} />
+        ) : (
+          <Text style={{ color: theme.colors.primary, ...appTheme.type.caption, fontWeight: '800' }}>
+            {label}
+          </Text>
+        )}
+      </Pressable>
+    </View>
+  );
+}
+
+/**
+ * A row's piece of the thread's line below the comment's own stem: a straight
+ * run through the row when the line goes on past it, and an elbow from the
+ * row's top that turns at `turn` (points from the top, or the row's middle).
+ * Drawn inside the row that holds what the elbow turns into, so it follows
+ * that row wherever it sits. Both reach `THREAD_LINE_OVERLAP` up into the
+ * piece above. Decoration only: it takes no touch and no screen reader reads it.
+ */
+function CommentThreadLinePieces({ line, color, turn }: { line: CommentThreadLine; color: string; turn: number | 'middle' }) {
   return (
     <>
-      {through ? (
+      {line.spine === 'through' ? (
         <View
           style={{
             position: 'absolute',
             left: THREAD_SPINE_LEFT,
-            top: 0,
+            top: -THREAD_LINE_OVERLAP,
             bottom: 0,
             width: THREAD_LINE_WIDTH,
             borderLeftWidth: THREAD_LINE_WIDTH,
-            borderColor: theme.colors.borderStrong,
+            borderColor: color,
             pointerEvents: 'none',
           }}
         />
       ) : null}
-      {line.elbow === 'none' ? null : through ? (
-        // The run already draws the elbow's first stretch, down the same
-        // column: the elbow's own copy of it is clipped off, so only its curve
-        // leaves the line.
-        <View
-          style={{
-            position: 'absolute',
-            left: THREAD_SPINE_LEFT + THREAD_LINE_WIDTH,
-            top: 0,
-            width: THREAD_ELBOW_WIDTH - THREAD_LINE_WIDTH,
-            height: turn,
-            overflow: 'hidden',
-            pointerEvents: 'none',
-          }}
-        >
-          <View style={{ position: 'absolute', left: -THREAD_LINE_WIDTH, top: 0, bottom: 0, width: THREAD_ELBOW_WIDTH, ...elbow }} />
-        </View>
-      ) : (
+      {line.elbow === 'none' ? null : (
         <View
           style={{
             position: 'absolute',
             left: THREAD_SPINE_LEFT,
-            top: 0,
+            top: -THREAD_LINE_OVERLAP,
+            ...(turn === 'middle' ? { bottom: '50%' } : { height: turn + THREAD_LINE_OVERLAP }),
             width: THREAD_ELBOW_WIDTH,
-            height: turn,
+            borderLeftWidth: THREAD_LINE_WIDTH,
+            borderBottomWidth: THREAD_LINE_WIDTH,
+            borderBottomLeftRadius: THREAD_ELBOW_RADIUS,
+            borderColor: color,
             pointerEvents: 'none',
-            ...elbow,
           }}
         />
       )}
@@ -1552,7 +1559,7 @@ function CommentThreadLinePieces({ line, turn }: { line: CommentThreadLine; turn
 function CommentRowView({
   comment,
   isReply = false,
-  threadStem = false,
+  thread,
   actionsMenu,
   onActions,
   onAuthorOpen,
@@ -1560,8 +1567,12 @@ function CommentRowView({
 }: {
   comment: PostComment;
   isReply?: boolean;
-  /** A top-level comment with replies: its thread's line starts under its avatar. */
-  threadStem?: boolean;
+  /**
+   * This row's piece of its thread's line (`getCommentThreadLines`) and the
+   * line's colour, drawn in the row that holds the avatar, so a piece is
+   * placed against the avatar itself and not against anything above the row.
+   */
+  thread?: { line: CommentThreadLine; color: string };
   /** The ••• menu; `onActions` opens the action sheet where native menus are missing. */
   actionsMenu?: CommentMenuBuilder;
   onActions?: CommentActionHandler;
@@ -1593,7 +1604,10 @@ function CommentRowView({
 
   return (
     <View>
-      {comment.pinned && !display.isDeleted ? (
+      {/* Only a top-level comment is pinned (`canPinComment`, and the server
+          holds the same rule): nothing sits above a reply's row, so the
+          thread's line runs into it unbroken. */}
+      {comment.pinned && !display.isDeleted && !isReply ? (
         <View
           style={{
             flexDirection: 'row',
@@ -1618,7 +1632,8 @@ function CommentRowView({
         paddingVertical: appTheme.spacing.gap,
       }}
     >
-      {threadStem ? (
+      {isReply && thread ? <CommentThreadLinePieces line={thread.line} color={thread.color} turn={THREAD_REPLY_TURN} /> : null}
+      {!isReply && thread?.line.spine === 'from-avatar' ? (
         // From under the avatar down through the row, into its first reply or its toggle.
         <View
           style={{
@@ -1628,7 +1643,7 @@ function CommentRowView({
             bottom: 0,
             width: THREAD_LINE_WIDTH,
             borderLeftWidth: THREAD_LINE_WIDTH,
-            borderColor: theme.colors.borderStrong,
+            borderColor: thread.color,
             pointerEvents: 'none',
           }}
         />
