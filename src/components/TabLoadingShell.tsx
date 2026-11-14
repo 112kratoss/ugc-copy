@@ -30,7 +30,8 @@ export function SkeletonBlock({ className = '' }: { className?: string }) {
  * A tab's wait, drawn without words (owner, 2026-11-14): the label chip and
  * "Loading <tab>" title it used to carry flashed past on every tab switch and
  * said nothing the sidebar's highlighted tab did not. Placeholder bars stand
- * where they were, and the tab's name stays in the status region's label.
+ * where they were. The tab's name stays for screen readers in a hidden line:
+ * a live region is announced by the text inside it, not by its label.
  */
 export default function TabLoadingShell({
   title,
@@ -44,6 +45,7 @@ export default function TabLoadingShell({
         aria-label={`Loading ${title}`}
         className="studio-shell py-8 sm:py-10"
       >
+        <span className="sr-only">Loading {title}</span>
         <div
           className={`rounded-3xl border bg-gradient-to-br ${accentClasses[accent]} p-5 shadow-[0_24px_80px_rgba(0,0,0,0.42)] sm:p-6`}
         >

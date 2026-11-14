@@ -13,7 +13,15 @@ describe('TabLoadingShell', () => {
 
     expect(html).toContain('role="status"');
     expect(html).toContain('aria-label="Loading Studio"');
-    const visibleText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    // Read out from a hidden line inside the live region (its label alone is not announced)...
+    // (React's server render puts a text separator between "Loading " and the title.)
+    expect(html).toContain('<span class="sr-only">Loading <!-- -->Studio</span>');
+    // ...and nothing else in words on screen.
+    const visibleText = html
+      .replace(/<span class="sr-only">[\s\S]*?<\/span>/g, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     expect(visibleText).toBe('');
     expect(html).toContain('animate-[skeleton-shimmer_1.5s_linear_infinite]');
   });

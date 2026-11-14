@@ -13,8 +13,14 @@ describe('Explore loading state', () => {
 
     expect(html).toContain('role="status"');
     expect(html).toContain('aria-label="Loading Explore"');
-    // Only the search entry carries visible text: no "Community" eyebrow, no "Loading Explore" title.
-    const visibleText = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    // Read out from a hidden line inside the live region (its label alone is not announced)...
+    expect(html).toContain('<span class="sr-only">Loading Explore</span>');
+    // ...and on screen only the search entry has words: no "Community" eyebrow, no "Loading Explore" title.
+    const visibleText = html
+      .replace(/<span class="sr-only">[\s\S]*?<\/span>/g, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     expect(visibleText).toBe('Search');
     expect(html).toContain('animate-[skeleton-shimmer_1.5s_linear_infinite]');
   });
