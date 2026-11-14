@@ -14,11 +14,13 @@ import { createServiceClient } from '@/lib/server-helpers';
 import {
   DataTable,
   EmptyState,
+  NO_PUBLIC_POST_PAGE,
   PageHeader,
   Pagination,
   StatusBadge,
   Td,
   adminPostHref,
+  adminPublicPostHref,
   formatTimestamp,
   parseOffset,
   shortId,
@@ -125,9 +127,13 @@ export default async function AdminModerationHistoryPage({
                   </Td>
                   <Td className="border-b-0"><StatusBadge status={report.reason} tone="warning" /></Td>
                   <Td className="border-b-0" truncateWidth={220}>
-                    <Link href={adminPostHref(report.postId)} target="_blank" rel="noreferrer" className="underline">
-                      {report.post?.title || 'Untitled post'}
-                    </Link>
+                    {report.post && adminPublicPostHref(report.post) ? (
+                      <Link href={adminPostHref(report.postId)} target="_blank" rel="noreferrer" className="underline">
+                        {report.post.title || 'Untitled post'}
+                      </Link>
+                    ) : (
+                      <span title={NO_PUBLIC_POST_PAGE}>{report.post?.title || 'Untitled post'}</span>
+                    )}
                   </Td>
                   <Td className="border-b-0">
                     <ReviewerCell reviewerId={report.reviewedBy} reviewers={history.reviewers} />

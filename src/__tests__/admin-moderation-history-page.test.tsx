@@ -124,7 +124,14 @@ describe('admin moderation history page', () => {
 
   it('links a decided post to its page, which lives at /showcase/<id>', async () => {
     // /post/<id> is only the editor's folder: every post link here answered 404.
-    collectAdminModerationHistoryMock.mockResolvedValue(history());
+    const base = history();
+    collectAdminModerationHistoryMock.mockResolvedValue(history({
+      postReports: [{
+        ...base.postReports[0],
+        resolutionAction: 'dismiss',
+        post: { ...base.postReports[0].post, reviewStatus: 'visible' },
+      }],
+    }));
 
     const html = await renderPageToHtml(
       await AdminModerationHistoryPage({ searchParams: Promise.resolve({}) }),
@@ -132,6 +139,18 @@ describe('admin moderation history page', () => {
 
     expect(html).toContain('href="/showcase/20000000-0000-4000-8000-000000000002"');
     expect(html).not.toContain('href="/post/');
+  });
+
+  it('does not link a post moderation hid, which has no public page', async () => {
+    collectAdminModerationHistoryMock.mockResolvedValue(history());
+
+    const html = await renderPageToHtml(
+      await AdminModerationHistoryPage({ searchParams: Promise.resolve({}) }),
+    );
+
+    expect(html).not.toContain('href="/showcase/20000000-0000-4000-8000-000000000002"');
+    expect(html).toContain('title="Private or hidden by moderation: it has no public page."');
+    expect(html).toContain('A reported post');
   });
 
   // A reviewer with no profile row must not drop the decision from the record.

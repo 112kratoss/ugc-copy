@@ -115,7 +115,12 @@ export default async function AdminUsersPage({
         {requestedKind ? <input type="hidden" name="kind" value={requestedKind} /> : null}
         <button type="submit" className="ui-button ui-button-primary ui-focus-ring">Search</button>
         {term ? (
-          <Link href="/admin/users" className="ui-button ui-button-ghost ui-focus-ring">Clear</Link>
+          <Link
+            href={requestedKind ? `/admin/users?kind=${requestedKind}` : '/admin/users'}
+            className="ui-button ui-button-ghost ui-focus-ring"
+          >
+            Clear
+          </Link>
         ) : null}
       </form>
 

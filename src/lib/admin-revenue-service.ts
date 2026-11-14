@@ -40,6 +40,12 @@ export type AdminRevenueRail = {
    * order. Kept out of `succeededCount` and gross, which count money.
    */
   freeCount: number;
+  /**
+   * Settled with credits: a credit unlock writes a 'paid' order carrying the
+   * price in USD cents. The money came in when the credits were bought, so it
+   * is kept out of `succeededCount` and gross too.
+   */
+  creditCount: number;
   pendingCount: number;
   failedCount: number;
   /**
@@ -90,6 +96,18 @@ export type AdminRevenueReport = {
 const RAIL_FETCH_LIMIT = 2000;
 const DEFAULT_ORDER_PAGE_SIZE = 60;
 
+/**
+ * The order references a credit unlock writes ('credits_bundle_'; 'credits_asset_'
+ * on purchases copied from the legacy marketplace), as the unlock library
+ * (`viewer-unlocks.ts`) and `list_credit_history` read them.
+ */
+export const CREDIT_UNLOCK_ORDER_PREFIXES = ['credits_bundle_', 'credits_asset_'];
+
+function isCreditUnlockOrder(orderReference: unknown): boolean {
+  return typeof orderReference === 'string'
+    && CREDIT_UNLOCK_ORDER_PREFIXES.some((prefix) => orderReference.startsWith(prefix));
+}
+
 const SUCCESS_STATUSES = new Set(['success', 'paid', 'completed', 'succeeded', 'active']);
 const FAILURE_STATUSES = new Set(['failed', 'cancelled', 'canceled', 'refunded', 'reversed', 'expired']);
 
@@ -108,10 +126,12 @@ function summarizeRail(
     amountSubunits: number | null;
     currency: string;
     credits?: number | null;
+    paidWithCredits?: boolean;
   }>,
 ): AdminRevenueRail {
   let succeededCount = 0;
   let freeCount = 0;
+  let creditCount = 0;
   let pendingCount = 0;
   let failedCount = 0;
   let creditsIssued = 0;
@@ -122,6 +142,8 @@ function summarizeRail(
     const outcome = classify(row.status);
     if (outcome === 'succeeded' && row.amountSubunits === 0) {
       freeCount += 1;
+    } else if (outcome === 'succeeded' && row.paidWithCredits) {
+      creditCount += 1;
     } else if (outcome === 'succeeded') {
       succeededCount += 1;
 
@@ -150,6 +172,7 @@ function summarizeRail(
     label,
     succeededCount,
     freeCount,
+    creditCount,
     pendingCount,
     failedCount,
     // Sorted largest-first so the dominant currency leads the card.
@@ -208,7 +231,7 @@ export async function collectAdminRevenueReport(
       .range(from, to), RAIL_FETCH_LIMIT),
     readBoundedAdminRows((from, to) => client
       .from('marketplace_orders')
-      .select('id, buyer_user_id, status, amount_subunits, currency, created_at, razorpay_payment_id', { count: 'exact' })
+      .select('id, buyer_user_id, status, amount_subunits, currency, created_at, razorpay_order_id, razorpay_payment_id', { count: 'exact' })
       .not('razorpay_order_id', 'like', 'mobile\\_%')
       .gte('created_at', since)
       .order('created_at', { ascending: false })
@@ -216,7 +239,7 @@ export async function collectAdminRevenueReport(
       .range(from, to), RAIL_FETCH_LIMIT),
     readBoundedAdminRows((from, to) => client
       .from('post_resource_bundle_orders')
-      .select('id, buyer_user_id, status, amount_subunits, currency, created_at, razorpay_payment_id', { count: 'exact' })
+      .select('id, buyer_user_id, status, amount_subunits, currency, created_at, razorpay_order_id, razorpay_payment_id', { count: 'exact' })
       .not('razorpay_order_id', 'like', 'mobile\\_%')
       .gte('created_at', since)
       .order('created_at', { ascending: false })
@@ -255,11 +278,13 @@ export async function collectAdminRevenueReport(
       status: String(row.status ?? ''),
       amountSubunits: typeof row.amount_subunits === 'number' ? row.amount_subunits : null,
       currency: String(row.currency ?? 'INR'),
+      paidWithCredits: isCreditUnlockOrder(row.razorpay_order_id),
     }))),
     summarizeRail('resource-bundles', 'Post resource bundles', bundleRows.map((row) => ({
       status: String(row.status ?? ''),
       amountSubunits: typeof row.amount_subunits === 'number' ? row.amount_subunits : null,
       currency: String(row.currency ?? 'INR'),
+      paidWithCredits: isCreditUnlockOrder(row.razorpay_order_id),
     }))),
   ];
 

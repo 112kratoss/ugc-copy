@@ -15,8 +15,9 @@ import { PostModerationControls } from './PostModerationControls';
 import {
   DataTable,
   EmptyState,
+  NO_PUBLIC_POST_PAGE,
   PageHeader,
-  adminPostHref,
+  adminPublicPostHref,
   Pagination,
   StatCard,
   StatusBadge,
@@ -141,13 +142,19 @@ export default async function AdminContentPage({
           <EmptyState message="No posts match this filter." />
         ) : (
           <DataTable columns={['Created', 'Title', 'Visibility', 'Review', 'Reports', 'Saves', 'Author', 'Moderation']}>
-            {snapshot.posts.map((post) => (
+            {snapshot.posts.map((post) => {
+              const postHref = adminPublicPostHref(post);
+              return (
               <tr key={post.id}>
                 <Td>{formatTimestamp(post.createdAt)}</Td>
                 <Td truncateWidth={260}>
-                  <Link href={adminPostHref(post.id)} target="_blank" rel="noreferrer" className="underline">
-                    {post.title || 'Untitled'}
-                  </Link>
+                  {postHref ? (
+                    <Link href={postHref} target="_blank" rel="noreferrer" className="underline">
+                      {post.title || 'Untitled'}
+                    </Link>
+                  ) : (
+                    <span title={NO_PUBLIC_POST_PAGE}>{post.title || 'Untitled'}</span>
+                  )}
                 </Td>
                 <Td><StatusBadge status={post.visibility} /></Td>
                 <Td><StatusBadge status={post.reviewStatus} /></Td>
@@ -164,7 +171,8 @@ export default async function AdminContentPage({
                   <PostModerationControls postId={post.id} reviewStatus={post.reviewStatus} />
                 </Td>
               </tr>
-            ))}
+              );
+            })}
           </DataTable>
         )}
 

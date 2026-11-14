@@ -67,6 +67,7 @@ function rail(overrides: Record<string, unknown>) {
   return {
     succeededCount: 0,
     freeCount: 0,
+    creditCount: 0,
     pendingCount: 0,
     failedCount: 0,
     totalsByCurrency: [],
@@ -88,6 +89,7 @@ function revenueReport(overrides: Record<string, unknown> = {}) {
         label: 'Post resource bundles',
         succeededCount: 1,
         freeCount: 13,
+        creditCount: 2,
         totalsByCurrency: [{ currency: 'USD', grossSubunits: 499, succeededCount: 1 }],
       }),
     ],
@@ -122,14 +124,15 @@ describe('admin revenue page', () => {
     expect(html).not.toContain('₹11,000');
   });
 
-  it('counts paid orders apart from free unlocks and unpaid checkouts', async () => {
+  it('counts paid orders apart from free unlocks, credit unlocks and unpaid checkouts', async () => {
     collectAdminRevenueReportMock.mockResolvedValue(revenueReport());
 
     const html = visibleText(await renderPageToHtml(await AdminRevenuePage({ searchParams: Promise.resolve({}) })));
 
     expect(html).toContain('Paid orders');
-    expect(html).toContain('13 free unlocks');
-    expect(html).toContain('Checkouts opened but never paid');
+    expect(html).toContain('13 free unlocks · 2 paid with credits');
+    expect(html).toContain('Paid with credits');
+    expect(html).toContain('Checkouts not paid, or payments still in progress');
     // A Razorpay order still `created` was never paid.
     expect(html).toContain('not paid');
     expect(html).not.toContain('>created<');
@@ -167,6 +170,25 @@ describe('admin content page', () => {
 
     expect(html).toContain('href="/showcase/30000000-0000-4000-8000-000000000003"');
     expect(html).not.toContain('href="/post/');
+  });
+
+  it('does not link a private post or one moderation hid, since neither has a public page', async () => {
+    const base = contentSnapshot().posts[0];
+    collectAdminContentSnapshotMock.mockResolvedValue(contentSnapshot({
+      posts: [
+        { ...base, id: '80000000-0000-4000-8000-000000000008', title: 'Private one', visibility: 'private' },
+        { ...base, id: '90000000-0000-4000-8000-000000000009', title: 'Hidden one', reviewStatus: 'hidden' },
+        { ...base, id: 'a0000000-0000-4000-8000-00000000000a', title: 'Unlisted one', visibility: 'unlisted' },
+      ],
+    }));
+
+    const html = await renderPageToHtml(await AdminContentPage({ searchParams: Promise.resolve({}) }));
+
+    expect(html).not.toContain('href="/showcase/80000000-0000-4000-8000-000000000008"');
+    expect(html).not.toContain('href="/showcase/90000000-0000-4000-8000-000000000009"');
+    expect(html).toContain('href="/showcase/a0000000-0000-4000-8000-00000000000a"');
+    expect(html).toContain('Private one');
+    expect(html).toContain('Hidden one');
   });
 
   it('calls a creator\'s private posts private, apart from posts moderation hid', async () => {
@@ -245,5 +267,7 @@ describe('admin users page', () => {
     expect(searchAdminUsersMock).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ term: 'abc', kind: 'guests' }));
     expect(html).toContain('<input type="hidden" name="kind" value="guests"/>');
     expect(html).toContain('No guests match “abc”.');
+    // Clearing the search keeps the switch.
+    expect(html).toContain('href="/admin/users?kind=guests" class="ui-button ui-button-ghost ui-focus-ring">Clear<');
   });
 });

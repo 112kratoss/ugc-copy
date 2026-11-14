@@ -52,6 +52,23 @@ export function adminPostHref(postId: string): string {
   return `/showcase/${encodeURIComponent(postId)}`;
 }
 
+/**
+ * The post's public page, or null when it has none: a private post, or one
+ * moderation hid, answers 404 there. Public and unlisted posts have one.
+ */
+export function adminPublicPostHref(post: {
+  id: string;
+  visibility?: string | null;
+  reviewStatus?: string | null;
+}): string | null {
+  if (post.reviewStatus === 'hidden') return null;
+  if (post.visibility && post.visibility !== 'public' && post.visibility !== 'unlisted') return null;
+  return adminPostHref(post.id);
+}
+
+/** Said in place of a link to a post with no public page. */
+export const NO_PUBLIC_POST_PAGE = 'Private or hidden by moderation: it has no public page.';
+
 export function StatusBadge({ status, tone }: { status: string; tone?: AdminStatusTone }) {
   return (
     <span

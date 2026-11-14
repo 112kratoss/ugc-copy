@@ -1,7 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 
-import { collectAdminRevenueReport } from '@/lib/admin-revenue-service';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { CREDIT_UNLOCK_ORDER_PREFIXES, collectAdminRevenueReport } from '@/lib/admin-revenue-service';
 
 type TableRows = Record<string, Array<Record<string, unknown>>>;
 
@@ -274,6 +277,40 @@ describe('admin revenue report', () => {
     const report = await collectAdminRevenueReport(client, { now: NOW });
 
     expect(report.rails.find((rail) => rail.key === 'marketplace')?.creditsIssued).toBeNull();
+  });
+
+  it('counts an unlock paid with credits apart from cash, since the credits were the sale', async () => {
+    // A credit unlock writes a 'paid' order carrying the price in USD cents. The
+    // money was counted when the credits were bought; as a cash sale it was
+    // counted twice, under "Paid orders" and the rail's USD gross.
+    const client = createClient({
+      transactions: [],
+      mobile_store_transactions: [],
+      marketplace_orders: [
+        { id: 'm-credits', status: 'paid', amount_subunits: 300, currency: 'USD', created_at: '2026-07-20T00:00:00.000Z', razorpay_order_id: 'credits_asset_a_u', razorpay_payment_id: 'credits_asset_a_u' },
+      ],
+      post_resource_bundle_orders: [
+        { id: 'b-credits', status: 'paid', amount_subunits: 499, currency: 'USD', created_at: '2026-07-21T00:00:00.000Z', razorpay_order_id: 'credits_bundle_b_u', razorpay_payment_id: 'credits_bundle_b_u' },
+        { id: 'b-cash', status: 'paid', amount_subunits: 999, currency: 'USD', created_at: '2026-07-22T00:00:00.000Z', razorpay_order_id: 'order_Abc', razorpay_payment_id: 'pay_Abc' },
+      ],
+      creator_resource_wallets: [],
+    });
+
+    const report = await collectAdminRevenueReport(client, { now: NOW });
+    const bundles = report.rails.find((rail) => rail.key === 'resource-bundles');
+    const marketplace = report.rails.find((rail) => rail.key === 'marketplace');
+
+    expect(bundles?.succeededCount).toBe(1);
+    expect(bundles?.creditCount).toBe(1);
+    expect(bundles?.totalsByCurrency).toEqual([{ currency: 'USD', grossSubunits: 999, succeededCount: 1 }]);
+    expect(marketplace?.succeededCount).toBe(0);
+    expect(marketplace?.creditCount).toBe(1);
+    expect(marketplace?.totalsByCurrency).toEqual([]);
+  });
+
+  it('reads a credit unlock by the same order prefixes as the unlock library and the credit history', () => {
+    const viewerUnlocks = readFileSync(join(process.cwd(), 'src/lib/viewer-unlocks.ts'), 'utf8');
+    expect(viewerUnlocks).toContain(`const CREDIT_ORDER_REFERENCE_PREFIXES = ['${CREDIT_UNLOCK_ORDER_PREFIXES.join("', '")}'];`);
   });
 
   it('counts a free unlock apart from paid orders', async () => {

@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(16);
+select plan(21);
 
 select ok(to_regprocedure('public.admin_search_users(text,text,integer,integer)') is not null, 'admin user search RPC exists');
 select ok(not has_function_privilege('anon','public.admin_search_users(text,text,integer,integer)','EXECUTE'), 'anonymous cannot list accounts');
@@ -65,6 +65,32 @@ select is(
   (select array_agg(id::text) from public.admin_search_users('kindprobe_','all',25,0)),
   array['a5e10001-0000-4000-8000-000000000001'],
   'an underscore in the term is a letter, not a wildcard'
+);
+-- Unescaped, '%' is any run of characters and 'kindprobe%guest' would match "Kindprobe guest".
+select is(
+  (select count(*) from public.admin_search_users('kindprobe%guest','all',25,0)),
+  0::bigint,
+  'a percent sign in the term is a letter, not a wildcard'
+);
+-- Unescaped, a trailing backslash would end the pattern on its escape character.
+select lives_ok(
+  $$select * from public.admin_search_users('kindprobe\','all',25,0)$$,
+  'a trailing backslash in the term is a letter, not an error'
+);
+select is(
+  (select count(*) from public.admin_search_users('kindprobe\','all',25,0)),
+  0::bigint,
+  'a trailing backslash matches only itself'
+);
+-- With neither a term nor a kind, the list is registered accounts: the
+-- fixtures are the newest profiles, so the first page holds all three.
+select ok(
+  (select bool_and(not is_guest) from public.admin_search_users()),
+  'the default list holds no guest'
+);
+select ok(
+  'a5e10001-0000-4000-8000-000000000001'::uuid in (select id from public.admin_search_users()),
+  'the default list holds the newest account'
 );
 select throws_ok(
   $$select * from public.admin_search_users(null,'everyone',25,0)$$,

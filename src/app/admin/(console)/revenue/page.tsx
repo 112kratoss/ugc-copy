@@ -51,6 +51,11 @@ export default async function AdminRevenuePage({
 
   const totalSucceeded = report.rails.reduce((total, rail) => total + rail.succeededCount, 0);
   const totalFree = report.rails.reduce((total, rail) => total + rail.freeCount, 0);
+  const totalCredit = report.rails.reduce((total, rail) => total + rail.creditCount, 0);
+  const unlockNotes = [
+    totalFree > 0 ? `${totalFree.toLocaleString()} free unlocks` : null,
+    totalCredit > 0 ? `${totalCredit.toLocaleString()} paid with credits` : null,
+  ].filter(Boolean).join(' · ');
   const totalPending = report.rails.reduce((total, rail) => total + rail.pendingCount, 0);
   const totalFailed = report.rails.reduce((total, rail) => total + rail.failedCount, 0);
 
@@ -81,12 +86,12 @@ export default async function AdminRevenuePage({
         <StatCard
           label="Paid orders"
           value={totalSucceeded}
-          hint={`Last ${windowDays} days${totalFree > 0 ? ` · ${totalFree.toLocaleString()} free unlocks` : ''}`}
+          hint={`Last ${windowDays} days${unlockNotes ? ` · ${unlockNotes}` : ''}`}
         />
         <StatCard
-          label="Not paid"
+          label="Unpaid or pending"
           value={totalPending}
-          hint="Checkouts opened but never paid"
+          hint="Checkouts not paid, or payments still in progress"
           tone={totalPending > 0 ? 'warning' : 'neutral'}
         />
         <StatCard label="Failed / refunded" value={totalFailed} tone={totalFailed > 0 ? 'danger' : 'neutral'} />
@@ -137,8 +142,14 @@ export default async function AdminRevenuePage({
                     <dd className="text-xs font-semibold text-[var(--ui-text-secondary)]">{rail.freeCount}</dd>
                   </div>
                 ) : null}
+                {rail.creditCount > 0 ? (
+                  <div className="flex justify-between gap-2">
+                    <dt><Text as="span" variant="caption">Paid with credits</Text></dt>
+                    <dd className="text-xs font-semibold text-[var(--ui-text-secondary)]">{rail.creditCount}</dd>
+                  </div>
+                ) : null}
                 <div className="flex justify-between gap-2">
-                  <dt><Text as="span" variant="caption">Not paid</Text></dt>
+                  <dt><Text as="span" variant="caption">Unpaid or pending</Text></dt>
                   <dd className="text-xs font-semibold text-[var(--ui-text-secondary)]">{rail.pendingCount}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
