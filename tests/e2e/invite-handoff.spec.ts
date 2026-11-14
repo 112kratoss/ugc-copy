@@ -5,11 +5,12 @@ import recipePost from './fixtures/post-with-recipe.json';
 
 // A shared profile link carries its sharer's invite (`?r=<code>`). A visitor with no account
 // who opens one is offered the way to keep it on the device they are on (the cross-device
-// plan, 2026-11-10; `src/components/InviteHandoffBar.tsx`): joining on the page while the app
-// in the stores cannot keep a handed-over invite, the phone's own browser from inside another
-// app's, a QR code on a laptop, and, for a link opened with `handoff=preview`, the page as it
-// will be once the app keeps it: Play with the invite as the install referrer, and on an
-// iPhone the invite's link copied before the App Store opens.
+// plan, 2026-11-10; `src/components/InviteHandoffBar.tsx`). The app in both stores keeps a
+// handed-over invite since 0.1.9 (switched on 2026-11-14, `INVITE_APP_HANDOFF_LIVE`), so a
+// phone is offered the app first: Play with the invite as the install referrer, and on an
+// iPhone the invite's link copied before the App Store opens; joining here comes second. A
+// laptop gets a QR code. The page with the switch off (joining here first, the phone's own
+// browser from inside another app's) is the rollback, held by invite-handoff-bar.test.tsx.
 //
 // The creator is the server stub's (support/supabase-server-stub.cjs); the visit route is
 // answered here, as the server would for a code it knows.
@@ -45,14 +46,15 @@ test.afterEach(async ({ page }) => {
 test.describe('on an iPhone', () => {
   test.use({ userAgent: UA.iphoneSafari, ...PHONE });
 
-  test('a shared profile link offers joining here, above the page, and loses its code from the address', async ({ page }) => {
+  test('a shared profile link offers the app first, above the page, and loses its code from the address', async ({ page }) => {
     const visits = await answerVisit(page);
     await page.goto(`${PROFILE}?s=creator-profile&r=${CODE}`);
 
-    await expect(offer(page).getByText('Join here to keep your invite')).toBeVisible(COLD_PAGE);
+    await expect(offer(page).getByText('Get the app and keep your invite')).toBeVisible(COLD_PAGE);
     await expect(offer(page).getByText('Whoever invited you may earn bonus credits if you join.')).toBeVisible();
-    await expect(offer(page).getByRole('link', { name: 'Join free' })).toHaveAttribute('href', `/login?mode=signup&next=${encodeURIComponent(PROFILE)}`);
-    await expect(offer(page).getByRole('link', { name: 'the App Store' })).toHaveAttribute('href', 'https://apps.apple.com/app/id6773286115');
+    await expect(offer(page).getByRole('button', { name: 'Get the app' })).toBeVisible();
+    await expect(offer(page).getByRole('link', { name: 'or join here' })).toHaveAttribute('href', `/login?mode=signup&next=${encodeURIComponent(PROFILE)}`);
+    await expect(offer(page).getByText(/^Preview:/)).toHaveCount(0);
     expect(visits).toEqual([{ code: CODE, source: 'web', kind: 'shared_link', next: PROFILE }]);
     expect(new URL(page.url()).search).toBe('?s=creator-profile');
 
@@ -64,7 +66,7 @@ test.describe('on an iPhone', () => {
 
     // A reload opens the page without the code and still offers it; Close puts it away for the tab.
     await page.reload();
-    await expect(offer(page).getByText('Join here to keep your invite')).toBeVisible(COLD_PAGE);
+    await expect(offer(page).getByText('Get the app and keep your invite')).toBeVisible(COLD_PAGE);
     await offer(page).getByRole('button', { name: 'Close' }).click();
     await expect(offer(page)).toHaveCount(0);
     await page.reload();
@@ -77,8 +79,8 @@ test.describe('on an iPhone', () => {
     const postPath = `/showcase/${recipePost.post.id}`;
     await page.goto(`${postPath}?s=feed&r=${CODE}`);
 
-    await expect(offer(page).getByText('Join here to keep your invite')).toBeVisible(COLD_PAGE);
-    await expect(offer(page).getByRole('link', { name: 'Join free' })).toHaveAttribute('href', `/login?mode=signup&next=${encodeURIComponent(postPath)}`);
+    await expect(offer(page).getByText('Get the app and keep your invite')).toBeVisible(COLD_PAGE);
+    await expect(offer(page).getByRole('link', { name: 'or join here' })).toHaveAttribute('href', `/login?mode=signup&next=${encodeURIComponent(postPath)}`);
     expect(visits).toEqual([{ code: CODE, source: 'web', kind: 'shared_link', next: postPath }]);
 
     const offerBox = (await offer(page).boundingBox())!;
@@ -89,17 +91,14 @@ test.describe('on an iPhone', () => {
     await expect(offer(page)).toHaveCount(0);
   });
 
-  test('with the preview switch, Get the app copies the invite’s link and only then opens the App Store', async ({ page, context }) => {
+  test('Get the app copies the invite’s link and only then opens the App Store', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await answerVisit(page);
     // The App Store's page, answered here: what it is handed is all this test reads of it.
     await page.route('https://apps.apple.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<title>App Store</title>' }));
-    await page.goto(`${PROFILE}?s=creator-profile&r=${CODE}&handoff=preview`);
+    await page.goto(`${PROFILE}?s=creator-profile&r=${CODE}`);
 
     await expect(offer(page).getByText('Get the app and keep your invite')).toBeVisible(COLD_PAGE);
-    await expect(offer(page).getByText('Preview: the app in the stores can’t keep an invite yet.')).toBeVisible();
-    // The switch is for this page: off the address, so a copied address does not pass it on.
-    expect(new URL(page.url()).search).toBe('?s=creator-profile');
     await expect(offer(page).getByText('This copies your invite link. After installing, open the app and tap Paste to keep it.')).toBeVisible();
     const siteOrigin = new URL(page.url()).origin;
     await offer(page).getByRole('button', { name: 'Get the app' }).click();
@@ -114,9 +113,9 @@ test.describe('on an iPhone', () => {
 test.describe('on an Android phone', () => {
   test.use({ userAgent: UA.androidChrome, ...PHONE });
 
-  test('with the preview switch, Get the app is the Play listing with the invite as its install referrer', async ({ page }) => {
+  test('Get the app is the Play listing with the invite as its install referrer', async ({ page }) => {
     await answerVisit(page);
-    await page.goto(`${PROFILE}?s=creator-profile&r=${CODE}&handoff=preview`);
+    await page.goto(`${PROFILE}?s=creator-profile&r=${CODE}`);
 
     const getTheApp = offer(page).getByRole('link', { name: 'Get the app' });
     await expect(getTheApp).toBeVisible(COLD_PAGE);
@@ -132,12 +131,14 @@ test.describe('on an Android phone', () => {
 test.describe('inside Instagram on an iPhone', () => {
   test.use({ userAgent: UA.iphoneInstagram, ...PHONE });
 
-  test('the page sends the visitor to Safari and keeps the code on the address for it', async ({ page }) => {
+  test('the page offers the app, points the web sign-up at Safari, and keeps the code on the address for it', async ({ page }) => {
     await answerVisit(page);
     await page.goto(`${PROFILE}?s=creator-profile&r=${CODE}`);
 
-    await expect(offer(page).getByText('Open this page in Safari to keep your invite')).toBeVisible(COLD_PAGE);
-    await expect(offer(page).getByRole('link', { name: 'Join free' })).toHaveCount(0);
+    await expect(offer(page).getByText('Get the app and keep your invite')).toBeVisible(COLD_PAGE);
+    await expect(offer(page).getByRole('button', { name: 'Get the app' })).toBeVisible();
+    await expect(offer(page).getByRole('link', { name: 'or join here' })).toHaveCount(0);
+    await expect(offer(page).getByText(/To join on the web instead/)).toBeVisible();
     expect(new URL(page.url()).searchParams.get('r')).toBe(CODE);
   });
 });

@@ -21,12 +21,17 @@ export type { InviteHandoffKind, InviteInstallHandoff };
  * platform. It reads the hand-off at its FIRST launch, which runs the code built
  * into the binary, never an over-the-air update: so a platform turns true only
  * once a store build with that code is live for everyone (the plan's step 4),
- * in a change of its own. Until then the page tells a phone to join here first,
- * which keeps the invite today, and says so of the app.
+ * in a change of its own. While a platform is false the page tells that phone
+ * to join here first, which keeps the invite, and says so of the app.
+ *
+ * Both true since 2026-11-14 (owner: "yes flip it"): 0.1.9 carries the hand-off
+ * on both, iOS build 62 on the App Store since 2026-11-12 and Android build 81
+ * in production since 2026-11-14. Setting a platform back to false is the
+ * rollback: the page then sends that phone to join here first again.
  */
 export const INVITE_APP_HANDOFF_LIVE: Readonly<Record<'android' | 'ios', boolean>> = {
-  android: false,
-  ios: false,
+  android: true,
+  ios: true,
 };
 
 /**
@@ -35,6 +40,8 @@ export const INVITE_APP_HANDOFF_LIVE: Readonly<Record<'android' | 'ios', boolean
  * for checking the store links and the copied link on real phones before the
  * store builds are out. The page takes the switch off its address and never
  * keeps it for the tab, so it does not travel on by a copied address or a reload.
+ * On a platform already live it changes nothing, and the page draws no preview
+ * note there (`inviteHandoffPreviewOnly`).
  */
 export const INVITE_HANDOFF_PREVIEW_PARAM = 'handoff';
 export const INVITE_HANDOFF_PREVIEW_VALUE = 'preview';
@@ -101,6 +108,23 @@ export function inviteHandoffOffer({
   if (device === 'desktop') return 'qr';
   if (preview || live[device]) return 'app';
   return inAppBrowser ? 'open-in-browser' : 'join';
+}
+
+/**
+ * Whether the app-first page is shown only because of the preview switch, so
+ * it must say that the app in the stores cannot keep the invite yet. False on
+ * a platform already live, where that note would be untrue.
+ */
+export function inviteHandoffPreviewOnly({
+  device,
+  preview,
+  live = INVITE_APP_HANDOFF_LIVE,
+}: {
+  device: InviteHandoffDevice;
+  preview: boolean;
+  live?: Readonly<Record<'android' | 'ios', boolean>>;
+}): boolean {
+  return preview && device !== 'desktop' && !live[device];
 }
 
 /** The sign-up page, returning to the page the invite led to once the account is made. */

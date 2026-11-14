@@ -13,6 +13,7 @@ import {
   inviteHandoffDevice,
   inviteHandoffDismissed,
   inviteHandoffOffer,
+  inviteHandoffPreviewOnly,
   inviteJoinPath,
   isInAppBrowser,
   openStoreListing,
@@ -112,6 +113,7 @@ function InviteHandoffOfferBody({ handoff, variant }: { handoff: StoredInviteHan
 
   const stores = getAppStoreLinks();
   const offer = inviteHandoffOffer({ device: browser.device, inAppBrowser: browser.inAppBrowser, preview: handoff.preview });
+  const previewOnly = offer === 'app' && inviteHandoffPreviewOnly({ device: browser.device, preview: handoff.preview });
   const joinPath = inviteJoinPath(handoff);
   const phoneBrowser = browser.device === 'ios' ? 'Safari' : 'Chrome';
   const storeName = browser.device === 'ios' ? 'the App Store' : 'Google Play';
@@ -140,7 +142,7 @@ function InviteHandoffOfferBody({ handoff, variant }: { handoff: StoredInviteHan
 
   const openInBrowserNote = (
     <p className="text-xs leading-5 text-[var(--ui-text-muted)]">
-      {offer === 'open-in-browser' ? 'Google sign-in doesn’t work inside this app. ' : 'To join on the web instead, '}
+      {offer === 'open-in-browser' ? 'Google sign-in doesn’t work inside this app. ' : 'Google sign-in doesn’t work inside this app. To join on the web instead, '}
       {chromeUrl ? (
         <><a href={chromeUrl} className={LINK_CLASS}>Open in Chrome</a>, or use this app’s menu and choose “Open in browser”.</>
       ) : (
@@ -168,7 +170,7 @@ function InviteHandoffOfferBody({ handoff, variant }: { handoff: StoredInviteHan
           {variant === 'bar' ? (
             <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">{INVITE_HANDOFF_DISCLOSURE}</p>
           ) : null}
-          {handoff.preview && offer === 'app' ? (
+          {previewOnly ? (
             <p className="mt-1 text-xs font-extrabold leading-5 text-[var(--ui-accent-commerce)]">{INVITE_HANDOFF_PREVIEW_NOTE}</p>
           ) : null}
 

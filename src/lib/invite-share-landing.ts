@@ -177,8 +177,10 @@ export async function settlePendingSharedInviteVisit({
  * offer is told by a toast instead.
  *
  * Inside another app's browser (Instagram, Facebook and the like) the code
- * stays on the address bar: nobody can join there, and "Open in browser" is the
- * way out, which opens the address as it stands.
+ * stays on the address bar: Google sign-in does not work there and that
+ * browser's cookie is not the phone's, so joining on the web means "Open in
+ * browser", which opens the address as it stands. (Get the app, offered there
+ * too since 0.1.9, carries the invite by its own link or install referrer.)
  */
 export function useInviteVisitFromSharedLink({
   search,

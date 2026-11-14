@@ -10,10 +10,29 @@ vi.mock('next/link', () => ({
 
 // Leaving for the store is a navigation, which the test page cannot make: watched instead.
 const store = vi.hoisted(() => ({ open: vi.fn<(url: string) => void>() }));
-vi.mock('@/lib/invite-handoff', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/invite-handoff')>()),
-  openStoreListing: store.open,
-}));
+// The switch is on for both platforms (INVITE_APP_HANDOFF_LIVE). `switchedOff` draws the
+// page as it is with the switch off, which is the rollback, so that page stays tested.
+const switchboard = vi.hoisted(() => ({ live: null as null | Record<'android' | 'ios', boolean> }));
+vi.mock('@/lib/invite-handoff', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/invite-handoff')>();
+  return {
+    ...actual,
+    openStoreListing: store.open,
+    inviteHandoffOffer: (args: Parameters<typeof actual.inviteHandoffOffer>[0]) =>
+      actual.inviteHandoffOffer(switchboard.live ? { ...args, live: switchboard.live } : args),
+    inviteHandoffPreviewOnly: (args: Parameters<typeof actual.inviteHandoffPreviewOnly>[0]) =>
+      actual.inviteHandoffPreviewOnly(switchboard.live ? { ...args, live: switchboard.live } : args),
+  };
+});
+
+function switchedOff() {
+  beforeEach(() => {
+    switchboard.live = { android: false, ios: false };
+  });
+  afterEach(() => {
+    switchboard.live = null;
+  });
+}
 
 import { INVITE_HANDOFF_DISCLOSURE, INVITE_HANDOFF_PREVIEW_NOTE, InviteHandoffBar, InviteHandoffLandingOffer } from '@/components/InviteHandoffBar';
 import { inviteHandoffDismissed, type StoredInviteHandoff } from '@/lib/invite-handoff';
@@ -39,7 +58,8 @@ function onDevice(userAgent: string) {
 
 const origin = () => window.location.origin;
 
-describe('the offer to keep an invite, at the top of the page a shared link opened', () => {
+describe('the offer to keep an invite, at the top of the page a shared link opened, with the switch off', () => {
+  switchedOff();
   beforeEach(() => {
     window.sessionStorage.clear();
     writeText.mockReset();
@@ -131,10 +151,92 @@ describe('the offer to keep an invite, at the top of the page a shared link open
   });
 });
 
-// The page as it will be once the app in the stores keeps a handed-over invite,
-// shown today only to a link opened with the preview switch.
-describe('the offer once the app keeps the invite', () => {
+// The page as it is now that the app in both stores keeps a handed-over invite
+// (0.1.9, switched on 2026-11-14).
+describe('the offer now that the app keeps the invite', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    writeText.mockReset();
+    writeText.mockResolvedValue(undefined);
+    store.open.mockClear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('puts Get the app first on an iPhone, with joining here second and no preview note', async () => {
+    onDevice(UA.iphoneSafari);
+    render(<InviteHandoffBar handoff={SHARED} />);
+    expect(screen.getByText('Get the app and keep your invite')).toBeInTheDocument();
+    expect(screen.getByText(INVITE_HANDOFF_DISCLOSURE)).toBeInTheDocument();
+    expect(screen.queryByText(INVITE_HANDOFF_PREVIEW_NOTE)).toBeNull();
+    expect(screen.getByRole('link', { name: 'or join here' })).toHaveAttribute('href', '/login?mode=signup&next=%2Fcreators%2Fmira');
+    expect(screen.queryByText(/can’t keep this invite yet/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get the app' }));
+    await waitFor(() => expect(store.open).toHaveBeenCalledWith('https://apps.apple.com/app/id6773286115'));
+    expect(writeText).toHaveBeenCalledWith(`${origin()}/creators/mira?r=${CODE}`);
+  });
+
+  it('sends an Android phone to Play with the invite as the install referrer', () => {
+    onDevice(UA.androidChrome);
+    render(<InviteHandoffBar handoff={SHARED} />);
+    expect(screen.getByText('Get the app and keep your invite')).toBeInTheDocument();
+    expect(screen.queryByText(INVITE_HANDOFF_PREVIEW_NOTE)).toBeNull();
+    const href = screen.getByRole('link', { name: 'Get the app' }).getAttribute('href')!;
+    const carried = decodeURIComponent(href.slice(href.indexOf('referrer=') + 'referrer='.length));
+    expect(readInviteInstallReferrer(carried)).toEqual({ code: CODE, kind: 'shared_link', path: '/creators/mira' });
+  });
+
+  it('offers Get the app inside another app’s browser too, with the way to join on the web', () => {
+    onDevice(UA.androidInstagram);
+    render(<InviteHandoffBar handoff={SHARED} />);
+    expect(screen.getByRole('link', { name: 'Get the app' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'or join here' })).toBeNull();
+    expect(screen.getByText(/Google sign-in doesn’t work inside this app\. To join on the web instead/)).toBeInTheDocument();
+  });
+
+  it('copies the invite’s link inside Instagram on an iPhone, and says where to join if it cannot', async () => {
+    onDevice(UA.iphoneInstagram);
+    const first = render(<InviteHandoffBar handoff={SHARED} />);
+    expect(screen.getByText('Get the app and keep your invite')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'or join here' })).toBeNull();
+    expect(screen.getByText(/Google sign-in doesn’t work inside this app\. To join on the web instead/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Get the app' }));
+    await waitFor(() => expect(store.open).toHaveBeenCalledWith('https://apps.apple.com/app/id6773286115'));
+    expect(writeText).toHaveBeenCalledWith(`${origin()}/creators/mira?r=${CODE}`);
+    first.unmount();
+
+    store.open.mockClear();
+    writeText.mockRejectedValue(new Error('NotAllowedError'));
+    render(<InviteHandoffBar handoff={SHARED} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Get the app' }));
+    expect(await screen.findByText('Your invite link could not be copied here. Join on this page to keep it, after opening it in Safari.')).toBeInTheDocument();
+    expect(store.open).not.toHaveBeenCalled();
+  });
+
+  it('draws no preview note for a link opened with the preview switch', () => {
+    onDevice(UA.androidChrome);
+    render(<InviteHandoffBar handoff={{ ...SHARED, preview: true }} />);
+    expect(screen.getByText('Get the app and keep your invite')).toBeInTheDocument();
+    expect(screen.queryByText(INVITE_HANDOFF_PREVIEW_NOTE)).toBeNull();
+  });
+
+  it('makes the same offer on the invite landing, with no Close and no second sign-up button', () => {
+    onDevice(UA.androidChrome);
+    render(<InviteHandoffLandingOffer handoff={{ code: CODE, kind: 'invite', path: '/create', preview: false }} />);
+    expect(screen.getByText('Prefer the mobile app? Your invite comes with you')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Get the app' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Join free' })).toBeNull();
+  });
+});
+
+// The app-first page shown with the preview switch on a platform that is not live yet:
+// marked as a preview, since the app there cannot keep the invite.
+describe('the preview of the app-first page while the switch is off', () => {
   const PREVIEW: StoredInviteHandoff = { ...SHARED, preview: true };
+  switchedOff();
 
   beforeEach(() => {
     window.sessionStorage.clear();
@@ -194,8 +296,9 @@ describe('the offer once the app keeps the invite', () => {
   });
 });
 
-describe('the same offer on the invite landing', () => {
+describe('the same offer on the invite landing, with the switch off', () => {
   const INVITE: StoredInviteHandoff = { code: CODE, kind: 'invite', path: '/create', preview: false };
+  switchedOff();
 
   beforeEach(() => window.sessionStorage.clear());
   afterEach(() => vi.unstubAllGlobals());
