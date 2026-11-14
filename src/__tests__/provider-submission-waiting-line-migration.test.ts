@@ -71,7 +71,7 @@ describe('provider submission waiting line migration', () => {
 
   it('reads the line under the lock that serialises every reservation', () => {
     const lock = logic.indexOf('pg_advisory_xact_lock');
-    const lineRead = logic.indexOf('FROM public.provider_submission_waiters w');
+    const lineRead = logic.indexOf('FROM public.provider_submission_waiters w\n      JOIN');
 
     expect(lock).toBeGreaterThan(-1);
     expect(lock).toBeLessThan(lineRead);
@@ -81,7 +81,7 @@ describe('provider submission waiting line migration', () => {
   });
 
   it('counts only tickets that are alive and whose generation is still waiting to be sent', () => {
-    expect(logic).toContain('w.seen_at > v_now - make_interval(secs => v_ttl)');
+    expect(logic).toContain('AND w.seen_at > v_now - make_interval(secs => v_ttl)');
     expect(logic).toContain("g.status = 'pending'");
     expect(logic).toContain('g.prediction_id IS NULL');
     expect(logic).toContain('g.provider_submission_reserved_at IS NULL');
@@ -91,6 +91,7 @@ describe('provider submission waiting line migration', () => {
     expect(logic).toContain('v_turn IS NULL');
     expect(logic).toContain('OR w.waiting_since < v_turn');
     expect(logic).toContain('OR (w.waiting_since = v_turn AND w.generation_id < p_generation_id)');
+    expect(logic).toContain(') AS ahead');
   });
 
   it('takes a start\'s turn from its ticket, or from the date a caller without one gives', () => {
@@ -100,22 +101,29 @@ describe('provider submission waiting line migration', () => {
     expect(logic).toContain('v_turn := coalesce(');
     expect(logic).toContain('CASE WHEN p_turn_since IS NULL THEN NULL ELSE least(p_turn_since, v_now) END');
     const turn = logic.indexOf('v_turn := coalesce(');
-    expect(turn).toBeGreaterThan(logic.indexOf('SELECT waiting_since INTO v_ticket'));
-    expect(turn).toBeLessThan(logic.indexOf('FROM public.provider_submission_waiters w'));
+    expect(turn).toBeGreaterThan(logic.indexOf('SELECT waiting_since, seen_at INTO v_ticket, v_ticket_seen'));
+    expect(turn).toBeLessThan(logic.indexOf('FROM public.provider_submission_waiters w\n      JOIN'));
   });
 
   it('gives no ticket to a start that finds the line full, and takes none away', () => {
-    expect(logic).toContain('v_ticket IS NOT NULL\n       OR (');
+    expect(logic).toContain('v_ticket_live\n       OR (');
+    // A ticket its start let lapse is not counted in the line, so it is not
+    // exempt from a line that filled up while it was away.
+    expect(logic).toContain('v_ticket_live := v_ticket IS NOT NULL AND v_ticket_seen > v_now - make_interval(secs => v_ttl);');
     expect(logic).toContain('(p_line_max IS NULL OR v_line < p_line_max)');
-    expect(logic).toContain('AND (p_model_line_max IS NULL OR v_model IS NULL OR v_model_ahead < p_model_line_max)');
-    // The line's length is every live ticket ahead, whatever it waits for.
-    const counts = logic.slice(logic.indexOf('SELECT\n      count(*),'), logic.indexOf('INTO v_line, v_ahead, v_model_ahead'));
-    expect(counts).toContain("count(*) FILTER (WHERE w.reason <> 'model_rate_limited')");
+    expect(logic).toContain('AND (p_model_line_max IS NULL OR v_model IS NULL OR v_model_line < p_model_line_max)');
+    // The line's length is every live ticket, ahead of this start or not and
+    // whatever it waits for; the model's is every live ticket on that model.
+    const counts = logic.slice(logic.indexOf('SELECT\n      count(*),'), logic.indexOf('INTO v_line, v_model_line, v_ahead, v_model_ahead'));
+    expect(counts.split('\n').slice(1, 3).map((line) => line.trim())).toEqual([
+      'count(*),',
+      'count(*) FILTER (WHERE v_model IS NOT NULL AND live.model = v_model),',
+    ]);
   });
 
   it('does not let a start waiting on its model hold an account place', () => {
-    expect(logic).toContain("count(*) FILTER (WHERE w.reason <> 'model_rate_limited')");
-    expect(logic).toContain('count(*) FILTER (WHERE v_model IS NOT NULL AND w.model = v_model)');
+    expect(logic).toContain("count(*) FILTER (WHERE live.ahead AND live.reason <> 'model_rate_limited')");
+    expect(logic).toContain('count(*) FILTER (WHERE live.ahead AND v_model IS NOT NULL AND live.model = v_model)');
   });
 
   it('asks for a place for this start and one for each start ahead of it', () => {

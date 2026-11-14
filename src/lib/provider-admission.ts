@@ -89,8 +89,8 @@ export const PROVIDER_ADMISSION_POLICY = {
    */
   waitBudgetMs: 45_000,
   /**
-   * The latest a start may still be waiting, counted from when its request
-   * began rather than from when it reached the gate. A start can spend tens of
+   * The latest a start may still be waiting, counted from when the route took
+   * the start rather than from when it reached the gate. A start can spend tens of
    * seconds preparing its inputs first (measuring reference clips, converting
    * tracks), and after the wait it still has to create the provider task (30 s
    * at most, `PROVIDER_TASK_CREATE_TIMEOUT_MS`) and attach it. A start that
@@ -127,7 +127,9 @@ export const PROVIDER_ADMISSION_POLICY = {
    * The longest the line gets. A start that finds this many already waiting
    * is refused at once: three rate windows of starts is all `waitBudgetMs` can
    * serve, so a place further back would be credits held for a wait that
-   * cannot end well. It also bounds what each ask reads under the gate's lock.
+   * cannot end well. A start with less time to wait (an agent's, or one that
+   * reached the gate late) is held to the windows its own wait spans
+   * (`lineMaxFor`). It also bounds what each ask reads under the gate's lock.
    */
   waitLineMax: 54,
   /**
@@ -257,14 +259,38 @@ type ProviderAdmissionClient = {
   rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<ProviderAdmissionAnswer>;
 };
 
-/** One ask, given up after `askTimeoutMs` where the client can be told to (supabase-js can). */
-function askWithTimeout(call: PromiseLike<ProviderAdmissionAnswer>): PromiseLike<ProviderAdmissionAnswer> {
+/** One ask, given up after `limitMs` where the client can be told to (supabase-js can). */
+function askWithTimeout(
+  call: PromiseLike<ProviderAdmissionAnswer>,
+  limitMs: number,
+): PromiseLike<ProviderAdmissionAnswer> {
   const abortable = call as PromiseLike<ProviderAdmissionAnswer> & {
     abortSignal?: (signal: AbortSignal) => PromiseLike<ProviderAdmissionAnswer>;
   };
   return typeof abortable.abortSignal === 'function'
-    ? abortable.abortSignal(AbortSignal.timeout(PROVIDER_ADMISSION_POLICY.askTimeoutMs))
+    ? abortable.abortSignal(AbortSignal.timeout(limitMs))
     : call;
+}
+
+/** An ask that ran into its time limit, as supabase-js reports the abort. */
+const ASK_TIMED_OUT = /TimeoutError|AbortError|operation was aborted/i;
+
+/**
+ * The time limit of the last ask a waiting start makes, as its budget runs
+ * out: enough for a healthy database to answer, and the most the wait can run
+ * past its budget.
+ */
+const WAIT_LAST_ASK_MS = 2_000;
+
+/**
+ * How long a line a start with `budgetMs` to wait may join: the starts the
+ * windows inside its budget can serve, at `perWindow` a window, and never more
+ * than `most`. An agent's shorter wait, or a start that reached the gate late,
+ * is served by fewer windows than a creator's full budget.
+ */
+function lineMaxFor(budgetMs: number, perWindow: number, most: number): number {
+  const windows = Math.max(1, Math.floor(budgetMs / (PROVIDER_ADMISSION_POLICY.rateWindowSeconds * 1000)));
+  return Math.min(most, windows * perWindow);
 }
 
 /** What the reservation raises for a generation that is gone or already settled: nothing to wait for. */
@@ -326,7 +352,14 @@ export async function admitProviderSubmission(params: {
   let gone = false;
 
   for (;;) {
-    const elapsedMs = now() - startedAt;
+    // The first ask gets the full limit. Each later one gets what is left of
+    // the budget, so the last ask cannot carry the wait far past its end.
+    const askLimitMs = refusal === null
+      ? PROVIDER_ADMISSION_POLICY.askTimeoutMs
+      : Math.min(
+          PROVIDER_ADMISSION_POLICY.askTimeoutMs,
+          Math.max(waitBudgetMs - (now() - startedAt), WAIT_LAST_ASK_MS),
+        );
     let verdict: Omit<ProviderAdmissionVerdict, 'waitedMs'> | null = null;
 
     try {
@@ -340,8 +373,12 @@ export async function admitProviderSubmission(params: {
               p_generation_id: params.generationId,
               p_wait: waitBudgetMs > 0,
               p_waiter_ttl_seconds: PROVIDER_ADMISSION_POLICY.waiterTtlSeconds,
-              p_line_max: PROVIDER_ADMISSION_POLICY.waitLineMax,
-              p_model_line_max: PROVIDER_ADMISSION_POLICY.waitModelLineMax,
+              p_line_max: lineMaxFor(
+                waitBudgetMs, PROVIDER_ADMISSION_POLICY.rateWindowMax, PROVIDER_ADMISSION_POLICY.waitLineMax,
+              ),
+              p_model_line_max: lineMaxFor(
+                waitBudgetMs, PROVIDER_ADMISSION_POLICY.modelRateWindowMax, PROVIDER_ADMISSION_POLICY.waitModelLineMax,
+              ),
               p_turn_since: turnSinceMs === null ? null : new Date(turnSinceMs).toISOString(),
             }
           : {}),
@@ -354,7 +391,7 @@ export async function admitProviderSubmission(params: {
         p_in_flight_window_seconds: PROVIDER_ADMISSION_POLICY.inFlightWindowSeconds,
         p_circuit_open_seconds: PROVIDER_ADMISSION_POLICY.circuitOpenSeconds,
         p_probe_timeout_seconds: PROVIDER_ADMISSION_POLICY.probeTimeoutSeconds,
-      }));
+      }), askLimitMs);
 
       if (error) {
         if (error instanceof Error) throw error;
@@ -362,32 +399,48 @@ export async function admitProviderSubmission(params: {
       }
       verdict = normalizeVerdict(data);
     } catch (admissionError) {
-      const message = admissionError instanceof Error ? admissionError.message : String(admissionError);
-      logBackendWarning('provider_admission_unavailable', { service, waiting: refusal !== null, error: message });
+      const message = admissionError instanceof Error
+        ? `${admissionError.name}: ${admissionError.message}`
+        : String(admissionError);
+      const timedOut = ASK_TIMED_OUT.test(message);
+      logBackendWarning('provider_admission_unavailable', {
+        service, waiting: refusal !== null, timedOut, error: message,
+      });
       // Something else settled or removed the generation while it waited. No
       // place will ever be its, so the wait ends here rather than at its budget.
       gone = refusal !== null && GENERATION_GONE.test(message);
 
-      // Fail *open* on any infrastructure problem. The gate protects the
-      // provider from us; it is not a correctness boundary, and refusing every
-      // generation because an admission table is unreachable — or because the
-      // service-role client cannot be constructed — would convert a monitoring
-      // problem into a full outage. The per-user limiter and the provider's own
-      // 429s still apply.
-      //
-      // Not for a start that is already waiting, though. The gate's last word
-      // to it was "no place yet", and an ask that got no answer does not take
-      // that back: letting every waiting start through on one failed ask would
-      // send the whole line at once, at the moment the database is struggling.
-      // It keeps its refusal and asks again.
-      if (refusal === null) {
+      if (refusal === null && timedOut) {
+        // The database is there and did not answer in time: the reservation is
+        // queued behind others, which is load, not an outage. Letting the
+        // start through unchecked would lift every limit at the moment the
+        // gate is busiest. It is treated as refused for now: a start that may
+        // wait asks again, and one that may not is told the provider is busy.
+        refusal = {
+          allowed: false, reason: 'rate_limited', state: 'unknown', retryAfterSeconds: 0, inFlight: null,
+          waiting: waitBudgetMs > 0, waitersAhead: null,
+        };
+      } else if (refusal === null) {
+        // Fail *open* on any other infrastructure problem. The gate protects
+        // the provider from us; it is not a correctness boundary, and refusing
+        // every generation because an admission table is unreachable — or
+        // because the service-role client cannot be constructed — would
+        // convert a monitoring problem into a full outage. The per-user
+        // limiter and the provider's own 429s still apply.
         return {
           allowed: true, reason: 'admitted', state: 'unknown', retryAfterSeconds: 0, inFlight: null,
           waiting: false, waitersAhead: null, waitedMs: 0,
         };
       }
+      // Otherwise the start is already waiting. The gate's last word to it was
+      // "no place yet", and an ask that got no answer does not take that back:
+      // letting every waiting start through on one failed ask would send the
+      // whole line at once, at the moment the database is struggling. It keeps
+      // its refusal and asks again.
     }
     asks += 1;
+    // Read after the ask, which is part of the wait: an ask can take seconds.
+    const elapsedMs = now() - startedAt;
 
     if (verdict?.allowed) {
       if (asks > 1) {
@@ -400,7 +453,7 @@ export async function admitProviderSubmission(params: {
           asks,
         });
       }
-      return { ...verdict, waitedMs: elapsedMs };
+      return { ...verdict, waitedMs: asks > 1 ? elapsedMs : 0 };
     }
 
     // The rejection sits deliberately outside the catch above: a genuine "not

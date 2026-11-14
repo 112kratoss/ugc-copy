@@ -10,7 +10,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(40);
+select plan(41);
 
 delete from public.generations;
 delete from public.provider_admission_buckets where scope like 'pgtap-line%';
@@ -247,6 +247,18 @@ select is(
   'a start already in the line keeps its ticket however full the line is'
 );
 
+-- Ticket 19 lapses: its start asked too slowly, and stopped being counted. A
+-- newcomer takes the line's one place. The slow start is not owed it back.
+update public.provider_submission_waiters set seen_at = now() - interval '20 seconds'
+where generation_id = pg_temp.gen(19);
+select pg_temp.ask(20, true, 'pgtap-line-cap', null, 1, null, 1000, null, 1);
+
+select is(
+  (pg_temp.ask(19, true, 'pgtap-line-cap', null, 1, null, 1000, null, 1) ->> 'waiting')::boolean,
+  false,
+  'a start that let its ticket lapse does not push a full line past its length'
+);
+
 -- One model's line is bounded by itself: it is served at the model's share.
 select pg_temp.ask(26, true, 'pgtap-line-model-cap', 'm1', 100, 1);
 select pg_temp.ask(27, true, 'pgtap-line-model-cap', 'm1', 100, 1, 1000, null, null, 1);
@@ -257,10 +269,13 @@ select is(
   'a start that finds its model''s line full is refused without a place in it'
 );
 
+-- Model m2 fills its own share, so its next start has to wait too.
+select pg_temp.ask(29, true, 'pgtap-line-model-cap', 'm2', 100, 1, 1000, null, null, 1);
+
 select is(
-  pg_temp.ask(29, true, 'pgtap-line-model-cap', 'm2', 100, 1, 1000, null, null, 1) ->> 'reason',
-  'admitted',
-  'which is no bar to a start on another model'
+  (pg_temp.ask(30, true, 'pgtap-line-model-cap', 'm2', 100, 1, 1000, null, null, 1) ->> 'waiting')::boolean,
+  true,
+  'which is no bar to a start on another model: its line is its own'
 );
 
 -- ─── A run step's turn ───────────────────────────────────────────────────────
@@ -275,7 +290,7 @@ update public.provider_admission_buckets set admitted_at = '{}' where scope = 'p
 select is(
   pg_temp.ask(23, false, 'pgtap-line-turn', null, 1, null, 1000, now() + interval '1 hour') ->> 'reason',
   'rate_limited',
-  'a turn dated in the future is no turn: the step is behind the line'
+  'a step whose turn is no older than the tickets is behind them'
 );
 
 select is(

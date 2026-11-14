@@ -54,11 +54,59 @@ function line(answers: unknown[]) {
   };
 }
 
+/**
+ * The same, through a client that takes a time limit the way supabase-js does:
+ * every ask after the first `fastAsks` takes `askMs` on the clock, or runs
+ * into the limit it was given and comes back as the abort supabase-js reports.
+ */
+function slowLine(askMs: number, answers: unknown[], fastAsks = 1) {
+  let clock = 0;
+  let asked = 0;
+  const pauses: number[] = [];
+  const limits: number[] = [];
+  let limit = Number.POSITIVE_INFINITY;
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+    limit = ms;
+    limits.push(ms);
+    return new AbortController().signal;
+  });
+  const rpc = vi.fn((fn: string, args: Record<string, unknown>) => ({
+    fn,
+    args,
+    abortSignal: async (): Promise<{ data: unknown; error: unknown }> => {
+      asked += 1;
+      const answer = answers.length > 1 ? answers.shift() : answers[0];
+      const takes = asked <= fastAsks ? 0 : askMs;
+      if (takes > limit) {
+        clock += limit;
+        return { data: null, error: { message: 'TimeoutError: The operation was aborted due to timeout' } };
+      }
+      clock += takes;
+      return { data: answer, error: null };
+    },
+  }));
+  return {
+    rpc,
+    pauses,
+    limits,
+    clock: () => clock,
+    seams: {
+      client: { rpc } as never,
+      now: () => clock,
+      sleep: async (ms: number) => { pauses.push(ms); clock += ms; },
+    },
+  };
+}
+
 function argsOfAsk(rpc: ReturnType<typeof line>['rpc'], ask: number) {
   return (rpc.mock.calls[ask] as unknown as [string, Record<string, unknown>])[1];
 }
 
 describe('waiting in line for provider admission', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('does not wait unless the caller asked to', async () => {
     // A template or workflow step has a durable retry of its own and a worker
     // whose time every step in its batch shares. It is refused at once, as
@@ -218,6 +266,84 @@ describe('waiting in line for provider admission', () => {
       generationId: GENERATION_ID, client: { rpc } as never,
     })).resolves.toMatchObject({ allowed: true });
     expect(abortSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts the time its asks take against the wait', async () => {
+    // An ask is part of the wait and can take seconds. Measured only between
+    // asks, a slow database let a 20 s wait run to 36 s. Each later ask is
+    // given what is left of the budget, so the wait ends when the budget does.
+    const { rpc, limits, clock, seams } = slowLine(15_000, [refused('rate_limited', 2)]);
+
+    await expect(admitProviderSubmission({ generationId: GENERATION_ID, waitBudgetMs: 20_000, ...seams }))
+      .rejects.toMatchObject({ status: 429 });
+
+    // 0 s: refused. 2 s: an ask that runs to its 10 s limit. 14 s: an ask given
+    // the 6 s that are left. 20 s: the budget is spent.
+    expect(limits).toEqual([PROVIDER_ADMISSION_POLICY.askTimeoutMs, PROVIDER_ADMISSION_POLICY.askTimeoutMs, 6_000]);
+    expect(rpc).toHaveBeenCalledTimes(3);
+    expect(clock()).toBe(20_000);
+  });
+
+  it('reports the whole wait, the last ask included', async () => {
+    const { seams } = slowLine(3_000, [refused('rate_limited', 2), ADMITTED]);
+
+    await expect(admitProviderSubmission({ generationId: GENERATION_ID, waitBudgetMs: 45_000, ...seams }))
+      .resolves.toMatchObject({ allowed: true, waitedMs: 5_000 });
+  });
+
+  it('gives the last ask of a spent budget two seconds, not ten', async () => {
+    // The ask made as the budget runs out is the only thing that can carry the
+    // wait past it, and it is held to what a healthy database needs to answer.
+    const { limits, clock, seams } = slowLine(15_000, [refused('rate_limited', 2)]);
+
+    await expect(admitProviderSubmission({ generationId: GENERATION_ID, waitBudgetMs: 2_000, ...seams }))
+      .rejects.toMatchObject({ status: 429 });
+
+    expect(limits).toEqual([PROVIDER_ADMISSION_POLICY.askTimeoutMs, 2_000]);
+    expect(clock()).toBeLessThanOrEqual(2_000 + 2_000);
+  });
+
+  it('does not let a start through because its first ask ran out of time', async () => {
+    // A reservation that takes ten seconds is queued behind others: that is
+    // load, not an outage. Failing open on it would lift every limit at the
+    // moment the gate is busiest. A start that may not wait is told busy.
+    const { rpc, seams } = slowLine(15_000, [ADMITTED], 0);
+
+    const error = await admitProviderSubmission({ generationId: GENERATION_ID, ...seams }).catch((thrown) => thrown);
+
+    expect(error).toBeInstanceOf(GenerationServiceError);
+    expect(error).toMatchObject({ status: 429 });
+    expect(getPublicGenerationStartFailure(error).code).toBe('provider_busy');
+    expect(rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks again after a first ask that ran out of time, when it may wait', async () => {
+    const { rpc, seams } = slowLine(15_000, [ADMITTED], 0);
+    // The second ask is answered in time.
+    let asked = 0;
+    const answering = vi.fn((fn: string, args: Record<string, unknown>) => {
+      asked += 1;
+      return asked === 1 ? rpc(fn, args) : Promise.resolve({ data: ADMITTED, error: null });
+    });
+
+    await expect(admitProviderSubmission({
+      generationId: GENERATION_ID, waitBudgetMs: 45_000, ...seams, client: { rpc: answering } as never,
+    })).resolves.toMatchObject({ allowed: true, reason: 'admitted' });
+    expect(answering).toHaveBeenCalledTimes(2);
+  });
+
+  it('holds a start to the line its own wait can be served in', async () => {
+    // Three windows fit a creator's 45 s, two an agent's 25 s, and a start
+    // that reached the gate with seconds left is served by the first alone.
+    const { rateWindowMax, modelRateWindowMax, waitLineMax, waitModelLineMax } = PROVIDER_ADMISSION_POLICY;
+    for (const [budget, windows] of [[45_000, 3], [25_000, 2], [5_000, 1], [600_000, 3]] as const) {
+      const { rpc, seams } = line([ADMITTED]);
+      await admitProviderSubmission({ generationId: GENERATION_ID, waitBudgetMs: budget, ...seams });
+      expect(argsOfAsk(rpc, 0)).toMatchObject({
+        p_line_max: Math.min(waitLineMax, windows * rateWindowMax),
+        p_model_line_max: Math.min(waitModelLineMax, windows * modelRateWindowMax),
+      });
+    }
   });
 
   it('never spins: a hint that rounds to nothing still pauses', async () => {

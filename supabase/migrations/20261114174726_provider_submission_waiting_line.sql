@@ -112,8 +112,11 @@ DECLARE
   v_breaker_state text;
   v_now timestamptz;
   v_ticket timestamptz;
+  v_ticket_seen timestamptz;
+  v_ticket_live boolean := false;
   v_turn timestamptz;
   v_line integer := 0;
+  v_model_line integer := 0;
   v_ahead integer := 0;
   v_model_ahead integer := 0;
   v_reason text;
@@ -168,9 +171,14 @@ BEGIN
   WHERE service = v_service
     AND seen_at < v_now - make_interval(secs => greatest(v_ttl * 4, 60));
 
-  SELECT waiting_since INTO v_ticket
+  SELECT waiting_since, seen_at INTO v_ticket, v_ticket_seen
   FROM public.provider_submission_waiters
   WHERE generation_id = p_generation_id;
+
+  -- A ticket this start let lapse (it asked too slowly) still dates its turn,
+  -- but it has not been counted in the line since, so it is not owed a place
+  -- in a line that filled up meanwhile.
+  v_ticket_live := v_ticket IS NOT NULL AND v_ticket_seen > v_now - make_interval(secs => v_ttl);
 
   -- This start's turn: its ticket, or for a caller that keeps none the moment
   -- it says it was first turned away, never later than now. With neither it is
@@ -201,24 +209,33 @@ BEGIN
     -- by then be its model's to wait on. Either way the next ask puts it right,
     -- and the limits themselves are the admission's, which no count here can
     -- raise.
+    --
+    -- The line's length is counted whole, not only ahead of this start: it is
+    -- what a start without a live ticket is held to before it may join.
     SELECT
       count(*),
-      count(*) FILTER (WHERE w.reason <> 'model_rate_limited'),
-      count(*) FILTER (WHERE v_model IS NOT NULL AND w.model = v_model)
-    INTO v_line, v_ahead, v_model_ahead
-    FROM public.provider_submission_waiters w
-    JOIN public.generations g ON g.id = w.generation_id
-    WHERE w.service = v_service
-      AND w.generation_id <> p_generation_id
-      AND w.seen_at > v_now - make_interval(secs => v_ttl)
-      AND (
-        v_turn IS NULL
-        OR w.waiting_since < v_turn
-        OR (w.waiting_since = v_turn AND w.generation_id < p_generation_id)
-      )
-      AND g.status = 'pending'
-      AND g.prediction_id IS NULL
-      AND g.provider_submission_reserved_at IS NULL;
+      count(*) FILTER (WHERE v_model IS NOT NULL AND live.model = v_model),
+      count(*) FILTER (WHERE live.ahead AND live.reason <> 'model_rate_limited'),
+      count(*) FILTER (WHERE live.ahead AND v_model IS NOT NULL AND live.model = v_model)
+    INTO v_line, v_model_line, v_ahead, v_model_ahead
+    FROM (
+      SELECT
+        w.model,
+        w.reason,
+        (
+          v_turn IS NULL
+          OR w.waiting_since < v_turn
+          OR (w.waiting_since = v_turn AND w.generation_id < p_generation_id)
+        ) AS ahead
+      FROM public.provider_submission_waiters w
+      JOIN public.generations g ON g.id = w.generation_id
+      WHERE w.service = v_service
+        AND w.generation_id <> p_generation_id
+        AND w.seen_at > v_now - make_interval(secs => v_ttl)
+        AND g.status = 'pending'
+        AND g.prediction_id IS NULL
+        AND g.provider_submission_reserved_at IS NULL
+    ) AS live;
 
     -- More starts ahead than the limit holds at all: no admission could leave
     -- a place for each of them and one for this start.
@@ -273,12 +290,12 @@ BEGIN
 
   IF v_wait AND v_reason IN ('rate_limited', 'model_rate_limited', 'max_in_flight')
      -- The line is full for a start that is not in it yet. One that holds a
-     -- ticket keeps it: it was let in, and is nearer the front every ask.
+     -- live ticket keeps it: it was let in, and is nearer the front every ask.
      AND (
-       v_ticket IS NOT NULL
+       v_ticket_live
        OR (
          (p_line_max IS NULL OR v_line < p_line_max)
-         AND (p_model_line_max IS NULL OR v_model IS NULL OR v_model_ahead < p_model_line_max)
+         AND (p_model_line_max IS NULL OR v_model IS NULL OR v_model_line < p_model_line_max)
        )
      ) THEN
     -- Take a ticket, or keep the one it has: the stamp is the first refusal's.
