@@ -427,6 +427,112 @@ describe('PostComments', () => {
         ))).toBe(true);
     });
 
+    it('ties a thread together with a line from the comment through each reply to the replies toggle', async () => {
+        const root = comment({ id: 'root-1', body: 'Root comment', replyCount: 2 });
+        const loner = comment({ id: 'loner', body: 'No replies here' });
+        const replies = [
+            comment({ id: 'reply-1', parentId: root.id, body: 'First reply' }),
+            comment({ id: 'reply-2', parentId: root.id, body: 'Second reply' }),
+        ];
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (
+            String(input).includes('parentId=root-1')
+                ? jsonResponse(page(replies))
+                : jsonResponse(page([root, loner]))
+        )));
+        // Each row's pieces of line, decoration a screen reader never reaches.
+        const linesOf = (item: HTMLElement) => Array.from(
+            item.querySelectorAll('[data-thread-line]'),
+            (piece) => {
+                expect(piece).toHaveAttribute('aria-hidden', 'true');
+                return piece.getAttribute('data-thread-line');
+            }
+        ).sort();
+
+        render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={4} />);
+        await screen.findByText('Root comment');
+
+        // Folded: the comment's spine falls to the toggle's elbow, and a
+        // comment without replies draws none.
+        expect(threadItems().map(linesOf)).toEqual([['spine'], ['elbow'], []]);
+
+        fireEvent.click(screen.getByRole('button', { name: 'View 2 replies' }));
+        await screen.findByText('Second reply');
+
+        // Open: every reply branches off the spine, which runs on past the last
+        // reply to the toggle and stops there.
+        expect(threadItems().map(linesOf)).toEqual([
+            ['spine'],
+            ['elbow', 'spine'],
+            ['elbow', 'spine'],
+            ['elbow'],
+            [],
+        ]);
+    });
+
+    it("draws a thread's line when its first reply is posted, keeps it whole while that reply is deleted, and takes it away after", async () => {
+        signIn();
+        let replies: PostComment[] = [];
+        let finishDelete: () => void = () => {};
+        const root = () => comment({ id: 'root-1', body: 'Root comment', replyCount: replies.length });
+        const mine = comment({ id: 'reply-mine', parentId: 'root-1', body: 'My only reply', author: viewerAuthor });
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method === 'POST') {
+                replies = [mine];
+                return jsonResponse({ success: true, comment: mine, commentCount: 2 }, 201);
+            }
+            if (init?.method === 'DELETE') {
+                // Held open so the row can be looked at while it is busy.
+                await new Promise<void>((resolve) => { finishDelete = resolve; });
+                replies = [];
+                return jsonResponse({ success: true, status: 'removed_by_author', commentCount: 1 });
+            }
+            return String(input).includes('parentId=root-1')
+                ? jsonResponse(page(replies))
+                : jsonResponse(page([root()]));
+        }));
+        const linesOf = (item: HTMLElement) => Array.from(
+            item.querySelectorAll('[data-thread-line]'),
+            (piece) => piece.getAttribute('data-thread-line')
+        ).sort();
+
+        render(
+            <>
+                <PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />
+                <FeedbackViewport />
+            </>
+        );
+        await screen.findByText('Root comment');
+        expect(threadItems().map(linesOf)).toEqual([[]]);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Reply to @creator' }));
+        fireEvent.change(screen.getByRole('textbox', { name: 'Write a reply' }), {
+            target: { value: 'My only reply' },
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+        await screen.findByRole('button', { name: 'Hide replies' });
+        expect(threadItems().map(linesOf)).toEqual([['spine'], ['elbow', 'spine'], ['elbow']]);
+
+        chooseFromMenu(screen.getByRole('button', { name: 'More actions for your comment' }), 'Delete');
+        const question = await screen.findByRole('alertdialog', { name: 'Delete your comment?' });
+        fireEvent.click(within(question).getByRole('button', { name: 'Delete comment' }));
+
+        // Busy: the reply's text dims, and no piece of the line sits inside
+        // anything dimmed.
+        const busyRow = screen.getByRole('listitem', { name: 'Reply from @viewer' });
+        await waitFor(() => expect(busyRow).toHaveAttribute('aria-busy', 'true'));
+        expect(busyRow.querySelector('[class*="opacity-60"]')).not.toBeNull();
+        for (const piece of document.querySelectorAll('[data-thread-line]')) {
+            for (let node = piece as HTMLElement | null; node; node = node.parentElement) {
+                expect(node.className).not.toMatch(/(^|\s)opacity-60(\s|$)/);
+            }
+        }
+
+        await act(async () => finishDelete());
+        await waitFor(() => expect(screen.queryByText('My only reply')).not.toBeInTheDocument());
+        expect(screen.queryByRole('button', { name: 'Hide replies' })).not.toBeInTheDocument();
+        expect(threadItems().map(linesOf)).toEqual([[]]);
+    });
+
     // Feed ranking v4, §4: a comment written under a ranked feed card names the
     // delivery that showed it, in the field the app sends too
     // (`contracts/mobile-api-v1.json`, `createPostComment.request`).
