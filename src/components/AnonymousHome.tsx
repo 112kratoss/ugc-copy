@@ -18,6 +18,7 @@ import { getInlineShowcasePriorityPoster } from '@/lib/showcase-priority-poster'
 import {
   buildOrganizationSchema,
   buildSoftwareApplicationSchema,
+  buildWebSiteSchema,
   siteConfig,
 } from '@/lib/seo';
 import type { ShowcaseFeedPage } from '@/lib/showcase';
@@ -171,13 +172,15 @@ export default function AnonymousHome() {
 
   return (
     <>
+      <JsonLd data={buildWebSiteSchema()} />
       <JsonLd data={buildOrganizationSchema()} />
       <JsonLd
         data={buildSoftwareApplicationSchema({
           name: siteConfig.name,
           path: '/',
-          description:
-            'Magic Booklet helps teams generate AI images, AI videos, motion-transfer ads, and reusable creative workflows.',
+          // The brand's own line, not the ad-maker one it replaced ("helps
+          // teams generate … motion-transfer ads") when the site was renamed.
+          description: siteConfig.description,
           featureList: ['AI images', 'AI videos', 'Motion transfer', 'Workflows'],
           includeMobileApps: true,
           offers: [
