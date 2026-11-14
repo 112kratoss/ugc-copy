@@ -54,8 +54,8 @@ export function getKeyboardLift({
  *
  * So the tracker leads while the keyboard moves, keeping the surface in step with
  * the keys; a reported hide is believed for as long as the tracker has not moved
- * since; and otherwise the larger source wins, which still covers a keyboard the
- * tracker never saw open.
+ * since (`isTrackerMotion`); and otherwise the larger source wins, which still
+ * covers a keyboard the tracker never saw open.
  *
  * The tracker's own state (OPEN, CLOSING, …) is deliberately not asked. It is
  * settled by counting the starts and ends of keyboard animations, and
@@ -84,4 +84,39 @@ export function resolveKeyboardHeight({
   if (reportedHidden) return reportedHeight;
 
   return Math.max(trackedHeight, reportedHeight);
+}
+
+/**
+ * Whether a tracker update is the keyboard moving, the one thing that overrules a
+ * reported hide.
+ *
+ * Only an animation's frames count, and Reanimated reports those with the keyboard
+ * OPENING or CLOSING (`animating`). It also tells its last height again, as OPEN,
+ * whenever the window's insets are applied while it believes the keyboard is up:
+ * as an area subscribes after none was listening, and as the app comes back to the
+ * front. A keyboard that left while no area listened (the search screen closed
+ * with its keys up takes the only area away before they have gone) leaves it
+ * believing that for the rest of the process, and every screen with a field opened
+ * after it drew a keyboard-sized band with no keyboard: the sign-in wall on the
+ * Pixel 9a emulator, Withdraw on the owner's S24 (2026-11-14).
+ *
+ * A counter left unsettled (see `resolveKeyboardHeight`) keeps the state at OPENING
+ * or CLOSING for good, and Reanimated tells nothing again from there, so on such a
+ * tracker every change counts, as every change did before this rule.
+ */
+export function isTrackerMotion({
+  height,
+  previousHeight,
+  animating,
+}: {
+  /** `useAnimatedKeyboard().height`. */
+  height: number;
+  /** The height before this update; null for the first value an area hears. */
+  previousHeight: number | null;
+  /** Whether the tracker's state is OPENING or CLOSING. */
+  animating: boolean;
+}) {
+  'worklet';
+
+  return animating && previousHeight !== null && height !== previousHeight;
 }

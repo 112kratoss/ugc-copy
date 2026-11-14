@@ -1,10 +1,18 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// What React Native's own keyboard module last heard: undefined leaves the area
+// to the tracker, as a test that mocks the module down to `addListener` does.
+const reported = vi.hoisted(() => ({ visible: undefined as boolean | undefined, height: 0 }));
 
 // The Pixel 9a emulator's keyboard, as the tracker has it: 336dp with the navigation bar.
 vi.mock('react-native', () => ({
-  Keyboard: { addListener: () => ({ remove: () => undefined }) },
+  Keyboard: {
+    addListener: () => ({ remove: () => undefined }),
+    isVisible: () => reported.visible,
+    metrics: () => (reported.visible ? { height: reported.height } : undefined),
+  },
   Platform: { OS: 'android' },
 }));
 
@@ -15,6 +23,11 @@ vi.mock('react-native-reanimated', async () => {
     default: actual.default,
     useAnimatedKeyboard: () => ({ height: { value: 336 }, state: { value: actual.KeyboardState.OPEN } }),
   };
+});
+
+afterEach(() => {
+  reported.visible = undefined;
+  reported.height = 0;
 });
 
 import { KeyboardAvoidingArea } from '../components/keyboard-aware';
@@ -51,5 +64,21 @@ describe('KeyboardAvoidingArea', () => {
   it('gives a keyboard nothing while it is mounted not following it', () => {
     expect(lift(<KeyboardAvoidingArea followsKeyboard={false}><></></KeyboardAvoidingArea>)).toBe(0);
     expect(lift(<KeyboardAvoidingArea followsKeyboard={false} reservedBottomInset={48}><></></KeyboardAvoidingArea>)).toBe(0);
+  });
+
+  // The tracker above says "open, 336", as Reanimated tells an area that
+  // subscribes after a keyboard left with no area listening. React Native's own
+  // module saw that keyboard go, so the area mounts believing it: the sign-in wall
+  // and Withdraw otherwise drew a keyboard-sized band with no keyboard (Pixel 9a
+  // emulator; the owner's S24, 2026-11-14).
+  it('gives nothing to a keyboard React Native last saw leave', () => {
+    reported.visible = false;
+    expect(lift(<KeyboardAvoidingArea><></></KeyboardAvoidingArea>)).toBe(0);
+  });
+
+  it('still gives way to a keyboard React Native says is up', () => {
+    reported.visible = true;
+    reported.height = 312;
+    expect(lift(<KeyboardAvoidingArea><></></KeyboardAvoidingArea>)).toBe(336);
   });
 });

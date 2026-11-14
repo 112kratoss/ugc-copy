@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import * as ReactNative from 'react-native';
 import Animated, {
+  KeyboardState,
   useAnimatedKeyboard,
   useAnimatedReaction,
   useAnimatedStyle,
@@ -9,7 +10,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { getKeyboardLift, resolveKeyboardHeight } from '@/lib/keyboard';
+import { getKeyboardLift, isTrackerMotion, resolveKeyboardHeight } from '@/lib/keyboard';
 
 /**
  * Keyboard avoidance that tracks the keyboard frame every frame.
@@ -82,8 +83,13 @@ const platformApi = optionalNativeExport(() => ReactNative.Platform);
  * underneath would read as a glitch rather than as calm.
  */
 function useReportedKeyboard() {
-  const height = useSharedValue(0);
-  const hidden = useSharedValue(false);
+  // Started from what React Native's module last heard, from any screen: an area
+  // that mounts with the keyboard already gone hears no hide of its own, and the
+  // tracker may yet tell it an old height (see `isTrackerMotion`). A module mocked
+  // down to `addListener` answers undefined, which leaves the tracker to lead.
+  const visibleAtMount = keyboardApi?.isVisible?.();
+  const height = useSharedValue(visibleAtMount ? (keyboardApi?.metrics?.()?.height ?? 0) : 0);
+  const hidden = useSharedValue(visibleAtMount === false);
 
   useEffect(() => {
     if (!keyboardApi?.addListener) return;
@@ -124,12 +130,19 @@ function useKeyboardHeight() {
   // Once the tracker moves again its frames are current, whatever the last event
   // said. Clearing on the UI thread means a show event that lands late (the JS thread
   // busy as the prompt takes focus) cannot drop the content behind the new keyboard.
-  // "Moves" is read from its height and never from its state, which can be left
-  // unsettled for the rest of the process (see `resolveKeyboardHeight`).
+  // "Moves" is a change of height in an animation's frame; an old height told again
+  // outside one is not (`isTrackerMotion`). The state is asked only whether it is in
+  // flight, never whether it has settled: it can be left unsettled for the rest of
+  // the process (see `resolveKeyboardHeight`).
   useAnimatedReaction(
-    () => keyboard.height.value,
-    (height, previous) => {
-      if (previous !== null && height !== previous) reportedHidden.value = false;
+    () => ({
+      height: keyboard.height.value,
+      animating: keyboard.state.value === KeyboardState.OPENING || keyboard.state.value === KeyboardState.CLOSING,
+    }),
+    (now, before) => {
+      if (isTrackerMotion({ height: now.height, previousHeight: before?.height ?? null, animating: now.animating })) {
+        reportedHidden.value = false;
+      }
     },
   );
 
