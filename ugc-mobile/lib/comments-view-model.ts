@@ -293,6 +293,100 @@ export function getRepliesToggleLabel(replyCount: number, expanded: boolean) {
 }
 
 /**
+ * One top-level comment's thread as the sheet draws it, top to bottom: the
+ * comment; while its replies are open, the replies (or the spinner before the
+ * first of them arrives), a failed load's retry and Load more replies; then
+ * the toggle that opens and closes them, whenever the comment has replies.
+ * The product keeps one reply level, so this is the whole thread.
+ */
+export type CommentThreadRow =
+  | { kind: 'comment'; key: string; comment: PostComment }
+  | { kind: 'reply'; key: string; comment: PostComment }
+  | { kind: 'replies-loading'; key: string }
+  | { kind: 'replies-error'; key: string }
+  | { kind: 'load-more-replies'; key: string }
+  | { kind: 'replies-toggle'; key: string };
+
+export type CommentThreadRowKind = CommentThreadRow['kind'];
+
+export function getCommentThreadRows({
+  comment,
+  expanded,
+  replies,
+  repliesLoading,
+  repliesFailed,
+  moreReplies,
+}: {
+  comment: PostComment;
+  expanded: boolean;
+  /** The loaded replies with the reader's own just posted (`mergeRepliesWithPending`). */
+  replies: readonly PostComment[];
+  repliesLoading: boolean;
+  repliesFailed: boolean;
+  moreReplies: boolean;
+}): CommentThreadRow[] {
+  const rows: CommentThreadRow[] = [{ kind: 'comment', key: comment.id, comment }];
+  if (expanded) {
+    if (repliesLoading && !replies.length) {
+      // Nothing else of the block shows until the first replies arrive.
+      rows.push({ kind: 'replies-loading', key: `${comment.id}:loading` });
+    } else {
+      for (const reply of replies) rows.push({ kind: 'reply', key: reply.id, comment: reply });
+      if (repliesFailed) rows.push({ kind: 'replies-error', key: `${comment.id}:error` });
+      if (moreReplies) rows.push({ kind: 'load-more-replies', key: `${comment.id}:more` });
+    }
+  }
+  if (comment.replyCount > 0) rows.push({ kind: 'replies-toggle', key: `${comment.id}:toggle` });
+  return rows;
+}
+
+/**
+ * The piece of a thread's line one row draws, YouTube's way: a line falls
+ * from under the comment's avatar and turns on a rounded elbow into each
+ * reply's avatar and each control that hangs off the thread (Load more
+ * replies, and the toggle that ends it). The web draws the same
+ * (`src/components/PostComments.tsx`, `CommentThreadSpine`/`CommentThreadElbow`).
+ *
+ * - `spine`: the straight run down the thread's left edge, from under the
+ *   comment's avatar to the bottom of its row (`from-avatar`), or through a
+ *   whole row on the way to a later elbow (`through`).
+ * - `elbow`: a branch off it into a reply's avatar (`avatar`) or into the
+ *   middle of a control (`control`).
+ */
+export type CommentThreadLine = {
+  spine: 'none' | 'from-avatar' | 'through';
+  elbow: 'none' | 'avatar' | 'control';
+};
+
+const COMMENT_THREAD_ELBOWS: Record<CommentThreadRowKind, CommentThreadLine['elbow']> = {
+  comment: 'none',
+  reply: 'avatar',
+  // A spinner and a failed load's retry are passed by the line, not joined to it.
+  'replies-loading': 'none',
+  'replies-error': 'none',
+  'load-more-replies': 'control',
+  'replies-toggle': 'control',
+};
+
+/**
+ * Which piece of the line each row of one thread draws, for rows in the order
+ * `getCommentThreadRows` gives them (the comment first). The line ends on the
+ * last row it branches into: a row past that one (a retry with no toggle under
+ * it) would leave it hanging in the air, and a comment with nothing to branch
+ * into draws none.
+ */
+export function getCommentThreadLines(rows: readonly CommentThreadRowKind[]): CommentThreadLine[] {
+  let lastElbow = -1;
+  rows.forEach((kind, index) => {
+    if (COMMENT_THREAD_ELBOWS[kind] !== 'none') lastElbow = index;
+  });
+  return rows.map((kind, index) => ({
+    spine: index >= lastElbow ? 'none' : kind === 'comment' ? 'from-avatar' : 'through',
+    elbow: index <= lastElbow ? COMMENT_THREAD_ELBOWS[kind] : 'none',
+  }));
+}
+
+/**
  * The question before a delete or an owner's removal. The server keeps a
  * removed comment as "[deleted]" only while it holds replies; one without
  * replies is removed outright, and the author's copy says so.

@@ -1183,6 +1183,50 @@ describe('comments sheet', () => {
     expect(pressable(tree.root, 'Hide replies').props.accessibilityState).toEqual({ expanded: true });
   });
 
+  it("ties a thread's replies and toggle to its comment with one line, and draws none without replies", () => {
+    pages = [page([
+      comment({ id: 'comment-1', replyCount: 2 }),
+      comment({ id: 'comment-2', replyCount: 0, author: { id: 'creator-4', username: 'alfred', displayName: 'Alfred', avatarUrl: null } }),
+    ], 4)];
+    replyPages = [page([
+      comment({ id: 'reply-1', parentId: 'comment-1' }),
+      comment({ id: 'reply-2', parentId: 'comment-1' }),
+    ], 4)];
+    const tree = renderSheet();
+    const flat = (style: unknown) => (Array.isArray(style) ? Object.assign({}, ...style) : style ?? {}) as Record<string, unknown>;
+    const lineViews = () => tree.root.findAll(
+      (node) => String(node.type) === 'view' && flat(node.props.style).borderLeftWidth === 1
+    ).map((node) => flat(node.props.style));
+    const stems = () => lineViews().filter((style) => style.borderBottomWidth === undefined);
+    const elbows = () => lineViews().filter((style) => style.borderBottomWidth === 1);
+
+    // Folded: a line from under the comment's avatar into "View 2 replies".
+    // The comment without replies draws none.
+    expect(stems()).toHaveLength(1);
+    expect(stems()[0]).toMatchObject({ position: 'absolute', top: 41, bottom: 0, pointerEvents: 'none' });
+    expect(elbows()).toHaveLength(1);
+    expect(elbows()[0]).toMatchObject({ height: '50%', pointerEvents: 'none' });
+
+    renderer.act(() => {
+      pressable(tree.root, 'View 2 replies').props.onPress();
+    });
+    // Open: an elbow into each reply's avatar and one into "Hide replies",
+    // with the line running on through both replies to reach it.
+    expect(stems()).toHaveLength(3);
+    expect(elbows()).toHaveLength(3);
+    // Beside a run, a reply's elbow is clipped to its curve, so the
+    // translucent line is never drawn twice; it turns at the avatar's middle.
+    const clipped = tree.root.findAll(
+      (node) => String(node.type) === 'view' && flat(node.props.style).overflow === 'hidden'
+    ).map((node) => flat(node.props.style));
+    expect(clipped).toEqual([
+      expect.objectContaining({ left: 33, width: 16, height: 25 }),
+      expect.objectContaining({ left: 33, width: 16, height: 25 }),
+    ]);
+    // The toggle ends the line, on an elbow of its own.
+    expect(elbows()[2]).toMatchObject({ left: 32, width: 17, height: '50%' });
+  });
+
   it('labels the composer for the reply being written', () => {
     pages = [page([comment()])];
     const tree = renderSheet();
