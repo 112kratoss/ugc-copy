@@ -347,6 +347,31 @@ describe('Model Pricing', () => {
             expect(getVideoDurationRange('kling-4.0')).toEqual({ min: 3, max: 30, default: 5 });
             expect(getVideoDurationRange('vidu-q4')).toEqual({ min: 3, max: 16, default: 5 });
         });
+        it('prices Seedream 5.5 with a charge for every input picture, and GPT Image 2.6 flat at 1K', () => {
+            // docs/model-api-references/seedream-5-5.md and gpt-image-2-6.md, read 2026-11-14.
+            // Seedream 5.5 bills 1.44 for each input picture, the first included, and a run is
+            // charged whole credits: the page's 2K example of two pictures, 9.18, is 10.
+            expect(getImageCost('seedream-5.5', '1K')).toBe(4);
+            expect(getImageCost('seedream-5.5', '2K')).toBe(7);
+            expect(getImageCost('seedream-5.5', '1K', { referenceCount: 1 })).toBe(6);
+            expect(getImageCost('seedream-5.5', '2K', { referenceCount: 2 })).toBe(10);
+            expect(getImageCost('seedream-5.5', '1K', { referenceCount: 10 })).toBe(18);
+            expect(getImageCost('seedream-5.5', '2K', { referenceCount: 10 })).toBe(21);
+            expect(getImageCost('gpt-image-2.6', '1K')).toBe(5);
+            expect(getImageCost('gpt-image-2.6', '1K', { referenceCount: 16 })).toBe(5);
+            expect(getImageResolutionOptions('gpt-image-2.6', 'auto')).toEqual(['1K']);
+        });
+        it('prices Kling 4.0 Flash and Gemini Omni 1.2 Flash per second of output', () => {
+            // docs/model-api-references/kling-4-0-flash.md and gemini-omni-1-2-flash.md (2026-11-14).
+            expect(getVideoCost('kling-4.0-flash', { resolution: '720p', durationSeconds: 5 })).toBe(85);
+            expect(getVideoCost('kling-4.0-flash', { resolution: '720p', durationSeconds: 20, hasReusableReference: true })).toBe(340);
+            expect(getVideoCost('gemini-omni-1.2-flash', { resolution: '360p', durationSeconds: 3 })).toBe(12);
+            expect(getVideoCost('gemini-omni-1.2-flash', { resolution: '720p', durationSeconds: 6 })).toBe(54);
+            expect(getVideoCost('gemini-omni-1.2-flash', { resolution: '1080p', durationSeconds: 10, hasReferenceImage: true })).toBe(100);
+            expect(getVideoCost('gemini-omni-1.2-flash', { resolution: '4k', durationSeconds: 15 })).toBe(330);
+            expect(getVideoDurationRange('kling-4.0-flash')).toEqual({ min: 3, max: 20, default: 5 });
+            expect(getVideoDurationRange('gemini-omni-1.2-flash')).toEqual({ min: 3, max: 15, default: 6 });
+        });
     });
 
     describe('video duration metadata', () => {

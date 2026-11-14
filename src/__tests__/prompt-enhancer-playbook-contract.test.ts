@@ -89,6 +89,18 @@ describe('prompt enhancer playbook contract', () => {
       // docs.kie.ai/market/pixverse/v6-max-{text,image}-to-video.md, read 2026-11-05: V6's
       // text and image bodies without generate_multi_clip_switch, prompt 1–5,000.
       'pixverse-v6-max': 'pixverse-v6',
+      // docs.kie.ai/market/seedream/5-5-*.md, read 2026-11-14: Seedream 5 Flash's body plus an
+      // unsent `background`; prompt 5–5,000.
+      'seedream-5.5': 'seedream-5-lite',
+      // docs.kie.ai/market/gpt/gpt-image-2-6-economy-*.md, read 2026-11-14: GPT Image 2's
+      // prompt / aspect_ratio / input_urls body without `resolution`, the same model family.
+      'gpt-image-2.6': 'gpt-image-2',
+      // docs.kie.ai/market/kling/v4-flash-*.md, read 2026-11-14: Kling 4.0's bodies with 720p
+      // only, 3–20 s and no last frame, keyframes or voices; the same @image_N grammar.
+      'kling-4.0-flash': 'kling-4.0',
+      // docs.kie.ai/market/google/gemini-omni-flash-1-2.md, read 2026-11-14: 1.1's body with an
+      // integer duration and six image_urls.
+      'gemini-omni-1.2-flash': 'gemini-omni-video',
     });
   });
 

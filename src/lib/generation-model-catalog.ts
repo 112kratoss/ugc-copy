@@ -422,6 +422,13 @@ const VIDEO_INPUT_LIMITS: Record<VideoModelId, VideoInputLimits> = {
   // vidu-q4 (2026-11-05): image-to-video's start frame (required: there is no text-only run)
   // or reference-to-video's 1–15 pictures. Its MP3-only reference audio is not offered.
   'vidu-q4': { images: 15, videos: 0, audios: 0, startFrame: true, endFrame: false },
+  // kling-4.0-flash (2026-11-14): flash-keyframe-to-video's first frame (no last frame), or
+  // flash-reference-to-video's 10 image_urls; clips and elements are not offered
+  // (docs/model-api-references/kling-4-0-flash.md).
+  'kling-4.0-flash': { images: 10, videos: 0, audios: 0, startFrame: true, endFrame: false },
+  // google/gemini-omni-flash-1-2 (2026-11-14): 6 image_urls, exclusive with the frame pair;
+  // last_frame_url needs the first. Its video edit is not offered.
+  'gemini-omni-1.2-flash': { images: 6, videos: 0, audios: 0, startFrame: true, endFrame: true },
 };
 
 /**
@@ -789,7 +796,7 @@ function videoDescriptors(): GenerationModelDescriptor[] {
       badge: [
         'grok-imagine-video', 'kling-3.0-turbo', 'seedance-2-mini', 'wan-2.7', 'hailuo-2.3',
         'gemini-omni-1.1-flash', 'wan-3.0', 'wan-3.0-prime', 'grok-imagine-video-1.5', 'pixverse-v6',
-        'pixverse-v6-max', 'kling-4.0', 'vidu-q4',
+        'pixverse-v6-max', 'kling-4.0', 'vidu-q4', 'kling-4.0-flash', 'gemini-omni-1.2-flash',
       ].includes(model.id) ? 'New' : null,
       recommended: model.id === DEFAULT_MODEL_IDS.video,
       sortOrder: index * 10,

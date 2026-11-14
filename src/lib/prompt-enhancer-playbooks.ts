@@ -121,6 +121,18 @@ export const MODEL_ALIASES: Record<string, string> = {
   // docs/model-api-references/pixverse-v6-max.md: PixVerse V6's text and image-to-video bodies
   // (no multi-clip switch), the same prompt grammar and sound toggle; Max has no references.
   'pixverse-v6-max': 'pixverse-v6',
+  // docs/model-api-references/seedream-5-5.md: Seedream 5 Flash's body field for field (plus an
+  // unsent `background`), so the Seedream grammar with Lite's budget, as Flash has.
+  'seedream-5.5': 'seedream-5-lite',
+  // docs/model-api-references/gpt-image-2-6.md: GPT Image 2's prompt and input_urls without a
+  // resolution field, from the same OpenAI model family, as 2.5's tiers are.
+  'gpt-image-2.6': 'gpt-image-2',
+  // docs/model-api-references/kling-4-0-flash.md: Kling 4.0's two bodies with fewer fields
+  // (720p, 3–20 s, no last frame or voices) and the same @image_N grammar and always-on audio.
+  'kling-4.0-flash': 'kling-4.0',
+  // docs/model-api-references/gemini-omni-1-2-flash.md: 1.1's prompt, image_urls, frame pair,
+  // aspect_ratio and resolution body with an integer duration, as 1.1 aliases Gemini Omni Video.
+  'gemini-omni-1.2-flash': 'gemini-omni-video',
 };
 
 // ─── Image playbooks ─────────────────────────────────────────────────────────

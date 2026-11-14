@@ -1,4 +1,5 @@
 import {
+  GEMINI_OMNI_1_2_FRAME_PAIR_MAX_DURATION_SECONDS,
   IMAGE_MODELS,
   MOTION_MODELS,
   VEO_REFERENCE_MODES,
@@ -117,6 +118,9 @@ const END_FRAME_NEEDS_START_FRAME: readonly string[] = [
   // kling-4.0/keyframe-to-video names no rule for a lone last frame; it is held to the pair
   // contract of Kling 3.0 rather than sent to find out after the hold.
   'kling-4.0',
+  // google/gemini-omni-flash-1-2: `last_frame_url` "Must be sent together with
+  // `first_frame_url`; cannot be used alone".
+  'gemini-omni-1.2-flash',
 ];
 
 /**
@@ -148,6 +152,11 @@ export const MOTION_IMAGE_ORIENTATION_MAX_DURATION_SECONDS: Record<string, numbe
   'kling-2.6': 10,
   'kling-3.0': 10,
 };
+
+/** The quote's and the start's words for a Gemini Omni 1.2 Flash frame pair over its cap. */
+export function geminiOmni12FramePairRefusal(): string {
+  return `Gemini Omni 1.2 Flash keeps a start and end frame run to ${GEMINI_OMNI_1_2_FRAME_PAIR_MAX_DURATION_SECONDS} seconds; drop the end frame for a longer clip.`;
+}
 
 /** The quote's and the start's words for an image-oriented clip over its model's cap. */
 export function motionImageOrientationRefusal(modelId: MotionModelId): string {
@@ -181,6 +190,9 @@ const VIDEO_REFERENCE_IMAGE_CAPS: Record<string, number> = {
   'pixverse-v6': 7,
   'kling-4.0': 10,
   'vidu-q4': 15,
+  'kling-4.0-flash': 10,
+  // google/gemini-omni-flash-1-2: image_urls "max **6**".
+  'gemini-omni-1.2-flash': 6,
 };
 
 export const GENERATION_MODEL_VALIDATION_RULE_TYPES = [
@@ -330,6 +342,17 @@ const IMAGE_PROVIDER_MODELS: Record<ImageModelId, Record<string, string>> = {
     text: 'flux-3/klein-text-to-image',
     reference: 'flux-3/klein-edit-image',
   },
+  // Verified 2026-11-14 against docs.kie.ai/market/seedream/5-5-*.md: Flash's vendor prefix.
+  'seedream-5.5': {
+    text: 'seedream/5-5-text-to-image',
+    reference: 'seedream/5-5-image-to-image',
+  },
+  // Verified 2026-11-14 against docs.kie.ai/market/gpt/gpt-image-2-6-economy-*.md: from 2.6 the
+  // tier follows a slash (`gpt-image-2-6/economy-…`), where 2.5 dashed it on.
+  'gpt-image-2.6': {
+    text: 'gpt-image-2-6/economy-text-to-image',
+    reference: 'gpt-image-2-6/economy-image-to-image',
+  },
 };
 
 /**
@@ -455,6 +478,26 @@ const KIE_TASK_IMAGE_ADAPTER_CONFIGS: Partial<Record<ImageModelId, Record<string
     slots: { imageReferences: { field: 'image_urls', cardinality: 'many', source: 'url' } },
     variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
   },
+  // docs/model-api-references/seedream-5-5.md: Seedream 5 Flash's body under the 5.5 ids.
+  // `background` is not sent, so Kie applies its `auto`.
+  'seedream-5.5': {
+    settings: {
+      aspectRatio: { field: 'aspect_ratio' },
+      resolution: { field: 'size' },
+      outputFormat: { field: 'output_format', transform: 'jpg-to-jpeg' },
+    },
+    constants: { nsfw_checker: true },
+    slots: { imageReferences: { field: 'image_urls', cardinality: 'many', source: 'url' } },
+    variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
+  },
+  // docs/model-api-references/gpt-image-2-6.md: the Economy endpoints render 1K only and take no
+  // `resolution` field, and their schema refuses any field it does not name, so GPT Image 2's
+  // shared config (which sends `resolution`) does not fit.
+  'gpt-image-2.6': {
+    settings: { aspectRatio: { field: 'aspect_ratio' } },
+    slots: { imageReferences: { field: 'input_urls', cardinality: 'many', source: 'url' } },
+    variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
+  },
 };
 
 const VIDEO_PROVIDER_MODELS: Record<VideoModelId, Record<string, string>> = {
@@ -548,6 +591,16 @@ const VIDEO_PROVIDER_MODELS: Record<VideoModelId, Record<string, string>> = {
     image: 'vidu-q4/image-to-video',
     reference: 'vidu-q4/reference-to-video',
   },
+  // docs/model-api-references/kling-4-0-flash.md (2026-11-14): Kling 4.0's routing under the
+  // Flash ids; the keyframe endpoint takes a first frame only.
+  'kling-4.0-flash': {
+    default: 'kling-4.0/flash-reference-to-video',
+    text: 'kling-4.0/flash-reference-to-video',
+    image: 'kling-4.0/flash-keyframe-to-video',
+    reference: 'kling-4.0/flash-reference-to-video',
+  },
+  // docs/model-api-references/gemini-omni-1-2-flash.md (2026-11-14): one id for every shape.
+  'gemini-omni-1.2-flash': { default: 'google/gemini-omni-flash-1-2' },
 };
 
 function cloneJson<T>(value: T): T {
@@ -766,6 +819,10 @@ function videoPricingExpression(model: (typeof VIDEO_MODELS)[VideoModelId]): Pri
     // (docs/model-api-references/kling-4-0.md); vidu-q4 bills one rate per resolution, audio or not.
     case 'kling-4.0':
     case 'vidu-q4':
+    // kling-4.0-flash bills its no-video rate the same way (720p only), and gemini-omni-1.2-flash
+    // one rate per second of output by resolution; neither is sent a clip.
+    case 'kling-4.0-flash':
+    case 'gemini-omni-1.2-flash':
       return perSecond(lookup(
         [selector('setting', 'resolution', { defaultValue: model.resolutions[0] })],
         model.pricing,
@@ -1146,6 +1203,20 @@ function validationConfigForModel(
         max: 7,
         field: 'references',
         message: 'Gemini Omni 1.1 Flash supports seven reference slots; a video uses two.',
+      });
+    }
+    if (modelId === 'gemini-omni-1.2-flash') {
+      // google/gemini-omni-flash-1-2: "First and last frame: required, 3–10", where a first
+      // frame alone or text reaches 15. Only a client that reports per-slot counts can trip
+      // this; the start applies the same ceiling from the resolved frames.
+      rules.push({
+        type: 'forbidden-combination',
+        conditions: [
+          { source: 'inputCount', key: 'endFrame', operator: 'greaterThan', value: 0 },
+          { source: 'setting', key: 'duration', operator: 'greaterThan', value: GEMINI_OMNI_1_2_FRAME_PAIR_MAX_DURATION_SECONDS },
+        ],
+        field: 'duration',
+        message: geminiOmni12FramePairRefusal(),
       });
     }
     if (modelId === 'gemini-omni-video') {

@@ -526,6 +526,49 @@ export const IMAGE_MODELS = {
             '4K': 6.5,
         },
     },
+    // docs/model-api-references/seedream-5-5.md (read 2026-11-14): Seedream 5 Flash's body plus
+    // an unsent `background`, at Kie's standing 3.6 / 6.3, and 1.44 for every input picture, the
+    // first included. The spec's 1.5K is left out (not an ImageResolution; 1K's price).
+    'seedream-5.5': {
+        id: 'seedream-5.5' as const,
+        displayName: 'Seedream 5.5',
+        description: 'Newest Seedream: realistic textures and dense small text, with edits from up to ten pictures',
+        badge: 'New',
+        badgeColor: 'from-blue-500 to-indigo-500',
+        accentColor: 'blue',
+        maxImages: 10,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: true,
+        aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '21:9'] as const,
+        resolutions: ['1K', '2K'] as const,
+        outputFormats: ['jpg', 'png'] as const,
+        pricing: {
+            '1K': 3.6,
+            '2K': 6.3,
+        },
+        additionalReferenceCredit: 1.44,
+        referenceCreditIncludesFirst: true,
+    },
+    // docs/model-api-references/gpt-image-2-6.md (read 2026-11-14): the Economy endpoints, the
+    // only GPT Image 2.6 tier with a price per picture (Flare and Sunburst bill tokens). 1K only,
+    // a flat 5 credits, with no `resolution` field to send.
+    'gpt-image-2.6': {
+        id: 'gpt-image-2.6' as const,
+        displayName: 'GPT Image 2.6',
+        description: 'Newest GPT Image at 1K: generation and edits with up to sixteen references',
+        badge: 'New',
+        badgeColor: 'from-amber-500 to-orange-500',
+        accentColor: 'amber',
+        maxImages: 16,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['auto', '1:1', '16:9', '9:16', '3:2', '2:3', '21:9', '4:3'] as const,
+        resolutions: ['1K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: {
+            '1K': 5,
+        },
+    },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
@@ -1290,9 +1333,74 @@ export const VIDEO_MODELS = {
             '4k': 62.4,
         },
     },
+    // docs/model-api-references/kling-4-0-flash.md (read 2026-11-14): Kling 4.0's two endpoints
+    // with less in them — 720p only, 3–20 s, a first frame and no last. Audio is always
+    // generated. Clips stay out for Kling 4.0's reason (their billing has a floor the catalog
+    // cannot express).
+    'kling-4.0-flash': {
+        id: 'kling-4.0-flash' as const,
+        displayName: 'Kling 4.0 Flash',
+        description: 'Faster, lower-cost Kling 4.0 with native audio from text, a start frame, or up to ten reference pictures',
+        provider: 'kling' as const,
+        apiModelId: 'kling-4.0/flash-reference-to-video',
+        enhancerModelId: 'kling-4.0',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', '1:1', '21:9'] as const,
+        durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20] as const,
+        singleShotDurationRange: {
+            min: 3,
+            max: 20,
+            default: 5,
+        } as const,
+        resolutions: ['720p'] as const,
+        modeOptions: [] as const,
+        /** Credits per second of output with no clip attached, both endpoints. */
+        pricing: {
+            '720p': 17,
+        },
+    },
+    // docs/model-api-references/gemini-omni-1-2-flash.md (read 2026-11-14): 1.1's endpoint shape
+    // with an integer duration of 3–15 s (a frame pair 3–10), six reference pictures, and a price
+    // per second of output. Its video edit is not offered: it bills the input clip's length.
+    'gemini-omni-1.2-flash': {
+        id: 'gemini-omni-1.2-flash' as const,
+        displayName: 'Gemini Omni 1.2 Flash',
+        description: 'Newest Gemini Omni Flash with native audio, frames or six references, 3 to 15 second clips up to 4K',
+        provider: 'gemini-omni' as const,
+        apiModelId: 'google/gemini-omni-flash-1-2',
+        enhancerModelId: 'gemini-omni-video',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16'] as const,
+        durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+        singleShotDurationRange: {
+            min: 3,
+            max: 15,
+            default: 6,
+        } as const,
+        resolutions: ['360p', '720p', '1080p', '4k'] as const,
+        modeOptions: [] as const,
+        /** Credits per second of output, by resolution. */
+        pricing: {
+            '360p': 4,
+            '720p': 9,
+            '1080p': 10,
+            '4k': 22,
+        },
+    },
 } as const;
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
+
+/**
+ * gemini-omni-flash-1-2: "First and last frame: required, 3–10" where a first frame alone or
+ * text reaches 15 (docs/model-api-references/gemini-omni-1-2-flash.md). The quote rule and the
+ * start both read this.
+ */
+export const GEMINI_OMNI_1_2_FRAME_PAIR_MAX_DURATION_SECONDS = 10;
 
 /**
  * The Veo 3.1 variants that take reference pictures: Kie's REFERENCE_2_VIDEO "supports veo3_fast
@@ -1381,7 +1489,8 @@ export function getVideoElementSupport(
     }
 
     // Gemini Omni 1.1 Flash takes 7 `image_urls`, both Grok Imagine Video ids 7 `image_urls`,
-    // and PixVerse V6 7 `image_references` (see docs/model-api-references for each).
+    // and PixVerse V6 7 `image_references` (see docs/model-api-references for each). Gemini
+    // Omni 1.2 Flash's `image_urls` stops at 6.
     if (
         modelId === 'gemini-omni-1.1-flash'
         || modelId === 'grok-imagine-video'
@@ -1391,9 +1500,14 @@ export function getVideoElementSupport(
         return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
     }
 
+    if (modelId === 'gemini-omni-1.2-flash') {
+        return { enabled: true, maxElements: 6, maxNamed: 6, reason: null };
+    }
+
     // Wan 3.0's `reference_image_urls` takes 10 where Wan 2.7's reference mode stops at 5, and
-    // kling-4.0/reference-to-video's `image_urls` takes 10, each one @image_N in the prompt.
-    if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime' || modelId === 'kling-4.0') {
+    // kling-4.0/reference-to-video's `image_urls` takes 10, each one @image_N in the prompt, as
+    // its Flash tier's does.
+    if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime' || modelId === 'kling-4.0' || modelId === 'kling-4.0-flash') {
         return { enabled: true, maxElements: 10, maxNamed: 10, reason: null };
     }
 
@@ -1549,10 +1663,11 @@ export function getImageCost(
         return pricing[qualityMode];
     }
 
-    if (modelId === 'seedream-5-pro' || modelId === 'qwen3' || modelId === 'qwen3-pro') {
+    if (modelId === 'seedream-5-pro' || modelId === 'seedream-5.5' || modelId === 'qwen3' || modelId === 'qwen3-pro') {
         const model = IMAGE_MODELS[modelId];
         const baseCost = (model.pricing as Partial<Record<ImageResolution, number>>)[resolution] ?? model.pricing['1K'];
-        // Seedream bundles the first reference into the base price; Qwen bills every one.
+        // Seedream 5 Pro bundles the first reference into the base price; Qwen and Seedream 5.5
+        // bill every one.
         const freeReferences = 'referenceCreditIncludesFirst' in model && model.referenceCreditIncludesFirst ? 0 : 1;
         const chargeableReferences = Math.max(0, (options.referenceCount ?? 0) - freeReferences);
         return Math.ceil(baseCost + (chargeableReferences * model.additionalReferenceCredit));
@@ -1733,9 +1848,10 @@ export function getVideoCost(
         return Math.ceil(durationSeconds * (options.sound ? rates.withSound : rates.noSound));
     }
 
-    // Kling 4.0 takes no clip here, so every run bills its no-video rate on the output
-    // seconds; Vidu Q4 bills one rate per resolution, audio or not.
-    if (modelId === 'kling-4.0' || modelId === 'vidu-q4') {
+    // Kling 4.0 and its Flash tier take no clip here, so every run bills the no-video rate on
+    // the output seconds; Vidu Q4 bills one rate per resolution, audio or not, and Gemini Omni
+    // 1.2 Flash one rate per second of output.
+    if (modelId === 'kling-4.0' || modelId === 'kling-4.0-flash' || modelId === 'vidu-q4' || modelId === 'gemini-omni-1.2-flash') {
         const pricingTable: Readonly<Record<string, number>> = VIDEO_MODELS[modelId].pricing;
         const resolution = options.resolution && options.resolution in pricingTable
             ? options.resolution

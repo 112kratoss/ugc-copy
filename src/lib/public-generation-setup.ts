@@ -311,6 +311,8 @@ const FRAME_SHAPED_VIDEO_MODELS = new Set([
   // kling-4.0/keyframe-to-video, pixverse-v6-max/image-to-video and vidu-q4/image-to-video take
   // the shape of their first frame (docs/model-api-references/*, 2026-11-05).
   'kling-4.0', 'pixverse-v6-max', 'vidu-q4',
+  // kling-4.0/flash-keyframe-to-video too (docs/model-api-references/kling-4-0-flash.md).
+  'kling-4.0-flash',
 ]);
 
 /**

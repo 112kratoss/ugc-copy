@@ -59,4 +59,8 @@ export const MODEL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   'pixverse-v6-max': 'PixVerse V6 Max',
   'kling-4.0': 'Kling 4.0',
   'vidu-q4': 'Vidu Q4',
+  'seedream-5.5': 'Seedream 5.5',
+  'gpt-image-2.6': 'GPT Image 2.6',
+  'kling-4.0-flash': 'Kling 4.0 Flash',
+  'gemini-omni-1.2-flash': 'Gemini Omni 1.2 Flash',
 };
