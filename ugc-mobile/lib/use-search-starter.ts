@@ -24,11 +24,27 @@ export function useSearchStarter(
   /** Whose starter: the signed-in account's id, null for a visitor. Another one is asked again. */
   viewerKey: string | null,
 ): SearchStarterResponse | null {
+  return useSearchStarterState(api, active, viewerKey).answer;
+}
+
+/**
+ * The same, with whether this opening's request has settled (answered,
+ * failed or answered empty), so the screen can hold its start a moment for
+ * the ideas instead of drawing the idle card they would then replace.
+ */
+export function useSearchStarterState(
+  api: MagicbookletApiClient,
+  active: boolean,
+  viewerKey: string | null,
+): { answer: SearchStarterResponse | null; settled: boolean } {
   const [answer, setAnswer] = useState<{ viewerKey: string | null; response: SearchStarterResponse } | null>(null);
+  // Whose request has settled: another account's says nothing of this one's.
+  const [settledFor, setSettledFor] = useState<{ viewerKey: string | null } | null>(null);
   // Cleared as the screen closes (review of #794): the next opening never
   // draws this one's list, whoever is signed in by then and whatever they
   // have blocked since, nor keeps it when its own request fails.
   if (!active && answer !== null) setAnswer(null);
+  if (!active && settledFor !== null) setSettledFor(null);
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
@@ -37,14 +53,19 @@ export function useSearchStarter(
         if (controller.signal.aborted) return;
         const parsed = parseSearchStarterResponse(body);
         setAnswer(parsed && !isSearchStarterEmpty(parsed) ? { viewerKey, response: parsed } : null);
+        setSettledFor({ viewerKey });
       })
       .catch(() => {
         // An extra: its failure leaves the screen as it was, never an error.
+        if (!controller.signal.aborted) setSettledFor({ viewerKey });
       });
     return () => controller.abort();
     // The account, not its session: a renewed token is the same viewer and
     // asks nothing; another account's creators to follow are its own.
   }, [active, api, viewerKey]);
   // Never another account's answer, even for the moment before its own lands.
-  return answer && answer.viewerKey === viewerKey ? answer.response : null;
+  return {
+    answer: answer && answer.viewerKey === viewerKey ? answer.response : null,
+    settled: settledFor !== null && settledFor.viewerKey === viewerKey,
+  };
 }

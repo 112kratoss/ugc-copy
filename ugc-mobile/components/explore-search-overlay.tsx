@@ -14,9 +14,12 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
+import { Reveal } from '@/components/reveal';
+import { useSearchEntrance } from '@/components/search-entrance';
 import { SearchPostMasonry } from '@/components/search-post-masonry';
 import { SearchStarterSections } from '@/components/search-starter-sections';
 import { SearchTypeaheadList } from '@/components/search-typeahead-list';
@@ -25,6 +28,8 @@ import { BackGlyph } from '@/lib/platform-glyphs';
 import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { ApiError, type MagicbookletApiClient } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
+import { useReducedMotion } from '@/lib/motion';
+import { searchFieldRestingFrame, type SearchEntranceOrigin } from '@/lib/search-entrance';
 import {
   NO_SEARCH_FILTERS,
   SEARCH_CLEAR_FIELD_LABEL,
@@ -101,7 +106,7 @@ import {
   type SearchStarterEntity,
   type SearchStarterSearch,
 } from '@/lib/public-search-policy/search-starter';
-import { useSearchStarter } from '@/lib/use-search-starter';
+import { useSearchStarterState } from '@/lib/use-search-starter';
 import { searchTypeaheadQuery, type SearchTypeaheadRow } from '@/lib/public-search-policy/search-typeahead';
 import {
   clearSearchHistory,
@@ -576,13 +581,23 @@ const noSortChange = () => {};
  * `initialQuery` and `initialType` open it on a search, as a shared search
  * link would; without them it opens on an empty field.
  */
+/** The header's numbers, which also place the field before it is measured (lib/search-entrance.ts). */
+const SEARCH_HEADER_TOP_GAP = 8;
+const SEARCH_HEADER_LEADING_WIDTH = 44;
+const SEARCH_HEADER_GAP = 10;
+const SEARCH_FIELD_HEIGHT = 50;
+/** The magnifier's place from the capsule's start, as Explore's bar draws it (its border and padding). */
+const SEARCH_FIELD_ICON_INSET = 16;
+/** How long the start waits for the ideas to start from before it draws the idle card instead. */
+const SEARCH_START_HOLD_MS = 900;
+
 export function ExploreSearchOverlay({
   api,
   onClose,
   visible,
   initialQuery = null,
   initialType = null,
-  focusReady,
+  entranceFrom = null,
 }: {
   api: MagicbookletApiClient;
   onClose: () => void;
@@ -590,11 +605,10 @@ export function ExploreSearchOverlay({
   initialQuery?: string | null;
   initialType?: PublicSearchType | null;
   /**
-   * Whether the field may take the focus yet. A pushed screen says so once its
-   * entrance is over (app/search.tsx), so the keyboard does not rise while the
-   * screen slides in; left out, the field takes it shortly after opening.
+   * The control search was opened from, for the field to grow out of
+   * (lib/search-entrance.ts); null grows out of nothing (a search link).
    */
-  focusReady?: boolean;
+  entranceFrom?: SearchEntranceOrigin | null;
 }) {
   const theme = useAppTheme();
   // The registered account, null for a visitor and for a guest session: the
@@ -602,7 +616,25 @@ export function ExploreSearchOverlay({
   const { user } = useAuth();
   const canFollow = Boolean(user);
   const insets = useSafeAreaInsets();
-  const { fontScale } = useWindowDimensions();
+  const { fontScale, width: windowWidth } = useWindowDimensions();
+  // The field grows out of the pressed control while the keyboard rises, as
+  // iOS's own Search does (lib/search-entrance.ts). The header's numbers below
+  // place it before it is measured.
+  const entrance = useSearchEntrance({
+    origin: entranceFrom,
+    reducedMotion: useReducedMotion(),
+    restingFrame: searchFieldRestingFrame({
+      windowWidth,
+      topInset: insets.top,
+      topGap: SEARCH_HEADER_TOP_GAP,
+      screenPadding: appTheme.spacing.screen,
+      leadingWidth: SEARCH_HEADER_LEADING_WIDTH,
+      gap: SEARCH_HEADER_GAP,
+      height: SEARCH_FIELD_HEIGHT,
+    }),
+    iconSize: appTheme.icon.default,
+    iconInset: SEARCH_FIELD_ICON_INSET,
+  });
   // Two posts across, one at the accessibility text sizes (search-post-grid.ts).
   const postColumns = searchPostGridColumns(fontScale);
   // Opened on a search (a link's `q`): its results from the first render, when
@@ -666,6 +698,9 @@ export function ExploreSearchOverlay({
   const [answer, setAnswer] = useState<SearchAnswer | null>(null);
   const [failure, setFailure] = useState<SearchFailure | null>(null);
   const [history, setHistory] = useState<string[]>([]);
+  // Whether the recent searches have been read for this opening: until then
+  // the start is not drawn, so the idle card never stands in for them.
+  const [historyRead, setHistoryRead] = useState(false);
   // What Top found for a query, by kind: what an empty tab points to
   // (searchEmptyTabPointer, the web's rule). Kept from the Top answer on hand,
   // or from the one request an empty tab may make for it (`askedTopFor`).
@@ -777,11 +812,11 @@ export function ExploreSearchOverlay({
     // or is still unanswered, is not kept.
     if (committedByPerson.current && showingResults && shownResponse && resultCount > 0) rememberQuery(historyQuery);
     keptOnLeave.current = null;
-    // Dismissing the keyboard alongside the fade keeps close reading as one
-    // gesture instead of two staggered ones.
+    // Dismissing the keyboard alongside the field going back into its
+    // control keeps close reading as one gesture instead of two staggered ones.
     Keyboard.dismiss();
-    onClose();
-  }, [historyQuery, onClose, rememberQuery, resultCount, showingResults, shownResponse]);
+    entrance.exit(onClose);
+  }, [entrance, historyQuery, onClose, rememberQuery, resultCount, showingResults, shownResponse]);
 
   // Leaving by the navigator (the back swipe, Android's back key) keeps the
   // search on screen as the close button does: read as it leaves.
@@ -799,15 +834,19 @@ export function ExploreSearchOverlay({
       requestController.current?.abort();
       return;
     }
-    void readSearchHistory().then(setHistory);
+    void readSearchHistory().then((read) => {
+      setHistory(read);
+      setHistoryRead(true);
+    });
   }, [visible]);
   useEffect(() => {
-    // Opened on a search, it shows the results; else the field is ready to
-    // type in, once the screen that holds it says its entrance is over.
-    if (!visible || openedOn || focusReady === false) return;
-    const focusTimer = setTimeout(() => inputRef.current?.focus(), focusReady === undefined ? 120 : 0);
+    // Opened on a search, it shows the results; else the field takes the focus
+    // at once, so the keyboard rises with the field as it grows out of its
+    // control, as iOS's Search does (it waited for the push to end before).
+    if (!visible || openedOn) return;
+    const focusTimer = setTimeout(() => inputRef.current?.focus(), 0);
     return () => clearTimeout(focusTimer);
-  }, [focusReady, openedOn, visible]);
+  }, [openedOn, visible]);
 
   // Related posts can come with the search in front (the first page of it).
   const relatedApplies = requestKey !== null && searchRelatedApplies({
@@ -1037,7 +1076,16 @@ export function ExploreSearchOverlay({
 
   // Ideas to start from: before anything is typed, and when a search finds
   // nothing. Asked once each time the search opens.
-  const starterAnswer = useSearchStarter(api, visible, user?.id ?? null);
+  const { answer: starterAnswer, settled: starterSettled } = useSearchStarterState(api, visible, user?.id ?? null);
+  // The start waits for the ideas a moment, so they arrive in place of nothing
+  // instead of replacing the idle card (filmed on the iPhone, 2026-11-14); a
+  // slow answer gives way to the card after SEARCH_START_HOLD_MS.
+  const [startHoldOver, setStartHoldOver] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setStartHoldOver(true), SEARCH_START_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  const startReady = historyRead && (starterSettled || startHoldOver);
   // A model or tool row whose query no tab can search (one character: Top
   // starts at two) is not drawn: pressed, it could run nothing (review of #794).
   const starter = useMemo(() => {
@@ -1121,13 +1169,39 @@ export function ExploreSearchOverlay({
     <KeyboardAvoidingArea
       style={{ flex: 1, backgroundColor: theme.colors.background }}
     >
-      <View style={{ paddingTop: insets.top + 8, paddingHorizontal: appTheme.spacing.screen, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: theme.colors.borderSubtle }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Close search" onPress={requestClose} hitSlop={10} style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}>
-            <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-          </Pressable>
-          <View style={{ minHeight: 50, minWidth: 0, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 15 }}>
-            <Search size={appTheme.icon.default} color={theme.colors.muted} />
+      <View style={{ paddingTop: insets.top + SEARCH_HEADER_TOP_GAP, paddingHorizontal: appTheme.spacing.screen, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: theme.colors.borderSubtle }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: SEARCH_HEADER_GAP }}>
+          <Animated.View style={entrance.styles.leadingStyle}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close search" onPress={requestClose} hitSlop={10} style={{ minWidth: SEARCH_HEADER_LEADING_WIDTH, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}>
+              <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
+            </Pressable>
+          </Animated.View>
+          <View
+            ref={entrance.fieldRef}
+            onLayout={entrance.onFieldLayout}
+            style={{ minHeight: SEARCH_FIELD_HEIGHT, minWidth: 0, flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: SEARCH_FIELD_ICON_INSET }}
+          >
+            {/* The field's capsule, drawn behind it so it can grow out of the
+                control search was opened from; a round button's own skin
+                covers it as it starts. */}
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                { position: 'absolute', borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceInset },
+                entrance.styles.capsuleStyle,
+              ]}
+            >
+              <Animated.View
+                style={[
+                  { position: 'absolute', left: -1, top: -1, right: -1, bottom: -1, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel },
+                  entrance.styles.buttonSkinStyle,
+                ]}
+              />
+            </Animated.View>
+            <Animated.View style={entrance.styles.iconStyle}>
+              <Search size={appTheme.icon.default} color={theme.colors.muted} />
+            </Animated.View>
+            <Animated.View style={[{ minWidth: 0, flex: 1, flexDirection: 'row', alignItems: 'center' }, entrance.styles.textStyle]}>
             <TextInput
               ref={inputRef}
               accessibilityLabel={SEARCH_FIELD_LABEL}
@@ -1165,13 +1239,15 @@ export function ExploreSearchOverlay({
                   moveMode('edit');
                   inputRef.current?.focus();
                 }}
-                style={{ minWidth: 44, minHeight: 44, marginRight: -13, alignItems: 'center', justifyContent: 'center' }}
+                style={{ minWidth: 44, minHeight: 44, marginRight: -14, alignItems: 'center', justifyContent: 'center' }}
               >
                 <X size={appTheme.icon.compact} color={theme.colors.muted} />
               </Pressable>
             ) : null}
+            </Animated.View>
           </View>
         </View>
+        <Animated.View style={entrance.styles.contentStyle}>
         <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 3, paddingTop: 10 }} accessibilityRole="tablist">
           {SEARCH_TABS.map((item) => (
             <SearchTab
@@ -1186,8 +1262,10 @@ export function ExploreSearchOverlay({
             />
           ))}
         </ScrollView>
+        </Animated.View>
       </View>
 
+      <Animated.View style={[{ flex: 1 }, entrance.styles.contentStyle]}>
       <ScrollView
         ref={resultsScrollRef}
         keyboardShouldPersistTaps="handled"
@@ -1233,7 +1311,11 @@ export function ExploreSearchOverlay({
           // Recent searches under an empty field only, as on the web: under a
           // typed query that is not searched they would read as its results.
           // Under them, the ideas to start from; with neither, the invitation.
-          body === 'start' && (history.length || starter) ? (
+          body === 'start' && !startReady ? (
+            // Held a moment for the recent searches and the ideas, so they
+            // arrive in place of nothing (startReady).
+            <View testID="search-start-holding" />
+          ) : body === 'start' && (history.length || starter) ? (
             <View style={{ gap: 28 }}>
               {history.length ? (
                 <View style={{ gap: 12 }}>
@@ -1273,14 +1355,21 @@ export function ExploreSearchOverlay({
                 </View>
               ) : null}
               {starter ? (
-                <SearchStarterSections
-                  answer={starter}
-                  onEntity={startFromEntity}
-                  onCreator={startFromCreator}
-                  onSearch={startFromSearch}
-                />
+                // Fades and rises in as it arrives, as iOS's suggestions do.
+                <Reveal>
+                  <SearchStarterSections
+                    answer={starter}
+                    onEntity={startFromEntity}
+                    onCreator={startFromCreator}
+                    onSearch={startFromSearch}
+                  />
+                </Reveal>
               ) : null}
             </View>
+          ) : body === 'start' ? (
+            <Reveal>
+              <StatusBlock title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
+            </Reveal>
           ) : (
             <StatusBlock title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
           )
@@ -1389,6 +1478,21 @@ export function ExploreSearchOverlay({
           </View>
         )}
       </ScrollView>
+      </Animated.View>
+      {entrance.touchable ? null : (
+        // Takes the taps while the field grows or goes back, so the second tap
+        // of a double tap does nothing. A shield, not pointerEvents on the
+        // field's parents: on iOS those turn off their interaction, and the
+        // field then refused the focus the entrance gives it (simulator,
+        // 2026-11-14).
+        <View
+          testID="search-entrance-shield"
+          accessible={false}
+          importantForAccessibility="no-hide-descendants"
+          onStartShouldSetResponder={() => true}
+          style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 }}
+        />
+      )}
     </KeyboardAvoidingArea>
   );
 }

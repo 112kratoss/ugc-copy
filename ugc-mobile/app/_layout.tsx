@@ -76,6 +76,7 @@ import { hydrateAiDataConsent } from '@/lib/ai-data-consent';
 import { hydrateContentPolicy } from '@/lib/content-policy';
 import { hydrateAppearancePreference, useResolvedColorScheme } from '@/lib/appearance';
 import { markDisplayFontLoaded } from '@/lib/display-font-ready';
+import { SEARCH_ENTRANCE } from '@/lib/search-entrance';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { appTheme, mediaColors, themes, type AppTheme } from '@/lib/theme';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
@@ -430,9 +431,11 @@ function RootLayoutNav() {
                 {/* Keep the library and its card feed opaque while navigating. A
                     fade composites two dense media surfaces and briefly makes
                     cards from the grid look stacked over feed cards. */}
-                {/* Search, opened from Home and Explore: the platform's own push
-                    and back swipe (search UX audit 2026-11-13, finding 7). */}
-                <Stack.Screen name="search" options={{ headerShown: false }} />
+                {/* Search, opened from Home and Explore: a cross-fade while its
+                    field grows out of the pressed control (lib/search-entrance.ts),
+                    with the platform's back swipe (search UX audit 2026-11-13,
+                    finding 7). */}
+                <Stack.Screen name="search" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade', animationDuration: SEARCH_ENTRANCE.fadeMs }} />
                 <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="showcase" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
                 {/* Where UIKit's zoom runs the page draws its own bar, which a

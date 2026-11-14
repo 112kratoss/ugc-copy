@@ -1,4 +1,5 @@
 import { normalizeSearchHistoryQuery } from './public-search-policy/public-search-policy';
+import type { SearchEntranceOrigin } from './search-entrance';
 import type { PublicSearchType } from './types';
 
 /** Where Home and Explore open search: a fresh screen, an empty field. */
@@ -42,12 +43,24 @@ export const SEARCH_SCREEN_OPEN_GUARD_MS = 600;
 export function createSearchScreenOpener({ push, now }: { push: (href: typeof SEARCH_SCREEN_HREF) => void; now: () => number }) {
   let pushedAt = Number.NEGATIVE_INFINITY;
   let mounted = 0;
+  // The control the push was made from, for the screen's field to grow out of
+  // (lib/search-entrance.ts). Handed to the screen once, as it mounts.
+  let origin: SearchEntranceOrigin | null = null;
   return {
-    open(): boolean {
+    open(from: SearchEntranceOrigin | null = null): boolean {
       if (mounted > 0 || now() - pushedAt < SEARCH_SCREEN_OPEN_GUARD_MS) return false;
       pushedAt = now();
+      origin = from;
       push(SEARCH_SCREEN_HREF);
       return true;
+    },
+    /**
+     * The control this opening was pressed from. Kept until the screen
+     * unmounts or another opening replaces it, so a render React repeats
+     * (Strict Mode) reads the same; a screen a link opens grows out of nothing.
+     */
+    takeOrigin(): SearchEntranceOrigin | null {
+      return origin;
     },
     screenMounted() {
       mounted += 1;
@@ -55,17 +68,14 @@ export function createSearchScreenOpener({ push, now }: { push: (href: typeof SE
     screenUnmounted() {
       mounted = Math.max(0, mounted - 1);
       pushedAt = Number.NEGATIVE_INFINITY;
+      origin = null;
     },
     /** Forgets every push and screen: for tests that open search again and again. */
     reset() {
       mounted = 0;
       pushedAt = Number.NEGATIVE_INFINITY;
+      origin = null;
     },
   };
 }
 
-/**
- * The field takes the focus once the push has slid in (`transitionEnd`); if
- * the navigator never says so (no animation, reduced motion), after this.
- */
-export const SEARCH_SCREEN_FOCUS_FALLBACK_MS = 700;
