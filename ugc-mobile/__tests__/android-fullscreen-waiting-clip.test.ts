@@ -139,25 +139,26 @@ describe('Android fullscreen waiting clip', () => {
     expect(added.some((line) => line.includes('onPictureInPictureModeChanged'))).toBe(false);
   });
 
-  it('keeps the two-second rule in the preview hook until updates reach only builds that carry the patch', () => {
+  it('keeps the two-second rule in the preview hook exactly while updates reach builds without the patch', () => {
     // The preview hook lets a clip keep its request to play while its own
     // fullscreen player is in front (`behindFullscreen`). On a build without
     // this patch that is what lets a waiting clip start behind the launcher,
-    // so the hook does not let a clip that has waited long there start by
-    // itself (`LONG_WAIT_MS`). That rule costs a press after a long stall even
-    // when the person is still watching. It can go, with the tests the README
+    // so the hook did not let a clip that had waited long there start by
+    // itself (`LONG_WAIT_MS`). That rule cost a press after a long stall even
+    // when the person was still watching. It went, with the tests the README
     // lists, once the Android build that updates reach was cut with the patch
-    // in patches/.
+    // in patches/ (0.1.9, 2026-11-14), and it must not come back while that
+    // holds: a person would be made to press play for nothing.
     //
-    // Both names come with "Let a preview clip play in Android's fullscreen
-    // player". Until that change is on main the hook has neither, a clip
-    // cannot play in the fullscreen player at all, and this has nothing to
+    // Both names came with "Let a preview clip play in Android's fullscreen
+    // player". Before that change was on main the hook had neither, a clip
+    // could not play in the fullscreen player at all, and this had nothing to
     // hold.
     const hook = read(previewHook);
     const androidTarget = JSON.parse(read('ota-targets.json')).targets.android;
     const reachedBuildCarriesIt = shipped && androidBuildsWithThePatch.includes(androidTarget.fingerprint);
-    if (hook.includes('behindFullscreen') && !reachedBuildCarriesIt) {
-      expect(hook).toContain('LONG_WAIT_MS');
-    }
+    if (!hook.includes('behindFullscreen')) return;
+    if (reachedBuildCarriesIt) expect(hook).not.toContain('LONG_WAIT_MS');
+    else expect(hook).toContain('LONG_WAIT_MS');
   });
 });

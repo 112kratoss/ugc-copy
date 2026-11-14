@@ -5,9 +5,6 @@ import { MediaViewportContext } from '@/components/media-viewport-scroll-view';
 import { useInModalWindow } from './modal-window';
 import { nativePreviewPlaybackOwner, previewIntersectsViewport, type PreviewRect } from './native-preview-playback';
 
-/** How long a clip may wait for data behind its fullscreen player and still go on by itself. */
-const LONG_WAIT_MS = 2000;
-
 export function useNativePreviewPlayback(player: VideoPlayer, isFocused: boolean) {
   const viewRef = useRef<View>(null);
   const viewport = useContext(MediaViewportContext);
@@ -52,30 +49,14 @@ export function useNativePreviewPlayback(player: VideoPlayer, isFocused: boolean
       check();
     };
     // Android: nothing tells JS that the app was left while the fullscreen
-    // player was in front, because its own activity was paused already.
-    // expo-video stops the clip then only if it is playing at that moment
-    // (FullscreenPlayerActivity.onPause), so a clip that wants to play and is
-    // waiting for data starts when the data comes, behind the launcher or the
-    // lock screen. So there a clip that has waited long is not started by its
-    // data: it waits for a press. After a short wait, as a seek makes, it
-    // plays on.
-    let waitingSince: number | null = null;
-    const waitedLongUnseen = () => behindFullscreen.current && waitingSince !== null && Date.now() - waitingSince > LONG_WAIT_MS;
+    // player was in front, because its own activity was paused already. The
+    // fullscreen activity itself stops a clip that means to play then, waiting
+    // for data or playing (`playWhenReady`, patches/expo-video+55.0.21+006, in
+    // every build from 0.1.9), so a clip that has waited for data goes on by
+    // itself when the data comes, in fullscreen as on the page.
     const playing = player.addListener('playingChange', event => {
-      if (!event.isPlaying) {
-        waitingSince = player.status === 'loading' ? Date.now() : null;
-        nativePreviewPlaybackOwner.release(player);
-        return;
-      }
-      const unseen = waitedLongUnseen();
-      waitingSince = null;
-      if (unseen) pause();
-      else claim();
-    });
-    const status = player.addListener('statusChange', event => {
-      if (event.status !== 'readyToPlay' || !waitedLongUnseen()) return;
-      waitingSince = null;
-      pause();
+      if (event.isPlaying) claim();
+      else nativePreviewPlaybackOwner.release(player);
     });
     const background = AppState.addEventListener('change', state => {
       if (state === 'active') { behindFullscreen.current = false; return; }
@@ -102,7 +83,7 @@ export function useNativePreviewPlayback(player: VideoPlayer, isFocused: boolean
     if (player.playing) claim();
     return () => {
       active = false;
-      playing.remove(); status.remove(); background.remove(); blur?.remove(); dimensions.remove(); unsubscribe?.();
+      playing.remove(); background.remove(); blur?.remove(); dimensions.remove(); unsubscribe?.();
       nativePreviewPlaybackOwner.release(player);
     };
   }, [inModalWindow, isFocused, player, viewport]);
