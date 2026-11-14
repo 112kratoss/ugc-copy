@@ -1171,7 +1171,13 @@ export function ExploreSearchOverlay({
   if (!visible) return null;
 
   return (
+    // iOS gives the keyboard's room through the results' own insets
+    // (automaticallyAdjustKeyboardInsets) instead of this area's padding: the
+    // padding re-laid the whole screen out on the UI thread at every frame of
+    // the keyboard's rise, and its first frame, landing on the keyboard's
+    // setup, was late (Animation Hitches on the iPhone 16e, 2026-11-14).
     <KeyboardAvoidingArea
+      iosScrollViewAdjustsInsets
       style={{ flex: 1, backgroundColor: theme.colors.background }}
     >
       <View style={{ paddingTop: insets.top + SEARCH_HEADER_TOP_GAP, paddingHorizontal: appTheme.spacing.screen, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: theme.colors.borderSubtle }}>
@@ -1273,6 +1279,7 @@ export function ExploreSearchOverlay({
       <Animated.View style={[{ flex: 1 }, entrance.styles.contentStyle]}>
       <ScrollView
         ref={resultsScrollRef}
+        automaticallyAdjustKeyboardInsets
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         contentContainerStyle={{
