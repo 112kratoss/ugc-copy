@@ -121,6 +121,18 @@ export const MODEL_ALIASES: Record<string, string> = {
   // docs/model-api-references/pixverse-v6-max.md: PixVerse V6's text and image-to-video bodies
   // (no multi-clip switch), the same prompt grammar and sound toggle; Max has no references.
   'pixverse-v6-max': 'pixverse-v6',
+  // docs/model-api-references/seedream-5-5.md: Seedream 5 Flash's body field for field (plus an
+  // unsent `background`), so the Seedream grammar with Lite's budget, as Flash has.
+  'seedream-5.5': 'seedream-5-lite',
+  // docs/model-api-references/gpt-image-2-6.md: GPT Image 2's prompt and input_urls without a
+  // resolution field, from the same OpenAI model family, as 2.5's tiers are.
+  'gpt-image-2.6': 'gpt-image-2',
+  // docs/model-api-references/kling-4-0-flash.md: Kling 4.0's two bodies with fewer fields
+  // (720p, 3–20 s, no last frame or voices) and the same @image_N grammar and always-on audio.
+  'kling-4.0-flash': 'kling-4.0',
+  // docs/model-api-references/gemini-omni-1-2-flash.md: 1.1's prompt, image_urls, frame pair,
+  // aspect_ratio and resolution body with an integer duration, as 1.1 aliases Gemini Omni Video.
+  'gemini-omni-1.2-flash': 'gemini-omni-video',
 };
 
 // ─── Image playbooks ─────────────────────────────────────────────────────────
@@ -653,6 +665,39 @@ const IMAGE_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
       label: 'Ideogram character director',
       strategyRules: [
         'Positive phrasing only; scene-only prompts underperform — always pair subject and context.',
+      ],
+      defaultSafeguards: [PRESERVE_INTENT_SAFEGUARD],
+    },
+  },
+  // docs/model-api-references/minimax-h3-image.md: 1–5,000 characters, Kie's own prompt rewrite
+  // on (`expand_prompt`), and edit references named `<Picture N>` in upload order.
+  'minimax-h3-image': {
+    modelId: 'minimax-h3-image',
+    label: 'MiniMax H3 Image',
+    medium: 'image',
+    plannerMode: 'structured-image',
+    compilerProfile: 'design-brief',
+    budget: { targetWords: [60, 180], maxChars: 4800 },
+    strategyRules: [
+      'Write a natural-language brief in the order subject, setting, composition, lighting, then one named style; default to realistic photography when no style is given.',
+      'For edits, state the change as one imperative (place, replace, remove, restyle) and close with a keep-clause naming what must not change (product shape, label text, identity).',
+      'Address references in upload order ("the product from Picture 1", "the room in Picture 2"), and keep every @name the user wrote exactly as written.',
+      'Fold avoidances into positive phrasing; there is no negative-prompt field.',
+    ],
+    workflowRules: [
+      'If stillImageModel is minimax-h3-image, write a concise subject-scene-light-style brief and, for edits, an imperative with a keep-clause.',
+    ],
+    plannerNotes: [
+      'A server-side rewriter expands the prompt into detailed English before generating — give it precise facts, not padding.',
+    ],
+    textRenderingRules: [
+      'Put in-image text in quotes with its position and type style; never translate or reword quoted text.',
+    ],
+    agent: {
+      id: 'minimax-h3-image-art-director',
+      label: 'MiniMax H3 Image art director',
+      strategyRules: [
+        'Describe the image itself, never meta-instructions ("generate an image of…").',
       ],
       defaultSafeguards: [PRESERVE_INTENT_SAFEGUARD],
     },

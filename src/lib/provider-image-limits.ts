@@ -15,9 +15,9 @@ import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/models';
  * is held as at most 30 MB for the same reason. An endpoint or field with no entry
  * documents no size for its pictures and is never measured: among the endpoints the app
  * sends pictures to, the GPT Image and Wan 2.7 pages, pixverse/reference-to-video,
- * kling-3.0/video's frames, the Seedance 2 frames, Veo, vidu-q4/reference-to-video and both
+ * kling-3.0/video's frames, the Seedance 2 frames, Veo, vidu-q4/reference-to-video, both
  * Kling 4.0 endpoints (whose pictures have a pixel range, 300–65536 a side, and no file size)
- * name none, and wan/2-7-r2v's
+ * and both Kling 4.0 Flash endpoints name none, and wan/2-7-r2v's
  * "up to `30MB`" (:168) is its reference voice. Seedance 1.5 Pro's page is gone (404); its
  * entry keeps the 10 MB of the page's archived capture.
  */
@@ -88,6 +88,9 @@ const PROVIDER_IMAGE_LIMITS: Readonly<Record<string, readonly ProviderImageField
   // Ideogram Character: reference_image_urls "maximum total size 10MB across all character
   // references" (ideogram/character:123-131).
   'ideogram/character': [limit('reference_image_urls', 'reference', 10, { total: true })],
+  // Seedream 5.5: image_urls "Max 10 MB per image" (seedream/5-5-image-to-image:126-148, read
+  // 2026-11-14), where Seedream 5 Pro, Lite and Flash take 30.
+  'seedream/5-5-image-to-image': [limit('image_urls', 'reference', 10)],
 
   // ── 20 MB a picture ──
   // Gemini Omni Video: image_urls "Each file must be no larger than `20MB`" (gemini-omni-video:132-145).
@@ -95,6 +98,12 @@ const PROVIDER_IMAGE_LIMITS: Readonly<Record<string, readonly ProviderImageField
   // Gemini Omni 1.1 Flash: image_urls "Each file must not exceed `20MB`"
   // (google/gemini-omni-flash-1-1:136-149); its frames name no size (:161-182).
   'google/gemini-omni-flash-1-1': [limit('image_urls', 'reference', 20)],
+  // Gemini Omni 1.2 Flash: image_urls "Each file must be no larger than `20MB`"
+  // (google/gemini-omni-flash-1-2:249-273, read 2026-11-14); its frames name no size (:289-319).
+  'google/gemini-omni-flash-1-2': [limit('image_urls', 'reference', 20)],
+  // MiniMax H3 Image: image_urls "Each image ≤ 20 MB and ≤ 64 MP" (minimax-h3/image-edit:351-373,
+  // read 2026-11-14).
+  'minimax-h3/image-edit': [limit('image_urls', 'reference', 20)],
   // HappyHorse 1.1: the first frame "File size: Up to 20 MB" (happyhorse-1-1/image-to-video:106-123),
   // reference_image "Maximum file size: 20 MB" (happyhorse-1-1/reference-to-video:109-127).
   'happyhorse-1-1/image-to-video': [limit('image_urls', 'frame', 20)],
@@ -137,6 +146,9 @@ const PROVIDER_IMAGE_LIMITS: Readonly<Record<string, readonly ProviderImageField
   'seedream/5-pro-image-to-image': [limit('image_urls', 'reference', 30)],
   'seedream/5-lite-image-to-image': [limit('image_urls', 'reference', 30)],
   'seedream/5-flash-image-to-image': [limit('image_urls', 'reference', 30)],
+  // GPT Image 2.6 Economy: input_urls "up to 30 MB each"
+  // (gpt/gpt-image-2-6-economy-image-to-image:151-163, read 2026-11-14).
+  'gpt-image-2-6/economy-image-to-image': [limit('input_urls', 'reference', 30)],
   // Seedance 2, Fast, Mini and 2.5: reference_image_urls "Size: Single image less than 30
   // MB" (bytedance/seedance-2:179-196, -2-fast:179-196, -2-mini:179-196, -2-5:184-201).
   // Seedance 1.5 Pro (delisted on Kie's site 2026-10-20; its API still runs it): input_urls

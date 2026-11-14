@@ -324,6 +324,48 @@ export const IMAGE_MODELS = {
     resolutions: ['1K', '2K', '4K'] as const,
     outputFormats: ['jpg'] as const,
   },
+  'seedream-5.5': {
+    id: 'seedream-5.5' as const,
+    displayName: 'Seedream 5.5',
+    description: 'Newest Seedream: realistic textures and dense small text, with edits from up to ten pictures',
+    badge: 'New',
+    badgeColor: 'from-blue-500 to-indigo-500',
+    accentColor: 'blue',
+    maxImages: 10,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: true,
+    aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '21:9'] as const,
+    resolutions: ['1K', '2K'] as const,
+    outputFormats: ['jpg', 'png'] as const,
+  },
+  'gpt-image-2.6': {
+    id: 'gpt-image-2.6' as const,
+    displayName: 'GPT Image 2.6',
+    description: 'Newest GPT Image at 1K: generation and edits with up to sixteen references',
+    badge: 'New',
+    badgeColor: 'from-amber-500 to-orange-500',
+    accentColor: 'amber',
+    maxImages: 16,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: false,
+    aspectRatios: ['auto', '1:1', '16:9', '9:16', '3:2', '2:3', '21:9', '4:3'] as const,
+    resolutions: ['1K'] as const,
+    outputFormats: ['jpg'] as const,
+  },
+  'minimax-h3-image': {
+    id: 'minimax-h3-image' as const,
+    displayName: 'MiniMax H3 Image',
+    description: 'Low-cost MiniMax generation and edits from up to sixteen pictures, up to 4K',
+    badge: 'New',
+    badgeColor: 'from-sky-500 to-indigo-500',
+    accentColor: 'blue',
+    maxImages: 16,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: true,
+    aspectRatios: ['auto', '1:1', '5:4', '4:3', '3:2', '16:9', '21:9', '4:5', '3:4', '2:3', '9:16'] as const,
+    resolutions: ['1K', '2K', '4K'] as const,
+    outputFormats: ['jpg', 'png'] as const,
+  },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
@@ -673,6 +715,32 @@ export const VIDEO_MODELS = {
     resolutions: ['540p', '720p', '1080p', '2k', '4k'] as const,
     modeOptions: [] as const,
   },
+  'kling-4.0-flash': {
+    id: 'kling-4.0-flash' as const,
+    displayName: 'Kling 4.0 Flash',
+    description: 'Faster, lower-cost Kling 4.0 with native audio from text, a start frame, or up to ten reference pictures',
+    supportsMultiShot: false,
+    supportsSound: false,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16', '1:1', '21:9'] as const,
+    durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20] as const,
+    singleShotDurationRange: { min: 3, max: 20, default: 5 } as const,
+    resolutions: ['720p'] as const,
+    modeOptions: [] as const,
+  },
+  'gemini-omni-1.2-flash': {
+    id: 'gemini-omni-1.2-flash' as const,
+    displayName: 'Gemini Omni 1.2 Flash',
+    description: 'Newest Gemini Omni Flash with native audio, frames or six references, 3 to 15 second clips up to 4K',
+    supportsMultiShot: false,
+    supportsSound: false,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16'] as const,
+    durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+    singleShotDurationRange: { min: 3, max: 15, default: 6 } as const,
+    resolutions: ['360p', '720p', '1080p', '4k'] as const,
+    modeOptions: [] as const,
+  },
 } as const;
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
@@ -719,8 +787,10 @@ export function getVideoElementSupport(
   ) {
     return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
   }
-  // Wan 3.0's reference_image_urls takes 10 where Wan 2.7's reference mode stops at 5; Kling 4.0's image_urls takes 10.
-  if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime' || modelId === 'kling-4.0') return { enabled: true, maxElements: 10, maxNamed: 10, reason: null };
+  // Gemini Omni 1.2 Flash's image_urls stops at 6.
+  if (modelId === 'gemini-omni-1.2-flash') return { enabled: true, maxElements: 6, maxNamed: 6, reason: null };
+  // Wan 3.0's reference_image_urls takes 10 where Wan 2.7's reference mode stops at 5; Kling 4.0's image_urls takes 10, as its Flash tier's does.
+  if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime' || modelId === 'kling-4.0' || modelId === 'kling-4.0-flash') return { enabled: true, maxElements: 10, maxNamed: 10, reason: null };
   // Vidu Q4's reference_image_urls takes 1 to 15.
   if (modelId === 'vidu-q4') return { enabled: true, maxElements: 15, maxNamed: 15, reason: null };
   if (modelId === 'kling-3.0-video') return { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable image references are not available for Kling yet.' };
@@ -843,6 +913,7 @@ export const ALWAYS_ON_AUDIO_VIDEO_MODELS: ReadonlySet<string> = new Set([
   'minimax-h3',
   'happyhorse-1.1',
   // kling-4.0/reference-to-video: "If no reference video is provided, native audio is always
-  // generated", and the app sends no clip.
+  // generated", and the app sends no clip. Its Flash tier says the same (kling-4-0-flash.md).
   'kling-4.0',
+  'kling-4.0-flash',
 ]);

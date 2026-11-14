@@ -69,6 +69,11 @@ const IMAGE_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   // FLUX.3 Klein, until real runs give each its own.
   'nano-banana-2.1': 120_000,
   'flux-3-klein': 90_000,
+  // 2026-11-14: Seedream 5 Flash's figure for Seedream 5.5's like body, and GPT Image 2.5's for
+  // 2.6, until real runs give each its own.
+  'seedream-5.5': 90_000,
+  'gpt-image-2.6': 120_000,
+  'minimax-h3-image': 105_000,
   // Registration audit 2026-08-16: these models had no estimate, which silently
   // disabled their progress bars (estimateGenerationDurationMs returns null).
   'seedream-5-lite': 105_000,
@@ -115,6 +120,10 @@ const VIDEO_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   'pixverse-v6-max': 120_000,
   'kling-4.0': 180_000,
   'vidu-q4': 150_000,
+  // 2026-11-14: neighbours' figures until real runs give each its own. Kling 4.0 Flash renders
+  // 720p up to 20 s; Gemini Omni 1.2 Flash takes 1.1's figure.
+  'kling-4.0-flash': 150_000,
+  'gemini-omni-1.2-flash': 150_000,
 };
 
 const MOTION_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {

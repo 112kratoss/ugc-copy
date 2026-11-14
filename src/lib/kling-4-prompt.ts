@@ -64,9 +64,14 @@ export function kling4ProviderPrompt(
  * The start's words for a prompt Kling 4.0 would refuse for its mentions: a run with reference
  * pictures can name them, and one without has nothing an `@` could name.
  */
-export function kling4UndeclaredMentionRefusal(mentions: readonly string[], pictureCount: number): string {
+export function kling4UndeclaredMentionRefusal(
+  mentions: readonly string[],
+  pictureCount: number,
+  /** The model's name, Kling 4.0 or its Flash tier, whose endpoints read mentions alike. */
+  modelName = 'Kling 4.0',
+): string {
   const named = mentions.map((mention) => (mention === '@' ? '"@"' : mention)).join(', ');
   return pictureCount > 0
-    ? `Kling 4.0 reads every @ as a mention of an attached picture. Mention a reference by its @name, or take the @ out of ${named}.`
-    : `Kling 4.0 reads every @ as a mention of an attached reference picture, and this run has none. Take the @ out of ${named}.`;
+    ? `${modelName} reads every @ as a mention of an attached picture. Mention a reference by its @name, or take the @ out of ${named}.`
+    : `${modelName} reads every @ as a mention of an attached reference picture, and this run has none. Take the @ out of ${named}.`;
 }

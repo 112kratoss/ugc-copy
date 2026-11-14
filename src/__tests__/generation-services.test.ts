@@ -1203,6 +1203,156 @@ describe('generation services', () => {
     });
   });
 
+  describe('the two Kie video models added 2026-11-14', () => {
+    // Bodies pinned to docs/model-api-references/{kling-4-0-flash,gemini-omni-1-2-flash}.md.
+    async function providerBodyFor(params: Record<string, unknown>) {
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      let providerBody: Record<string, unknown> | null = null;
+      vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        providerBody = JSON.parse(String(init?.body));
+        return {
+          ok: true,
+          json: async () => ({ code: 200, data: { taskId: 'task-new-video-3' } }),
+        } as Response;
+      });
+      const { supabase } = createSupabaseMock();
+      await startVideoGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'A chef plates a dish under warm kitchen light.',
+        ...(params as object),
+      } as Parameters<typeof startVideoGeneration>[0]);
+      return providerBody as Record<string, unknown> | null;
+    }
+    const PROMPT = 'A chef plates a dish under warm kitchen light.';
+    const chef = { id: 'element-1', displayName: 'The chef', handle: '@chef', storagePath: null, sourceGenerationId: null };
+    const dish = { id: 'element-2', displayName: 'The dish', handle: '@dish', storagePath: null, sourceGenerationId: null };
+
+    it('sends Kling 4.0 Flash to its own two ids, a start frame alone to the keyframe one', async () => {
+      expect(await providerBodyFor({ model: 'kling-4.0-flash', duration: 20, resolution: '720p', aspectRatio: '21:9', sound: true })).toEqual({
+        model: 'kling-4.0/flash-reference-to-video',
+        input: { prompt: PROMPT, duration: 20, resolution: '720p', aspect_ratio: '21:9' },
+        callBackUrl: expect.any(String),
+      });
+
+      expect(await providerBodyFor({
+        model: 'kling-4.0-flash',
+        duration: 5,
+        resolution: '720p',
+        aspectRatio: '16:9',
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+      })).toEqual({
+        model: 'kling-4.0/flash-keyframe-to-video',
+        input: { prompt: PROMPT, duration: 5, resolution: '720p', first_frame_url: 'https://cdn.example.com/start.jpg' },
+        callBackUrl: expect.any(String),
+      });
+
+      // The Flash keyframe endpoint has no last frame.
+      await expect(providerBodyFor({
+        model: 'kling-4.0-flash',
+        duration: 5,
+        resolution: '720p',
+        aspectRatio: '16:9',
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+        endImageUrl: 'https://cdn.example.com/end.jpg',
+      })).rejects.toThrow('Kling 4.0 Flash supports a start frame only.');
+    });
+
+    it('sends Kling 4.0 Flash pictures as image_urls with @image_N, and names Flash when an @ names nothing', async () => {
+      expect(await providerBodyFor({
+        model: 'kling-4.0-flash',
+        duration: 8,
+        resolution: '720p',
+        aspectRatio: '1:1',
+        prompt: '@chef lifts @dish toward the camera.',
+        referenceMode: 'elements',
+        elements: [chef, dish],
+        elementImageUrls: ['https://cdn.example.com/chef.jpg', 'https://cdn.example.com/dish.jpg'],
+      })).toEqual({
+        model: 'kling-4.0/flash-reference-to-video',
+        input: {
+          prompt: '@image_1 lifts @image_2 toward the camera.',
+          duration: 8,
+          resolution: '720p',
+          aspect_ratio: '1:1',
+          image_urls: ['https://cdn.example.com/chef.jpg', 'https://cdn.example.com/dish.jpg'],
+        },
+        callBackUrl: expect.any(String),
+      });
+
+      await expect(providerBodyFor({
+        model: 'kling-4.0-flash',
+        duration: 5,
+        resolution: '720p',
+        aspectRatio: '16:9',
+        prompt: 'Email chef@example.com.',
+      })).rejects.toThrow(
+        'Kling 4.0 Flash reads every @ as a mention of an attached reference picture, and this run has none. Take the @ out of @example.com.',
+      );
+    });
+
+    it('sends Gemini Omni 1.2 Flash an integer duration, frames or image_urls, and no clip', async () => {
+      const common = { model: 'gemini-omni-1.2-flash', resolution: '4k', aspectRatio: '9:16' };
+      expect(await providerBodyFor({ ...common, duration: 15 })).toEqual({
+        model: 'google/gemini-omni-flash-1-2',
+        input: { prompt: PROMPT, duration: 15, aspect_ratio: '9:16', resolution: '4k' },
+        callBackUrl: expect.any(String),
+      });
+
+      expect(await providerBodyFor({
+        ...common,
+        duration: 10,
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+        endImageUrl: 'https://cdn.example.com/end.jpg',
+      })).toEqual({
+        model: 'google/gemini-omni-flash-1-2',
+        input: {
+          prompt: PROMPT,
+          duration: 10,
+          aspect_ratio: '9:16',
+          resolution: '4k',
+          first_frame_url: 'https://cdn.example.com/start.jpg',
+          last_frame_url: 'https://cdn.example.com/end.jpg',
+        },
+        callBackUrl: expect.any(String),
+      });
+
+      const references = await providerBodyFor({
+        ...common,
+        duration: 6,
+        referenceMode: 'elements',
+        prompt: '@chef serves @dish.',
+        elements: [chef, dish],
+        elementImageUrls: ['https://cdn.example.com/chef.jpg', 'https://cdn.example.com/dish.jpg'],
+      });
+      expect((references as { input: Record<string, unknown> }).input).toMatchObject({
+        duration: 6,
+        image_urls: ['https://cdn.example.com/chef.jpg', 'https://cdn.example.com/dish.jpg'],
+      });
+      expect((references as { input: Record<string, unknown> }).input).not.toHaveProperty('video_list');
+    });
+
+    it('refuses a Gemini Omni 1.2 Flash frame pair over 10 seconds, and a lone end frame, before anything is held', async () => {
+      const common = { model: 'gemini-omni-1.2-flash', resolution: '720p', aspectRatio: '16:9' };
+      await expect(providerBodyFor({
+        ...common,
+        duration: 11,
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+        endImageUrl: 'https://cdn.example.com/end.jpg',
+      })).rejects.toThrow('Gemini Omni 1.2 Flash keeps a start and end frame run to 10 seconds; drop the end frame for a longer clip.');
+      // A start frame alone reaches 15.
+      expect(await providerBodyFor({ ...common, duration: 15, startImageUrl: 'https://cdn.example.com/start.jpg' })).toMatchObject({
+        input: { duration: 15, first_frame_url: 'https://cdn.example.com/start.jpg' },
+      });
+      await expect(providerBodyFor({
+        ...common,
+        duration: 5,
+        endImageUrl: 'https://cdn.example.com/end.jpg',
+      })).rejects.toThrow('Add a start frame to use an end frame with this model.');
+    });
+  });
+
   describe('the five Kie video models added 2026-10-08', () => {
     // Bodies pinned to docs/model-api-references/{wan-3-0,pixverse-v6,gemini-omni-1-1-flash,
     // grok-imagine-video-1-5}.md. Each run returns the provider body the mock saw.
@@ -1574,6 +1724,57 @@ describe('generation services', () => {
     });
     expect(uploads).toEqual([]);
     expect(inputMediaRows).toEqual([]);
+  });
+
+  // The hand-written branches in startImageGeneration run whenever a model's loaded entry is
+  // not on kie-task-v1 (no published entry yet, or one still on image-v1). Each must send what
+  // the adapter sends: GPT Image 2.6 Economy refuses any field it does not name, and Kie judges
+  // a body only after the hold (docs/model-api-references/{seedream-5-5,gpt-image-2-6,
+  // minimax-h3-image}.md, 2026-11-14).
+  it.each([
+    ['seedream-5.5', '2K'],
+    ['gpt-image-2.6', '1K'],
+    ['minimax-h3-image', '4K'],
+  ] as const)('%s: the hand-written body is the adapter body, with and without references', async (modelId, resolution) => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const { buildCodeGenerationModelOperations } = await import('@/lib/generation-model-runtime');
+    const { buildGenerationProviderRequest } = await import('@/lib/generation-model-adapters');
+    const operation = buildCodeGenerationModelOperations().find((candidate) => candidate.modelId === modelId)!;
+    expect(operation.adapterKey).toBe('kie-task-v1');
+    const ladder = { ...operation, adapterKey: 'image-v1' as const, adapterConfig: {} };
+    const PROMPT = 'A ceramic mug on a marble counter.';
+    const settings = { aspectRatio: '1:1', resolution, outputFormat: 'jpg' as const };
+    const references = ['https://cdn.example.com/hero.jpg', 'https://cdn.example.com/reference.jpg'];
+
+    for (const imageUrls of [[], references]) {
+      let providerBody: Record<string, unknown> | null = null;
+      vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        providerBody = JSON.parse(String(init?.body));
+        return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-image-ladder-1' } }) } as Response;
+      });
+      const { supabase } = createSupabaseMock();
+      await startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: PROMPT,
+        model: modelId,
+        ...settings,
+        imageUrls,
+        persistInputMedia: false,
+        operationalConfig: ladder,
+      });
+
+      const adapted = buildGenerationProviderRequest({
+        operation,
+        prompt: PROMPT,
+        settings: { ...settings, googleSearch: false },
+        inputs: imageUrls.map((url) => ({ slot: 'imageReferences', kind: 'image' as const, url })),
+      }).body as Record<string, unknown>;
+      const sent = providerBody as unknown as Record<string, unknown>;
+      expect({ model: sent.model, input: sent.input }, `${modelId} with ${imageUrls.length} references`)
+        .toEqual({ model: adapted.model, input: adapted.input });
+    }
   });
 
   it('sends image generations with named elements first and stores compiled prompt metadata', async () => {
@@ -5607,6 +5808,20 @@ describe('generation services', () => {
         model: 'vidu-q4',
         settings: { duration: 5, resolution: '540p' },
         request: { model: 'vidu-q4/reference-to-video', input: { reference_image_urls: [REFERENCE], aspect_ratio: '16:9' } },
+      },
+      // Added 2026-11-14 (docs/model-api-references/kling-4-0-flash.md, gemini-omni-1-2-flash.md).
+      {
+        label: 'Kling 4.0 Flash',
+        model: 'kling-4.0-flash',
+        settings: { duration: 5, resolution: '720p' },
+        request: { model: 'kling-4.0/flash-reference-to-video', input: { image_urls: [REFERENCE], aspect_ratio: '16:9' } },
+        promptNames: '@image_1 walks along the harbour at dusk.',
+      },
+      {
+        label: 'Gemini Omni 1.2 Flash',
+        model: 'gemini-omni-1.2-flash',
+        settings: { duration: 6, resolution: '720p' },
+        request: { model: 'google/gemini-omni-flash-1-2', input: { image_urls: [REFERENCE] } },
       },
     ];
 

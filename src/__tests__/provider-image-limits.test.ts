@@ -31,6 +31,8 @@ const KIE_IMAGE_LIMITS: Record<string, Array<[string, number] | [string, number,
   'ideogram/character': [['reference_image_urls', 10, 'total']],
   'gemini-omni-video': [['image_urls', 20]],
   'google/gemini-omni-flash-1-1': [['image_urls', 20]],
+  'google/gemini-omni-flash-1-2': [['image_urls', 20]],
+  'minimax-h3/image-edit': [['image_urls', 20]],
   'happyhorse-1-1/image-to-video': [['image_urls', 20]],
   'happyhorse-1-1/reference-to-video': [['reference_image', 20]],
   'grok-imagine-video-1-5-preview': [['image_urls', 20]],
@@ -47,6 +49,8 @@ const KIE_IMAGE_LIMITS: Record<string, Array<[string, number] | [string, number,
   'seedream/5-pro-image-to-image': [['image_urls', 30]],
   'seedream/5-lite-image-to-image': [['image_urls', 30]],
   'seedream/5-flash-image-to-image': [['image_urls', 30]],
+  'gpt-image-2-6/economy-image-to-image': [['input_urls', 30]],
+  'seedream/5-5-image-to-image': [['image_urls', 10]],
   // Delisted on Kie's site; the last captured page's input_urls limit (provider-image-limits).
   'bytedance/seedance-1.5-pro': [['input_urls', 10]],
   'bytedance/seedance-2': [['reference_image_urls', 30]],
@@ -88,6 +92,9 @@ const NO_DOCUMENTED_IMAGE_LIMIT = new Set([
   'kling-4.0/reference-to-video',
   'kling-4.0/keyframe-to-video',
   'vidu-q4/reference-to-video',
+  // Read 2026-11-14: Kling 4.0 Flash's pages name no file size either.
+  'kling-4.0/flash-reference-to-video',
+  'kling-4.0/flash-keyframe-to-video',
 ]);
 
 function measured(images: ProviderRequestImage[], sizes: Array<number | null>) {

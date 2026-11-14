@@ -73,6 +73,25 @@ const VERIFIED_PROVIDER_IDS: Partial<Record<ImageModelId, { text: string; refere
     text: 'flux-3/klein-text-to-image',
     reference: 'flux-3/klein-edit-image',
   },
+  // Verified 2026-11-14 against docs.kie.ai/market/seedream/5-5-{text,image}-to-image.md and a
+  // zero-cost probe (docs/model-api-references/seedream-5-5.md).
+  'seedream-5.5': {
+    text: 'seedream/5-5-text-to-image',
+    reference: 'seedream/5-5-image-to-image',
+  },
+  // Verified 2026-11-14 against docs.kie.ai/market/gpt/gpt-image-2-6-economy-*.md and a zero-cost
+  // probe: the Economy tier after a slash, the only 2.6 tier priced per picture
+  // (docs/model-api-references/gpt-image-2-6.md).
+  'gpt-image-2.6': {
+    text: 'gpt-image-2-6/economy-text-to-image',
+    reference: 'gpt-image-2-6/economy-image-to-image',
+  },
+  // Verified 2026-11-14 against docs.kie.ai/market/minimax-h3/{text-to-image,image-edit}.md and a
+  // zero-cost probe (docs/model-api-references/minimax-h3-image.md).
+  'minimax-h3-image': {
+    text: 'minimax-h3/text-to-image',
+    reference: 'minimax-h3/image-edit',
+  },
   // UNVERIFIED. No published spec was found for z-image under any probed path
   // on docs.kie.ai, so this records current behaviour rather than a confirmed
   // provider id. It is listed so the completeness check below still forces a

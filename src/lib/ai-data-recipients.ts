@@ -68,6 +68,9 @@ export const AI_MODEL_MAKER_BY_MODEL_ID = {
   'grok-imagine-image-2': 'xAI',
   'nano-banana-2.1': 'Google',
   'flux-3-klein': 'Black Forest Labs',
+  'seedream-5.5': 'ByteDance',
+  'gpt-image-2.6': 'OpenAI',
+  'minimax-h3-image': 'MiniMax',
   // Video
   'kling-3.0-video': 'Kuaishou',
   'kling-3.0-turbo': 'Kuaishou',
@@ -92,6 +95,8 @@ export const AI_MODEL_MAKER_BY_MODEL_ID = {
   'pixverse-v6': 'PixVerse',
   'pixverse-v6-max': 'PixVerse',
   'kling-4.0': 'Kuaishou',
+  'kling-4.0-flash': 'Kuaishou',
+  'gemini-omni-1.2-flash': 'Google',
   // ShengShu Technology makes Vidu. Web only until an app update names it in the AI-data
   // question (WEB_ONLY_VIDEO_MODEL_IDS in generation-model-catalog.ts).
   'vidu-q4': 'ShengShu',

@@ -37,12 +37,15 @@ const KIE_PROMPT_CAPS: Record<string, number> = {
   'qwen3-pro': 5000,
   'seedream-5-flash': 5000,
   'seedream-5-pro': 5000,
+  'seedream-5.5': 5000,
+  'minimax-h3-image': 5000,
   'wan-2.7': 5000,
   'wan-2.7-image': 5000,
   'wan-2.7-image-pro': 5000,
   'minimax-h3': 7000,
   'grok-imagine-image-2': 8000,
   'kling-4.0': 8000,
+  'kling-4.0-flash': 8000,
 };
 
 const ALL_MODEL_IDS = [

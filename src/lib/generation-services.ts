@@ -13,6 +13,7 @@ import {
   type ImageElementDescriptor,
 } from '@/lib/image-elements';
 import {
+  GEMINI_OMNI_1_2_FRAME_PAIR_MAX_DURATION_SECONDS,
   getImageCost,
   getImageResolutionOptions,
   getMotionCost,
@@ -135,6 +136,7 @@ import { isAllowlistedRemoteMediaUrl, type RemoteMediaKind } from '@/lib/remote-
 import { stageAllowlistedRemoteMedia } from '@/lib/staged-remote-media';
 import { loadGenerationModelOperationalConfig } from '@/lib/generation-model-catalog-store';
 import {
+  geminiOmni12FramePairRefusal,
   MOTION_IMAGE_ORIENTATION_MAX_DURATION_SECONDS,
   motionImageOrientationRefusal,
   resolveProviderModelId,
@@ -1734,6 +1736,22 @@ export function getKieImageModelId(model: ImageModelId, referenceCount: number):
     return referenceCount > 0 ? 'flux-3/klein-edit-image' : 'flux-3/klein-text-to-image';
   }
 
+  // Verified 2026-11-14 against docs.kie.ai/market/seedream/5-5-*.md.
+  if (model === 'seedream-5.5') {
+    return referenceCount > 0 ? 'seedream/5-5-image-to-image' : 'seedream/5-5-text-to-image';
+  }
+
+  // Verified 2026-11-14 against docs.kie.ai/market/gpt/gpt-image-2-6-economy-*.md: the Economy
+  // tier, after a slash (docs/model-api-references/gpt-image-2-6.md).
+  if (model === 'gpt-image-2.6') {
+    return referenceCount > 0 ? 'gpt-image-2-6/economy-image-to-image' : 'gpt-image-2-6/economy-text-to-image';
+  }
+
+  // Verified 2026-11-14 against docs.kie.ai/market/minimax-h3/{text-to-image,image-edit}.md.
+  if (model === 'minimax-h3-image') {
+    return referenceCount > 0 ? 'minimax-h3/image-edit' : 'minimax-h3/text-to-image';
+  }
+
   // Everything else sends the app id unchanged, which is correct only because
   // those ids are byte-identical to the provider's (nano-banana-2,
   // nano-banana-2-lite, nano-banana-pro, z-image). Adding a model whose
@@ -2363,6 +2381,45 @@ export async function startImageGeneration(params: {
 
       if (resolvedImageUrls.length > 0) {
         input.input_urls = resolvedImageUrls;
+      }
+    } else if (model === 'gpt-image-2.6') {
+      // docs/model-api-references/gpt-image-2-6.md: the Economy endpoints render 1K only, take
+      // no `resolution`, and refuse a field they do not name.
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+      };
+
+      if (resolvedImageUrls.length > 0) {
+        input.input_urls = resolvedImageUrls;
+      }
+    } else if (model === 'minimax-h3-image') {
+      // docs/model-api-references/minimax-h3-image.md: jpeg rather than the png default, and
+      // Kie's own prompt rewrite (its recommended default) said out loud.
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+        resolution,
+        output_format: outputFormat === 'jpg' ? 'jpeg' : outputFormat,
+        expand_prompt: true,
+      };
+
+      if (resolvedImageUrls.length > 0) {
+        input.image_urls = resolvedImageUrls;
+      }
+    } else if (model === 'seedream-5.5') {
+      // docs/model-api-references/seedream-5-5.md: Seedream 5 Flash's body, the resolution as
+      // `size`; `background` stays at Kie's `auto`.
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+        size: resolution,
+        output_format: outputFormat === 'jpg' ? 'jpeg' : outputFormat,
+        nsfw_checker: true,
+      };
+
+      if (resolvedImageUrls.length > 0) {
+        input.image_urls = resolvedImageUrls;
       }
     } else if (model === 'nano-banana-2-lite') {
       input = {
@@ -3066,6 +3123,13 @@ export async function startVideoGeneration(params: {
   if (model === 'gemini-omni-1.1-flash' && totalReferenceImageCount + (resolvedReferenceVideoUrls.length * 2) > 7) {
     throw new GenerationServiceError('Gemini Omni 1.1 Flash supports seven reference slots; a video uses two.', 400);
   }
+  // google/gemini-omni-flash-1-2: "First and last frame: required, 3–10", where a first frame
+  // alone or text reaches 15 (docs/model-api-references/gemini-omni-1-2-flash.md).
+  if (model === 'gemini-omni-1.2-flash'
+    && frameImageUrls.length > 1
+    && duration > GEMINI_OMNI_1_2_FRAME_PAIR_MAX_DURATION_SECONDS) {
+    throw new GenerationServiceError(geminiOmni12FramePairRefusal(), 400);
+  }
   // wan/3-0-video: reference_*_urls "Cannot be provided together with the first-frame /
   // last-frame parameters"; up to 5 clips and 5 audio files; and with reference clips
   // "input video duration + output duration ≤ 30", so the output stays at 15 s.
@@ -3147,19 +3211,20 @@ export async function startVideoGeneration(params: {
   // would name nothing is refused here, before anything is held (kling-4-prompt.ts). The handles
   // are those of the pictures the provider is sent, in order; a run of frames or text sends none
   // and can name nothing.
-  const kling4PictureHandles = model === 'kling-4.0' && providerReferenceImageUrls.length > 0
+  const isKling4Family = model === 'kling-4.0' || model === 'kling-4.0-flash';
+  const kling4PictureHandles = isKling4Family && providerReferenceImageUrls.length > 0
     ? normalizedReferences.length > 0
       ? normalizedReferences.map((reference) => reference.handle)
       : resolvedReferenceImageUrls.length > 0
         ? providerReferenceImageUrls.map(() => null)
         : normalizedElements.map((element) => element.handle)
     : [];
-  const kling4Prompt = model === 'kling-4.0'
+  const kling4Prompt = isKling4Family
     ? kling4ProviderPrompt(trimmedPrompt, kling4PictureHandles)
     : null;
   if (kling4Prompt && kling4Prompt.undeclaredMentions.length > 0) {
     throw new GenerationServiceError(
-      kling4UndeclaredMentionRefusal(kling4Prompt.undeclaredMentions, kling4PictureHandles.length),
+      kling4UndeclaredMentionRefusal(kling4Prompt.undeclaredMentions, kling4PictureHandles.length, selectedModel.displayName),
       400,
       PROVIDER_INPUT_REFUSED,
     );
@@ -3356,17 +3421,22 @@ export async function startVideoGeneration(params: {
       }
 
       body = { model: providerModelId, input };
-    } else if (model === 'kling-4.0') {
+    } else if (isKling4Family) {
       // docs/model-api-references/kling-4-0.md: a frame pair goes to keyframe-to-video as
       // first_frame_url and last_frame_url, which take the run's shape from the first frame;
       // text and reference pictures go to reference-to-video, which "behaves as plain
       // text-to-video" with no materials. Both type duration as an integer, and neither takes a
-      // sound field: with no clip, audio is always generated.
+      // sound field: with no clip, audio is always generated. The Flash tier
+      // (kling-4-0-flash.md) has the same two endpoints under its own ids, and its keyframe one
+      // takes a first frame only, which the catalog's end-frame check holds it to above.
       const usesFrames = providerReferenceImageUrls.length === 0 && frameImageUrls.length > 0;
+      const kling4ProviderIds = model === 'kling-4.0-flash'
+        ? { keyframe: 'kling-4.0/flash-keyframe-to-video', reference: 'kling-4.0/flash-reference-to-video' }
+        : { keyframe: 'kling-4.0/keyframe-to-video', reference: 'kling-4.0/reference-to-video' };
       providerModelId = resolveProviderModelId(
         runtimeConfig,
         usesFrames ? 'image' : (providerReferenceImageUrls.length > 0 ? 'reference' : 'text'),
-        usesFrames ? 'kling-4.0/keyframe-to-video' : 'kling-4.0/reference-to-video',
+        usesFrames ? kling4ProviderIds.keyframe : kling4ProviderIds.reference,
       );
       const input: Record<string, unknown> = {
         prompt: kling4Prompt?.prompt ?? trimmedPrompt,
@@ -3708,6 +3778,25 @@ export async function startVideoGeneration(params: {
         if (resolvedReferenceVideoUrls[0]) {
           input.video_list = [{ url: resolvedReferenceVideoUrls[0], start: 0, ends: duration }];
         }
+      }
+      body = { model: providerModelId, input };
+    } else if (model === 'gemini-omni-1.2-flash') {
+      // google/gemini-omni-flash-1-2 (docs/model-api-references/gemini-omni-1-2-flash.md,
+      // 2026-11-14): 1.1's shape with `duration` an integer. The frame fields are exclusive with
+      // image_urls, a lone last frame and a frame pair over 10 s are refused above, and the
+      // video edit (`video_list`), `character_ids` and `seeds` are not sent.
+      providerModelId = resolveProviderModelId(runtimeConfig, 'default', 'google/gemini-omni-flash-1-2');
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        duration,
+        aspect_ratio: aspectRatio,
+        resolution,
+      };
+      if (frameImageUrls.length > 0) {
+        input.first_frame_url = frameImageUrls[0];
+        if (frameImageUrls[1]) input.last_frame_url = frameImageUrls[1];
+      } else if (providerReferenceImageUrls.length > 0) {
+        input.image_urls = providerReferenceImageUrls;
       }
       body = { model: providerModelId, input };
     } else if (selectedModel.provider === 'gemini-omni') {
