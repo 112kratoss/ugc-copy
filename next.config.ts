@@ -70,8 +70,9 @@ const contentSecurityPolicyReportOnly = [
   // 'unsafe-inline' covers the Next.js bootstrap scripts, the inline
   // Google Analytics snippet, the root layout's typed-text capture
   // (src/lib/typed-before-hydration.ts), its sidebar restore
-  // (src/lib/app-shell-sidebar-restore.ts) and its welcome-promise restore
-  // (src/lib/welcome-promise-restore.ts), and the first sign-up intro's cover
+  // (src/lib/app-shell-sidebar-restore.ts), its welcome-promise restore
+  // (src/lib/welcome-promise-restore.ts) and its account restore
+  // (src/lib/app-shell-account-restore.ts), and the first sign-up intro's cover
   // on /onboarding (src/lib/first-sign-up-intro.ts) until a nonce pipeline exists. Next
   // gives a nonce only to its own scripts: the pipeline has to hand the
   // capture one, or text typed before a creator's script runs is lost again.

@@ -6,6 +6,7 @@ import AppShellAccountFallback from '@/components/AppShellAccountFallback';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { APP_NAV_ITEMS } from '@/components/app-shell-nav';
 import { resetFeedbackState } from '@/components/feedback-state';
+import { APP_SHELL_CREDITS_DIGITS_STORAGE_KEY } from '@/lib/app-shell-account-restore';
 import { wasSignedOutInBrowser } from '@/lib/browser-sign-out';
 import { resetShowcaseFeedEventQueueForTests, sendShowcaseFeedEvent } from '@/app/showcase/ShowcaseFeedInteraction';
 import { FEED_EVENT_OUTBOX_STORAGE_KEY } from '@/app/showcase/feed-event-outbox';
@@ -232,6 +233,77 @@ describe('AppShellAccount', () => {
 
     clickWithoutLeaving(creditHistory);
     expect(screen.queryByRole('menu', { name: 'Account' })).not.toBeInTheDocument();
+  });
+
+  // A signed-in refresh drew "Sign in", then "Credits" and the avatar, then "617 credits", and each
+  // moved the bell, Create and the search field sideways (owner's screen recording, 2026-11-14).
+  // The slot keeps the signed-in shape until the session check answers, and the balance's place
+  // until the profile does.
+  describe('while the account loads', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('holds the signed-in shape, never "Sign in", until the session check answers', async () => {
+      mocks.onAuthStateChange.mockImplementation((callback) => {
+        appShellAuthCallback = callback;
+        return { data: { subscription: { unsubscribe: vi.fn() } } };
+      });
+      const { container } = render(<AppShellAccount />);
+
+      expect(container.querySelector('.app-shell-credits-pending')).not.toBeNull();
+      expect(screen.queryByRole('link', { name: /Sign in/ })).toBeNull();
+
+      act(() => appShellAuthCallback?.('INITIAL_SESSION', null));
+
+      expect(await screen.findByRole('link', { name: 'Sign in for 25 free credits' })).toBeInTheDocument();
+      expect(container.querySelector('.app-shell-credits-pending')).toBeNull();
+    });
+
+    it('holds the balance\'s place until the profile is read, and keeps its width for the next page', async () => {
+      let answerProfile!: (value: { data: { display_name: string; avatar_url: null; credits: number } }) => void;
+      mocks.maybeSingle.mockReturnValueOnce(new Promise((resolve) => {
+        answerProfile = resolve;
+      }));
+      render(<AppShellAccount />);
+
+      const balance = await screen.findByRole('link', { name: 'Credits' });
+      expect(balance.querySelector('.app-shell-credits-pending')).not.toBeNull();
+      expect(balance).not.toHaveTextContent(/^Credits$/);
+
+      await act(async () => answerProfile({ data: { display_name: 'Test Creator', avatar_url: null, credits: 1295 } }));
+
+      expect(await screen.findByRole('link', { name: '1295 credits' })).toBeInTheDocument();
+      expect(window.localStorage.getItem(APP_SHELL_CREDITS_DIGITS_STORAGE_KEY)).toBe('4');
+    });
+
+    it('says "Credits" when the profile was read without a balance', async () => {
+      mocks.maybeSingle.mockResolvedValueOnce({ data: null });
+      render(<AppShellAccount />);
+
+      await waitFor(() => expect(screen.getByRole('link', { name: 'Credits' })).toHaveTextContent(/^Credits$/));
+      expect(document.querySelector('.app-shell-credits-pending')).toBeNull();
+    });
+
+    // Review of #811: the session kept while Supabase Auth could not answer has no profile read
+    // coming, so a held place would stay blank until the tab came back.
+    it('says "Credits", not a blank place, while Supabase Auth cannot answer', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout'] });
+      mocks.getUser.mockResolvedValue({ data: { user: null }, error: { ...unreachable, name: 'AuthRetryableFetchError', status: 503 } });
+      render(<AppShellAccount />);
+
+      expect(await screen.findByRole('button', { name: 'Open account menu for creator' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Credits' })).toHaveTextContent(/^Credits$/);
+      expect(document.querySelector('.app-shell-credits-pending')).toBeNull();
+
+      // Nor after the second check fails too.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(mocks.getUser).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('link', { name: 'Credits' })).toHaveTextContent(/^Credits$/);
+      expect(mocks.select).not.toHaveBeenCalled();
+    });
   });
 
   it('does not publish a stale or forged browser session as authenticated', async () => {

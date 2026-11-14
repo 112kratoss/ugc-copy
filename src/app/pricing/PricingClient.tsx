@@ -37,6 +37,13 @@ interface PricingClientProps {
      * to the recipe", B-F8; "Back to your remix").
      */
     returnTo?: string | null;
+    /**
+     * The request carried this browser's Supabase session cookie (read on the server, a hint and
+     * never authentication: `hasSupabaseAuthCookie`). Until the browser has read its session the
+     * balance card is drawn on it, so a signed-in visit draws the card from the first paint
+     * instead of pushing the page down when the session answers (2026-11-14).
+     */
+    sessionCookieHint?: boolean;
 }
 
 const percentFormatter = new Intl.NumberFormat('en', { maximumFractionDigits: 2 });
@@ -190,8 +197,14 @@ function inferDefaultCurrency(initialCountryCode?: string | null): SupportedCurr
     return 'USD';
 }
 
-export function PricingClient({ initialCountryCode = null, referralProgram = null, returnTo = null }: PricingClientProps) {
+export function PricingClient({
+    initialCountryCode = null,
+    referralProgram = null,
+    returnTo = null,
+    sessionCookieHint = false,
+}: PricingClientProps) {
     const [userId, setUserId] = useState<string | null>(null);
+    const [sessionRead, setSessionRead] = useState(false);
     const [selectedCurrency, setSelectedCurrency] = useState<SupportedCurrency>(() => (
         inferCurrencyFromCountry(initialCountryCode) ?? 'INR'
     ));
@@ -232,8 +245,11 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
         // before it returned sent a signed-in buyer to /login.
         void supabase.auth.getSession().then(({ data: { session } }) => {
             if (session?.user) setUserId(session.user.id);
-        });
+        }).finally(() => setSessionRead(true));
     }, []);
+
+    // A cookie whose session is gone (expired, signed out elsewhere) takes the card away once read.
+    const showBalance = userId !== null || (sessionCookieHint && !sessionRead);
 
     useEffect(() => {
         if (!userId) return;
@@ -388,7 +404,7 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
                     </div>
                 </div>
 
-                {userId ? (
+                {showBalance ? (
                     // The app's pricing screen opens on the balance; here it sits
                     // beside the way to where every credit in it came from and went.
                     <Surface

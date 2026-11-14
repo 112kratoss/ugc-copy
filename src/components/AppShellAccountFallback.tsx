@@ -32,12 +32,23 @@ const readSearch = () => window.location.search;
 // A statically rendered page has no query on the server; the browser fills it in.
 const readServerSearch = () => '';
 
-export default function AppShellAccountFallback({ pathname: shellPathname }: { pathname?: string }) {
+/**
+ * `className` adds to the link's own: the server's mark that hides it where the browser holds a
+ * session (`.app-shell-when-signed-out`, DeferredAppShellAccount).
+ */
+export default function AppShellAccountFallback({
+  pathname: shellPathname,
+  className,
+}: {
+  pathname?: string;
+  className?: string;
+}) {
   const routePathname = usePathname();
   // The shell's pathname when it passes one. It is the neutral '' wherever the
   // header must match HTML drawn for another address (the not-found page at
-  // every address, `/` before mounting), and '' returns Home, as the server
-  // wrote it: React never patches an attribute that hydrates differently.
+  // every address), and `/` for Home under every pathname the server draws it
+  // with (`/home`, `/index`): both return Home, as the server wrote it, since
+  // React never patches an attribute that hydrates differently.
   const pathname = shellPathname ?? routePathname;
   const search = useSyncExternalStore(subscribeToHistory, readSearch, readServerSearch);
   // The router changes the query with history.pushState, which no event
@@ -60,7 +71,7 @@ export default function AppShellAccountFallback({ pathname: shellPathname }: { p
       onPointerDown={rereadSearch}
       onFocus={rereadSearch}
       aria-label={welcomePromise ? `Sign in for ${WELCOME_CREDITS_SHOWN} free credits` : 'Sign in'}
-      className="ui-focus-ring inline-flex min-h-12 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-3)] active:scale-[0.985]"
+      className={`ui-focus-ring inline-flex min-h-12 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-3)] active:scale-[0.985]${className ? ` ${className}` : ''}`}
     >
       <Crown aria-hidden className="app-shell-sign-in-crown h-4 w-4 shrink-0 text-[var(--ui-accent-commerce)]" fill="currentColor" fillOpacity={0.2} />
       <span>Sign in</span>

@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { useAuth } from '@/components/AuthProvider';
-import { HOME_FEED_DETAIL_CONTEXT } from '@/components/HomeFeedSkeleton';
+import { feedChipClassName, HOME_FEED_COLUMN_CLASS, HOME_FEED_DETAIL_CONTEXT } from '@/components/HomeFeedSkeleton';
 import NewPostsPill, { newPostsScrollBehavior } from '@/components/NewPostsPill';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import { publishNavigationStart } from '@/components/navigation-progress-state';
@@ -1116,10 +1116,9 @@ export default function FeedClient({
                     type="button"
                     onClick={() => selectChip(chip.id)}
                     aria-pressed={chipId === chip.id}
-                    className={`ui-focus-ring min-h-11 rounded-full border px-4 text-sm font-bold transition ${
-                        chipId === chip.id
-                            ? 'border-[var(--ui-primary-strong)] bg-[var(--ui-primary)] text-[var(--ui-primary-on)]'
-                            : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] hover:border-[var(--ui-border-default)] hover:text-[var(--ui-text-primary)]'
+                    // The same classes as the row Home's skeleton holds in its place.
+                    className={`ui-focus-ring transition ${feedChipClassName(chipId === chip.id)}${
+                        chipId === chip.id ? '' : ' hover:border-[var(--ui-border-default)] hover:text-[var(--ui-text-primary)]'
                     }`}
                 >
                     {chip.label}
@@ -1129,7 +1128,7 @@ export default function FeedClient({
     );
 
     return (
-        <div ref={rootRef} className="flex w-full flex-col gap-5">
+        <div ref={rootRef} className={HOME_FEED_COLUMN_CLASS}>
             {chipRow}
 
             {loadError ? (

@@ -298,6 +298,49 @@ describe('pricing page balance and credit history link', () => {
     expect(screen.queryByRole('link', { name: 'Credit history' })).toBeNull();
     expect(profileState.reads).toEqual([]);
   });
+
+  describe('when the request carried a session cookie', () => {
+    it('draws the balance card from the first render, before the session is read', async () => {
+      const { PricingClient } = await import('@/app/pricing/PricingClient');
+      const { supabase } = await import('@/lib/supabase');
+      // A session that has not answered yet: a signed-in refresh before getSession returns.
+      vi.mocked(supabase.auth.getSession).mockReturnValueOnce(new Promise(() => undefined));
+      render(<PricingClient initialCountryCode="IN" sessionCookieHint />);
+
+      // Synchronously: the card sits where it will stay, so nothing below it moves (2026-11-14).
+      expect(screen.getByText('Available balance')).toBeInTheDocument();
+      expect(screen.getByText('Balance loading…')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Credit history' })).toHaveAttribute('href', '/credits');
+      expect(profileState.reads).toEqual([]);
+    });
+
+    it("draws it in the server's HTML too", async () => {
+      const { renderToString } = await import('react-dom/server');
+      const { PricingClient } = await import('@/app/pricing/PricingClient');
+
+      expect(renderToString(<PricingClient initialCountryCode="IN" sessionCookieHint />)).toContain('Available balance');
+      expect(renderToString(<PricingClient initialCountryCode="IN" />)).not.toContain('Available balance');
+    });
+
+    it('keeps the card and fills in the balance once the session answers', async () => {
+      const { PricingClient } = await import('@/app/pricing/PricingClient');
+      render(<PricingClient initialCountryCode="IN" sessionCookieHint />);
+
+      expect(await screen.findByText('1,295 credits')).toBeInTheDocument();
+      expect(screen.getAllByText('Available balance')).toHaveLength(1);
+    });
+
+    it('takes the card away when the cookie held no session', async () => {
+      sessionState.session = null;
+      const { PricingClient } = await import('@/app/pricing/PricingClient');
+      render(<PricingClient initialCountryCode="IN" sessionCookieHint />);
+      expect(screen.getByText('Available balance')).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.queryByText('Available balance')).toBeNull());
+      expect(screen.queryByRole('link', { name: 'Credit history' })).toBeNull();
+      expect(profileState.reads).toEqual([]);
+    });
+  });
 });
 
 describe('pricing page server render', () => {
@@ -316,7 +359,7 @@ describe('pricing page server render', () => {
     const element = await Pricing();
 
     // No recipe to go back to on a plain visit.
-    expect(element.props).toEqual({ initialCountryCode: 'IN', referralProgram: terms, returnTo: null });
+    expect(element.props).toEqual({ initialCountryCode: 'IN', referralProgram: terms, returnTo: null, sessionCookieHint: false });
   });
 
   it('passes null, never made-up numbers, while no program can be read', async () => {
@@ -326,7 +369,28 @@ describe('pricing page server render', () => {
     const { default: Pricing } = await import('@/app/pricing/page');
     const element = await Pricing();
 
-    expect(element.props).toEqual({ initialCountryCode: null, referralProgram: null, returnTo: null });
+    expect(element.props).toEqual({ initialCountryCode: null, referralProgram: null, returnTo: null, sessionCookieHint: false });
+  });
+
+  it("tells the client whether the request carried this project's session cookie, whole or in chunks", async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://example.supabase.co');
+    pageMocks.loadReferralProgramTerms.mockResolvedValue(null);
+    const { default: Pricing } = await import('@/app/pricing/page');
+    const hintFor = async (cookie: string | null) => {
+      pageMocks.headers.mockResolvedValue(new Headers(cookie === null ? {} : { cookie }));
+      return (await Pricing()).props.sessionCookieHint;
+    };
+
+    try {
+      expect(await hintFor('sb-example-auth-token=base64-abc')).toBe(true);
+      expect(await hintFor('theme=dark; sb-example-auth-token.0=base64-abc; sb-example-auth-token.1=def')).toBe(true);
+      // Another project's cookie, the PKCE verifier alone, or none at all is no session.
+      expect(await hintFor('sb-other-auth-token=base64-abc')).toBe(false);
+      expect(await hintFor('sb-example-auth-token-code-verifier=xyz')).toBe(false);
+      expect(await hintFor(null)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

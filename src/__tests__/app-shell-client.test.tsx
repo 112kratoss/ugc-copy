@@ -250,6 +250,32 @@ describe('AppShellClient', () => {
     expect(within(view.container).getAllByRole('link', { name: 'Home', current: 'page' })).not.toEqual([]);
   });
 
+  // Drawn neutral until it mounted, Home's first paint read "Workspace", then "Home" with its line
+  // beneath, and the search field beside the title moved 117px (owner's screen recording,
+  // 2026-11-14). The live static `/` was drawn under `/index` (its Sign in wrote
+  // `returnUrl=%2Findex`), the signed-in one under `/home`.
+  it.each(['/', '/home', '/index', '/_not-found'])(
+    'draws Home from the server\'s first paint when the server reads %s, and hydrates it unchanged',
+    (server) => {
+      mockedPathname = server;
+      const drawn = document.createElement('div');
+      drawn.innerHTML = renderToString(
+        <AppShellClient>
+          <div>Home content</div>
+        </AppShellClient>
+      );
+      const firstPaint = within(drawn);
+      expect(firstPaint.getByRole('banner')).toHaveTextContent('Community feed and your creative workspace');
+      expect(firstPaint.getByRole('banner')).not.toHaveTextContent('Workspace Search');
+      expect(firstPaint.getAllByRole('link', { name: 'Home', current: 'page' })).not.toEqual([]);
+      expect(firstPaint.getByRole('link', { name: 'Sign in for 25 free credits' })).toHaveAttribute('href', '/login?returnUrl=%2F');
+
+      const view = hydrateShell({ server, browser: '/', content: 'Home content' });
+      expect(view.onRecoverableError).not.toHaveBeenCalled();
+      expect(view.attributeWarnings).toEqual([]);
+    }
+  );
+
   it('does not draw the shell again when only the router state around its pathname changes', () => {
     // The root segment comes from the router's whole state, which also changes
     // for a query-only address change (the Explore reel's replaceState): the
