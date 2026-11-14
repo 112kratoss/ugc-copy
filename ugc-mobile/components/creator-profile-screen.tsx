@@ -7,7 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
 import { ChevronRight, ExternalLink, Globe, Heart, ImageIcon, Layers3, Lock, MapPin, MoreVertical, Pencil, Play, Repeat2 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Linking, Pressable, Share, Text, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
@@ -56,6 +56,7 @@ import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
+import { shareSheetContent } from '@/lib/share-sheet-content';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
 import { createShowcaseFeedViewerQueryKey, createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { CreatorProfileSkeleton, SkeletonBone } from '@/components/skeleton';
@@ -256,11 +257,10 @@ export function CreatorProfileScreen({
       `/creators/${encodeURIComponent(data.profile.username)}`,
       'creator-profile'
     );
-    const result = await Share.share({
-      message: `${data.profile.displayName} on Magicbooklet\n${url}`,
-      url,
-      title: data.profile.displayName,
-    });
+    const result = await Share.share(shareSheetContent(
+      { title: data.profile.displayName, text: `${data.profile.displayName} on Magicbooklet`, url },
+      Platform.OS
+    ));
     if (result.action !== Share.sharedAction) return;
     await api
       .shareCreatorProfile(data.profile.username, { sourceSurface: 'creator-profile' })

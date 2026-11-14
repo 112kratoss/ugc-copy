@@ -5,6 +5,7 @@ import type { ImmersivePreviewItem, PreviewViewerSource } from './immersive-prev
 import { currentInviteShareCode } from './invite-share-code-state';
 import { withInviteShareCode } from './invite-share-link/invite-share-link';
 import { postName } from './placeholder-title';
+import type { ShareLink } from './share-sheet-content';
 import { getShowcaseMediaPreviewUrl } from './showcase-media';
 import { appTheme, type ThemeColors } from './theme';
 import type { CreatorToolId, GenerationShareSourceSurface } from './types';
@@ -134,12 +135,6 @@ export function getViewerShareSourceSurface(
   }
 }
 
-export interface ViewerShareContent {
-  title: string;
-  message: string;
-  url: string;
-}
-
 /**
  * What the Share control should actually do for an item.
  *
@@ -150,7 +145,7 @@ export interface ViewerShareContent {
  * publishable, and the intent says so.
  */
 export type ViewerShareIntent =
-  | { kind: 'share'; content: ViewerShareContent }
+  | { kind: 'share'; content: ShareLink }
   | { kind: 'publish'; generationId: string }
   | { kind: 'make-public'; postId: string }
   | { kind: 'unavailable' };
@@ -172,7 +167,7 @@ export function getViewerShareIntent(
     const url = buildShareUrl(siteUrl, item.sharePath, surface ?? getViewerShareSourceSurface(item.source));
     return {
       kind: 'share',
-      content: { title: item.title, message: `${item.title}\n${url}`, url },
+      content: { title: item.title, text: item.title, url },
     };
   }
 

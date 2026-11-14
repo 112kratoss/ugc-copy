@@ -73,6 +73,7 @@ import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
 import { useViewerRefreshSpinner } from '@/lib/viewer-refresh-indicator';
 import { BackGlyph } from '@/lib/platform-glyphs';
 import { createShowcaseFeedViewerQueryKey } from '@/lib/showcase-feed-query';
+import { shareSheetContent } from '@/lib/share-sheet-content';
 import {
   buildImmersiveSlidePages,
   getImmersiveVideoBlockerId,
@@ -1090,7 +1091,7 @@ function ImmersivePreviewViewer() {
 
     // A dismissed share sheet is not an error worth surfacing. `.catch` rather
     // than try…catch, which React Compiler cannot compile around the check below.
-    const shareResult = await Share.share({ ...intent.content }).catch(() => null);
+    const shareResult = await Share.share(shareSheetContent(intent.content, Platform.OS)).catch(() => null);
     // Android's share intent cannot report a dismissal (it answers "shared" either way), so only iOS counts a share.
     if (Platform.OS !== 'ios' || shareResult?.action !== Share.sharedAction) return;
     if (item.showcasePostId) {

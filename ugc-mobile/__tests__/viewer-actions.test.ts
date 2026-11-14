@@ -510,7 +510,7 @@ describe('share url', () => {
         kind: 'share',
         content: {
           title: 'Neon skyline',
-          message: 'Neon skyline\nhttps://magicbooklet.com/showcase/post-1?s=showcase-reel&r=30b5f916c7aa',
+          text: 'Neon skyline',
           url: 'https://magicbooklet.com/showcase/post-1?s=showcase-reel&r=30b5f916c7aa',
         },
       });
@@ -535,11 +535,13 @@ describe('viewer share intent', () => {
       'https://magicbooklet.com'
     );
 
+    // The words and the link stay apart: shareSheetContent puts them together
+    // the way each platform's share sheet needs, the link once.
     expect(intent).toEqual({
       kind: 'share',
       content: {
         title: 'Neon skyline',
-        message: 'Neon skyline\nhttps://magicbooklet.com/showcase/post-1?s=showcase-reel',
+        text: 'Neon skyline',
         url: 'https://magicbooklet.com/showcase/post-1?s=showcase-reel',
       },
     });
