@@ -1,5 +1,5 @@
 import TabLoadingShell from '@/components/TabLoadingShell';
 
 export default function MarketplaceLoading() {
-  return <TabLoadingShell title="Marketplace" eyebrow="Recipes" accent="emerald" />;
+  return <TabLoadingShell title="Marketplace" accent="emerald" />;
 }
