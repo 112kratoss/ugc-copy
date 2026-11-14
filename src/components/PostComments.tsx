@@ -1219,13 +1219,20 @@ export default function PostComments({
 
             {rows.length > 0 ? (
                 <ol className="flex flex-col" aria-label="Comment thread">
-                    {rows.map((row) => {
+                    {rows.map((row, index) => {
+                        // A reply or the replies toggle comes next: the thread's
+                        // line runs on through the bottom of this row.
+                        const nextRow = rows[index + 1];
+                        const threadContinues = nextRow !== undefined && nextRow.kind !== 'comment';
+
                         if (row.kind === 'replies-toggle') {
                             const parentId = row.parentId as string;
                             const replyPage = replyPages[parentId] ?? emptyReplyPageState();
                             return (
-                                // Under the comment's text, past its avatar.
-                                <li key={row.key} className="pl-8">
+                                // Under the comment's text, past its avatar, at
+                                // the end of the thread's line.
+                                <li key={row.key} className="relative pl-10">
+                                    <CommentThreadElbow target="toggle" />
                                     <div className="flex flex-wrap items-center gap-1">
                                         <button
                                             type="button"
@@ -1360,16 +1367,23 @@ export default function PostComments({
                                 aria-level={isReply ? 2 : 1}
                                 aria-busy={busyCommentId === comment.id}
                                 className={`py-2 transition-opacity ${
-                                    isReply ? 'ml-4 border-l border-[var(--ui-border-subtle)] pl-5' : ''
+                                    isReply ? 'relative pl-11' : ''
                                 } ${busyCommentId === comment.id ? 'opacity-60' : ''}`}
                             >
+                                {isReply ? (
+                                    <>
+                                        {threadContinues ? <CommentThreadSpine from="row-top" /> : null}
+                                        <CommentThreadElbow target="reply" />
+                                    </>
+                                ) : null}
                                 {comment.pinned && !display.isDeleted ? (
                                     <p className="mb-1.5 flex items-center gap-1.5 text-xs font-bold text-[var(--ui-text-muted)]">
                                         <Pin className="h-3.5 w-3.5" aria-hidden="true" />
                                         Pinned by the creator
                                     </p>
                                 ) : null}
-                                <div className="flex items-start gap-3">
+                                <div className="relative flex items-start gap-3">
+                                    {!isReply && threadContinues ? <CommentThreadSpine from="avatar" /> : null}
                                     <PostCommentAvatar
                                         avatarUrl={comment.author?.avatarUrl ?? null}
                                         // The initials under a missing picture: the handle's
@@ -1556,6 +1570,48 @@ export default function PostComments({
 
             {isPanel ? composer : null}
         </section>
+    );
+}
+
+/*
+ * The lines that tie a thread's replies to the comment they answer: a spine
+ * falls from under the comment's avatar, and each reply, then the replies
+ * toggle that ends the thread, branches off it on a rounded elbow. The rows
+ * stay one flat list (aria-level tells the levels apart), so each row draws its
+ * own piece and the pieces meet at the row edges. In px from the list's left
+ * edge: the comment's avatar is 32 wide, so the spine runs at 16; an elbow
+ * turns at 16 and ends at 40, short of a reply's avatar at 44 (`pl-11`) and at
+ * the toggle's edge (`pl-10`). Decoration only: hidden from screen readers.
+ */
+const THREAD_LINE_COLOR = 'var(--ui-border-strong)';
+
+function CommentThreadSpine({ from }: { from: 'avatar' | 'row-top' }) {
+    return (
+        <span
+            aria-hidden="true"
+            data-thread-line="spine"
+            style={{ backgroundColor: THREAD_LINE_COLOR }}
+            className={`pointer-events-none absolute left-4 w-px ${
+                // Under the 32px avatar with a 4px gap, down through the row's
+                // bottom padding (`py-2`) to where the next row's piece starts.
+                from === 'avatar' ? 'top-9 -bottom-2' : 'inset-y-0'
+            }`}
+        />
+    );
+}
+
+function CommentThreadElbow({ target }: { target: 'reply' | 'toggle' }) {
+    return (
+        <span
+            aria-hidden="true"
+            data-thread-line="elbow"
+            style={{ borderColor: THREAD_LINE_COLOR }}
+            className={`pointer-events-none absolute left-4 top-0 w-6 rounded-bl-xl border-b border-l ${
+                // Turns at the middle of what it points to: a reply's 24px
+                // avatar under the row's 8px top padding, or the toggle's 44px button.
+                target === 'reply' ? 'h-5' : 'h-5.5'
+            }`}
+        />
     );
 }
 

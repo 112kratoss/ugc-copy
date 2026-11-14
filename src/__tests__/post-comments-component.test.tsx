@@ -427,6 +427,48 @@ describe('PostComments', () => {
         ))).toBe(true);
     });
 
+    it('ties a thread together with a line from the comment through each reply to the replies toggle', async () => {
+        const root = comment({ id: 'root-1', body: 'Root comment', replyCount: 2 });
+        const loner = comment({ id: 'loner', body: 'No replies here' });
+        const replies = [
+            comment({ id: 'reply-1', parentId: root.id, body: 'First reply' }),
+            comment({ id: 'reply-2', parentId: root.id, body: 'Second reply' }),
+        ];
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (
+            String(input).includes('parentId=root-1')
+                ? jsonResponse(page(replies))
+                : jsonResponse(page([root, loner]))
+        )));
+        // Each row's pieces of line, decoration a screen reader never reaches.
+        const linesOf = (item: HTMLElement) => Array.from(
+            item.querySelectorAll('[data-thread-line]'),
+            (piece) => {
+                expect(piece).toHaveAttribute('aria-hidden', 'true');
+                return piece.getAttribute('data-thread-line');
+            }
+        ).sort();
+
+        render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={4} />);
+        await screen.findByText('Root comment');
+
+        // Folded: the comment's spine falls to the toggle's elbow, and a
+        // comment without replies draws none.
+        expect(threadItems().map(linesOf)).toEqual([['spine'], ['elbow'], []]);
+
+        fireEvent.click(screen.getByRole('button', { name: 'View 2 replies' }));
+        await screen.findByText('Second reply');
+
+        // Open: every reply branches off the spine, which runs on past the last
+        // reply to the toggle and stops there.
+        expect(threadItems().map(linesOf)).toEqual([
+            ['spine'],
+            ['elbow', 'spine'],
+            ['elbow', 'spine'],
+            ['elbow'],
+            [],
+        ]);
+    });
+
     // Feed ranking v4, §4: a comment written under a ranked feed card names the
     // delivery that showed it, in the field the app sends too
     // (`contracts/mobile-api-v1.json`, `createPostComment.request`).
