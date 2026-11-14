@@ -13,6 +13,7 @@ import {
   inviteHandoffDevice,
   inviteHandoffDismissed,
   inviteHandoffOffer,
+  inviteHandoffPreviewOnly,
   inviteJoinPath,
   isInAppBrowser,
   readInviteHandoffPreview,
@@ -64,17 +65,36 @@ describe('what the page offers a visitor who holds an invite', () => {
     inviteHandoffOffer({ device, inAppBrowser, ...extra });
 
   // The app reads a handed-over invite at its first launch, which runs the code built
-  // into the binary: until a store build with it is live, the app loses the invite and
-  // the page must not send anyone there to keep it.
-  it('puts joining here first on a phone until the app in the stores keeps an invite', () => {
-    expect(INVITE_APP_HANDOFF_LIVE).toEqual({ android: false, ios: false });
-    expect(offer('android')).toBe('join');
-    expect(offer('ios')).toBe('join');
+  // into the binary. 0.1.9 has it on both platforms (iOS 62 since 2026-11-12, Android 81
+  // since 2026-11-14), so the switch is on for both (owner, 2026-11-14).
+  it('puts the app first on both phones, now that the app in both stores keeps an invite', () => {
+    expect(INVITE_APP_HANDOFF_LIVE).toEqual({ android: true, ios: true });
+    expect(offer('android')).toBe('app');
+    expect(offer('ios')).toBe('app');
+    expect(offer('android', true)).toBe('app');
+    expect(offer('ios', true)).toBe('app');
+  });
+
+  // The rollback: a platform set back to false.
+  const off = { live: { android: false, ios: false } };
+
+  it('puts joining here first on a phone whose app cannot keep an invite', () => {
+    expect(offer('android', false, off)).toBe('join');
+    expect(offer('ios', false, off)).toBe('join');
   });
 
   it('sends a visitor inside another app’s browser to the phone’s own, where they can join', () => {
-    expect(offer('android', true)).toBe('open-in-browser');
-    expect(offer('ios', true)).toBe('open-in-browser');
+    expect(offer('android', true, off)).toBe('open-in-browser');
+    expect(offer('ios', true, off)).toBe('open-in-browser');
+  });
+
+  it('marks the app-first page as a preview only where the app cannot keep the invite yet', () => {
+    expect(inviteHandoffPreviewOnly({ device: 'ios', preview: true })).toBe(false);
+    expect(inviteHandoffPreviewOnly({ device: 'android', preview: true })).toBe(false);
+    expect(inviteHandoffPreviewOnly({ device: 'ios', preview: true, ...off })).toBe(true);
+    expect(inviteHandoffPreviewOnly({ device: 'android', preview: true, live: { android: false, ios: true } })).toBe(true);
+    expect(inviteHandoffPreviewOnly({ device: 'android', preview: false, ...off })).toBe(false);
+    expect(inviteHandoffPreviewOnly({ device: 'desktop', preview: true, ...off })).toBe(false);
   });
 
   it('puts the app first once it keeps the invite, platform by platform, in-app browsers included', () => {
@@ -86,8 +106,8 @@ describe('what the page offers a visitor who holds an invite', () => {
   });
 
   it('shows the app-first page to a link opened with the preview switch', () => {
-    expect(offer('ios', false, { preview: true })).toBe('app');
-    expect(offer('android', true, { preview: true })).toBe('app');
+    expect(offer('ios', false, { preview: true, ...off })).toBe('app');
+    expect(offer('android', true, { preview: true, ...off })).toBe('app');
     expect(readInviteHandoffPreview(`?s=feed&r=${CODE}&handoff=preview`)).toBe(true);
     expect(readInviteHandoffPreview('handoff=preview')).toBe(true);
     for (const search of ['', null, undefined, '?handoff=1', '?xhandoff=preview', '?handoff=previews']) {
