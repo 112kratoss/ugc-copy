@@ -245,8 +245,27 @@ and what was done:
   and catalog starts; the callback serving the queue; the queued answer read by the web's
   status reader.
 
+A third reviewer then read those fixes and found one more on the credit path, and four
+smaller points, all answered:
+
+- **A delete tried again lost the credits.** The first delete took the run out of the queue
+  and, its refund failing, kept the creation; the second found nothing to claim and deleted
+  it. A delete now also refunds a run that is out of the queue and still holds its credits
+  with nothing on its way (pending, never admitted by the gate), and keeps it if it cannot.
+- **A lost queueing answer could read as "queued" for a run nothing would send**, when the
+  start's own reservation had gone through unseen. Asked again, the queue now says whether
+  the run has its task (`onItsWay`); one that is only reserved is looked at once more two
+  seconds on, and refused if it still has none.
+- **A pass that hung held every caller in its instance.** A caller waits on a running pass
+  no longer than its own time, and a pass running for 90 seconds is no longer joined.
+- **The callback's pass could be skipped just after its task freed a place.** It now makes
+  a pass of its own (`fresh`), after any that is running.
+- **The runbook** said to end the queue before a rollback; that could refund a run being
+  sent. It says straight after, now.
+
 Known and left: 200 queued long videos cannot all start inside ten minutes when the 50
 in-flight places are what they wait on, so the tail of such a burst waits, is refunded and is
 told. `/creations` says "Queued" for every pending run, including the rare start that died
 before it was sent, until the reaper ends it. A queueing whose answer is lost twice, with a
-pass claiming the run in the same moment, can still refund a run that is being sent.
+pass claiming the run in the same moment, can still refund a run that is being sent; so can
+one that is still being posted two seconds after a lost answer.

@@ -6,6 +6,7 @@ import { isExternalServiceTimeoutError } from '@/lib/provider-fetch';
 import {
   claimQueuedProviderSubmission,
   enqueueProviderSubmission,
+  QUEUED_START_SENDING_RECHECK_MS,
 } from '@/lib/generation-submission-queue-store';
 import { PROVIDER_ADMISSION_POLICY } from '@/lib/provider-admission';
 
@@ -80,11 +81,20 @@ describe('queueing a generation start', () => {
     }
   });
 
-  /** A queue whose first answer is lost and whose second is `second`. */
-  function lostThen(second: { data?: unknown; error?: unknown }) {
-    const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => ({ data: second.data ?? null, error: second.error ?? null }));
+  /** A queue whose first answer is lost, and which then answers `later`, one answer an ask. */
+  function lostThen(...later: Array<{ data?: unknown; error?: unknown } | Error>) {
+    const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => {
+      const answer = later.shift() ?? later[later.length - 1] ?? { data: null };
+      if (answer instanceof Error) throw answer;
+      return { data: answer.data ?? null, error: answer.error ?? null };
+    });
     rpc.mockRejectedValueOnce(new Error('fetch failed'));
-    return { rpc };
+    const pauses: number[] = [];
+    return { rpc, pauses, sleep: async (ms: number) => { pauses.push(ms); } };
+  }
+
+  function queueAgain(queue: ReturnType<typeof lostThen>) {
+    return enqueueProviderSubmission({ generationId: GENERATION_ID, task: TASK, client: queue as never, sleep: queue.sleep });
   }
 
   it('asks again when the answer was lost, and keeps the place the first ask took', async () => {
@@ -93,25 +103,56 @@ describe('queueing a generation start', () => {
     // paying for. Asked again, a run already queued answers with its place.
     const queue = lostThen({ data: { status: 'queued', queuedAt: '2026-11-15T10:00:00.250Z', replayed: true } });
 
-    await expect(enqueueProviderSubmission({ generationId: GENERATION_ID, task: TASK, client: queue as never }))
-      .resolves.toEqual({ queuedAtMs: Date.parse('2026-11-15T10:00:00.250Z'), ahead: null });
+    await expect(queueAgain(queue)).resolves.toEqual({ queuedAtMs: Date.parse('2026-11-15T10:00:00.250Z'), ahead: null });
     expect(queue.rpc).toHaveBeenCalledTimes(2);
+    expect(queue.pauses).toEqual([]);
   });
 
-  it('answers queued when the lost ask did queue it and a pass has taken it to send since', async () => {
-    // Asked again it is "not queueable": reserved or attached, because it is
-    // on its way to the provider. Refusing here would refund a run being sent.
-    const queue = lostThen({ data: { status: 'not_queueable' } });
+  it('answers queued when the lost ask did queue it and a pass has sent it since', async () => {
+    // Asked again it is "not queueable" because it has its task. Refusing
+    // here would refund a run the provider is running.
+    const queue = lostThen({ data: { status: 'not_queueable', onItsWay: true } });
+
+    await expect(queueAgain(queue)).resolves.toMatchObject({ ahead: null });
+    expect(queue.rpc).toHaveBeenCalledTimes(2);
+    expect(queue.pauses).toEqual([]);
+  });
+
+  it('looks once more, a moment later, when the start is only reserved', async () => {
+    // A pass that took it is posting it now and attaches its task in a moment.
+    const queue = lostThen(
+      { data: { status: 'not_queueable', onItsWay: false } },
+      { data: { status: 'not_queueable', onItsWay: true } },
+    );
+
+    await expect(queueAgain(queue)).resolves.toMatchObject({ ahead: null });
+    expect(queue.rpc).toHaveBeenCalledTimes(3);
+    expect(queue.pauses).toEqual([QUEUED_START_SENDING_RECHECK_MS]);
+  });
+
+  it('refuses a start that is still only reserved: nothing is sending it, and nothing would', async () => {
+    // The reservation is the start's own, from an ask of the gate that timed
+    // out here and went through there. Answered "queued", the run would wait
+    // 45 minutes for the reaper with nothing ever sending it.
+    for (const last of [{ data: { status: 'not_queueable', onItsWay: false } }, new Error('fetch failed')]) {
+      const queue = lostThen({ data: { status: 'not_queueable', onItsWay: false } }, last);
+
+      await expect(queueAgain(queue)).rejects.toMatchObject({ status: 429 });
+      expect(queue.rpc).toHaveBeenCalledTimes(3);
+    }
+  });
+
+  it('does not take "not queueable" for "sent" when no answer was lost', async () => {
+    const queue = client({ data: { status: 'not_queueable', onItsWay: true } });
 
     await expect(enqueueProviderSubmission({ generationId: GENERATION_ID, task: TASK, client: queue as never }))
-      .resolves.toMatchObject({ ahead: null });
+      .rejects.toMatchObject({ status: 429 });
+    expect(queue.rpc).toHaveBeenCalledTimes(1);
   });
 
   it('still refuses a start the queue will not take when asked the second time', async () => {
     for (const status of ['queue_full', 'user_queue_full', 'missing']) {
-      await expect(enqueueProviderSubmission({
-        generationId: GENERATION_ID, task: TASK, client: lostThen({ data: { status } }) as never,
-      })).rejects.toMatchObject({ status: 429 });
+      await expect(queueAgain(lostThen({ data: { status } }))).rejects.toMatchObject({ status: 429 });
     }
   });
 

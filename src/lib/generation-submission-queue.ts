@@ -182,7 +182,7 @@ async function expireQueuedSubmission(client: SupabaseClient, generationId: stri
 }
 
 export type QueuedSubmissionCancel =
-  /** It was not queued: nothing of the queue's to end. */
+  /** Nothing to end: it is not queued, and it holds no credits for a run that was never sent. */
   | 'not_queued'
   /** Out of the queue, and its hold is settled: returned, or no longer the queue's. */
   | 'cancelled'
@@ -195,10 +195,39 @@ export type QueuedSubmissionCancel =
  */
 export async function cancelQueuedSubmission(client: SupabaseClient, generationId: string): Promise<QueuedSubmissionCancel> {
   const claimed = await claimQueuedProviderSubmission(client, generationId);
-  if (!claimed) return 'not_queued';
+  if (!claimed && !await holdsCreditsUnsent(client, generationId)) return 'not_queued';
 
   const refund = await refundClaimedSubmission(client, generationId, QUEUED_SUBMISSION_CANCELLED_MESSAGE);
   return refund === 'unsettled' ? 'refund_failed' : 'cancelled';
+}
+
+/**
+ * Whether a generation that is not in the queue still holds its credits with
+ * nothing on its way to the provider: pending, never admitted by the gate, no
+ * task, not marked unknown. That is a run an earlier delete took out of the
+ * queue and could not refund (`refund_failed`), or a start that died before
+ * the gate. Deleting it without returning the hold would lose it: the reaper
+ * settles rows, and the row would be gone. One the gate admitted is left
+ * alone: it may be being sent this moment.
+ */
+async function holdsCreditsUnsent(client: SupabaseClient, generationId: string): Promise<boolean> {
+  const { data, error } = await client
+    .from('generations')
+    .select('status, prediction_id, provider_submission_reserved_at, submission_unknown_at')
+    .eq('id', generationId)
+    .maybeSingle();
+  if (error) throw error;
+  const row = data as {
+    status: string | null;
+    prediction_id: string | null;
+    provider_submission_reserved_at: string | null;
+    submission_unknown_at: string | null;
+  } | null;
+  return Boolean(row)
+    && row!.status === 'pending'
+    && !row!.prediction_id
+    && !row!.provider_submission_reserved_at
+    && !row!.submission_unknown_at;
 }
 
 type QueuedSubmissionAttempt = {
@@ -342,17 +371,41 @@ async function passOverQueue(
  * full. Per instance by design: it is the many requests one instance serves
  * during a burst that would otherwise each ask the gate about the same head.
  */
-const passes: { running: Promise<void> | null; fullAtMs: number | null } = { running: null, fullAtMs: null };
+const passes: { running: Promise<void> | null; runningSinceMs: number; fullAtMs: number | null } = {
+  running: null, runningSinceMs: 0, fullAtMs: null,
+};
+
+/**
+ * A running pass older than this is taken for hung (a database call with no
+ * time limit of its own) and is no longer joined: the next caller passes by itself.
+ */
+export const QUEUED_SUBMISSION_PASS_STALE_MS = 90_000;
 
 /** For tests: forgets the running pass and the last full account. */
 export function resetQueuedSubmissionPasses() {
   passes.running = null;
+  passes.runningSinceMs = 0;
   passes.fullAtMs = null;
+}
+
+/** Waits for a pass, but no longer than `ms`: a caller has its own time limit, whatever the pass is stuck on. */
+async function settledWithin(pass: Promise<void>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([pass, new Promise<void>((resolve) => { timer = setTimeout(resolve, Math.max(0, ms)); })]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
  * Makes a pass, unless one is running in this instance (it is joined) or one
  * has just found the account full (nothing can have changed).
+ *
+ * `fresh` is for a caller that knows something has changed since any pass
+ * began: the provider's callback, whose finished task has just freed a place.
+ * It waits out a running pass and then makes its own, whatever was found a
+ * moment ago.
  */
 async function passOnce(
   client: SupabaseClient,
@@ -360,12 +413,18 @@ async function passOnce(
   deadlineMs: number,
   dependencies: DriveDependencies,
   summary: QueuedSubmissionDriveSummary,
+  fresh: boolean,
 ): Promise<void> {
-  if (passes.running) {
-    await passes.running;
-    return;
+  const running = passes.running;
+  if (running && dependencies.now() - passes.runningSinceMs < QUEUED_SUBMISSION_PASS_STALE_MS) {
+    await settledWithin(running, deadlineMs - dependencies.now());
+    if (!fresh || passes.running === running) return;
   }
-  if (passes.fullAtMs !== null && dependencies.now() - passes.fullAtMs < QUEUED_SUBMISSION_PASS_SPACING_MS) return;
+  if (
+    !fresh
+    && passes.fullAtMs !== null
+    && dependencies.now() - passes.fullAtMs < QUEUED_SUBMISSION_PASS_SPACING_MS
+  ) return;
 
   const pass = (async () => {
     try {
@@ -376,6 +435,7 @@ async function passOnce(
     }
   })();
   passes.running = pass;
+  passes.runningSinceMs = dependencies.now();
   try {
     await pass;
   } finally {
@@ -399,6 +459,8 @@ export async function driveQueuedSubmissions(params: {
   untilGenerationId?: string;
   /** When to stop, on the clock. Without one, a single pass has `QUEUED_SUBMISSION_PASS_BUDGET_MS`. */
   deadlineMs?: number;
+  /** Something has just changed (a place was freed): pass now, not joined to or spaced after an earlier pass. */
+  fresh?: boolean;
   client?: SupabaseClient;
   dependencies?: Partial<DriveDependencies>;
 } = {}): Promise<QueuedSubmissionDriveSummary> {
@@ -411,7 +473,7 @@ export async function driveQueuedSubmissions(params: {
     const client = params.client ?? createServiceClient();
 
     for (;;) {
-      await passOnce(client, limit, deadlineMs, dependencies, summary);
+      await passOnce(client, limit, deadlineMs, dependencies, summary, params.fresh === true);
 
       if (!params.untilGenerationId) break;
       if (!await readQueuedProviderSubmission(client, params.untilGenerationId)) break;

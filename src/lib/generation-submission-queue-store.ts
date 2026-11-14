@@ -56,6 +56,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+/** How long a pass that has just taken a run needs to post it and attach its task. */
+export const QUEUED_START_SENDING_RECHECK_MS = 2_000;
+
 const QUEUE_FULL_MESSAGE =
   'Too many generations are waiting to start right now. No credits were charged. Please retry shortly.';
 const USER_QUEUE_FULL_MESSAGE =
@@ -81,15 +84,18 @@ export async function enqueueProviderSubmission(params: {
   generationId: string;
   task: QueuedProviderTask;
   client?: RpcClient;
+  sleep?: (ms: number) => Promise<void>;
 }): Promise<{ queuedAtMs: number; ahead: number | null }> {
   let status: string | null = null;
   let data: unknown = null;
 
-  // Asked again, once, when the first ask was lost. The row may have been
-  // written all the same, and a start that then refunded itself would leave a
-  // request in the queue for a run nobody is paying for. Asking again is
-  // safe: a run already queued keeps its place and its request.
-  for (let attempt = 1; attempt <= 2 && status === null; attempt += 1) {
+  // Asked again when the first ask was lost. The row may have been written
+  // all the same, and a start that then refunded itself would leave a request
+  // in the queue for a run nobody is paying for. Asking again is safe: a run
+  // already queued keeps its place and its request.
+  const sleep = params.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let lost = false;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       const client = params.client ?? createServiceClient();
       const answer = await client.rpc('enqueue_provider_submission', {
@@ -105,18 +111,33 @@ export async function enqueueProviderSubmission(params: {
       if (answer.error) throw answer.error;
       data = answer.data;
       status = isRecord(data) && typeof data.status === 'string' ? data.status : 'invalid_answer';
-      // The first ask did queue it, and a pass has taken it to send since:
-      // reserved or attached, it is no longer queueable because it is on its way.
-      if (attempt === 2 && status === 'not_queueable') {
-        return { queuedAtMs: Date.now(), ahead: null };
-      }
     } catch (error) {
       logBackendWarning('generation_submission_queue_unavailable', {
         generationId: params.generationId,
         attempt,
         error: error instanceof Error ? error.message : String(isRecord(error) ? error.message : error),
       });
+      status = null;
+      // Lost twice: refused, below.
+      if (lost) break;
+      lost = true;
+      continue;
     }
+
+    // Only an ask made after a lost one has this to settle: "not queueable"
+    // may mean the lost ask did queue the run and a pass has taken it since.
+    if (!lost || status !== 'not_queueable') break;
+    // It has its task, or has finished: it was queued, and it was sent.
+    if (isRecord(data) && data.onItsWay === true) {
+      return { queuedAtMs: Date.now(), ahead: null };
+    }
+    // Reserved and nothing more. A pass that took it is posting it right now
+    // and will have attached its task in a moment; a reservation that is the
+    // start's own (an ask of the gate that timed out here and went through
+    // there) never will, and nothing would send that run. One look later
+    // tells them apart.
+    if (attempt === 3) break;
+    await sleep(QUEUED_START_SENDING_RECHECK_MS);
   }
 
   if (status === 'queued' && isRecord(data)) {

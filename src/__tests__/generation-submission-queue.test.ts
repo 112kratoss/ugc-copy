@@ -41,6 +41,7 @@ import {
   QUEUED_SUBMISSION_PASS_BUDGET_MS,
   QUEUED_SUBMISSION_PASS_LIMIT,
   QUEUED_SUBMISSION_PASS_SPACING_MS,
+  QUEUED_SUBMISSION_PASS_STALE_MS,
   resetQueuedSubmissionPasses,
 } from '@/lib/generation-submission-queue';
 
@@ -68,15 +69,30 @@ function taskOf(generationId: string) {
 const ADMITTED = { allowed: true, reason: 'admitted' };
 const noPlace = (reason = 'rate_limited') => ({ allowed: false, reason });
 
-/** The service client: the queue's refunds go through its `settle_generation_start_failed`. */
-function serviceClient(settleStatus: string | Error = 'failed') {
+/**
+ * The service client: the queue's refunds go through its
+ * `settle_generation_start_failed`, and a delete reads the generation's row.
+ */
+function serviceClient(settleStatus: string | Error = 'failed', generation: Record<string, unknown> | null | Error = null) {
   const rpc = vi.fn(async (_fn: string, _args: Record<string, unknown>) => (
     settleStatus instanceof Error
       ? { data: null, error: settleStatus }
       : { data: { status: settleStatus }, error: null }
   ));
-  return { client: { rpc } as unknown as SupabaseClient, rpc };
+  const from = vi.fn((_table: string) => ({
+    select: () => ({
+      eq: () => ({
+        maybeSingle: async () => (generation instanceof Error
+          ? { data: null, error: generation }
+          : { data: generation, error: null }),
+      }),
+    }),
+  }));
+  return { client: { rpc, from } as unknown as SupabaseClient, rpc, from };
 }
+
+/** A generation holding its credits with nothing on its way to the provider. */
+const UNSENT_HOLD = { status: 'pending', prediction_id: null, provider_submission_reserved_at: null, submission_unknown_at: null };
 
 /**
  * A queue holding `queued`, served with a gate that answers `admit` by
@@ -341,6 +357,79 @@ describe('passes within one server instance', () => {
     await driveQueuedSubmissions({ client, dependencies: served.dependencies });
 
     expect(served.sent).toHaveLength(2);
+  });
+
+  it('does not wait on a running pass past its own time', async () => {
+    // A pass stuck on a call with no time limit of its own must not hold
+    // every other caller in the instance for as long as it is stuck.
+    const a = run('a');
+    const stuck = new Promise<string>(() => undefined);
+    const served = queue([a], { post: async () => stuck });
+    const { client } = serviceClient();
+
+    void driveQueuedSubmissions({ client, dependencies: served.dependencies });
+    await vi.waitFor(() => expect(served.post).toHaveBeenCalledTimes(1));
+    const joined = driveQueuedSubmissions({ client, deadlineMs: served.dependencies.now() + 30, dependencies: served.dependencies });
+
+    await expect(joined).resolves.toEqual({ sent: 0, queued: 0, gone: 0, expired: 0, failed: 0 });
+    expect(mocks.list).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes by itself once a running pass has been stuck too long to be believed', async () => {
+    const [a, b] = [run('a'), run('b')];
+    const stuck = new Promise<string>(() => undefined);
+    const served = queue([a, b], {
+      post: async (task) => (String(task.body.input.prompt).includes(a.generationId) ? stuck : 'task-b'),
+    });
+    const { client } = serviceClient();
+
+    void driveQueuedSubmissions({ client, dependencies: served.dependencies });
+    await vi.waitFor(() => expect(served.post).toHaveBeenCalledTimes(1));
+    served.advance(QUEUED_SUBMISSION_PASS_STALE_MS);
+    const summary = await driveQueuedSubmissions({ client, dependencies: served.dependencies });
+
+    expect(summary).toMatchObject({ sent: 1 });
+    expect(served.waiting).toEqual([]);
+  });
+
+  it('lets the provider\'s callback pass at once after a full account: its finished task freed a place', async () => {
+    const a = run('a');
+    let full = true;
+    const served = queue([a], { admit: () => (full ? noPlace('max_in_flight') : ADMITTED) });
+    const { client } = serviceClient();
+
+    await driveQueuedSubmissions({ client, dependencies: served.dependencies });
+    full = false;
+    // Any other caller is spaced out: nothing can have changed, as far as it knows.
+    await driveQueuedSubmissions({ client, dependencies: served.dependencies });
+    expect(served.sent).toEqual([]);
+
+    await driveQueuedSubmissions({ client, fresh: true, dependencies: served.dependencies });
+    expect(served.sent).toEqual([`request of ${a.generationId}`]);
+  });
+
+  it('has the callback wait out a running pass, then make its own', async () => {
+    const [a, b] = [run('a'), run('b')];
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const posted: string[] = [];
+    const served = queue([a], { post: async (task) => {
+      if (String(task.body.input.prompt).includes(a.generationId)) await held;
+      posted.push(String(task.body.input.prompt));
+      return 'task';
+    } });
+    const { client } = serviceClient();
+
+    const first = driveQueuedSubmissions({ client, dependencies: served.dependencies });
+    await vi.waitFor(() => expect(served.post).toHaveBeenCalledTimes(1));
+    served.waiting.push(b);
+    const callback = driveQueuedSubmissions({ client, fresh: true, dependencies: served.dependencies });
+    release!();
+    await Promise.all([first, callback]);
+
+    // Not beside the running pass, and not left to it either: b joined the queue after that pass had read it.
+    expect(mocks.list).toHaveBeenCalledTimes(2);
+    expect(posted).toEqual([`request of ${a.generationId}`, `request of ${b.generationId}`]);
   });
 
   it('joins a pass that is running instead of asking the gate beside it', async () => {
@@ -617,6 +706,46 @@ describe('deleting a queued start', () => {
       queue([a]);
       await expect(cancelQueuedSubmission(serviceClient(status).client, a.generationId)).resolves.toBe('cancelled');
     }
+  });
+
+  it('returns the credits of a run that is out of the queue and still holds them', async () => {
+    // An earlier delete claimed it and could not refund it, or its start died
+    // before the gate. Deleted on "not queued", its hold would go with its row.
+    queue([]);
+    const { client, rpc } = serviceClient('failed', UNSENT_HOLD);
+
+    await expect(cancelQueuedSubmission(client, a.generationId)).resolves.toBe('cancelled');
+    expect(rpc).toHaveBeenCalledWith('settle_generation_start_failed', {
+      p_generation_id: a.generationId,
+      p_error_message: QUEUED_SUBMISSION_CANCELLED_MESSAGE,
+    });
+  });
+
+  it('keeps such a run when its credits still cannot be returned', async () => {
+    queue([]);
+
+    await expect(cancelQueuedSubmission(serviceClient(new Error('connection reset'), UNSENT_HOLD).client, a.generationId))
+      .resolves.toBe('refund_failed');
+  });
+
+  it.each([
+    ['the gate admitted: it may be being sent this moment', { ...UNSENT_HOLD, provider_submission_reserved_at: '2026-11-15T10:00:00.000Z' }],
+    ['with its task', { ...UNSENT_HOLD, status: 'processing', prediction_id: 'task-1' }],
+    ['whose sending is unknown', { ...UNSENT_HOLD, submission_unknown_at: '2026-11-15T10:00:00.000Z' }],
+    ['that has finished', { ...UNSENT_HOLD, status: 'succeeded' }],
+  ])('refunds nothing for a run %s', async (_what, generation) => {
+    queue([]);
+    const { client, rpc } = serviceClient('failed', generation);
+
+    await expect(cancelQueuedSubmission(client, a.generationId)).resolves.toBe('not_queued');
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('lets a failed look at the run reach its caller, which must not delete the creation', async () => {
+    queue([]);
+
+    await expect(cancelQueuedSubmission(serviceClient('failed', new Error('connection reset')).client, a.generationId))
+      .rejects.toThrow('connection reset');
   });
 
   it('lets a failed claim reach its caller, which must not delete the creation', async () => {

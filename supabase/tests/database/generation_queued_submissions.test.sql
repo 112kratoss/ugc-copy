@@ -10,7 +10,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(32);
+select plan(34);
 
 delete from public.generations;
 delete from public.provider_admission_buckets where scope like 'pgtap-queue%';
@@ -115,6 +115,12 @@ insert into public.provider_submission_waiters (generation_id, service, waiting_
 values (pg_temp.gen(2), 'pgtap-queue', now(), now(), 'rate_limited');
 
 select is(pg_temp.enqueue(2) ->> 'status', 'not_queueable', 'a start that is already on its way to the provider is not queued');
+
+select is(
+  pg_temp.enqueue(2) -> 'onItsWay',
+  'false'::jsonb,
+  'a reservation alone does not say it was sent: the reservation may be the start''s own'
+);
 
 select is(
   (select count(*)::int from public.provider_submission_waiters where generation_id = pg_temp.gen(2)),
@@ -256,6 +262,12 @@ select is(
   (select count(*)::int from public.generation_queued_submissions where generation_id = pg_temp.gen(13)),
   0,
   'a queued start that got its task by another road is out of the queue'
+);
+
+select is(
+  pg_temp.enqueue(13, 'pgtap-queue-model', 200, 4, 'm1') -> 'onItsWay',
+  'true'::jsonb,
+  'and a start asked about again once it has its task is told it is on its way'
 );
 
 -- A queued start past its time is owed no place. One nothing is driving (the

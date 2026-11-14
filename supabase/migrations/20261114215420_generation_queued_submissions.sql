@@ -114,7 +114,13 @@ BEGIN
      OR v_generation.provider_submission_reserved_at IS NOT NULL
      OR v_generation.submission_unknown_at IS NOT NULL THEN
     DELETE FROM public.provider_submission_waiters WHERE generation_id = p_generation_id;
-    RETURN jsonb_build_object('status', 'not_queueable');
+    -- `onItsWay` tells a caller asking again after a lost answer what became
+    -- of the start: with a task, or settled, it was queued and has been sent.
+    -- Reserved alone says nothing: the reservation may be the start's own.
+    RETURN jsonb_build_object(
+      'status', 'not_queueable',
+      'onItsWay', v_generation.prediction_id IS NOT NULL OR v_generation.status <> 'pending'
+    );
   END IF;
 
   -- A repeated call keeps the place and the request it already has.

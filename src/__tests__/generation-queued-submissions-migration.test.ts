@@ -103,7 +103,12 @@ describe('generation queued submissions migration', () => {
     expect(enqueue).toContain('OR v_generation.prediction_id IS NOT NULL');
     expect(enqueue).toContain('OR v_generation.provider_submission_reserved_at IS NOT NULL');
     expect(enqueue).toContain('OR v_generation.submission_unknown_at IS NOT NULL');
-    expect(enqueue).toContain("RETURN jsonb_build_object('status', 'not_queueable');");
+    // And says what became of it, for a caller asking again after a lost
+    // answer: with a task, or settled, it was queued and has been sent.
+    expect(enqueue.replace(/\s+/g, ' ')).toContain(
+      "RETURN jsonb_build_object( 'status', 'not_queueable',"
+      + " 'onItsWay', v_generation.prediction_id IS NOT NULL OR v_generation.status <> 'pending' );",
+    );
   });
 
   it('refuses past the queue\'s length or the creator\'s share, and takes the refused start out of the line', () => {

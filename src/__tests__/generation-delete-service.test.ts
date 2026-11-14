@@ -12,6 +12,11 @@ type GenerationRow = {
   preview_url?: string | null;
   display_url?: string | null;
   workflow_settings?: Record<string, unknown> | null;
+  /** Read by the queue before a delete: whether the run still holds credits for a start that was never sent. */
+  status?: string | null;
+  prediction_id?: string | null;
+  provider_submission_reserved_at?: string | null;
+  submission_unknown_at?: string | null;
 };
 
 /** A post as the read after the delete returns it: unlinked, recording the creation. */
@@ -201,9 +206,10 @@ function createAdminSupabaseMock({
                   && filters.id === generation.id
                   // Owner scoping is `in` over the linked-account set, so this
                   // arrives as an array once a guest identity is linked.
-                  && (Array.isArray(filters.user_id)
+                  // The queue's own look at the row is by id alone: the delete has checked whose it is.
+                  && (!('user_id' in filters) || (Array.isArray(filters.user_id)
                     ? filters.user_id.includes(generation.user_id)
-                    : filters.user_id === generation.user_id)
+                    : filters.user_id === generation.user_id))
                 ) {
                   return { data: generation, error: null };
                 }
@@ -387,6 +393,9 @@ describe('generation delete service', () => {
       queuedAt: '2026-11-15T10:00:00.000Z',
     };
 
+    /** A creation with no output yet. */
+    const UNSENT = { id: 'gen-1', user_id: 'user-1', output_url: null, showcase_asset_path: null };
+
     async function remove(admin: ReturnType<typeof createAdminSupabaseMock>) {
       createAdminSupabase.mockReturnValueOnce(admin.client);
       const { deleteOwnerGenerationForRoute } = await import('@/lib/generation-delete-service');
@@ -433,6 +442,43 @@ describe('generation delete service', () => {
       expect(admin.queueEvents.filter((event) => event.startsWith('refund:'))).toHaveLength(3);
       expect(admin.deletes).toEqual([]);
       expect(admin.storageRemovals).toEqual([]);
+    });
+
+    it('is refunded by the delete that is tried again, though it is out of the queue by then', async () => {
+      // The first delete took it out of the queue and could not return its
+      // credits, so it kept the creation. Tried again there is nothing to
+      // claim, and deleting on that word would lose the hold for good: the
+      // reaper settles rows, and the row would be gone.
+      const admin = createAdminSupabaseMock({
+        generation: { ...UNSENT, status: 'pending', prediction_id: null, provider_submission_reserved_at: null, submission_unknown_at: null },
+      });
+
+      const result = await remove(admin);
+
+      expect(result.ok).toBe(true);
+      expect(admin.queueEvents).toEqual(['claim:gen-1', 'refund:gen-1:deleted-rows=0']);
+      expect(admin.deletes).toContain('generations');
+    });
+
+    it('is kept again when that refund fails too', async () => {
+      const admin = createAdminSupabaseMock({
+        generation: { ...UNSENT, status: 'pending', prediction_id: null, provider_submission_reserved_at: null, submission_unknown_at: null },
+        queueRefundError: { message: 'connection reset' },
+      });
+
+      expect(await remove(admin)).toMatchObject({ ok: false, status: 500 });
+      expect(admin.deletes).toEqual([]);
+    });
+
+    it('does not refund a pending run the gate admitted: it may be being sent this moment', async () => {
+      const admin = createAdminSupabaseMock({
+        generation: { ...UNSENT, status: 'pending', prediction_id: null, provider_submission_reserved_at: '2026-11-15T10:00:00.000Z', submission_unknown_at: null },
+      });
+
+      const result = await remove(admin);
+
+      expect(result.ok).toBe(true);
+      expect(admin.queueEvents).toEqual(['claim:gen-1']);
     });
 
     it('is the only kind of creation a delete refunds: one that was sent keeps its charge', async () => {

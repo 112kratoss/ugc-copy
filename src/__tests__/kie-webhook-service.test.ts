@@ -167,9 +167,10 @@ describe('kie webhook service', () => {
       limit: 1,
     });
     // A finished task has freed a place at the provider: the queue of starts
-    // is served now, not at the next cron pass.
+    // is served now, not at the next cron pass, and by a pass of its own, since
+    // one made a moment ago did not know of the place.
     await vi.waitFor(() => {
-      expect(mocks.driveQueuedSubmissions).toHaveBeenCalledWith({ client: serviceClient });
+      expect(mocks.driveQueuedSubmissions).toHaveBeenCalledWith({ client: serviceClient, fresh: true });
     });
   });
 

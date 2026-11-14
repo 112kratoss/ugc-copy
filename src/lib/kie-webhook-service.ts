@@ -272,7 +272,7 @@ export async function handleKieWebhookForRoute(input: KieWebhookRouteInput): Pro
       if (completion.completed > 0) {
         // A finished task has just freed a slot. The head of the queue is
         // served now, not at the next cron pass.
-        await driveQueuedSubmissions({ client: serviceClient });
+        await driveQueuedSubmissions({ client: serviceClient, fresh: true });
       }
     } catch (error) {
       logBackendError('kie_webhook_completion_processing_failed', {
