@@ -734,3 +734,119 @@ export async function findRelatedPostRows(
     return skipped('related_failed', error);
   }
 }
+
+// ─── The blended order's vector ─────────────────────────────────────────────
+
+/**
+ * How long a blended search waits for a new query's vector before it answers
+ * in the word order (`search-blended-posts.ts`). The wait holds the search's
+ * own posts, not an extra group beside them, so it is a third of what related
+ * posts allow (`SEARCH_QUERY_EMBEDDING_TIMEOUT_MS`): a warm function answers
+ * a query in well under 100 ms (70 ms on the local runtime, 2026-11-15, the
+ * request included) and the reads ahead of it (the cache, the allowances,
+ * the day's place) are four short round trips, so 400 ms passes every warm
+ * answer with room. A function that is cold takes seconds, which no bound
+ * worth waiting covers: that search is answered in the word order, the
+ * request goes on behind it (`SEARCH_QUERY_EMBEDDING_BACKGROUND_TIMEOUT_MS`),
+ * and the next search of the same words finds the vector in the cache.
+ */
+export const SEARCH_BLEND_QUERY_EMBEDDING_TIMEOUT_MS = 400;
+
+/** How long the work behind a blended answer (a late vector, its write to the cache) is kept alive. */
+const SEARCH_BLEND_KEEP_ALIVE_MS = SEARCH_BLEND_QUERY_EMBEDDING_TIMEOUT_MS + SEARCH_QUERY_EMBEDDING_BACKGROUND_TIMEOUT_MS + 2_000;
+
+/** Why a search was not blended for want of a vector; goes to the log, never with the query. */
+export type SearchBlendSkipReason = Exclude<RelatedPostsSkipReason, 'related_failed'> | 'blend_failed';
+
+/**
+ * A query's vector for the blended Posts order, or `null` when there is none
+ * to be had in time. The same path as related posts, with the same limits:
+ * the cache first, which costs and counts nothing; then, for a query not in
+ * it, the viewer's daily allowance (and a guest session's network's), the
+ * day's cap for everyone and the function, waited on for
+ * `SEARCH_BLEND_QUERY_EMBEDDING_TIMEOUT_MS`. A request it started and stopped
+ * waiting for still finishes behind the answer and keeps its vector. Never
+ * throws; a skip is one line in the log, with its reason and without the
+ * query.
+ */
+export async function findSearchQueryEmbedding(
+  client: SupabaseClient,
+  options: {
+    /** The query as the search reads it. */
+    query: string;
+    viewerKey: string;
+    /** As `findRelatedPostRows` takes it: a guest session's hashed network. */
+    guestNetworkKey?: string | null;
+  },
+  dependencyOverrides: RelatedPostsDependencies = {},
+): Promise<number[] | null> {
+  const logEvent = dependencyOverrides.logEvent ?? logBackendEvent;
+  const skipped = (reason: SearchBlendSkipReason, error?: unknown) => {
+    if (reason === 'viewer_cap_reached' || reason === 'network_cap_reached') {
+      logEvent('info', 'public_search_blend_skipped', { reason });
+    } else if (reason !== 'disabled') {
+      logEvent('warn', 'public_search_blend_skipped', { reason, ...(error === undefined ? {} : { error }) });
+    }
+    return null;
+  };
+
+  try {
+    const env = dependencyOverrides.env ?? process.env;
+    if (isSearchSemanticDisabled(env)) return skipped('disabled');
+    const embeddedQuery = normalizeSearchQueryForEmbedding(options.query);
+    if (!embeddedQuery) return null;
+    const viewerKey = options.viewerKey.trim();
+    if (!viewerKey) return skipped('no_viewer_key');
+    const allowances: QueryEmbeddingAllowance[] = [
+      { limit: SEARCH_QUERY_EMBEDDING_VIEWER_DAILY_LIMIT, key: viewerKey, reason: 'viewer_cap_reached' },
+    ];
+    if (options.guestNetworkKey !== undefined && options.guestNetworkKey !== null) {
+      const guestNetworkKey = options.guestNetworkKey.trim();
+      if (!guestNetworkKey) return skipped('no_viewer_key');
+      allowances.push({
+        limit: SEARCH_QUERY_EMBEDDING_GUEST_NETWORK_DAILY_LIMIT,
+        key: guestNetworkKey,
+        reason: 'network_cap_reached',
+      });
+    }
+
+    const waitMs = dependencyOverrides.queryEmbeddingTimeoutMs ?? SEARCH_BLEND_QUERY_EMBEDDING_TIMEOUT_MS;
+    let abandoned = false;
+    const background: Promise<unknown>[] = [];
+    const read = queryEmbedding(client, embeddedQuery, allowances, {
+      env,
+      fetchImpl: dependencyOverrides.fetchImpl ?? fetch,
+      logEvent,
+      enforceBackendRateLimit: dependencyOverrides.enforceBackendRateLimit ?? enforceBackendRateLimit,
+      queryEmbeddingTimeoutMs: waitMs,
+      background,
+      isAbandoned: () => abandoned,
+    });
+    const settled = read.catch(() => null);
+    // Handed over while the request is open, as findRelatedPostRows does and for its reason.
+    runBehindAnswer(dependencyOverrides.runAfterResponse, async () => {
+      await withTimeout((async () => {
+        await settled;
+        await Promise.allSettled(background);
+      })(), SEARCH_BLEND_KEEP_ALIVE_MS);
+    });
+
+    const answer = await withTimeout(read, dependencyOverrides.totalTimeoutMs ?? waitMs);
+    if (answer === TIMED_OUT) {
+      abandoned = true;
+      return skipped('timeout');
+    }
+    if (!answer.ok) {
+      if (answer.reason === 'abandoned') return null;
+      return skipped(answer.reason === 'related_failed' ? 'blend_failed' : answer.reason, answer.error);
+    }
+    return answer.embedding;
+  } catch (error) {
+    return skipped('blend_failed', error);
+  }
+}
+
+/** A vector as an RPC takes one. */
+export function searchEmbeddingLiteral(embedding: readonly number[]): string {
+  return toVectorLiteral(embedding);
+}

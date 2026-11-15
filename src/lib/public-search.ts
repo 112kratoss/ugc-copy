@@ -11,6 +11,7 @@ import {
   type SearchFilters,
   type SearchMediaKind,
 } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
+import type { SearchMatchSource } from '../../ugc-mobile/lib/public-search-policy/search-blend';
 
 // What a request may name, and the words both clients show, are one copy the
 // web and the app share (ugc-mobile/lib/public-search-policy).
@@ -82,6 +83,23 @@ export const PUBLIC_SEARCH_RELATED_PARAM = 'related';
  * Any other value is refused.
  */
 export const PUBLIC_SEARCH_PROBE_PARAM = 'probe';
+
+/**
+ * The request parameter a client asks for the blended Posts order with:
+ * `blend=1` (`SEARCH_BLEND_PARAM`, the clients' shared rule, which also says
+ * when a client sends it). Any other value is refused, as `related`'s is.
+ * Without it posts are in the word order, as before the blend.
+ */
+export { SEARCH_BLEND_PARAM as PUBLIC_SEARCH_BLEND_PARAM } from '../../ugc-mobile/lib/public-search-policy/search-blend';
+
+/**
+ * The furthest place in the blended window a cursor may name: the word list
+ * and the meaning list together, `c_word_window + c_meaning_window` of
+ * `search_blended_posts` (search-blended-posts-migration.test.ts holds the
+ * two equal). Past it a cursor is invalid, a 400, never a call the database
+ * refuses.
+ */
+export const PUBLIC_SEARCH_BLEND_MAX_PLACE = 80;
 
 /** How many entities the Top tab offers. */
 export const PUBLIC_SEARCH_ENTITY_LIMIT = 5;
@@ -167,6 +185,13 @@ export interface RecipeSearchResult {
   };
 }
 
+/**
+ * A post result: a card like any other, and, for a request that asked for the
+ * blended order (`blend=1`), how it matched (`SearchMatchSource`). Left out
+ * for a request that did not ask.
+ */
+export type PublicSearchPost = ShowcaseFeedItem & { matchedBy?: SearchMatchSource };
+
 export interface PublicSearchPage<T> {
   items: T[];
   nextCursor: string | null;
@@ -194,7 +219,7 @@ export interface PublicSearchResponse {
   /** The request asked for the query as typed: nothing was corrected. */
   exact: boolean;
   creators: PublicSearchPage<CreatorSearchResult>;
-  posts: PublicSearchPage<ShowcaseFeedItem>;
+  posts: PublicSearchPage<PublicSearchPost>;
   recipes: PublicSearchPage<RecipeSearchResult>;
   /**
    * Posts that mean what the query says without holding its words, nearest
@@ -236,6 +261,15 @@ export type PublicSearchCursor = {
    * before filters is. A cursor pages the search it came from and no other.
    */
   filters?: string;
+  /**
+   * Top posts, blended: the place in the blended window the next page starts
+   * after (`search_blended_posts`). Beside it `score` and `id` are the floor:
+   * the furthest row of the word order shown so far, which the word order
+   * continues from when the blend cannot (no vector, the lookup switched off,
+   * a server from before the blend, which ignores this field). They are left
+   * out only while no post holds the query's words. Always with `asOf`.
+   */
+  window?: number;
 };
 
 /**
@@ -360,6 +394,7 @@ export function encodePublicSearchCursor(cursor: PublicSearchCursor): string {
     ...(cursor.asOf !== undefined ? { a: cursor.asOf } : {}),
     ...(cursor.createdAt ? { c: cursor.createdAt } : {}),
     ...(cursor.filters ? { f: cursor.filters } : {}),
+    ...(cursor.window !== undefined ? { w: cursor.window } : {}),
   }), 'utf8').toString('base64url');
 }
 
@@ -400,6 +435,22 @@ export function decodePublicSearchCursor(
       }
       return { version: 1, type: expectedType, ...sortField, offset: Number(parsed.o) };
     }
+    // A place in the blended window: only a Top posts cursor has one, with the
+    // instant its search began. Its floor is optional, both halves or neither.
+    let windowField: { window?: number } = {};
+    if (parsed.w !== undefined) {
+      if (
+        expectedType !== 'posts' || sort !== 'top'
+        || !Number.isSafeInteger(parsed.w) || Number(parsed.w) < 1 || Number(parsed.w) > PUBLIC_SEARCH_BLEND_MAX_PLACE
+        || !Number.isSafeInteger(parsed.a) || Number(parsed.a) < MIN_CURSOR_AS_OF_MS || Number(parsed.a) > MAX_CURSOR_AS_OF_MS
+      ) {
+        return null;
+      }
+      windowField = { window: Number(parsed.w) };
+      if (parsed.i === undefined && parsed.s === undefined) {
+        return { version: 1, type: expectedType, asOf: Number(parsed.a), ...filtersField, ...windowField };
+      }
+    }
     // The id feeds a uuid RPC parameter; rejecting malformed ids here keeps a
     // hand-built cursor a 400 instead of a Postgres cast error surfacing as 500.
     if (
@@ -423,7 +474,7 @@ export function decodePublicSearchCursor(
       ) {
         return null;
       }
-      return { version: 1, type: expectedType, score: parsed.s, id: parsed.i, asOf: Number(parsed.a), ...filtersField };
+      return { version: 1, type: expectedType, score: parsed.s, id: parsed.i, asOf: Number(parsed.a), ...filtersField, ...windowField };
     }
     return { version: 1, type: expectedType, score: parsed.s, id: parsed.i, ...filtersField };
   } catch {
