@@ -1289,6 +1289,11 @@ const NO_PENDING_REPLIES: PostComment[] = [];
  * `THREAD_LINE_OVERLAP` up into the piece above, where a solid overlap shows
  * as nothing.
  */
+// Above and below a comment's or a reply's content, which ends on its row of
+// actions: with those drawn 32pt tall, one line of text makes a row of about
+// 91pt, where the 48pt actions and 12pt padding made one of 115 that read as a
+// gap between replies (owner, 2026-11-15).
+const COMMENT_ROW_PADDING = appTheme.spacing.compact;
 const THREAD_AVATAR_SIZE = 25;
 const THREAD_REPLY_INSET = appTheme.spacing.panel + 33;
 const THREAD_LINE_WIDTH = 1;
@@ -1298,9 +1303,9 @@ const THREAD_SPINE_LEFT = appTheme.spacing.panel + Math.floor(THREAD_AVATAR_SIZE
 const THREAD_ELBOW_WIDTH = THREAD_REPLY_INSET - 4 - THREAD_SPINE_LEFT;
 const THREAD_ELBOW_RADIUS = appTheme.radii.sm;
 // A row's avatar sits under its top padding: the comment's line starts 4pt
-// under it, and an elbow's bottom edge, 24–25, turns into a reply's at 24.5.
-const THREAD_STEM_TOP = appTheme.spacing.gap + THREAD_AVATAR_SIZE + 4;
-const THREAD_REPLY_TURN = appTheme.spacing.gap + Math.ceil(THREAD_AVATAR_SIZE / 2);
+// under it, and an elbow's bottom edge, 20–21, turns into a reply's at 20.5.
+const THREAD_STEM_TOP = COMMENT_ROW_PADDING + THREAD_AVATAR_SIZE + 4;
+const THREAD_REPLY_TURN = COMMENT_ROW_PADDING + Math.ceil(THREAD_AVATAR_SIZE / 2);
 // A control's label is centred in its row, whatever the text size makes its height.
 const THREAD_CONTROL_TURN = 'middle';
 
@@ -1629,7 +1634,7 @@ function CommentRowView({
         gap: appTheme.spacing.compact,
         paddingLeft: isReply ? THREAD_REPLY_INSET : appTheme.spacing.panel,
         paddingRight: appTheme.spacing.panel,
-        paddingVertical: appTheme.spacing.gap,
+        paddingVertical: COMMENT_ROW_PADDING,
       }}
     >
       {isReply && thread ? <CommentThreadLinePieces line={thread.line} color={thread.color} turn={THREAD_REPLY_TURN} /> : null}
@@ -1651,11 +1656,14 @@ function CommentRowView({
       {authorPress ? (
         // The avatar takes the handle's tap, with room around it for a 44pt
         // target. The handle is the one control a screen reader lists, so this
-        // one stays out of its way.
+        // one stays out of its way. Its reach upward stops at the row's top
+        // edge, as the handle's does, so a press on the bottom of the row above
+        // (another thread's replies toggle) never opens this profile; the
+        // reach below the avatar makes up the height, clear of the actions.
         <Pressable
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
-          hitSlop={10}
+          hitSlop={{ top: COMMENT_ROW_PADDING, bottom: 44 - THREAD_AVATAR_SIZE - COMMENT_ROW_PADDING, left: 10, right: 10 }}
           {...authorPress}
           style={({ pressed }) => ({ alignSelf: 'flex-start', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
@@ -1670,7 +1678,7 @@ function CommentRowView({
               accessibilityLabel={`Open ${display.authorLabel} profile`}
               // Up into the row's padding, and down no further than the gap
               // above the comment, so a tap on its text never opens the profile.
-              hitSlop={{ top: appTheme.spacing.gap, bottom: 3 }}
+              hitSlop={{ top: COMMENT_ROW_PADDING, bottom: 3 }}
               {...authorPress}
               style={({ pressed }) => ({ flexShrink: 1, opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
@@ -1720,17 +1728,24 @@ function CommentRowView({
         ) : null}
         {!display.isDeleted ? (
           // Like with its count, Dislike with none (the server never sends
-          // one), the creator's heart, Reply: the web thread's row.
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: -10 }}>
+          // one), the creator's heart, Reply: the web thread's row. Each is
+          // drawn 32pt tall around its 16pt icon or label and reaches 44pt
+          // through `verticalHitSlop`, as one-line controls do across the app
+          // (`lib/hit-target.ts`): drawn at 44 and more, the row read as a gap
+          // under every comment. Under Read more the row sits 3pt lower, so
+          // the actions' reach above them (6pt) ends at Read more's edge
+          // instead of taking the bottom of its button.
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: -10, marginTop: foldable ? 3 : 0 }}>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Like ${display.authorLabel}'s comment`}
               accessibilityValue={{ text: likeCountLabel ? `${likeCountLabel} likes` : 'No likes' }}
               accessibilityState={{ selected: liked }}
               onPress={() => rowActions.onReact(comment, 'like')}
+              hitSlop={verticalHitSlop(32)}
               style={({ pressed }) => ({
                 minWidth: 48,
-                minHeight: 48,
+                minHeight: 32,
                 flexDirection: 'row',
                 alignItems: 'center',
                 // From the left, so the thumb sits in one column down the
@@ -1757,9 +1772,10 @@ function CommentRowView({
               accessibilityLabel={`Dislike ${display.authorLabel}'s comment`}
               accessibilityState={{ selected: disliked }}
               onPress={() => rowActions.onReact(comment, 'dislike')}
+              hitSlop={verticalHitSlop(32)}
               style={({ pressed }) => ({
                 width: 48,
-                minHeight: 48,
+                minHeight: 32,
                 alignItems: 'center',
                 justifyContent: 'center',
                 opacity: pressed ? appTheme.opacity.pressed : 1,
@@ -1777,9 +1793,10 @@ function CommentRowView({
                 accessibilityLabel={`Heart ${display.authorLabel}'s comment`}
                 accessibilityState={{ selected: Boolean(comment.hearted) }}
                 onPress={() => rowActions.onHeart(comment)}
+                hitSlop={verticalHitSlop(32)}
                 style={({ pressed }) => ({
                   width: 48,
-                  minHeight: 48,
+                  minHeight: 32,
                   alignItems: 'center',
                   justifyContent: 'center',
                   opacity: pressed ? appTheme.opacity.pressed : 1,
@@ -1795,7 +1812,7 @@ function CommentRowView({
               <View
                 accessible
                 accessibilityLabel={HEARTED_COMMENT_LABEL}
-                style={{ width: 36, minHeight: 48, alignItems: 'center', justifyContent: 'center' }}
+                style={{ width: 36, minHeight: 32, alignItems: 'center', justifyContent: 'center' }}
               >
                 <Heart size={16} color={theme.colors.primary} fill={theme.colors.primary} />
               </View>
@@ -1804,7 +1821,8 @@ function CommentRowView({
               accessibilityRole="button"
               accessibilityLabel={`Reply to ${display.authorLabel}`}
               onPress={() => rowActions.onReply(comment)}
-              style={({ pressed }) => ({ minHeight: 48, paddingHorizontal: 10, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+              hitSlop={verticalHitSlop(32)}
+              style={({ pressed }) => ({ minHeight: 32, paddingHorizontal: 10, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
               <Text style={{ color: theme.colors.faint, ...appTheme.type.caption, fontWeight: '800' }}>Reply</Text>
             </Pressable>
