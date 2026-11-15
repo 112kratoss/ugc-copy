@@ -303,9 +303,8 @@ export default function ShowcaseDetailBody({
       </div>
 
       <div className="canonical-post-shell studio-shell-wide relative z-10 pt-4 sm:pt-6">
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <ShowcaseDetailBackLink href={returnContext.href} label={returnContext.label} />
-        </div>
+        {/* Its own row, drawn only for a viewer who came here from another page of the site. */}
+        <ShowcaseDetailBackLink href={returnContext.href} label={returnContext.label} />
 
         <ShowcaseDetailCommentCountProvider key={detail.id} initialCount={detail.commentCount}>
         <div ref={layoutRef} className="canonical-post-layout">

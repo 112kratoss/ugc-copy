@@ -53,6 +53,15 @@ const clientAuth = vi.hoisted(() => ({
 // The address the page was opened at, as the browser's router reads it: the
 // page itself never sees it.
 const locationSearch = vi.hoisted(() => ({ current: '' }));
+// Whether the viewer came to the page from another page of the site in this tab
+// (a link click there counts one navigation); a full load of the post's own
+// address counts none.
+const navigatedInThisDocument = vi.hoisted(() => ({ current: false }));
+
+vi.mock('@/components/navigation-progress-state', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/navigation-progress-state')>()),
+  hasNavigatedInThisDocument: () => navigatedInThisDocument.current,
+}));
 
 vi.mock('next/headers', () => ({
   headers: () => requestTimeRead('the request headers'),
@@ -182,12 +191,19 @@ function openedAt(search: string) {
   locationSearch.current = search;
 }
 
+/** Opens the page from a link on another page of the site, as an in-app open is. */
+function openedFromInsideTheSite(search: string) {
+  navigatedInThisDocument.current = true;
+  openedAt(search);
+}
+
 describe('Showcase detail page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetFeedbackState();
     clientAuth.current = { session: null, user: null };
     locationSearch.current = '';
+    navigatedInThisDocument.current = false;
     requestTimeRead.mockClear();
     stubPageFetch();
     // The reference lookup runs only after a missed post read now, so a test's
@@ -395,12 +411,38 @@ describe('Showcase detail page', () => {
   it('does not count an in-app open as a share visit', async () => {
     // Every in-app link carries `from` and no marker. Both guards hold: even a
     // marker copied into an internal link cannot turn one into a share visit.
-    openedAt('?from=community&returnTo=%2Ffeed&s=showcase-reel');
+    openedFromInsideTheSite('?from=community&returnTo=%2Ffeed&s=showcase-reel');
     render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
 
     expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('link', { name: /back to/i })).toHaveAttribute('href', '/feed'));
     expect(shareVisitsSent()).toEqual([]);
+  });
+
+  // Owner, 2026-11-15: a shared link's "Back to Community" was not needed. Someone who
+  // arrived by the post's own address has no page of the site behind them, and the menu
+  // already leads on; the same address opened from inside the site keeps its way back.
+  it('draws no way back for a post opened by a shared link', async () => {
+    openedAt('?s=showcase-reel');
+    render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+    // The page's script has read its address by the time the visit goes out.
+    await waitFor(() => expect(shareVisitsSent()).toHaveLength(1));
+    expect(screen.queryByRole('link', { name: /^back/i })).toBeNull();
+  });
+
+  it('draws no way back for an in-site address loaded on its own (a refresh, a new tab)', async () => {
+    openedAt('?from=home&returnTo=%2F');
+    const page = render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+    expect(screen.getByRole('heading', { name: /shared creation/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^back/i })).toBeNull();
+
+    // The same address reached from Home in this tab: the way back, by Home's name.
+    page.unmount();
+    openedFromInsideTheSite('?from=home&returnTo=%2F');
+    render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+    expect(await screen.findByRole('link', { name: 'Back to Home' })).toHaveAttribute('href', '/');
   });
 
   it('does not count a visit to an unlisted post', async () => {
@@ -1017,7 +1059,7 @@ describe('Showcase detail page', () => {
   });
 
   it('uses the source return context for the detail back link', async () => {
-    openedAt(`?from=unlocks&returnTo=${encodeURIComponent('/marketplace?access=paid&resource=workflow')}`);
+    openedFromInsideTheSite(`?from=unlocks&returnTo=${encodeURIComponent('/marketplace?access=paid&resource=workflow')}`);
     render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
 
     expect(screen.getByRole('link', { name: /back to marketplace/i })).toHaveAttribute(

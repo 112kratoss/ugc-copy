@@ -51,6 +51,14 @@ export type GenerationShareEventType = 'share_click' | 'share_visit';
  */
 type ShowcaseReturnSource = 'community' | 'unlocks' | 'library' | 'creator' | 'seller' | 'studio' | 'template-run' | 'profile' | 'home' | 'search';
 
+/**
+ * Where a post page's way back leads. `unnamed` is a page the link to the post
+ * did not name (a notification, a remix, the page a publish lands on, another
+ * post): the way back then says only "Back", and the button goes back to
+ * wherever the viewer was. Never a `from` a link carries.
+ */
+export type ShowcaseReturnOrigin = ShowcaseReturnSource | 'unnamed';
+
 export interface ShowcaseDetailPathOptions {
   from?: ShowcaseReturnSource | string | null;
   returnTo?: string | null;
@@ -60,7 +68,7 @@ export interface ShowcaseDetailPathOptions {
 }
 
 export interface ShowcaseReturnContext {
-  source: ShowcaseReturnSource;
+  source: ShowcaseReturnOrigin;
   href: string;
   label: string;
 }
@@ -78,8 +86,13 @@ const SHOWCASE_RETURN_SOURCES: ShowcaseReturnSource[] = [
   'search',
 ];
 
-const SHOWCASE_RETURN_LABELS: Record<ShowcaseReturnSource, string> = {
-  community: 'Back to Community',
+/**
+ * `community` is Explore's grid, `/showcase`, and keeps its old name in links
+ * already out there; the menu calls the page Explore, and so does its way back
+ * (owner, 2026-11-15: "Back to Community" named a page the site no longer has).
+ */
+const SHOWCASE_RETURN_LABELS: Record<ShowcaseReturnOrigin, string> = {
+  community: 'Back to Explore',
   unlocks: 'Back to Marketplace',
   library: 'Back to unlocked recipes',
   creator: 'Back to Creator Portfolio',
@@ -89,9 +102,10 @@ const SHOWCASE_RETURN_LABELS: Record<ShowcaseReturnSource, string> = {
   profile: 'Back to Your Profile',
   home: 'Back to Home',
   search: 'Back to Search',
+  unnamed: 'Back',
 };
 
-const SHOWCASE_RETURN_FALLBACKS: Record<ShowcaseReturnSource, string> = {
+const SHOWCASE_RETURN_FALLBACKS: Record<ShowcaseReturnOrigin, string> = {
   community: '/showcase',
   unlocks: '/marketplace',
   library: '/creations?view=unlocks',
@@ -102,6 +116,7 @@ const SHOWCASE_RETURN_FALLBACKS: Record<ShowcaseReturnSource, string> = {
   profile: '/profile?tab=posts',
   home: '/',
   search: '/search',
+  unnamed: '/showcase',
 };
 
 export function isGenerationShareSourceSurface(value: string): value is GenerationShareSourceSurface {
@@ -171,12 +186,15 @@ export function stripShowcaseViewerState(path: string): string {
   return `${pathname}${params.size > 0 ? `?${params.toString()}` : ''}${hash}`;
 }
 
-function inferShowcaseReturnSource(returnTo: string | null | undefined): ShowcaseReturnSource {
+function inferShowcaseReturnOrigin(returnTo: string | null | undefined): ShowcaseReturnOrigin {
   if (!returnTo) {
-    return 'community';
+    return 'unnamed';
   }
 
-  if (returnTo === '/') {
+  const pathname = returnTo.split(/[?#]/, 1)[0];
+
+  // `/home` is the address the signed-in `/` is served from (src/proxy.ts).
+  if (pathname === '/' || pathname === '/home') {
     return 'home';
   }
 
@@ -209,7 +227,12 @@ function inferShowcaseReturnSource(returnTo: string | null | undefined): Showcas
     return 'search';
   }
 
-  return 'community';
+  // Explore's grid, whatever lane the address keeps; a post page under it is another post.
+  if (pathname === '/showcase' || pathname === '/showcase/') {
+    return 'community';
+  }
+
+  return 'unnamed';
 }
 
 export function getShowcaseReturnContext({
@@ -220,7 +243,7 @@ export function getShowcaseReturnContext({
   returnTo?: string | null;
 }): ShowcaseReturnContext {
   const safeReturnTo = stripShowcaseViewerState(getSafeInternalReturnPath(returnTo, ''));
-  const source = normalizeShowcaseReturnSource(from) ?? inferShowcaseReturnSource(safeReturnTo);
+  const source = normalizeShowcaseReturnSource(from) ?? inferShowcaseReturnOrigin(safeReturnTo);
   const href = safeReturnTo || SHOWCASE_RETURN_FALLBACKS[source];
 
   return {

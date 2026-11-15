@@ -26,8 +26,8 @@ function setHistoryLength(value: number) {
 }
 
 function renderBackLink() {
-    render(<ShowcaseDetailBackLink href="/feed" label="Back to Community" />);
-    return screen.getByRole('link', { name: /back to community/i });
+    render(<ShowcaseDetailBackLink href="/feed" label="Back to Explore" />);
+    return screen.getByRole('link', { name: /back to explore/i });
 }
 
 describe('ShowcaseDetailBackLink', () => {
@@ -59,16 +59,25 @@ describe('ShowcaseDetailBackLink', () => {
         expect(event.defaultPrevented).toBe(true);
     });
 
-    it('follows the href for someone who arrived from a shared link', () => {
+    it('is not drawn for someone who arrived by the post’s own address', () => {
+        // A shared link, a refresh, a new tab: no page of the site is behind them, and
+        // stepping back would take them out of the site (owner, 2026-11-15).
         navigatedInThisDocument = false;
-        const link = renderBackLink();
+        const { container } = render(<ShowcaseDetailBackLink href="/showcase" label="Back to Explore" />);
 
-        const event = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
-        link.dispatchEvent(event);
+        expect(screen.queryByRole('link')).toBeNull();
+        // Nor the row it sits in: no empty gap above the post.
+        expect(container).toBeEmptyDOMElement();
+    });
 
-        // Stepping back here would take them out of the app entirely.
-        expect(routerBack).not.toHaveBeenCalled();
-        expect(event.defaultPrevented).toBe(false);
+    it('keeps the answer it had as the page mounted', () => {
+        // A navigation that starts as the reader leaves must not draw it under them.
+        navigatedInThisDocument = false;
+        const view = render(<ShowcaseDetailBackLink href="/showcase" label="Back" />);
+        navigatedInThisDocument = true;
+        view.rerender(<ShowcaseDetailBackLink href="/showcase" label="Back to Search" />);
+
+        expect(screen.queryByRole('link')).toBeNull();
     });
 
     it('follows the href when there is no history entry to consume', () => {
