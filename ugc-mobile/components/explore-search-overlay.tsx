@@ -108,6 +108,7 @@ import {
   type SearchStarterSearch,
 } from '@/lib/public-search-policy/search-starter';
 import { useSearchStarterState } from '@/lib/use-search-starter';
+import { appendSearchPosts, isSearchPageAllRepeats } from '@/lib/public-search-policy/search-blend';
 import { searchTypeaheadQuery, type SearchTypeaheadRow } from '@/lib/public-search-policy/search-typeahead';
 import { searchEntryForChosenText, type SearchEntry, type SearchOpenKind } from '@/lib/public-search-policy/search-open-log';
 import { reportSearchOpen } from '@/lib/search-open-report';
@@ -756,6 +757,12 @@ export function ExploreSearchOverlay({
   // Top and Creators from two characters, Posts and Recipes from three.
   const requestKey = searchTabRuns(type, countedLength) ? searchKey(normalizedQuery, type, sort, narrowing) : null;
   const response = answer && answer.key === requestKey ? answer.response : null;
+  // The posts on show, for a later page to be held against. Kept by an
+  // effect, never written while rendering.
+  const shownPosts = useRef<readonly ShowcaseFeedItem[]>([]);
+  useEffect(() => {
+    shownPosts.current = response?.posts.items ?? [];
+  }, [response]);
   const shownFailure = failure && failure.key === requestKey ? failure : null;
   // The answer on hand for this query and tab in the other order, or under
   // other filters or the other reading, if any.
@@ -902,8 +909,18 @@ export function ExploreSearchOverlay({
     if (cursor) setLoadingMore(true);
     if (!relatedFollowUp) setFailure(null);
     try {
-      const next = await api.searchPublicContent({ query: normalizedQuery, type, sort, filters, exact, cursor, related: askRelated, entry: searchEntry.current }, controller.signal);
+      let next = await api.searchPublicContent({ query: normalizedQuery, type, sort, filters, exact, cursor, related: askRelated, entry: searchEntry.current }, controller.signal);
       if (sequence !== requestSequence.current) return;
+      // A later page made of nothing but posts already on show, with more to
+      // come (a later page may hold a post already shown:
+      // searchPublicContent.laterPages): the page after it is asked for in
+      // the same press, once, so the press shows something. If that one is
+      // repeats as well the list keeps its cursor and the next press asks:
+      // never a loop.
+      if (cursor && type === 'posts' && isSearchPageAllRepeats(shownPosts.current, next.posts)) {
+        next = await api.searchPublicContent({ query: normalizedQuery, type, sort, filters, exact, cursor: next.posts.nextCursor, related: false, entry: searchEntry.current }, controller.signal);
+        if (sequence !== requestSequence.current) return;
+      }
       if (next.filters !== undefined) setFiltersOffered(true);
       // The names this answer gives: its entities, and the one its filter is read with.
       const named = [...(next.entities ?? []), ...(next.filters?.madeWith ? [next.filters.madeWith] : [])];
@@ -921,7 +938,8 @@ export function ExploreSearchOverlay({
           response: {
             ...next,
             creators: type === 'creators' ? { ...next.creators, items: [...current.response.creators.items, ...next.creators.items] } : next.creators,
-            posts: type === 'posts' ? { ...next.posts, items: [...current.response.posts.items, ...next.posts.items] } : next.posts,
+            // Left out by id: the posts this page holds that are already on show.
+            posts: type === 'posts' ? { ...next.posts, items: appendSearchPosts(current.response.posts.items, next.posts.items) } : next.posts,
             recipes: type === 'recipes' ? { ...next.recipes, items: [...current.response.recipes.items, ...next.recipes.items] } : next.recipes,
           },
         } : current);

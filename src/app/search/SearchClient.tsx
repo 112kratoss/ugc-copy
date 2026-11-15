@@ -113,6 +113,7 @@ import {
   toggleSearchFilterSwitch,
   type SearchTopSection,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
+import { appendSearchPosts, isSearchPageAllRepeats } from '../../../ugc-mobile/lib/public-search-policy/search-blend';
 import { searchTypeaheadOfferForTab, type SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
 import {
   SEARCH_STARTER_NO_RESULTS_HEADING,
@@ -546,6 +547,9 @@ export default function SearchClient({
   const [retryBlocked, setRetryBlocked] = useState(false);
   const requestSequence = useRef(0);
   const requestController = useRef<AbortController | null>(null);
+  // The posts on show, for a later page to be held against (a later page may
+  // hold a post already shown: searchPublicContent.laterPages).
+  const shownPosts = useRef<readonly PublicSearchResponse['posts']['items'][number][]>([]);
   const retryUnblockTimer = useRef<number | null>(null);
   // The query of the last scheduled search. A URL query arrives already typed
   // and a tab change keeps the query, so only a new query waits for a pause.
@@ -651,8 +655,25 @@ export default function SearchClient({
         throw controller.signal.aborted ? fetchError : new SearchRequestError(SEARCH_OFFLINE_BODY);
       });
       if (!response.ok) throw await failedResponseError(response);
-      const next = await response.json() as PublicSearchResponse;
+      let next = await response.json() as PublicSearchResponse;
       if (sequence !== requestSequence.current) return;
+      // A later page made of nothing but posts already on show, with more to
+      // come: the page after it is asked for in the same press, once, so the
+      // press shows something. If that one is repeats as well the list keeps
+      // its cursor and the next press asks: never a loop.
+      if (append && request.type === 'posts' && isSearchPageAllRepeats(shownPosts.current, next.posts)) {
+        params.set('cursor', next.posts.nextCursor ?? '');
+        const after = await fetch(`/api/search?${params.toString()}`, {
+          cache: 'no-store',
+          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+          signal: controller.signal,
+        }).catch((fetchError: unknown) => {
+          throw controller.signal.aborted ? fetchError : new SearchRequestError(SEARCH_OFFLINE_BODY);
+        });
+        if (!after.ok) throw await failedResponseError(after);
+        next = await after.json() as PublicSearchResponse;
+        if (sequence !== requestSequence.current) return;
+      }
       if (retryUnblockTimer.current !== null) window.clearTimeout(retryUnblockTimer.current);
       retryUnblockTimer.current = null;
       setRetryBlocked(false);
@@ -687,7 +708,8 @@ export default function SearchClient({
           result: {
             ...next,
             creators: request.type === 'creators' ? { ...next.creators, items: [...current.result.creators.items, ...next.creators.items] } : next.creators,
-            posts: request.type === 'posts' ? { ...next.posts, items: [...current.result.posts.items, ...next.posts.items] } : next.posts,
+            // Left out by id: the posts this page holds that are already on show.
+            posts: request.type === 'posts' ? { ...next.posts, items: appendSearchPosts(current.result.posts.items, next.posts.items) } : next.posts,
             recipes: request.type === 'recipes' ? { ...next.recipes, items: [...current.result.recipes.items, ...next.recipes.items] } : next.recipes,
           },
         };
@@ -864,6 +886,7 @@ export default function SearchClient({
   // names: a sign-out unmounts the page with the account's answer on screen.
   const onScreen = useRef<{ address: string; answer: SearchAnswer | null }>({ address, answer: null });
   onScreen.current = { address, answer: currentAnswer };
+  shownPosts.current = currentAnswer?.result.posts.items ?? [];
   const lastScrollY = useRef(restored?.scrollY ?? 0);
   // A live region speaks when its words change, never for what it held when
   // drawn: a page Back restored says its count a moment after it is drawn.
