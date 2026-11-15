@@ -2190,6 +2190,10 @@ describe('publish_post with uploads', () => {
     const capped = harness({ readPostForAgent: found({ visibility: 'private', state: 'private' }), countAgentPublicPublishesSince: vi.fn(async () => 60) as never });
     expect(toolFailureCode(await tool('publish_post').handle({ ...args, visibility: 'public' }, capped.context))).toBe('RATE_LIMITED');
     expect(capped.services.updateOwnerPostForRoute).not.toHaveBeenCalled();
+    // Fifty-nine published today: the private post still goes public, as the sixtieth.
+    const room = harness({ readPostForAgent: found({ visibility: 'private', state: 'private' }), countAgentPublicPublishesSince: vi.fn(async () => 59) as never });
+    expect((await tool('publish_post').handle({ ...args, visibility: 'public' }, room.context)).isError).toBeUndefined();
+    expect(room.services.updateOwnerPostForRoute).toHaveBeenCalledTimes(1);
 
     // The save's own refusals: a post under a moderation decision, one gone since the read, its limit.
     const refusals: Array<[Record<string, unknown>, string, RegExp]> = [

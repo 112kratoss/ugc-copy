@@ -1034,7 +1034,7 @@ URL, because Claude takes a document only when its `resource` equals the URL the
 connected. Its documentation is `/developers/mcp/posting`, which describes posting alone and
 links nowhere that creates media. The kill switch, the audit table, the rate limits and the
 daily cap are the full server's: one `MCP_SERVER_DISABLED` stops both, and a public post
-through either counts toward the same ten a day.
+through either counts toward the same 60 a day.
 
 The listing must stand on its own. A tool description that pointed a person at the full server
 would break the checklist's rule against promoting other software, and the policy's clause on
