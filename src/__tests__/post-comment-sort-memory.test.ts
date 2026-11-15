@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { act, renderHook } from '@testing-library/react';
 
 import {
+  forgetPostCommentSortsForTests,
   POST_COMMENT_SORT_MAX_POSTS,
   readPostCommentSort,
   rememberPostCommentSort,
+  usePostCommentSort,
 } from '@/lib/post-comment-sort-memory';
 
 // The order chosen for a post's comments, kept for that post in this tab (owner, 2026-11-15); the
@@ -11,6 +15,8 @@ import {
 
 afterEach(() => {
   window.sessionStorage.clear();
+  forgetPostCommentSortsForTests();
+  vi.restoreAllMocks();
 });
 
 describe("a post's comment order kept for the tab", () => {
@@ -43,7 +49,27 @@ describe("a post's comment order kept for the tab", () => {
   it('reads anything it cannot use as Top', () => {
     window.sessionStorage.setItem('post-comment-sort', '{"post-1":"sideways"}');
     expect(readPostCommentSort('post-1')).toBe('top');
+    forgetPostCommentSortsForTests();
     window.sessionStorage.setItem('post-comment-sort', 'not json');
     expect(readPostCommentSort('post-1')).toBe('top');
+  });
+
+  it('comes back after a reload, from what the tab stored', () => {
+    rememberPostCommentSort('post-1', 'newest');
+    forgetPostCommentSortsForTests();
+
+    expect(readPostCommentSort('post-1')).toBe('newest');
+  });
+
+  // Review of #821: storage full, or site data blocked, left the order unchangeable.
+  it('changes the order where storage refuses it, for this document', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Full', 'QuotaExceededError');
+    });
+    const { result } = renderHook(() => usePostCommentSort('post-1'));
+
+    act(() => result.current[1]('newest'));
+
+    expect(result.current[0]).toBe('newest');
   });
 });

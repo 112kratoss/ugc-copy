@@ -58,7 +58,7 @@ import {
 } from '@/lib/post-comments-client';
 import { formatCompactCount, formatRelativeTime } from '@/lib/post-feed-presentation';
 import { getCurrentInternalPath } from '@/lib/share';
-import { usePostCommentSort } from '@/lib/post-comment-sort-memory';
+import { readPostCommentSort, usePostCommentSort } from '@/lib/post-comment-sort-memory';
 
 const SORT_OPTIONS: Array<{ value: PostCommentSort; label: string; description: string }> = [
     // Top is the server's order: the most liked first, then the most replied to.
@@ -431,6 +431,9 @@ export default function PostComments({
     // their blocks. Aborting the previous request keeps an older sort from
     // overwriting the current selection.
     useEffect(() => {
+        // The render that hydrates draws Top, the server's order; the order kept for the post is
+        // drawn a render later, and only its first page is asked for (review of #821).
+        if (sort !== readPostCommentSort(postId)) return;
         const replyRequestIds = replyRequestIdsRef.current;
         setComments([]);
         setPendingComments([]);
@@ -453,7 +456,7 @@ export default function PostComments({
                 replyRequestIds[parentId] += 1;
             }
         };
-    }, [postCreatorId, postId, readTopLevel, viewerId]);
+    }, [postCreatorId, postId, readTopLevel, sort, viewerId]);
 
     useEffect(() => {
         setTotalCount(commentCount);

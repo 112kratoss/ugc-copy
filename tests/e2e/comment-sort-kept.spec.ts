@@ -65,10 +65,13 @@ test("a post's comments keep the order chosen for them across a refresh and Back
   expect(await chosenOrder(page)).toBe('newest');
   expect(orders.at(-1)).toBe('newest');
 
-  // Away to another page and Back: the thread mounts again on the order chosen.
-  await page.goto('/terms', COLD_PAGE);
+  // Away through the app to another page and Back, both without a load: the thread mounts again
+  // on the order chosen (the tab's copy, not a reload's read of storage).
+  await page.getByRole('complementary', { name: 'Primary navigation' }).getByRole('link', { name: 'Home' }).click();
+  await expect.poll(() => new URL(page.url()).pathname, COLD_PAGE).toBe('/');
   orders.length = 0;
   await page.goBack(COLD_PAGE);
+  await expect.poll(() => new URL(page.url()).pathname).toBe(`/showcase/${POST_ID}`);
   await expect(page.getByText('The newest comment')).toBeVisible(COLD_PAGE);
   expect(await chosenOrder(page)).toBe('newest');
   expect(orders.at(-1)).toBe('newest');

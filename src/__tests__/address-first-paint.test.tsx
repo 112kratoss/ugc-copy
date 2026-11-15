@@ -13,7 +13,6 @@ import {
   ADDRESS_FIRST_PAINT_RESTORE,
   CREATOR_TAB_MARK,
   HOME_CHIP_MARK,
-  readAddressFirstPaintMark,
   TEMPLATE_INPUT_MARK,
 } from '@/lib/address-first-paint';
 import { useFirstPaintMark } from '@/lib/use-first-paint-mark';
@@ -69,9 +68,6 @@ describe('the mark the address gives a page before it draws', () => {
     const marked = ADDRESS_FIRST_PAINT_MARKS.filter((name) => root.hasAttribute(name));
     expect(marked).toEqual(attribute ? [attribute] : []);
     if (attribute) expect(root.getAttribute(attribute)).toBe(value);
-    const url = new URL(address, 'https://magicbooklet.test');
-    expect(readAddressFirstPaintMark(url.pathname, url.search, url.hash))
-      .toEqual(attribute ? { attribute, value } : null);
   });
 
   it('is in the root layout, run ahead of the page', () => {

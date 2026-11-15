@@ -48,31 +48,10 @@ const HOME_PATH = '^/$';
 const CREATOR_PATH = '^/creators/[^/]+/?$';
 const TEMPLATES_PATH = '^/templates/?$';
 
-/** The mark an address gives its page, as the inline script reads it; null where it gives none. */
-export function readAddressFirstPaintMark(
-  pathname: string,
-  search: string,
-  hash: string,
-): { attribute: string; value: string } | null {
-  const params = new URLSearchParams(search);
-  if (new RegExp(HOME_PATH).test(pathname)) {
-    const lane = params.get('chip');
-    return lane && HOME_MARKED_LANES.includes(lane) ? { attribute: HOME_CHIP_MARK, value: lane } : null;
-  }
-  if (new RegExp(CREATOR_PATH).test(pathname)) {
-    const tab = Object.prototype.hasOwnProperty.call(CREATOR_MARKED_TABS, hash) ? CREATOR_MARKED_TABS[hash] : null;
-    return tab ? { attribute: CREATOR_TAB_MARK, value: tab } : null;
-  }
-  if (new RegExp(TEMPLATES_PATH).test(pathname)) {
-    const input = params.get('input');
-    return input && (TEMPLATE_INPUT_FILTERS as readonly string[]).includes(input)
-      ? { attribute: TEMPLATE_INPUT_MARK, value: input }
-      : null;
-  }
-  return null;
-}
-
-/** Inline in the server's HTML, ahead of the page: the mark the address gives it. */
+/**
+ * Inline in the server's HTML, ahead of the page: the mark the address gives it. The one reading
+ * of the address there is (its tests run it, address by address).
+ */
 export const ADDRESS_FIRST_PAINT_RESTORE = [
   'try{var r=document.documentElement,p=location.pathname,q=new URLSearchParams(location.search),v=null,a=null;',
   `if(new RegExp(${JSON.stringify(HOME_PATH)}).test(p)){v=q.get("chip");if(${JSON.stringify(HOME_MARKED_LANES)}.indexOf(v)>=0)a=${JSON.stringify(HOME_CHIP_MARK)}}`,

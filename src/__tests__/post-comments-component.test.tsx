@@ -1,10 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import FeedbackViewport from '@/components/FeedbackViewport';
 import PostComments from '@/components/PostComments';
 import type { PostComment, PostCommentsPage } from '@/lib/post-comments-client';
-import { readPostCommentSort, rememberPostCommentSort } from '@/lib/post-comment-sort-memory';
+import { forgetPostCommentSortsForTests, readPostCommentSort, rememberPostCommentSort } from '@/lib/post-comment-sort-memory';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
@@ -153,6 +154,7 @@ describe('PostComments', () => {
         authState.user = null;
         // The order chosen for a post's comments is kept for the tab: one case's must not reach the next.
         window.sessionStorage.clear();
+        forgetPostCommentSortsForTests();
         window.history.replaceState(null, '', '/feed?chip=recent');
         vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
             callback(0);
@@ -233,6 +235,26 @@ describe('PostComments', () => {
         rememberPostCommentSort('post-2', 'newest');
         render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />);
         expect(await screen.findByText('Top first')).toBeInTheDocument();
+    });
+
+    // Review of #821: the render that hydrates draws Top, and its first page was asked for too,
+    // then dropped, before the kept order's.
+    it('asks only for the kept order when it hydrates the server\'s Top', async () => {
+        const fetchMock = vi.fn(async (input: RequestInfo | URL) => jsonResponse(page([comment({
+            body: String(input).includes('sort=newest') ? 'Newest first' : 'Top first',
+        })])));
+        vi.stubGlobal('fetch', fetchMock);
+        rememberPostCommentSort('post-1', 'newest');
+        const thread = <PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />;
+        const container = document.createElement('div');
+        container.innerHTML = renderToString(thread);
+        document.body.appendChild(container);
+
+        render(thread, { container, hydrate: true });
+
+        expect(await screen.findByText('Newest first')).toBeInTheDocument();
+        expect(fetchMock.mock.calls.map(([input]) => new URL(String(input), 'https://magicbooklet.test').searchParams.get('sort')))
+            .toEqual(['newest']);
     });
 
     it('ignores an older sort response after the viewer changes sort', async () => {
