@@ -792,6 +792,79 @@ describe('CreationsPage', () => {
     expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
   });
 
+  // Back pressed with a creation's details open left Studio for the page before (owner,
+  // 2026-11-15). The details are an entry of the browser's history now, as a reel opened from a
+  // tile is (the browser's half: tests/e2e/studio-preview-back.spec.ts).
+  describe("the details in the browser's history", () => {
+    afterEach(() => {
+      window.history.replaceState(null, '', '/');
+    });
+
+    async function openFreshDetails() {
+      const creation = makeGeneration({ id: 'gen-fresh', title: 'Fresh portrait' });
+      stubStudioFetch((url) => (
+        url === GENERATIONS_PAGE_URL || url === generationDetailUrl('gen-fresh')
+          ? Promise.resolve(jsonResponse({ generations: [creation] }))
+          : null
+      ));
+      window.history.replaceState(null, '', '/creations?media=images');
+      render(<CreationsPage />);
+      fireEvent.click(within(await screen.findByTestId('creation-card-gen-fresh')).getByRole('button', { name: 'Details' }));
+      return screen.findByRole('dialog', { name: 'Fresh portrait' });
+    }
+
+    it("push an entry naming the creation, and Close goes Back to Studio's own", async () => {
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      const dialog = await openFreshDetails();
+
+      expect(`${window.location.pathname}${window.location.search}`).toBe('/creations?media=images&generation=gen-fresh');
+      expect(window.history.state).toMatchObject({ reelPushedFor: 'generation' });
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close preview' }));
+
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('dialog', { name: 'Fresh portrait' })).not.toBeInTheDocument();
+    });
+
+    it("close when Back reaches Studio's own entry", async () => {
+      await openFreshDetails();
+
+      act(() => {
+        window.history.replaceState(null, '', '/creations?media=images');
+        window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+      });
+
+      expect(screen.queryByRole('dialog', { name: 'Fresh portrait' })).not.toBeInTheDocument();
+    });
+
+    it('take a creation the address opened out of the address in place on Close', async () => {
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      navigationState.searchParams = new URLSearchParams('generation=gen-notification');
+      window.history.replaceState(null, '', '/creations?generation=gen-notification');
+      const notificationGeneration = makeGeneration({
+        id: 'gen-notification',
+        title: 'Notification image',
+        input_media: [],
+        paywallPrefill: null,
+      });
+      stubStudioFetch((url) => {
+        if (url === GENERATIONS_PAGE_URL) return Promise.resolve(jsonResponse({ generations: [] }));
+        if (url === generationDetailUrl('gen-notification')) {
+          return Promise.resolve(jsonResponse({ generations: [notificationGeneration] }));
+        }
+        return null;
+      });
+      render(<CreationsPage />);
+
+      const dialog = await screen.findByRole('dialog', { name: 'Notification image' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close preview' }));
+
+      expect(`${window.location.pathname}${window.location.search}`).toBe('/creations');
+      expect(back).not.toHaveBeenCalled();
+      expect(screen.queryByRole('dialog', { name: 'Notification image' })).not.toBeInTheDocument();
+    });
+  });
+
   // Publishing the creation again would rebuild a recipe from the generation
   // prefill and replace whatever the editor saved. An existing post's recipe
   // is always edited in the editor, which loads the stored bundle.
