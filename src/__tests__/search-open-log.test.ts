@@ -59,10 +59,13 @@ function setup(overrides: {
 }
 
 describe('the names the search log is told (search-open-log policy)', () => {
-  it('lists the eight ways a search is entered, the database’s list', () => {
-    expect([...SEARCH_ENTRIES]).toEqual(['typed', 'suggestion', 'entity', 'recent', 'starter', 'related', 'correction', 'link']);
+  it('lists the seven ways a search is entered, the database’s list', () => {
+    expect([...SEARCH_ENTRIES]).toEqual(['typed', 'suggestion', 'entity', 'recent', 'starter', 'related', 'link']);
     expect(isSearchEntry('recent')).toBe(true);
     expect(isSearchEntry('voice')).toBe(false);
+    // "Search instead for …" reads the same query another way: it is no entry of its own
+    // (review of #826, finding 17), and a client that sent one would be refused.
+    expect(isSearchEntry('correction')).toBe(false);
     expect(isSearchEntry(null)).toBe(false);
   });
 
@@ -88,6 +91,14 @@ describe('the names the search log is told (search-open-log policy)', () => {
     expect(searchEntryForChosenText('neon', ' Neon ', recents)).toBe('typed');
     expect(searchEntryForChosenText('neon portrait', 'neon', recents)).toBe('recent');
     expect(searchEntryForChosenText('neon product shots', 'neon', recents)).toBe('suggestion');
+  });
+
+  it('reads a full-width typed text as the row draws it, NFKC: its "Search for" row is typed, not a suggestion', () => {
+    // The row's text is the query as the server normalizes it; the box holds what was typed.
+    expect(searchEntryForChosenText('neon', '\uFF4E\uFF45\uFF4F\uFF4E', [])).toBe('typed');
+    expect(searchEntryForChosenText('neon city', '\uFF4E\uFF45\uFF4F\uFF4E\u3000city', [])).toBe('typed');
+    // And a recent search kept in full width is the recent one.
+    expect(searchEntryForChosenText('neon harbour', 'ne', ['\uFF4E\uFF45\uFF4F\uFF4E harbour'])).toBe('recent');
   });
 
   it('builds the body a client posts, and nothing the server would refuse', () => {

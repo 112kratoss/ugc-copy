@@ -5,12 +5,14 @@ import { after, NextResponse } from 'next/server';
 import { createPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
   BackendRateLimitError,
+  SEARCH_OPENED_GUEST_NETWORK_RATE_LIMIT,
   SEARCH_OPENED_RATE_LIMIT,
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { logBackendEvent, logBackendRouteError } from '@/lib/backend-logger';
 import { readBoundedJsonBody } from '@/lib/bounded-json-request';
+import { isGuestUser } from '@/lib/account-identity';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH,
@@ -31,14 +33,26 @@ import { readSearchOpenBody } from '../../ugc-mobile/lib/public-search-policy/se
  * What it answers, and why none of it says whether an id exists or may be seen:
  *
  *   204, no body   every well-formed report: written, dropped because the log is switched off,
- *                  or lost to a failed write. The id is stored as sent and never looked up, so
- *                  an id of a private post, of a deleted one and of nothing at all are the same
- *                  request with the same answer and the same work behind it;
- *   400            a body that is not the shape `searchOpenBody` builds (a syntax check alone);
+ *                  dropped because it names the viewer's own profile, or lost to a failed write.
+ *                  The id is stored as sent and never looked up, so an id of a private post, of
+ *                  a deleted one and of nothing at all are the same request with the same answer
+ *                  and the same work behind it;
+ *   400            a request that is not `Content-Type: application/json`, or a body that is not
+ *                  the shape `searchOpenBody` builds (a syntax check alone);
  *   401            a token that does not verify, as `/api/search` answers one, so a signed-in
  *                  client's report is never quietly keyed on its network instead;
  *   413            a body past 2 KB;
- *   429            past the route's own limit, counted on the key `/api/search` counts on.
+ *   429            past the route's own limit, counted on the key `/api/search` counts on, and
+ *                  for a guest session on its network as well.
+ *
+ * Only a JSON request is read. Another site's page can post here from a visitor's browser, and a
+ * "simple" request (text/plain, a form) leaves without a preflight; `application/json` makes the
+ * browser ask first, and this site grants no other origin, so such a post never reaches the write
+ * (review of #826, finding 9). Both clients send the header.
+ *
+ * A report of kind `creator` whose id is the token's own account is dropped: stored, it would put
+ * an account id beside that day's visitor code and so name the account behind every search of the
+ * code (finding 13). Nothing is looked up for it; the id compared is the verified token's.
  *
  * Admitted as `/api/search` is (a public route: no token is a visitor, a guest's token is a guest,
  * an agent's is refused at the proxy), and keyed as it is: the user id, or the hashed network
@@ -92,15 +106,21 @@ async function resolveViewerUserId(
   request: Request,
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
-  if (!request.headers.get('Authorization')) return { ok: true as const, viewerUserId: null };
+  if (!request.headers.get('Authorization')) return { ok: true as const, viewerUserId: null, isGuest: false };
   try {
     const client = dependencies.createUserClient(request);
     const { data: { user }, error } = await getVerifiedAuthUserResult(client);
-    if (error || !user?.id) return { ok: false as const, viewerUserId: null };
-    return { ok: true as const, viewerUserId: user.id };
+    if (error || !user?.id) return { ok: false as const, viewerUserId: null, isGuest: false };
+    return { ok: true as const, viewerUserId: user.id, isGuest: isGuestUser(user) };
   } catch {
-    return { ok: false as const, viewerUserId: null };
+    return { ok: false as const, viewerUserId: null, isGuest: false };
   }
+}
+
+/** Whether the request says its body is JSON: the media type alone, whatever parameters follow it. */
+function isJsonRequest(request: Request): boolean {
+  const mediaType = (request.headers.get('Content-Type') ?? '').split(';')[0].trim().toLowerCase();
+  return mediaType === 'application/json';
 }
 
 function refusal(request: Request, status: number, error: string) {
@@ -122,6 +142,7 @@ export async function postSearchOpenedRouteResponse({
   const dependencies = resolveDependencies(overrides);
   const requestedAt = new Date();
   try {
+    if (!isJsonRequest(request)) return refusal(request, 400, 'Content-Type must be application/json.');
     const body = await readBoundedJsonBody(request, SEARCH_OPENED_MAX_BODY_BYTES);
     if (!body.ok) {
       return body.reason === 'too_large'
@@ -146,10 +167,15 @@ export async function postSearchOpenedRouteResponse({
 
     const viewerKey = actor.viewerUserId ?? dependencies.getFeedNetworkKeyHash(request);
     try {
-      await dependencies.enforceBackendRateLimit(dependencies.createServiceClient(), {
-        ...SEARCH_OPENED_RATE_LIMIT,
-        key: viewerKey,
-      });
+      const limiter = dependencies.createServiceClient();
+      await dependencies.enforceBackendRateLimit(limiter, { ...SEARCH_OPENED_RATE_LIMIT, key: viewerKey });
+      // A guest's id is new with every anonymous sign-in: its network is counted too.
+      if (actor.isGuest) {
+        await dependencies.enforceBackendRateLimit(limiter, {
+          ...SEARCH_OPENED_GUEST_NETWORK_RATE_LIMIT,
+          key: dependencies.getFeedNetworkKeyHash(request),
+        });
+      }
     } catch (error) {
       if (error instanceof BackendRateLimitError) {
         const response = createBackendRateLimitResponse(error);
@@ -161,6 +187,15 @@ export async function postSearchOpenedRouteResponse({
       // The limit could not be counted, so nothing is written: an unbounded log is worse than a
       // missing row, and the person who pressed a result is owed no error for it.
       dependencies.logError('Search opened rate limit failed:', error);
+      return accepted(request);
+    }
+
+    // The viewer's own profile: counted as any report, answered as any report, never stored.
+    if (
+      reading.open.kind === 'creator'
+      && actor.viewerUserId !== null
+      && reading.open.id === actor.viewerUserId.toLowerCase()
+    ) {
       return accepted(request);
     }
 

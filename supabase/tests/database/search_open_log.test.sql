@@ -17,13 +17,18 @@ select col_is_null('public', 'search_query_events', 'entry', 'a search row may s
 select lives_ok(
   $$ insert into public.search_query_events (query, search_type, signed_in, visitor_day, creator_count, post_count, recipe_count, entry)
      select 'port', 'top', false, repeat('a', 64), 0, 1, 0, entry
-     from unnest(array['typed', 'suggestion', 'entity', 'recent', 'starter', 'related', 'correction', 'link', null]) as entry $$,
-  'each of the eight entries is kept, and so is none'
+     from unnest(array['typed', 'suggestion', 'entity', 'recent', 'starter', 'related', 'link', null]) as entry $$,
+  'each of the seven entries is kept, and so is none'
 );
 select throws_ok(
   $$ insert into public.search_query_events (query, search_type, signed_in, visitor_day, creator_count, post_count, recipe_count, entry)
      values ('port', 'top', false, repeat('a', 64), 0, 1, 0, 'voice') $$,
   '23514', null, 'an entry outside the list is refused'
+);
+select throws_ok(
+  $$ insert into public.search_query_events (query, search_type, signed_in, visitor_day, creator_count, post_count, recipe_count, entry)
+     values ('port', 'top', false, repeat('a', 64), 0, 1, 0, 'correction') $$,
+  '23514', null, '"search instead for" is no entry: a search read as typed writes no row that could hold it'
 );
 select lives_ok(
   $$ insert into public.search_query_events (query, search_type, signed_in, visitor_day, creator_count, post_count, recipe_count)
@@ -258,20 +263,32 @@ select pg_temp.search('6', interval '190 seconds', 'zzyzx', 0, null);
 -- Visitor-day 7 asked "harbour" on Top as a suggestion, then on Posts from a link: one search, its first entry.
 select pg_temp.search('7', interval '100 seconds', 'harbour', 2, 'suggestion');
 select pg_temp.search('7', interval '97 seconds', 'harbour', 2, 'link', 'posts');
+-- Visitor-days A and B searched "harbour" from a client that says no entry (an app before its
+-- update, a tab loaded before the release): such a client cannot report an open, so neither search
+-- is opened or unopened. B's has an open under its code (another client of the same account): it
+-- still counts for nothing, as B's search is not one that could report.
+select pg_temp.search('a', interval '95 seconds', 'harbour', 2, null);
+select pg_temp.search('b', interval '94 seconds', 'harbour', 2, null);
+select pg_temp.opened('b', interval '93 seconds', 'harbour', 'post', pg_temp.post_id('11')::text, 9);
 -- An open with no search behind it that day (the search log was off, or the key rolled over) counts nowhere.
 select pg_temp.opened('8', interval '50 seconds', 'harbour', 'post', pg_temp.post_id('11')::text, 1);
 -- And an open outside the window is not read.
 select pg_temp.opened('2', interval '10 days', 'harbour', 'post', pg_temp.post_id('11')::text, 1);
 
 select results_eq(
-  $$ select query, searches, zero_result_searches, opened_searches, unopened_searches, mean_open_position, entry_mix
+  $$ select query, searches, zero_result_searches, reporting_searches, opened_searches, unopened_searches, mean_open_position, entry_mix
      from public.search_query_report(7, 50) $$,
   $$ values
-       ('zzyzx'::text, 2::bigint, 2::bigint, 0::bigint, 0::bigint, null::numeric, '{"starter": 1, "unknown": 1}'::jsonb),
-       ('harbour'::text, 4::bigint, 0::bigint, 1::bigint, 3::bigint, 1.50::numeric, '{"typed": 2, "recent": 1, "suggestion": 1}'::jsonb),
-       ('harb'::text, 1::bigint, 0::bigint, 1::bigint, 0::bigint, 4.00::numeric, '{"typed": 1}'::jsonb),
-       ('harbour sketch'::text, 1::bigint, 0::bigint, 1::bigint, 0::bigint, 1.00::numeric, '{"typed": 1}'::jsonb) $$,
-  'a search is opened when a result search still shows was pressed from it; one result pressed twice is one open at its first place; an id search does not show counts for nothing; a query a result was opened from is a search, not a typing step; a zero-result search is not "unopened"; a search takes its first entry'
+       ('zzyzx'::text, 2::bigint, 2::bigint, 1::bigint, 0::bigint, 0::bigint, null::numeric, '{"starter": 1, "unknown": 1}'::jsonb),
+       ('harbour'::text, 6::bigint, 0::bigint, 4::bigint, 1::bigint, 3::bigint, 1.50::numeric, '{"typed": 2, "recent": 1, "suggestion": 1, "unknown": 2}'::jsonb),
+       ('harb'::text, 1::bigint, 0::bigint, 1::bigint, 1::bigint, 0::bigint, 4.00::numeric, '{"typed": 1}'::jsonb),
+       ('harbour sketch'::text, 1::bigint, 0::bigint, 1::bigint, 1::bigint, 0::bigint, 1.00::numeric, '{"typed": 1}'::jsonb) $$,
+  'a search is opened when a result search still shows was pressed from it; one result pressed twice is one open at its first place; an id search does not show counts for nothing; a query a result was opened from is a search, not a typing step; a zero-result search is not "unopened"; a search takes its first entry; and a search from a client that says no entry is counted as a search and as neither opened nor unopened'
+);
+select is(
+  (select reporting_searches from public.search_query_report(7, 50) where query = 'harbour'),
+  (select opened_searches + unopened_searches from public.search_query_report(7, 50) where query = 'harbour'),
+  'of the searches that could report an open and found something, each is opened or unopened'
 );
 select is(
   (select count(*)::integer from public.search_query_report(7, 50) where query = 'har'),
@@ -279,12 +296,12 @@ select is(
   'a query nothing was opened from still collapses into the one it led to'
 );
 select results_eq(
-  $$ select distinct total_searches, total_zero_result_searches, total_opened_searches, total_unopened_searches,
-            total_mean_open_position, total_entry_mix
+  $$ select distinct total_searches, total_zero_result_searches, total_reporting_searches, total_opened_searches,
+            total_unopened_searches, total_mean_open_position, total_entry_mix
      from public.search_query_report(7, 50) $$,
-  $$ values (8::bigint, 2::bigint, 3::bigint, 3::bigint, 2.00::numeric,
-             '{"typed": 4, "recent": 1, "suggestion": 1, "starter": 1, "unknown": 1}'::jsonb) $$,
-  'every row carries the window totals: searches, zero-result, opened, left unopened, the mean place and the entry mix'
+  $$ values (10::bigint, 2::bigint, 7::bigint, 3::bigint, 3::bigint, 2.00::numeric,
+             '{"typed": 4, "recent": 1, "suggestion": 1, "starter": 1, "unknown": 3}'::jsonb) $$,
+  'every row carries the window totals: searches, zero-result, those from a client that reports opens, opened, left unopened, the mean place and the entry mix'
 );
 select results_eq(
   $$ select query, unopened_searches from public.search_query_report(7, 2, 'unopened') $$,

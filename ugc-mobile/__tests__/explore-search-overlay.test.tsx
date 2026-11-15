@@ -886,8 +886,8 @@ describe('ExploreSearchOverlay search', () => {
       await advance(0);
       // (Then Top, once, for what an empty Posts would point to: finding 8.)
       expect(asked().filter((params) => params.type === 'posts').at(-1)).toMatchObject({ type: 'posts', exact: true });
-      // The search asked for as typed says so to the search log; the probe of Top says nothing.
-      expect(searchPublicContent.mock.calls.filter(([params]) => params.exact && params.type === 'posts').at(-1)?.[0].entry).toBe('correction');
+      // The same query read another way: it keeps the entry it was typed under (the probe of Top says nothing).
+      expect(searchPublicContent.mock.calls.filter(([params]) => params.exact && params.type === 'posts').at(-1)?.[0].entry).toBe('typed');
       expect(shownTexts(tree)).toContain('Showing results for “portriat” as typed');
       expect(shownTexts(tree)).not.toContain('Showing results for “portrait”');
       expect(saysNoResults(tree)).toBe(true);

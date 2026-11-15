@@ -64,6 +64,13 @@ describe('the search log’s names, shared with the server and the web', () => {
     expect(searchEntryForChosenText('nano', 'nano', [])).toBe('typed');
     expect(searchEntryForChosenText('Nano Banana', 'nano', ['nano banana'])).toBe('recent');
     expect(searchEntryForChosenText('nano banana pro', 'nano', ['nano banana'])).toBe('suggestion');
+    // A row's text is the query as the server normalizes it (NFKC); the field holds what was typed.
+    expect(searchEntryForChosenText('nano', '\uFF4E\uFF41\uFF4E\uFF4F', [])).toBe('typed');
+  });
+
+  it('have no entry for "search instead for": the same query read another way keeps its own', () => {
+    expect([...SEARCH_ENTRIES]).not.toContain('correction');
+    expect(readSearchEntry('correction')).toEqual({ ok: false });
   });
 
   it('stay free of React Native, Expo and Node imports: the web and the server compile the file too', () => {

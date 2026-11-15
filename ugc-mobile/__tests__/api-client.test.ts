@@ -485,7 +485,9 @@ describe('mobile api client caching', () => {
     expect(new URL(String(url)).pathname).toBe(contract.path);
     expect(init?.method).toBe(contract.method);
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer token-1');
-    expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json');
+    // The route reads a JSON request only (the contract's contentType): anything else is a 400.
+    expect(new Headers(init?.headers).get('Content-Type')).toBe(contract.contentType);
+    expect(contract.contentType).toBe('application/json');
     expect(JSON.parse(String(init?.body))).toEqual(contract.request);
     expect(String(init?.body).length).toBeLessThan(contract.maxBodyBytes);
   });

@@ -1366,7 +1366,7 @@ export default function SearchClient({
               <span>{correctionNotice}</span>
               <button
                 type="button"
-                onClick={() => { searchEntry.current = 'correction'; setExactQuery(normalizedQuery); }}
+                onClick={() => setExactQuery(normalizedQuery)}
                 className="ui-focus-ring inline-flex min-h-11 items-center rounded-full px-2 text-sm font-semibold text-[var(--ui-primary)] hover:underline"
               >
                 {searchInsteadLabel(normalizedQuery)}

@@ -8,6 +8,7 @@ import {
   pressedSearchResult,
   reportSearchOpen,
 } from '@/components/search/search-open-report';
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import type { SearchOpen } from '../../ugc-mobile/lib/public-search-policy/search-open-log';
 
 const POST_ID = '0b9e1000-0000-4000-8000-000000000011';
@@ -42,7 +43,10 @@ describe('reportSearchOpen (web)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('/api/search/opened');
-    expect(init).toMatchObject({ method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' } });
+    // The route reads a JSON request only (the contract's contentType): anything else is a 400.
+    expect(init).toMatchObject({
+      method: 'POST', keepalive: true, headers: { 'Content-Type': mobileApiContract.endpoints.recordSearchOpen.contentType },
+    });
     expect(init.headers).not.toHaveProperty('Authorization');
     expect(JSON.parse(init.body as string)).toEqual({
       q: 'neon product', type: 'posts', sort: 'latest', entry: 'recent', kind: 'post', id: POST_ID, position: 3,

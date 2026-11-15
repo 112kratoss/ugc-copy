@@ -21,7 +21,9 @@
 // Pricing's referral terms: no active program, which Pricing drew from the failed read too. And
 // /api/search/suggest's two calls (its rate limit, by its scope, and its read, for one query:
 // fixtures/search-suggestions.json), a route and not a page. And /api/search/starter's two
-// (its rate limit, by its scope, and its read for a visitor: fixtures/search-starter.json). And the
+// (its rate limit, by its scope, and its read for a visitor: fixtures/search-starter.json). And
+// POST /api/search/opened's three (its rate limit, by its scope: allowed, but for one network
+// address that has had its share; the day's visitor key; the insert of the opened result). And the
 // E2E user's recipe sales page, /marketplace/sell: two free recipes on text posts of theirs
 // (fixtures/seller-recipes.json), with no unlock orders and no deleted posts.
 // A page added here brings each of its reads, matched by method, path and the filters that name
@@ -32,6 +34,8 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { appendFileSync } = require('node:fs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { createHash } = require('node:crypto');
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const creator = require('../fixtures/creator-profile.json');
@@ -73,6 +77,15 @@ const sellerBundleIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.id).
 
 const HOST = 'example.supabase.co';
 
+// A visitor is counted by its hashed network address (hashFeedIdentity, src/lib/showcase-feed-identity.ts,
+// with the salt the E2E server runs on). search-open-log.spec.ts sends one request as this address
+// (x-vercel-forwarded-for), which the limit below refuses: the route's 429 shows its 204s were counted.
+const SEARCH_OPENED_LIMITED_ADDRESS = '203.0.113.77';
+const feedIdentitySalt = process.env.FEED_ANALYTICS_SALT || process.env.SUPABASE_SERVICE_ROLE_KEY || 'local-feed-identity-only';
+const searchOpenedLimitedKey = createHash('sha256')
+  .update(`${feedIdentitySalt}:network:${SEARCH_OPENED_LIMITED_ADDRESS}`)
+  .digest('hex');
+
 function json(body, headers = {}) {
   return new Response(JSON.stringify(body), {
     status: 200,
@@ -109,6 +122,32 @@ const READS = [
     path: '/rest/v1/rpc/search_starter',
     body: { p_viewer_user_id: null },
     answer: () => json(searchStarter.rows),
+  },
+  {
+    // POST /api/search/opened: its own rate limit, spent for the one address above ...
+    methods: ['POST'],
+    path: '/rest/v1/rpc/check_backend_rate_limit',
+    body: { p_scope: 'public-search:opened', p_subject_key: searchOpenedLimitedKey },
+    answer: () => json({ allowed: false, limit: 120, remaining: 0, retryAfterSeconds: 30, resetAt: '2026-11-15T12:00:00.000Z' }),
+  },
+  {
+    // ... and allowed for every other caller, matched by its scope ...
+    methods: ['POST'],
+    path: '/rest/v1/rpc/check_backend_rate_limit',
+    body: { p_scope: 'public-search:opened' },
+    answer: () => json({ allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0, resetAt: '2026-11-15T12:00:00.000Z' }),
+  },
+  {
+    // ... the day's key for the visitor code (search_visitor_day_key), behind the answer ...
+    methods: ['POST'],
+    path: '/rest/v1/rpc/search_visitor_day_key',
+    answer: () => json('e'.repeat(64)),
+  },
+  {
+    // ... and the insert of the opened result, which PostgREST answers 201 with no body.
+    methods: ['POST'],
+    path: '/rest/v1/search_result_opens',
+    answer: () => new Response(null, { status: 201 }),
   },
   {
     // loadCreatorProfileRow: the creator by handle. maybeSingle() asks for a list.

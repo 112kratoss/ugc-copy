@@ -73,8 +73,10 @@ test.describe('the search log', () => {
         )),
       });
     });
+    const openedContentTypes: Array<string | undefined> = [];
     await page.route(OPENED_API, async (route) => {
       opened.push({ method: route.request().method(), body: route.request().postDataJSON() });
+      openedContentTypes.push(route.request().headers()['content-type']);
       await route.fulfill({ status: 204 });
     });
 
@@ -121,9 +123,19 @@ test.describe('the search log', () => {
     await page.waitForTimeout(500);
     expect(searches.slice(asked)).toEqual([]);
     expect(opened).toHaveLength(2);
+    // The route reads a JSON request only: the page says so on every report.
+    expect(openedContentTypes).toEqual(['application/json', 'application/json']);
   });
 
-  test('the route answers 204 with no body whatever the id names, and 400 to a malformed report, through the real proxy', async ({ page }) => {
+  // Through the real proxy and the real route. The dev server's Supabase stub answers the route's
+  // three calls (tests/e2e/support/supabase-server-stub.cjs): the rate limit, the day's visitor
+  // key and the insert. What this shows: a visitor is admitted; a well-formed report is counted
+  // and answered 204 with no body whatever its id names (the address the stub's limit refuses
+  // gets a 429, which the "limit could not be counted" branch never answers, so the 204s came
+  // through the count); and a malformed one is a 400. What it cannot show is the row: the insert
+  // runs behind the answer, on the server. search-opened-route-adapter-service.test.ts holds the
+  // row, and search_open_log.test.sql what the table takes.
+  test('the real route counts a report and answers 204 whatever its id names, 429 past its limit, 400 to a malformed one', async ({ page }) => {
     const origin = 'http://127.0.0.1:3100';
     const report = { q: 'harbour', type: 'top', sort: 'top', entry: 'typed', kind: 'post', position: 1 };
     // Two ids nothing in the placeholder project could hold: the same answer for both.
@@ -135,10 +147,28 @@ test.describe('the search log', () => {
       expect(await response.text(), id).toBe('');
       expect(response.headers()['cache-control'], id).toBe('private, no-store');
     }
+
+    // The same report from the address whose share the stub says is spent: refused by the count.
+    const limited = await page.request.post('/api/search/opened', {
+      headers: { Origin: origin, 'x-vercel-forwarded-for': '203.0.113.77' }, data: { ...report, id: POST_IDS[0] }, timeout: 0,
+    });
+    expect(limited.status()).toBe(429);
+    expect(limited.headers()['retry-after']).toBe('30');
+
     const malformed = await page.request.post('/api/search/opened', {
       headers: { Origin: origin }, data: { ...report, id: 'luna-studio' }, timeout: 0,
     });
     expect(malformed.status()).toBe(400);
+    // A well-formed report that is not sent as JSON (what another site's page can send without
+    // asking): refused before anything is read.
+    const notJson = await page.request.post('/api/search/opened', {
+      headers: { Origin: origin, 'Content-Type': 'text/plain;charset=UTF-8' },
+      data: JSON.stringify({ ...report, id: POST_IDS[0] }),
+      timeout: 0,
+    });
+    expect(notJson.status()).toBe(400);
+    expect(await notJson.json()).toEqual({ error: 'Content-Type must be application/json.' });
+
     const unknownEntry = await page.request.get('/api/search?q=harbour&entry=voice', { headers: { Origin: origin }, timeout: 0 });
     expect(unknownEntry.status()).toBe(400);
   });

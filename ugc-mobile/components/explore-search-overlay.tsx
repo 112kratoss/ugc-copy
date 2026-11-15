@@ -1360,7 +1360,7 @@ export function ExploreSearchOverlay({
           <ReadingNotice
             line={correctionNotice}
             actionLabel={searchInsteadLabel(normalizedQuery)}
-            onAction={() => { searchEntry.current = 'correction'; setExactQuery(normalizedQuery); }}
+            onAction={() => setExactQuery(normalizedQuery)}
           />
         ) : exactNotice ? (
           <ReadingNotice line={exactNotice} actionLabel={SEARCH_CORRECTED_AGAIN_LABEL} onAction={() => setExactQuery(null)} />

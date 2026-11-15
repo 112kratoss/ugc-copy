@@ -683,13 +683,15 @@ describe('public search route adapter service', () => {
         'http://localhost/api/search?q=Port&entry=voice',
         'http://localhost/api/search?q=Port&entry=',
         'http://localhost/api/search?q=Port&entry=TYPED',
+        // No search row could hold it (a search read as typed writes none): not a value.
+        'http://localhost/api/search?q=Port&entry=correction',
         'http://localhost/api/search?q=Port&type=creators&entry=voice',
       ]) {
         const { ask, tasks } = logHarness();
         const response = await ask(url);
         expect(response.status, url).toBe(400);
         await expect(response.json()).resolves.toEqual({
-          error: 'entry must be one of typed, suggestion, entity, recent, starter, related, correction, link.',
+          error: 'entry must be one of typed, suggestion, entity, recent, starter, related, link.',
         });
         expect(tasks).toHaveLength(0);
       }

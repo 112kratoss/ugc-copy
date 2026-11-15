@@ -103,6 +103,23 @@ describe('search open log migration', () => {
     expect(report).toContain('ELSE false');
   });
 
+  // Only a client that sends an entry also reports opens (review of #826, S1): a search with none
+  // is a search, and neither opened nor unopened.
+  it('counts opened and unopened only over the searches whose client could report an open', () => {
+    const report = code.slice(code.indexOf('CREATE FUNCTION public.search_query_report('), code.indexOf('REVOKE ALL ON FUNCTION public.search_query_report'));
+    expect(report).toContain("count(*) FILTER (WHERE p.entry <> 'unknown') AS reporting_searches");
+    expect(report).toContain("count(*) FILTER (WHERE p.entry <> 'unknown' AND p.opens IS NOT NULL) AS opened_searches");
+    expect(report).toContain("count(*) FILTER (WHERE p.entry <> 'unknown' AND p.opens IS NULL AND NOT p.is_zero) AS unopened_searches");
+    expect(report).toContain("coalesce(sum(p.position_sum) FILTER (WHERE p.entry <> 'unknown'), 0) AS position_sum");
+    // Added at the end, so the columns an older reader names keep their places.
+    expect(report).toContain('total_entry_mix jsonb, reporting_searches bigint, total_reporting_searches bigint )');
+  });
+
+  it('has no entry for "search instead for": no search row could hold it', () => {
+    expect(code).not.toContain("'correction'");
+    expect(SEARCH_ENTRIES).toHaveLength(7);
+  });
+
   it('keeps the report a sort: each row compared with the next only, each opened id looked up once', () => {
     const report = code.slice(code.indexOf('CREATE FUNCTION public.search_query_report('), code.indexOf('REVOKE ALL ON FUNCTION public.search_query_report'));
     expect(report).toContain('lead(w.created_at) OVER visitor');
