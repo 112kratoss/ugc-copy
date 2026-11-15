@@ -14,6 +14,7 @@ import {
   type PublicSearchSort,
   type PublicSearchType,
 } from '@/lib/public-search';
+import type { SearchEntry } from '../../ugc-mobile/lib/public-search-policy/search-open-log';
 
 /**
  * The anonymous search log, `public.search_query_events`: one row per first-page `/api/search`
@@ -28,7 +29,12 @@ import {
  * entity, the media kind, "has a recipe", "from creators I follow": each null when off, and
  * the last says only that the filter was on, never who is followed), whether the answer's posts
  * or recipes were found on a corrected reading of the query, how many related posts (search by
- * meaning) the answer added, null when none were looked for, and when the request arrived.
+ * meaning) the answer added, null when none were looked for, how the search was entered as the
+ * client says it (`entry`: typed, a suggestion, a recent search...; null from a client that says
+ * nothing), and when the request arrived.
+ *
+ * Its companion is `src/lib/search-open-log.ts`: a result opened from a search, under the same
+ * per-day visitor code, which is all that ties the two rows.
  *
  * A search asked to read the query as typed ("search instead for") writes no row: it is the
  * second asking of a search already counted, and by its nature finds no post or recipe, so it
@@ -69,8 +75,19 @@ export type SearchQueryEventRow = {
   followed_only: true | null;
   /** Whether the answer's posts or recipes were found on a corrected reading; null for Creators. */
   corrected: boolean | null;
-  /** How many related posts the answer held beside its own; null when none were looked for. */
+  /**
+   * How many posts the answer held for what they mean and not for their words: the related
+   * posts beside its own and, on a blended answer, the meaning-only posts among its own.
+   * Null when none were looked for.
+   */
   related_count: number | null;
+  /** How the search was entered, as the client says it; null when it said nothing. */
+  entry: SearchEntry | null;
+  /**
+   * Set, and true, only on a blended answer (the column's default is false): its posts are
+   * word matches and meaning matches in one order, and the two are counted apart above.
+   */
+  blended?: true;
 };
 
 export type SearchAnswerLogInput = {
@@ -84,6 +101,8 @@ export type SearchAnswerLogInput = {
   filters?: PublicSearchFilters;
   /** The search was asked to read the query as typed: it writes no row. */
   exact?: boolean;
+  /** How the search was entered (the request's `entry`); none when left out. */
+  entry?: SearchEntry | null;
   /** The rate-limit key the adapter computed: the user id, or the hashed network address. */
   viewerKey: string;
   /** A registered (non-guest) account was presented. */
@@ -121,6 +140,17 @@ export function sanitizeSearchQuery(normalizedQuery: string): string {
 }
 
 /**
+ * A viewer's code for one UTC day: HMAC-SHA256 of the rate-limit key under that day's key, or a
+ * fresh random value when the key could not be read. The search row and the opened-result row of
+ * one viewer on one day carry the same code, which is all that ties them.
+ */
+export function searchVisitorDay(dayKey: string | null, viewerKey: string): string {
+  return dayKey
+    ? createHmac('sha256', dayKey).update(viewerKey).digest('hex')
+    : randomBytes(32).toString('hex');
+}
+
+/**
  * The row for an answer, or null when the query is blank after cleaning. `dayKey` is the
  * request's UTC day key; null (it could not be read) gives a random visitor value.
  */
@@ -133,16 +163,21 @@ export function buildSearchQueryEventRow(
   const filters = publicSearchTypeHasFilters(input.type) ? input.filters : undefined;
   // An answer from before the reading was reported says nothing of it.
   const corrected = input.response.correctedQuery;
+  const blended = input.response.blended === true ? true as const : undefined;
+  const meaningOnlyPosts = blended
+    ? input.response.posts.items.filter((post) => post.matchedBy === 'meaning').length
+    : 0;
   return {
     created_at: input.requestedAt.toISOString(),
     query,
     search_type: input.type,
     signed_in: input.signedIn,
-    visitor_day: dayKey
-      ? createHmac('sha256', dayKey).update(input.viewerKey).digest('hex')
-      : randomBytes(32).toString('hex'),
+    visitor_day: searchVisitorDay(dayKey, input.viewerKey),
     creator_count: input.response.creators.items.length,
-    post_count: input.response.posts.items.length,
+    // The posts that hold the words. On a blended answer the posts found by meaning alone are
+    // counted with the related ones, so "the words found nothing" reads post_count 0 whichever
+    // way the answer was ordered, and the report's zero-result test keeps its meaning.
+    post_count: input.response.posts.items.length - meaningOnlyPosts,
     recipe_count: input.response.recipes.items.length,
     sort: publicSearchTypeHasSorts(input.type) ? input.sort : null,
     made_with: filters?.madeWith ?? null,
@@ -152,15 +187,19 @@ export function buildSearchQueryEventRow(
     corrected: input.type === 'creators' || !corrected
       ? null
       : corrected.posts !== null || corrected.recipes !== null,
-    related_count: input.response.related ? input.response.related.posts.length : null,
+    related_count: input.response.related || blended
+      ? (input.response.related?.posts.length ?? 0) + meaningOnlyPosts
+      : null,
+    ...(blended ? { blended } : {}),
+    entry: input.entry ?? null,
   };
 }
 
 /** Today's key, read once per instance and day; a failed read is not cached, so the next answer retries. */
-async function readDayKey(
+export async function readSearchDayKey(
   client: SupabaseClient,
   day: string,
-  cache: SearchDayKeyCache,
+  cache: SearchDayKeyCache = instanceKeyCache,
 ): Promise<string | null> {
   const cached = cache.get(day);
   if (cached) return cached;
@@ -201,7 +240,7 @@ export function recordSearchAnswer(
       try {
         const client = dependencies.createClient();
         const day = input.requestedAt.toISOString().slice(0, 10);
-        const dayKey = await readDayKey(client, day, dependencies.keyCache ?? instanceKeyCache);
+        const dayKey = await readSearchDayKey(client, day, dependencies.keyCache ?? instanceKeyCache);
         const row = buildSearchQueryEventRow(input, dayKey);
         if (!row) return;
         const { error } = await client.from(SEARCH_QUERY_EVENTS_TABLE).insert(row);

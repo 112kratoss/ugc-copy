@@ -451,6 +451,26 @@ export const PUBLIC_SEARCH_READ_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+// A result opened from a search (POST /api/search/opened): one write per press, counted on the
+// key /api/search counts on. A person opens a handful of results a minute; this stops a script
+// filling the log, at most 17,280 rows a day from one key.
+export const SEARCH_OPENED_RATE_LIMIT = {
+  scope: 'public-search:opened',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
+// The same write for a guest session, counted against its network as well (review of #826): a
+// guest's id is new with every anonymous sign-in, so its own key alone is no limit, and a script
+// that minted sessions wrote 120 rows a session. Three guests' worth, as the search's embedding
+// allows a network (SEARCH_QUERY_EMBEDDING_GUEST_NETWORK_DAILY_LIMIT): a home or an office behind
+// one address is not stopped by one phone. A registered account is counted by its own key only.
+export const SEARCH_OPENED_GUEST_NETWORK_RATE_LIMIT = {
+  scope: 'public-search:opened-guest-network',
+  limit: 360,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const SHOWCASE_POST_DETAIL_READ_RATE_LIMIT = {
   scope: 'showcase-post:read',
   limit: 300,

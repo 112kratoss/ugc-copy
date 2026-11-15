@@ -6,6 +6,7 @@ import { encodePublicSearchCursor, publicSearchCursorFilterMark } from '@/lib/pu
 import type { PublicSearchOptions } from '@/lib/public-search-service';
 import { getPublicSearchRouteResponse } from '@/lib/public-search-route-adapter-service';
 import type { PublicSearchResponse } from '@/lib/public-search';
+import { SEARCH_ENTRIES } from '../../ugc-mobile/lib/public-search-policy/search-open-log';
 
 function emptyResponse(query: string, type: PublicSearchResponse['type']): PublicSearchResponse {
   return {
@@ -71,6 +72,8 @@ describe('public search route adapter service', () => {
       exact: false,
       // Related posts were not asked for; a new query would be counted against the request's own key.
       related: false,
+      // Nor were related searches.
+      relatedSearches: false,
       viewerKey: 'network-key',
       // A visitor is no guest session: its one key is the network already.
       guestNetworkKey: null,
@@ -150,6 +153,80 @@ describe('public search route adapter service', () => {
         expect(response.status, search).toBe(200);
         expect(options, search).toMatchObject({ related: true });
       }
+    });
+  });
+
+  describe('the relatedSearches parameter', () => {
+    async function ask(search: string) {
+      const searchPublicContent = vi.fn(async (options: PublicSearchOptions) => emptyResponse(options.query, options.type));
+      const response = await getPublicSearchRouteResponse({
+        request: new Request(`http://localhost/api/search?${search}`),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          createUserClient: vi.fn(),
+          enforceBackendRateLimit: vi.fn(allowedRateLimit),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
+          searchPublicContent,
+          runAfterResponse: () => {},
+          withProviderFetchRequestId: requestIdBoundary,
+        },
+      });
+      return { response, options: searchPublicContent.mock.calls[0]?.[0] ?? null };
+    }
+
+    it('asks the service for related searches only when the request says relatedSearches=1', async () => {
+      expect((await ask('q=portrait')).options).toMatchObject({ relatedSearches: false });
+      expect((await ask('q=portrait&relatedSearches=1')).options).toMatchObject({ relatedSearches: true, type: 'top' });
+      expect((await ask('q=portrait&type=posts&relatedSearches=1')).options).toMatchObject({ relatedSearches: true, type: 'posts' });
+      // Apart from related posts: either may be asked for without the other.
+      expect((await ask('q=portrait&relatedSearches=1')).options).toMatchObject({ related: false });
+      expect((await ask('q=portrait&related=1')).options).toMatchObject({ relatedSearches: false });
+      expect((await ask('q=portrait&related=1&relatedSearches=1')).options).toMatchObject({ related: true, relatedSearches: true });
+    });
+
+    it.each(['0', 'true', 'yes', '', '2', '1,1'])('refuses relatedSearches=%s with a 400, whatever the type', async (value) => {
+      for (const type of ['top', 'posts', 'creators', 'recipes']) {
+        const { response, options } = await ask(`q=portrait&type=${type}&relatedSearches=${encodeURIComponent(value)}`);
+        expect(response.status, type).toBe(400);
+        await expect(response.json()).resolves.toEqual({ error: 'relatedSearches must be 1.' });
+        expect(options, type).toBeNull();
+      }
+    });
+
+    it('takes it on any search, where it changes nothing the service does not apply', async () => {
+      // The service alone decides where related searches apply (public-search-service.test.ts).
+      for (const search of [
+        'q=portrait&type=creators&relatedSearches=1',
+        'q=portrait&type=recipes&relatedSearches=1',
+        'q=portrait&type=posts&sort=latest&relatedSearches=1',
+        'q=portrait&exact=1&relatedSearches=1',
+      ]) {
+        const { response, options } = await ask(search);
+        expect(response.status, search).toBe(200);
+        expect(options, search).toMatchObject({ relatedSearches: true });
+      }
+    });
+
+    it('answers what the service answers: the field only when the service sent one', async () => {
+      const withSearches = vi.fn(async (options: PublicSearchOptions) => ({
+        ...emptyResponse(options.query, options.type),
+        relatedSearches: [{ text: 'cinematic portrait' }],
+      }));
+      const response = await getPublicSearchRouteResponse({
+        request: new Request('http://localhost/api/search?q=portrait&relatedSearches=1'),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          createUserClient: vi.fn(),
+          enforceBackendRateLimit: vi.fn(allowedRateLimit),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
+          searchPublicContent: withSearches,
+          runAfterResponse: () => {},
+          withProviderFetchRequestId: requestIdBoundary,
+        },
+      });
+      await expect(response.json()).resolves.toMatchObject({ relatedSearches: [{ text: 'cinematic portrait' }] });
+      const without = await ask('q=portrait');
+      expect(await without.response.json()).not.toHaveProperty('relatedSearches');
     });
   });
 
@@ -583,13 +660,49 @@ describe('public search route adapter service', () => {
       expect(row).toMatchObject({
         query: 'port', search_type: 'top', signed_in: false, creator_count: 0, post_count: 0, recipe_count: 0,
         sort: null, made_with: null, media_kind: null, has_recipe: null, followed_only: null, corrected: false,
-        related_count: null,
+        related_count: null, entry: null,
       });
       expect(Object.keys(row).sort()).toEqual([
-        'corrected', 'created_at', 'creator_count', 'followed_only', 'has_recipe', 'made_with', 'media_kind',
+        'corrected', 'created_at', 'creator_count', 'entry', 'followed_only', 'has_recipe', 'made_with', 'media_kind',
         'post_count', 'query', 'recipe_count', 'related_count', 'search_type', 'signed_in', 'sort', 'visitor_day',
       ]);
       expect(JSON.stringify(row)).not.toContain('network-key');
+    });
+
+    it.each(SEARCH_ENTRIES)('logs how the search was entered: entry=%s', async (entry) => {
+      const { ask, insert, tasks } = logHarness();
+      const response = await ask(`http://localhost/api/search?q=Port&entry=${entry}`);
+      expect(response.status).toBe(200);
+      await tasks[0]();
+      const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
+      expect(row).toMatchObject({ query: 'port', entry });
+    });
+
+    it('answers 400 to an entry it does not know, on any type, and logs nothing', async () => {
+      for (const url of [
+        'http://localhost/api/search?q=Port&entry=voice',
+        'http://localhost/api/search?q=Port&entry=',
+        'http://localhost/api/search?q=Port&entry=TYPED',
+        // No search row could hold it (a search read as typed writes none): not a value.
+        'http://localhost/api/search?q=Port&entry=correction',
+        'http://localhost/api/search?q=Port&type=creators&entry=voice',
+      ]) {
+        const { ask, tasks } = logHarness();
+        const response = await ask(url);
+        expect(response.status, url).toBe(400);
+        await expect(response.json()).resolves.toEqual({
+          error: 'entry must be one of typed, suggestion, entity, recent, starter, related, link.',
+        });
+        expect(tasks).toHaveLength(0);
+      }
+    });
+
+    it('changes nothing of the search itself: the service is asked the same with an entry and without', async () => {
+      const searchWith = vi.fn(async () => emptyResponse('Port', 'top'));
+      const searchWithout = vi.fn(async () => emptyResponse('Port', 'top'));
+      await logHarness().ask('http://localhost/api/search?q=Port&entry=starter', { searchPublicContent: searchWith });
+      await logHarness().ask('http://localhost/api/search?q=Port', { searchPublicContent: searchWithout });
+      expect(searchWith.mock.calls[0]).toEqual(searchWithout.mock.calls[0]);
     });
 
     it('logs what narrowed a Posts search, the filters applied and nothing of who is followed', async () => {

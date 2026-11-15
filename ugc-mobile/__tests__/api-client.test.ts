@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { parseSearchStarterResponse } from '../lib/public-search-policy/search-starter';
+import { searchOpenBody } from '../lib/public-search-policy/search-open-log';
 import { parseSearchSuggestResponse } from '../lib/public-search-policy/search-typeahead';
 import {
   ACCOUNT_DELETION_TIMEOUT_MS,
@@ -444,6 +445,51 @@ describe('mobile api client caching', () => {
       '?q=lake&type=top&probe=1',
       '?q=lake&type=top',
     ]);
+  });
+
+  it('names how a search was entered only when the screen knows, in the web page’s own parameter', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({}));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    await api.searchPublicContent({ query: 'lake', type: 'top', entry: 'recent' });
+    await api.searchPublicContent({ query: 'lake', type: 'posts', sort: 'latest', entry: 'link', cursor: 'page-2' });
+    await api.searchPublicContent({ query: 'lake', type: 'top', entry: null });
+    await api.searchPublicContent({ query: 'lake', type: 'top' });
+    // A server from before the parameter ignores it; one that knows it refuses any other value.
+    expect((fetcher.mock.calls as unknown as Array<[string]>).map(([url]) => new URL(String(url)).search)).toEqual([
+      '?q=lake&type=top&entry=recent',
+      '?q=lake&type=posts&sort=latest&entry=link&cursor=page-2',
+      '?q=lake&type=top',
+      '?q=lake&type=top',
+    ]);
+  });
+
+  it('posts an opened result as the contract’s request, with the session’s token, and takes the empty 204', async () => {
+    const contract = mobileApiContract.endpoints.recordSearchOpen;
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: contract.status }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    const body = searchOpenBody({
+      query: contract.request.q, type: 'posts', sort: 'latest', entry: 'suggestion', kind: 'post',
+      id: contract.request.id, position: contract.request.position,
+    });
+    expect(body).toEqual(contract.request);
+    await expect(api.recordSearchOpen(body!)).resolves.toBe('');
+    const [url, init] = fetcher.mock.calls[0];
+    expect(new URL(String(url)).pathname).toBe(contract.path);
+    expect(init?.method).toBe(contract.method);
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer token-1');
+    // The route reads a JSON request only (the contract's contentType): anything else is a 400.
+    expect(new Headers(init?.headers).get('Content-Type')).toBe(contract.contentType);
+    expect(contract.contentType).toBe('application/json');
+    expect(JSON.parse(String(init?.body))).toEqual(contract.request);
+    expect(String(init?.body).length).toBeLessThan(contract.maxBodyBytes);
   });
 
   it('sends a request id with backend calls', async () => {

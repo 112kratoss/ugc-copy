@@ -21,9 +21,11 @@ import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
 import {
   PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
+  PUBLIC_SEARCH_BLEND_PARAM,
   PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH,
   PUBLIC_SEARCH_PROBE_PARAM,
   PUBLIC_SEARCH_RELATED_PARAM,
+  PUBLIC_SEARCH_RELATED_SEARCHES_PARAM,
   appliedPublicSearchFilters,
   decodePublicSearchCursor,
   isPublicSearchQueryTooLong,
@@ -40,6 +42,11 @@ import { recordSearchAnswer } from '@/lib/public-search-query-log';
 import { searchPublicContent } from '@/lib/public-search-service';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+import {
+  SEARCH_ENTRIES,
+  SEARCH_ENTRY_PARAM,
+  readSearchEntry,
+} from '../../ugc-mobile/lib/public-search-policy/search-open-log';
 
 type PublicSearchRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
@@ -170,13 +177,34 @@ async function handlePublicSearchGET(
     // the query read as typed).
     const rawRelated = url.searchParams.get(PUBLIC_SEARCH_RELATED_PARAM);
     if (rawRelated !== null && rawRelated !== '1') return badRequest(request, 'related must be 1.');
+    // Related searches, asked for the same way by a client that draws them:
+    // any request may name the parameter, any other value is refused, and it
+    // changes nothing where they do not apply (another tab, a later page).
+    const rawRelatedSearches = url.searchParams.get(PUBLIC_SEARCH_RELATED_SEARCHES_PARAM);
+    if (rawRelatedSearches !== null && rawRelatedSearches !== '1') {
+      return badRequest(request, 'relatedSearches must be 1.');
+    }
     // A search the client asks for itself (PUBLIC_SEARCH_PROBE_PARAM): answered
     // and limited as any, never written to the search log.
     const rawProbe = url.searchParams.get(PUBLIC_SEARCH_PROBE_PARAM);
     if (rawProbe !== null && rawProbe !== '1') return badRequest(request, 'probe must be 1.');
 
+    // How the search was entered (typed, a suggestion, a recent search...), for
+    // the search log alone: it changes nothing of the answer. Left out by every
+    // client installed before it; any other value is refused, as an unknown
+    // type is.
+    const entry = readSearchEntry(url.searchParams.get(SEARCH_ENTRY_PARAM));
+    if (!entry.ok) return badRequest(request, `${SEARCH_ENTRY_PARAM} must be one of ${SEARCH_ENTRIES.join(', ')}.`);
+
     const limit = parsePublicSearchLimit(url.searchParams.get('limit'));
     if (!limit) return badRequest(request, 'limit must be an integer between 1 and 24.');
+
+    // The blended Posts order, asked for the same way by a client that
+    // settled on the search: any request may name the parameter, any other
+    // value is refused, and it changes nothing where the blend does not apply
+    // (another tab, Latest, one word, the query read as typed).
+    const rawBlend = url.searchParams.get(PUBLIC_SEARCH_BLEND_PARAM);
+    if (rawBlend !== null && rawBlend !== '1') return badRequest(request, 'blend must be 1.');
 
     const rawCursor = url.searchParams.get('cursor');
     if (type === 'top' && rawCursor) return badRequest(request, 'Top search does not accept a cursor.');
@@ -236,6 +264,7 @@ async function handlePublicSearchGET(
       filters,
       exact: filterParams.exact,
       related: rawRelated === '1',
+      relatedSearches: rawRelatedSearches === '1',
       // A new query's vector is counted against the same key as the request,
       // and a guest session's against its network too: a guest's id is new
       // with every anonymous sign-in, so its own key alone is no limit.
@@ -245,6 +274,7 @@ async function handlePublicSearchGET(
       limit,
       viewerUserId: actor.viewerUserId,
       countryCode: request.headers.get('x-vercel-ip-country'),
+      ...(rawBlend === '1' ? { blend: true } : {}),
     });
     const response = NextResponse.json(responseBody, {
       headers: createApiResponseHeaders(request, API_CACHE_CONTROL.privateNoStore, {
@@ -264,6 +294,7 @@ async function handlePublicSearchGET(
       sort,
       filters,
       exact: filterParams.exact,
+      entry: entry.entry,
       viewerKey,
       // Most sessions here are guests, which the log does not call signed in.
       signedIn: registered,

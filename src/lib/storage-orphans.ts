@@ -168,6 +168,9 @@ const TELEMETRY = 'telemetry or counters: no stored paths, and too large to read
 const NO_TEXT = 'no text or JSON column';
 const SEARCH_DICTIONARY = 'single words of letters, held to that by a check: never a path';
 const SEARCH_ENTITIES = 'model and tool names and their keys, at most 80 characters, copied from Made with: never a stored path';
+const SEARCH_PHRASES = 'phrases of words and model or tool names of at most 60 characters, counts and post ids: never a path';
+const SEARCH_POPULARITY = 'model and tool keys of at most 80 characters, ids and counts: never a path';
+const SEARCH_PHRASES_STATE = 'one row holding when the phrases were last rebuilt: a flag and a time';
 const SEARCH_DENYLIST = 'single words an operator withdrew from suggestions, each with a note: never a path';
 const COMMENT_REACTIONS = 'a like or a dislike, one of two words held to that by a check: never a path';
 const QUEUED_PROVIDER_REQUEST = 'a queued start: signed links to inputs that are recorded elsewhere, kept only while the start waits';
@@ -239,7 +242,13 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   search_query_embeddings: TELEMETRY,
   // The anonymous search log: a short query, a hash and three counts per row.
   search_query_events: TELEMETRY,
+  // Results opened from a search: a short query, a hash, an id and a place per row.
+  search_result_opens: TELEMETRY,
   search_visitor_day_keys: TELEMETRY,
+  // Search's phrases and names for typeahead and the starter, and each model's, tool's and creator's week.
+  search_phrases: SEARCH_PHRASES,
+  search_popularity: SEARCH_POPULARITY,
+  search_phrases_state: SEARCH_PHRASES_STATE,
   // Search's spelling dictionary: one lowercase word of letters per row.
   search_terms: SEARCH_DICTIONARY,
   // Words an operator took out of typeahead: a lowercase word and a note per row.

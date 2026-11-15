@@ -11,6 +11,7 @@ Live runbooks are at the root of this folder; everything dated or reference-only
 - [model-onboarding.md](model-onboarding.md) — adding a generation model end to end: provider checks, code registration, the release, rollout.
 - [moderation-operations.md](moderation-operations.md) — staffed moderation queue and the service-role CLI.
 - [feed-algorithm-operations.md](feed-algorithm-operations.md) — For You ranking versions: the scorecard (including the viewer-grain, position and format sections and the SRM check), activating a version and rolling back, experiments, kill switches, and training a draft version from the delivery facts (`ops:feed-ranker`).
+- [search-ranking-operations.md](search-ranking-operations.md) — the blended Posts order of search (`blend=1`: word matches and meaning matches merged by reciprocal rank fusion), its constants and how to change one, the relevance check (`npm run search:relevance`) a ranking change must pass, latency, and when `post_search_embeddings` gets a vector index and how.
 - [mobile-store-product-catalog.md](mobile-store-product-catalog.md) — IAP tier provisioning.
 - [post-resource-bundle-v1.md](post-resource-bundle-v1.md) — paid resource bundles.
 - [mcp-server-operations.md](mcp-server-operations.md) — the agents' MCP server (`/api/mcp`): enabling Supabase Auth's OAuth server, registering each agent client and its redirect URIs, the kill switch, reading the logs and the `agent_tool_calls` audit table, the publishing rules (the daily cap, the moderation filter), Connected apps, revoking a client.

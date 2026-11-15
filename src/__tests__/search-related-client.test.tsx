@@ -74,7 +74,9 @@ const ok = (body: PublicSearchResponse) => ({ ok: true, status: 200, json: async
 const RELATED = { posts: [post('r1', 'Sea after sunset'), post('r2', 'Cliffs in mist')] };
 const posts = (count: number) => Array.from({ length: count }, (_, index) => post(`p${index}`, `Own post ${index}`));
 
-const asked = () => fetchMock.mock.calls.map(([url]) => url as string);
+// Without `entry` (how the query was entered, said to the search log: always the last
+// parameter; search-client.test.tsx, "the search log", pins it).
+const asked = () => fetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, ''));
 const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 const type = (value: string) => fireEvent.change(screen.getByRole('combobox'), { target: { value } });
 const enter = () => fireEvent.submit(screen.getByRole('search'));

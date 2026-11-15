@@ -9,6 +9,7 @@ import { useRef, useState } from 'react';
 import { SearchEntrancePart, SearchEntranceStandIn } from '@/components/search/SearchEntrancePart';
 import { isPlainPress, markSearchEntrance } from '@/components/search/search-entrance';
 import { markSearchFieldHandoff } from '@/components/search/search-field-handoff';
+import { searchEntryForChosenText, type SearchEntry } from '../../ugc-mobile/lib/public-search-policy/search-open-log';
 import { readSearchHistory } from '@/components/search/search-history';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
 import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
@@ -52,14 +53,15 @@ export function AppShellSearch() {
   const [recents, setRecents] = useState<readonly string[]>([]);
   const typeahead = useSearchTypeahead({ text, focused, recents });
 
-  const leaveFor = (path: string) => {
+  // `entry`: how the search was entered, handed to the search page for the search log.
+  const leaveFor = (path: string, entry: SearchEntry = 'typed') => {
     const leave = () => {
       // A search lands with the focus in the search page's field
       // (search-field-handoff.ts). Marked only as the leave happens: a leave
       // the person cancels hands nothing on.
       // The page's field grows out of this one (search-entrance.ts).
       if (path.startsWith('/search')) {
-        markSearchFieldHandoff();
+        markSearchFieldHandoff(Date.now(), entry);
         markSearchEntrance('bar');
       }
       router.push(path);
@@ -87,7 +89,10 @@ export function AppShellSearch() {
       setText(action.query);
       params.set('q', action.query);
     }
-    leaveFor(`/search?${params.toString()}`);
+    leaveFor(
+      `/search?${params.toString()}`,
+      action.type === 'entity' ? 'entity' : searchEntryForChosenText(action.query, text, recents),
+    );
   };
 
   return (

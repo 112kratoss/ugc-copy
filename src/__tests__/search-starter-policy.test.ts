@@ -12,20 +12,25 @@ import {
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
+  SEARCH_STARTER_ALL_TIME,
   SEARCH_STARTER_EMPTY_RESPONSE,
   SEARCH_STARTER_HEADINGS,
   SEARCH_STARTER_MAX_CREATORS,
   SEARCH_STARTER_MAX_ENTITIES,
   SEARCH_STARTER_MAX_SEARCHES,
+  SEARCH_STARTER_PERIODS,
   SEARCH_STARTER_SECTION_IDS,
+  SEARCH_STARTER_WEEK_HEADINGS,
   isSearchStarterEmpty,
   parseSearchStarterResponse,
   searchStarterCreatorAction,
   searchStarterEntityAction,
+  searchStarterHeading,
+  searchStarterPeriod,
   searchStarterSearchAction,
   searchStarterSections,
 } from '../../ugc-mobile/lib/public-search-policy/search-starter';
-import { searchEntityId } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
+import { readSearchThumbnail, searchEntityId } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
 
 const contract = mobileApiContract.endpoints.searchStarter;
 
@@ -82,7 +87,7 @@ describe('search starter shared rules', () => {
       ],
       searches: [{ text: '  anime ' }, { text: '   ' }, { text: 7 }, ...Array.from({ length: 10 }, (_, index) => ({ text: `s ${index}` }))],
     })!;
-    expect(parsed.entities[0]).toEqual({ kind: 'model', key: 'veo-3.1', label: 'Veo 3.1', postCount: 12, postCountCapped: false, query: 'veo 3 1' });
+    expect(parsed.entities[0]).toEqual({ kind: 'model', key: 'veo-3.1', label: 'Veo 3.1', postCount: 12, postCountCapped: false, thumbnail: null, query: 'veo 3 1' });
     expect(parsed.entities.map((entity) => entity.key)).not.toContain('no-query');
     expect(parsed.entities.map((entity) => entity.key)).not.toContain('blank-query');
     expect(parsed.entities).toHaveLength(SEARCH_STARTER_MAX_ENTITIES);
@@ -91,13 +96,62 @@ describe('search starter shared rules', () => {
     });
     expect(parsed.creators.map((creator) => creator.username)).not.toContain('');
     expect(parsed.creators).toHaveLength(SEARCH_STARTER_MAX_CREATORS);
-    expect(parsed.searches[0]).toEqual({ text: 'anime' });
+    expect(parsed.searches[0]).toEqual({ text: 'anime', thumbnail: null });
     expect(parsed.searches).toHaveLength(SEARCH_STARTER_MAX_SEARCHES);
   });
 
   it('read a missing list as empty', () => {
     expect(parseSearchStarterResponse({ searches: [{ text: 'anime' }] }))
-      .toEqual({ entities: [], creators: [], searches: [{ text: 'anime' }] });
+      .toEqual({ entities: [], creators: [], searches: [{ text: 'anime', thumbnail: null }], periods: SEARCH_STARTER_ALL_TIME });
+  });
+
+  describe('periods and pictures (2026-11-15)', () => {
+    it('pin the week’s headings to the contract, and say one only for a list the answer says is this week’s', () => {
+      expect(contract.weekHeadings).toEqual(SEARCH_STARTER_WEEK_HEADINGS);
+      expect(SEARCH_STARTER_PERIODS).toEqual(['week', 'all']);
+      const parsed = parseSearchStarterResponse(contract.response)!;
+      expect(parsed.periods).toEqual({ entities: 'week', creators: 'week', searches: 'all' });
+      expect(searchStarterHeading('entities', searchStarterPeriod(parsed, 'entities'))).toBe('Popular this week');
+      expect(searchStarterHeading('creators', searchStarterPeriod(parsed, 'creators'))).toBe('Creators popular this week');
+      expect(searchStarterHeading('searches', searchStarterPeriod(parsed, 'searches'))).toBe('Try searching for');
+      // An answer that does not say is all-time.
+      expect(searchStarterPeriod({}, 'entities')).toBe('all');
+      expect(searchStarterPeriod(null, 'creators')).toBe('all');
+      expect(searchStarterHeading('searches', 'week')).toBe('Popular searches this week');
+      expect(searchStarterHeading('entities', 'all')).toBe('Popular models and tools');
+    });
+
+    it.each([
+      ['no periods', undefined],
+      ['periods that are not an object', ['week', 'week', 'week']],
+      ['a period it does not know', { entities: 'month', creators: true, searches: 'WEEK' }],
+    ])('read %s as all-time, so "this week" is never said untruly', (_name, periods) => {
+      const parsed = parseSearchStarterResponse({ entities: [], creators: [], searches: [], periods })!;
+      expect(parsed.periods).toEqual(SEARCH_STARTER_ALL_TIME);
+      expect(searchStarterPeriod(parsed, 'searches')).toBe('all');
+    });
+
+    it('read the answer of a server from before periods and pictures: all-time, and no picture on any row', () => {
+      const parsed = parseSearchStarterResponse(contract.responseVariants.beforePeriods.response)!;
+      expect(parsed.periods).toEqual(SEARCH_STARTER_ALL_TIME);
+      expect(parsed.entities.map((entity) => entity.thumbnail)).toEqual([null]);
+      expect(parsed.searches).toEqual([{ text: 'portrait', thumbnail: null }]);
+    });
+
+    it('read a row’s picture, or null for one that is not whole', () => {
+      const [pictured, bare] = parseSearchStarterResponse(contract.response)!.entities;
+      expect(pictured.thumbnail).toEqual(contract.response.entities[0].thumbnail);
+      expect(bare.thumbnail).toBeNull();
+      const whole = { postId: 'post-1', url: 'https://cdn.example.test/p.webp', thumbhash: 'hash', width: 800, height: 1200, mediaKind: 'video' };
+      expect(readSearchThumbnail(whole)).toEqual(whole);
+      expect(readSearchThumbnail({ ...whole, thumbhash: '', width: 0, height: -1, mediaKind: 'gif' }))
+        .toEqual({ postId: 'post-1', url: 'https://cdn.example.test/p.webp', thumbhash: null, width: null, height: null, mediaKind: 'image' });
+      for (const broken of [null, undefined, 'https://cdn.example.test/p.webp', [whole], { ...whole, url: '' }, { ...whole, postId: 7 }]) {
+        expect(readSearchThumbnail(broken)).toBeNull();
+      }
+      const searches = parseSearchStarterResponse({ searches: [{ text: 'anime', thumbnail: { ...whole, url: '' } }, { text: 'neon', thumbnail: whole }] })!.searches;
+      expect(searches).toEqual([{ text: 'anime', thumbnail: null }, { text: 'neon', thumbnail: whole }]);
+    });
   });
 
   it('draw the sections a answer fills, in order, under their headings', () => {
@@ -108,7 +162,7 @@ describe('search starter shared rules', () => {
       ['creators', 'Creators to follow'],
       ['searches', 'Try searching for'],
     ]);
-    expect(searchStarterSections({ entities: [], creators: [], searches: [{ text: 'anime' }] }).map((section) => section.id))
+    expect(searchStarterSections({ entities: [], creators: [], searches: [{ text: 'anime', thumbnail: null }] }).map((section) => section.id))
       .toEqual(['searches']);
     expect(searchStarterSections(null)).toEqual([]);
     expect(isSearchStarterEmpty(SEARCH_STARTER_EMPTY_RESPONSE)).toBe(true);

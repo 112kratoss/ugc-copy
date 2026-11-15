@@ -11,7 +11,8 @@ test('keeps Vary: Authorization on a visitor’s cacheable starter beside the pr
   const response = await page.request.get('/api/search/starter', { headers: { Origin: origin }, timeout: 0 });
   expect(response.status()).toBe(200);
   expect(await response.json()).toEqual({
-    entities: [{ kind: 'tool', key: 'e2e-tool', label: 'E2E Tool', postCount: 2, postCountCapped: false, query: 'e2e tool' }],
+    // The stub's rows carry no picture and no week list, so every list is the all-time one.
+    entities: [{ kind: 'tool', key: 'e2e-tool', label: 'E2E Tool', postCount: 2, postCountCapped: false, query: 'e2e tool', thumbnail: null }],
     creators: [{
       id: 'workflow-user',
       username: 'e2e-creator',
@@ -21,7 +22,8 @@ test('keeps Vary: Authorization on a visitor’s cacheable starter beside the pr
       publicPostCount: 2,
       isFollowing: false,
     }],
-    searches: [{ text: 'portrait' }],
+    searches: [{ text: 'portrait', thumbnail: null }],
+    periods: { entities: 'all', creators: 'all', searches: 'all' },
   });
   const headers = response.headers();
   expect(headers['cache-control']).toBe('public, s-maxage=60, stale-while-revalidate=300');

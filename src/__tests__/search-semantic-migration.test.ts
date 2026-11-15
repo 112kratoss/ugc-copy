@@ -43,10 +43,16 @@ const TABLES = [
   'public.search_query_embedding_days',
 ] as const;
 
-/** The newest migration that defines `public.<name>`, and that definition, comments left out. */
-function newestDefinition(name: string): { file: string; definition: string } {
+/**
+ * The newest migration that defines `public.<name>`, and that definition, comments left out.
+ * `upTo` reads the function as a migration left it: a later migration may define it again
+ * (20261115105353 re-creates the growth accounting and the search report, with its own tests).
+ */
+function newestDefinition(name: string, upTo?: string): { file: string; definition: string } {
   const pattern = new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+public\\.${name}\\s*\\(`, 'i');
-  const definers = migrationNames.filter((file) => pattern.test(withoutComments(readFileSync(join(migrationsDirectory, file), 'utf8'))));
+  const definers = migrationNames
+    .filter((file) => upTo === undefined || file <= upTo)
+    .filter((file) => pattern.test(withoutComments(readFileSync(join(migrationsDirectory, file), 'utf8'))));
   expect(definers.length, `${name} must be defined`).toBeGreaterThan(0);
   const file = definers[definers.length - 1];
   const sql = withoutComments(readFileSync(join(migrationsDirectory, file), 'utf8'));
@@ -346,7 +352,7 @@ describe('semantic search migration', () => {
   });
 
   it('adds the two tables that grow to the growth accounting, each with a budget, and drops none it counted', () => {
-    const { file, definition } = newestDefinition('get_operational_table_growth');
+    const { file, definition } = newestDefinition('get_operational_table_growth', MIGRATION);
     expect(file).toBe(MIGRATION);
     const before = withoutComments(readFileSync(join(migrationsDirectory, '20261112084002_search_query_events.sql'), 'utf8'));
     const previous = before.slice(before.search(/CREATE OR REPLACE FUNCTION public\.get_operational_table_growth\(/));
@@ -374,6 +380,6 @@ describe('semantic search migration', () => {
       ALTER TABLE public.search_query_events
         ADD COLUMN related_count integer CHECK (related_count IS NULL OR related_count BETWEEN 0 AND 24);`));
     expect(statements.match(/ALTER TABLE public\.search_query_events/g)).toHaveLength(1);
-    expect(newestDefinition('search_query_report').file).toBe('20261112084002_search_query_events.sql');
+    expect(newestDefinition('search_query_report', MIGRATION).file).toBe('20261112084002_search_query_events.sql');
   });
 });

@@ -43,8 +43,13 @@ const suggestFetchMock = vi.fn();
 // By default the route is not there yet, as before its release: no starter.
 const starterFetchMock = vi.fn();
 const NO_STARTER_ROUTE = { ok: false, status: 404, json: async () => ({}) };
+// The search log's opened results (search-open-report.ts): apart, so `fetchMock` holds the searches alone.
+const openedFetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<{ ok: boolean; status: number }>>(
+  async () => ({ ok: true, status: 204 }),
+);
 function fetchBySurface(url: string, init?: RequestInit) {
   if (String(url).startsWith('/api/search/starter')) return starterFetchMock(url, init);
+  if (String(url).startsWith('/api/search/opened')) return openedFetchMock(url, init);
   return String(url).startsWith('/api/search/suggest') ? suggestFetchMock(url, init) : fetchMock(url, init);
 }
 // The page's auth listener, kept so a test can say "signed out" as Supabase does.
@@ -159,8 +164,17 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+/**
+ * The searches asked, each without its `entry` (how the query was entered, said to the search
+ * log and to nothing else: always the last parameter). "the search log" below pins the entries.
+ */
 function requestedUrls() {
-  return fetchMock.mock.calls.map(([url]) => url as string);
+  return fetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, ''));
+}
+
+/** How each search asked says it was entered. */
+function requestedEntries() {
+  return fetchMock.mock.calls.map(([url]) => new URL(url as string, 'http://localhost').searchParams.get('entry'));
 }
 
 /** The tab's own searches: an empty tab of one kind also asks Top once, for what the other tabs hold. */
@@ -229,7 +243,8 @@ describe('SearchClient', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 2000 });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('/api/search?q=luna&type=top');
+    // Opened on an address: said to the search log as a link.
+    expect(url).toBe('/api/search?q=luna&type=top&entry=link');
     expect(init.headers).toEqual({ Authorization: 'Bearer token-1' });
 
     expect(await screen.findByText('Luna Studio')).toBeInTheDocument();
@@ -251,7 +266,7 @@ describe('SearchClient', () => {
     expect(screen.getByRole('tab', { name: 'Posts' })).toHaveAttribute('aria-selected', 'true');
     // No pause: the query arrives already typed, as a shared link's does.
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 250 });
-    expect((fetchMock.mock.calls[0] as [string])[0]).toBe('/api/search?q=lumi&type=posts&sort=latest&recipe=1');
+    expect(requestedUrls()[0]).toBe('/api/search?q=lumi&type=posts&sort=latest&recipe=1');
     expect(`${window.location.pathname}${window.location.search}`).toBe('/search?q=lumi&type=posts&sort=latest&recipe=1');
     // An emptied search comes back empty, not as the first load's.
     cleanup();
@@ -477,7 +492,7 @@ describe('SearchClient', () => {
     // Top searches creators from two characters.
     fireEvent.click(screen.getByRole('tab', { name: 'Top' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled(), { timeout: 2000 });
-    expect((fetchMock.mock.calls[0] as [string])[0]).toBe('/api/search?q=ab&type=top');
+    expect(requestedUrls()[0]).toBe('/api/search?q=ab&type=top');
   });
 
   it('ends a full Top section with a full-width "See all", and names each card in words', async () => {
@@ -1584,6 +1599,166 @@ describe('SearchClient', () => {
         setItem.mockRestore();
       });
     });
+  });
+});
+
+describe('SearchClient and the search log (search-open-log.ts)', () => {
+  const HISTORY_KEY = 'magicbooklet:public-search-history:v1';
+  const CREATOR_IDS = ['0b9e0000-0000-4000-8000-000000000001', '0b9e0000-0000-4000-8000-000000000002'];
+  const POST_IDS = ['0b9e1000-0000-4000-8000-000000000011', '0b9e1000-0000-4000-8000-000000000012'];
+  const RELATED_ID = '0b9e1000-0000-4000-8000-000000000019';
+  const RECIPE_ID = '0b9e5000-0000-4000-8000-000000000014';
+  const kling = { kind: 'model' as const, key: 'kling-2.6', label: 'Kling 2.6', postCount: 14, postCountCapped: false };
+  const settle = (ms = 400) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+  const openedBodies = () => openedFetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+
+  function fullAnswer(): PublicSearchResponse {
+    return searchResponse({
+      entities: [kling],
+      creators: { items: CREATOR_IDS.map((id, index) => ({ ...creator(`Maker ${index + 1}`), id })), nextCursor: null },
+      posts: { items: POST_IDS.map((id, index) => post(id, `Harbour ${index + 1}`, 0)) as unknown as ShowcaseFeedItem[], nextCursor: null },
+      recipes: { items: [{ ...recipe('r1', 'Lantern recipe', 'Wren'), id: RECIPE_ID }], nextCursor: null },
+      related: { posts: [post(RELATED_ID, 'Sea after sunset', 0)] as unknown as ShowcaseFeedItem[] },
+    });
+  }
+
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    cookieUserMock.mockReset();
+    cookieUserMock.mockReturnValue(null);
+    getSessionMock.mockReset();
+    getSessionMock.mockResolvedValue({ data: { session: null } });
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(jsonResponse(fullAnswer()));
+    openedFetchMock.mockClear();
+    suggestFetchMock.mockReset();
+    suggestFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ query: '', normalizedQuery: '', creators: [], entities: [], completions: [] }),
+    });
+    starterFetchMock.mockReset();
+    starterFetchMock.mockResolvedValue(NO_STARTER_ROUTE);
+    vi.stubGlobal('fetch', fetchBySurface);
+    window.history.replaceState(null, '', '/search');
+    clearSearchFieldHandoff();
+  });
+
+  afterEach(() => {
+    cleanup();
+    clearSearchFieldHandoff();
+    vi.unstubAllGlobals();
+  });
+
+  it('says a search opened on an address came from a link, and one the top bar handed over as that field entered it', async () => {
+    const first = render(<SearchClient initialQuery="harbour" initialType="top" />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    expect(requestedEntries()).toEqual(['link']);
+    first.unmount();
+
+    fetchMock.mockClear();
+    markSearchFieldHandoff(Date.now(), 'suggestion');
+    render(<SearchClient initialQuery="harbour light" initialType="top" />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    expect(requestedEntries()).toEqual(['suggestion']);
+  });
+
+  it('says a typed search was typed, keeps that across a tab, and says a recent search was a recent one', async () => {
+    window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['neon harbour']));
+    render(<SearchClient initialQuery="" initialType="top" />);
+    typeQuery('harbour');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    fireEvent.click(screen.getByRole('tab', { name: 'Creators' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    expect(requestedEntries()).toEqual(['typed', 'typed']);
+    expect(requestedUrls()).toEqual(['/api/search?q=harbour&type=top', '/api/search?q=harbour&type=creators']);
+
+    typeQuery('');
+    fireEvent.click(await screen.findByRole('button', { name: 'Search again for neon harbour' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3), { timeout: 2000 });
+    expect(requestedEntries().at(-1)).toBe('recent');
+    // Edited by hand, it is typed again.
+    typeQuery('neon harbour at dusk');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4), { timeout: 2000 });
+    expect(requestedEntries().at(-1)).toBe('typed');
+  });
+
+  it('tells the log each result opened: its kind, id and 1-based place among its own kind, with the search it came from', async () => {
+    render(<SearchClient initialQuery="" initialType="top" />);
+    typeQuery('Harbour');
+    await screen.findByText('Maker 2');
+    await settle(1700);
+    expect(openedFetchMock).not.toHaveBeenCalled();
+    // jsdom follows no link: the press is what is under test.
+    const press = (name: RegExp) => {
+      const link = screen.getByRole('link', { name });
+      link.addEventListener('click', (event) => event.preventDefault());
+      fireEvent.click(link);
+    };
+
+    press(/Maker 2/);
+    press(/Harbour 2/);
+    press(/Lantern recipe/);
+    press(/Sea after sunset/);
+    await settle(50);
+    const search = { q: 'Harbour', type: 'top', sort: 'top', entry: 'typed' };
+    expect(openedBodies()).toEqual([
+      { ...search, kind: 'creator', id: CREATOR_IDS[1], position: 2 },
+      { ...search, kind: 'post', id: POST_IDS[1], position: 2 },
+      { ...search, kind: 'recipe', id: RECIPE_ID, position: 1 },
+      // A related post follows the search's own two.
+      { ...search, kind: 'post', id: RELATED_ID, position: 3 },
+    ]);
+    for (const [url, init] of openedFetchMock.mock.calls) {
+      expect(url).toBe('/api/search/opened');
+      expect(init).toMatchObject({ method: 'POST', keepalive: true });
+      // A visitor's search carried no token, and neither does its open.
+      expect(init?.headers).not.toHaveProperty('Authorization');
+    }
+    // Opening a result is not a search.
+    expect(fetchMock.mock.calls.every(([url]) => !String(url).startsWith('/api/search/opened'))).toBe(true);
+  });
+
+  it('tells the log a model or tool row pressed among the results, at its place, and narrows Posts under the same entry', async () => {
+    render(<SearchClient initialQuery="harbour" initialType="top" />);
+    fireEvent.click(await screen.findByRole('button', { name: /Kling 2\.6/ }));
+    await waitFor(() => expect(requestedUrls().at(-1)).toBe('/api/search?q=harbour&type=posts&madeWith=model%3Akling-2.6'), { timeout: 2000 });
+    expect(openedBodies()).toEqual([
+      { q: 'harbour', type: 'top', sort: 'top', entry: 'link', kind: 'entity', id: 'model:kling-2.6', position: 1 },
+    ]);
+    expect(requestedEntries().at(-1)).toBe('link');
+  });
+
+  it('sends the open with the session’s token, as the search was, and nothing for a result the log could not name', async () => {
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-1', user: { id: 'user-1' } } } });
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({
+      creators: { items: [{ ...creator('Maker 1'), id: CREATOR_IDS[0] }, creator('Old Fixture')], nextCursor: null },
+    })));
+    render(<SearchClient initialQuery="harbour" initialType="creators" />);
+    for (const name of [/Maker 1/, /Old Fixture/]) {
+      const link = await screen.findByRole('link', { name });
+      link.addEventListener('click', (event) => event.preventDefault());
+      fireEvent.click(link);
+    }
+    await settle(50);
+    expect(openedBodies()).toEqual([
+      { q: 'harbour', type: 'creators', sort: 'top', entry: 'link', kind: 'creator', id: CREATOR_IDS[0], position: 1 },
+    ]);
+    expect(openedFetchMock.mock.calls[0][1]?.headers).toMatchObject({ Authorization: 'Bearer token-1' });
+  });
+
+  it('opens the result all the same when the log cannot be told', async () => {
+    openedFetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    render(<SearchClient initialQuery="harbour" initialType="top" />);
+    const link = await screen.findByRole('link', { name: /Harbour 1/ });
+    let followed = false;
+    link.addEventListener('click', (event) => { followed = !event.defaultPrevented; event.preventDefault(); });
+    expect(() => fireEvent.click(link)).not.toThrow();
+    await settle(50);
+    // The page left the link's own navigation alone.
+    expect(followed).toBe(true);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
 

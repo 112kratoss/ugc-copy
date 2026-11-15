@@ -1,5 +1,7 @@
 import 'server-only';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 import { normalizeCreatorSearchQuery } from '@/lib/public-search';
 import { entityResult } from '@/lib/public-search-service';
 import {
@@ -10,9 +12,11 @@ import {
   SEARCH_STARTER_SUGGESTED_SEARCHES,
   type SearchStarterCreator,
   type SearchStarterEntity,
+  type SearchStarterPeriod,
   type SearchStarterResponse,
   type SearchStarterSearch,
 } from '@/lib/search-starter';
+import { searchThumbnailFromRow } from '@/lib/search-thumbnail';
 import { createServiceClient } from '@/lib/server-helpers';
 
 type SearchStarterServiceDependencies = {
@@ -41,7 +45,7 @@ function isText(value: unknown): value is string {
  * migration and this file out of step, which must be seen as a failure, not
  * drawn as a creator with no handle or served as an empty list.
  */
-function entityFromRow(row: unknown): SearchStarterEntity {
+function entityFromRow(client: SupabaseClient, row: unknown): SearchStarterEntity {
   if (
     !isRecord(row)
     || !isText(row.query)
@@ -57,7 +61,8 @@ function entityFromRow(row: unknown): SearchStarterEntity {
   }
   // Named as full search names it (a model made here by its catalog name),
   // and searched by the query the database counted, which can differ from
-  // that name: the name is drawn, the query is sent.
+  // that name: the name is drawn, the query is sent. Its picture is of a
+  // post that search opens, or null.
   return {
     ...entityResult({
       kind: row.kind,
@@ -66,6 +71,7 @@ function entityFromRow(row: unknown): SearchStarterEntity {
       post_count: row.post_count,
       post_count_capped: row.post_count_capped,
     }),
+    thumbnail: searchThumbnailFromRow(client, row.thumbnail),
     query: row.query,
   };
 }
@@ -95,9 +101,19 @@ function creatorFromRow(row: unknown): SearchStarterCreator {
   };
 }
 
-function searchFromRow(row: unknown): SearchStarterSearch {
+function searchFromRow(client: SupabaseClient, row: unknown): SearchStarterSearch {
   if (!isRecord(row) || !isText(row.text)) throw new Error(UNEXPECTED_ANSWER);
-  return { text: row.text };
+  return { text: row.text, thumbnail: searchThumbnailFromRow(client, row.thumbnail) };
+}
+
+/**
+ * Which period a list is of. A database from before 20261115105944 answers
+ * no `periods`, and every list of its is the all-time one; so is anything
+ * that is not plainly `week`, since a heading may say "this week" only when
+ * that is true.
+ */
+function periodOf(periods: unknown, list: 'entities' | 'creators' | 'searches'): SearchStarterPeriod {
+  return isRecord(periods) && periods[list] === 'week' ? 'week' : 'all';
 }
 
 /**
@@ -120,8 +136,14 @@ function isSearchedAsCounted(query: string): boolean {
  * guest, a suspended or deleting account, either side of a block with the
  * viewer, a creator the viewer follows and the viewer; a model or tool one
  * creator alone uses or whose name holds a withdrawn word; a search that
- * finds no post this viewer may see or holds a withdrawn word. Labelled,
- * private and hidden posts count for nothing.
+ * finds no post this viewer may see or holds a withdrawn word; a picture of
+ * a labelled post or of a creator blocked with the viewer. Labelled, private
+ * and hidden posts count for nothing.
+ *
+ * A list is this week's where the week has enough in it (`periods`): models,
+ * tools and creators by what their posts gained in the last 7 days against
+ * their own three weeks before, searches from the phrases posts write. The
+ * hand-picked terms sent here fill the searches up to six.
  */
 export async function getSearchStarter(
   options: SearchStarterOptions,
@@ -154,9 +176,18 @@ export async function getSearchStarter(
     // rests on one side alone.
     entities: data.entities
       .slice(0, SEARCH_STARTER_ENTITY_LIMIT)
-      .map(entityFromRow)
+      .map((row) => entityFromRow(client, row))
       .filter((entity) => isSearchedAsCounted(entity.query)),
     creators: data.creators.slice(0, SEARCH_STARTER_CREATOR_LIMIT).map(creatorFromRow),
-    searches: data.searches.slice(0, SEARCH_STARTER_SEARCH_LIMIT).map(searchFromRow),
+    searches: data.searches
+      .slice(0, SEARCH_STARTER_SEARCH_LIMIT)
+      .map((row) => searchFromRow(client, row))
+      // A phrase is searched as the database held it, as an entity's query is.
+      .filter((search) => isSearchedAsCounted(search.text.toLowerCase())),
+    periods: {
+      entities: periodOf(data.periods, 'entities'),
+      creators: periodOf(data.periods, 'creators'),
+      searches: periodOf(data.periods, 'searches'),
+    },
   };
 }

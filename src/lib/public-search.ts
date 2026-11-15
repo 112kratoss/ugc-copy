@@ -10,7 +10,9 @@ import {
   type SearchEntityKind,
   type SearchFilters,
   type SearchMediaKind,
+  type SearchRelatedSearch,
 } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
+import type { SearchMatchSource } from '../../ugc-mobile/lib/public-search-policy/search-blend';
 
 // What a request may name, and the words both clients show, are one copy the
 // web and the app share (ugc-mobile/lib/public-search-policy).
@@ -83,8 +85,33 @@ export const PUBLIC_SEARCH_RELATED_PARAM = 'related';
  */
 export const PUBLIC_SEARCH_PROBE_PARAM = 'probe';
 
+/**
+ * The request parameter a client asks for related searches with:
+ * `relatedSearches=1` (`SEARCH_RELATED_SEARCHES_PARAM`, the clients' shared
+ * rule). Any other value is refused, as `related`'s is. Without it the
+ * server looks for none, and the answer is what it was before them.
+ */
+export { SEARCH_RELATED_SEARCHES_PARAM as PUBLIC_SEARCH_RELATED_SEARCHES_PARAM } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
+
 /** How many entities the Top tab offers. */
 export const PUBLIC_SEARCH_ENTITY_LIMIT = 5;
+
+/**
+ * The request parameter a client asks for the blended Posts order with:
+ * `blend=1` (`SEARCH_BLEND_PARAM`, the clients' shared rule, which also says
+ * when a client sends it). Any other value is refused, as `related`'s is.
+ * Without it posts are in the word order, as before the blend.
+ */
+export { SEARCH_BLEND_PARAM as PUBLIC_SEARCH_BLEND_PARAM } from '../../ugc-mobile/lib/public-search-policy/search-blend';
+
+/**
+ * The furthest place in the blended window a cursor may name: the word list
+ * and the meaning list together, `c_word_window + c_meaning_window` of
+ * `search_blended_posts` (search-blended-posts-migration.test.ts holds the
+ * two equal). Past it a cursor is invalid, a 400, never a call the database
+ * refuses.
+ */
+export const PUBLIC_SEARCH_BLEND_MAX_PLACE = 80;
 
 /** Whether a tab's results can be narrowed: only Posts. */
 export function publicSearchTypeHasFilters(type: PublicSearchType): boolean {
@@ -167,6 +194,13 @@ export interface RecipeSearchResult {
   };
 }
 
+/**
+ * A post result: a card like any other, and, for a request that asked for the
+ * blended order (`blend=1`), how it matched (`SearchMatchSource`). Left out
+ * for a request that did not ask.
+ */
+export type PublicSearchPost = ShowcaseFeedItem & { matchedBy?: SearchMatchSource };
+
 export interface PublicSearchPage<T> {
   items: T[];
   nextCursor: string | null;
@@ -194,7 +228,7 @@ export interface PublicSearchResponse {
   /** The request asked for the query as typed: nothing was corrected. */
   exact: boolean;
   creators: PublicSearchPage<CreatorSearchResult>;
-  posts: PublicSearchPage<ShowcaseFeedItem>;
+  posts: PublicSearchPage<PublicSearchPost>;
   recipes: PublicSearchPage<RecipeSearchResult>;
   /**
    * Posts that mean what the query says without holding its words, nearest
@@ -208,6 +242,25 @@ export interface PublicSearchResponse {
    * reordered or shortened for it.
    */
   related?: PublicSearchRelated;
+  /**
+   * Searches near this one: the phrases, and at most two model or tool
+   * names, that at least two of this page's posts hold, never the query or
+   * its corrected reading, each finding two posts or more for this viewer.
+   * At most six. Present only for a request that asked
+   * (`relatedSearches=1`) for the first page of a Top or Posts search, and
+   * then a list, empty when there are none or they could not be read. Left
+   * out everywhere else and by a server from before them.
+   */
+  relatedSearches?: SearchRelatedSearch[];
+  /**
+   * For a Top or Posts search that asked for the blended order (`blend=1`):
+   * true when `posts` is in it, false when the answer is the word order
+   * after all (one word, Latest, a query read corrected, no vector in time,
+   * the lookup switched off, a later page continued by its floor). Left out
+   * for a request that did not ask. A later page may hold a post an earlier
+   * page showed, blended or not: a client leaves those out by id.
+   */
+  blended?: boolean;
 }
 
 export interface PublicSearchRelated {
@@ -236,6 +289,22 @@ export type PublicSearchCursor = {
    * before filters is. A cursor pages the search it came from and no other.
    */
   filters?: string;
+  /**
+   * Top posts, blended: the place in the blended window the next page starts
+   * after (`search_blended_posts`). Beside it `score` and `id` are the floor:
+   * the furthest row of the word order shown so far, which the word order
+   * continues from when the blend cannot (no vector, the lookup switched off,
+   * a server from before the blend, which ignores this field). They are left
+   * out only while the first row of the word order is still to come (the
+   * word order then continues from its top). Always with `asOf`.
+   */
+  window?: number;
+  /**
+   * Top posts, blended: the post shown last, beside `window`. The window is
+   * rebuilt at every request, so the next page starts after this post where
+   * the window still holds it, and at `window` only when it is gone.
+   */
+  last?: string;
 };
 
 /**
@@ -257,6 +326,8 @@ export function publicSearchCursorFilterMark(filters: SearchFilters, exact: bool
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+// A post id as a cursor carries one.
+const CURSOR_POST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // A timestamptz as PostgREST writes one: 2026-11-12T10:35:47.123456+00:00.
 const CURSOR_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-](\d{2}):(\d{2}))$/;
 // The years a cursor's time may name. Nothing here was made before 2020, and
@@ -360,6 +431,8 @@ export function encodePublicSearchCursor(cursor: PublicSearchCursor): string {
     ...(cursor.asOf !== undefined ? { a: cursor.asOf } : {}),
     ...(cursor.createdAt ? { c: cursor.createdAt } : {}),
     ...(cursor.filters ? { f: cursor.filters } : {}),
+    ...(cursor.window !== undefined ? { w: cursor.window } : {}),
+    ...(cursor.window !== undefined && cursor.last ? { l: cursor.last } : {}),
   }), 'utf8').toString('base64url');
 }
 
@@ -400,6 +473,26 @@ export function decodePublicSearchCursor(
       }
       return { version: 1, type: expectedType, ...sortField, offset: Number(parsed.o) };
     }
+    // A place in the blended window: only a Top posts cursor has one, with the
+    // instant its search began. Its floor is optional, both halves or neither.
+    let windowField: { window?: number; last?: string } = {};
+    // The post shown last travels only with a place, and is an id.
+    if (parsed.l !== undefined && (parsed.w === undefined || typeof parsed.l !== 'string' || !CURSOR_POST_ID_PATTERN.test(parsed.l))) {
+      return null;
+    }
+    if (parsed.w !== undefined) {
+      if (
+        expectedType !== 'posts' || sort !== 'top'
+        || !Number.isSafeInteger(parsed.w) || Number(parsed.w) < 1 || Number(parsed.w) > PUBLIC_SEARCH_BLEND_MAX_PLACE
+        || !Number.isSafeInteger(parsed.a) || Number(parsed.a) < MIN_CURSOR_AS_OF_MS || Number(parsed.a) > MAX_CURSOR_AS_OF_MS
+      ) {
+        return null;
+      }
+      windowField = { window: Number(parsed.w), ...(typeof parsed.l === 'string' ? { last: parsed.l } : {}) };
+      if (parsed.i === undefined && parsed.s === undefined) {
+        return { version: 1, type: expectedType, asOf: Number(parsed.a), ...filtersField, ...windowField };
+      }
+    }
     // The id feeds a uuid RPC parameter; rejecting malformed ids here keeps a
     // hand-built cursor a 400 instead of a Postgres cast error surfacing as 500.
     if (
@@ -423,7 +516,7 @@ export function decodePublicSearchCursor(
       ) {
         return null;
       }
-      return { version: 1, type: expectedType, score: parsed.s, id: parsed.i, asOf: Number(parsed.a), ...filtersField };
+      return { version: 1, type: expectedType, score: parsed.s, id: parsed.i, asOf: Number(parsed.a), ...filtersField, ...windowField };
     }
     return { version: 1, type: expectedType, score: parsed.s, id: parsed.i, ...filtersField };
   } catch {

@@ -640,6 +640,12 @@ const extendedOperationCases: Array<{
   { key: 'searchPublicContent', call: (api) => api.searchPublicContent({ query: 'product', type: 'top' }) },
   { key: 'suggestSearch', call: (api) => api.suggestSearch({ query: 'lu' }) },
   { key: 'searchStarter', call: (api) => api.searchStarter() },
+  {
+    key: 'recordSearchOpen',
+    call: (api) => api.recordSearchOpen({
+      q: 'product', type: 'top', sort: 'top', kind: 'post', id: '0b9e1000-0000-4000-8000-000000000011', position: 1,
+    }),
+  },
   { key: 'reportPost', call: (api) => api.reportPost('post-1', { reason: 'unsafe_content' }) },
   {
     key: 'reportUser',

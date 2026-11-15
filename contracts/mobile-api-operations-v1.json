@@ -181,6 +181,11 @@
       "path": "/api/search/starter",
       "auth": "optional"
     },
+    "recordSearchOpen": {
+      "method": "POST",
+      "path": "/api/search/opened",
+      "auth": "optional"
+    },
     "recordShowcaseFeedEvent": {
       "method": "POST",
       "path": "/api/showcase/feed/events",

@@ -13,6 +13,7 @@ export function CreatorSearchResult({ creator, label }: {
       href={`/creators/${encodeURIComponent(creator.username)}`}
       // Search keeps the typed query for a creator opened from it.
       data-search-result="creator"
+      data-search-result-id={creator.id}
       aria-label={label}
       className="ui-focus-ring flex min-h-20 items-center gap-4 rounded-2xl border border-white/8 bg-white/[0.035] p-3 transition hover:border-white/15 hover:bg-white/[0.065]"
     >
