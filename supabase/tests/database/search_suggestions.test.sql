@@ -616,7 +616,7 @@ from (
 select is(pg_temp.entities('midj'), array['tool:midjourney'],
   'a tool two creators'' posts are made with is offered for the start of its name');
 select is(
-  (public.search_suggestions('midj') -> 'entities' -> 0) - 'thumbnail',
+  (public.search_suggestions('midj') -> 'entities' -> 0) - 'thumbnail' - 'in_catalog' - 'catalog_model' - 'query',
   (select jsonb_build_object('kind', kind, 'key', key, 'label', label, 'post_count', post_count, 'post_count_capped', post_count_capped)
    from public.search_public_entities('midj', null, 10, null)),
   'as search itself offers it: its kind, key, the name its posts print, and the posts the query finds made with it'
@@ -749,8 +749,8 @@ select is(
 -- ─── Whose they are ─────────────────────────────────────────────────────────
 
 select ok(
-  not has_function_privilege('anon', 'public.search_suggestions(text, uuid, boolean, integer, integer)', 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.search_suggestions(text, uuid, boolean, integer, integer)', 'EXECUTE')
+  not has_function_privilege('anon', 'public.search_suggestions(text, uuid, boolean, integer, integer, boolean)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.search_suggestions(text, uuid, boolean, integer, integer, boolean)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.search_suggest_creators(text, uuid, boolean, integer)', 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.search_suggest_creators(text, uuid, boolean, integer)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.search_suggest_completions(text, integer, uuid)', 'EXECUTE')
@@ -760,7 +760,7 @@ select ok(
   'no client role may call the suggestion functions or the rebuild'
 );
 select ok(
-  has_function_privilege('service_role', 'public.search_suggestions(text, uuid, boolean, integer, integer)', 'EXECUTE')
+  has_function_privilege('service_role', 'public.search_suggestions(text, uuid, boolean, integer, integer, boolean)', 'EXECUTE')
   and has_function_privilege('service_role', 'public.search_suggest_creators(text, uuid, boolean, integer)', 'EXECUTE')
   and has_function_privilege('service_role', 'public.search_suggest_completions(text, integer, uuid)', 'EXECUTE')
   and has_function_privilege('service_role', 'public.rebuild_search_terms()', 'EXECUTE'),

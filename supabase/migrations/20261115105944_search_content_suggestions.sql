@@ -92,10 +92,41 @@
 --    least two posts of a result page hold, for /api/search?relatedSearches=1.
 --    A function of its own, so search_public_posts is not touched.
 --
+-- 9. CATALOG MODELS IN THE TYPEAHEAD (owner, 2026-11-15: typing "see" must
+--    offer Seedance). `suggest?q=see` answered nothing while a search for
+--    "seedance" found a tool one creator names and our own Seedance model on
+--    another creator's post: a typeahead entity needed unlabelled posts of
+--    two creators (20261112192423), and each had one. That rule is there so
+--    one account cannot plant a made-up name; a model of the product's own
+--    public catalog is ours and already public, so it is exempt. The source
+--    is the catalog's public projection as /api/model-catalog/v1 reads it:
+--    the entries of the active release (the newest by schema version) that
+--    are enabled on the web or in the app, by their public displayName. A
+--    model no longer in that release, or switched off on both, is not a
+--    catalog model here. search_suggestions gains a sixth parameter:
+--      p_catalog = false (the code and the apps live today): a catalog model
+--        search itself answers for the query is offered though one creator
+--        alone uses it. Nothing else changes, so a row still opens posts.
+--      p_catalog = true (a client that sends catalog=1 and knows what to do
+--        with a row that has no posts): every catalog model with a word of
+--        its name or id starting with the typed text is offered, from two
+--        characters, with the posts this viewer may see that are made with
+--        it (0 when none) and the `query` whose Posts search, narrowed to
+--        it, opens exactly those.
+--    Every entity row says `in_catalog`, and a catalog model's row its id,
+--    kind and platforms. A catalog model the text starts stands first, then
+--    the rest, most posts first. The word "seedance" is still no completion
+--    there, by the dictionary's own rule: a word is counted only where a
+--    post writes it, never where it is the post's tool or model name, so
+--    both posts count for nothing; the entity row is what offers it.
+--
 -- THE RELEASE WINDOW. Migrations apply before the new app is promoted. The
 -- app live meanwhile calls search_suggestions and search_starter by name
 -- with the parameters they keep, and reads the keys they keep; the new keys
--- (`thumbnail`, `periods`) are additions it does not read.
+-- (`thumbnail`, `periods`, `in_catalog`, `catalog_model`, `query`) are
+-- additions it does not read. search_suggestions is dropped and re-created
+-- in this transaction with p_catalog last and false by default, so the
+-- five-argument named call resolves to it and PostgREST sees one function.
 -- search_suggest_completions gains a third parameter with a default; only
 -- search_suggestions calls it. rebuild_search_terms is untouched.
 --
@@ -1000,7 +1031,6 @@ BEGIN
     -- matched, and 'amb%' is not read as 'amb'.
     v_phrase_tsquery := CASE
       WHEN v_text ~ '^[[:alnum:] .+]+$' THEN public.search_prefix_tsquery('pg_catalog.simple', v_text)
-      ELSE ''::tsquery
     END;
     v_like := replace(replace(replace(v_text, '\', '\\'), '%', '\%'), '_', '\_') || '%';
 
@@ -1074,7 +1104,8 @@ BEGIN
           phrases.phrase LIKE v_like AS starts,
           phrases.core
         FROM public.search_phrases AS phrases
-        WHERE numnode(v_phrase_tsquery) > 0
+        WHERE v_phrase_tsquery IS NOT NULL
+          AND numnode(v_phrase_tsquery) > 0
           AND NOT v_head_withdrawn
           AND phrases.words @@ v_phrase_tsquery
           AND (v_is_corrected OR phrases.phrase <> v_text)
@@ -1383,18 +1414,222 @@ GRANT EXECUTE ON FUNCTION public.search_suggest_creators(text, uuid, boolean, in
 
 -- ─── 7. The one call the suggest route makes ────────────────────────────────
 
-CREATE OR REPLACE FUNCTION public.search_suggestions(
+-- The product's own models a typed text names: the public projection of the
+-- catalog (the active release's entries enabled on a platform), matched as an
+-- entity's name is (every typed word, the last a prefix, against the name and
+-- the id as written, split and joined). No posts are read here.
+CREATE FUNCTION public.search_suggest_catalog_models(p_query text)
+RETURNS TABLE(
+  key text,
+  model_id text,
+  model_kind text,
+  label text,
+  web boolean,
+  mobile boolean,
+  starts boolean
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $function$
+DECLARE
+  v_query text := lower(btrim(regexp_replace(coalesce(p_query, ''), '[[:space:]]+', ' ', 'g')));
+  v_like text;
+  v_tsquery tsquery;
+BEGIN
+  -- From two characters: one letter starts a word of most names.
+  IF char_length(v_query) < 2 OR char_length(v_query) > 100 THEN
+    RETURN;
+  END IF;
+  -- Names are not stemmed (search_public_entities).
+  v_tsquery := public.search_query_tsquery(v_query, false);
+  IF numnode(v_tsquery) = 0 THEN
+    RETURN;
+  END IF;
+  v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_') || '%';
+
+  RETURN QUERY
+  SELECT
+    named.key,
+    entries.model_id,
+    models.kind,
+    named.label,
+    entries.web_enabled,
+    entries.mobile_enabled,
+    -- The name or the id starts with what is typed.
+    (lower(named.label) LIKE v_like OR named.key LIKE v_like)
+  FROM (
+    -- The release /api/model-catalog/v1 serves (read_model_catalog_v1_current).
+    SELECT releases.id
+    FROM public.generation_model_catalog_releases AS releases
+    WHERE releases.status = 'active'
+    ORDER BY releases.schema_version DESC, releases.activated_at DESC
+    LIMIT 1
+  ) AS current_release
+  JOIN public.generation_model_catalog_entries AS entries ON entries.release_id = current_release.id
+  JOIN public.generation_models AS models ON models.model_id = entries.model_id
+  CROSS JOIN LATERAL (
+    SELECT
+      public.search_entity_key(entries.model_id) AS key,
+      left(coalesce(nullif(btrim(entries.public_descriptor ->> 'displayName'), ''), entries.model_id), 80) AS label
+  ) AS named
+  -- Offered to someone: a model switched off on the web and in the app is not public.
+  WHERE (entries.web_enabled OR entries.mobile_enabled)
+    AND named.key IS NOT NULL
+    AND to_tsvector(
+      'pg_catalog.simple',
+      coalesce(public.search_term_variants(named.label), '') || ' ' || coalesce(public.search_term_variants(entries.model_id), '')
+    ) @@ v_tsquery;
+END;
+$function$;
+
+COMMENT ON FUNCTION public.search_suggest_catalog_models(text) IS
+  'The product''s own models a typed text names, for the typeahead: the entries of the active catalog release enabled on the web or in the app (the public projection /api/model-catalog/v1 reads), by their public displayName, where every typed word is in the name or the id and the last starts one of their words; from two characters. key is the model''s search key (search_entity_key of its id), starts whether the name or the id starts with the text. Only public descriptor fields are read: no provider mapping, no price. Service role only.';
+
+REVOKE ALL ON FUNCTION public.search_suggest_catalog_models(text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.search_suggest_catalog_models(text) TO service_role;
+
+-- Dropped and re-created for its sixth parameter, in this transaction: the
+-- five-argument named call of the code live during the release resolves to
+-- the new function through the default, and reads the keys it read.
+DROP FUNCTION public.search_suggestions(text, uuid, boolean, integer, integer);
+
+CREATE FUNCTION public.search_suggestions(
   p_query text,
   p_viewer_user_id uuid DEFAULT NULL,
   p_handles_only boolean DEFAULT false,
   p_creator_limit integer DEFAULT 5,
-  p_completion_limit integer DEFAULT 6
+  p_completion_limit integer DEFAULT 6,
+  p_catalog boolean DEFAULT false
 )
 RETURNS jsonb
 LANGUAGE sql
 STABLE
 SET search_path = ''
 AS $function$
+  WITH catalog AS MATERIALIZED (
+    -- A query typed as a handle ('@lu') asks for people: no models.
+    SELECT models.key, models.model_id, models.model_kind, models.label, models.web, models.mobile, models.starts
+    FROM public.search_suggest_catalog_models(p_query) AS models
+    WHERE NOT coalesce(p_handles_only, false)
+  ),
+  found AS MATERIALIZED (
+    -- Models and tools: search's own answer for this query and viewer.
+    SELECT answered.kind, answered.key, answered.label, answered.post_count, answered.post_count_capped, answered.position
+    FROM public.search_public_entities(p_query, p_viewer_user_id, 10, NULL)
+      WITH ORDINALITY AS answered(kind, key, label, post_count, post_count_capped, position)
+    WHERE NOT coalesce(p_handles_only, false)
+  ),
+  candidates AS (
+    -- What search answers, less what a suggestion must not put in front of
+    -- someone who did not ask.
+    SELECT
+      -- A catalog model under the catalog's own name; anything else under
+      -- the name most of its posts print.
+      found.kind, found.key, coalesce(catalog.label, found.label) AS label,
+      found.post_count, found.post_count_capped, found.position,
+      catalog.model_id, catalog.model_kind, catalog.web, catalog.mobile,
+      coalesce(catalog.starts, false) AS starts,
+      false AS added
+    FROM found
+    LEFT JOIN catalog ON found.kind = 'model' AND catalog.key = found.key
+    WHERE (
+      -- A model of the product's own catalog: ours, and already public.
+      catalog.model_id IS NOT NULL
+      -- Anything else, two creators: an unlabelled post made with it by
+      -- someone other than the first creator found, among the first 500 of
+      -- its posts.
+      OR EXISTS (
+        SELECT 1
+        FROM (
+          SELECT members.creator_user_id
+          FROM public.post_search_entities AS members
+          JOIN public.posts AS posts ON posts.id = members.post_id
+          WHERE members.kind = found.kind
+            AND members.key = found.key
+            AND posts.is_nsfw = false
+          LIMIT 500
+        ) AS makers
+        WHERE makers.creator_user_id <> (
+          SELECT members.creator_user_id
+          FROM public.post_search_entities AS members
+          JOIN public.posts AS posts ON posts.id = members.post_id
+          WHERE members.kind = found.kind
+            AND members.key = found.key
+            AND posts.is_nsfw = false
+          LIMIT 1
+        )
+      )
+    )
+    UNION ALL
+    -- For a client that asked (p_catalog): the catalog models search did not
+    -- answer, because no post this viewer may see is made with one, or the
+    -- text is too short to search posts by. Counted here to order them; the
+    -- count a row states is made below, with the search that opens it.
+    SELECT
+      'model', catalog.key, catalog.label, visible.post_count, false, NULL::bigint,
+      catalog.model_id, catalog.model_kind, catalog.web, catalog.mobile,
+      catalog.starts,
+      true
+    FROM catalog
+    CROSS JOIN LATERAL (
+      -- The posts this viewer may see that are made with it. A template
+      -- result has no model here (post_search_entities holds none).
+      SELECT count(*)::integer AS post_count
+      FROM (
+        SELECT 1
+        FROM public.post_search_entities AS members
+        JOIN public.posts AS posts ON posts.id = members.post_id
+        WHERE members.kind = 'model'
+          AND members.key = catalog.key
+          AND posts.is_nsfw = false
+          AND NOT EXISTS (
+            SELECT 1
+            FROM public.user_blocks AS blocks
+            WHERE blocks.blocker_user_id = p_viewer_user_id
+              AND blocks.blocked_user_id = members.creator_user_id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM public.user_blocks AS blocks
+            WHERE blocks.blocker_user_id = members.creator_user_id
+              AND blocks.blocked_user_id = p_viewer_user_id
+          )
+        LIMIT 201
+      ) AS seen
+    ) AS visible
+    WHERE coalesce(p_catalog, false)
+      AND NOT EXISTS (
+        SELECT 1 FROM found WHERE found.kind = 'model' AND found.key = catalog.key
+      )
+  ),
+  offered AS (
+    SELECT
+      candidates.kind, candidates.key, candidates.label, candidates.post_count, candidates.post_count_capped,
+      candidates.model_id, candidates.model_kind, candidates.web, candidates.mobile, candidates.added,
+      row_number() OVER (
+        ORDER BY
+          -- A catalog model the text starts, then the rest: the one whose
+          -- name is the text, then the most posts, then search's own order.
+          (candidates.model_id IS NOT NULL AND candidates.starts) DESC,
+          (lower(candidates.label) = lower(btrim(coalesce(p_query, ''))) OR candidates.key = lower(btrim(coalesce(p_query, '')))) DESC,
+          candidates.post_count DESC,
+          candidates.position NULLS LAST,
+          candidates.kind,
+          candidates.key
+      ) AS place
+    FROM candidates
+    -- No withdrawn word in its name or key, read as post_search_entities.name_vector reads them.
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM public.search_suggestion_denylist AS denied
+      WHERE denied.term = ANY (tsvector_to_array(to_tsvector(
+        'pg_catalog.simple',
+        coalesce(public.search_term_variants(candidates.label), '') || ' ' || coalesce(public.search_term_variants(candidates.key), '')
+      )))
+    )
+  )
   SELECT jsonb_build_object(
     'creators', coalesce((
       SELECT jsonb_agg(jsonb_build_object(
@@ -1407,58 +1642,39 @@ AS $function$
       FROM public.search_suggest_creators(p_query, p_viewer_user_id, p_handles_only, p_creator_limit)
         WITH ORDINALITY AS creators(creator_user_id, username, display_name, avatar_url, is_following, position)
     ), '[]'::jsonb),
-    -- Models and tools: search's own answer for this query and viewer, less
-    -- what a suggestion must not put in front of someone who did not ask.
     'entities', coalesce((
       SELECT jsonb_agg(jsonb_build_object(
-        'kind', offered.kind,
-        'key', offered.key,
-        'label', offered.label,
-        'post_count', offered.post_count,
-        'post_count_capped', offered.post_count_capped,
+        'kind', chosen.kind,
+        'key', chosen.key,
+        'label', chosen.label,
+        -- What pressing the row opens: for a row search answered, the posts
+        -- the typed text finds narrowed to it; for a catalog model added
+        -- here, the posts `query` finds narrowed to it, none when it has no
+        -- post this viewer may see.
+        'post_count', CASE WHEN chosen.added THEN coalesce(opened.post_count, 0) ELSE chosen.post_count END,
+        'post_count_capped', CASE WHEN chosen.added THEN coalesce(opened.post_count_capped, false) ELSE chosen.post_count_capped END,
         -- A picture of a post made with it that this viewer may see, or null.
-        'thumbnail', public.search_entity_picture(offered.kind, offered.key, p_viewer_user_id, NULL)
-      ) ORDER BY offered.position)
+        'thumbnail', public.search_entity_picture(chosen.kind, chosen.key, p_viewer_user_id, NULL),
+        'in_catalog', chosen.model_id IS NOT NULL,
+        'catalog_model', CASE WHEN chosen.model_id IS NOT NULL THEN jsonb_build_object(
+          'id', chosen.model_id,
+          'kind', chosen.model_kind,
+          'web', chosen.web,
+          'mobile', chosen.mobile
+        ) END,
+        'query', opened.query
+      ) ORDER BY chosen.place)
       FROM (
-        SELECT found.kind, found.key, found.label, found.post_count, found.post_count_capped, found.position
-        FROM public.search_public_entities(p_query, p_viewer_user_id, 10, NULL)
-          WITH ORDINALITY AS found(kind, key, label, post_count, post_count_capped, position)
-        WHERE NOT coalesce(p_handles_only, false)
-          -- Two creators: an unlabelled post made with it by someone other
-          -- than the first creator found, among the first 500 of its posts.
-          AND EXISTS (
-            SELECT 1
-            FROM (
-              SELECT members.creator_user_id
-              FROM public.post_search_entities AS members
-              JOIN public.posts AS posts ON posts.id = members.post_id
-              WHERE members.kind = found.kind
-                AND members.key = found.key
-                AND posts.is_nsfw = false
-              LIMIT 500
-            ) AS makers
-            WHERE makers.creator_user_id <> (
-              SELECT members.creator_user_id
-              FROM public.post_search_entities AS members
-              JOIN public.posts AS posts ON posts.id = members.post_id
-              WHERE members.kind = found.kind
-                AND members.key = found.key
-                AND posts.is_nsfw = false
-              LIMIT 1
-            )
-          )
-          -- No withdrawn word in its name or key, read as post_search_entities.name_vector reads them.
-          AND NOT EXISTS (
-            SELECT 1
-            FROM public.search_suggestion_denylist AS denied
-            WHERE denied.term = ANY (tsvector_to_array(to_tsvector(
-              'pg_catalog.simple',
-              coalesce(public.search_term_variants(found.label), '') || ' ' || coalesce(public.search_term_variants(found.key), '')
-            )))
-          )
-        ORDER BY found.position
+        SELECT offered.kind, offered.key, offered.label, offered.post_count, offered.post_count_capped,
+          offered.model_id, offered.model_kind, offered.web, offered.mobile, offered.added, offered.place
+        FROM offered
+        ORDER BY offered.place
         LIMIT 3
-      ) AS offered
+      ) AS chosen
+      -- Only for the rows added here, at most three: the search pressing one
+      -- runs and what it finds for this viewer (search_starter_entity_offer).
+      LEFT JOIN LATERAL public.search_starter_entity_offer(chosen.kind, chosen.key, p_viewer_user_id) AS opened
+        ON chosen.added
     ), '[]'::jsonb),
     -- A query typed as a handle ('@lu') asks for people, not words.
     'completions', coalesce((
@@ -1470,11 +1686,11 @@ AS $function$
   );
 $function$;
 
-COMMENT ON FUNCTION public.search_suggestions(text, uuid, boolean, integer, integer) IS
-  'GET /api/search/suggest in one call: {creators: [{id, username, display_name, avatar_url, is_following}], entities: [{kind, key, label, post_count, post_count_capped, thumbnail}], completions: [{text}]}, each list in the order to show it. Creators from search_suggest_creators; entities (at most 3) from search_public_entities, only those two creators'' posts are made with and whose name holds no withdrawn word, each with search_entity_picture''s picture or null; completions from search_suggest_completions for this viewer. No entities or completions for a handles-only query.';
+COMMENT ON FUNCTION public.search_suggestions(text, uuid, boolean, integer, integer, boolean) IS
+  'GET /api/search/suggest in one call: {creators: [{id, username, display_name, avatar_url, is_following}], entities: [{kind, key, label, post_count, post_count_capped, thumbnail, in_catalog, catalog_model, query}], completions: [{text}]}, each list in the order to show it. Creators from search_suggest_creators. Entities (at most 3): search_public_entities'' answer for the query and the viewer, each kept when it is a model of the public catalog (search_suggest_catalog_models) or two creators'' posts are made with it; with p_catalog, also every catalog model the text names that search did not answer, from two characters, with the posts the viewer may see made with it (0 when none) and the query whose search opens them. None whose name holds a withdrawn word. A catalog model the text starts first, then the most posts. Completions from search_suggest_completions for this viewer. No entities or completions for a handles-only query.';
 
-REVOKE ALL ON FUNCTION public.search_suggestions(text, uuid, boolean, integer, integer) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.search_suggestions(text, uuid, boolean, integer, integer) TO service_role;
+REVOKE ALL ON FUNCTION public.search_suggestions(text, uuid, boolean, integer, integer, boolean) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.search_suggestions(text, uuid, boolean, integer, integer, boolean) TO service_role;
 
 -- ─── 8. The starter: popular this week ──────────────────────────────────────
 --

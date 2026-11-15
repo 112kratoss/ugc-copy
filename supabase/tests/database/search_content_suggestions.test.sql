@@ -18,7 +18,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(138);
+select plan(174);
 
 create function pg_temp.uid(p_suffix text)
 returns uuid
@@ -682,6 +682,230 @@ select is(pg_temp.related('amberglow', array['11', '12', '13']), array['midjourn
   'a phrase that holds a withdrawn word is not related');
 delete from public.search_suggestion_denylist where term = 'lanterns';
 
+-- ─── Catalog models in the typeahead ─────────────────────────────────────────
+--
+-- The product's own catalog, as a release of this test's: the release live
+-- until now is retired, so only these models are public.
+--   zephyrmodel-2     "Zephyr Motion 2"   creations of …01 and …02
+--   zephyrmodel-lite  "Zephyr Lite"       no post anyone may see: a template
+--                                         result of …02 and a labelled post of …03
+--   zephyrmodel-web   "Lumen Zephyr Web"  on the web alone, no post; its name starts as
+--                                         the tool Lumen Forge's does
+--   zephyrmodel-off   "Zephyr Off"        switched off on both; a creation of …01
+--   zephyrmodel-old   "Zephyr Old"        of no live release; a creation of …01
+--   Zephyrtool        an outside tool one creator, …03, names
+
+create function pg_temp.entity_rows(p_query text, p_catalog boolean default false, p_viewer uuid default null)
+returns text[]
+language sql
+as $$
+  select coalesce(array_agg((entity ->> 'kind') || ':' || (entity ->> 'key') || '=' || (entity ->> 'post_count') order by position), '{}')
+  from jsonb_array_elements(public.search_suggestions(p_query, p_viewer, false, 5, 6, p_catalog) -> 'entities')
+    with ordinality as offered(entity, position);
+$$;
+
+insert into public.generation_models (model_id, kind) values
+  ('zephyrmodel-2', 'video'), ('zephyrmodel-lite', 'image'), ('zephyrmodel-web', 'image'),
+  ('zephyrmodel-off', 'image'), ('zephyrmodel-old', 'image');
+insert into public.generation_model_catalog_releases (revision, schema_version, status, defaults, created_by)
+values ('c5e6-typeahead-catalog', 2, 'draft',
+  '{"web":{"image":null,"video":null,"motion":null},"mobile":{"image":null,"video":null,"motion":null}}', 'database-test');
+insert into public.generation_model_catalog_entries (
+  release_id, model_id, public_descriptor, adapter_key, provider_model_map, pricing_strategy, pricing_config,
+  validation_strategy, web_enabled, mobile_enabled
+)
+select releases.id, model.id,
+  jsonb_build_object('id', model.id, 'kind', model.kind, 'displayName', model.name, 'description', 'A model',
+                     'badge', null, 'recommended', false, 'sortOrder', 1, 'minClientSchemaVersion', 1),
+  model.kind || '-v1', '{"private":"zephyr-provider-secret"}', model.kind || '-v1', '{"private":"zephyr-price-secret"}',
+  model.kind || '-v1', model.web, model.mobile
+from public.generation_model_catalog_releases as releases
+cross join (
+  values
+    ('zephyrmodel-2', 'video', 'Zephyr Motion 2', true, true),
+    ('zephyrmodel-lite', 'image', 'Zephyr Lite', true, true),
+    ('zephyrmodel-web', 'image', 'Lumen Zephyr Web', true, false),
+    ('zephyrmodel-off', 'image', 'Zephyr Off', false, false)
+) as model(id, kind, name, web, mobile)
+where releases.revision = 'c5e6-typeahead-catalog';
+update public.generation_model_catalog_releases set status = 'retired', retired_at = now() where status = 'active';
+update public.generation_model_catalog_releases set status = 'active', activated_at = now() where revision = 'c5e6-typeahead-catalog';
+
+insert into public.generations (id, user_id, model, status, is_public, template_run_id) values
+  (pg_temp.uid('71'), pg_temp.uid('01'), 'zephyrmodel-2', 'succeeded', true, null),
+  (pg_temp.uid('72'), pg_temp.uid('02'), 'zephyrmodel-2', 'succeeded', true, null),
+  (pg_temp.uid('73'), pg_temp.uid('02'), 'zephyrmodel-lite', 'succeeded', true, pg_temp.uid('43')),
+  (pg_temp.uid('74'), pg_temp.uid('03'), 'zephyrmodel-lite', 'succeeded', true, null),
+  (pg_temp.uid('75'), pg_temp.uid('01'), 'zephyrmodel-off', 'succeeded', true, null),
+  (pg_temp.uid('76'), pg_temp.uid('01'), 'zephyrmodel-old', 'succeeded', true, null);
+insert into public.posts (
+  id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw,
+  title, showcase_asset_path, source_tool, source_tool_slug, generation_id, created_at, updated_at
+)
+select pg_temp.uid(post.suffix), pg_temp.uid(post.owner), 'public', 'image', post.source, 'media', 'visible', post.is_nsfw,
+       post.title, 'showcase/c5e6-' || post.suffix || '.png', post.tool, lower(post.tool),
+       case when post.generation is not null then pg_temp.uid(post.generation) end, now(), now()
+from (
+  values
+    ('81', '01', 'magicbooklet', false, 'Kite field one', 'Magicbooklet', '71'),
+    ('82', '02', 'magicbooklet', false, 'Kite field two', 'Magicbooklet', '72'),
+    ('83', '02', 'magicbooklet', false, 'A template result', 'Magicbooklet', '73'),
+    ('84', '03', 'magicbooklet', true, 'A labelled creation', 'Magicbooklet', '74'),
+    ('85', '01', 'magicbooklet', false, 'Made with a model switched off', 'Magicbooklet', '75'),
+    ('86', '01', 'magicbooklet', false, 'Made with a model of no live release', 'Magicbooklet', '76'),
+    ('87', '03', 'external', false, 'Made with an outside tool', 'Zephyrtool', null)
+) as post(suffix, owner, source, is_nsfw, title, tool, generation);
+insert into public.post_media (post_id, storage_path, media_kind, content_type, width, height, sort_order,
+  preview_storage_path, preview_thumbhash, preview_status)
+values (pg_temp.uid('81'), 'c5e6/81/source.png', 'image', 'image/png', 800, 800, 0, 'c5e6/81/preview.webp', 'hash-81', 'ready');
+select ok((select phrases > 0 from public.rebuild_search_phrases()), 'fixture: a rebuild reads the creations');
+
+select is(
+  (select array_agg(model_id order by model_id) from public.search_suggest_catalog_models('zeph')),
+  array['zephyrmodel-2', 'zephyrmodel-lite', 'zephyrmodel-web'],
+  'the catalog''s models a text names are those of the live release that are on the web or in the app: never one switched off on both, never one of no live release'
+);
+select is(
+  (select array_agg(model_id order by model_id) from public.search_suggest_catalog_models('lite')),
+  array['zephyrmodel-lite'],
+  'by any word of the name or the id'
+);
+select is(
+  (select array_agg(model_id order by model_id) from public.search_suggest_catalog_models('motion 2')),
+  array['zephyrmodel-2'],
+  'every typed word, the last a prefix'
+);
+select is((select count(*) from public.search_suggest_catalog_models('z')), 0::bigint, 'not from one character');
+select results_eq(
+  $$ select key, model_kind, label, web, mobile, starts from public.search_suggest_catalog_models('zephyr web') $$,
+  $$ values ('zephyrmodel-web', 'image', 'Lumen Zephyr Web', true, false, false) $$,
+  'each with its search key, its kind, its public name and where it is offered'
+);
+select is(
+  (select array_agg(model_id || '=' || starts order by model_id) from public.search_suggest_catalog_models('lumen z')),
+  array['zephyrmodel-web=true'],
+  'and whether its name or its id starts with the text'
+);
+
+-- The code and the apps live today (no p_catalog): a row still opens posts.
+select is(pg_temp.entity_rows('zeph'), array['model:zephyrmodel-2=2'],
+  'a catalog model with posts is offered; one with none is not, nor a tool one creator names');
+update public.posts set visibility = 'private' where id = pg_temp.uid('82');
+select is(pg_temp.entity_rows('zeph'), array['model:zephyrmodel-2=1'],
+  'a catalog model one creator alone uses is still offered: the two-creator rule is for names an account could make up');
+select is(pg_temp.entity_rows('zephyrtool'), '{}'::text[],
+  'an outside tool one creator names is still not offered');
+select is(pg_temp.entity_rows('zephyrmodel-off'), '{}'::text[],
+  'nor a model switched off on both platforms that one creator used');
+select is(pg_temp.entity_rows('zephyrmodel-old'), '{}'::text[],
+  'nor a model of no live release that one creator used');
+select is(pg_temp.entity_rows('ze'), '{}'::text[], 'nothing under three characters, where posts are not searched');
+update public.posts set visibility = 'public' where id = pg_temp.uid('82');
+select is(
+  public.search_suggestions('zeph') -> 'entities' -> 0,
+  jsonb_build_object(
+    'kind', 'model', 'key', 'zephyrmodel-2', 'label', 'Zephyr Motion 2', 'post_count', 2, 'post_count_capped', false,
+    'thumbnail', public.search_post_picture(pg_temp.uid('81')),
+    'in_catalog', true,
+    'catalog_model', jsonb_build_object('id', 'zephyrmodel-2', 'kind', 'video', 'web', true, 'mobile', true),
+    'query', null
+  ),
+  'the row is named by the catalog and says it is a catalog model: its id, its kind and where it is offered'
+);
+select is(
+  (select jsonb_agg(jsonb_build_object('in_catalog', entity -> 'in_catalog', 'catalog_model', entity -> 'catalog_model', 'query', entity -> 'query'))
+   from jsonb_array_elements(public.search_suggestions('lumen') -> 'entities') as entity),
+  '[{"in_catalog": false, "catalog_model": null, "query": null}]'::jsonb,
+  'a tool, or a model of no catalog, says it is none'
+);
+
+-- A client that asked (p_catalog): every catalog model the text names.
+select is(pg_temp.entity_rows('zeph', true),
+  array['model:zephyrmodel-2=2', 'model:zephyrmodel-lite=0', 'model:zephyrmodel-web=0'],
+  'with p_catalog, a catalog model with no post is offered too, after the ones with posts');
+select is(pg_temp.entity_rows('ze', true),
+  array['model:zephyrmodel-2=2', 'model:zephyrmodel-lite=0', 'model:zephyrmodel-web=0'],
+  'from two characters');
+select is(pg_temp.entity_rows('z', true), '{}'::text[], 'not from one');
+select is(pg_temp.entity_rows('lite', true), array['model:zephyrmodel-lite=0'],
+  'a template result''s hidden model and a labelled post count for nothing: the row says 0');
+select is(
+  (select entity - 'label' from jsonb_array_elements(public.search_suggestions('lite', null, false, 5, 6, true) -> 'entities') as entity),
+  jsonb_build_object(
+    'kind', 'model', 'key', 'zephyrmodel-lite', 'post_count', 0, 'post_count_capped', false, 'thumbnail', null,
+    'in_catalog', true,
+    'catalog_model', jsonb_build_object('id', 'zephyrmodel-lite', 'kind', 'image', 'web', true, 'mobile', true),
+    'query', null
+  ),
+  'a row with no post has no picture and no search to run: it is there to open the creator with that model'
+);
+select is(
+  (select entity -> 'catalog_model' from jsonb_array_elements(public.search_suggestions('web', null, false, 5, 6, true) -> 'entities') as entity),
+  jsonb_build_object('id', 'zephyrmodel-web', 'kind', 'image', 'web', true, 'mobile', false),
+  'a model on the web alone says so'
+);
+select is(pg_temp.entity_rows('zephyrmodel-off', true), '{}'::text[], 'a model switched off on both is not offered, asked or not');
+select is(pg_temp.entity_rows('zephyrmodel-old', true), '{}'::text[], 'nor one of no live release');
+select is(pg_temp.entity_rows('zephyrtool', true), '{}'::text[], 'nor an outside tool one creator names');
+select is(
+  (select array_agg((entity ->> 'key') || '=' || (entity ->> 'post_count') || '/' || (entity ->> 'query'))
+   from jsonb_array_elements(public.search_suggestions('ze', null, false, 5, 6, true) -> 'entities') as entity
+   where (entity ->> 'post_count')::integer > 0),
+  array['zephyrmodel-2=2/zephyrmodel-2'],
+  'a row added for a text too short to search posts by carries the search that opens its posts'
+);
+select is(
+  (select count(*) from jsonb_array_elements(public.search_suggestions('ze', null, false, 5, 6, true) -> 'entities') as entity
+   where entity ->> 'query' is not null
+     and (entity ->> 'post_count')::integer <> pg_temp.opened(entity ->> 'query', null, 'model:' || (entity ->> 'key'))),
+  0::bigint,
+  'and its count is what that search, narrowed to it, opens'
+);
+select is(
+  (select count(*) from jsonb_array_elements(public.search_suggestions('zeph', null, false, 5, 6, true) -> 'entities') as entity
+   where entity ->> 'query' is null and (entity ->> 'post_count')::integer > 0
+     and (entity ->> 'post_count')::integer <> pg_temp.opened('zeph', null, 'model:' || (entity ->> 'key'))),
+  0::bigint,
+  'a row search itself answered counts what the typed text, narrowed to it, opens'
+);
+select is(pg_temp.entity_rows('zeph', true, pg_temp.uid('05')),
+  array['model:zephyrmodel-2=1', 'model:zephyrmodel-lite=0', 'model:zephyrmodel-web=0'],
+  'the viewer''s count leaves out the creator they blocked');
+select is(pg_temp.entity_rows('ze', true, pg_temp.uid('05')),
+  array['model:zephyrmodel-2=1', 'model:zephyrmodel-lite=0', 'model:zephyrmodel-web=0'],
+  'in a row added for a short text too');
+select is(
+  (select array_agg(entity ->> 'key' order by position)
+   from jsonb_array_elements(public.search_suggestions('motion', null, false, 5, 6, true) -> 'entities') with ordinality as offered(entity, position)),
+  array['zephyrmodel-2'],
+  'a later word of a catalog name finds its model'
+);
+select is(
+  public.search_suggestions('zeph', null, true, 5, 6, true) -> 'entities',
+  '[]'::jsonb,
+  'a query typed as a handle is offered no model'
+);
+insert into public.search_suggestion_denylist (term, note) values ('lite', 'test');
+select is(pg_temp.entity_rows('zeph', true), array['model:zephyrmodel-2=2', 'model:zephyrmodel-web=0'],
+  'a catalog model whose name holds a withdrawn word is not offered');
+delete from public.search_suggestion_denylist where term = 'lite';
+-- A catalog model the text starts stands ahead of a tool with more posts.
+select is(pg_temp.entity_rows('lumen', true), array['model:zephyrmodel-web=0', 'tool:lumen-forge=3'],
+  'a catalog model the text starts stands first, though a tool it also names has more posts');
+select is(pg_temp.entity_rows('lumen'), array['tool:lumen-forge=3'],
+  'and is not offered at all to a client that did not ask: it has no post to open');
+select is(
+  (select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname = 'search_suggestions'),
+  1::bigint,
+  'one search_suggestions: the five-parameter one is gone, and its named call resolves to this one'
+);
+select is(
+  (select jsonb_object_keys(answer) from public.search_suggestions(p_query => 'zeph', p_viewer_user_id => null, p_handles_only => false, p_creator_limit => 5, p_completion_limit => 6) as answer
+   order by 1 limit 1),
+  'completions',
+  'the call the live route makes, by its five names, is answered'
+);
+
 -- ─── Who may read what ───────────────────────────────────────────────────────
 
 select ok(
@@ -714,7 +938,7 @@ select is(
        'rebuild_search_phrases', 'search_text_phrases', 'search_entity_phrase', 'search_post_picture',
        'search_entity_picture', 'search_query_picture', 'search_query_post_floor', 'search_week_score',
        'search_suggest_completions', 'search_suggest_creators', 'search_suggestions', 'search_starter',
-       'search_related_searches'
+       'search_related_searches', 'search_suggest_catalog_models'
      )
      and (
        has_function_privilege('anon', oid, 'EXECUTE')
@@ -732,13 +956,13 @@ select is(
      and proname in (
        'rebuild_search_phrases', 'search_post_picture', 'search_entity_picture', 'search_query_picture',
        'search_query_post_floor', 'search_suggest_completions', 'search_suggest_creators', 'search_starter',
-       'search_related_searches'
+       'search_related_searches', 'search_suggest_catalog_models'
      )
      and prosecdef),
   array[
     'rebuild_search_phrases', 'search_entity_picture', 'search_post_picture', 'search_query_picture',
-    'search_query_post_floor', 'search_related_searches', 'search_starter', 'search_suggest_completions',
-    'search_suggest_creators'
+    'search_query_post_floor', 'search_related_searches', 'search_starter', 'search_suggest_catalog_models',
+    'search_suggest_completions', 'search_suggest_creators'
   ],
   'the ones that read posts run with their owner''s rights'
 );
