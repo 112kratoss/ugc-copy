@@ -8,6 +8,8 @@ const listeners = new Set<NavigationListener>();
 // Whether the latest navigation was the browser's Back or Forward (a `popstate`)
 // rather than one announced here (a link click, an announced push).
 let lastNavigationWasTraversal = false;
+// The pathname the latest announced navigation was going to, where it said.
+let lastAnnouncedPathname: string | null = null;
 
 if (typeof window !== 'undefined') {
   // Registered as this module loads, with the root layout, so before the router's
@@ -19,12 +21,13 @@ if (typeof window !== 'undefined') {
 
 /**
  * Announce that a navigation is starting. Call this immediately before an
- * imperative `router.push` — link clicks are picked up by NavigationProgress's
- * own document listener and do not need it.
+ * imperative `router.push`, with the `href` it pushes — link clicks are picked
+ * up by NavigationProgress's own document listener and do not need it.
  */
-export function publishNavigationStart() {
+export function publishNavigationStart(href?: string) {
   navigationToken += 1;
   lastNavigationWasTraversal = false;
+  lastAnnouncedPathname = href === undefined ? null : new URL(href, window.location.href).pathname;
   listeners.forEach((listener) => listener(navigationToken));
 }
 
@@ -36,7 +39,7 @@ export function publishNavigationStart() {
  */
 export function publishNavigationStartTo(href: string) {
   if (new URL(href, window.location.href).pathname === window.location.pathname) return;
-  publishNavigationStart();
+  publishNavigationStart(href);
 }
 
 export function readNavigationToken() {
@@ -73,15 +76,21 @@ const documentPathname = typeof window === 'undefined' ? null : window.location.
  * loaded (a shared link, a refresh, a new tab) or as the browser's Back or
  * Forward returns to it. Any other page counts whatever brought the viewer there
  * (a link, a router push or replace, a traversal), so no imperative navigation is
- * missed; the first page counts only when an announced navigation (a link, an
- * announced push) has taken the viewer back to it. It cannot hold for the first
- * page as it loads however late a part of it mounts, and it is false on the
- * server, so a server render and the hydration of the first page agree.
+ * missed. The first page counts only when the latest announced navigation (a
+ * link, an announced push) went to it: not when a trip elsewhere comes back to it
+ * by a replace (a sign-in from it, which lands back on it with the sign-in page's
+ * entry replaced, so a step back would only reach the first page again). It
+ * cannot hold for the first page as it loads however late a part of it mounts,
+ * and it is false on the server, so a server render and the hydration of the
+ * first page agree.
+ *
+ * Keyed on the address, not on the history entry: Back or Forward onto a later
+ * visit of the first page takes it for the first page itself, and draws nothing.
  */
 export function isPageReachedInThisDocument(pathname: string) {
   if (documentPathname === null) return false;
   if (pathname !== documentPathname) return true;
-  return navigationToken > 0 && !lastNavigationWasTraversal;
+  return lastAnnouncedPathname === documentPathname && !lastNavigationWasTraversal;
 }
 
 /**

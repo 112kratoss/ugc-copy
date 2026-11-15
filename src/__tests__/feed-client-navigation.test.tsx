@@ -17,7 +17,7 @@ vi.mock('next/navigation', () => ({
 }));
 
 vi.mock('@/components/navigation-progress-state', () => ({
-    publishNavigationStart: () => publishNavigationStartMock(),
+    publishNavigationStart: (href?: string) => publishNavigationStartMock(href),
 }));
 
 // Expose the two navigation props as buttons so the test drives the real
@@ -117,8 +117,11 @@ describe('FeedClient navigation', () => {
         fireEvent.click(screen.getByText('open:post-1'));
 
         // An imperative push raises no link status of its own; without this the
-        // click would go unacknowledged for the length of the round trip.
+        // click would go unacknowledged for the length of the round trip. It names
+        // where it goes, as the post page's way back reads (a link back to the post a
+        // tab opened on).
         expect(publishNavigationStartMock).toHaveBeenCalledTimes(1);
+        expect(publishNavigationStartMock).toHaveBeenCalledWith('/showcase/post-1?from=home&returnTo=%2F');
         expect(routerPush).toHaveBeenCalledWith('/showcase/post-1?from=home&returnTo=%2F');
     });
 

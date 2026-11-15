@@ -37,7 +37,7 @@ describe('isPageReachedInThisDocument', () => {
   it('counts the first page when a link takes the viewer back to it, and not when Back or Forward does', async () => {
     const { isPageReachedInThisDocument, publishNavigationStart } = await loadDocumentAt('/showcase/post-1');
 
-    publishNavigationStart();
+    publishNavigationStart('/showcase/post-1?from=creator&returnTo=%2Fcreators%2Fluna');
     expect(isPageReachedInThisDocument('/showcase/post-1')).toBe(true);
 
     window.dispatchEvent(new PopStateEvent('popstate'));
@@ -45,8 +45,22 @@ describe('isPageReachedInThisDocument', () => {
     // Any other page is reached whatever brought the viewer there.
     expect(isPageReachedInThisDocument('/creators/luna')).toBe(true);
 
-    publishNavigationStart();
+    publishNavigationStart('http://localhost:3000/showcase/post-1');
     expect(isPageReachedInThisDocument('/showcase/post-1')).toBe(true);
+  });
+
+  // Second re-review of #829: signing in from the first page announces a trip to the
+  // sign-in page, and the sign-in comes back by a replace, which swaps the sign-in page's
+  // entry for the first page's address. A step back from there only reaches the first page.
+  it('does not count the first page when a trip elsewhere comes back to it unannounced', async () => {
+    const { isPageReachedInThisDocument, publishNavigationStart } = await loadDocumentAt('/showcase/post-1');
+
+    publishNavigationStart('/login?returnUrl=%2Fshowcase%2Fpost-1');
+    expect(isPageReachedInThisDocument('/showcase/post-1')).toBe(false);
+
+    // An announcement that names no destination says nothing of the first page either.
+    publishNavigationStart();
+    expect(isPageReachedInThisDocument('/showcase/post-1')).toBe(false);
   });
 
   it('is false on the server, so the server render and the first page hydrating agree', async () => {

@@ -173,6 +173,27 @@ test("the browser's Back to a post opened by its own address draws no way back",
   await expect(wayBack(page)).toHaveCount(0);
 });
 
+// Second re-review of #829: a trip from the post the tab opened on that comes back to it by a
+// replace (a sign-in from the post lands back on it, the sign-in page's entry replaced) has only
+// the post's own first entry behind it, so it draws no way back.
+test('a trip from the first post that comes back to it by a replace draws no way back', async ({ page }) => {
+  await visitSignedOut(page);
+  const offer = await answerInviteVisit(page);
+
+  await page.goto(`${POST_PATH}?r=${CODE}`);
+  await expect(offer).toBeVisible(COLD_PAGE);
+
+  await page.getByRole('complementary', { name: 'Primary navigation' }).getByRole('link', { name: 'Explore', exact: true }).click();
+  await page.waitForURL((url) => url.pathname === '/showcase', COLD_PAGE);
+  await page.evaluate((href) => (
+    window as unknown as { next: { router: { replace: (target: string) => void } } }
+  ).next.router.replace(href), POST_PATH);
+
+  await expect(title(page)).toBeVisible(COLD_PAGE);
+  expect(new URL(page.url()).pathname).toBe(POST_PATH);
+  await expect(wayBack(page)).toHaveCount(0);
+});
+
 // Re-review of #829: a link back to the post the tab opened on is an arrival from inside the
 // site, and draws its way back. Only the browser's Back or Forward to that first page does not.
 test('a link back to the post the tab opened on draws its way back', async ({ page }) => {
