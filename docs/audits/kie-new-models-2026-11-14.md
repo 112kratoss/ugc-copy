@@ -14,6 +14,10 @@ answered 422; the Kie balance stayed at 2375.9). Raw copies:
 
 ## Shipped by release `kie-models-20261114`
 
+Code in #807 (`d9c167672`), live from build `2961e1c25`; the release was published on 2026-11-15 at
+16:54:55Z (based on `kie-models-20261105`), and 26 quotes on production's public route matched the
+prices below, refusals included.
+
 | Model (listed) | App id | Provider ids | Credits | Evidence |
 | --- | --- | --- | --- | --- |
 | **Seedream 5.5** (11-10) | `seedream-5.5` | `seedream/5-5-{text,image}-to-image` | 3.6 / 6.3 at 1K / 2K, + 1.44 per input picture | `seedream-5-5.md` |
