@@ -9,6 +9,7 @@ import {
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { dismissToast, pushToast, requestConfirmation, resetFeedbackState } from '@/components/feedback-state';
+import { REEL_OPENING_ATTRIBUTE } from '@/lib/reel-opening-restore';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
 vi.mock('next/link', () => ({
@@ -706,6 +707,21 @@ describe('ShowcaseReelViewer pagination', () => {
 
     expect(document.activeElement).toBe(rows[1]);
     expect(onSelectItemId).not.toHaveBeenCalled();
+  });
+
+  // A load on a post's reel address covers the page with the reel's stage until the reel
+  // draws (src/lib/reel-opening-restore.ts): its dialog attaching takes the mark away, in the
+  // commit that draws it.
+  it("takes the stage's mark off the root element as its dialog attaches", () => {
+    document.documentElement.setAttribute(REEL_OPENING_ATTRIBUTE, '');
+    try {
+      render(<ShowcaseReelViewer {...reelProps()} />);
+
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(document.documentElement.hasAttribute(REEL_OPENING_ATTRIBUTE)).toBe(false);
+    } finally {
+      document.documentElement.removeAttribute(REEL_OPENING_ATTRIBUTE);
+    }
   });
 
   // A creator's page and the viewer's saved posts are not feeds. Their reel is

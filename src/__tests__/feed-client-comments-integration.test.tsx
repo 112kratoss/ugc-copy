@@ -98,6 +98,8 @@ describe('FeedClient request ordering', () => {
 
     afterEach(() => {
         vi.unstubAllGlobals();
+        // A lane switch writes `?chip=` to the address, which the next feed would open on.
+        window.history.replaceState(null, '', '/');
     });
 
     it('lets a lane switch supersede an in-flight pagination request', async () => {

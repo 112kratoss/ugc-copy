@@ -1,6 +1,7 @@
 import { SkeletonBlock } from '@/components/TabLoadingShell';
 import { SearchEntryLink } from '@/components/search/SearchEntryLink';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
+import ReelHostMark from '@/components/ReelHostMark';
 
 const PLACEHOLDER_CARDS = 8;
 
@@ -40,6 +41,7 @@ function LinePlaceholder({ lineClassName, barClassName }: { lineClassName: strin
 export default function ShowcaseLoading() {
   return (
     <div className="ui-page ui-page-ambient min-h-screen py-5 sm:py-7">
+      <ReelHostMark />
       <section role="status" aria-live="polite" aria-label="Loading Explore" className="studio-shell relative z-10">
         <span className="sr-only">Loading Explore</span>
         {/* Explore opens on its search bar below 1024px: the loading state draws it

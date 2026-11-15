@@ -40,6 +40,7 @@ import {
     type ShowcaseFeedbackAction,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import { feedNewestCategoryFor, newestCreatedAtOf, useNewPostsProbe, type NewPostsProbeLane } from '@/lib/feed-newest-probe';
+import { onHomeFeedRefresh } from '@/lib/home-feed-refresh';
 import { removeFromHomeShelf } from '@/lib/home-shelf-removals';
 import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { REMIX_UNLOCK_REQUIRED_CODE, requestShowcaseRemix, ShowcaseRemixRequestError } from '@/lib/showcase-remix-client';
@@ -188,13 +189,13 @@ interface FeedClientProps {
      * starts empty and fetches page one itself, with its own Retry.
      */
     initialFeed: ShowcaseFeedPage | null;
-    initialChipId: FeedChipId;
     /**
-     * The page could not read `?chip=` (the static signed-out `/`), so it
-     * rendered `initialChipId`; the lane the address names is switched to
-     * after mount, from its snapshot when there is one.
+     * The lane the page drew. The address's `?chip=` is the lane the reader
+     * is on, and where the two differ the feed switches to the address's after
+     * mount (below): the static signed-out `/` cannot read the address, and
+     * Back draws the render Next kept, from before the lane last changed.
      */
-    laneFromUrl?: boolean;
+    initialChipId: FeedChipId;
     /** Where a post opened from the feed leads back to: Home's lane by default. */
     detailContext?: FeedDetailContext;
     /** One bounded server-inlined cover for the anonymous home LCP. */
@@ -214,7 +215,6 @@ function toggleInSet(current: Set<string>, id: string) {
 export default function FeedClient({
     initialFeed,
     initialChipId,
-    laneFromUrl = false,
     detailContext = HOME_FEED_DETAIL_CONTEXT,
     initialPriorityPreview = null,
 }: FeedClientProps) {
@@ -536,8 +536,8 @@ export default function FeedClient({
         // effect cleanup (strict mode, Fast Refresh) aborts the request in
         // flight, and the re-run has to start it again.
         if (!needsInitialFetch || items.length > 0 || loadError) return;
-        // The lane the address names is fetched by the switch after mount.
-        if (laneFromUrl && readLaneFromUrl() !== initialChipId) return;
+        // Another lane the address names is fetched by the switch after mount.
+        if (readLaneFromUrl() !== initialChipId) return;
         void fetchPage(initialChipId, 0, 'replace');
         // `items` and `loadError` are read, not reacted to: a token refresh
         // mid-request must not start a second one.
@@ -555,11 +555,11 @@ export default function FeedClient({
     useEffect(() => {
         if (authLoading || viewerId || chipId !== 'for-you' || feedSessionId) return;
         if (switching || loadError || forYouFetchedRef.current) return;
-        // The lane the address names is switched to after mount, and this run
-        // still sees For you.
-        if (laneFromUrl && readLaneFromUrl() !== chipId) return;
+        // Another lane the address names is switched to after mount, and this
+        // run still sees For you.
+        if (readLaneFromUrl() !== chipId) return;
         void fetchPage('for-you', 0, 'merge');
-    }, [authLoading, chipId, feedSessionId, fetchPage, laneFromUrl, loadError, switching, viewerId]);
+    }, [authLoading, chipId, feedSessionId, fetchPage, loadError, switching, viewerId]);
 
     useEffect(() => {
         // An empty list is the transient state mid chip-switch, never a
@@ -680,12 +680,15 @@ export default function FeedClient({
         void fetchPage(nextChipId, 0, 'replace');
     }, [chipId, feedSessionId, fetchPage, items, laneFetchedAt, nextCursor, nextOffset, nextSeedBucket, removedForViewer, setItems]);
 
-    // The static `/` renders For you whatever `?chip=` says. Back from a post
-    // opened in another lane lands here, so that lane is shown after mount, as
-    // it was left when its snapshot is still fresh. Before the first paint: a
-    // frame of For you would flash under the lane's chip.
+    // The address names the lane the reader is on, and the page can have drawn
+    // another: the static `/` renders For you whatever `?chip=` says, and Back
+    // from a post draws the render Next kept, from before `writeLaneToUrl`
+    // changed the lane without its knowing (owner's report, 2026-11-15: a note
+    // opened from Notes came back to For you, by Back and by "Back to Home").
+    // So the address's lane is shown after mount, as it was left when its
+    // snapshot is still fresh. Before the first paint: a frame of the other
+    // lane would flash under the lane's chip.
     useLayoutEffect(() => {
-        if (!laneFromUrl) return;
         const urlLaneId = readLaneFromUrl();
         if (urlLaneId === initialChipId) return;
 
@@ -1096,6 +1099,14 @@ export default function FeedClient({
         }
         selectChip(chipId);
     }, [chipId, dismissNewPosts, selectChip]);
+
+    // Home, or the brand, pressed on Home already at its top asks the same:
+    // the shell has nothing to scroll, so the lane starts again from page one
+    // (src/lib/home-feed-refresh.ts).
+    useEffect(() => onHomeFeedRefresh(() => {
+        dismissNewPosts();
+        selectChip(chipId);
+    }), [chipId, dismissNewPosts, selectChip]);
 
     // The "Hidden · Undo" row stands where the card stood: above the card that
     // followed it, or below the last. It shares that card's place in the

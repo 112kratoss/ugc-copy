@@ -5,6 +5,7 @@ import OwnerProfileMediaHub from '@/app/profile/OwnerProfileMediaHub';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import { resetSaverNoticeForTests } from '@/components/saver-notice';
 import { createReelEntryState } from '@/lib/reel-history-entry';
+import { REEL_OPENING_ATTRIBUTE } from '@/lib/reel-opening-restore';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 // One router object for every render, as Next's is.
@@ -456,6 +457,41 @@ describe('OwnerProfileMediaHub', () => {
       fireEvent.click(within(reel).getByRole('button', { name: 'Close reel' }));
       expect(back).not.toHaveBeenCalled();
       expect(replaceState).toHaveBeenLastCalledWith(null, '', '/profile?tab=posts');
+    });
+  });
+
+  // A load on a post's reel address covers the page with the reel's stage until the reel
+  // attaches (src/lib/reel-opening-restore.ts; the real reel takes the mark away, this one
+  // stands in for it). The profile's reel opens only on a post its tab has loaded.
+  describe("the reel's stage over a load on a post's address", () => {
+    const root = document.documentElement;
+    const owner = { id: 'owner-1', username: 'owner', name: 'Owner', avatar: null };
+
+    beforeEach(() => {
+      // As the root layout's inline script marks it.
+      root.setAttribute(REEL_OPENING_ATTRIBUTE, '');
+    });
+
+    afterEach(() => {
+      root.removeAttribute(REEL_OPENING_ATTRIBUTE);
+    });
+
+    it('leaves the stage to the reel when the tab has the post', async () => {
+      window.history.replaceState(null, '', '/profile?tab=posts&post=post-public');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+
+      await screen.findByRole('dialog', { name: /public post showcase reel/i });
+      expect(root.hasAttribute(REEL_OPENING_ATTRIBUTE)).toBe(true);
+    });
+
+    it('gives the page back once the tab has loaded without the post', async () => {
+      window.history.replaceState(null, '', '/profile?tab=posts&post=post-from-a-later-page');
+      render(<OwnerProfileMediaHub creator={owner} stats={TOTALS} />);
+      expect(root.hasAttribute(REEL_OPENING_ATTRIBUTE)).toBe(true);
+
+      await screen.findByRole('button', { name: /open public post/i });
+      await waitFor(() => expect(root.hasAttribute(REEL_OPENING_ATTRIBUTE)).toBe(false));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
   });
 

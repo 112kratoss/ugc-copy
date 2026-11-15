@@ -6,6 +6,7 @@ import FeedClient, { forgetFeedRemovalsForTests } from '@/app/feed/FeedClient';
 import { resetSaverNoticeForTests } from '@/components/saver-notice';
 import { FEED_REMOVAL_UNDO_MS } from '@/app/showcase/ShowcaseFeedInteraction';
 import { NEW_POSTS_PROBE_AFTER_MS } from '@/lib/feed-newest-probe';
+import { requestHomeFeedRefresh } from '@/lib/home-feed-refresh';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 import { REMIX_UNLOCK_REQUIRED_CODE as SERVER_REMIX_UNLOCK_REQUIRED_CODE } from '@/lib/remix-access';
 import {
@@ -422,6 +423,8 @@ describe('FeedClient lanes and card actions', () => {
         void actual.flushShowcaseFeedEvents();
 
         try {
+            // The address the page read its lane from, as the server does.
+            window.history.replaceState(null, '', '/?chip=recent');
             render(<FeedClient initialFeed={null} initialChipId="recent" />);
 
             // Inside the 1.5 s a For you page one would wait.
@@ -429,6 +432,23 @@ describe('FeedClient lanes and card actions', () => {
         } finally {
             actual.resetShowcaseFeedEventQueueForTests();
         }
+    });
+
+    it('fetches the open lane afresh from page one when the shell asks, as Home pressed at its top does', async () => {
+        const fetchMock = mockFetchPage([item('fresh-1', 'Fresh one')]);
+        window.history.replaceState(null, '', '/?chip=recent');
+        render(<FeedClient initialFeed={rankedFeed} initialChipId="recent" />);
+        expect(screen.getByText('First')).toBeInTheDocument();
+        expect(fetchMock).not.toHaveBeenCalled();
+
+        act(() => requestHomeFeedRefresh());
+
+        expect(await screen.findByText('Fresh one')).toBeInTheDocument();
+        expect(screen.queryByText('First')).not.toBeInTheDocument();
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const requestedUrl = String(fetchMock.mock.calls[0]?.[0]);
+        expect(requestedUrl).toContain('sort=recent');
+        expect(requestedUrl).toContain('offset=0');
     });
 
     it('fetches page one itself when the server render had none', async () => {
@@ -653,7 +673,7 @@ describe('FeedClient lanes and card actions', () => {
         });
         window.history.replaceState(null, '', '/?chip=notes');
 
-        render(<FeedClient initialFeed={feed} initialChipId="for-you" laneFromUrl detailContext={HOME_DETAIL_CONTEXT} />);
+        render(<FeedClient initialFeed={feed} initialChipId="for-you" detailContext={HOME_DETAIL_CONTEXT} />);
 
         expect(await screen.findByText('Note two')).toBeInTheDocument();
         expect(screen.queryByText('First')).not.toBeInTheDocument();
@@ -676,20 +696,36 @@ describe('FeedClient lanes and card actions', () => {
         const fetchMock = mockFetchPage([item('note-1', 'Note one')]);
         window.history.replaceState(null, '', '/?chip=notes');
 
-        render(<FeedClient initialFeed={null} initialChipId="for-you" laneFromUrl detailContext={HOME_DETAIL_CONTEXT} />);
+        render(<FeedClient initialFeed={null} initialChipId="for-you" detailContext={HOME_DETAIL_CONTEXT} />);
 
         expect(await screen.findByText('Note one')).toBeInTheDocument();
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect(String(fetchMock.mock.calls[0]?.[0])).toContain('category=text');
     });
 
-    it('leaves the lane alone on a page that read it from the address itself', () => {
+    // Back from a note opened in Notes (owner's report, 2026-11-15): Next draws
+    // the render it kept, whose lane is the one the page was first opened on,
+    // while the address names Notes. Both the browser's Back and the post
+    // page's "Back to Home", which goes Back, met it, and For you came back.
+    it('takes the address\'s lane on a page drawn for another, as Back draws Next\'s kept render', async () => {
+        const fetchMock = holdRequests();
+        writeShowcaseClientSnapshot(homeFeedSnapshotKey('text', 'viewer-1'), {
+            feed: page([item('note-1', 'Note one')]),
+            renderedItemCount: 1,
+            savedItemIds: [],
+        });
         window.history.replaceState(null, '', '/?chip=notes');
+        // Signed in, as the page that reads the address on the server is.
+        auth.state = { session: { access_token: 'token' }, user: { id: 'viewer-1' } };
 
         render(<FeedClient initialFeed={feed} initialChipId="for-you" detailContext={HOME_DETAIL_CONTEXT} />);
 
-        expect(screen.getByText('First')).toBeInTheDocument();
-        expect(screen.getByRole('button', { name: 'For you' })).toHaveAttribute('aria-pressed', 'true');
+        expect(await screen.findByText('Note one')).toBeInTheDocument();
+        expect(screen.queryByText('First')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Notes' })).toHaveAttribute('aria-pressed', 'true');
+        expect(window.location.search).toBe('?chip=notes');
+        // The lane as it was left, from its snapshot: no page of it is fetched.
+        expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/showcase/feed?'))).toEqual([]);
     });
 
     it('gives the post page a way back to the lane the post was opened from', async () => {

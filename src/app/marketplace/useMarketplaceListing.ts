@@ -35,6 +35,11 @@ export type MarketplaceListingStatus = 'ready' | 'loading' | 'failed';
 export interface MarketplaceListing {
   filters: MarketplaceFilters;
   shortQuery: string;
+  /**
+   * Whether `filters` are the address bar's: until the page is live they are the server's, which
+   * drew the plain address whatever the address bar says.
+   */
+  addressKnown: boolean;
   /** The first page for the address; null while one the page does not hold is read. */
   page: MarketplaceListingPage | null;
   status: MarketplaceListingStatus;
@@ -156,6 +161,7 @@ export function useMarketplaceListing({
   return {
     filters: address.filters,
     shortQuery: address.shortQuery,
+    addressKnown: search !== null,
     page: address.shortQuery ? null : page,
     status: address.shortQuery ? 'ready' : status,
     retry,

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useEffectEvent, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowRight,
@@ -32,9 +32,16 @@ import type { SourceToolFilterOption } from '@/lib/source-tools';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 import { MARKETPLACE_COMPACT_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
+import {
+  buildMarketplacePagesKey,
+  recallMarketplacePages,
+  rememberMarketplacePages,
+  withRememberedPages,
+  type MarketplacePages,
+} from '@/lib/marketplace-pages-memory';
 
 import { MarketplaceListingFailed, MarketplaceListingSkeleton } from './MarketplaceListingStates';
-import { isPlainLinkClick } from './marketplace-address';
+import { isPlainLinkClick, marketplaceFiltersKey } from './marketplace-address';
 import type { MarketplaceListingStatus } from './useMarketplaceListing';
 
 interface MarketplacePageInfo {
@@ -47,6 +54,20 @@ interface MarketplacePageInfo {
 interface MarketplaceResourcePage {
   items: MarketplaceResourceListItem[];
   pageInfo: MarketplacePageInfo;
+}
+
+/** The recipes drawn, of which listing, and whether they are the ones kept for it. */
+interface DrawnListing extends MarketplaceResourcePage {
+  /** `marketplaceFiltersKey` of the listing they are of. */
+  key: string;
+  /** Drawn behind the first page from what was kept (marketplace-pages-memory). */
+  kept: boolean;
+}
+
+/** A listing as the browser starts drawing it: its first page, and what was kept of it behind. */
+function openListing(key: string, firstPage: MarketplaceResourcePage, kept: MarketplacePages | null): DrawnListing {
+  const drawn = withRememberedPages(firstPage, kept);
+  return { key, items: drawn.items, pageInfo: drawn.pageInfo, kept: drawn !== firstPage };
 }
 
 interface MarketplaceBrowserProps {
@@ -104,23 +125,37 @@ export default function MarketplaceBrowser({
   onRetry,
 }: MarketplaceBrowserProps) {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, user } = useAuth();
   // The signed-in viewer's own recipes, read apart from the cached catalog.
   const viewer = useViewerRecipeState();
-  const [items, setItems] = useState(initialPage.items);
-  const [pageInfo, setPageInfo] = useState(initialPage.pageInfo);
+  // What "Load more" brought to this listing, kept for the tab: Back from a recipe draws it again
+  // in the first render, and the page's height with it, so the reader lands where they were
+  // (marketplace-pages-memory; never anything kept before this document loaded, so a page the
+  // server drew hydrates on its first page alone).
+  const listingKey = marketplaceFiltersKey(initialFilters);
+  const pagesKey = buildMarketplacePagesKey(listingKey, user?.id ?? null);
+  const [listing, setListing] = useState(() => openListing(listingKey, initialPage, recallMarketplacePages(pagesKey)));
+  const { items, pageInfo } = listing;
+  // While the listing's own first page is on its way, what was kept of it stands in for it.
+  const drawsKeptListing = listing.kept && listing.key === listingKey;
   const [searchInput, setSearchInput] = useState(initialFilters.q || shortQuery);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const loadMoreAbortControllerRef = useRef<AbortController | null>(null);
 
+  // Who is looking is read when the listing starts again, and is no reason to start it: the
+  // session arriving after a full load would cut a Load more short and the search being typed.
+  const restartListing = useEffectEvent(() => {
+    setListing(openListing(listingKey, initialPage, recallMarketplacePages(pagesKey)));
+  });
+
   useEffect(() => {
     loadMoreAbortControllerRef.current?.abort();
     loadMoreAbortControllerRef.current = null;
-    // Navigation supplies a new result page; discard state from the previous query.
-    setItems(initialPage.items);
-    setPageInfo(initialPage.pageInfo);
+    // Navigation supplies a new result page; discard state from the previous query, keeping the
+    // later pages this listing loaded before behind its first page.
+    restartListing();
     setSearchInput(initialFilters.q || shortQuery);
     setIsLoadingMore(false);
     setLoadError(null);
@@ -205,20 +240,18 @@ export default function MarketplaceBrowser({
         return;
       }
 
-      setItems((current) => {
-        const nextItems = [...current];
-        const seenIds = new Set(current.map((item) => item.id));
-        for (const item of payload.items ?? []) {
-          if (!seenIds.has(item.id)) {
-            seenIds.add(item.id);
-            nextItems.push(item);
-          }
+      // From the list as drawn: one Load more runs at a time, and nothing else adds to it meanwhile.
+      const nextItems = [...items];
+      const seenIds = new Set(items.map((item) => item.id));
+      for (const item of payload.items ?? []) {
+        if (!seenIds.has(item.id)) {
+          seenIds.add(item.id);
+          nextItems.push(item);
         }
-        return nextItems;
-      });
-      if (payload.pageInfo) {
-        setPageInfo(payload.pageInfo);
       }
+      const nextListing = { ...listing, items: nextItems, pageInfo: payload.pageInfo ?? pageInfo };
+      setListing(nextListing);
+      rememberMarketplacePages(pagesKey, initialPage.items.length, nextListing);
     } catch (error) {
       if (!controller.signal.aborted && loadMoreAbortControllerRef.current === controller) {
         setLoadError(error instanceof Error ? error.message : 'Could not load more recipes.');
@@ -354,9 +387,9 @@ export default function MarketplaceBrowser({
           actionHref={marketplaceReturnPath}
           onActionClick={navigateOnPlainClick(marketplaceReturnPath)}
         />
-      ) : listingStatus === 'loading' ? (
+      ) : listingStatus === 'loading' && !drawsKeptListing ? (
         <MarketplaceListingSkeleton />
-      ) : listingStatus === 'failed' ? (
+      ) : listingStatus === 'failed' && !drawsKeptListing ? (
         <MarketplaceListingFailed onRetry={() => onRetry?.()} />
       ) : items.length === 0 && !pageInfo.hasMore ? (
         // A page emptied by the viewer's blocks still has a next page to load,

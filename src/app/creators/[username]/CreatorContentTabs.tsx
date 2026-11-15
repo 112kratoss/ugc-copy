@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { MouseEvent, ReactNode } from 'react';
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   FileText,
@@ -43,6 +43,7 @@ import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import { fetchShowcaseViewerExclusions } from '@/lib/showcase-viewer-exclusions-client';
+import ReelHostMark from '@/components/ReelHostMark';
 import { itemsWithoutBlockedRemixCredits } from '../../../../ugc-mobile/lib/remix-credit/remix-credit';
 
 function ShowcaseReelLoadingFallback() {
@@ -242,9 +243,14 @@ function CreatorContentTabsView({
     closeViewer();
   };
 
+  // The tab a `#creator-unlocks` or `#creator-tools` address names, before the first paint: read
+  // after it, Back from a recipe to the Recipes tab drew a frame of Posts first.
+  useLayoutEffect(() => {
+    setActiveTab(getTabFromHash(window.location.hash));
+  }, []);
+
   useEffect(() => {
     const handleHashChange = () => setActiveTab(getTabFromHash(window.location.hash));
-    handleHashChange();
     // The entry the page mounts on says how its reel was opened: one a tile
     // pushed (a reload, or a Back from a page the reel linked to, brought the
     // reader back to it) closes by going Back to the entry under it; a post any
@@ -526,6 +532,7 @@ function CreatorContentTabsView({
 
   return (
     <section className="mt-7" aria-label="Creator portfolio" onClickCapture={closeOnLinkToThisPage}>
+      <ReelHostMark />
       {/* Sticky under the top bar, and opaque, so the grid scrolls under it. */}
       <SegmentedControl
         role="tab"

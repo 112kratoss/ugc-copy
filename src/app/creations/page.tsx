@@ -539,6 +539,10 @@ function parsePostVisibilityFilter(value: string | null): OwnerPostVisibilityFil
         : 'all';
 }
 
+function parseCreationMediaFilter(value: string | null): FilterType {
+    return value === 'images' || value === 'videos' || value === 'audio' ? value : 'all';
+}
+
 const WORKSPACE_TABS: ReadonlyArray<{ key: WorkspaceView; label: string; lede: string }> = [
     { key: 'creations', label: 'Creations', lede: 'Preview private outputs, then turn the strongest ones into posts.' },
     { key: 'posts', label: 'Post Library', lede: 'Use Post Library for full post edits, archive state, and cleanup after publishing.' },
@@ -559,13 +563,26 @@ export default function CreationsPage() {
     // links that change it; nothing else does.
     const activeView = parseWorkspaceView(searchParams.get('view'));
     const postVisibilityFilter = parsePostVisibilityFilter(searchParams.get('visibility'));
-    const buildWorkspacePath = (view: WorkspaceView, visibility: OwnerPostVisibilityFilter = 'all') => {
+    // The creations' media filter is in the address too (owner's report, 2026-11-15: a
+    // filter left by Back or a refresh came back as All).
+    const filter = parseCreationMediaFilter(searchParams.get('media'));
+    // Each section's filter rides along through the others, so a section left and opened again
+    // is as it was left (review of #815: the media filter, kept in a state of the page before,
+    // came back as All once it moved to the address).
+    const buildWorkspacePath = (
+        view: WorkspaceView,
+        visibility: OwnerPostVisibilityFilter = 'all',
+        media: FilterType = 'all',
+    ) => {
         const params = new URLSearchParams();
         if (view !== 'creations') {
             params.set('view', view);
         }
-        if (view === 'posts' && visibility !== 'all') {
+        if (visibility !== 'all') {
             params.set('visibility', visibility);
+        }
+        if (media !== 'all') {
+            params.set('media', media);
         }
         const query = params.toString();
         return query ? `${pathname}?${query}` : pathname;
@@ -587,7 +604,6 @@ export default function CreationsPage() {
     // Pages of the creations list loaded since the last full first-page load.
     const loadedGenerationPagesRef = useRef(0);
     const generationStatusRefreshInFlightRef = useRef(false);
-    const [filter, setFilter] = useState<FilterType>('all');
     const [previewGen, setPreviewGen] = useState<Generation | null>(null);
     const requestedGenerationRef = useRef<string | null>(null);
     const [highlightedGenerationId, setHighlightedGenerationId] = useState<string | null>(null);
@@ -1123,7 +1139,7 @@ export default function CreationsPage() {
     // changes on an existing post link to the editor instead, which loads the
     // stored bundle rather than rebuilding one from the prefill.
     const withStudioReturn = (href: string): string =>
-        withSearchParam(href, 'returnTo', buildWorkspacePath(activeView, postVisibilityFilter));
+        withSearchParam(href, 'returnTo', buildWorkspacePath(activeView, postVisibilityFilter, filter));
 
     const requestPreviewRestore = (generation: Generation) => {
         const mediaKind = getMediaKind(generation);
@@ -1819,7 +1835,7 @@ export default function CreationsPage() {
                         {WORKSPACE_TABS.map((tab) => (
                             <Link
                                 key={tab.key}
-                                href={buildWorkspacePath(tab.key)}
+                                href={buildWorkspacePath(tab.key, postVisibilityFilter, filter)}
                                 scroll={false}
                                 aria-current={activeView === tab.key ? 'page' : undefined}
                                 className={`ui-focus-ring rounded-full border px-4 py-2.5 text-sm font-semibold transition ${
@@ -1935,16 +1951,21 @@ export default function CreationsPage() {
                             { all: successfulGenerations.length, images: imageCount, videos: videoCount, audio: audioCount },
                             filter,
                         ).map(tab => (
-                            <button
+                            // As the post filters below: a refinement of the section, so it
+                            // replaces the history entry, and Back and a refresh keep it.
+                            <Link
                                 key={tab.key}
-                                onClick={() => setFilter(tab.key)}
-                                className={`shrink-0 whitespace-nowrap px-5 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${filter === tab.key
+                                href={buildWorkspacePath('creations', postVisibilityFilter, tab.key)}
+                                replace
+                                scroll={false}
+                                aria-current={filter === tab.key ? 'true' : undefined}
+                                className={`ui-focus-ring shrink-0 whitespace-nowrap px-5 py-2 rounded-full text-sm font-semibold transition-all duration-200 ${filter === tab.key
                                     ? 'bg-white/10 text-white border border-white/20'
                                     : 'bg-zinc-900/50 text-zinc-500 border border-white/5 hover:text-zinc-300 hover:bg-zinc-800'
                                     }`}
                             >
                                 {tab.label}
-                            </button>
+                            </Link>
                         ))}
                     </div>
                 )}
@@ -1966,7 +1987,7 @@ export default function CreationsPage() {
                             // replaces the history entry instead of adding one.
                             <Link
                                 key={tab.key}
-                                href={buildWorkspacePath('posts', tab.key)}
+                                href={buildWorkspacePath('posts', tab.key, filter)}
                                 replace
                                 scroll={false}
                                 aria-current={postVisibilityFilter === tab.key ? 'true' : undefined}

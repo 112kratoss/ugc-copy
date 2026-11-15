@@ -11,7 +11,10 @@ import type { AppNavClickHandler } from '@/components/app-shell-nav';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import type { ConfirmationRequest } from '@/components/feedback-state';
 import { publishUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
+import { onHomeFeedRefresh } from '@/lib/home-feed-refresh';
 import { useLeaveGuard } from '@/lib/use-leave-guard';
+
+import { findHomeShellProblems } from '../../scripts/build/check-home-shell-prerender.mjs';
 
 let mockedPathname = '/';
 /** The root layout's selected segment: the route's first segment. */
@@ -662,6 +665,131 @@ describe('AppShellClient', () => {
     // The tab that is already open scrolls to the top instead of navigating.
     expect(scrollToMock).toHaveBeenLastCalledWith({ top: 0, behavior: 'smooth' });
     expect(navigations).toEqual(['/showcase', '/']);
+  });
+
+  describe('Home, and the brand beside it, pressed on Home', () => {
+    let refreshRequests = 0;
+    const countRefresh = () => {
+      refreshRequests += 1;
+    };
+    let stopCounting: () => void = () => undefined;
+
+    beforeEach(() => {
+      refreshRequests = 0;
+      stopCounting = onHomeFeedRefresh(countRefresh);
+    });
+
+    afterEach(() => stopCounting());
+
+    function renderHome() {
+      render(
+        <AppShellClient>
+          <div>Home content</div>
+        </AppShellClient>
+      );
+    }
+
+    function sidebarBrand() {
+      return within(screen.getByRole('complementary', { name: 'Primary navigation' }))
+        .getByRole('link', { name: /^Magic Booklet/ });
+    }
+
+    it('brings a scrolled Home to its top from the brand, and goes nowhere', () => {
+      mockedScrollY = 1800;
+      renderHome();
+
+      fireEvent.click(sidebarBrand());
+
+      expect(scrollToMock).toHaveBeenLastCalledWith({ top: 0, behavior: 'smooth' });
+      expect(refreshRequests).toBe(0);
+      expect(navigations).toEqual([]);
+    });
+
+    it('asks the feed to refresh from the brand on Home already at its top', () => {
+      mockedScrollY = 0;
+      renderHome();
+
+      fireEvent.click(sidebarBrand());
+
+      expect(refreshRequests).toBe(1);
+      expect(scrollToMock).not.toHaveBeenCalled();
+      expect(navigations).toEqual([]);
+    });
+
+    it('asks the feed to refresh from every Home tab at its top too', () => {
+      mockedScrollY = 0;
+      renderHome();
+
+      fireEvent.click(within(screen.getByRole('complementary', { name: 'Primary navigation' })).getByRole('link', { name: 'Home' }));
+      fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary mobile navigation' })).getByRole('link', { name: 'Home' }));
+
+      expect(refreshRequests).toBe(2);
+      expect(scrollToMock).not.toHaveBeenCalled();
+      expect(navigations).toEqual([]);
+    });
+
+    it('closes the phone drawer from its brand and brings Home to its top', () => {
+      mockedScrollY = 900;
+      renderHome();
+      fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+      const drawer = screen.getByRole('dialog', { name: 'Navigation' });
+
+      fireEvent.click(within(drawer).getByRole('link', { name: /^Magic Booklet/ }));
+
+      expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
+      expect(scrollToMock).toHaveBeenLastCalledWith({ top: 0, behavior: 'smooth' });
+      expect(navigations).toEqual([]);
+    });
+
+    // The build's check of the prerendered Home (npm run build:verify) fails
+    // unless every control naming Home is drawn current there.
+    it('draws the brand current on Home, as the build check of the prerendered Home reads it', () => {
+      const html = renderToString(
+        <AppShellClient>
+          <div>Home content</div>
+        </AppShellClient>
+      );
+
+      const drawn = document.createElement('div');
+      drawn.innerHTML = html;
+      const brand = [...drawn.querySelectorAll('a[data-app-nav-tab="home"]')]
+        .find((control) => control.textContent?.startsWith('Magic Booklet'));
+
+      expect(brand).toHaveAttribute('aria-current', 'page');
+      expect(findHomeShellProblems(html)).toEqual([]);
+    });
+
+    it('lets the brand go Home from any other page, and leaves Home\'s feed alone', () => {
+      mockedPathname = '/showcase';
+      mockedScrollY = 0;
+      render(
+        <AppShellClient>
+          <div>Showcase content</div>
+        </AppShellClient>
+      );
+      expect(sidebarBrand()).not.toHaveAttribute('aria-current');
+
+      fireEvent.click(sidebarBrand());
+
+      expect(navigations).toEqual(['/']);
+      expect(refreshRequests).toBe(0);
+      expect(scrollToMock).not.toHaveBeenCalled();
+    });
+
+    it('scrolls Explore to its top at any scroll: only Home refreshes', () => {
+      mockedPathname = '/showcase';
+      mockedScrollY = 0;
+      render(
+        <AppShellClient>
+          <div>Showcase content</div>
+        </AppShellClient>
+      );
+
+      fireEvent.click(within(screen.getByRole('complementary', { name: 'Primary navigation' })).getByRole('link', { name: 'Explore' }));
+
+      expect(refreshRequests).toBe(0);
+      expect(scrollToMock).toHaveBeenLastCalledWith({ top: 0, behavior: 'smooth' });
+    });
   });
 
   it('uses an instant active-tab return when reduced motion is enabled', () => {

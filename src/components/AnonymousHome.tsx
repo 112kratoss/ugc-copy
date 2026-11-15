@@ -31,7 +31,7 @@ import type { ShowcaseFeedPage } from '@/lib/showcase';
  *
  * Everything here must stay statically prerenderable: no cookies, no headers,
  * no server auth reads, and no `searchParams` (feed lane switching happens
- * client-side inside FeedClient, which reads `?chip=` itself: `laneFromUrl`).
+ * client-side inside FeedClient, which reads `?chip=` itself after mount).
  * Pinned by anonymous-home-page-cache.test.tsx.
  */
 
@@ -47,7 +47,6 @@ async function AnonymousFeedSection({ data }: { data: Promise<ShowcaseFeedPage |
       <FeedClient
         initialFeed={null}
         initialChipId="for-you"
-        laneFromUrl
         detailContext={HOME_FEED_DETAIL_CONTEXT}
       />
     );
@@ -65,7 +64,6 @@ async function AnonymousFeedSection({ data }: { data: Promise<ShowcaseFeedPage |
     <FeedClient
       initialFeed={feed}
       initialChipId="for-you"
-      laneFromUrl
       detailContext={HOME_FEED_DETAIL_CONTEXT}
       initialPriorityPreview={priorityPost && priorityMedia && inlinePriorityPreview
         ? {

@@ -11,6 +11,7 @@ import {
   Surface,
   Text,
 } from '@/components/DesignSystem';
+import { useAddressParam, writeAddressParam } from '@/lib/address-param';
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
 import { listTemplatePage, listTemplates } from './api';
@@ -19,6 +20,13 @@ import type { MediaTemplate } from './types';
 import { useTemplatePosterRecovery } from './useTemplatePosterRecovery';
 
 type InputFilter = 'all' | 'image' | 'video';
+
+/** The address's name for the input filter: `?input=image`; All formats goes unsaid. */
+const INPUT_FILTER_PARAM = 'input';
+
+function parseInputFilter(value: string | null): InputFilter {
+  return value === 'image' || value === 'video' ? value : 'all';
+}
 
 function CatalogSkeleton() {
   return (
@@ -85,7 +93,12 @@ export default function TemplateCatalogClient({
   // tests/e2e/templates-typed-before-script.spec.ts).
   const queryRef = useRef<HTMLInputElement>(null);
   useFieldValueBeforeHydration(queryRef, { drawn: '', onValue: setQuery });
-  const [inputFilter, setInputFilter] = useState<InputFilter>('all');
+  // The filter is the address's, so a refresh and Back from a template keep it. The catalog is
+  // drawn ahead of time for everyone, with All formats, and reads the address once it is live.
+  const inputFilter = parseInputFilter(useAddressParam(INPUT_FILTER_PARAM));
+  const chooseInputFilter = (value: InputFilter) => {
+    writeAddressParam(INPUT_FILTER_PARAM, value === 'all' ? null : value);
+  };
   const [nextCursor, setNextCursor] = useState(initialNextCursor);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   // Apart from the first-load error, which replaces the grid.
@@ -221,7 +234,7 @@ export default function TemplateCatalogClient({
             <button
               key={value}
               type="button"
-              onClick={() => setInputFilter(value)}
+              onClick={() => chooseInputFilter(value)}
               aria-pressed={inputFilter === value}
               className={`ui-focus-ring min-h-11 shrink-0 rounded-full border px-4 text-sm font-bold transition ${
                 inputFilter === value

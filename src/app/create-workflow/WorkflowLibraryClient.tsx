@@ -32,6 +32,7 @@ import {
 import { useRouter } from 'next/navigation';
 
 import { useAuth } from '@/components/AuthProvider';
+import { useAddressParam, writeAddressParam } from '@/lib/address-param';
 import { getClientE2EAuthState } from '@/lib/e2e-auth';
 import type {
   WorkflowCanvasListItem,
@@ -43,6 +44,14 @@ import type {
 import { createWorkflowCanvasLibrarySummary } from '@/lib/workflow-canvas-preview';
 
 type LibrarySort = 'recent' | 'name';
+
+// The library's order is the address's (`?sort=name`), so a refresh and Back from a canvas keep
+// it; Recently edited goes unsaid.
+const LIBRARY_SORT_PARAM = 'sort';
+
+function parseLibrarySort(value: string | null): LibrarySort {
+  return value === 'name' ? 'name' : 'recent';
+}
 type LibraryDialog =
   | { kind: 'rename'; canvas: WorkflowCanvasListItem }
   | { kind: 'delete'; canvas: WorkflowCanvasListItem }
@@ -377,7 +386,10 @@ export default function WorkflowLibraryClient() {
   const [isCreating, setIsCreating] = useState(false);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
-  const [sort, setSort] = useState<LibrarySort>('recent');
+  const sort = parseLibrarySort(useAddressParam(LIBRARY_SORT_PARAM));
+  const chooseSort = (value: LibrarySort) => {
+    writeAddressParam(LIBRARY_SORT_PARAM, value === 'recent' ? null : value);
+  };
   const [openMenuCanvasId, setOpenMenuCanvasId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<LibraryDialog>(null);
   const [dialogReturnFocus, setDialogReturnFocus] = useState<HTMLElement | null>(null);
@@ -566,7 +578,7 @@ export default function WorkflowLibraryClient() {
           <label className="flex min-h-12 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.035] px-4 text-sm text-zinc-300">
             <ListFilter className="h-4 w-4 text-zinc-500" />
             <span className="sr-only">Sort workflows</span>
-            <select value={sort} onChange={(event) => setSort(event.target.value as LibrarySort)} className="bg-transparent pr-4 outline-none">
+            <select value={sort} onChange={(event) => chooseSort(event.target.value as LibrarySort)} className="bg-transparent pr-4 outline-none">
               <option value="recent" className="bg-zinc-950">Recently edited</option>
               <option value="name" className="bg-zinc-950">Name</option>
             </select>

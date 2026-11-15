@@ -3,10 +3,21 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
+import { marketplaceFiltersKey } from '@/app/marketplace/marketplace-address';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
+import { buildMarketplacePagesKey, rememberMarketplacePages } from '@/lib/marketplace-pages-memory';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 const browserModuleLoaded = vi.hoisted(() => vi.fn());
+
+// The address bar's query once the page is live; null, as outside Next's router, unless a case
+// sets it.
+const addressBar = vi.hoisted(() => ({ search: null as string | null }));
+
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  useSearchParams: () => (addressBar.search === null ? null : new URLSearchParams(addressBar.search)),
+}));
 
 vi.mock('@/app/marketplace/MarketplaceBrowser', () => {
   browserModuleLoaded();
@@ -393,6 +404,58 @@ describe('MarketplaceBootstrap', () => {
     });
 
     expect(await screen.findByTestId('interactive-marketplace-browser')).toBeInTheDocument();
+  });
+
+  // Back from a recipe drew this shell, the first page alone, though Load more had brought more
+  // (owner's report, 2026-11-15): the browser was put back only after a scroll, too late for the
+  // reader's place. A listing kept with later pages is handed to the browser before the paint.
+  describe('drawn again after a recipe', () => {
+    afterEach(() => {
+      addressBar.search = null;
+      window.sessionStorage.clear();
+    });
+
+    // As on the reader's first visit to the listing: Load more brought the browser.
+    async function browserCameInThisDocument() {
+      const firstVisit = render(
+        <MarketplaceBootstrap initialPage={createPage(4, true)} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />
+      );
+      fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
+      expect(await screen.findByTestId('interactive-marketplace-browser')).toBeInTheDocument();
+      firstVisit.unmount();
+    }
+
+    function backToListing() {
+      // The page is live: the address bar's query is read, and the listing's first page is asked for.
+      addressBar.search = '';
+      vi.stubGlobal('fetch', vi.fn(() => new Promise(() => undefined)));
+      return render(
+        <MarketplaceBootstrap initialPage={createPage(4, true)} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />
+      );
+    }
+
+    it('hands a listing kept with later pages to the browser in the first frame', async () => {
+      await browserCameInThisDocument();
+      rememberMarketplacePages(
+        buildMarketplacePagesKey(marketplaceFiltersKey(INITIAL_FILTERS), null),
+        4,
+        createPage(16, true),
+      );
+
+      backToListing();
+
+      expect(screen.getByTestId('interactive-marketplace-browser')).toBeInTheDocument();
+      expect(screen.queryByText('Unlock 1')).not.toBeInTheDocument();
+    });
+
+    it('stays the shell for a listing kept at its first page alone', async () => {
+      await browserCameInThisDocument();
+
+      backToListing();
+
+      expect(screen.queryByTestId('interactive-marketplace-browser')).not.toBeInTheDocument();
+      expect(screen.getByText('Unlock 1')).toBeInTheDocument();
+    });
   });
 });
 

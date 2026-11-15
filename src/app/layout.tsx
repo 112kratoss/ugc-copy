@@ -9,6 +9,7 @@ import { TYPED_BEFORE_HYDRATION_CAPTURE } from "@/lib/typed-before-hydration";
 import { buildAppShellAccountRestore } from "@/lib/app-shell-account-restore";
 import { APP_SHELL_SIDEBAR_RESTORE } from "@/lib/app-shell-sidebar-restore";
 import { WELCOME_PROMISE_RESTORE } from "@/lib/welcome-promise-restore";
+import { REEL_OPENING_RESTORE } from "@/lib/reel-opening-restore";
 
 import "./globals.css";
 import AppShell from "@/components/AppShell";
@@ -16,6 +17,7 @@ import DeferredGenerationNotifications from "@/components/DeferredGenerationNoti
 import DeferredWelcomeCreditsPopup from "@/components/DeferredWelcomeCreditsPopup";
 import FeedbackViewport from "@/components/FeedbackViewport";
 import NavigationProgress from "@/components/NavigationProgress";
+import ReelOpeningCover from "@/components/ReelOpeningCover";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -114,6 +116,9 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: WELCOME_PROMISE_RESTORE }} />
         {/* A browser that holds a session, and the width of its last balance, marked on the root element so the top bar's account slot draws its signed-in shape from the first paint (`src/lib/app-shell-account-restore.ts`). */}
         <script dangerouslySetInnerHTML={{ __html: appShellAccountRestore }} />
+        {/* An address that opens a post in its page's reel (`?post=`), marked on the root element so the reel's stage, below, covers the page from the first paint until the reel attaches (`src/lib/reel-opening-restore.ts`). */}
+        <script dangerouslySetInnerHTML={{ __html: REEL_OPENING_RESTORE }} />
+        <ReelOpeningCover />
         <a
           href="#main-content"
           className="ui-focus-ring fixed left-4 top-3 z-[120] -translate-y-24 rounded-full bg-[var(--ui-primary)] px-4 py-3 text-sm font-bold text-[var(--ui-primary-on)] transition focus:translate-y-0"

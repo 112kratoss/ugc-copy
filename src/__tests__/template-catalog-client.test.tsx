@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import TemplateCatalogClient from '@/components/templates/TemplateCatalogClient';
 import type { MediaTemplate } from '@/components/templates/types';
@@ -59,6 +59,42 @@ describe('TemplateCatalogClient initial data', () => {
     mocks.listTemplates.mockReset();
     mocks.listTemplatePage.mockReset();
     mocks.useAuth.mockReturnValue({ session: null, isLoading: false });
+  });
+
+  // A filter left by Back or a refresh came back as All formats (owner's report, 2026-11-15).
+  describe('the input filter in the address', () => {
+    const imageTemplate = template({ id: 'template-image', name: 'Image Template' });
+    const videoTemplate = template({
+      id: 'template-video',
+      name: 'Video Template',
+      inputSlots: [{ key: 'clip', kind: 'video', label: 'Clip', required: true }],
+    });
+
+    afterEach(() => {
+      window.history.replaceState(null, '', '/');
+    });
+
+    it('opens on the filter the address names', () => {
+      window.history.replaceState(null, '', '/templates?input=video');
+      render(<TemplateCatalogClient initialTemplates={[imageTemplate, videoTemplate]} />);
+
+      expect(screen.getByRole('button', { name: 'Uses video' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByText('Video Template')).toBeInTheDocument();
+      expect(screen.queryByText('Image Template')).not.toBeInTheDocument();
+    });
+
+    it('writes the filter chosen into the address, and All formats out of it', () => {
+      window.history.replaceState(null, '', '/templates');
+      render(<TemplateCatalogClient initialTemplates={[imageTemplate, videoTemplate]} />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Uses images' }));
+      expect(window.location.search).toBe('?input=image');
+      expect(screen.queryByText('Video Template')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'All formats' }));
+      expect(window.location.search).toBe('');
+      expect(screen.getByText('Video Template')).toBeInTheDocument();
+    });
   });
 
   it('loads the next bounded catalog page on demand', async () => {

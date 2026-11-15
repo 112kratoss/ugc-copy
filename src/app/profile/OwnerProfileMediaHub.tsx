@@ -46,8 +46,10 @@ import {
   replaceReelEntry,
   type ReelHistoryMode,
 } from '@/lib/reel-history-entry';
+import { releaseReelOpening } from '@/lib/reel-opening-restore';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
+import ReelHostMark from '@/components/ReelHostMark';
 import type {
   ShowcaseCreator,
   ShowcaseFeedItem,
@@ -653,9 +655,19 @@ export default function OwnerProfileMediaHub({
   const activeCount = activeTab === 'posts' ? ownerPosts.length : savedSaveState.items.length;
   const hasMore = activePageInfo.hasMore;
   const isLoading = loadingTabs.has(activeTab);
+  const isReelPostLoaded = selectedPostId !== null && viewerItems.some((item) => item.id === selectedPostId);
+
+  // A load on a post's reel address covers the page with the reel's stage until the reel
+  // attaches (src/lib/reel-opening-restore.ts). This reel opens only on a post its tab has
+  // loaded, so once the tab has loaded without it (a post from a later page, or one gone), no
+  // reel is coming: the page shows at once, not after the cover's longest wait.
+  useEffect(() => {
+    if (!isLoading && !isReelPostLoaded) releaseReelOpening();
+  }, [isLoading, isReelPostLoaded]);
 
   return (
     <>
+      <ReelHostMark />
       <section className="ui-enter mb-5 overflow-hidden rounded-3xl border border-white/10 bg-[var(--ui-surface-1)] shadow-[0_28px_90px_rgba(0,0,0,0.28)]">
         <div className="relative h-36 overflow-hidden bg-[radial-gradient(circle_at_20%_0%,rgba(255,122,89,0.28),transparent_42%),radial-gradient(circle_at_85%_20%,rgba(56,189,248,0.18),transparent_36%),#151519] sm:h-52">
           {profile.coverUrl ? (

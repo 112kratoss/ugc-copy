@@ -80,6 +80,8 @@
 @source "../components/PublicIdentityFields.tsx";
 @source "../components/PublicShareButton.tsx";
 @source "../components/RecoverableMediaVideo.tsx";
+@source "../components/ReelHostMark.tsx";
+@source "../components/ReelOpeningCover.tsx";
 @source "../components/ResourceMediaPreview.tsx";
 @source "../components/RouteAuthBoundary.tsx";
 @source "../components/search/search-field-handoff.ts";
@@ -1692,6 +1694,62 @@ html:not([data-auth-hint='signed-in']) .app-shell-when-signed-in {
 
   html[data-sidebar='hidden'] .app-shell-sidebar {
     display: none;
+  }
+}
+
+/* A page loaded on an address that opens a post in its reel (`?post=`) shows the reel's own
+   stage from its first paint, not the grid under it (src/lib/reel-opening-restore.ts: an inline
+   script marks the root element, and the reel takes the mark away when its dialog attaches).
+   Only while the page holds a reel's host or its loading state (`ReelHostMark`): a creator not
+   found, a blocked creator, an error page, which open no reel, show at once. A browser without
+   :has() keeps the page as it was before the stage. Just under the reel (z-index 90), so the
+   reel draws over it should it come first, and under the reel's "Opening preview" (100), which
+   then sits on the same black. */
+.reel-opening-cover {
+  display: none;
+}
+
+html[data-reel-opening]:has([data-reel-host]) .reel-opening-cover {
+  position: fixed;
+  inset: 0;
+  z-index: 89;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #050506;
+  color: #ffffff;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.reel-opening-cover-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 9999px;
+  background: #09090b;
+  padding: 0.75rem 1.25rem;
+}
+
+.reel-opening-cover-spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 9999px;
+  animation: reel-opening-spin 0.9s linear infinite;
+}
+
+@keyframes reel-opening-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reel-opening-cover-spinner {
+    animation: none;
   }
 }
 

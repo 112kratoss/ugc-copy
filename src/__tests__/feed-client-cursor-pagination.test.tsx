@@ -94,6 +94,8 @@ describe('FeedClient cursor pagination', () => {
     afterEach(() => {
         cleanup();
         clearShowcaseClientCacheForTests();
+        // The feed takes its lane from the address: a case's address must not reach the next.
+        window.history.replaceState(null, '', '/');
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
@@ -131,6 +133,8 @@ describe('FeedClient cursor pagination', () => {
             { status: 200, headers: { 'Content-Type': 'application/json' } },
         ));
         vi.stubGlobal('fetch', fetchMock);
+        // The address the page read its lane from, as the server does.
+        window.history.replaceState(null, '', '/?chip=recent');
 
         render(<FeedClient
             initialFeed={page([item('post-1'), item('post-2')], { nextOffset: 2 })}
@@ -197,6 +201,7 @@ describe('FeedClient cursor pagination', () => {
             { status: 200, headers: { 'Content-Type': 'application/json' } },
         ));
         vi.stubGlobal('fetch', fetchMock);
+        window.history.replaceState(null, '', '/?chip=recent');
 
         render(<FeedClient
             initialFeed={page([item('post-1'), item('post-2')], { nextOffset: 2, seedBucket: 2970123 })}
