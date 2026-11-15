@@ -34,11 +34,13 @@ import {
   SEARCH_RECENTS_HEADING,
   normalizeCreatorSearchQuery,
   normalizeSearchHistoryQuery,
+  readSearchCatalogModel,
   readSearchThumbnail,
   searchEntityActionLabel,
   searchEntityId,
   searchQueryLength,
   searchRecentAgainLabel,
+  type SearchCatalogModel,
   type SearchEntity,
   type SearchEntityKind,
   type SearchTabId,
@@ -81,8 +83,10 @@ export interface SearchSuggestResponse {
   creators: SearchSuggestCreator[];
   /**
    * Models and tools, as a search result names them, each with a `thumbnail`
-   * (a picture of a post made with it, or null). Empty under three characters
-   * and for a query typed as a handle.
+   * (a picture of a post made with it, or null) and whether it is a model of
+   * the product's catalog (`inCatalog`, `catalogModel`). Empty for a query
+   * typed as a handle; empty under three characters unless the request asked
+   * for the catalog (`catalog=1`), which offers its models from two.
    */
   entities: SearchEntity[];
   /** In the order to show them. Empty for a query typed as a handle. */
@@ -128,7 +132,16 @@ function readEntity(value: unknown): SearchEntity | null {
     // A picture of a post made with it, or null: a server from before
     // pictures sends none.
     thumbnail: readSearchThumbnail(value.thumbnail),
+    // A catalog model only when the answer says so and says which: a server
+    // from before them says neither.
+    ...readCatalogFields(value),
   };
+}
+
+function readCatalogFields(value: Record<string, unknown>): Required<Pick<SearchEntity, 'inCatalog' | 'catalogModel' | 'query'>> {
+  const catalogModel = value.inCatalog === true ? readSearchCatalogModel(value.catalogModel) : null;
+  const query = typeof value.query === 'string' ? value.query.trim() : '';
+  return { inCatalog: catalogModel !== null, catalogModel, query: query || null };
 }
 
 function readCompletion(value: unknown): SearchSuggestCompletion | null {
@@ -182,6 +195,18 @@ export const SEARCH_TYPEAHEAD_DEBOUNCE_MS = 140;
  */
 export const SEARCH_TYPEAHEAD_KEPT_ANSWER_MS = 30_000;
 export const SEARCH_TYPEAHEAD_KEPT_ANSWERS = 30;
+
+/**
+ * The parameter a client asks for every catalog model with: `catalog=1`
+ * (2026-11-15). Any other value is refused. Without it the server offers a
+ * catalog model only where it has a post to open, from three characters, so a
+ * client from before it never draws a row that opens an empty page. With it,
+ * every model of the product's catalog that the text names is offered, from
+ * two characters, with `postCount` 0 where nobody has posted with it: a
+ * client sends it only once it opens the creator for such a row
+ * (searchTypeaheadEntityOpening).
+ */
+export const SEARCH_TYPEAHEAD_CATALOG_PARAM = 'catalog';
 
 /** Entities are offered from the length Posts are searched from: pressing one opens Posts. */
 const SEARCH_TYPEAHEAD_MIN_ENTITY_QUERY_LENGTH = 3;
@@ -516,6 +541,42 @@ export function searchTypeaheadAction(row: SearchTypeaheadRow): SearchTypeaheadA
   if (row.kind === 'creator') return { type: 'creator', username: row.creator.username };
   if (row.kind === 'entity') return { type: 'entity', entity: row.entity, madeWith: searchEntityId(row.entity) };
   return { type: 'search', query: row.text };
+}
+
+/** The client a row is drawn on: which of a catalog model's platforms counts. */
+export type SearchTypeaheadPlatform = 'web' | 'mobile';
+
+/**
+ * What pressing a model's or tool's row opens (2026-11-15):
+ *
+ *   - `posts`: Posts narrowed to it by `madeWith`, searched for `query`, or
+ *     for the text in the box when `query` is null. It opens `postCount`
+ *     posts.
+ *   - `creator`: the creator that makes with this catalog model (image, video
+ *     or motion, by `model.kind`), with `model.id` chosen. For a catalog
+ *     model nobody this viewer may see has posted with.
+ */
+export type SearchTypeaheadEntityOpening =
+  | { type: 'posts'; madeWith: string; query: string | null }
+  | { type: 'creator'; model: SearchCatalogModel };
+
+export function searchTypeaheadEntityOpening(
+  entity: SearchEntity,
+  platform: SearchTypeaheadPlatform,
+): SearchTypeaheadEntityOpening {
+  const model = entity.inCatalog ? entity.catalogModel ?? null : null;
+  if (entity.postCount <= 0 && model && model[platform]) return { type: 'creator', model };
+  return { type: 'posts', madeWith: searchEntityId(entity), query: entity.postCount > 0 ? entity.query ?? null : null };
+}
+
+/**
+ * Whether a row has anything to open on this client: posts, or a creator
+ * this platform has. A catalog model with no posts that is offered only on
+ * the other platform is left out of the list.
+ */
+export function isSearchTypeaheadEntityOffered(entity: SearchEntity, platform: SearchTypeaheadPlatform): boolean {
+  if (entity.postCount > 0) return true;
+  return searchTypeaheadEntityOpening(entity, platform).type === 'creator';
 }
 
 // ─── While typing: the list in place of results ──────────────────────────────

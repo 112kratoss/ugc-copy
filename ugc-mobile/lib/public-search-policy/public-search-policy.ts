@@ -197,6 +197,34 @@ export function readSearchThumbnail(value: unknown): SearchThumbnail | null {
 export const SEARCH_ENTITY_KINDS = ['model', 'tool'] as const;
 export type SearchEntityKind = (typeof SEARCH_ENTITY_KINDS)[number];
 
+/** The kinds of model the product's own catalog holds: each has a creator of its own. */
+export const SEARCH_CATALOG_MODEL_KINDS = ['image', 'video', 'motion'] as const;
+export type SearchCatalogModelKind = (typeof SEARCH_CATALOG_MODEL_KINDS)[number];
+
+/**
+ * A model of the product's own public catalog, on a typeahead row
+ * (2026-11-15): its catalog id, which creator makes with it, and where it is
+ * offered. Enough to open that creator with the model chosen.
+ */
+export interface SearchCatalogModel {
+  /** The catalog's id, as the creators and /api/model-catalog/v1 name it: `seedance-2`. */
+  id: string;
+  kind: SearchCatalogModelKind;
+  /** Offered on the web. */
+  web: boolean;
+  /** Offered in the app. */
+  mobile: boolean;
+}
+
+/** A catalog model as a client may use it, or null for anything that is not one. */
+export function readSearchCatalogModel(value: unknown): SearchCatalogModel | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if (typeof row.id !== 'string' || !row.id) return null;
+  if (!SEARCH_CATALOG_MODEL_KINDS.includes(row.kind as SearchCatalogModelKind)) return null;
+  return { id: row.id, kind: row.kind as SearchCatalogModelKind, web: row.web === true, mobile: row.mobile === true };
+}
+
 /** A model or tool as a search result. */
 export interface SearchEntity {
   kind: SearchEntityKind;
@@ -214,6 +242,24 @@ export interface SearchEntity {
    * and from a server before it.
    */
   thumbnail?: SearchThumbnail | null;
+  /**
+   * On a typeahead row (2026-11-15): the product's own catalog offers this
+   * model. Such a row is offered though one creator alone has posted with it,
+   * and, to a client that asked (`catalog=1`), though nobody has: `postCount`
+   * is then 0. False for a tool and for a model of no catalog; absent on a
+   * search result's entity and from a server before it.
+   */
+  inCatalog?: boolean;
+  /** The catalog model the row is, when `inCatalog`; null otherwise. */
+  catalogModel?: SearchCatalogModel | null;
+  /**
+   * On a typeahead row: the Posts search that opens this row's `postCount`
+   * posts, narrowed to it, when that is not the text in the box (a row the
+   * server added for a catalog model: the text was too short to search posts
+   * by, or names it by a word its posts do not hold). Null when the text in
+   * the box is that search, and when the row has no posts.
+   */
+  query?: string | null;
 }
 
 // The server's keys hold letters, digits, dots and hyphens (search_entity_key);

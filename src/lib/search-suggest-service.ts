@@ -13,6 +13,8 @@ import {
   type SearchSuggestResponse,
 } from '@/lib/search-suggest';
 import { searchThumbnailFromRow } from '@/lib/search-thumbnail';
+
+import { readSearchCatalogModel } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import { createServiceClient } from '@/lib/server-helpers';
 
 type SearchSuggestServiceDependencies = {
@@ -27,6 +29,12 @@ export type SearchSuggestOptions = {
   handlesOnly: boolean;
   /** The verified viewer, a guest included, or null for a visitor with no token. */
   viewerUserId: string | null;
+  /**
+   * The client asked for every catalog model the text names (`catalog=1`):
+   * it opens the creator for one nobody has posted with. Without it a
+   * catalog model is offered only where it has a post to open.
+   */
+  catalog?: boolean;
 };
 
 const UNEXPECTED_ANSWER = 'search_suggestions returned an unexpected answer.';
@@ -92,7 +100,34 @@ function entityFromRow(client: SupabaseClient, row: unknown): SearchEntityResult
       post_count_capped: row.post_count_capped,
     }),
     thumbnail: searchThumbnailFromRow(client, row.thumbnail),
+    ...catalogFieldsFromRow(row),
   };
+}
+
+/**
+ * Whether the row is a model of the product's own catalog, which one, and
+ * the search that opens its posts when that is not the typed text. A
+ * database from before 20261115105944 answers none of the three: no row is a
+ * catalog model then. A catalog model that cannot be read is not said to be
+ * one, since a client opens a creator by it.
+ */
+function catalogFieldsFromRow(row: Record<string, unknown>): Required<Pick<SearchEntityResult, 'inCatalog' | 'catalogModel' | 'query'>> {
+  const catalogModel = row.in_catalog === true ? readSearchCatalogModel(row.catalog_model) : null;
+  const query = typeof row.query === 'string' ? row.query.trim() : '';
+  return { inCatalog: catalogModel !== null, catalogModel, query: query || null };
+}
+
+/**
+ * One row per model name. A motion creation is stored under the provider's
+ * id, which the database keys apart from the catalog's (search-entity-label
+ * names both by the catalog), so a catalog model with no post of its own key
+ * can stand beside the row that holds its posts, under one name. The row
+ * with nothing to open is the one left out.
+ */
+function withoutRepeatedModels(entities: SearchEntityResult[]): SearchEntityResult[] {
+  const named = (entity: SearchEntityResult) => `${entity.kind}:${entity.label.trim().toLowerCase()}`;
+  const withPosts = new Set(entities.filter((entity) => entity.postCount > 0).map(named));
+  return entities.filter((entity) => entity.postCount > 0 || entity.kind !== 'model' || !withPosts.has(named(entity)));
 }
 
 function completionFromRow(row: unknown): SearchSuggestCompletion {
@@ -106,8 +141,10 @@ function completionFromRow(row: unknown): SearchSuggestCompletion {
  * must never show (a guest, a suspended or deleting account, either side of a
  * block with the viewer; a word fewer than two creators write, or one only a
  * labelled, private or hidden post or a paid recipe's locked text holds; a
- * model or tool no post the viewer may see names, or only one creator uses;
- * a picture of a labelled post or of a creator blocked with the viewer).
+ * model or tool no post the viewer may see names, or only one creator uses,
+ * unless it is a model of the product's own public catalog; a catalog model
+ * that is retired or switched off; a picture of a labelled post or of a
+ * creator blocked with the viewer).
  * Completions are words, phrases and model and tool names that public posts
  * of two creators show, and the corrected reading of a text nothing
  * completes.
@@ -127,6 +164,7 @@ export async function suggestSearch(
     p_handles_only: options.handlesOnly,
     p_creator_limit: SEARCH_SUGGEST_MAX_CREATORS,
     p_completion_limit: SEARCH_SUGGEST_MAX_COMPLETIONS,
+    p_catalog: options.catalog ?? false,
   });
   if (error) throw error;
   if (!isRecord(data) || !Array.isArray(data.creators) || !Array.isArray(data.completions)) {
@@ -143,7 +181,9 @@ export async function suggestSearch(
     // The caps are the database's too; held here so the answer's size never
     // rests on one side alone.
     creators: data.creators.slice(0, SEARCH_SUGGEST_MAX_CREATORS).map(creatorFromRow),
-    entities: entityRows.slice(0, SEARCH_SUGGEST_MAX_ENTITIES).map((row) => entityFromRow(client, row)),
+    entities: withoutRepeatedModels(
+      entityRows.slice(0, SEARCH_SUGGEST_MAX_ENTITIES).map((row) => entityFromRow(client, row)),
+    ),
     completions: data.completions.slice(0, SEARCH_SUGGEST_MAX_COMPLETIONS).map(completionFromRow),
   };
 }

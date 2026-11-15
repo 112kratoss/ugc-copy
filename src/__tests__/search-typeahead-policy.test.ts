@@ -30,6 +30,9 @@ import {
   searchTypeaheadOfferForTab,
   SEARCH_TYPEAHEAD_OFFER_ALL,
   searchTypeaheadTextRuns,
+  SEARCH_TYPEAHEAD_CATALOG_PARAM,
+  isSearchTypeaheadEntityOffered,
+  searchTypeaheadEntityOpening,
   searchTypeaheadQuery,
   searchTypeaheadRowLabel,
   searchTypeaheadRows,
@@ -39,6 +42,8 @@ import {
 } from '../../ugc-mobile/lib/public-search-policy/search-typeahead';
 
 const contract = mobileApiContract.endpoints.suggestSearch;
+// What an entity that is no catalog model reads as, and one from a server before the catalog.
+const NOT_CATALOG = { inCatalog: false, catalogModel: null, query: null };
 
 const answer: SearchSuggestResponse = {
   query: 'lum',
@@ -89,14 +94,91 @@ describe('search typeahead: the answer', () => {
     expect(pictured.thumbnail?.mediaKind).toBe('video');
     expect(parseSearchSuggestResponse(contract.responseVariants.entityWithoutPicture.response)!.entities[0].thumbnail).toBeNull();
     const before = contract.responseVariants.beforePictures.response;
-    expect(parseSearchSuggestResponse(before)!.entities).toEqual([{ ...before.entities[0], thumbnail: null }]);
+    expect(parseSearchSuggestResponse(before)!.entities).toEqual([{ ...before.entities[0], thumbnail: null, ...NOT_CATALOG }]);
     // A picture that is not whole is none; the row is still drawn.
     const broken = parseSearchSuggestResponse({
       creators: [],
       completions: [],
       entities: [{ ...before.entities[0], thumbnail: { postId: 'p', url: '' } }],
     });
-    expect(broken?.entities).toEqual([{ ...before.entities[0], thumbnail: null }]);
+    expect(broken?.entities).toEqual([{ ...before.entities[0], thumbnail: null, ...NOT_CATALOG }]);
+  });
+
+  describe('catalog models (2026-11-15)', () => {
+    const withPosts = contract.responseVariants.catalogModelWithPosts;
+    const asked = contract.responseVariants.catalogModels;
+    const twoLetters = contract.responseVariants.catalogModelsOfTwoLetters;
+
+    it('names the parameter a client asks with, and where a catalog model is offered from', () => {
+      expect(contract.catalogParameter).toBe(SEARCH_TYPEAHEAD_CATALOG_PARAM);
+      expect(asked.query).toEqual({ q: 'see', [SEARCH_TYPEAHEAD_CATALOG_PARAM]: '1' });
+      expect(withPosts.query).toEqual({ q: 'see' });
+      expect(twoLetters.query.q).toHaveLength(contract.limits.minCatalogQueryLength);
+      expect(contract.errors.unknownCatalog.response).toEqual({ error: 'catalog must be 1.' });
+    });
+
+    it('reads the contract’s answers as they are', () => {
+      for (const variant of [withPosts, asked, twoLetters]) {
+        expect(parseSearchSuggestResponse(variant.response)).toEqual(variant.response);
+      }
+    });
+
+    it('offers a client that did not ask only rows with posts to open', () => {
+      const entities = parseSearchSuggestResponse(withPosts.response)!.entities;
+      expect(entities.map((entity) => [entity.key, entity.postCount, entity.inCatalog])).toEqual([['seedance-2', 1, true]]);
+      // And a client that asked, every model the text names.
+      expect(parseSearchSuggestResponse(asked.response)!.entities.map((entity) => [entity.key, entity.postCount]))
+        .toEqual([['seedance-2', 1], ['seedance-1.5-pro', 0], ['seedream-5-pro', 0]]);
+    });
+
+    it('opens a row’s posts when it has some, and the creator with that model when it has none', () => {
+      const [seedance, older, webOnly] = parseSearchSuggestResponse(asked.response)!.entities;
+      // Posts narrowed to it, for the text in the box: the count is that search's.
+      expect(searchTypeaheadEntityOpening(seedance, 'web')).toEqual({ type: 'posts', madeWith: 'model:seedance-2', query: null });
+      expect(searchTypeaheadEntityOpening(seedance, 'mobile')).toEqual({ type: 'posts', madeWith: 'model:seedance-2', query: null });
+      // No posts: the creator of its kind, with the model chosen.
+      expect(searchTypeaheadEntityOpening(older, 'mobile')).toEqual({
+        type: 'creator', model: { id: 'seedance-1.5-pro', kind: 'video', web: true, mobile: true },
+      });
+      // Only where this client has that creator: a model on the web alone opens nothing in the app.
+      expect(searchTypeaheadEntityOpening(webOnly, 'web')).toEqual({
+        type: 'creator', model: { id: 'seedream-5-pro', kind: 'image', web: true, mobile: false },
+      });
+      expect(isSearchTypeaheadEntityOffered(webOnly, 'web')).toBe(true);
+      expect(isSearchTypeaheadEntityOffered(webOnly, 'mobile')).toBe(false);
+      expect(isSearchTypeaheadEntityOffered(older, 'mobile')).toBe(true);
+      expect(isSearchTypeaheadEntityOffered(seedance, 'mobile')).toBe(true);
+    });
+
+    it('searches the query a row carries, where the text in the box is too short to search posts by', () => {
+      const [entity] = parseSearchSuggestResponse(twoLetters.response)!.entities;
+      expect(entity.query).toBe('seedance-2');
+      expect(searchTypeaheadEntityOpening(entity, 'web')).toEqual({ type: 'posts', madeWith: 'model:seedance-2', query: 'seedance-2' });
+    });
+
+    it('does not read a row as a catalog model unless the answer says so and says which', () => {
+      const row = { kind: 'model', key: 'zephyr-2', label: 'Zephyr 2', postCount: 0, postCountCapped: false };
+      const read = (extra: Record<string, unknown>) => parseSearchSuggestResponse({ creators: [], completions: [], entities: [{ ...row, ...extra }] })!.entities[0];
+      const model = { id: 'zephyr-2', kind: 'video', web: true, mobile: true };
+      expect(read({ inCatalog: true, catalogModel: model })).toMatchObject({ inCatalog: true, catalogModel: model });
+      for (const extra of [
+        {},
+        { catalogModel: model },
+        { inCatalog: 'true', catalogModel: model },
+        { inCatalog: true },
+        { inCatalog: true, catalogModel: { ...model, id: '' } },
+        { inCatalog: true, catalogModel: { ...model, kind: 'audio' } },
+      ]) {
+        expect(read(extra)).toMatchObject(NOT_CATALOG);
+        // With no posts and no catalog model there is nothing to open: the row is not drawn.
+        expect(isSearchTypeaheadEntityOffered(read(extra), 'web')).toBe(false);
+      }
+      // A platform flag that is not plainly true is false.
+      expect(read({ inCatalog: true, catalogModel: { ...model, web: 'yes', mobile: 1 } }).catalogModel)
+        .toEqual({ id: 'zephyr-2', kind: 'video', web: false, mobile: false });
+      expect(read({ inCatalog: true, catalogModel: model, query: '  zephyr 2 ' }).query).toBe('zephyr 2');
+      expect(read({ query: '   ' }).query).toBeNull();
+    });
   });
 
   it('reads anything that is not an answer as nothing, never as an error', () => {
@@ -138,7 +220,7 @@ describe('search typeahead: the answer', () => {
     // An empty avatar is none, and only `true` is a follow.
     expect(read?.creators[1]).toEqual({ id: 'x0', username: 'luna-0', displayName: 'Luna 0', avatarUrl: null, isFollowing: false });
     expect(read?.entities).toHaveLength(SEARCH_TYPEAHEAD_MAX_ENTITIES);
-    expect(read?.entities[0]).toEqual({ kind: 'tool', key: 'lumen-forge', label: 'Lumen Forge', postCount: 3, postCountCapped: false, thumbnail: null });
+    expect(read?.entities[0]).toEqual({ kind: 'tool', key: 'lumen-forge', label: 'Lumen Forge', postCount: 3, postCountCapped: false, thumbnail: null, ...NOT_CATALOG });
     expect(read?.completions).toHaveLength(SEARCH_TYPEAHEAD_MAX_COMPLETIONS);
     expect(read?.completions[0]).toEqual({ text: 'lunar' });
   });

@@ -18,8 +18,11 @@ import {
   searchStarterSections,
 } from '../lib/public-search-policy/search-starter';
 import {
+  SEARCH_TYPEAHEAD_CATALOG_PARAM,
   SEARCH_TYPEAHEAD_MAX_COMPLETIONS,
+  isSearchTypeaheadEntityOffered,
   parseSearchSuggestResponse,
+  searchTypeaheadEntityOpening,
   searchTypeaheadTextRuns,
 } from '../lib/public-search-policy/search-typeahead';
 
@@ -48,7 +51,8 @@ describe('typeahead: phrases, names and pictures', () => {
 
   it('reads an entity of a server from before pictures with no picture, and still draws it', () => {
     const before = suggest.responseVariants.beforePictures.response;
-    expect(parseSearchSuggestResponse(before)!.entities).toEqual([{ ...before.entities[0], thumbnail: null }]);
+    expect(parseSearchSuggestResponse(before)!.entities)
+      .toEqual([{ ...before.entities[0], thumbnail: null, inCatalog: false, catalogModel: null, query: null }]);
     expect(parseSearchSuggestResponse(suggest.responseVariants.entityWithoutPicture.response)!.entities[0].thumbnail).toBeNull();
   });
 
@@ -66,6 +70,45 @@ describe('typeahead: phrases, names and pictures', () => {
     const corrected = suggest.responseVariants.correctedReading;
     expect(searchTypeaheadTextRuns(corrected.response.completions[0].text, corrected.query.q))
       .toEqual([{ text: 'portrait', typed: false }]);
+  });
+});
+
+describe('typeahead: the product’s own models', () => {
+  const withPosts = suggest.responseVariants.catalogModelWithPosts;
+  const asked = suggest.responseVariants.catalogModels;
+  const twoLetters = suggest.responseVariants.catalogModelsOfTwoLetters;
+
+  it('names the parameter the server reads, and reads the contract’s answers as they are', () => {
+    expect(suggest.catalogParameter).toBe(SEARCH_TYPEAHEAD_CATALOG_PARAM);
+    expect(asked.query).toEqual({ q: 'see', [SEARCH_TYPEAHEAD_CATALOG_PARAM]: '1' });
+    for (const variant of [withPosts, asked, twoLetters]) {
+      expect(parseSearchSuggestResponse(variant.response)).toEqual(variant.response);
+    }
+    expect(suggest.errors.unknownCatalog.response).toEqual({ error: 'catalog must be 1.' });
+  });
+
+  it('is offered "Seedance" for "see" without asking, when it has a post to open', () => {
+    const entities = parseSearchSuggestResponse(withPosts.response)!.entities;
+    expect(entities.map((entity) => entity.label)).toEqual(['Seedance 2']);
+    expect(entities[0]).toMatchObject({ inCatalog: true, postCount: 1, catalogModel: { id: 'seedance-2', kind: 'video' } });
+    expect(searchTypeaheadEntityOpening(entities[0], 'mobile')).toEqual({ type: 'posts', madeWith: 'model:seedance-2', query: null });
+  });
+
+  it('opens the creator for a catalog model with no posts, where the app has that model', () => {
+    const [seedance, older, webOnly] = parseSearchSuggestResponse(asked.response)!.entities;
+    expect(searchTypeaheadEntityOpening(seedance, 'mobile').type).toBe('posts');
+    expect(searchTypeaheadEntityOpening(older, 'mobile')).toEqual({
+      type: 'creator', model: { id: 'seedance-1.5-pro', kind: 'video', web: true, mobile: true },
+    });
+    // A model on the web alone has nothing to open in the app: its row is not drawn there.
+    expect(isSearchTypeaheadEntityOffered(webOnly, 'mobile')).toBe(false);
+    expect(isSearchTypeaheadEntityOffered(webOnly, 'web')).toBe(true);
+  });
+
+  it('searches the query a row carries when two letters were typed', () => {
+    const [entity] = parseSearchSuggestResponse(twoLetters.response)!.entities;
+    expect(twoLetters.query.q).toHaveLength(suggest.limits.minCatalogQueryLength);
+    expect(searchTypeaheadEntityOpening(entity, 'mobile')).toEqual({ type: 'posts', madeWith: 'model:seedance-2', query: 'seedance-2' });
   });
 });
 

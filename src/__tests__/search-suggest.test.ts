@@ -121,6 +121,8 @@ describe('search suggest limits', () => {
       maxCompletions: SEARCH_SUGGEST_MAX_COMPLETIONS,
       // An entity opens Posts, which are searched from three characters.
       minEntityQueryLength: PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
+      // A catalog model, for a request that asked for the catalog, from two.
+      minCatalogQueryLength: 2,
     });
     expect(contract.response.creators.length).toBeLessThanOrEqual(SEARCH_SUGGEST_MAX_CREATORS);
     expect(contract.response.entities.length).toBeLessThanOrEqual(SEARCH_SUGGEST_MAX_ENTITIES);

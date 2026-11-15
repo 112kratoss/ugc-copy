@@ -308,8 +308,10 @@ describe('search suggestions migration', () => {
     const parameters = header![1].split(',').map((parameter) => parameter.trim().split(/\s+/)[0]);
     expect(parameters).toEqual(['p_query', 'p_viewer_user_id', 'p_handles_only', 'p_creator_limit', 'p_completion_limit']);
     // PostgREST finds a function by its arguments' names: each one the service sends must be one of these.
+    // The five of this file first, as it named them; the sixth is 20261115105944's (p_catalog).
     const sent = Array.from(serviceSource.matchAll(/^\s+(p_\w+):/gm), (match) => match[1]);
-    expect(sent).toEqual(parameters);
+    expect(sent.slice(0, parameters.length)).toEqual(parameters);
+    expect(sent.slice(parameters.length)).toEqual(['p_catalog']);
     expect(serviceSource).toContain(".rpc('search_suggestions', {");
     expect(header![1]).toContain(`p_creator_limit integer DEFAULT ${SEARCH_SUGGEST_MAX_CREATORS}`);
     expect(header![1]).toContain(`p_completion_limit integer DEFAULT ${SEARCH_SUGGEST_MAX_COMPLETIONS}`);
@@ -366,7 +368,9 @@ describe('search suggestions entities migration', () => {
   });
 
   it('takes entities from search itself, and only takes away from its answer', () => {
-    const { definition } = newestDefinition('search_suggestions');
+    // As this file made it. 20261115105944 re-creates the function to add the
+    // product's own catalog models; its test holds what is kept of this.
+    const definition = definitionIn(entitiesStatements, 'search_suggestions');
     // The one source: the call /api/search makes, for this query and viewer, with no filter of its own.
     expect(definition).toContain('FROM public.search_public_entities(p_query, p_viewer_user_id, 10, NULL)');
     expect(definition.match(/search_public_entities/g)).toHaveLength(1);
@@ -405,12 +409,12 @@ describe('search suggestions entities migration', () => {
   });
 
   it('is read by the service list for list, with the cap the SQL holds', () => {
-    expect(serviceSource).toContain('entities: entityRows.slice(0, SEARCH_SUGGEST_MAX_ENTITIES).map((row) => entityFromRow(client, row)),');
+    expect(serviceSource).toContain('entityRows.slice(0, SEARCH_SUGGEST_MAX_ENTITIES).map((row) => entityFromRow(client, row)),');
     for (const column of ['kind', 'key', 'label', 'post_count', 'post_count_capped']) {
       expect(serviceSource, column).toContain(`row.${column}`);
     }
-    // The service sends the same five arguments as before: nothing new to name.
+    // The service sends the five arguments it sent, and since 20261115105944 a sixth.
     expect(Array.from(serviceSource.matchAll(/^\s+(p_\w+):/gm), (match) => match[1]))
-      .toEqual(['p_query', 'p_viewer_user_id', 'p_handles_only', 'p_creator_limit', 'p_completion_limit']);
+      .toEqual(['p_query', 'p_viewer_user_id', 'p_handles_only', 'p_creator_limit', 'p_completion_limit', 'p_catalog']);
   });
 });

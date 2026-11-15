@@ -1641,6 +1641,7 @@
       "method": "GET",
       "path": "/api/search/suggest",
       "auth": "optional",
+      "catalogParameter": "catalog",
       "query": {
         "q": "Lum"
       },
@@ -1653,7 +1654,8 @@
         "maxCreators": 5,
         "maxEntities": 3,
         "maxCompletions": 6,
-        "minEntityQueryLength": 3
+        "minEntityQueryLength": 3,
+        "minCatalogQueryLength": 2
       },
       "rateLimit": {
         "scope": "public-search:suggest",
@@ -1693,7 +1695,10 @@
               "width": 1024,
               "height": 1536,
               "mediaKind": "video"
-            }
+            },
+            "inCatalog": false,
+            "catalogModel": null,
+            "query": null
           }
         ],
         "completions": [
@@ -1833,7 +1838,145 @@
                 "label": "Luma Ray 2",
                 "postCount": 14,
                 "postCountCapped": false,
-                "thumbnail": null
+                "thumbnail": null,
+                "inCatalog": false,
+                "catalogModel": null,
+                "query": null
+              }
+            ],
+            "completions": []
+          }
+        },
+        "catalogModelWithPosts": {
+          "query": {
+            "q": "see"
+          },
+          "response": {
+            "query": "see",
+            "normalizedQuery": "see",
+            "creators": [],
+            "entities": [
+              {
+                "kind": "model",
+                "key": "seedance-2",
+                "label": "Seedance 2",
+                "postCount": 1,
+                "postCountCapped": false,
+                "thumbnail": {
+                  "postId": "77777777-7777-4777-8777-777777777777",
+                  "url": "https://cdn.example.test/previews/seedance-city.webp",
+                  "thumbhash": "HBkSHYSIeHiPiHh8eJd4eTN0EEQG",
+                  "width": 1280,
+                  "height": 720,
+                  "mediaKind": "video"
+                },
+                "inCatalog": true,
+                "catalogModel": {
+                  "id": "seedance-2",
+                  "kind": "video",
+                  "web": true,
+                  "mobile": true
+                },
+                "query": null
+              }
+            ],
+            "completions": []
+          }
+        },
+        "catalogModels": {
+          "query": {
+            "q": "see",
+            "catalog": "1"
+          },
+          "response": {
+            "query": "see",
+            "normalizedQuery": "see",
+            "creators": [],
+            "entities": [
+              {
+                "kind": "model",
+                "key": "seedance-2",
+                "label": "Seedance 2",
+                "postCount": 1,
+                "postCountCapped": false,
+                "thumbnail": {
+                  "postId": "77777777-7777-4777-8777-777777777777",
+                  "url": "https://cdn.example.test/previews/seedance-city.webp",
+                  "thumbhash": "HBkSHYSIeHiPiHh8eJd4eTN0EEQG",
+                  "width": 1280,
+                  "height": 720,
+                  "mediaKind": "video"
+                },
+                "inCatalog": true,
+                "catalogModel": {
+                  "id": "seedance-2",
+                  "kind": "video",
+                  "web": true,
+                  "mobile": true
+                },
+                "query": null
+              },
+              {
+                "kind": "model",
+                "key": "seedance-1.5-pro",
+                "label": "Seedance 1.5 Pro",
+                "postCount": 0,
+                "postCountCapped": false,
+                "thumbnail": null,
+                "inCatalog": true,
+                "catalogModel": {
+                  "id": "seedance-1.5-pro",
+                  "kind": "video",
+                  "web": true,
+                  "mobile": true
+                },
+                "query": null
+              },
+              {
+                "kind": "model",
+                "key": "seedream-5-pro",
+                "label": "Seedream 5 Pro",
+                "postCount": 0,
+                "postCountCapped": false,
+                "thumbnail": null,
+                "inCatalog": true,
+                "catalogModel": {
+                  "id": "seedream-5-pro",
+                  "kind": "image",
+                  "web": true,
+                  "mobile": false
+                },
+                "query": null
+              }
+            ],
+            "completions": []
+          }
+        },
+        "catalogModelsOfTwoLetters": {
+          "query": {
+            "q": "se",
+            "catalog": "1"
+          },
+          "response": {
+            "query": "se",
+            "normalizedQuery": "se",
+            "creators": [],
+            "entities": [
+              {
+                "kind": "model",
+                "key": "seedance-2",
+                "label": "Seedance 2",
+                "postCount": 1,
+                "postCountCapped": false,
+                "thumbnail": null,
+                "inCatalog": true,
+                "catalogModel": {
+                  "id": "seedance-2",
+                  "kind": "video",
+                  "web": true,
+                  "mobile": true
+                },
+                "query": "seedance-2"
               }
             ],
             "completions": []
@@ -1874,6 +2017,16 @@
           "status": 400,
           "response": {
             "error": "q must be at most 100 characters."
+          }
+        },
+        "unknownCatalog": {
+          "query": {
+            "q": "see",
+            "catalog": "yes"
+          },
+          "status": 400,
+          "response": {
+            "error": "catalog must be 1."
           }
         },
         "rateLimited": {
