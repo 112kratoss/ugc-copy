@@ -173,7 +173,8 @@ test.describe('search starting and ending screens', () => {
     await shot(page, 'desktop-03-empty-tab');
     // Read from Top's answer on hand: nothing more was asked.
     // (`entry=link`: the page was opened on an address, said to the search log.)
-    expect(searches).toEqual(['?q=nano&type=top&entry=link', '?q=nano&type=recipes&entry=link']);
+    // (`relatedSearches`: the chips of searches near this one, asked with the first page of Top and Posts.)
+    expect(searches).toEqual(['?q=nano&type=top&relatedSearches=1&entry=link', '?q=nano&type=recipes&entry=link']);
     await page.getByRole('button', { name: 'See posts' }).click();
     await expect(page.getByRole('tab', { name: 'Posts' })).toHaveAttribute('aria-selected', 'true');
     await expect(page).toHaveURL(/[?&]type=posts/);

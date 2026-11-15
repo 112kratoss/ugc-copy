@@ -5,11 +5,13 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 
 import {
   SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS,
+  SEARCH_TYPEAHEAD_CATALOG_PARAM,
   SEARCH_TYPEAHEAD_DEBOUNCE_MS,
   SEARCH_TYPEAHEAD_KEPT_ANSWERS,
   SEARCH_TYPEAHEAD_KEPT_ANSWER_MS,
   SEARCH_TYPEAHEAD_OFFER_ALL,
   SEARCH_TYPEAHEAD_PRESS_SETTLE_MS,
+  isSearchTypeaheadEntityOffered,
   isSearchTypeaheadPressAccepted,
   searchTypeaheadAsks,
   isSearchTypeaheadShown,
@@ -29,6 +31,7 @@ import {
   type SearchTypeaheadPlacement,
   type SearchTypeaheadRow,
 } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
+import { withoutRepeatedEntityNames } from './search-typeahead-rows';
 
 // The browser's Supabase client, loaded when a request first needs the
 // session, as the shell's other readers load it (AuthProvider,
@@ -58,6 +61,16 @@ const NO_ROWS: readonly string[] = [];
 
 // No recent search: one array, so a box without a list keeps its memo.
 const NO_RECENTS: readonly string[] = [];
+
+/**
+ * An answer with only the model and tool rows the web can open: every row
+ * with posts, and a catalog model nobody has posted with only where the web
+ * has its creator (isSearchTypeaheadEntityOffered).
+ */
+function offeredOnTheWeb(response: SearchSuggestResponse): SearchSuggestResponse {
+  const entities = response.entities.filter((entity) => isSearchTypeaheadEntityOffered(entity, 'web'));
+  return entities.length === response.entities.length ? response : { ...response, entities };
+}
 
 export function useSearchTypeahead({ text, focused, closedFor = null, recents = NO_RECENTS, offer = SEARCH_TYPEAHEAD_OFFER_ALL }: {
   /** What the box holds. */
@@ -156,7 +169,9 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
         }
         const { data: { session } } = await supabase.auth.getSession();
         if (controller.signal.aborted) return;
-        const reply = await fetch(`/api/search/suggest?q=${encodeURIComponent(query)}`, {
+        // Asked for every name the product keeps (`catalog=1`): this box opens the creator for a
+        // catalog model nobody has posted with, and searches the query a row carries.
+        const reply = await fetch(`/api/search/suggest?q=${encodeURIComponent(query)}&${SEARCH_TYPEAHEAD_CATALOG_PARAM}=1`, {
           headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
           signal: controller.signal,
         });
@@ -165,7 +180,8 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
           const seconds = typeof body?.retryAfterSeconds === 'number' && body.retryAfterSeconds > 0 ? body.retryAfterSeconds : 5;
           refusedUntil.current = Date.now() + Math.min(seconds, 60) * 1000;
         }
-        response = reply.ok ? parseSearchSuggestResponse(body) : null;
+        const parsed = reply.ok ? parseSearchSuggestResponse(body) : null;
+        response = parsed ? offeredOnTheWeb(parsed) : null;
       } catch {
         // Offline, aborted, or not JSON: a suggestion is an extra, and its failure is nothing.
         response = null;
@@ -206,11 +222,12 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
   }
 
   // This text's answer, or until it arrives the one before it, marked stale.
-  const { sections, stale } = useMemo(
+  const { sections, stale } = useMemo(() => {
     // A text not asked about draws no answer, not even the one before it.
-    () => searchTypeaheadDrawn(asks ? answer : null, query, { recents, offer }),
-    [answer, asks, offer, query, recents],
-  );
+    const drawn = searchTypeaheadDrawn(asks ? answer : null, query, { recents, offer });
+    // A name drawn as a model's or tool's row is not suggested again as a search under it.
+    return { ...drawn, sections: withoutRepeatedEntityNames(drawn.sections) };
+  }, [answer, asks, offer, query, recents]);
   const rows = useMemo(() => searchTypeaheadRows(sections), [sections]);
   const shown = isSearchTypeaheadShown({ focused, query, closedQuery, rowCount: rows.length });
   const highlightedAt = shown && highlight !== null && highlight.query === query

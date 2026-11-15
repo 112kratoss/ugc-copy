@@ -10,20 +10,32 @@ import {
   type SearchTypeaheadRow,
   type SearchTypeaheadSection,
 } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
+import { SearchRowPicture } from './SearchRowPicture';
+import { searchCatalogModelActionLabel, searchCatalogModelLine } from './search-ui-words';
+import { isSearchTypeaheadCreatorRow } from './search-typeahead-rows';
 import { searchTypeaheadOptionId } from './use-search-typeahead';
 
 const NO_ROWS: readonly string[] = [];
+
+/** A row's accessible name: the shared one, but for a catalog model with no posts, which opens its creator. */
+function typeaheadRowLabel(row: SearchTypeaheadRow): string {
+  if (row.kind === 'entity' && row.entity.catalogModel && isSearchTypeaheadCreatorRow(row.entity)) {
+    return searchCatalogModelActionLabel(row.entity.label, row.entity.catalogModel.kind);
+  }
+  return searchTypeaheadRowLabel(row);
+}
 
 const ICON_FRAME_CLASS = 'flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06]';
 
 /**
  * A query row's text: what the person typed plain, what the row adds heavier
  * (searchTypeaheadTextRuns). The row's accessible name is its whole label, so
- * the runs are drawing only.
+ * the runs are drawing only. Two lines before it is cut: a phrase found in
+ * posts can be long, and the words it adds are at its end.
  */
 function QueryText({ text, query }: { text: string; query: string | null }) {
   return (
-    <span className="min-w-0 flex-1 truncate text-sm text-zinc-300">
+    <span className="line-clamp-2 min-w-0 flex-1 break-words text-sm leading-5 text-zinc-300">
       {searchTypeaheadTextRuns(text, query).map((run, index) => (
         <span key={index} className={run.typed ? undefined : 'font-semibold text-white'}>{run.text}</span>
       ))}
@@ -57,16 +69,17 @@ function RowBody({ row, query }: { row: SearchTypeaheadRow; query: string | null
     );
   }
   if (row.kind === 'entity') {
-    const Icon = row.entity.kind === 'model' ? Box : Wrench;
+    const { entity } = row;
+    // A model of the catalog nobody has posted with opens its creator: it says so, never "0 posts".
+    const model = isSearchTypeaheadCreatorRow(entity) ? entity.catalogModel ?? null : null;
     return (
       <>
-        <span className={`${ICON_FRAME_CLASS} text-[var(--ui-primary)]`}>
-          <Icon className="h-4 w-4" aria-hidden="true" />
-        </span>
+        {/* The name drawn whole: it need not hold what was typed ("sdxl" offers Stability AI). */}
+        <SearchRowPicture thumbnail={entity.thumbnail} icon={entity.kind === 'model' ? Box : Wrench} className="h-9 w-9 rounded-lg" />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold text-white">{row.entity.label}</span>
+          <span className="block truncate text-sm font-semibold text-white">{entity.label}</span>
           <span className="block truncate text-xs text-zinc-400">
-            {searchEntityKindLabel(row.entity.kind)} · {searchEntityCountLabel(row.entity)}
+            {model ? searchCatalogModelLine(model.kind) : `${searchEntityKindLabel(entity.kind)} · ${searchEntityCountLabel(entity)}`}
           </span>
         </span>
       </>
@@ -165,7 +178,7 @@ export function SearchTypeaheadList({
                   id={searchTypeaheadOptionId(listId, rowIndex)}
                   role="option"
                   aria-selected={active}
-                  aria-label={searchTypeaheadRowLabel(row)}
+                  aria-label={typeaheadRowLabel(row)}
                   data-typeahead-row={row.kind === 'completion' && row.recent ? 'recent' : row.kind}
                   data-settling={settling || undefined}
                   onClick={() => onPick(row)}

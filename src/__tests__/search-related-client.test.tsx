@@ -76,7 +76,7 @@ const posts = (count: number) => Array.from({ length: count }, (_, index) => pos
 
 // Without `entry` (how the query was entered, said to the search log: always the last
 // parameter; search-client.test.tsx, "the search log", pins it).
-const asked = () => fetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, ''));
+const asked = () => fetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, '').replace(/&relatedSearches=1/u, ''));
 const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 const type = (value: string) => fireEvent.change(screen.getByRole('combobox'), { target: { value } });
 const enter = () => fireEvent.submit(screen.getByRole('search'));
@@ -157,7 +157,8 @@ describe('related posts on the search page', () => {
     type('ocean at dusk');
     enter();
     await tick(PAUSE);
-    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top&related=1']);
+    // Settled and of three words: in the blended order too (search-blend.ts).
+    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top&related=1&blend=1']);
     expect(relatedGroup()).not.toBeNull();
     // It was asked for with the search: there is no second request.
     await tick(SEARCH_RELATED_SETTLE_MS * 2);
@@ -172,7 +173,8 @@ describe('related posts on the search page', () => {
     fetchMock.mockResolvedValue(ok(answer({ related: RELATED })));
     enter();
     await tick(0);
-    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top', '/api/search?q=ocean+at+dusk&type=top&related=1']);
+    // One request brings both: the related posts and the blended order the settled search now has.
+    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top', '/api/search?q=ocean+at+dusk&type=top&related=1&blend=1']);
     expect(relatedGroup()).not.toBeNull();
   });
 
@@ -183,12 +185,13 @@ describe('related posts on the search page', () => {
     enter();
     await tick(PAUSE);
     // Settled, so the first page asks; its answer has its own posts and a next page.
-    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=posts&related=1']);
+    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=posts&related=1&blend=1']);
     await tick(SEARCH_RELATED_SETTLE_MS * 2);
     expect(asked()).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
     await tick(0);
-    expect(asked().at(-1)).toBe('/api/search?q=ocean+at+dusk&type=posts&cursor=page-2');
+    // The blended order goes on with its later pages; related posts never do.
+    expect(asked().at(-1)).toBe('/api/search?q=ocean+at+dusk&type=posts&cursor=page-2&blend=1');
 
     // A full Top answer that came without the parameter is left as it is.
     fetchMock.mockClear();
@@ -216,9 +219,11 @@ describe('related posts on the search page', () => {
     enter();
     await tick(SEARCH_RELATED_SETTLE_MS * 2);
     // The tab's own search, and at most Top's once more for an empty tab to
-    // say what the other tabs hold (never with related posts).
+    // say what the other tabs hold, or, for a filtered search settled on, the
+    // same search in the blended order, which filters do not change
+    // (search-blend.ts): never with related posts.
     expect(asked()[0]).toBe(url);
-    expect(asked().slice(1).every((other) => other === '/api/search?q=ocean+at+dusk&type=top&probe=1')).toBe(true);
+    expect(asked().slice(1).every((other) => other === '/api/search?q=ocean+at+dusk&type=top&probe=1' || other === `${url}&blend=1`)).toBe(true);
     expect(asked().length).toBeLessThanOrEqual(2);
   });
 
@@ -251,7 +256,7 @@ describe('related posts on the search page', () => {
     await tick(0);
     fireEvent.click(screen.getByRole('button', { name: 'Search again for ocean at dusk' }));
     await tick(PAUSE);
-    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top&related=1']);
+    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top&related=1&blend=1']);
   });
 
   it('asks for a search that arrived in the address after its answer has stood', async () => {

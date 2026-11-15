@@ -11,7 +11,7 @@ import { useSearchScreenCrossFade } from '@/components/search/SearchEntrancePart
 import { SearchField } from '@/components/search/SearchField';
 import { SearchPostWall } from '@/components/search/SearchPostWall';
 import { SearchResultsPlaceholder } from '@/components/search/SearchResultsPlaceholder';
-import { SearchStarter, useSearchStarter } from '@/components/search/SearchStarter';
+import { SearchQueryChip, SearchStarter, useSearchStarter } from '@/components/search/SearchStarter';
 import { SearchStateBlock } from '@/components/search/SearchStateBlock';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
 import { clearSearchFieldHandoff, searchFieldHandoffEntry, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
@@ -23,6 +23,8 @@ import {
   searchEntrancePending,
 } from '@/components/search/search-entrance';
 import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
+import { searchTypeaheadEntityRoute } from '@/components/search/search-typeahead-rows';
+import { SEARCH_RELATED_SEARCHES_HEADING } from '@/components/search/search-ui-words';
 import {
   NO_PUBLIC_SEARCH_FILTERS,
   PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
@@ -70,6 +72,7 @@ import {
   shownRecentSearches,
   SEARCH_RELATED_HEADING,
   SEARCH_RELATED_PARAM,
+  SEARCH_RELATED_SEARCHES_PARAM,
   SEARCH_RETRY_LABEL,
   SEARCH_SEARCHING_LABEL,
   SEARCH_SEE_ALL_LABEL,
@@ -105,6 +108,8 @@ import {
   searchRelatedApplies,
   searchRelatedFollowUpDelay,
   searchRelatedPosts,
+  searchRelatedSearches,
+  searchRelatedSearchesApply,
   searchRelatedStatus,
   searchSaysNoResults,
   searchSeeAllLabel,
@@ -113,7 +118,12 @@ import {
   toggleSearchFilterSwitch,
   type SearchTopSection,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
-import { appendSearchPosts, isSearchPageAllRepeats } from '../../../ugc-mobile/lib/public-search-policy/search-blend';
+import {
+  appendSearchPosts,
+  isSearchPageAllRepeats,
+  searchBlendApplies,
+  searchBlendParams,
+} from '../../../ugc-mobile/lib/public-search-policy/search-blend';
 import { searchTypeaheadOfferForTab, type SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
 import {
   SEARCH_STARTER_NO_RESULTS_HEADING,
@@ -141,6 +151,8 @@ import type { Session } from '@supabase/supabase-js';
 
 const SEARCH_DEBOUNCE_MS = 300;
 
+const NO_FOLLOW_CHANGES: Readonly<Record<string, boolean>> = {};
+
 // What a request asked for. Its answer or error is drawn only while the page
 // still asks the same thing, so a change never reads as the old outcome.
 // `narrowing` is the filters and the exact reading as one string
@@ -148,13 +160,26 @@ const SEARCH_DEBOUNCE_MS = 300;
 type SearchRequest = { query: string; type: PublicSearchType; sort: PublicSearchSort; narrowing: string };
 // `relatedAsked`: the answer was asked for with related posts, or has been
 // asked about them since. They are asked about once per answer.
+// `blendAsked`: the answer was asked for in the blended Posts order
+// (`blend=1`, search-blend.ts), or has been asked about it since: its later
+// pages are asked for in it too, and it is not asked for again. A later page
+// of a word-order list that names the blend is read in the word order (the
+// server blends only from a cursor it issued for a blended list), so a
+// follow-up that failed costs nothing later.
 // `viewerId`: the account the answer was asked for (a guest's, or null for a
 // visitor): what Back may draw it for (search-kept-pages.ts), and whose own
 // recipes its cards say "Your recipe" on.
-type SearchAnswer = SearchRequest & { result: PublicSearchResponse; relatedAsked: boolean; viewerId: string | null };
+type SearchAnswer = SearchRequest & {
+  result: PublicSearchResponse;
+  relatedAsked: boolean;
+  blendAsked: boolean;
+  viewerId: string | null;
+};
+/** An answer as Back may hold it: one kept before the blended order has no `blendAsked`, and was never blended. */
+type KeptSearchAnswer = Omit<SearchAnswer, 'blendAsked'> & { blendAsked?: boolean };
 
 /** A kept answer in the shape this page draws: a tab that spans a deploy may hold an older one. */
-function isKeptSearchAnswer(value: unknown): value is SearchAnswer {
+function isKeptSearchAnswer(value: unknown): value is KeptSearchAnswer {
   if (typeof value !== 'object' || value === null) return false;
   const answer = value as Partial<SearchAnswer>;
   const result = answer.result as Partial<PublicSearchResponse> | undefined;
@@ -163,6 +188,7 @@ function isKeptSearchAnswer(value: unknown): value is SearchAnswer {
     && typeof answer.sort === 'string'
     && typeof answer.narrowing === 'string'
     && typeof answer.relatedAsked === 'boolean'
+    && (answer.blendAsked === undefined || typeof answer.blendAsked === 'boolean')
     && (answer.viewerId === null || typeof answer.viewerId === 'string')
     && typeof result === 'object' && result !== null
     && Array.isArray(result.creators?.items)
@@ -458,11 +484,12 @@ export default function SearchClient({
   // has brought the page back to it (search-kept-pages.ts): drawn at once,
   // with the pages "Show more" added, at the place they had scrolled to, and
   // not asked for again. A fresh visit to the same address asks as before.
-  const [restored] = useState<KeptSearchPage<SearchAnswer> | null>(() => (
-    readSearchPageAddress()
+  const [restored] = useState<KeptSearchPage<SearchAnswer> | null>(() => {
+    const kept = readSearchPageAddress()
       ? readKeptSearchPage(`${window.location.pathname}${window.location.search}`, isKeptSearchAnswer)
-      : null
-  ));
+      : null;
+    return kept ? { ...kept, answer: { ...kept.answer, blendAsked: kept.answer.blendAsked === true } } : null;
+  });
   const [query, setQuery] = useState(opening.query);
   // The tab the user chose. It stays chosen whatever the length of the query:
   // a tab that is not searched yet shows the idle state (searchTabRuns).
@@ -485,6 +512,16 @@ export default function SearchClient({
   // The account the session names now, once read (undefined until then):
   // an answer asked for another is never kept for Back.
   const viewer = useRef<string | null | undefined>(undefined);
+  // The same account, for drawing: its own creator card offers no Follow.
+  const [viewerId, setViewerId] = useState<string | null>(null);
+  // Creators followed or unfollowed from this page since their answer came,
+  // by id: the start screen's answer is not this page's to change, and a
+  // creator can be on it and among the results at once. They belong to the
+  // account that made them, so another account draws none of them.
+  const [followChanges, setFollowChanges] = useState<{ viewerId: string | null; byId: Readonly<Record<string, boolean>> }>(
+    { viewerId: null, byId: {} },
+  );
+  const followed = followChanges.viewerId === viewerId ? followChanges.byId : NO_FOLLOW_CHANGES;
   // Recent searches live in this browser alone, and are read after the first
   // paint: the server's HTML has none to agree with.
   const [history, setHistory] = useState<string[]>([]);
@@ -559,8 +596,14 @@ export default function SearchClient({
   // (public-search-policy.ts, "Related posts"); one still being typed is not.
   // The ref is read as a request is sent, the state by the wait after an
   // answer: a request that read the state would be made again when it changed.
-  const settledQueryAtSend = useRef<string | null>(null);
-  const [settledQuery, setSettledQuery] = useState<string | null>(null);
+  // A search the top bar's field handed over was settled there (Enter, a
+  // suggestion, a recent search), all but a model's or tool's row, which
+  // opens Posts narrowed to it here as it does on this page.
+  const [handedOffSettled] = useState(() => (
+    openingEntry !== null && handedOff && openingEntry !== 'entity' ? normalizePublicSearchQuery(opening.query) : null
+  ));
+  const settledQueryAtSend = useRef<string | null>(handedOffSettled);
+  const [settledQuery, setSettledQuery] = useState<string | null>(handedOffSettled);
   const settleOn = (settled: string) => {
     settledQueryAtSend.current = settled;
     setSettledQuery(settled);
@@ -605,23 +648,31 @@ export default function SearchClient({
     laterPage: false,
   });
 
-  // `relatedFollowUp`: the search in front asked again for its related posts,
-  // over the answer on hand. That answer stays whatever becomes of the
-  // request: its failure is not the search's, and is drawn as nothing.
+  // `followUp`: the search in front asked again over the answer on hand, for
+  // its related posts or in the blended order. That answer stays whatever
+  // becomes of the request: its failure is not the search's, and is drawn as
+  // nothing. `blend`: a later page's answer was asked for in the blended order.
   const requestSearch = useCallback(async ({
     append = false,
     cursor = null,
-    relatedFollowUp = false,
-  }: { append?: boolean; cursor?: string | null; relatedFollowUp?: boolean } = {}) => {
+    followUp = false,
+    blend = false,
+  }: { append?: boolean; cursor?: string | null; followUp?: boolean; blend?: boolean } = {}) => {
     const request: SearchRequest = { query: normalizedQuery, type: activeType, sort: activeSort, narrowing };
+    const settled = settledQueryAtSend.current === request.query;
     // Asked for with the search a person has settled on, and by the follow-up; never for a later page.
-    const askRelated = relatedApplies && !cursor && (relatedFollowUp || settledQueryAtSend.current === request.query);
+    const askRelated = relatedApplies && !cursor && (followUp || settled);
+    // The blended order for a search the person settled on (searchBlendApplies),
+    // and for every later page of a list asked for in it.
+    const askBlend = cursor
+      ? blend
+      : searchBlendApplies({ query: request.query, type: request.type, sort: request.sort, exact: activeExact, settled });
     const sequence = ++requestSequence.current;
     requestController.current?.abort();
     const controller = new AbortController();
     requestController.current = controller;
     if (append) setLoadingMore(true);
-    if (!relatedFollowUp) setFailure(null);
+    if (!followUp) setFailure(null);
     try {
       const params = new URLSearchParams({ q: request.query, type: request.type });
       if (askRelated) params.set(SEARCH_RELATED_PARAM, '1');
@@ -630,6 +681,9 @@ export default function SearchClient({
       // A cursor pages the filters and the reading it was issued under, so a later page names them too.
       for (const [name, value] of Object.entries(publicSearchFilterParams(activeFilters, activeExact))) params.set(name, value);
       if (cursor) params.set('cursor', cursor);
+      // Searches near this one, drawn as chips over its results: with the first page of Top and Posts.
+      if (searchRelatedSearchesApply({ type: request.type, firstPage: !cursor })) params.set(SEARCH_RELATED_SEARCHES_PARAM, '1');
+      for (const [name, value] of Object.entries(searchBlendParams(askBlend))) params.set(name, value);
       for (const [name, value] of Object.entries(searchEntryParams(searchEntry.current))) params.set(name, value);
       const { data: { session } } = await supabase.auth.getSession();
       const registered = Boolean(session?.user) && session?.user?.is_anonymous !== true;
@@ -701,7 +755,7 @@ export default function SearchClient({
         keepTopAnswer(topAnswerKey(request.query, activeExact), next);
       }
       setAnswer((current) => {
-        if (!append) return { ...request, result: next, relatedAsked: askRelated, viewerId };
+        if (!append) return { ...request, result: next, relatedAsked: askRelated, blendAsked: askBlend, viewerId };
         if (!current || !isSameRequest(current, request.query, request.type, request.sort, request.narrowing)) return current;
         return {
           ...current,
@@ -717,11 +771,11 @@ export default function SearchClient({
     } catch (requestError) {
       if (sequence !== requestSequence.current) return;
       if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
-      if (relatedFollowUp) {
+      if (followUp) {
         // The answer on hand stands, and is not asked about again.
         setAnswer((current) => (
           current && isSameRequest(current, request.query, request.type, request.sort, request.narrowing)
-            ? { ...current, relatedAsked: true }
+            ? { ...current, relatedAsked: true, blendAsked: true }
             : current
         ));
         return;
@@ -786,6 +840,7 @@ export default function SearchClient({
     let disposed = false;
     const learnViewer = (session: Session | null) => {
       viewer.current = session?.user?.id ?? null;
+      setViewerId(viewer.current);
       setCanFollow(Boolean(session?.user) && session?.user?.is_anonymous !== true);
     };
     void supabase.auth.getSession().then(({ data: { session } }) => {
@@ -874,6 +929,20 @@ export default function SearchClient({
   }, [address]);
 
   const currentAnswer = isSameRequest(answer, normalizedQuery, activeType, activeSort, narrowing) ? answer : null;
+  // The blended order (search-blend.ts) for an answer that came while the
+  // query was still being typed, asked for at once when the person settles
+  // on it (Enter, most often): the cards dim meanwhile, as for any search on
+  // its way, so the new order lands as an answer and not as cards moving
+  // under the pointer. The one request brings the related posts too.
+  const blendFollowUp = currentAnswer !== null
+    && !currentAnswer.blendAsked
+    && searchBlendApplies({
+      query: normalizedQuery,
+      type: activeType,
+      sort: activeSort,
+      exact: activeExact,
+      settled: settledQuery === normalizedQuery,
+    });
 
   // What is on screen, kept for Back and Forward (search-kept-pages.ts): the
   // answer for the search in front, the pages added to it included, under the
@@ -946,7 +1015,10 @@ export default function SearchClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as the page mounts
   }, []);
   const currentFailure = isSameRequest(failure, normalizedQuery, activeType, activeSort, narrowing) ? failure : null;
-  const pending = canSearch && !currentAnswer && !currentFailure;
+  // A search on its way, and so is one asked for again in the blended order
+  // (blendFollowUp): its cards dim, or, where it found nothing, no verdict is
+  // given until the blended answer, which may find something, has come.
+  const pending = canSearch && ((!currentAnswer && !currentFailure) || blendFollowUp);
   // While the next query on the same tab loads, the previous cards stay up,
   // dimmed, and so do the cards of the other order while Top or Latest loads:
   // the two hold the same results. Another tab's answer holds other kinds, so
@@ -973,11 +1045,12 @@ export default function SearchClient({
       settled: settledQuery === normalizedQuery,
     })
     : null;
+  const followUpDelay = blendFollowUp ? 0 : relatedFollowUpDelay;
   useEffect(() => {
-    if (relatedFollowUpDelay === null) return;
-    const timer = window.setTimeout(() => void requestSearch({ relatedFollowUp: true }), relatedFollowUpDelay);
+    if (followUpDelay === null) return;
+    const timer = window.setTimeout(() => void requestSearch({ followUp: true }), followUpDelay);
     return () => window.clearTimeout(timer);
-  }, [relatedFollowUpDelay, requestSearch]);
+  }, [followUpDelay, requestSearch]);
   const relatedStatus = currentAnswer ? searchRelatedStatus(searchRelatedPosts(activeType, currentAnswer.result).length) : '';
   // One live region says the settled outcome, the reading first: "Showing
   // results for “portrait”. 12 results for portriat", and the related posts
@@ -1003,6 +1076,29 @@ export default function SearchClient({
       ?? null);
   const filtersShown = canSearch && publicSearchTypeHasFilters(activeType);
   const entities = shownAnswer ? offeredEntities(shownAnswer.result, activeType, normalizedQuery) : [];
+  // Searches near this one, from the posts it found: over a Top or Posts answer, six at most.
+  const relatedSearches = shownAnswer ? searchRelatedSearches(shownAnswer.result) : [];
+
+  // A creator followed or unfollowed from a row (SearchFollowButton): every
+  // row of it on the page says so, and so does the answer kept for Back.
+  const noteFollow = (creatorId: string, following: boolean) => {
+    setFollowChanges((current) => ({
+      viewerId,
+      byId: { ...(current.viewerId === viewerId ? current.byId : {}), [creatorId]: following },
+    }));
+    setAnswer((current) => (current?.result.creators.items.some((creator) => creator.id === creatorId)
+      ? {
+        ...current,
+        result: {
+          ...current.result,
+          creators: {
+            ...current.result.creators,
+            items: current.result.creators.items.map((creator) => (creator.id === creatorId ? { ...creator, isFollowing: following } : creator)),
+          },
+        },
+      }
+      : current));
+  };
 
   // Pressing an entity opens Posts narrowed to it and to nothing else: its
   // count is of the posts this query finds with it, so a switch left on from
@@ -1095,8 +1191,24 @@ export default function SearchClient({
       return;
     }
     if (action.type === 'entity') {
-      // As pressing the entity among the results does: Posts for what is typed, narrowed to it.
+      const route = searchTypeaheadEntityRoute(action.entity, query);
+      if (route.type === 'creator') {
+        // A model of the catalog nobody has posted with: its creator, with the model chosen,
+        // never a Posts page with nothing on it. Left as a creator's row is left.
+        writeSearchPageAddress(address);
+        keepBeforeLeaving.current?.();
+        router.push(route.href);
+        return;
+      }
+      // As pressing the entity among the results does: Posts narrowed to it, for the search its
+      // count was made for, which is the row's own query where the server gave one ("sdxl" opens
+      // Stability AI's posts for "stability ai"), and what is typed otherwise.
       searchEntry.current = 'entity';
+      const next = normalizePublicSearchQuery(route.query);
+      if (next !== normalizedQuery) {
+        scheduledQuery.current = next;
+        setQuery(next);
+      }
       pickEntity(action.entity);
       return;
     }
@@ -1111,6 +1223,19 @@ export default function SearchClient({
     searchEntry.current = searchEntryForChosenText(action.query, query, history);
     settleOn(next);
     setQuery(action.query);
+  };
+  // A related search pressed (the chips over a Top or Posts answer): its text
+  // in the box, searched at once on the same tab, in the same order and
+  // inside the same filters (it was found among these results), and
+  // committed as Enter commits a search.
+  const pickRelatedSearch = (text: string) => {
+    const next = normalizePublicSearchQuery(text);
+    if (!next || next === normalizedQuery) return;
+    scheduledQuery.current = next;
+    rememberOnAnswer.current = `${activeType}:${activeSort}:${publicSearchFilterKey(activeFilters, false)}:${next}`;
+    searchEntry.current = 'related';
+    settleOn(next);
+    setQuery(next);
   };
   // The starter's rows (SearchStarter.tsx). A model or tool: Posts for its
   // own query (`query`, which need not read like its name), narrowed to it and
@@ -1151,6 +1276,7 @@ export default function SearchClient({
   const readExact = exactQuery !== null && exactQuery === normalizedQuery;
   const emptyKindTab: SearchKindTab | null = activeType !== 'top'
     && currentAnswer !== null
+    && !pending
     && resultCount === 0
     && !hasPublicSearchFilters(activeFilters)
     && gatedQueryLength >= PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH
@@ -1217,8 +1343,11 @@ export default function SearchClient({
   const idleBlock = starter ? (
     <SearchStarter
       answer={starter}
+      viewerId={viewerId}
+      followed={followed}
       onEntity={pickStarterEntity}
       onSearch={pickStarterSearch}
+      onFollowChange={noteFollow}
     />
   ) : (
     <SearchStateBlock tone="initial" title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
@@ -1469,14 +1598,33 @@ export default function SearchClient({
                     <SearchStarter
                       answer={starter}
                       heading={SEARCH_STARTER_NO_RESULTS_HEADING}
+                      viewerId={viewerId}
+                      followed={followed}
                       onEntity={pickStarterEntity}
                       onSearch={pickStarterSearch}
+                      onFollowChange={noteFollow}
                     />
                   ) : null}
               </div>
             )
           ) : (
             <div className={`space-y-10 transition-opacity${staleResultsShown ? ' opacity-60' : ''}`}>
+              {relatedSearches.length ? (
+                <section aria-labelledby="search-related-searches-heading">
+                  <h2 id="search-related-searches-heading" className="mb-3 text-sm font-semibold text-zinc-400">
+                    {SEARCH_RELATED_SEARCHES_HEADING}
+                  </h2>
+                  {/* One row on a phone, scrolled sideways from edge to edge; wrapped from 640px. */}
+                  <ul className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0">
+                    {relatedSearches.map((item) => (
+                      <li key={item.text} className="flex shrink-0 sm:max-w-full sm:shrink">
+                        <SearchQueryChip text={item.text} onPress={() => pickRelatedSearch(item.text)} />
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+
               {entities.length ? (
                 <section aria-labelledby="search-entities-heading">
                   <h2 id="search-entities-heading" className="mb-4 text-xl font-semibold text-white">{SEARCH_ENTITIES_HEADING}</h2>
@@ -1498,7 +1646,20 @@ export default function SearchClient({
                     <h2 id="search-creators-heading" className="text-xl font-semibold text-white">Creators</h2>
                     {activeType === 'top' ? <SeeAllLink section="creators" onPress={() => setPickedType('creators')} /> : null}
                   </div>
-                  <div className="grid gap-3 lg:grid-cols-2">{shownAnswer.result.creators.items.map((creator) => <CreatorSearchResult key={creator.id} creator={creator} label={searchCreatorCardLabel(creator)} />)}</div>
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    {shownAnswer.result.creators.items.map((item) => {
+                      const creator = { ...item, isFollowing: followed[item.id] ?? item.isFollowing };
+                      return (
+                        <CreatorSearchResult
+                          key={creator.id}
+                          creator={creator}
+                          label={searchCreatorCardLabel(creator)}
+                          viewerId={viewerId}
+                          onFollowChange={noteFollow}
+                        />
+                      );
+                    })}
+                  </div>
                   {activeType === 'top' && searchTopSectionHasMore('creators', shownAnswer.result.creators.items.length)
                     ? <SeeAllButton section="creators" onPress={() => setPickedType('creators')} />
                     : null}
@@ -1540,7 +1701,7 @@ export default function SearchClient({
                   <button
                     type="button"
                     disabled={loadingMore || retryBlocked}
-                    onClick={() => void requestSearch({ append: true, cursor: nextCursor })}
+                    onClick={() => void requestSearch({ append: true, cursor: nextCursor, blend: currentAnswer?.blendAsked === true })}
                     className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-6 text-sm font-semibold text-white transition hover:bg-white/[0.09] disabled:opacity-50"
                   >
                     {loadingMore ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}

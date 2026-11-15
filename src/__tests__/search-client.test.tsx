@@ -169,7 +169,7 @@ function deferred<T>() {
  * log and to nothing else: always the last parameter). "the search log" below pins the entries.
  */
 function requestedUrls() {
-  return fetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, ''));
+  return fetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, '').replace(/&relatedSearches=1/u, ''));
 }
 
 /** How each search asked says it was entered. */
@@ -244,7 +244,8 @@ describe('SearchClient', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 2000 });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     // Opened on an address: said to the search log as a link.
-    expect(url).toBe('/api/search?q=luna&type=top&entry=link');
+    // Related searches with the first page of Top (searchRelatedSearchesApply), the entry last.
+    expect(url).toBe('/api/search?q=luna&type=top&relatedSearches=1&entry=link');
     expect(init.headers).toEqual({ Authorization: 'Bearer token-1' });
 
     expect(await screen.findByText('Luna Studio')).toBeInTheDocument();
@@ -843,8 +844,10 @@ describe('SearchClient', () => {
       render(<SearchClient initialQuery="luna" initialType="top" />);
       await settle();
 
-      expect(screen.getByRole('link', { name: /Luna Studio/ })).toHaveTextContent('Following');
-      expect(screen.getByRole('link', { name: /Luna Lake/ })).not.toHaveTextContent('Following');
+      // On the card's Follow, beside its link (2026-11-15: Follow from the list), and in the link's name.
+      expect(screen.getByRole('button', { name: 'Following Luna Studio' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('button', { name: 'Follow Luna Lake' })).toHaveAttribute('aria-pressed', 'false');
+      expect(screen.getByRole('link', { name: /Luna Studio's profile, @luna-studio, following/ })).not.toHaveTextContent('Following');
       expect(screen.getAllByText('Following')).toHaveLength(1);
     });
 
@@ -1453,7 +1456,8 @@ describe('SearchClient', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Search again for kling portrait' }));
         await settle(300);
         expect(field).toHaveValue('kling portrait');
-        expect(requestedUrls().at(-1)).toBe('/api/search?q=kling+portrait&type=top&related=1');
+        // Settled, and two words: in the blended order too (searchBlendApplies).
+        expect(requestedUrls().at(-1)).toBe('/api/search?q=kling+portrait&type=top&related=1&blend=1');
         // The box holds text: the results, and no list.
         expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
 
