@@ -18,7 +18,8 @@
 --
 -- public.search_blended_posts(p_query, p_query_hash, p_query_embedding,
 --   p_viewer_user_id, p_as_of, p_after_position, p_limit, p_made_with,
---   p_media_kind, p_has_recipe, p_followed_only, p_embedding_model)
+--   p_media_kind, p_has_recipe, p_followed_only, p_embedding_model,
+--   p_after_post_id)
 --
 -- 1. TWO LISTS, for one viewer, one instant and one set of filters.
 --    THE WORD LIST is the first c_word_window rows of search_public_posts,
@@ -110,17 +111,32 @@
 --    list is full, and held to the original by a test.
 --    PAGES. The window is a function of the query, the viewer, p_as_of, the
 --    filters and the vector, so a page is asked for by its place:
---    p_after_position rows are skipped. Each row also names its FLOOR
---    (floor_score, floor_post_id): the furthest row of the word order shown
---    up to and including it. A cursor carries both, the place and the floor.
---    When the blend cannot be made for a later page (the query's vector has
---    left the cache, the lookup is switched off, the app is rolled back to
---    code that knows no place), search_public_posts read from the floor
---    continues the list and repeats nothing: every word row shown so far is
---    at or before the floor. It can skip the few word rows that posts in
---    both lists had jumped, and it drops the meaning-only posts not yet
---    shown. Past the window a cursor carries the floor alone and is an
---    ordinary Top cursor.
+--    p_after_position rows are skipped. The window is rebuilt from the rows
+--    as they are at each request (a post published, removed or saved in
+--    between moves every place after it), so a page is also asked for by the
+--    last post shown, p_after_post_id: where the window still holds that
+--    post, the page starts after it, wherever it now stands, and the place
+--    is used only when the post is gone. What is left is a post that moves
+--    across that line between two pages: it can be shown twice, or once
+--    passed over. A CLIENT LEAVES OUT, BY ITS ID, A POST IT HAS ALREADY
+--    SHOWN.
+--    Each row also names its FLOOR (floor_score, floor_post_id): the last
+--    row of the unbroken run of the word order, from its top, shown up to
+--    and including that row. Word ranks 1, 3, 2 shown in that order have
+--    the floors 1, 1, 3. A row shown before the first word row has no floor.
+--    A cursor carries the place, the last post and the floor. When the blend
+--    cannot be made for a later page (the query's vector has left the cache,
+--    the lookup is switched off, the app is rolled back to code that knows
+--    no place), search_public_posts read from the floor continues the list,
+--    or from its top when there is no floor. That read passes over no post
+--    that holds the words: every word row before the floor has been shown.
+--    It repeats the word rows shown from further down, which posts in both
+--    lists are (such a post outranks every post the word list alone holds:
+--    1/100 + 0.9/80 is more than 1/51, so a first page can be made of them
+--    alone and its floor be none), and it drops the meaning-only posts not
+--    yet shown. Repeats are the client's to leave out; a skipped word match
+--    would be nobody's to find. Past the window a cursor carries the floor
+--    alone and is an ordinary Top cursor.
 --
 -- 4. WHEN IT DOES NOT BLEND, the rows are search_public_posts's own, in its
 --    order, each its own floor, in_window false, and blend_state says why:
@@ -133,7 +149,7 @@
 --                   of the words as typed and the posts found are of other
 --                   words: the answer is the corrected word order.
 --    Past the first page such a call returns nothing: its caller pages the
---    word order from its cursor's floor. Nothing here asks the embedding
+--    word order from its cursor's floor, or from its top without one. Nothing here asks the embedding
 --    function for anything, counts anything or writes anything.
 --    The service asks only for a search of two words or more in the ranked
 --    order, not a handle and not read as typed, by a client that sent
@@ -153,13 +169,28 @@
 -- in one pass here; that means a second copy of search_public_posts's match
 -- and score, which this file chose not to keep.
 --
+-- 5. THE SEARCH LOG SAYS WHEN AN ANSWER WAS BLENDED. search_query_events
+--    gains blended (boolean, false unless a row says otherwise). A blended
+--    answer's posts are not all word matches, so its row counts them apart:
+--    post_count is the posts that hold the words (matched by words or by
+--    both), related_count the posts found by meaning alone, as it already
+--    counts the related group. "The words found nothing" therefore still
+--    reads post_count = 0 whichever way the answer was ordered, and the
+--    report's zero-result test keeps its meaning; blended lets a report
+--    split the two orders later. search_query_report is not touched.
+--
 -- THE RELEASE WINDOW. Migrations apply before the new app is promoted.
--- Nothing live calls this function until the new app does, and nothing
--- existing is changed: search_public_posts, search_related_posts,
+-- Nothing live calls this function until the new app does, and no existing
+-- function is changed: search_public_posts, search_related_posts,
 -- search_post_score, the documents, the embeddings and their job are
 -- untouched, so the app live meanwhile, and the new app after a code-only
--- rollback, read what they read before. No table, column, index or trigger
--- is added, and no lock is taken beyond the catalog's for one new function.
+-- rollback, read what they read before. The app live meanwhile writes its
+-- log rows without the new column, which takes its default.
+--
+-- LOCKS. The new column takes ACCESS EXCLUSIVE on search_query_events for a
+-- catalog change only (a constant default rewrites no row), under the
+-- 5-second lock timeout. No other table is locked, and no index or trigger
+-- is added.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
@@ -175,7 +206,8 @@ CREATE FUNCTION public.search_blended_posts(
   p_media_kind text DEFAULT NULL,
   p_has_recipe boolean DEFAULT false,
   p_followed_only boolean DEFAULT false,
-  p_embedding_model text DEFAULT 'gte-small'
+  p_embedding_model text DEFAULT 'gte-small',
+  p_after_post_id uuid DEFAULT NULL
 )
 RETURNS TABLE(
   post_id uuid,
@@ -456,11 +488,21 @@ BEGIN
       )::integer AS place
     FROM fused
   ),
+  -- For each word row, the place by which it and every word row before it
+  -- have been shown.
+  reached AS (
+    SELECT
+      placed.word_rank,
+      max(placed.place) OVER (ORDER BY placed.word_rank ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS by_place
+    FROM placed
+    WHERE placed.word_rank IS NOT NULL
+  ),
   floored AS (
     SELECT
       placed.*,
-      -- The furthest place in the word list of any row up to this one.
-      max(placed.word_rank) OVER (ORDER BY placed.place ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS floor_rank
+      -- The end of the unbroken run of the word order, from its top, shown
+      -- up to this row: NULL while the first word row is still to come.
+      (SELECT max(reached.word_rank) FROM reached WHERE reached.by_place <= placed.place) AS floor_rank
     FROM placed
   )
   SELECT
@@ -480,8 +522,13 @@ BEGIN
   FROM floored;
 
   v_window_size := cardinality(v_window_ids);
-  -- A place past the window (the window was longer when the cursor was
-  -- issued): the list goes on from the window's end.
+  -- The page starts after the last post shown, where the window still holds
+  -- it: its place may have moved since the cursor was issued. Without it,
+  -- at the place given; and a place past the window (the window was longer
+  -- then) goes on from the window's end.
+  IF v_after > 0 AND p_after_post_id IS NOT NULL THEN
+    v_after := coalesce(array_position(v_window_ids, p_after_post_id), v_after);
+  END IF;
   v_after := least(v_after, v_window_size);
 
   RETURN QUERY
@@ -513,12 +560,22 @@ BEGIN
 END;
 $function$;
 
-REVOKE ALL ON FUNCTION public.search_blended_posts(text, text, extensions.vector, uuid, timestamptz, integer, integer, text, text, boolean, boolean, text)
+REVOKE ALL ON FUNCTION public.search_blended_posts(text, text, extensions.vector, uuid, timestamptz, integer, integer, text, text, boolean, boolean, text, uuid)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.search_blended_posts(text, text, extensions.vector, uuid, timestamptz, integer, integer, text, text, boolean, boolean, text)
+GRANT EXECUTE ON FUNCTION public.search_blended_posts(text, text, extensions.vector, uuid, timestamptz, integer, integer, text, text, boolean, boolean, text, uuid)
   TO service_role;
 
-COMMENT ON FUNCTION public.search_blended_posts(text, text, extensions.vector, uuid, timestamptz, integer, integer, text, text, boolean, boolean, text) IS
-  'The blended Posts order: the first 50 rows of search_public_posts (the word list) and the 30 posts nearest the query vector at cosine similarity 0.82 or above over post_search_embeddings (the meaning list, public text only), merged by reciprocal rank fusion (k 50, word weight 1, meaning weight 0.9), posts whose title is the query first. Rows from p_after_position on; past the window, the word order. The vector is p_query_embedding or the cached one for p_query_hash; without one, or for a query read corrected, the rows are search_public_posts''s own (blend_state no_vector or corrected). Labelled posts, both sides of a block, stale vectors and posts outside the filters are left out of both lists before any limit. Service role only.';
+-- ─── 5. The search log says when an answer was blended ──────────────────────
+--
+-- False for every row written before this file, by the app live during the
+-- release, and for every answer in the word order.
+ALTER TABLE public.search_query_events
+  ADD COLUMN blended boolean NOT NULL DEFAULT false;
+
+COMMENT ON COLUMN public.search_query_events.blended IS
+  'True when the answer''s posts were in the blended order (search_blended_posts). On such a row post_count is the posts that hold the words (matched by words or by both lists) and related_count the posts found by meaning alone. False for rows written before 20261115130046 and for answers in the word order.';
+
+COMMENT ON FUNCTION public.search_blended_posts(text, text, extensions.vector, uuid, timestamptz, integer, integer, text, text, boolean, boolean, text, uuid) IS
+  'The blended Posts order: the first 50 rows of search_public_posts (the word list) and the 30 posts nearest the query vector at cosine similarity 0.82 or above over post_search_embeddings (the meaning list, public text only), merged by reciprocal rank fusion (k 50, word weight 1, meaning weight 0.9), posts whose title is the query first. Rows from p_after_position on, or from after p_after_post_id where the window holds it; past the window, the word order. Each row names its floor, the end of the unbroken run of the word order shown up to it. The vector is p_query_embedding or the cached one for p_query_hash; without one, or for a query read corrected, the rows are search_public_posts''s own (blend_state no_vector or corrected). Labelled posts, both sides of a block, stale vectors and posts outside the filters are left out of both lists before any limit. Service role only.';
 
 COMMIT;

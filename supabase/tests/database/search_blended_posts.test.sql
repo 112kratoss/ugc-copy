@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(64);
+select plan(79);
 
 -- …01 creates most posts; …02 is the creator the viewer blocked; …03 is the
 -- viewer; …04 blocked the viewer; …05 is a creator the viewer follows.
@@ -130,8 +130,10 @@ select is(
 select is(
   (select array_agg(right(floor_post_id::text, 2) order by blend_position)
    from public.search_blended_posts('amber lantern', null, pg_temp.vec(1), null, now(), 0, 25)),
-  array['11', '13', '13', '14', '14', '14'],
-  'each row names its floor: the furthest row of the word order shown up to it'
+  -- Shown, in order: word ranks 1, 3, 2, 4. After the second row ranks 1 and
+  -- 3 are shown and 2 is not: the run from the top ends at rank 1.
+  array['11', '11', '13', '14', '14', '14'],
+  'each row names its floor: the last row of the unbroken run of the word order shown up to it'
 );
 
 select ok(
@@ -434,8 +436,10 @@ $$;
 
 -- The blended list, all of it, paged as the service pages it: a page and one
 -- row more are read; the cursor after a page is the last shown row's floor,
--- with its place while the row after it is still inside the window; without
--- a place the next page is search_public_posts from that floor.
+-- with its place (and the last post shown) while the row after it is still
+-- inside the window; without a place, or when a later page cannot be
+-- blended, the next page is search_public_posts from that floor, or from
+-- its top when there is no floor yet.
 create function pg_temp.kite_paged(p_page integer, p_with_vector boolean default true) returns integer[]
 language plpgsql as $$
 declare
@@ -444,6 +448,7 @@ declare
   v_in_window boolean := true;
   v_score double precision;
   v_id uuid;
+  v_last uuid;
   v_rows record;
 begin
   for v_guard in 1..200 loop
@@ -453,10 +458,12 @@ begin
         array_agg(page.blend_position order by page.blend_position) as places,
         array_agg(page.in_window order by page.blend_position) as inside,
         array_agg(page.floor_score order by page.blend_position) as floor_scores,
-        array_agg(page.floor_post_id order by page.blend_position) as floor_ids
+        array_agg(page.floor_post_id order by page.blend_position) as floor_ids,
+        array_agg(page.post_id order by page.blend_position) as ids
       into v_rows
       from public.search_blended_posts(
-        'zephyr kite', null, case when p_with_vector or v_after = 0 then pg_temp.vec(1) end, null, now(), v_after, p_page + 1
+        'zephyr kite', null, case when p_with_vector or v_after = 0 then pg_temp.vec(1) end, null, now(), v_after, p_page + 1,
+        p_after_post_id => v_last
       ) as page;
       if v_rows.suffixes is null then
         -- No vector for a later page: the word order, from the floor.
@@ -469,7 +476,8 @@ begin
         null::integer[] as places,
         array_agg(false order by page.ordinality) as inside,
         array_agg(page.search_score order by page.ordinality) as floor_scores,
-        array_agg(page.post_id order by page.ordinality) as floor_ids
+        array_agg(page.post_id order by page.ordinality) as floor_ids,
+        array_agg(page.post_id order by page.ordinality) as ids
       into v_rows
       from public.search_public_posts('zephyr kite', null, v_score, v_id, p_page + 1, now(), 'top')
         with ordinality as page;
@@ -485,6 +493,7 @@ begin
     v_id := v_rows.floor_ids[p_page];
     if v_in_window and v_rows.inside[p_page + 1] then
       v_after := v_rows.places[p_page];
+      v_last := v_rows.ids[p_page];
     else
       v_in_window := false;
     end if;
@@ -548,28 +557,34 @@ select is(
 );
 
 -- The vector gone after the first page (the cache emptied, the lookup
--- switched off): the list goes on in the word order from the floor.
-select is(
-  (select count(distinct suffix)::integer from unnest(pg_temp.kite_paged(3, false)) as listed(suffix)),
-  cardinality(pg_temp.kite_paged(3, false)),
-  'without the vector on later pages no post is repeated'
-);
+-- switched off): the list goes on in the word order from the floor. A post
+-- already shown can come again; no post that holds the words is passed over.
 select ok(
-  pg_temp.kite_paged(3, false) @> array[51, 52, 53, 54, 55, 56, 57, 58],
-  'and the word order is read to its end'
+  pg_temp.kite_paged(3, false) @> (select array_agg(n) from generate_series(1, 58) as n),
+  'without the vector on later pages every post that holds the words is still reached'
 );
 
--- From any row of the window, the word order after its floor holds nothing shown up to it.
+-- Every row of the word order up to a row's floor has been shown by that row.
 select ok(
   not exists (
     select 1
     from public.search_blended_posts('zephyr kite', null, pg_temp.vec(1), null, now(), 0, 25) as shown
-    cross join lateral public.search_public_posts('zephyr kite', null, shown.floor_score, shown.floor_post_id, 25, now(), 'top') as later
-    join public.search_blended_posts('zephyr kite', null, pg_temp.vec(1), null, now(), 0, 25) as earlier
-      on earlier.post_id = later.post_id and earlier.blend_position <= shown.blend_position
-    where shown.floor_post_id is not null
+    join unnest(pg_temp.kite_words()) with ordinality as words(suffix, word_rank)
+      on words.suffix = right(shown.floor_post_id::text, 2)::integer
+    join unnest(pg_temp.kite_words()) with ordinality as earlier(suffix, word_rank)
+      on earlier.word_rank <= words.word_rank
+    left join public.search_blended_posts('zephyr kite', null, pg_temp.vec(1), null, now(), 0, 25) as seen
+      on right(seen.post_id::text, 2)::integer = earlier.suffix and seen.blend_position <= shown.blend_position
+    where seen.post_id is null
   ),
-  'from any row''s floor the word order holds no post shown up to that row'
+  'from any row''s floor the word order passes over no post: every word row up to the floor is already shown'
+);
+select is(
+  (select array_agg(coalesce(right(floor_post_id::text, 2), 'none') order by blend_position)
+   from public.search_blended_posts('zephyr kite', null, pg_temp.vec(1), null, now(), 0, 3)),
+  -- The 40th word row comes first: nothing of the run from the top is shown yet.
+  array['none', '01', '02'],
+  'a row ahead of the first word row has no floor: the word order would start from its top'
 );
 
 -- A place past the window (it was longer when the cursor was issued).
@@ -586,6 +601,81 @@ select is(
   array['40:meaning:none', '55:meaning:none', '59:meaning:none'],
   'a query no post holds is answered by meaning alone, and its rows have no floor'
 );
+
+-- ─── The list moves between two pages ───────────────────────────────────────
+--
+-- A page is asked for by its place and by the last post shown. When the
+-- window was rebuilt in between, the page starts after that post, wherever
+-- it now stands.
+create function pg_temp.kite_page(p_after integer, p_last uuid, p_limit integer default 3) returns integer[]
+language sql as $$
+  select coalesce(array_agg(right(post_id::text, 2)::integer order by blend_position), '{}')
+  from public.search_blended_posts('zephyr kite', null, pg_temp.vec(1), null, now(), p_after, p_limit, p_after_post_id => p_last);
+$$;
+
+select is(pg_temp.kite_page(0, null, 5), array[40, 1, 2, 3, 4], 'the first page of the long list');
+select is(pg_temp.kite_page(5, pg_temp.kite(4)), array[5, 6, 7], 'the next page starts after the last post shown');
+
+-- A post published since, newest of all: every place moves down by one.
+insert into public.posts (
+  id, user_id, visibility, category, source_kind, post_format, review_status,
+  title, body, source_tool, source_tool_slug, showcase_asset_path, is_nsfw, created_at, updated_at
+) values (
+  pg_temp.kite(99), '5eb00000-0000-4000-8000-000000000001'::uuid, 'public', 'image', 'external', 'media', 'visible',
+  'Zephyr kite 00', 'On the hill', 'Midjourney', 'midjourney', 'showcase/search-blend-kite-99.png', false, now(), now()
+);
+select is(pg_temp.kite_page(5, null), array[4, 5, 6], 'by its place alone the next page would open with a post already shown');
+-- (The nearest meaning-only post still comes in after the sixth word row, which is now the 6th post.)
+select is(pg_temp.kite_page(5, pg_temp.kite(4)), array[5, 6, 59], 'by the last post shown it does not');
+
+-- A post shown on the first page removed: every place moves up by one.
+delete from public.posts where id in (pg_temp.kite(99), pg_temp.kite(2));
+select is(pg_temp.kite_page(5, null), array[6, 7, 8], 'by its place alone the next page would pass a post over');
+select is(pg_temp.kite_page(5, pg_temp.kite(4)), array[5, 6, 7], 'by the last post shown it does not');
+select is(pg_temp.kite_page(5, pg_temp.kite(2)), array[6, 7, 8], 'when the last post shown is gone the page starts at its place');
+
+-- ─── Many posts in both lists: the fall-back still reaches every word match ──
+--
+-- Of the 57 posts that hold the words, 25 further down the word order are
+-- also near in meaning, and each of them stands ahead of every post the word
+-- list alone holds. The first page is blended; the pages after it are not.
+select is(
+  (select count(*)::integer
+   from public.store_post_search_embeddings(
+     (select jsonb_agg(jsonb_build_object('post_id', texts.post_id, 'content_hash', texts.content_hash,
+                                          'embedding', pg_temp.vec(0.99 - near.n * 0.001)::text))
+      from generate_series(26, 50) as near(n)
+      cross join lateral public.post_search_embedding_texts(array[pg_temp.kite(near.n)], 'gte-small') as texts),
+     'gte-small'
+   )),
+  25,
+  'twenty-five posts further down the word order are near in meaning too'
+);
+select ok(
+  (select bool_and(matched_by = 'both') and min(right(post_id::text, 2)::integer) >= 26
+   from public.search_blended_posts('zephyr kite', null, pg_temp.vec(1), null, now(), 0, 20)),
+  'the first page of twenty is all posts in both lists, none of the first 25 word rows'
+);
+select ok(
+  pg_temp.kite_paged(20, false) @> (select array_agg(n) from generate_series(1, 58) as n where n <> 2),
+  'blended first page, word order after it: every post that holds the words appears at least once'
+);
+select ok(
+  (select count(*) from unnest(pg_temp.kite_paged(20, false)) as listed(suffix))
+    > (select count(distinct suffix) from unnest(pg_temp.kite_paged(20, false)) as listed(suffix)),
+  'at the price of posts shown twice, which a client leaves out by their id'
+);
+select is(
+  (select count(distinct suffix)::integer from unnest(pg_temp.kite_paged(20)) as listed(suffix)),
+  cardinality(pg_temp.kite_paged(20)),
+  'blended all the way, the same list holds each post once'
+);
+
+-- ─── The search log can say an answer was blended ───────────────────────────
+
+select col_type_is('public', 'search_query_events', 'blended', 'boolean', 'the search log has a blended column');
+select col_not_null('public', 'search_query_events', 'blended', 'which is never null');
+select col_default_is('public', 'search_query_events', 'blended', 'false', 'and false for every row that does not say otherwise');
 
 -- ─── What a call may ask ────────────────────────────────────────────────────
 
@@ -622,14 +712,14 @@ select is(
 select ok(
   (select prosecdef and provolatile = 's' and proconfig = array['search_path=""']
    from pg_proc
-   where oid = 'public.search_blended_posts(text, text, extensions.vector, uuid, timestamptz, integer, integer, text, text, boolean, boolean, text)'::regprocedure),
+   where oid = 'public.search_blended_posts(text, text, extensions.vector, uuid, timestamptz, integer, integer, text, text, boolean, boolean, text, uuid)'::regprocedure),
   'the function is a security definer with an empty search path, and writes nothing'
 );
 select ok(
   (select not has_function_privilege('anon', signature, 'EXECUTE')
      and not has_function_privilege('authenticated', signature, 'EXECUTE')
      and has_function_privilege('service_role', signature, 'EXECUTE')
-   from (select 'public.search_blended_posts(text, text, extensions.vector, uuid, timestamptz, integer, integer, text, text, boolean, boolean, text)' as signature) as named),
+   from (select 'public.search_blended_posts(text, text, extensions.vector, uuid, timestamptz, integer, integer, text, text, boolean, boolean, text, uuid)' as signature) as named),
   'only the service role may call it'
 );
 
