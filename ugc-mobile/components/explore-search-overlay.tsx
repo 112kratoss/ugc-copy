@@ -265,8 +265,16 @@ function ResultsHeading({
   sort,
   onSortChange,
   seeAll,
+  busy = false,
 }: {
   title: 'Creators' | 'Posts' | 'Recipes' | typeof SEARCH_ENTITIES_HEADING | typeof SEARCH_RELATED_HEADING;
+  /**
+   * The cards under this heading are the other order's, or the ones a filter
+   * just switched narrows, until the answer lands: a small spinner beside the
+   * title says so. The cards themselves stay at full strength (owner,
+   * 2026-11-16: nothing in search dims).
+   */
+  busy?: boolean;
   /** Null where the results have one order, or the server has not said it reads another. */
   sort: PublicSearchSort | null;
   onSortChange: (sort: PublicSearchSort) => void;
@@ -275,7 +283,10 @@ function ResultsHeading({
   const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-      <Text accessibilityRole="header" style={{ flexShrink: 1, color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>{title}</Text>
+      <View style={{ flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text accessibilityRole="header" style={{ flexShrink: 1, color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>{title}</Text>
+        {busy ? <ActivityIndicator testID="search-results-busy" size="small" color={theme.colors.muted} /> : null}
+      </View>
       {sort ? (
         <SegmentedControl
           role="tab"
@@ -874,8 +885,8 @@ export function ExploreSearchOverlay({
   // other filters or the other reading, if any.
   const otherOrder = !response && requestKey !== null && answer !== null
     && answer.scope === searchScope(normalizedQuery, type) ? answer.response : null;
-  // While the other order of the same search loads, its cards stay up, dimmed,
-  // with the control on them: the two orders hold the same results, and a
+  // While the other order of the same search loads, its cards stay up, at full
+  // strength, with the control on them and a small spinner by their heading: the two orders hold the same results, and a
   // spinner in their place would take the control from under the finger. The
   // same goes for a filter just switched: the cards it narrows stay under the
   // switches until its answer lands. A request that failed is no longer
@@ -1626,8 +1637,8 @@ export function ExploreSearchOverlay({
             ) : null}
             {(type === 'top' || type === 'posts') && shownResponse.posts.items.length ? (
               <View style={{ gap: 10 }}>
-                <ResultsHeading title="Posts" sort={type === 'posts' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'posts', onPress: () => setPickedType('posts') } : null} />
-                <View accessibilityState={{ busy: reordering }} style={{ opacity: reordering ? appTheme.opacity.disabled : 1 }}>
+                <ResultsHeading title="Posts" busy={reordering} sort={type === 'posts' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'posts', onPress: () => setPickedType('posts') } : null} />
+                <View accessibilityState={{ busy: reordering }}>
                   <SearchPostMasonry
                     testID="search-posts"
                     items={shownResponse.posts.items}
@@ -1643,8 +1654,8 @@ export function ExploreSearchOverlay({
             ) : null}
             {(type === 'top' || type === 'recipes') && shownResponse.recipes.items.length ? (
               <View style={{ gap: 10 }}>
-                <ResultsHeading title="Recipes" sort={type === 'recipes' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'recipes', onPress: () => setPickedType('recipes') } : null} />
-                <View accessibilityState={{ busy: reordering }} style={{ gap: 10, opacity: reordering ? appTheme.opacity.disabled : 1 }}>
+                <ResultsHeading title="Recipes" busy={reordering} sort={type === 'recipes' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'recipes', onPress: () => setPickedType('recipes') } : null} />
+                <View accessibilityState={{ busy: reordering }} style={{ gap: 10 }}>
                   {shownResponse.recipes.items.map((recipe, index) => <RecipeRow key={recipe.id} recipe={recipe} onOpen={() => openRecipe(recipe, index + 1)} />)}
                 </View>
                 {type === 'top' && searchTopSectionHasMore('recipes', shownResponse.recipes.items.length)

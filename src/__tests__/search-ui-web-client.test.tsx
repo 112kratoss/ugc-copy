@@ -476,7 +476,7 @@ describe('related searches', () => {
 });
 
 describe('the blended order', () => {
-  it('is asked for once the person settles on a search the answer came for while typing, with the cards dimmed meanwhile', async () => {
+  it('is asked for once the person settles on a search the answer came for while typing, the cards at full strength and the field busy meanwhile', async () => {
     const blended = deferred<ReturnType<typeof ok>>();
     searchFetchMock.mockImplementation(async (url: string) => {
       const params = new URL(url, 'http://localhost').searchParams;
@@ -496,10 +496,12 @@ describe('the blended order', () => {
     enter();
     await waitFor(() => expect(searchUrls()).toHaveLength(2));
     expect(searchUrls()[1]).toBe('/api/search?q=ocean+at+dusk&type=posts&related=1&relatedSearches=1&blend=1&entry=typed');
-    // The cards stay, dimmed, and the field says it is busy: an answer on its way, not cards moving under the pointer.
+    // The cards stay, at full strength (owner, 2026-11-16), and the field says it is busy: an answer on
+    // its way, not cards moving under the pointer.
     const results = document.querySelector('[aria-busy]');
     expect(results?.getAttribute('aria-busy')).toBe('true');
-    expect(results?.querySelector('.opacity-60')).not.toBeNull();
+    expect(screen.getByText('Post p0')).toBeInTheDocument();
+    expect(results?.querySelector('[class*="opacity-60"]')).toBeNull();
     expect(document.querySelector('[data-search-field-busy]')).not.toBeNull();
     // Show more waits for it (review of #828, S3): a press would give the re-ask up, and with it the
     // blended order, and leave the page saying "Searching…".

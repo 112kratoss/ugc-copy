@@ -256,7 +256,8 @@ test.describe('search typeahead', () => {
     await expect(resultsSaid).toHaveText('');
 
     // The next letter, its answer held: the list never goes. It keeps what it
-    // had and says it is busy.
+    // had, at full strength (owner, 2026-11-16: nothing dims, and the page
+    // never shows through the list), and says it is busy to a screen reader.
     await box.press('End');
     await box.press('i');
     await expect(box).toHaveValue('lumi');
@@ -264,9 +265,12 @@ test.describe('search typeahead', () => {
     await expect(list).toHaveAttribute('aria-busy', 'true');
     await expect(list.getByRole('option')).toHaveText(['luminous portrait', 'lumen glow']);
     await expect.poll(() => suggests).toEqual(['lum', 'lumi']);
-    // Past the pause a count waits for: a stale list is not announced.
+    // Past the pause a count waits for: a stale list is not announced. Past
+    // the half second after which a slow answer used to dim it, too.
     await page.waitForTimeout(900);
     await expect(list).toHaveAttribute('aria-busy', 'true');
+    await expect(list).toHaveCSS('opacity', '1');
+    for (const option of await list.getByRole('option').all()) await expect(option).toHaveCSS('opacity', '1');
     await expect(said).toHaveText('2 suggestions');
     await expect(resultsSaid).toHaveText('');
     await shot(page, 'desktop-stale-list');
@@ -359,10 +363,13 @@ test.describe('search typeahead', () => {
     await box.press('x');
     await expect(box).toHaveValue('lumax');
     await expect(options).toHaveText(['luma dream', 'luminous portrait', 'lumen glow']);
-    // What a sighted person has of it: the rows that moved are dimmed.
+    // The rows that moved are marked, and drawn as every other row: a dim at
+    // each letter was a flicker (owner, 2026-11-16).
     const moved = list.getByRole('option', { name: 'Search for luminous portrait' });
-    await expect(moved).toHaveCSS('opacity', '0.6');
-    await expect(list.getByRole('option', { name: 'Search for luma dream' })).toHaveCSS('opacity', '0.6');
+    await expect(moved).toHaveAttribute('data-settling', 'true');
+    await expect(moved).toHaveCSS('opacity', '1');
+    await expect(list.getByRole('option', { name: 'Search for luma dream' })).toHaveAttribute('data-settling', 'true');
+    await expect(list.getByRole('option', { name: 'Search for luma dream' })).toHaveCSS('opacity', '1');
     await moved.click();
     await expect(box).toHaveValue('lumax');
     await expect(list).toBeVisible();
@@ -370,10 +377,10 @@ test.describe('search typeahead', () => {
     await page.clock.runFor(249);
     await moved.click();
     await expect(box).toHaveValue('lumax');
-    await expect(moved).toHaveCSS('opacity', '0.6');
+    await expect(moved).toHaveAttribute('data-settling', 'true');
     await page.clock.runFor(1);
-    // At full strength again as it starts to take a press.
-    await expect(moved).toHaveCSS('opacity', '1');
+    // No longer marked as it starts to take a press.
+    await expect(moved).not.toHaveAttribute('data-settling');
     await moved.click();
     await expect(box).toHaveValue('luminous portrait');
     await page.clock.resume();

@@ -5,6 +5,7 @@ import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExploreSearchOverlay } from '../components/explore-search-overlay';
+import { SearchTypeaheadList } from '../components/search-typeahead-list';
 import { ApiError, type MagicbookletApiClient } from '../lib/api-client';
 import { searchEntityActionLabel, searchRecipeCardLabel } from '../lib/public-search-policy/public-search-policy';
 import { SEARCH_ENTRANCE } from '../lib/search-entrance';
@@ -1676,7 +1677,7 @@ describe('ExploreSearchOverlay search', () => {
       await act(async () => tree.unmount());
     });
 
-    it('asks for Latest at once and keeps the cards up, dimmed, under the control until it answers', async () => {
+    it('asks for Latest at once and keeps the cards up, at full strength, under the control until it answers', async () => {
       searchPublicContent.mockResolvedValueOnce(searchAnswer('portrait', 'posts', { sort: 'top', posts: [post('saved'), post('new')] }));
       const tree = await render({ visible: true, onClose: vi.fn() });
       await press(tab(tree, 'Posts'));
@@ -1695,15 +1696,18 @@ describe('ExploreSearchOverlay search', () => {
       expect(isSearching(tree)).toBe(false);
       expect(sortControls(tree)[0].props.value).toBe('latest');
       expect(postTitles(tree)).toEqual(['saved', 'new']);
-      const dimmed = tree.root.findAll((node) => node.type === 'view' && node.props.accessibilityState?.busy === true);
-      expect(dimmed).toHaveLength(1);
-      expect(dimmed[0].props.style).toMatchObject({ opacity: 0.5 });
+      // Said to be busy, with a small spinner by the heading, and never drawn fainter (owner, 2026-11-16).
+      const kept = tree.root.findAll((node) => node.type === 'view' && node.props.accessibilityState?.busy === true);
+      expect(kept).toHaveLength(1);
+      expect(JSON.stringify(kept[0].props.style ?? {})).not.toContain('opacity');
+      expect(tree.root.findAll((node) => node.props.testID === 'search-results-busy').length).toBeGreaterThan(0);
       // A page of the other order is not offered while this one loads.
       expect(() => showMoreButton(tree)).toThrow();
 
       await act(async () => pending.resolve(searchAnswer('portrait', 'posts', { sort: 'latest', posts: [post('new'), post('saved')] })));
       expect(postTitles(tree)).toEqual(['new', 'saved']);
       expect(tree.root.findAll((node) => node.type === 'view' && node.props.accessibilityState?.busy === true)).toHaveLength(0);
+      expect(tree.root.findAll((node) => node.props.testID === 'search-results-busy')).toHaveLength(0);
 
       await act(async () => tree.unmount());
     });
@@ -1720,7 +1724,7 @@ describe('ExploreSearchOverlay search', () => {
       await advance(1);
 
       const busyViews = () => tree.root.findAll((node) => node.type === 'view' && node.props.accessibilityState?.busy === true);
-      // Nothing is loading any more: no dimmed cards of the other order, no spinner.
+      // Nothing is loading any more: no cards of the other order marked busy, no spinner.
       expect(busyViews()).toHaveLength(0);
       expect(postTitles(tree)).toEqual([]);
       expect(isSearching(tree)).toBe(false);
@@ -2033,16 +2037,28 @@ describe('ExploreSearchOverlay typeahead', () => {
     if (!panel) return [];
     return panel.findAll((node) => isHost(node, 'pressable')).map((node) => node.props.accessibilityLabel as string);
   }
-  /** The rows drawn dimmed: they have only just come to stand where they are, and take no tap yet. */
-  function dimmedRows(tree: Tree) {
+  /**
+   * The rows that have only just come to stand where they are, and take no tap yet. Every row, these included, is drawn at full strength while it is not pressed (owner,
+   * 2026-11-16: nothing in search dims), which this checks of each row it reads.
+   */
+  function settlingRows(tree: Tree) {
     const panel = list(tree);
     if (!panel) return [];
-    return panel.findAll((node) => isHost(node, 'pressable'))
-      .filter((node) => {
-        const style = node.props.style as unknown;
-        const drawn = (typeof style === 'function' ? style({ pressed: false }) : style) as { opacity?: number };
-        return drawn.opacity !== 1;
-      })
+    // The list's own props say which rows are settling; its pressables are its rows, in order.
+    const props = tree.root.findByType(SearchTypeaheadList).props as {
+      sections: readonly { rows: readonly { key: string }[] }[];
+      settlingRows?: readonly string[];
+    };
+    const keys = props.sections.flatMap((section) => section.rows.map((row) => row.key));
+    const rows = panel.findAll((node) => isHost(node, 'pressable'));
+    expect(rows).toHaveLength(keys.length);
+    for (const row of rows) {
+      const style = row.props.style as unknown;
+      const drawn = (typeof style === 'function' ? style({ pressed: false }) : style) as { opacity?: number };
+      expect(drawn.opacity).toBe(1);
+    }
+    return rows
+      .filter((_, index) => (props.settlingRows ?? []).includes(keys[index]))
       .map((node) => node.props.accessibilityLabel as string);
   }
   function asked() {
@@ -2284,9 +2300,9 @@ describe('ExploreSearchOverlay typeahead', () => {
     // a tap there now was aimed at the model.
     suggestSearch.mockReturnValueOnce(later.promise);
     await typeQuery(tree, 'lumi');
-    // What a sighted person has of it: the rows that moved are dimmed, at
+    // The rows that moved show no press, at
     // once, and the rows that stayed ("Search for" and the creators) are not.
-    expect(dimmedRows(tree)).toEqual(['Search for luminous', 'Search for lumen glow']);
+    expect(settlingRows(tree)).toEqual(['Search for luminous', 'Search for lumen glow']);
     await press(pressableLabelled(tree, 'Search for luminous'));
     expect(searchInput(tree).props.value).toBe('lumi');
     expect(mocks.keyboardDismiss).not.toHaveBeenCalled();
@@ -2301,7 +2317,7 @@ describe('ExploreSearchOverlay typeahead', () => {
     });
     expect(rowLabels(tree)).toHaveLength(6);
     expect(list(tree)!.props.accessibilityState).toEqual({ busy: true });
-    expect(dimmedRows(tree)).toEqual(['Luma Ray 2, model, 14 posts. Show posts made with it', 'Search for luminous', 'Search for lumen glow']);
+    expect(settlingRows(tree)).toEqual(['Luma Ray 2, model, 14 posts. Show posts made with it', 'Search for luminous', 'Search for lumen glow']);
     await press(pressableLabelled(tree, 'Luma Ray 2, model, 14 posts. Show posts made with it'));
     await press(pressableLabelled(tree, 'Search for luminous'));
     await advance(SETTLE - 1);
@@ -2313,7 +2329,7 @@ describe('ExploreSearchOverlay typeahead', () => {
     // Once the rows have stood, the tap counts, and opens the row it is on.
     await advance(1);
     expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
-    expect(dimmedRows(tree)).toEqual([]);
+    expect(settlingRows(tree)).toEqual([]);
     await press(pressableLabelled(tree, 'Search for luminous'));
     expect(searchInput(tree).props.value).toBe('luminous');
     await act(async () => tree.unmount());
@@ -2334,16 +2350,16 @@ describe('ExploreSearchOverlay typeahead', () => {
     // Stale until the answer lands: busy for that, with every row at full strength.
     expect(rowLabels(tree)).toEqual([searchFor('luma'), ...before]);
     expect(list(tree)!.props.accessibilityState).toEqual({ busy: true });
-    expect(dimmedRows(tree)).toEqual([]);
+    expect(settlingRows(tree)).toEqual([]);
     await advance(PAUSE);
     await act(async () => {
       later.resolve(suggestions({ query: 'luma', normalizedQuery: 'luma' }));
       await later.promise;
     });
-    // The answer is drawn: not busy at once, no row dimmed, and a tap counts.
+    // The answer is drawn: not busy at once, no row settling, and a tap counts.
     expect(rowLabels(tree)).toEqual([searchFor('luma'), ...before]);
     expect(list(tree)!.props.accessibilityState).toEqual({ busy: false });
-    expect(dimmedRows(tree)).toEqual([]);
+    expect(settlingRows(tree)).toEqual([]);
     await press(pressableLabelled(tree, 'Search for luminous'));
     expect(searchInput(tree).props.value).toBe('luminous');
     await act(async () => tree.unmount());
@@ -2371,12 +2387,12 @@ describe('ExploreSearchOverlay typeahead', () => {
       await later.promise;
     });
     expect(rowLabels(tree)[3]).toBe('Search for neon sign');
-    expect(dimmedRows(tree)).toContain('Search for neon sign');
+    expect(settlingRows(tree)).toContain('Search for neon sign');
     await press(pressableLabelled(tree, 'Search for neon sign'));
     expect(searchInput(tree).props.value).toBe('neo');
     expect(searchPublicContent).not.toHaveBeenCalled();
     await advance(SETTLE);
-    expect(dimmedRows(tree)).toEqual([]);
+    expect(settlingRows(tree)).toEqual([]);
     await press(pressableLabelled(tree, 'Search for neon sign'));
     expect(searchInput(tree).props.value).toBe('neon sign');
     await act(async () => tree.unmount());

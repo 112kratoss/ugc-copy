@@ -951,7 +951,7 @@ export default function SearchClient({
   const currentAnswer = isSameRequest(answer, normalizedQuery, activeType, activeSort, narrowing) ? answer : null;
   // The blended order (search-blend.ts) for an answer that came while the
   // query was still being typed, asked for at once when the person settles
-  // on it (Enter, most often): the cards dim meanwhile, as for any search on
+  // on it (Enter, most often): the field's magnifier spins meanwhile, as for any search on
   // its way, so the new order lands as an answer and not as cards moving
   // under the pointer. The one request brings the related posts too.
   const blendFollowUp = currentAnswer !== null
@@ -1036,11 +1036,12 @@ export default function SearchClient({
   }, []);
   const currentFailure = isSameRequest(failure, normalizedQuery, activeType, activeSort, narrowing) ? failure : null;
   // A search on its way, and so is one asked for again in the blended order
-  // (blendFollowUp): its cards dim, or, where it found nothing, no verdict is
-  // given until the blended answer, which may find something, has come.
+  // (blendFollowUp): its cards stay as they are and the field's magnifier
+  // spins, or, where it found nothing, no verdict is given until the blended
+  // answer, which may find something, has come.
   const pending = canSearch && ((!currentAnswer && !currentFailure) || blendFollowUp);
   // While the next query on the same tab loads, the previous cards stay up,
-  // dimmed, and so do the cards of the other order while Top or Latest loads:
+  // at full strength, and so do the cards of the other order while Top or Latest loads:
   // the two hold the same results. Another tab's answer holds other kinds, so
   // it is not drawn.
   const shownAnswer = currentAnswer ?? (pending && answer?.type === activeType ? answer : null);
@@ -1479,7 +1480,6 @@ export default function SearchClient({
                 sections={typeahead.sections}
                 query={typeahead.query}
                 activeIndex={typeahead.activeIndex}
-                stale={typeahead.stale}
                 busy={typeahead.busy}
                 settlingRows={typeahead.settlingRows}
                 onPick={(row) => runTypeaheadAction(typeahead.press(row))}
@@ -1631,7 +1631,9 @@ export default function SearchClient({
               </div>
             )
           ) : (
-            <div className={`space-y-10 transition-opacity${staleResultsShown ? ' opacity-60' : ''}`}>
+            // At full strength while the next answer is on its way: the field's
+            // spinner says so (owner, 2026-11-16: nothing dims).
+            <div className="space-y-10">
               {relatedSearches.length ? (
                 <section aria-labelledby="search-related-searches-heading">
                   <h2 id="search-related-searches-heading" className="mb-3 text-sm font-semibold text-zinc-400">

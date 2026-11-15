@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { Box, Search, Wrench } from 'lucide-react';
 
 import {
@@ -12,8 +11,6 @@ import {
 import { searchTypeaheadRowLabel } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
 import {
   SEARCH_STARTER_LABEL,
-  isSearchStarterEmpty,
-  parseSearchStarterResponse,
   searchStarterHeading,
   searchStarterPeriod,
   searchStarterSections,
@@ -24,72 +21,8 @@ import {
 import { CreatorSearchResult } from './CreatorSearchResult';
 import { SearchRowPicture } from './SearchRowPicture';
 
-// The browser's Supabase client, loaded when the request needs the session, as
-// the typeahead loads it.
-const loadSupabase = () => import('@/lib/supabase').then((module) => module.supabase);
-
-/**
- * What to start a search from (`GET /api/search/starter`), asked once per
- * opening of the page and kept for its life: the answer is drawn under the
- * empty box and again under a search that found nothing. Null until it lands,
- * and for good when it cannot be had (the route switched off or not there yet,
- * a refusal, offline, an answer that is not one, or one with nothing in it):
- * the page then draws what it drew before. A visitor's request carries no
- * token and is the edge's to keep (about a minute); an account's carries its
- * token, so a creator it follows or has blocked is left out. So it is asked
- * again when the account changes (a sign-in or a sign-out on this page or in
- * another tab), never for the SIGNED_IN supabase-js repeats for the same
- * account each time the tab comes back into view.
- */
-export function useSearchStarter(): SearchStarterResponse | null {
-  const [answer, setAnswer] = useState<SearchStarterResponse | null>(null);
-  useEffect(() => {
-    let disposed = false;
-    let stopWatching: (() => void) | null = null;
-    let request: AbortController | null = null;
-    // The account the answer on hand was asked for; undefined while none has been asked.
-    let askedFor: string | null | undefined;
-    const ask = async (supabase: Awaited<ReturnType<typeof loadSupabase>>) => {
-      request?.abort();
-      const controller = new AbortController();
-      request = controller;
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (controller.signal.aborted) return;
-        askedFor = session?.user?.id ?? null;
-        const response = await fetch('/api/search/starter', {
-          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
-          signal: controller.signal,
-        });
-        if (!response.ok) return;
-        const parsed = parseSearchStarterResponse(await response.json().catch(() => null));
-        if (!controller.signal.aborted && !isSearchStarterEmpty(parsed)) setAnswer(parsed);
-      } catch {
-        // An extra: its failure is drawn as nothing.
-      }
-    };
-    void loadSupabase().then((supabase) => {
-      if (disposed) return;
-      const { data } = supabase.auth.onAuthStateChange((event, session) => {
-        if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT') return;
-        const next = event === 'SIGNED_OUT' ? null : session?.user?.id ?? null;
-        if (askedFor === undefined || next === askedFor) return;
-        // Another account: what was offered to the one before is not this one's.
-        askedFor = undefined;
-        setAnswer(null);
-        void ask(supabase);
-      });
-      stopWatching = () => data.subscription.unsubscribe();
-      void ask(supabase);
-    }).catch(() => {});
-    return () => {
-      disposed = true;
-      stopWatching?.();
-      request?.abort();
-    };
-  }, []);
-  return answer;
-}
+// The answer's reader, kept beside the starter it feeds (the top bar reads it without this file's cards).
+export { useSearchStarter } from './use-search-starter';
 
 const HEADING_CLASS = 'mb-3 text-base font-semibold text-white';
 
