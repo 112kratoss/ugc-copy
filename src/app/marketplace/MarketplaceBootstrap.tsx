@@ -18,12 +18,14 @@ import {
   MarketplaceRecipeTile,
 } from '@/app/marketplace/MarketplaceRecipeTile';
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
+import { useAuth } from '@/components/AuthProvider';
+import { buildMarketplacePagesKey, recallMarketplacePages } from '@/lib/marketplace-pages-memory';
 import { MARKETPLACE_INITIAL_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
 import type { SourceToolFilterOption } from '@/lib/source-tools';
 import { useViewerRecipeState } from '@/app/marketplace/useViewerRecipeState';
 
-import { isPlainLinkClick, type MarketplaceFilters } from './marketplace-address';
+import { isPlainLinkClick, marketplaceFiltersKey, type MarketplaceFilters } from './marketplace-address';
 import { MarketplaceListingFailed, MarketplaceListingSkeleton } from './MarketplaceListingStates';
 import {
   MarketplaceSearchParamsReporter,
@@ -74,10 +76,17 @@ const SORT_FILTERS = [
 ] as const;
 
 let marketplaceBrowserPromise: Promise<MarketplaceBrowserComponent> | null = null;
+// The interactive browser once its module has come in this document. Only it loads more than a
+// listing's first page, so a listing kept with later pages (marketplace-pages-memory) was kept by
+// it, in this document, and it is here to draw them again from the first render.
+let loadedMarketplaceBrowser: MarketplaceBrowserComponent | null = null;
 
 function loadMarketplaceBrowser() {
   marketplaceBrowserPromise ??= import('@/app/marketplace/MarketplaceBrowser')
-    .then((module) => module.default)
+    .then((module) => {
+      loadedMarketplaceBrowser = module.default;
+      return module.default;
+    })
     .catch((error) => {
       marketplaceBrowserPromise = null;
       throw error;
@@ -99,6 +108,19 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
   const { filters: initialFilters, shortQuery, navigate } = listing;
   const initialPage = listing.page ?? EMPTY_PAGE;
   const [InteractiveBrowser, setInteractiveBrowser] = useState<MarketplaceBrowserComponent | null>(null);
+  const { user } = useAuth();
+  // Back from a recipe to a listing whose Load more had brought more recipes: the interactive
+  // browser draws them in the first frame, so the page is as long as when the reader left it and
+  // the browser puts them back where they were (owner's report, 2026-11-15). This shell would
+  // draw the first page alone. Decided once the address bar's listing is known, before the paint.
+  if (
+    InteractiveBrowser === null
+    && loadedMarketplaceBrowser !== null
+    && listing.addressKnown
+    && recallMarketplacePages(buildMarketplacePagesKey(marketplaceFiltersKey(initialFilters), user?.id ?? null)) !== null
+  ) {
+    setInteractiveBrowser(() => loadedMarketplaceBrowser);
+  }
   // The signed-in viewer's own recipes, read apart from the cached catalog.
   const viewer = useViewerRecipeState();
   const [isActivating, setIsActivating] = useState(false);

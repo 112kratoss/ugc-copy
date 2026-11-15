@@ -5,9 +5,11 @@ import { act, render } from '@testing-library/react';
 import postcss, { type Rule } from 'postcss';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import ReelHostMark from '@/components/ReelHostMark';
 import ReelOpeningCover, { REEL_OPENING_COVER_MAX_MS } from '@/components/ReelOpeningCover';
 import {
   isReelOpeningAddress,
+  REEL_HOST_ATTRIBUTE,
   REEL_OPENING_ATTRIBUTE,
   REEL_OPENING_RESTORE,
   releaseReelOpening,
@@ -48,6 +50,9 @@ describe('the reel address marked before the page draws', () => {
     ['/creators/someone?post=post-1#creator-unlocks', true],
     ['/showcase', false],
     ['/showcase?category=video', false],
+    // A `?post=` naming nothing opens no reel (review of #815).
+    ['/showcase?post=', false],
+    ['/creators/someone?post=&media=1', false],
     // A post page is the post itself: no reel opens over it.
     ['/showcase/post-1?post=post-1', false],
     ['/profile/edit?post=post-1', false],
@@ -93,8 +98,24 @@ describe("the reel's stage in the stylesheet", () => {
     expect(declaration(hidden, 'display')).toBe('none');
   });
 
+  // Only while a reel's host, or its page still loading, is on the page: a creator not found,
+  // a blocked creator, an error page open no reel and showed the stage for ten seconds (review
+  // of #815).
+  const SHOWN = `html[${REEL_OPENING_ATTRIBUTE}]:has([${REEL_HOST_ATTRIBUTE}]) .reel-opening-cover`;
+
+  it('draws the stage only while the page holds a reel host', () => {
+    let shownRules = 0;
+    css.walkRules((rule) => {
+      if (rule.selector.includes('.reel-opening-cover') && declaration(rule, 'display') === 'flex') {
+        expect(rule.selector).toBe(SHOWN);
+        shownRules += 1;
+      }
+    });
+    expect(shownRules).toBe(1);
+  });
+
   it("covers the window with the reel's background, just under the reel", () => {
-    const [shown] = rules('html[data-reel-opening] .reel-opening-cover');
+    const [shown] = rules(SHOWN);
     expect(declaration(shown, 'display')).toBe('flex');
     expect(declaration(shown, 'position')).toBe('fixed');
     expect(declaration(shown, 'inset')).toBe('0');
@@ -105,6 +126,40 @@ describe("the reel's stage in the stylesheet", () => {
     expect(viewer).toContain('fixed inset-0 z-[90] overflow-hidden bg-[#050506]');
     expect(declaration(shown, 'background')).toBe('#050506');
     expect(Number(declaration(shown, 'z-index'))).toBeLessThan(90);
+  });
+});
+
+describe('the reel hosts', () => {
+  it('marks a page with an element the stylesheet finds and nobody sees', () => {
+    const { container } = render(<ReelHostMark />);
+    const mark = container.querySelector(`[${REEL_HOST_ATTRIBUTE}]`);
+
+    expect(mark).not.toBeNull();
+    expect(mark).toHaveAttribute('hidden');
+    expect(mark).toBeEmptyDOMElement();
+  });
+
+  // Each page whose `?post=` opens the reel, and its loading state, which stands in for it until
+  // the server's page arrives. The pages that open none (not found, blocked, error) draw no mark.
+  it.each([
+    'src/app/showcase/ShowcaseBootstrapClient.tsx',
+    'src/app/showcase/ShowcaseClient.tsx',
+    'src/app/showcase/(feed)/loading.tsx',
+    'src/app/creators/[username]/CreatorContentTabs.tsx',
+    'src/app/creators/[username]/loading.tsx',
+    'src/app/profile/OwnerProfileMediaHub.tsx',
+    'src/app/profile/loading.tsx',
+  ])('%s draws the mark', (file) => {
+    expect(readFileSync(path.join(ROOT, file), 'utf8')).toContain('<ReelHostMark />');
+  });
+
+  it.each([
+    'src/app/creators/[username]/not-found.tsx',
+    'src/app/creators/[username]/BlockedCreatorPanel.tsx',
+    'src/app/creators/[username]/error.tsx',
+    'src/app/showcase/error.tsx',
+  ])('%s draws none', (file) => {
+    expect(readFileSync(path.join(ROOT, file), 'utf8')).not.toContain('ReelHostMark');
   });
 });
 

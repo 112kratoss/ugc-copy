@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
 import MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
-import { publishNavigationStart } from '@/components/navigation-progress-state';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 // One router for every render, so the browser's effects never see a new one.
@@ -501,15 +500,14 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
 
 // Back from a recipe drew the first four recipes alone (owner's report, 2026-11-15): opening a
 // recipe unmounts the listing, so what "Load more" brought lived in its state only. The listing now
-// keeps it for the tab and draws it again, behind a fresh first page that still starts the same.
+// keeps it for the tab and draws it again from its first render (marketplace-pages-memory; the
+// shell hands such a listing over at once, marketplace-bootstrap's).
 describe('MarketplaceBrowser drawn again after a recipe', () => {
   beforeEach(() => {
     pushMock.mockReset();
     authState.session = null;
     authState.user = null;
     window.sessionStorage.clear();
-    // The app has navigated in this document, as it has when Back returns to the listing.
-    publishNavigationStart();
   });
 
   afterEach(() => {
@@ -526,6 +524,9 @@ describe('MarketplaceBrowser drawn again after a recipe', () => {
     return { listing, fetchMock };
   }
 
+  const drawnTitles = () => screen.getAllByRole('link', { name: /: Unlock \w+$/ })
+    .map((link) => link.getAttribute('aria-label')?.replace(/^.*: /, ''));
+
   it('draws the recipes "Load more" brought in its first render, and asks for none of them again', async () => {
     const { listing, fetchMock } = await loadSecondPage();
     listing.unmount();
@@ -534,24 +535,40 @@ describe('MarketplaceBrowser drawn again after a recipe', () => {
     renderMarketplace(createPage(4, true, 0, 4));
 
     expect(screen.getByText('Unlock 16')).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: /Unlock \d+$/ })).toHaveLength(16);
+    expect(drawnTitles()).toHaveLength(16);
     expect(screen.queryByRole('button', { name: 'Load more recipes' })).not.toBeInTheDocument();
     await act(async () => Promise.resolve());
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('draws the first page alone when the listing no longer starts the same', async () => {
+  it('puts a first page that has moved in front of the recipes kept, each once and in order', async () => {
     const { listing } = await loadSecondPage();
     listing.unmount();
 
-    // A recipe published since: the listing's top has moved.
-    const changed = createPage(4, true, 0, 4);
-    changed.items[0] = { ...createMarketplaceItem(99), title: 'Unlock new' };
-    renderMarketplace(changed);
+    // A recipe published since: the listing's first page starts with it.
+    const moved = createPage(4, true, 0, 4);
+    moved.items = [{ ...createMarketplaceItem(99), title: 'Unlock new' }, ...moved.items.slice(0, 3)];
+    renderMarketplace(moved);
 
-    expect(screen.getByText('Unlock new')).toBeInTheDocument();
-    expect(screen.queryByText('Unlock 16')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Load more recipes' })).toBeInTheDocument();
+    expect(drawnTitles()).toEqual(['Unlock new', ...Array.from({ length: 16 }, (_, index) => `Unlock ${index + 1}`)]);
+  });
+
+  // Back to a filtered listing: its first page is read in the browser, and meanwhile the listing
+  // as the reader left it is drawn, not the loading state, so the page keeps its height.
+  it("draws what was kept, not the loading state, while the listing's first page is read", async () => {
+    const { listing } = await loadSecondPage();
+    listing.unmount();
+
+    render(
+      <MarketplaceBrowser
+        initialPage={{ items: [], pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 4 } }}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+        listingStatus="loading"
+      />
+    );
+
+    expect(drawnTitles()).toHaveLength(16);
   });
 
   it('keeps a listing apart for each viewer, whose blocks it leaves out', async () => {
@@ -564,6 +581,32 @@ describe('MarketplaceBrowser drawn again after a recipe', () => {
     renderMarketplace(createPage(4, true, 0, 4));
 
     expect(screen.queryByText('Unlock 16')).not.toBeInTheDocument();
+  });
+
+  // Review of #815: the session arriving after a full load started the listing again, which cut
+  // the Load more under way short and put back the search being typed.
+  it('goes on with a Load more, and the search being typed, when the session arrives', async () => {
+    let answer: (response: Response) => void = () => undefined;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => {
+      answer = resolve;
+    })));
+    const page = createPage(4, true, 0, 4);
+    const view = renderMarketplace(page);
+    fireEvent.click(screen.getByRole('button', { name: 'Load more recipes' }));
+    const search = screen.getByPlaceholderText('Search prompts, tools, creators');
+    fireEvent.change(search, { target: { value: 'cats' } });
+
+    authState.session = { access_token: 'token-1' };
+    authState.user = { id: 'viewer-1' };
+    view.rerender(
+      <MarketplaceBrowser initialPage={page} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />
+    );
+    await act(async () => {
+      answer(new Response(JSON.stringify(createPage(12, false, 4, 12))));
+    });
+
+    expect(await screen.findByText('Unlock 16')).toBeInTheDocument();
+    expect(search).toHaveValue('cats');
   });
 });
 

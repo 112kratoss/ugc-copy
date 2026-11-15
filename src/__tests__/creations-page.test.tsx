@@ -1304,6 +1304,32 @@ describe('CreationsPage', () => {
     }
   });
 
+  // Review of #815: kept in a state of the page, the media filter outlived a visit to another
+  // section; in the address it came back as All. Each section's filter now rides along through the
+  // others' links, the post filter's too.
+  it("keeps each section's filter through the other sections", async () => {
+    navigationState.searchParams = new URLSearchParams('view=posts&visibility=public&media=images');
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/generations')) return Promise.resolve(jsonResponse({ generations: [makeGeneration()] }));
+      if (url.startsWith('/api/posts')) return Promise.resolve(jsonResponse({ posts: [] }));
+      if (url === '/api/profile') return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    }));
+
+    try {
+      render(<CreationsPage />);
+      const sections = await screen.findByRole('navigation', { name: 'Studio sections' });
+
+      expect(within(sections).getByRole('link', { name: 'Creations' }))
+        .toHaveAttribute('href', '/creations?visibility=public&media=images');
+      expect(within(sections).getByRole('link', { name: 'Post Library' }))
+        .toHaveAttribute('href', '/creations?view=posts&visibility=public&media=images');
+    } finally {
+      navigationState.searchParams = new URLSearchParams();
+    }
+  });
+
   // A photo is never required to sell. The card said "Your selling identity is
   // ready. Add a short bio" to a creator who had a bio and no photo.
   it.each([

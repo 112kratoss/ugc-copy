@@ -9,9 +9,11 @@ import { useAuth } from '@/components/AuthProvider';
 // A type alone: the full client's module is loaded with `import()` below, on demand.
 import type { ShowcaseClientProps } from '@/app/showcase/ShowcaseClient';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
+import ReelHostMark from '@/components/ReelHostMark';
 import { SearchEntryLink } from '@/components/search/SearchEntryLink';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import { pushReelEntry, replaceReelEntry } from '@/lib/reel-history-entry';
+import { releaseReelOpening } from '@/lib/reel-opening-restore';
 import {
     buildShowcaseClientCacheKey,
     filterFeedItemsForVisit,
@@ -296,6 +298,8 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
         }).catch(() => {
             fullClientPromiseRef.current = null;
             setIsActivating(false);
+            // No reel opens without the full page: the grid shows, not the reel's stage.
+            releaseReelOpening();
         });
     }, [loadFullClient]);
 
@@ -445,6 +449,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
             className="ui-page ui-page-ambient min-h-screen py-5 font-[family-name:var(--font-geist-sans)] sm:py-7"
             aria-busy={isActivating || undefined}
         >
+            <ReelHostMark />
             <div className="studio-shell relative z-10">
                 {/* As the full page draws it (ShowcaseClient): the shell hands over without a move. */}
                 <SearchEntryLink className="mb-5 lg:hidden" />

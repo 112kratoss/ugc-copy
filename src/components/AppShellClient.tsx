@@ -307,13 +307,17 @@ function BottomNavItem({
 /**
  * The brand is Home's other control: elsewhere it goes Home, and on Home it does what
  * Home does there, so a scrolled feed goes back to its top and one already at its top
- * is fetched afresh. It names the tab for a page's leave guard, as Home does.
+ * is fetched afresh. It names the tab for a page's leave guard, as Home does, and is
+ * marked current with it: the build's check of the prerendered Home
+ * (scripts/build/check-home-shell-prerender.mjs) reads every control naming Home.
  */
 function Brand({
+  active,
   compact = false,
   onClick,
   onNavigate,
 }: {
+  active: boolean;
   compact?: boolean;
   onClick?: () => void;
   onNavigate: AppNavClickHandler;
@@ -322,6 +326,7 @@ function Brand({
     <Link
       href={HOME_NAV_ITEM.href}
       prefetch={false}
+      aria-current={active ? 'page' : undefined}
       data-app-nav-tab={HOME_NAV_ITEM.id}
       onClick={(event) => {
         onClick?.();
@@ -501,7 +506,7 @@ const AppShellFrame = memo(function AppShellFrame({
     <div className="app-shell-root" data-bottom-nav={bottomNavHidden ? 'hidden' : undefined}>
       <aside id={APP_SHELL_SIDEBAR_ID} className="app-shell-sidebar" aria-label="Primary navigation">
         <div className="px-4 pt-5">
-          <Brand onNavigate={handleAppNavClick} />
+          <Brand active={activeItem?.id === HOME_NAV_ITEM.id} onNavigate={handleAppNavClick} />
         </div>
 
         <nav className="app-scrollbar mt-7 flex flex-1 flex-col gap-5 overflow-y-auto px-3 pb-4">
@@ -644,7 +649,7 @@ const AppShellFrame = memo(function AppShellFrame({
             className="ui-enter app-scrollbar flex h-full w-[min(88vw,370px)] flex-col overflow-y-auto border-r border-[var(--ui-border-default)] bg-[var(--ui-bg-app)] p-4 shadow-2xl shadow-black"
           >
             <div className="flex items-center justify-between gap-3">
-              <Brand compact onClick={() => setMobileOpen(false)} onNavigate={handleAppNavClick} />
+              <Brand active={activeItem?.id === HOME_NAV_ITEM.id} compact onClick={() => setMobileOpen(false)} onNavigate={handleAppNavClick} />
               <button
                 ref={closeButtonRef}
                 type="button"

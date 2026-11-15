@@ -6,6 +6,7 @@ import {
   unblockCreator,
   type SafetySurface,
 } from '@/lib/moderation-client';
+import { takeBlockedCreatorOffMarketplacePages } from '@/lib/marketplace-pages-memory';
 import { forgetBlockedCreatorForVisit, takeBlockedCreatorOffClientFeeds } from '@/lib/showcase-client-cache';
 import { forgetKeptSearchPages } from '@/lib/search-kept-pages';
 
@@ -132,8 +133,9 @@ export async function blockCreatorAfterConfirmation({
     // posts again: not from the copy it kept (Explore, the home feed), and
     // not from Explore's first page, which the server builds for everyone.
     takeBlockedCreatorOffClientFeeds(userId);
-    // Nor a search Back would redraw from what it kept.
+    // Nor a search Back would redraw from what it kept, nor a Marketplace listing's later pages.
     forgetKeptSearchPages();
+    takeBlockedCreatorOffMarketplacePages(userId);
     return { status: 'done', message: `${creatorName} is blocked. Their posts are gone from your feed.` };
   } catch (error) {
     return failed('Could not block this creator.', error);

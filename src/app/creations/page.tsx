@@ -566,6 +566,9 @@ export default function CreationsPage() {
     // The creations' media filter is in the address too (owner's report, 2026-11-15: a
     // filter left by Back or a refresh came back as All).
     const filter = parseCreationMediaFilter(searchParams.get('media'));
+    // Each section's filter rides along through the others, so a section left and opened again
+    // is as it was left (review of #815: the media filter, kept in a state of the page before,
+    // came back as All once it moved to the address).
     const buildWorkspacePath = (
         view: WorkspaceView,
         visibility: OwnerPostVisibilityFilter = 'all',
@@ -575,10 +578,10 @@ export default function CreationsPage() {
         if (view !== 'creations') {
             params.set('view', view);
         }
-        if (view === 'posts' && visibility !== 'all') {
+        if (visibility !== 'all') {
             params.set('visibility', visibility);
         }
-        if (view === 'creations' && media !== 'all') {
+        if (media !== 'all') {
             params.set('media', media);
         }
         const query = params.toString();
@@ -1832,7 +1835,7 @@ export default function CreationsPage() {
                         {WORKSPACE_TABS.map((tab) => (
                             <Link
                                 key={tab.key}
-                                href={buildWorkspacePath(tab.key)}
+                                href={buildWorkspacePath(tab.key, postVisibilityFilter, filter)}
                                 scroll={false}
                                 aria-current={activeView === tab.key ? 'page' : undefined}
                                 className={`ui-focus-ring rounded-full border px-4 py-2.5 text-sm font-semibold transition ${
@@ -1952,7 +1955,7 @@ export default function CreationsPage() {
                             // replaces the history entry, and Back and a refresh keep it.
                             <Link
                                 key={tab.key}
-                                href={buildWorkspacePath('creations', 'all', tab.key)}
+                                href={buildWorkspacePath('creations', postVisibilityFilter, tab.key)}
                                 replace
                                 scroll={false}
                                 aria-current={filter === tab.key ? 'true' : undefined}
@@ -1984,7 +1987,7 @@ export default function CreationsPage() {
                             // replaces the history entry instead of adding one.
                             <Link
                                 key={tab.key}
-                                href={buildWorkspacePath('posts', tab.key)}
+                                href={buildWorkspacePath('posts', tab.key, filter)}
                                 replace
                                 scroll={false}
                                 aria-current={postVisibilityFilter === tab.key ? 'true' : undefined}

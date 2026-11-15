@@ -14,6 +14,8 @@ import { publishUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
 import { onHomeFeedRefresh } from '@/lib/home-feed-refresh';
 import { useLeaveGuard } from '@/lib/use-leave-guard';
 
+import { findHomeShellProblems } from '../../scripts/build/check-home-shell-prerender.mjs';
+
 let mockedPathname = '/';
 /** The root layout's selected segment: the route's first segment. */
 let mockedSegment: string | null = null;
@@ -739,6 +741,24 @@ describe('AppShellClient', () => {
       expect(navigations).toEqual([]);
     });
 
+    // The build's check of the prerendered Home (npm run build:verify) fails
+    // unless every control naming Home is drawn current there.
+    it('draws the brand current on Home, as the build check of the prerendered Home reads it', () => {
+      const html = renderToString(
+        <AppShellClient>
+          <div>Home content</div>
+        </AppShellClient>
+      );
+
+      const drawn = document.createElement('div');
+      drawn.innerHTML = html;
+      const brand = [...drawn.querySelectorAll('a[data-app-nav-tab="home"]')]
+        .find((control) => control.textContent?.startsWith('Magic Booklet'));
+
+      expect(brand).toHaveAttribute('aria-current', 'page');
+      expect(findHomeShellProblems(html)).toEqual([]);
+    });
+
     it('lets the brand go Home from any other page, and leaves Home\'s feed alone', () => {
       mockedPathname = '/showcase';
       mockedScrollY = 0;
@@ -747,6 +767,7 @@ describe('AppShellClient', () => {
           <div>Showcase content</div>
         </AppShellClient>
       );
+      expect(sidebarBrand()).not.toHaveAttribute('aria-current');
 
       fireEvent.click(sidebarBrand());
 

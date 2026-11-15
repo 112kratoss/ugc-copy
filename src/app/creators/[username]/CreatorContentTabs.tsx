@@ -43,6 +43,7 @@ import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import { fetchShowcaseViewerExclusions } from '@/lib/showcase-viewer-exclusions-client';
+import ReelHostMark from '@/components/ReelHostMark';
 import { itemsWithoutBlockedRemixCredits } from '../../../../ugc-mobile/lib/remix-credit/remix-credit';
 
 function ShowcaseReelLoadingFallback() {
@@ -531,6 +532,7 @@ function CreatorContentTabsView({
 
   return (
     <section className="mt-7" aria-label="Creator portfolio" onClickCapture={closeOnLinkToThisPage}>
+      <ReelHostMark />
       {/* Sticky under the top bar, and opaque, so the grid scrolls under it. */}
       <SegmentedControl
         role="tab"

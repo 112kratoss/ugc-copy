@@ -6,9 +6,15 @@ import { useSyncExternalStore } from 'react';
  * back as its default).
  *
  * The address is the control's state: the page reads it with `useAddressParam` and changes it
- * with `writeAddressParam`, in place, without a navigation and without a history entry, through
- * the history API, which Next follows: its router takes the new address as the page's own, and
- * the entry keeps Next's state, so Back and Forward still reach it.
+ * with `writeAddressParam`, in place, without a navigation and without a history entry. The write
+ * is the search page's (`writeSearchPageAddress`): it keeps the entry's state, Next's mark
+ * included, so Next hands it straight to the browser. A write Next took for its own would end a
+ * navigation still loading: a template pressed, then a filter while it loads, and the template
+ * never opened (review of #815). Back and Forward still reach the entry, and Next takes the
+ * address it finds there as the page's. What that costs: Next's router keeps the address the
+ * page opened at, and writes it back at a commit on this page that does not leave it (a refresh,
+ * a server action; in development a hot update); the pages that use this do none of these, and
+ * none reads `useSearchParams` for these parameters.
  *
  * Read from the browser's address, never from the render: a page drawn ahead of time cannot read
  * it, and Back draws the render Next kept, from before the control last changed (`FeedClient`'s
@@ -48,8 +54,7 @@ export function writeAddressParam(name: string, value: string | null): void {
   if (value === null) url.searchParams.delete(name); else url.searchParams.set(name, value);
   if (url.href === window.location.href) return;
   try {
-    // No state of its own: Next copies its own onto the entry and follows the new address.
-    window.history.replaceState(null, '', url);
+    window.history.replaceState({ ...window.history.state, __NA: true }, '', url);
   } catch {
     // Safari refuses more than 100 history writes in 30 seconds; the next change writes again.
     return;

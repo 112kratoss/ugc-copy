@@ -92,6 +92,7 @@ import {
 } from '@/lib/reel-history-entry';
 import { scheduleIdleWork } from '@/lib/schedule-idle-work';
 import { useMediaQuery } from '@/lib/use-media-query';
+import ReelHostMark from '@/components/ReelHostMark';
 
 function ShowcaseReelLoadingFallback() {
     return (
@@ -2182,6 +2183,7 @@ export default function ShowcaseClient({
 
     return (
         <div className="ui-page ui-page-ambient min-h-screen py-5 font-[family-name:var(--font-geist-sans)] sm:py-7">
+            <ReelHostMark />
             <div className="studio-shell relative z-10">
                 {/* Below 1024px the top bar has only a magnifier: Explore opens on a search bar. */}
                 <SearchEntryLink className="mb-5 lg:hidden" />

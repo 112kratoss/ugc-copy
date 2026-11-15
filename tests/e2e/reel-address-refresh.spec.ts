@@ -61,6 +61,26 @@ test("a creator's page loaded on a post's reel address hands the stage to the re
   expect(await topmostAtCentre(page)).toBe('reel');
 });
 
+// A page that ends with no reel to open (a creator not found, blocked or not loaded, an error
+// page) holds no reel host, so the stage gives way as soon as that page is drawn, not after its
+// ten-second wait for a reel (review of #815). Offline, a creator the stub does not know fails to
+// load. (Explore's error page comes offline only after that wait, so it cannot tell the two apart.)
+test("a creator's page that cannot be loaded, on a post's reel address, shows the page, not the stage", async ({ page }) => {
+  await page.goto(`/creators/e2e-no-such-creator?post=${POST_ID}`, COLD_PAGE);
+
+  await expect(page.getByRole('heading', { name: 'Could not load this creator' })).toBeVisible(COLD_PAGE);
+  await expect(page.locator('.reel-opening-cover')).toBeHidden({ timeout: 2_000 });
+  expect(await topmostAtCentre(page)).toBe('page');
+});
+
+test('a post address naming nothing never shows the stage', async ({ page }) => {
+  await withoutPageScripts(page);
+  await page.goto('/creators/e2e-creator?post=', COLD_PAGE);
+
+  await expect(page.locator('.reel-opening-cover')).toBeHidden();
+  expect(await topmostAtCentre(page)).toBe('page');
+});
+
 test('the stage is never drawn on a post page, whose address is the post itself', async ({ page }) => {
   await withoutPageScripts(page);
   await page.goto(`/showcase/${POST_ID}?post=${POST_ID}`, COLD_PAGE);
