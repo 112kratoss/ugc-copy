@@ -61,3 +61,11 @@ API, as the H3 video model's "50% of the official price" is, not a dated offer.
 - Reference pictures reach the prompt through the app's usual legend (`@name = attached reference
   image N`), as for the other image models; Kie does not refuse an `@`, and its prompt rewriter
   reads the legend. Its own enhancer playbook names the pictures in upload order.
+
+## Paid runs (2026-11-15)
+
+The app's bodies at 1K, on the owner's word ("Yes, run them"); record `archive/kie-models-2026-11-14/paid-results.txt`:
+- `minimax-h3/text-to-image`, 1:1: task `fb2565d1e6d08d66df96004f9cfffb06`, charged **1.8**, a
+  1024×1024 JPEG.
+- `minimax-h3/image-edit`, 3:2, one picture: task `5e870e370c004fd6368cb2c4ba5f4367`, charged
+  **2.3** (1.8 + 0.5, the first picture billed), a 1248×832 JPEG.

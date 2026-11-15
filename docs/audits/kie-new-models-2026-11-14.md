@@ -22,7 +22,9 @@ answered 422; the Kie balance stayed at 2375.9). Raw copies:
 | **Kling 4.0 Flash** (listed 09-29, priced by 11-14) | `kling-4.0-flash` | `kling-4.0/flash-{reference,keyframe}-to-video` | 17 per second, 720p | `kling-4-0-flash.md` |
 | **Gemini Omni 1.2 Flash** (11-06) | `gemini-omni-1.2-flash` | `google/gemini-omni-flash-1-2` | 4 / 9 / 10 / 22 per second, 360p–4K | `gemini-omni-1-2-flash.md` |
 
-No paid run yet: each evidence file says what the release leaves out and why.
+One paid run per endpoint on 2026-11-15 (Gemini Omni 1.2 Flash: one per shape) charged exactly
+the listed prices, 160.74 credits in all, and delivered the asked sizes, lengths and audio; each
+evidence file records its tasks. What the release leaves out, and why:
 
 - **GPT Image 2.6 Flare and Sunburst**: billed per token (prompt, input pictures, output), so no
   price can be quoted before a run. Only the Economy endpoints, at a flat 5 credits, ship.

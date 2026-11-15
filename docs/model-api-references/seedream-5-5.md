@@ -62,3 +62,11 @@ Vidu Q4's and Nano Banana 2.1's "below official" lines are, not a dated offer; t
 - Enhancer: an alias of `seedream-5-lite`, as Flash is — the Seedream prompt grammar, the same
   request schema but for `background`, which is not sent.
 - Maker ByteDance, already named in the AI-data question; no app release.
+
+## Paid runs (2026-11-15)
+
+The app's bodies at 1K, on the owner's word ("Yes, run them"); record `archive/kie-models-2026-11-14/paid-results.txt`:
+- `seedream/5-5-text-to-image`, 1:1: task `56c381c5e23f275fdd66ddb480c61687`, charged **3.6**
+  (`creditsConsumed`), a 1024×1024 JPEG.
+- `seedream/5-5-image-to-image`, 3:2, one picture: task `53d8cea4684aa8c56a1abc9cc946a9d2`,
+  charged **5.04** (3.6 + 1.44, the first picture billed), a 1248×832 JPEG.
