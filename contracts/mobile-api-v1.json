@@ -1021,15 +1021,6 @@
       "path": "/api/search",
       "auth": "optional",
       "cacheControl": "private, no-store",
-      "filterParameters": {
-        "madeWith": "madeWith",
-        "mediaKind": "kind",
-        "hasRecipe": "recipe",
-        "following": "following",
-        "exact": "exact"
-      },
-      "relatedParameter": "related",
-      "probeParameter": "probe",
       "relatedSearches": {
         "parameter": "relatedSearches",
         "max": 6,
@@ -1062,6 +1053,15 @@
           }
         }
       },
+      "filterParameters": {
+        "madeWith": "madeWith",
+        "mediaKind": "kind",
+        "hasRecipe": "recipe",
+        "following": "following",
+        "exact": "exact"
+      },
+      "relatedParameter": "related",
+      "probeParameter": "probe",
       "response": {
         "query": "Neon product",
         "normalizedQuery": "Neon product",
