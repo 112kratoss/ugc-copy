@@ -8,7 +8,7 @@
  * The two limits the page states, as numbers it can print without importing server code;
  * `mcp-server-service.test.ts` holds them to `MAX_POST_MEDIA_ITEMS` and `AGENT_PUBLISH_RATE_LIMIT`.
  */
-export const MCP_POSTS_PAGE_LIMITS = { filesPerPost: 5, publicPostsPerDay: 10 } as const;
+export const MCP_POSTS_PAGE_LIMITS = { filesPerPost: 5, publicPostsPerDay: 60 } as const;
 
 export const MCP_POSTS_TOOL_SUMMARIES: ReadonlyArray<{ name: string; readOnly: boolean; summary: string }> = [
   {

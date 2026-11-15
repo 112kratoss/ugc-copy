@@ -169,8 +169,9 @@ it the media goes alone. The rules the owner set (2026-11-09):
 
 - **Two limits.** Every agent publish passes the web's publish limit (`SHOWCASE_PUBLISH_RATE_LIMIT`,
   20 per 10 minutes per account, which counts attempts as the route does) and, where it makes a
-  post public, the agent cap (`AGENT_PUBLISH_RATE_LIMIT` in `backend-rate-limit.ts`, 10 public
-  posts per account per UTC day). The cap counts publications, not attempts: the tool counts the
+  post public, the agent cap (`AGENT_PUBLISH_RATE_LIMIT` in `backend-rate-limit.ts`, 60 public
+  posts per account per UTC day; 10 until the owner raised it on 2026-11-15, after a batch of
+  18 good posts stopped at the tenth). The cap counts publications, not attempts: the tool counts the
   day's rows recorded `PUBLISHED_PUBLIC` in `agent_tool_calls` before it publishes, so a publish
   the service refuses (a missing handle, a safety refusal, a short recipe title) spends nothing,
   and a private post is not counted. The row is written behind the answer, so two publishes a
@@ -693,7 +694,7 @@ agents → The audit table), which outlives the log retention.
 
 Rate limits are the creator's own: the generation start's 30 per 10 minutes, the quote's 240,
 the library read's 400 (polls in `get_generation` and `get_post` count once per call), prompt
-enhancement's 60, the publish's 20 plus the agent cap of 10 public posts per UTC day, the post
+enhancement's 60, the publish's 20 plus the agent cap of 60 public posts per UTC day, the post
 mutation's 60 for `delete_post` and for a text post or a post made from uploads (its create, and
 a change of its visibility), and `upload_input`'s own 30 per 10 minutes, which `request_upload`
 shares, before
@@ -1033,7 +1034,7 @@ URL, because Claude takes a document only when its `resource` equals the URL the
 connected. Its documentation is `/developers/mcp/posting`, which describes posting alone and
 links nowhere that creates media. The kill switch, the audit table, the rate limits and the
 daily cap are the full server's: one `MCP_SERVER_DISABLED` stops both, and a public post
-through either counts toward the same ten a day.
+through either counts toward the same 60 a day.
 
 The listing must stand on its own. A tool description that pointed a person at the full server
 would break the checklist's rule against promoting other software, and the policy's clause on

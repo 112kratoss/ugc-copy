@@ -47,7 +47,7 @@ describe('the posting connector page', () => {
     // What a person decides is said in words: a public post, a price, the daily limit.
     expect(words).toContain('unless you ask for a private one');
     expect(words).toContain('Claude never chooses one');
-    expect(words).toContain('10 public posts a day');
+    expect(words).toContain('60 public posts a day');
     expect(words).toContain('Up to 5 files in one post.');
     // It does not send a person to search a directory it may not be in yet.
     expect(words).toContain('Once Magic Booklet is listed in Claude’s connectors directory');

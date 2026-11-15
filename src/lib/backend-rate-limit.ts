@@ -342,10 +342,15 @@ export const SHOWCASE_PUBLISH_RATE_LIMIT = {
  * counts the day's successful public publishes in `agent_tool_calls` before it publishes
  * (`countAgentPublicPublishesSince`), so a refused publish spends nothing and a private post is
  * not counted. The window is the UTC day, as the limiter's own windows are aligned.
+ *
+ * 60 since 2026-11-15 (owner: "make it 60 a day with 20 per 10 minute"); it was 10, a first
+ * safety number that stopped a real batch of 18 posts at its tenth. What it is for has not
+ * changed: an agent posts at machine speed, and the 20 per 10 minutes alone would let one
+ * through with 2,880 public posts a day, each into the feed and the moderation queue.
  */
 export const AGENT_PUBLISH_RATE_LIMIT = {
   scope: 'agent:publish-public',
-  limit: 10,
+  limit: 60,
   windowSeconds: 24 * 60 * 60,
 } as const;
 
