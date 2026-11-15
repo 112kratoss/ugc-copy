@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Bell, Loader2 } from 'lucide-react';
+import { publishNavigationStartTo } from '@/components/navigation-progress-state';
 import { publishUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
 import { supabase } from '@/lib/supabase';
 import { resolveWebNotificationPath } from '@/lib/web-notification-links';
@@ -294,6 +295,9 @@ export default function NotificationsPage() {
     // tap used to wait for a session check and the write before moving.
     const webPath = resolveWebNotificationPath(notification.deepLink);
     if (webPath) {
+      // Announced as a link click is: the progress bar shows, and a post opened
+      // here steps back to Alerts by its "Back" even when Alerts was the first page.
+      publishNavigationStartTo(webPath);
       startTransition(() => {
         router.push(webPath);
       });

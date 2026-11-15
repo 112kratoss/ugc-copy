@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import creationPost from './fixtures/creation-post.json';
+import recipePost from './fixtures/post-with-recipe.json';
 
 // Owner, 2026-11-15, of the "Back to Community" above a post: "is it needed? actually its home
 // right". It was neither: Community is Explore's old name, and a link that named no page was given
@@ -27,6 +28,14 @@ test.describe.configure({ timeout: 180_000 });
 const wayBack = (page: Page) => page.getByRole('link', { name: /^Back\b/ });
 const title = (page: Page) => page.getByRole('heading', { level: 1, name: TITLE });
 
+/** Answers the invite's visit, whose offer the page's script draws once it has read the address. */
+async function answerInviteVisit(page: Page) {
+  await page.route('**/api/referrals/visit', (route) => route.fulfill({
+    json: { success: true, code: CODE, preserved: false, program: null },
+  }));
+  return page.getByRole('complementary', { name: 'Your invite' });
+}
+
 /** Signed out, with the browser's other requests answered as they fail offline. */
 async function visitSignedOut(page: Page) {
   const context = page.context();
@@ -45,12 +54,9 @@ test.describe('a post opened by its own address', () => {
 
   test('draws no way back, from a shared link or an in-site address loaded on its own', async ({ page }) => {
     await visitSignedOut(page);
-    await page.route('**/api/referrals/visit', (route) => route.fulfill({
-      json: { success: true, code: CODE, preserved: false, program: null },
-    }));
     // The invite's offer is drawn by the page's script once it has read the address and the
     // viewer: the page has hydrated by the time it shows.
-    const offer = page.getByRole('complementary', { name: 'Your invite' });
+    const offer = await answerInviteVisit(page);
 
     // A shared link.
     await page.goto(`${POST_PATH}?s=feed&r=${CODE}`);
@@ -114,4 +120,48 @@ test('a post opened from search says Search, and goes back to the search as it w
   await wayBack(page).click();
   await expect(page).toHaveURL((url) => url.pathname === '/search' && url.searchParams.get('q') === 'rooftop');
   await expect(result).toBeVisible();
+});
+
+// Review of #829: the way back was drawn only after a counted link click, so a post the
+// router opened after the first page (an alert's tap, the composer's Publish replacing the
+// composer) drew none. A replace leaves no page of the site behind the post, so the way back
+// opens the page it names instead of stepping back out of the site.
+test('a post the router opened after the first page draws its way back, which opens the page it names', async ({ page }) => {
+  await visitSignedOut(page);
+  const offer = await answerInviteVisit(page);
+
+  await page.goto(`/showcase/${recipePost.post.id}?r=${CODE}`);
+  await expect(offer).toBeVisible(COLD_PAGE);
+  await expect(wayBack(page)).toHaveCount(0);
+
+  await page.evaluate((href) => (
+    window as unknown as { next: { router: { replace: (target: string) => void } } }
+  ).next.router.replace(href), `${POST_PATH}?from=home&returnTo=%2F`);
+
+  await expect(title(page)).toBeVisible(COLD_PAGE);
+  await expect(wayBack(page)).toHaveText('Back to Home');
+
+  await wayBack(page).click();
+  // Home, not the blank page the replaced first page left behind the post.
+  await expect(page).toHaveURL((url) => url.pathname === '/', COLD_PAGE);
+});
+
+// The browser's Back to a post opened by its own address returns to the first page: no page
+// of the site is behind it there either. The old rule drew "Back" once any link was clicked,
+// and stepping back from it left the site.
+test("the browser's Back to a post opened by its own address draws no way back", async ({ page }) => {
+  await visitSignedOut(page);
+  const offer = await answerInviteVisit(page);
+
+  await page.goto(`${POST_PATH}?r=${CODE}`);
+  await expect(offer).toBeVisible(COLD_PAGE);
+  await expect(wayBack(page)).toHaveCount(0);
+
+  await page.getByRole('complementary', { name: 'Primary navigation' }).getByRole('link', { name: 'Explore', exact: true }).click();
+  await page.waitForURL((url) => url.pathname === '/showcase', COLD_PAGE);
+
+  await page.goBack();
+  await expect(title(page)).toBeVisible(COLD_PAGE);
+  expect(new URL(page.url()).pathname).toBe(POST_PATH);
+  await expect(wayBack(page)).toHaveCount(0);
 });

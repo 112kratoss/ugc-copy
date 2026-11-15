@@ -152,6 +152,24 @@ describe('the web Alerts page', () => {
     expect(mocks.publish).toHaveBeenLastCalledWith(2);
   });
 
+  // An alert's tap is a router push: unannounced, it raised no progress bar, and a post
+  // opened from Alerts loaded as the first page drew no way back to it (review of #829).
+  it('announces the navigation of a tapped alert as a link click is announced', async () => {
+    const { readNavigationToken } = await import('@/components/navigation-progress-state');
+    answerFetch((url) => (
+      url.pathname === '/api/mobile/notifications/read'
+        ? { body: { success: true } }
+        : inbox([alertRow(1, { deepLink: '/showcase/post-7' })], 1)
+    ));
+    render(<NotificationsPage />);
+    const before = readNavigationToken();
+
+    fireEvent.click(await screen.findByText('Alert 1'));
+
+    expect(readNavigationToken()).toBe(before + 1);
+    await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/showcase/post-7'));
+  });
+
   // A refused Mark all read looked like a broken button: nothing changed and nothing was said.
   it('keeps the alerts unread and says why when Mark all read is refused, and marks them on a retry', async () => {
     let readAllAnswer: Answer = {

@@ -55,7 +55,8 @@ type ShowcaseReturnSource = 'community' | 'unlocks' | 'library' | 'creator' | 's
  * Where a post page's way back leads. `unnamed` is a page the link to the post
  * did not name (a notification, a remix, the page a publish lands on, another
  * post): the way back then says only "Back", and the button goes back to
- * wherever the viewer was. Never a `from` a link carries.
+ * wherever the viewer was; with no page of its own to open, it is drawn only
+ * where that step back stays on the site. Never a `from` a link carries.
  */
 export type ShowcaseReturnOrigin = ShowcaseReturnSource | 'unnamed';
 

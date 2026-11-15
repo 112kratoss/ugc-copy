@@ -39,9 +39,33 @@ export function readNavigationToken() {
  * where stepping back in history would take them out of the app rather than to
  * the page they came from. Lets a "back" affordance choose between a cheap
  * history pop and a real navigation to its stated destination.
+ *
+ * It counts navigations as they start (a link click, a push that announces
+ * itself), not as they land, and a `router.replace` never counts: one that
+ * swapped the first page for another leaves no page of the site to step back to.
  */
 export function hasNavigatedInThisDocument() {
   return navigationToken > 0;
+}
+
+/**
+ * The pathname this document was loaded at. The root layout's NavigationProgress
+ * imports this module, so it is read as the first page loads, before any client
+ * navigation; there is none on the server.
+ */
+const documentPathname = typeof window === 'undefined' ? null : window.location.pathname;
+
+/**
+ * Whether the page at `pathname` was reached inside this document, by any client
+ * navigation (a link, a router push or replace, the browser's Back to another
+ * page), rather than being the page the document was loaded at (a shared link, a
+ * refresh, a new tab, or a return to that page by the browser's Back). Unlike the
+ * navigation count it misses no imperative navigation, and it cannot hold for the
+ * first page however late a part of it mounts. False on the server, so a server
+ * render and the hydration of the first page agree.
+ */
+export function isPageReachedInThisDocument(pathname: string) {
+  return documentPathname !== null && pathname !== documentPathname;
 }
 
 /**
