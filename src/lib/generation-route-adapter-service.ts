@@ -31,7 +31,10 @@ export type GenerationRouteOperationInput = {
   kieApiKey?: string;
   readRequestBody?: () => Promise<unknown>;
   request: Request;
-  /** Given to a status check only. A start has nothing to send once it has answered. */
+  /**
+   * A status check tells the creator's devices what it found once it has
+   * answered. A start that was queued goes on asking for its place.
+   */
   runAfterResponse?: RunAfterResponse;
 };
 
@@ -104,12 +107,17 @@ export function postGenerationRouteResponse({
   postGenerationForRoute: GenerationRouteOperation;
   request: Request;
 }) {
+  const resolvedDependencies = resolveDependencies(dependencies);
+
   return runGenerationRouteOperation({
-    dependencies: resolveDependencies(dependencies),
+    dependencies: resolvedDependencies,
     kieApiKey,
     operation: postGenerationForRoute,
     readRequestBody: () => request.json(),
     request,
+    // A start over the provider's limits answers as queued, and the request
+    // that queued it sends it from here when its turn comes.
+    runAfterResponse: resolvedDependencies.runAfterResponse,
   });
 }
 

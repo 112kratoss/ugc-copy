@@ -1,3 +1,4 @@
+import { resolveRunHandleStatus } from '@/lib/generation-run-handle-status';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { isGuestUser } from '@/lib/account-identity';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -133,9 +134,21 @@ export async function getImageGenerationForRoute(
       };
     }
 
+    // A queued run is followed by its handle, the generation's own id, until
+    // the provider task exists (generation-run-handle-status.ts).
+    const handle = await resolveRunHandleStatus({
+      id: predictionId,
+      userId,
+      createAdminSupabase: input.createAdminSupabase as () => SupabaseClient,
+      runAfterResponse: input.runAfterResponse,
+    });
+    if (handle.kind === 'answered') {
+      return { ok: true, body: handle.body };
+    }
+
     const result = await getImageGenerationStatusForRoute({
       request: input.request,
-      predictionId,
+      predictionId: handle.predictionId,
       userId,
       createAdminSupabase: input.createAdminSupabase as () => ImageRouteSupabaseClient,
       kieApiKey: input.kieApiKey,

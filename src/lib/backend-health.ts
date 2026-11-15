@@ -51,10 +51,30 @@ type StalledGenerationRow = {
   cost: number | string | null;
 };
 
+type QueuedSubmissionEmbed = { queued_at: string | null };
+
 type PendingGenerationWithoutProviderTaskRow = {
   created_at: string | null;
   cost: number | string | null;
+  /** The run's row in the queue of starts, when it is waiting there. One-to-one, which PostgREST may still hand back as a list. */
+  generation_queued_submissions?: QueuedSubmissionEmbed | QueuedSubmissionEmbed[] | null;
 };
+
+/**
+ * A pending generation with no provider task is a start that died, unless it
+ * is waiting its turn in the queue of starts (generation-submission-queue.ts),
+ * where having no task yet is the point. A run may wait there ten minutes and
+ * is ended by the next pass after that, the cron's at the latest: one still
+ * queued past `QUEUED_START_OVERDUE_AFTER_MINUTES` is a queue nothing is
+ * serving, and counts.
+ */
+export function isPendingGenerationWaitingInQueue(row: PendingGenerationWithoutProviderTaskRow, now: Date): boolean {
+  const embed = row.generation_queued_submissions;
+  const queued = Array.isArray(embed) ? embed[0] : embed;
+  const queuedAt = queued?.queued_at ? Date.parse(queued.queued_at) : Number.NaN;
+  return Number.isFinite(queuedAt)
+    && now.getTime() - queuedAt < QUEUED_START_OVERDUE_AFTER_MINUTES * 60 * 1000;
+}
 
 type GenerationCompletionQueueRow = {
   status: string | null;
@@ -355,6 +375,8 @@ const JOB_RUN_PAGE_SIZE = 1_000;
 const GENERATION_RECENT_WINDOW_MINUTES = 60;
 const GENERATION_STALLED_AFTER_MINUTES = 60;
 const GENERATION_PENDING_WITHOUT_PROVIDER_TASK_AFTER_MINUTES = 5;
+/** The queue's ten minutes, and the ten between two cron passes that would end an overdue run. */
+const QUEUED_START_OVERDUE_AFTER_MINUTES = 20;
 const COMPLETION_QUEUE_STALE_PENDING_AFTER_MINUTES = 15;
 const COMPLETION_QUEUE_STALE_PROCESSING_AFTER_MINUTES = 10;
 const AI_USAGE_RECENT_WINDOW_MINUTES = 60;
@@ -1359,7 +1381,7 @@ export async function collectBackendHealth(
       .limit(50),
     client
       .from('generations')
-      .select('created_at,cost')
+      .select('created_at,cost,generation_queued_submissions(queued_at)')
       .eq('status', 'pending')
       .is('prediction_id', null)
       .lt('created_at', pendingWithoutProviderTaskBefore)
@@ -1452,7 +1474,8 @@ export async function collectBackendHealth(
   const generationResult = buildGenerationHealth(
     healthSample('generations', (recentGenerationsResult.data ?? []) as GenerationStatusRow[], HEALTH_RECENCY_SAMPLE_LIMIT, recentGenerationsResult.count),
     (stalledGenerationsResult.data ?? []) as StalledGenerationRow[],
-    (pendingWithoutProviderTaskResult.data ?? []) as PendingGenerationWithoutProviderTaskRow[],
+    ((pendingWithoutProviderTaskResult.data ?? []) as PendingGenerationWithoutProviderTaskRow[])
+      .filter((row) => !isPendingGenerationWaitingInQueue(row, now)),
   );
   const completionQueueResultHealth = buildCompletionQueueHealth(
     healthSample('generation_completion_jobs', (completionQueueResult.data ?? []) as GenerationCompletionQueueRow[], COMPLETION_QUEUE_SAMPLE_LIMIT),

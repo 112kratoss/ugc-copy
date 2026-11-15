@@ -1,3 +1,4 @@
+import { driveQueuedSubmissions } from '@/lib/generation-submission-queue';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
@@ -267,6 +268,11 @@ export async function handleKieWebhookForRoute(input: KieWebhookRouteInput): Pro
             Math.max(1, completion.completed + outputImports.completed),
           ),
         });
+      }
+      if (completion.completed > 0) {
+        // A finished task has just freed a slot. The head of the queue is
+        // served now, not at the next cron pass.
+        await driveQueuedSubmissions({ client: serviceClient, fresh: true });
       }
     } catch (error) {
       logBackendError('kie_webhook_completion_processing_failed', {

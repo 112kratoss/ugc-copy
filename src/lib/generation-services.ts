@@ -132,6 +132,7 @@ import {
   parseProviderRetryAfterSeconds,
   recordProviderSubmissionOutcome,
 } from '@/lib/provider-admission';
+import { enqueueProviderSubmission } from '@/lib/generation-submission-queue-store';
 import { isAllowlistedRemoteMediaUrl, type RemoteMediaKind } from '@/lib/remote-media-security';
 import { stageAllowlistedRemoteMedia } from '@/lib/staged-remote-media';
 import { loadGenerationModelOperationalConfig } from '@/lib/generation-model-catalog-store';
@@ -330,11 +331,21 @@ export async function attachGenerationProviderTask(
   throw new GenerationServiceError('Failed to attach provider task to generation.', 500);
 }
 
-async function createKieTask(
+const KIE_CREATE_TASK_ENDPOINT = 'https://api.kie.ai/api/v1/jobs/createTask';
+
+/** A provider request ready to send: what a start builds, and what a queued run stores. */
+export type PreparedKieTask = {
+  endpoint: string;
+  body: Record<string, unknown>;
+  callbackUrl: string;
+  modelId: string | null;
+};
+
+function prepareKieTask(
   body: Record<string, unknown>,
-  endpoint = 'https://api.kie.ai/api/v1/jobs/createTask',
-  options: { generationId?: string | null; modelId?: string | null } = {},
-) {
+  endpoint: string,
+  options: { generationId?: string | null; modelId?: string | null },
+): PreparedKieTask {
   requireKieGenerationConfiguration();
   // Every start path checks its prompts before holding credits. This repeats
   // the check on the exact payload, so a start path added later cannot send a
@@ -343,18 +354,76 @@ async function createKieTask(
   const callbackUrl = typeof body.callBackUrl === 'string' && body.callBackUrl.trim()
     ? body.callBackUrl
     : buildKieWebhookCallbackUrl({ generationId: options.generationId });
+  return { endpoint, body, callbackUrl, modelId: options.modelId ?? null };
+}
 
-  // F14: account-wide admission, immediately before the only outbound call that
-  // creates provider work. Placed here rather than at the seven start call
-  // sites for the same reason the money-bug fix went into the shared settle
-  // helper — a new start path inherits the gate instead of having to remember
-  // it. A rejection throws a 429 `GenerationServiceError`, which the caller's
-  // existing catch refunds through the ordinary path; that is correct because
-  // no request was sent, so the provider will never bill for it.
+/**
+ * Creates the provider task of a start that is never queued: a run step's, or
+ * a sound or voiceover's, which only a workflow starts.
+ *
+ * F14: account-wide admission, immediately before the only outbound call that
+ * creates provider work. Placed here rather than at the start call sites for
+ * the same reason the money-bug fix went into the shared settle helper — a new
+ * start path inherits the gate instead of having to remember it. A rejection
+ * throws a 429 `GenerationServiceError`, which the caller's existing catch
+ * refunds through the ordinary path; that is correct because no request was
+ * sent, so the provider will never bill for it.
+ */
+async function createKieTask(
+  body: Record<string, unknown>,
+  endpoint = KIE_CREATE_TASK_ENDPOINT,
+  options: { generationId?: string | null; modelId?: string | null } = {},
+) {
+  const task = prepareKieTask(body, endpoint, options);
   await admitProviderSubmission({
     generationId: options.generationId,
     model: options.modelId,
+    mayQueue: false,
   });
+  return postKieTask(task);
+}
+
+/**
+ * Sends a held start to the provider, or queues it when the limits are full.
+ *
+ * Answers the id the run is followed by. Sent, that is the provider's task,
+ * which the caller attaches to the generation as it always has. Queued (a
+ * creator's start, inside `withProviderSubmissionQueue`, that the gate has no
+ * place for yet), it is the generation's own id: the run's handle until the
+ * task exists, which the status checks accept in its place
+ * (generation-run-handle.ts). The request is stored for whatever sends the run
+ * when its turn comes (generation-submission-queue.ts), which attaches it.
+ *
+ * Either way the id is set before anything else can fail, which is what each
+ * start's catch reads: a run that was sent or queued is alive, and a later
+ * error (the attach itself, the input copies) must not refund it. A start
+ * that may not be queued is refused as before, a 429 its catch refunds; so is
+ * one that finds the queue full.
+ */
+async function submitOrQueueKieTask(
+  generationId: string,
+  body: Record<string, unknown>,
+  endpoint: string = KIE_CREATE_TASK_ENDPOINT,
+  options: { modelId?: string | null } = {},
+): Promise<{ runId: string; queued: boolean }> {
+  const task = prepareKieTask(body, endpoint, { generationId, modelId: options.modelId });
+  const verdict = await admitProviderSubmission({ generationId, model: options.modelId });
+
+  if (verdict.allowed) {
+    return { runId: await postKieTask(task), queued: false };
+  }
+
+  await enqueueProviderSubmission({ generationId, task });
+  return { runId: generationId, queued: true };
+}
+
+/**
+ * The one outbound call that creates provider work. Its caller holds the
+ * run's place already: the gate admitted it, at its start or from the queue.
+ */
+export async function postKieTask(task: PreparedKieTask): Promise<string> {
+  const { endpoint, body, callbackUrl } = task;
+  const options = { modelId: task.modelId };
 
   let response: Response;
   try {
@@ -586,7 +655,7 @@ async function startGenerationRecord(
   };
 }
 
-async function markGenerationProviderStarted(
+export async function markGenerationProviderStarted(
   supabase: SupabaseClient,
   generationId: string,
   predictionId: string,
@@ -851,7 +920,7 @@ async function holdAmbiguousGenerationSubmission(params: {
   return 'unrecorded';
 }
 
-async function settleGenerationStartFailureQuietly(params: {
+export async function settleGenerationStartFailureQuietly(params: {
   creditSupabase: SupabaseClient;
   error: unknown;
   generationId: string;
@@ -2600,8 +2669,10 @@ export async function startImageGeneration(params: {
       };
     }
 
-    predictionId = await createKieTask({ model: providerModel, input }, undefined, { generationId, modelId: model });
-    await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
+    const submission = await submitOrQueueKieTask(generationId, { model: providerModel, input }, undefined, { modelId: model });
+    predictionId = submission.runId;
+    // A queued run has no task to attach yet: whatever sends it attaches it.
+    if (!submission.queued) await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     if (persistInputMedia) {
       await persistGenerationInputMedia({
@@ -4038,8 +4109,10 @@ export async function startVideoGeneration(params: {
       copies: trackCopies,
       stored: storedTrackCopies,
     });
-    predictionId = await createKieTask(body, endpoint, { generationId, modelId: model });
-    await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
+    const submission = await submitOrQueueKieTask(generationId, body, endpoint, { modelId: model });
+    predictionId = submission.runId;
+    // A queued run has no task to attach yet: whatever sends it attaches it.
+    if (!submission.queued) await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     const videoInputCandidates: PersistGenerationInputCandidate[] = [];
     let inputSortOrder = 0;
@@ -4370,7 +4443,7 @@ export async function startMotionGeneration(params: {
       };
     }
 
-    predictionId = await createKieTask({
+    const submission = await submitOrQueueKieTask(generationId, {
       model: providerModelId,
       input: {
         prompt: prompt.trim() || 'The character follows the reference performance naturally.',
@@ -4379,8 +4452,10 @@ export async function startMotionGeneration(params: {
         character_orientation: characterOrientation,
         mode,
       },
-    }, undefined, { generationId, modelId: model });
-    await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
+    }, undefined, { modelId: model });
+    predictionId = submission.runId;
+    // A queued run has no task to attach yet: whatever sends it attaches it.
+    if (!submission.queued) await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     // Each input is kept from the link sent to the provider, and known by the file the caller named,
     // as the video start keeps its clips (collectReferenceMediaCandidates): with no stored path given,
@@ -4635,12 +4710,15 @@ export async function startCatalogGeneration(params: {
       shots,
     });
 
-    predictionId = await createKieTask(
+    const submission = await submitOrQueueKieTask(
+      generationId,
       providerRequest.body,
       providerRequest.endpoint,
-      { generationId, modelId: operation.modelId },
+      { modelId: operation.modelId },
     );
-    await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
+    predictionId = submission.runId;
+    // A queued run has no task to attach yet: whatever sends it attaches it.
+    if (!submission.queued) await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
     if (persistInputMedia) {
       const candidates = buildCatalogInputMediaCandidates(operation.kind, resolvedInputs);

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import {
   createMobileNotificationHistory,
@@ -3305,6 +3305,194 @@ describe('generation services', () => {
     expect(generations[0].completed_at).toBeNull();
     expect(JSON.stringify(consoleError.mock.calls)).toContain('task-image-attach-down-1');
     expect(JSON.stringify(consoleError.mock.calls)).toContain('gen-1');
+  });
+
+  describe('a creator\'s start the provider has no place for', () => {
+    const REFUSED = {
+      allowed: false, reason: 'rate_limited', state: 'closed', retryAfterSeconds: 4, inFlight: 12, waitersAhead: 3,
+    };
+
+    // The gate and the queue are stood in for once, for the whole block, and
+    // each test says what they answer. Registering and
+    // removing the stand-ins around every test raced the next test's imports.
+    const answers: {
+      admit: () => Promise<unknown>;
+      enqueue: (...args: unknown[]) => Promise<unknown>;
+    } = { admit: async () => REFUSED, enqueue: async () => ({ queuedAtMs: 1, ahead: 0 }) };
+
+    beforeAll(() => {
+      vi.doMock('@/lib/provider-admission', async (importOriginal) => ({
+        ...await importOriginal<typeof import('@/lib/provider-admission')>(),
+        admitProviderSubmission: () => answers.admit(),
+      }));
+      vi.doMock('@/lib/generation-submission-queue-store', () => ({
+        enqueueProviderSubmission: (...args: unknown[]) => answers.enqueue(...args),
+      }));
+    });
+
+    afterAll(() => {
+      vi.doUnmock('@/lib/provider-admission');
+      vi.doUnmock('@/lib/generation-submission-queue-store');
+      vi.resetModules();
+    });
+
+    /** The hub with the gate answering `admit` and the queue answering `enqueue`. */
+    async function loadWith(admit: () => Promise<unknown>, enqueue: (...args: unknown[]) => Promise<unknown>) {
+      answers.admit = admit;
+      answers.enqueue = enqueue;
+      vi.resetModules();
+      return {
+        services: await import('@/lib/generation-services'),
+        admission: await import('@/lib/provider-admission'),
+      };
+    }
+
+    it('is queued with the request it would have sent, and answers under its own id', async () => {
+      // Nothing is sent and nothing is refunded: the run is held, and its
+      // provider request is stored for whatever sends it when its turn comes.
+      // The id it answers is the generation's own, the handle a queued run is
+      // followed by, so every caller above this gets an id as it always has.
+      const enqueue = vi.fn(async (..._args: unknown[]) => ({ queuedAtMs: 1, ahead: 3 }));
+      const { services, admission } = await loadWith(async () => REFUSED, enqueue);
+      const { supabase, generations, rpcCalls } = createSupabaseMock();
+
+      const result = await admission.withProviderSubmissionQueue(() => services.startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'A premium skincare product hero image.',
+        model: 'nano-banana-2',
+      }));
+
+      expect(result).toMatchObject({ predictionId: 'gen-1', generationId: 'gen-1' });
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+      expect(rpcCalls.some((call) => call.fn.startsWith('settle_'))).toBe(false);
+      expect(rpcCalls.some((call) => call.fn === 'attach_generation_provider_task')).toBe(false);
+      expect(generations[0]).toMatchObject({ status: 'pending', prediction_id: null });
+
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      const [queued] = enqueue.mock.calls[0] as [{ generationId: string; task: {
+        endpoint: string; body: { model: string; input: { prompt: string } }; callbackUrl: string; modelId: string;
+      } }];
+      expect(queued.generationId).toBe('gen-1');
+      expect(queued.task.endpoint).toBe('https://api.kie.ai/api/v1/jobs/createTask');
+      expect(queued.task.modelId).toBe('nano-banana-2');
+      expect(queued.task.body.input.prompt).toContain('A premium skincare product hero image.');
+      // The callback the provider will answer on names this generation.
+      expect(queued.task.callbackUrl).toContain('gen-1');
+    });
+
+    type QueuedStart = (
+      services: typeof import('@/lib/generation-services'),
+      supabase: SupabaseClient,
+    ) => Promise<{ predictionId: string; generationId?: string | null }>;
+
+    // Each kind of start has its own path to the provider. All four queue.
+    const OTHER_STARTS: Array<[string, string, QueuedStart]> = [
+      ['video', 'kling-3.0-video', (services, supabase) => services.startVideoGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'A product spins on a marble pedestal.',
+        model: 'kling-3.0-video',
+        duration: 7,
+        mode: 'std',
+        aspectRatio: '16:9',
+        sound: true,
+      })],
+      ['motion', 'kling-2.6', (services, supabase) => services.startMotionGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'Match the reference motion.',
+        model: 'kling-2.6',
+        referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+        characterImageUrl: 'https://cdn.example.com/character.png',
+        duration: 10,
+        characterOrientation: 'video',
+        mode: '720p',
+      })],
+      ['catalog', 'catalog-image-model', (services, supabase) => services.startCatalogGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        operation: {
+          modelId: 'catalog-image-model',
+          kind: 'image',
+          adapterKey: 'kie-task-v1',
+          providerModelMap: { default: 'provider/image' },
+          adapterConfig: { promptField: 'prompt', shotsField: 'multi_prompt' },
+        },
+        catalogRevision: 'rev-1',
+        prompt: 'A premium skincare product hero image.',
+        settings: {},
+        shots: [],
+        quotedCostCredits: 40,
+      } as never)],
+    ];
+
+    it.each(OTHER_STARTS)('queues a %s start the same way: held, stored, unsent and not refunded', async (_kind, modelId, start) => {
+      const enqueue = vi.fn(async (..._args: unknown[]) => ({ queuedAtMs: 1, ahead: 0 }));
+      const { services, admission } = await loadWith(async () => REFUSED, enqueue);
+      const { supabase, generations, rpcCalls } = createSupabaseMock();
+
+      const result = await admission.withProviderSubmissionQueue(() => start(services, supabase));
+
+      const generationId = String(generations[0].id);
+      expect(result).toMatchObject({ predictionId: generationId, generationId });
+      // Its inputs may be looked at; nothing goes to the provider.
+      expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('kie.ai'))).toEqual([]);
+      expect(rpcCalls.some((call) => call.fn.startsWith('settle_'))).toBe(false);
+      expect(rpcCalls.some((call) => call.fn === 'attach_generation_provider_task')).toBe(false);
+      expect(generations[0]).toMatchObject({ status: 'pending', prediction_id: null });
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      expect(enqueue.mock.calls[0][0]).toMatchObject({ generationId, task: { modelId } });
+    });
+
+    it('is refused and refunded when the queue will not take it', async () => {
+      const { GenerationServiceError } = await import('@/lib/generation-service-core');
+      const enqueue = vi.fn(async (..._args: unknown[]) => {
+        throw new GenerationServiceError('Too many generations are waiting to start right now.', 429, 'provider_busy');
+      });
+      const { services, admission } = await loadWith(async () => REFUSED, enqueue);
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { supabase, rpcCalls } = createSupabaseMock();
+
+      await expect(admission.withProviderSubmissionQueue(() => services.startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'A premium skincare product hero image.',
+        model: 'nano-banana-2',
+      }))).rejects.toMatchObject({ status: 429 });
+
+      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+      expect(rpcCalls.some((call) => call.fn === 'settle_generation_start_failed')).toBe(true);
+    });
+
+    it('is sent at once when there is a place, and nothing is queued', async () => {
+      const enqueue = vi.fn(async (..._args: unknown[]) => ({ queuedAtMs: 1, ahead: 0 }));
+      const { services, admission } = await loadWith(
+        async () => ({ ...REFUSED, allowed: true, reason: 'admitted' }),
+        enqueue,
+      );
+      vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-image-sent-1' } }),
+      } as Response);
+      const { supabase } = createSupabaseMock();
+
+      const result = await admission.withProviderSubmissionQueue(() => services.startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'A premium skincare product hero image.',
+        model: 'nano-banana-2',
+      }));
+
+      expect(result).toMatchObject({ predictionId: 'task-image-sent-1', generationId: 'gen-1' });
+      expect(enqueue).not.toHaveBeenCalled();
+    });
   });
 
   it('uses GPT Image 2 image-to-image provider payload when references are attached', async () => {

@@ -2,10 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { admitProviderSubmission, PROVIDER_ADMISSION_POLICY } from '@/lib/provider-admission';
-
 /**
- * True-concurrency coverage for the waiting line.
+ * True-concurrency coverage for the waiting line's tickets.
+ *
+ * Since the queue (generation-queue-concurrency.test.ts) nothing in the app
+ * takes a ticket: a start over the limits is queued, and the queue's rows are
+ * the line. The tickets are still honoured by the reservation, for the
+ * deployment before the queue, which waits inside its requests, until it can
+ * no longer be rolled back to.
  *
  * pgTAP proves the line's rules one ask at a time. What makes it a queue is
  * that the rules hold when everybody asks at once: a place that opens must go
@@ -115,69 +119,6 @@ describe.skipIf(!connectionString)('the waiting line under concurrent callers', 
     );
     expect(rows[0].tickets).toBe(0);
   });
-
-  it('holds a real start over the limit until a place opens, then sends it', async () => {
-    // The app's own wait against the database's own line, on the clock both
-    // run on in production: the window is full, so the next starts wait about
-    // one window and are then admitted, inside the budget a creator is given.
-    const { maxInFlight, rateWindowMax, rateWindowSeconds, waitBudgetMs, waitPollMaxMs } = PROVIDER_ADMISSION_POLICY;
-
-    // This case runs on the policy's own limits, and the in-flight cap counts
-    // every reserved, unfinished generation in the database, not this test's
-    // alone. Rows another suite left behind would make these starts wait for a
-    // slot that never frees, and time out here looking like a broken line.
-    const { rows: [before] } = await admin.query(
-      "select count(*)::int as in_flight from public.generations"
-        + " where status in ('pending', 'waiting', 'processing')"
-        + " and (prediction_id is not null or submission_unknown_at is not null or provider_submission_reserved_at is not null)"
-        + " and created_at > now() - interval '1 hour'",
-    );
-    expect(
-      before.in_flight,
-      'reserved generations left in the test database by another suite',
-    ).toBeLessThanOrEqual(maxInFlight - rateWindowMax - 2);
-    const rpcOn = (client: Client) => ({
-      rpc: async (fn: string, args: Record<string, unknown>) => {
-        const names = Object.keys(args);
-        const named = names.map((name, index) => name + ' => $' + (index + 1)).join(', ');
-        try {
-          const { rows } = await client.query(
-            'select public.' + fn + '(' + named + ') as verdict',
-            names.map((name) => args[name]),
-          );
-          return { data: rows[0].verdict as unknown, error: null };
-        } catch (error) {
-          return { data: null, error };
-        }
-      },
-    });
-    const start = async (generationId: string) => admitProviderSubmission({
-      service, generationId, waitBudgetMs, client: rpcOn(await connect()),
-    });
-
-    const filling = await generations(rateWindowMax);
-    const over = await generations(2);
-
-    const filled = await Promise.all(filling.map(start));
-    expect(filled.every((verdict) => verdict.allowed && verdict.waitedMs === 0)).toBe(true);
-
-    const waited = await Promise.all(over.map(start));
-
-    for (const verdict of waited) {
-      expect(verdict).toMatchObject({ allowed: true, reason: 'admitted' });
-      // Not before the window's first places opened, and well inside the budget.
-      expect(verdict.waitedMs).toBeGreaterThan(rateWindowSeconds * 1000 - waitPollMaxMs - 1000);
-      expect(verdict.waitedMs).toBeLessThan(waitBudgetMs / 2);
-    }
-    const { rows } = await admin.query(
-      'select'
-        + ' (select count(*)::int from public.provider_submission_waiters where service = $1) as tickets,'
-        + ' (select count(*)::int from public.generations'
-        + '  where id = any($2::uuid[]) and provider_submission_reserved_at is not null) as reserved',
-      [service, [...filling, ...over]],
-    );
-    expect(rows[0]).toEqual({ tickets: 0, reserved: rateWindowMax + 2 });
-  }, 40_000);
 
   it('never admits more than the window, with or without tickets', async () => {
     const ids = await generations(WINDOW + 9);

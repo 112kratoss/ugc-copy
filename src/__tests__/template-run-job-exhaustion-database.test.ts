@@ -38,7 +38,10 @@ const service = vi.hoisted(() => ({ client: null as unknown }));
 // and the job queue run their real code against real SQL.
 vi.mock('@/lib/provider-admission', async (original) => ({
   ...(await original<typeof import('@/lib/provider-admission')>()),
-  admitProviderSubmission: vi.fn(),
+  admitProviderSubmission: vi.fn(async () => ({
+    // The gate's answer for a start it has a place for: a start reads it now, to send or to queue.
+    allowed: true, reason: 'admitted', state: 'closed', retryAfterSeconds: 0, inFlight: null, waitersAhead: null,
+  })),
   recordProviderSubmissionOutcome: vi.fn(),
 }));
 vi.mock('@/lib/generation-status-sync', () => ({

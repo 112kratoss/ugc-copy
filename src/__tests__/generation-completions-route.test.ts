@@ -9,8 +9,15 @@ const stalledReapSummary = {
   startFailures: { eligible: 1, settled: 1, skipped: 0, failed: 0, deferred: 0 },
 };
 
+const queuedStartsSummary = { sent: 1, queued: 2, gone: 0, expired: 1, failed: 0 };
+
 const mocks = vi.hoisted(() => ({
   createServiceClient: vi.fn(),
+  hasQueuedProviderSubmissions: vi.fn(async (_client: unknown) => {
+    void _client;
+    return false;
+  }),
+  driveQueuedSubmissions: vi.fn(),
   hasStalledGenerationWork: vi.fn(async (_client: unknown, _options?: unknown) => {
     void _client;
     void _options;
@@ -84,6 +91,14 @@ vi.mock('@/lib/backend-job-runs', () => ({
       startedAtMs: number;
     },
   ),
+}));
+
+vi.mock('@/lib/generation-submission-queue', () => ({
+  driveQueuedSubmissions: (...args: unknown[]) => mocks.driveQueuedSubmissions(...args),
+}));
+
+vi.mock('@/lib/generation-submission-queue-store', () => ({
+  hasQueuedProviderSubmissions: (client: unknown) => mocks.hasQueuedProviderSubmissions(client),
 }));
 
 vi.mock('@/lib/stalled-generation-reaper', () => ({
@@ -184,6 +199,10 @@ describe('/api/cron/generation-completions route', () => {
     });
     mocks.hasStalledGenerationWork.mockResolvedValue(false);
     mocks.reapStalledGenerations.mockResolvedValue(stalledReapSummary);
+    mocks.hasQueuedProviderSubmissions.mockReset();
+    mocks.hasQueuedProviderSubmissions.mockResolvedValue(false);
+    mocks.driveQueuedSubmissions.mockReset();
+    mocks.driveQueuedSubmissions.mockResolvedValue(queuedStartsSummary);
     mocks.hasDueGenerationCompletionJobs.mockResolvedValue(true);
     mocks.maybePruneGenerationCompletionJobs.mockResolvedValue(3);
     mocks.pruneGenerationCompletionJobs.mockResolvedValue(3);
@@ -296,6 +315,7 @@ describe('/api/cron/generation-completions route', () => {
           failed: 0,
           stalled: stalledReapSummary,
           outputImports: expect.objectContaining({ claimed: 1, completed: 1 }),
+          queuedStarts: queuedStartsSummary,
           workflowWake: expect.objectContaining({ claimed: 1, advanced: 1 }),
           templateWake: expect.objectContaining({ claimed: 1, completed: 1 }),
           pruned: 3,
@@ -313,6 +333,27 @@ describe('/api/cron/generation-completions route', () => {
         stalled: stalledReapSummary,
         pruned: 3,
       },
+    });
+  });
+
+  it('runs when the only work is a start waiting in the queue, and drives the oldest of them', async () => {
+    // The backstop for a queued start whose request stopped asking and whose
+    // creator left: nothing else would send it, or expire and refund it.
+    mocks.hasDueGenerationCompletionJobs.mockResolvedValueOnce(false);
+    mocks.hasStalledGenerationWork.mockResolvedValueOnce(false);
+    mocks.hasQueuedProviderSubmissions.mockResolvedValueOnce(true);
+
+    const { GET } = await import('@/app/api/cron/generation-completions/route');
+    const response = await GET(new Request('http://localhost/api/cron/generation-completions', {
+      headers: { authorization: 'Bearer secret-123' },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.hasQueuedProviderSubmissions).toHaveBeenCalledWith({ service: 'supabase' });
+    expect(mocks.driveQueuedSubmissions).toHaveBeenCalledWith({ client: { service: 'supabase' }, limit: 25 });
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      summary: { queuedStarts: queuedStartsSummary },
     });
   });
 
@@ -358,6 +399,8 @@ describe('/api/cron/generation-completions route', () => {
       expect.objectContaining({ nowMs: expect.any(Number) }),
     );
     expect(mocks.reapStalledGenerations).not.toHaveBeenCalled();
+    expect(mocks.hasQueuedProviderSubmissions).toHaveBeenCalledWith({ service: 'supabase' });
+    expect(mocks.driveQueuedSubmissions).not.toHaveBeenCalled();
     expect(mocks.startBackendJobRun).toHaveBeenCalledWith(
       { service: 'supabase' },
       expect.objectContaining({

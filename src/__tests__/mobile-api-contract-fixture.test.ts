@@ -1364,10 +1364,15 @@ describe('shared mobile API v1 contract fixture', () => {
     const restoreSink = setBackendLogSink((record) => {
       records.push(record);
     });
-    const startPricedAt = (costCredits: number, body: Record<string, unknown> = endpoint.request) => {
+    const startPricedAt = (
+      costCredits: number,
+      body: Record<string, unknown> = endpoint.request,
+      // What the start service answers: the provider's task, or for a queued run its own id.
+      followedBy: { predictionId: string; generationId: string } = endpoint.response,
+    ) => {
       const startImage = vi.fn(async () => ({
-        predictionId: endpoint.response.predictionId,
-        generationId: endpoint.response.generationId,
+        predictionId: followedBy.predictionId,
+        generationId: followedBy.generationId,
         remainingCredits: endpoint.response.remainingCredits,
         cost: costCredits,
       }));
@@ -1424,6 +1429,14 @@ describe('shared mobile API v1 contract fixture', () => {
       const atPrice = startPricedAt(quote.costCredits);
       await expect(atPrice.outcome).resolves.toEqual(endpoint.response);
       expect(atPrice.startImage).toHaveBeenCalledWith(expect.objectContaining({ quotedCostCredits: quote.costCredits }));
+      // Over the provider's limits the run is queued, and says so. The id to
+      // follow it by is the generation's own, which the status checks accept, so
+      // an app that knows nothing of the queue follows it as it follows any run.
+      const queued = startPricedAt(quote.costCredits, endpoint.request, endpoint.queued.response);
+      await expect(queued.outcome).resolves.toEqual(endpoint.queued.response);
+      expect(endpoint.queued.response.predictionId).toBe(endpoint.queued.response.generationId);
+      expect(Object.keys(endpoint.queued.response).filter((key) => key !== 'queued'))
+        .toEqual(Object.keys(endpoint.response));
       const below = startPricedAt(quote.costCredits - 1);
       await expect(below.outcome).resolves.toMatchObject({ cost: quote.costCredits - 1 });
       expect(below.startImage).toHaveBeenCalledWith(expect.objectContaining({ quotedCostCredits: quote.costCredits - 1 }));

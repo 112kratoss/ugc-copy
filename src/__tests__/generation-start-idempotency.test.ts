@@ -24,6 +24,8 @@ type ProfileRow = {
 function createClient(options: {
   generations?: GenerationRow[];
   profiles?: ProfileRow[];
+  /** Generation ids waiting in the queue to be sent. */
+  queued?: string[];
   lockAcquired?: boolean;
   claimResult?: 'claimed' | 'payload_mismatch';
 }) {
@@ -48,6 +50,11 @@ function createClient(options: {
     from: vi.fn((table: string) => {
       if (table === 'generations') return createChain(generations);
       if (table === 'profiles') return createChain(profiles);
+      if (table === 'generation_queued_submissions') {
+        return createChain((options.queued ?? []).map((id) => ({
+          generation_id: id, user_id: 'user-1', model: 'nano-banana-2', queued_at: '2026-11-15T10:00:00.000Z',
+        })));
+      }
       throw new Error(`Unexpected table: ${table}`);
     }),
   };
@@ -182,6 +189,41 @@ describe('generation start idempotency', () => {
       status: 409,
       code: 'GENERATION_START_IN_PROGRESS',
     });
+  });
+
+  it('replays a queued run under its handle, in place of a conflict', async () => {
+    // A queued run has answered: it is not "still starting". The app's "Check
+    // again" after a lost answer has to get that answer back, with the id the
+    // run is followed by, which for a queued run is the generation's own.
+    const keyHash = hashGenerationStartIdempotencyKey('user-1', 'start-queued');
+    const { client } = createClient({
+      generations: [{
+        id: 'gen-queued-1',
+        user_id: 'user-1',
+        prediction_id: null,
+        status: 'pending',
+        cost: 8,
+        client_request_key_hash: keyHash,
+      }],
+      queued: ['gen-queued-1'],
+    });
+    const start = vi.fn();
+
+    await expect(withGenerationStartIdempotency({
+      client: client as never,
+      userId: 'user-1',
+      idempotencyKey: 'start-queued',
+      requestHash: hashGenerationStartRequest({ prompt: 'queued' }),
+      owner: 'request-1',
+      start,
+    })).resolves.toEqual({
+      predictionId: 'gen-queued-1',
+      generationId: 'gen-queued-1',
+      cost: 8,
+      remainingCredits: 42,
+      idempotentReplay: true,
+    });
+    expect(start).not.toHaveBeenCalled();
   });
 
   it('returns a conflict when a local generation row is already starting without a provider id', async () => {

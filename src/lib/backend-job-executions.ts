@@ -24,6 +24,8 @@ import {
   type BackendJobRunHandle,
 } from '@/lib/backend-job-runs';
 import { BACKEND_JOBS_BY_NAME, type BackendJobDefinition } from '@/lib/backend-jobs';
+import { driveQueuedSubmissions } from '@/lib/generation-submission-queue';
+import { hasQueuedProviderSubmissions } from '@/lib/generation-submission-queue-store';
 import { hasFeedEmbeddingWork, runFeedEmbeddingJob } from '@/lib/feed-embeddings';
 import { maintainFeedPersonalization } from '@/lib/feed-maintenance';
 import { pruneOperationalBackendData } from '@/lib/operational-data-retention';
@@ -379,6 +381,9 @@ async function runManagedBackendJob<TSummary>({
   });
 }
 
+/** The queue holds 200 runs at most; a cron pass asks for the oldest of them. */
+const QUEUED_SUBMISSION_CRON_BATCH_LIMIT = 25;
+
 export function runGenerationCompletionsBackendJob(options: {
   requestId?: string;
   startedAtMs?: number;
@@ -400,6 +405,7 @@ export function runGenerationCompletionsBackendJob(options: {
       await hasDueGenerationCompletionJobs(client, { nowMs: context.startedAtMs })
       || await hasDueGenerationOutputImportJobs(client)
       || await hasStalledGenerationWork(client, { nowMs: context.startedAtMs })
+      || await hasQueuedProviderSubmissions(client)
     ),
     onNoWork: async (client, context) => ({
       pruned: await maybePruneGenerationCompletionJobs(client, { nowMs: context.startedAtMs }),
@@ -435,6 +441,12 @@ export function runGenerationCompletionsBackendJob(options: {
         lockedBy: `${context.lockOwner}:output-import`,
         limit: GENERATION_OUTPUT_IMPORT_BATCH_LIMIT,
       });
+      // The backstop for queued starts: one whose request stopped asking and
+      // whose creator left is sent, or expired and refunded, from here.
+      const queuedStarts = await driveQueuedSubmissions({
+        client,
+        limit: QUEUED_SUBMISSION_CRON_BATCH_LIMIT,
+      });
       const terminalTransitions = completionSummary.completed
         + stalled.providerSync.reconciled
         + stalled.startFailures.settled
@@ -460,6 +472,7 @@ export function runGenerationCompletionsBackendJob(options: {
         ...completionSummary,
         stalled,
         outputImports,
+        queuedStarts,
         workflowWake,
         templateWake,
         pruned,
