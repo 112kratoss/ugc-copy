@@ -62,3 +62,12 @@ per second: **4 / 9 / 10 / 22 credits per second** at 360p / 720p / 1080p / 4K. 
 - Request body: `prompt`, `duration` as an integer, `aspect_ratio`, `resolution`; frames as
   `first_frame_url` / `last_frame_url`, otherwise `image_urls` when pictures are attached.
 - Enhancer: an alias of `gemini-omni-video`, as 1.1 is (the same prompt grammar).
+
+## Paid runs (2026-11-15)
+
+The app's bodies at 360p, 3 s, on the owner's word ("Yes, run them"); record `archive/kie-models-2026-11-14/paid-results.txt`. Each charged
+**12** (4 × 3) and delivered a 640×360, 3.03 s MP4 with an AAC track:
+- text only: task `6696317db78d11b96089662c156c1997`;
+- a frame pair (`first_frame_url`, `last_frame_url`): task `b424c6a2857c743e570015e281c74fab`;
+- one reference picture in `image_urls`, with the app's legend prompt: task
+  `716001b568e7fd1e4cf76bbaee93ce05`.

@@ -64,3 +64,13 @@ ships as `gpt-image-2.6`. The page names no input-picture charge for Economy.
   schema that only drops fields.
 - To ship Flare or Sunburst later, Kie has to list a per-image price for them, or the catalog has
   to learn to bill a run after it ends.
+
+## Paid runs (2026-11-15)
+
+The app's bodies, on the owner's word ("Yes, run them"); record `archive/kie-models-2026-11-14/paid-results.txt`:
+- `gpt-image-2-6/economy-text-to-image`, 1:1: task `1372b5596d99812f6fc2bd595da91833`, charged
+  **5**, a 1254×1254 PNG.
+- `gpt-image-2-6/economy-image-to-image`, 3:2, one picture: task
+  `4b0a0de6d7b65b6fa8d50b23673a07a1`, charged **5** (no picture charge), 1536×1024. Its bytes are
+  **WebP** under a `.png` link served as `image/png`; the import stores it as the header says, and
+  browsers, the apps and the preview step read the format from the bytes, so it displays.

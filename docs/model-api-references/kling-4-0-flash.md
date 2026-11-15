@@ -62,3 +62,13 @@ express. No promotional wording.
   @handle is sent as `@image_N`, and any other `@` is refused before the hold.
 - Enhancer: an alias of `kling-4.0` — the same prompt grammar and a request schema that only
   drops fields.
+
+## Paid runs (2026-11-15)
+
+The app's bodies at 720p, 3 s, on the owner's word ("Yes, run them"); record `archive/kie-models-2026-11-14/paid-results.txt`. Each charged
+**51** (17 × 3):
+- `kling-4.0/flash-reference-to-video`, 16:9, one picture named `@image_1`: task
+  `69b0bf540a9dddb3ef5eb9f202cd03f4`, a 1280×720, 3.04 s MP4.
+- `kling-4.0/flash-keyframe-to-video`, a first frame only: task `7f7b2f3a1de74664704cff5a5aa47693`,
+  a 1180×780, 3.04 s MP4 (the frame set the shape).
+Both carry an AAC track with no audio field sent, the always-on audio.
