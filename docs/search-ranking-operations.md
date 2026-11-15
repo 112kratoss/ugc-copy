@@ -39,12 +39,20 @@ again. Every post of the answer says how it matched: `matchedBy` is `words`, `me
 | the same, the query's vector not in the cache | one attempt to embed it, waited on for 400 ms; then the blended order, or the word order |
 | one word, a handle (`@…`), Latest, `exact=1`, Creators, Recipes | the word order; the parameter changes nothing |
 | a query the word search read corrected | the corrected word order |
-| a later page, cursor issued inside the window | the window from the cursor's place, from the cached vector |
-| a later page, no vector any more | the word order from the cursor's floor: no post repeated |
+| a later page, cursor issued inside the window | the window after the last post shown (or from the cursor's place), from the cached vector |
+| a later page, no vector any more | the word order from the cursor's floor: no word match passed over, posts already shown can come again |
 | `SEARCH_SEMANTIC_DISABLED=1` | the word order, with no extra read at all |
 
-With `blend=1` every post carries `matchedBy`, in the word order too (`words`). Without the parameter
-the answer is what it was before the blend, field for field.
+With `blend=1` every post carries `matchedBy`, in the word order too (`words`), and the answer says
+which order it is in: `blended` is true, or false when it is the word order after all. Without the
+parameter the answer is what it was before the blend, field for field.
+
+**A later page may hold a post an earlier page showed, and a client must leave those out by id**
+(`withoutShownSearchPosts` in `search-blend.ts`; the contract states it under
+`searchPublicContent.laterPages`). The server never skips a post where it can avoid it, and where it
+must choose it repeats one: a repeat is removed by the client, a skipped post is seen by nobody. An
+empty page after the removal is not the end of the list; `nextCursor` being null is. "Pages" below
+says where repeats come from.
 
 **Related posts beside it.** A blended answer already holds, in its own order, every post the
 "Related posts" group would bring, so with both `blend=1` and `related=1` a blended answer looks for
@@ -54,38 +62,59 @@ for related posts as before.
 
 **What a new query costs.** The same as related posts: a cached vector is free; a new one spends one
 of the viewer's 40 a day (and a guest session's network's 120), one of the day's 2,000, and one
-`embed-post` request. The blend asks on every settled search of two words or more, where related
+`embed-post` request. One search spends that once, however many parts of it need the vector: the
+blended order and related posts read one lookup between them (`createSearchQueryVectors`), so a
+thin answer that also asks for related posts joins the request already on its way. A lookup that
+has started is never cut short: once an allowance is taken the request it paid for is made and its
+vector kept, whether or not anybody is still waiting, so no allowance is spent for nothing and the
+next search of the same words is answered from the cache. The blend asks on every settled search of two words or more, where related
 posts ask only beside a thin answer, so expect more of the day's count to be used. The count is
 `search_query_embedding_days` (runbook, "Search By Meaning").
 
 **Logs.** `public_search_blend_skipped` with a `reason` (`viewer_cap_reached` and
-`network_cap_reached` at info; `daily_cap_reached`, `embedding_timeout`, `timeout`,
+`network_cap_reached` at info; `daily_cap_reached`, `embedding_timeout` (the 400 ms ran out),
 `embedding_failed`, `lookup_failed`, `not_configured` at warn) says why a search was answered in the
 word order for want of a vector. `public_search_blend_failed` is the database call failing. Neither
 ever carries the query.
 
-**Release and rollback.** The migration adds one function and changes nothing, so it applies ahead
-of the app with no effect. A code-only rollback leaves cursors issued by the new app in clients'
-hands: a blended cursor is an ordinary Top cursor with one more field, which older code ignores, and
-its place is the floor, so the list continues in the word order. The one cursor older code refuses
-(400) is that of a blended list with no word match at all, which has no floor.
+**The search log.** A blended answer's row in `search_query_events` has `blended = true` (the column
+is false for every other row), and its counts keep their meaning: `post_count` is the posts that hold
+the words (`matchedBy` words or both) and `related_count` the posts found by meaning alone, with the
+related group's. So a search whose words found nothing is `post_count = 0` whichever way it was
+ordered, and the report's zero-result rate does not fall because clients turned the blend on. An
+opened result joins its search row, which carries the flag.
+
+**Release and rollback.** The migration adds one function and one column of the search log
+(`blended`, default false) and changes nothing else, so it applies ahead of the app with no effect.
+A code-only rollback leaves cursors issued by the new app in clients' hands: a blended cursor is an
+ordinary Top cursor with two more fields, which older code ignores, and its place is the floor, so
+the list continues in the word order. The one cursor older code refuses (400) is a blended cursor
+with no floor (the first row of the word order was still to come, or no post holds the words).
 
 ## Pages
 
 The window is a function of the query, the viewer, the instant the search began, the filters and the
-vector, so a page is asked for by its place in it. A blended cursor carries:
+vector, and it is rebuilt from the posts as they are at every request. A blended cursor carries:
 
-- `w`, the place the next page starts after;
-- `s` and `i`, the *floor*: the score and id of the furthest row of the word order shown so far;
+- `w`, the place the next page starts after, and `l`, the post shown last. The page starts after
+  that post wherever it now stands, so a post published, removed or saved above it between two
+  pages moves nothing; the place is used only when that post is gone.
+- `s` and `i`, the *floor*: the score and id of the last row of the unbroken run of the word order,
+  from its top, shown so far. Word ranks 1, 3, 2 shown in that order have the floors 1, 1, 3. A page
+  whose posts all come from further down the word order (posts in both lists do: each outranks
+  every post the word list alone holds) has no floor.
 - `a`, the instant, and `f`, the filter mark, as every Top cursor does.
 
 Past the window the cursor has no `w` and is a plain Top cursor at the floor. That is also what a
-blended cursor is to anything that cannot blend. From the floor the word order repeats nothing: every
-word row shown is at or before it. It can skip the few word rows that posts in both lists had jumped
-ahead of, and it drops the meaning-only posts not yet shown.
+blended cursor is to anything that cannot blend: the word order is read from the floor, or from its
+top when there is no floor. That read passes over no post that holds the words, since every word
+row before the floor has been shown. It repeats the word rows already shown from further down, and
+it drops the meaning-only posts not yet shown.
 
-Two things can still move a post between pages, as on any list paged by place: a post published,
-hidden or blocked between two pages shifts the places after it by one.
+What can still move a post between two pages: a post whose own score changed enough to cross the
+line between them (it is shown twice, or once passed over), and the last post shown being removed
+(the page then starts at the place, one off). Hence the rule above: clients leave out, by id, what
+they already show.
 
 ## Changing the ranking
 
@@ -164,14 +193,15 @@ COPY="$(mktemp -d)/stack" && mkdir -p "$COPY" && cp -R supabase "$COPY/supabase"
 # In "$COPY/supabase/config.toml": a project_id of its own and every 543xx port moved (593xx).
 grep -q '^project_id = "magicbooklet-search-hybrid"$' "$COPY/supabase/config.toml"
 npx --yes supabase@2.75.0 start --workdir "$COPY" -x studio,imgproxy,mailpit,logflare,vector,realtime,supavisor
-npx --yes supabase@2.75.0 status --workdir "$COPY" -o env   # DB_URL, API_URL, SERVICE_ROLE_KEY
-SEARCH_RELEVANCE_DB_URL=… SEARCH_RELEVANCE_API_URL=… SEARCH_RELEVANCE_SERVICE_ROLE_KEY=… \
-  npm run search:relevance -- --calibrate
+# The stack's address and key go from the CLI into the environment, never onto the screen.
+eval "$(npx --yes supabase@2.75.0 status --workdir "$COPY" -o env 2>/dev/null \
+  | sed -n -E 's/^(DB_URL|API_URL|SERVICE_ROLE_KEY)=/export SEARCH_RELEVANCE_\1=/p')"
+npm run search:relevance -- --calibrate
 npx --yes supabase@2.75.0 stop --workdir "$COPY" --no-backup
 ```
 
 Give every supabase command `--workdir`; a `cd` that fails leaves the command on the default stack.
-Put the key in the environment from `status -o env` without printing it. The first embedding request
+Never run `status -o env` bare: it prints the stack's service-role key. The first embedding request
 loads the model and can take half a minute; the run takes about two minutes. It removes what it
 seeded (`--keep` leaves it).
 
@@ -263,8 +293,8 @@ first page of 21 rows, median of 25 calls in one connection:
 
 Not measured: production. The function's warm and cold times there, and the word read on real data,
 are the numbers to look at first after release (`Server-Timing` under
-`SCALING_CERTIFICATION_TIMINGS=1`, and the `public_search_blend_skipped` reasons `embedding_timeout`
-and `timeout`).
+`SCALING_CERTIFICATION_TIMINGS=1`, and the `public_search_blend_skipped` reason
+`embedding_timeout`).
 
 If the second word read becomes the cost that matters, the word list can be read in one pass inside
 `search_blended_posts`. That means a second copy of `search_public_posts`'s match and score, kept
