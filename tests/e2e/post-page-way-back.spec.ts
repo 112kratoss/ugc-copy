@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 import creationPost from './fixtures/creation-post.json';
 import recipePost from './fixtures/post-with-recipe.json';
@@ -73,16 +73,16 @@ test.describe('a post opened by its own address', () => {
   });
 });
 
-test('a post opened from search says Search, and goes back to the search as it was left', async ({ page }) => {
-  await visitSignedOut(page);
-  await page.route((url) => url.pathname === '/api/search/suggest', (route) => route.fulfill({
+/** Answers Search with the post as its one result, for a page or for every page of a context. */
+async function answerSearch(target: Page | BrowserContext) {
+  await target.route((url) => url.pathname === '/api/search/suggest', (route) => route.fulfill({
     json: { query: '', normalizedQuery: '', creators: [], entities: [], completions: [] },
   }));
-  await page.route((url) => url.pathname === '/api/search/starter', (route) => route.fulfill({
+  await target.route((url) => url.pathname === '/api/search/starter', (route) => route.fulfill({
     json: { entities: [], creators: [], searches: [] },
   }));
-  await page.route((url) => url.pathname === '/api/search/opened', (route) => route.fulfill({ status: 204 }));
-  await page.route((url) => url.pathname === '/api/search', (route) => {
+  await target.route((url) => url.pathname === '/api/search/opened', (route) => route.fulfill({ status: 204 }));
+  await target.route((url) => url.pathname === '/api/search', (route) => {
     const url = new URL(route.request().url());
     const query = url.searchParams.get('q') ?? '';
     return route.fulfill({
@@ -106,9 +106,16 @@ test('a post opened from search says Search, and goes back to the search as it w
       },
     });
   });
+}
+
+const searchResult = (page: Page) => page.getByRole('link', { name: new RegExp(TITLE) });
+
+test('a post opened from search says Search, and goes back to the search as it was left', async ({ page }) => {
+  await visitSignedOut(page);
+  await answerSearch(page);
 
   await page.goto('/search?q=rooftop');
-  const result = page.getByRole('link', { name: new RegExp(TITLE) });
+  const result = searchResult(page);
   await expect(result).toBeVisible(COLD_PAGE);
   await result.click();
 
@@ -164,4 +171,55 @@ test("the browser's Back to a post opened by its own address draws no way back",
   await expect(title(page)).toBeVisible(COLD_PAGE);
   expect(new URL(page.url()).pathname).toBe(POST_PATH);
   await expect(wayBack(page)).toHaveCount(0);
+});
+
+// Re-review of #829: a link back to the post the tab opened on is an arrival from inside the
+// site, and draws its way back. Only the browser's Back or Forward to that first page does not.
+test('a link back to the post the tab opened on draws its way back', async ({ page }) => {
+  await visitSignedOut(page);
+  const offer = await answerInviteVisit(page);
+  await answerSearch(page);
+
+  await page.goto(`${POST_PATH}?r=${CODE}`);
+  await expect(offer).toBeVisible(COLD_PAGE);
+  await expect(wayBack(page)).toHaveCount(0);
+
+  await page.evaluate((href) => (
+    window as unknown as { next: { router: { push: (target: string) => void } } }
+  ).next.router.push(href), '/search?q=rooftop');
+  const result = searchResult(page);
+  await expect(result).toBeVisible(COLD_PAGE);
+  await result.click();
+
+  await expect(title(page)).toBeVisible(COLD_PAGE);
+  await expect(wayBack(page)).toHaveText('Back to Search');
+  await wayBack(page).click();
+  await expect(page).toHaveURL((url) => url.pathname === '/search' && url.searchParams.get('q') === 'rooftop');
+  await expect(result).toBeVisible();
+});
+
+// Re-review of #829: the router adds the post's entry only after the page has rendered, so in a
+// tab whose first page led to the post (one entry, as a link opened in a new tab has) the way back
+// must still step back, not reload the search as a new page on top of it.
+test('in a tab of its own, the way back steps back to the page the post was opened from', async ({ page, context }) => {
+  await visitSignedOut(page);
+  await answerSearch(context);
+
+  await page.goto('/search?q=rooftop');
+  const [tab] = await Promise.all([
+    context.waitForEvent('page'),
+    page.evaluate(() => { window.open(window.location.href); }),
+  ]);
+  const result = searchResult(tab);
+  await expect(result).toBeVisible(COLD_PAGE);
+  expect(await tab.evaluate(() => window.history.length)).toBe(1);
+  await result.click();
+
+  await expect(title(tab)).toBeVisible(COLD_PAGE);
+  await expect(wayBack(tab)).toHaveText('Back to Search');
+  await wayBack(tab).click();
+  await expect(tab).toHaveURL((url) => url.pathname === '/search' && url.searchParams.get('q') === 'rooftop');
+  await expect(result).toBeVisible();
+  // Stepped back: the search's own entry, not a third one pushed on top of the post.
+  expect(await tab.evaluate(() => window.history.length)).toBe(2);
 });

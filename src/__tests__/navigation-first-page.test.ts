@@ -31,6 +31,24 @@ describe('isPageReachedInThisDocument', () => {
     expect(isPageReachedInThisDocument('/showcase/post-2')).toBe(true);
   });
 
+  // Re-review of #829: a link back to the post the tab opened on (a shared link, then the
+  // creator's page, then the same post) is an arrival from inside the site; only the
+  // browser's Back or Forward to that first page is not.
+  it('counts the first page when a link takes the viewer back to it, and not when Back or Forward does', async () => {
+    const { isPageReachedInThisDocument, publishNavigationStart } = await loadDocumentAt('/showcase/post-1');
+
+    publishNavigationStart();
+    expect(isPageReachedInThisDocument('/showcase/post-1')).toBe(true);
+
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(isPageReachedInThisDocument('/showcase/post-1')).toBe(false);
+    // Any other page is reached whatever brought the viewer there.
+    expect(isPageReachedInThisDocument('/creators/luna')).toBe(true);
+
+    publishNavigationStart();
+    expect(isPageReachedInThisDocument('/showcase/post-1')).toBe(true);
+  });
+
   it('is false on the server, so the server render and the first page hydrating agree', async () => {
     const { isPageReachedInThisDocument } = await loadDocumentAt(null);
 

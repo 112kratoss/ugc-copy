@@ -122,6 +122,20 @@ describe('ShowcaseDetailBackLink', () => {
         }
     });
 
+    it('reads the history length at the press, after the router has added the post’s entry', () => {
+        // Re-review of #829: the router pushes the post's entry only after the page has
+        // rendered, so a tab whose first page led here held one entry as the page mounted.
+        // Read then, "Back to Explore" reloaded Explore instead of stepping back to it.
+        setHistoryLength(1);
+        const link = renderBackLink();
+        setHistoryLength(2);
+
+        const event = plainClick(link);
+
+        expect(routerBack).toHaveBeenCalledTimes(1);
+        expect(event.defaultPrevented).toBe(true);
+    });
+
     it('follows the href when there is no history entry to consume', () => {
         setHistoryLength(1);
         const event = plainClick(renderBackLink());
@@ -131,18 +145,14 @@ describe('ShowcaseDetailBackLink', () => {
     });
 
     it('draws a plain Back, which names no page, only where it steps back inside the site', () => {
+        // No navigation announced: the post replaced the first page, or an unannounced
+        // push brought the viewer here, and a step back could leave the site.
         navigatedInThisDocument = false;
         const hidden = render(<ShowcaseDetailBackLink href="/showcase" label="Back" stepsBackOnly />);
         expect(hidden.container).toBeEmptyDOMElement();
         hidden.unmount();
 
-        setHistoryLength(1);
         navigatedInThisDocument = true;
-        const lone = render(<ShowcaseDetailBackLink href="/showcase" label="Back" stepsBackOnly />);
-        expect(lone.container).toBeEmptyDOMElement();
-        lone.unmount();
-
-        setHistoryLength(4);
         render(<ShowcaseDetailBackLink href="/showcase" label="Back" stepsBackOnly />);
         const event = plainClick(screen.getByRole('link', { name: 'Back' }));
         expect(routerBack).toHaveBeenCalledTimes(1);
