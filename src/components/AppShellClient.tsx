@@ -6,7 +6,6 @@ import {
   Menu,
   PanelLeft,
   Plus,
-  Search,
   WandSparkles,
   X,
 } from 'lucide-react';
@@ -44,7 +43,7 @@ import AppShellCreateMenu, {
   openCreateMenuWithoutPopovers,
 } from './AppShellCreateMenu';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
-import { AppShellSearch } from '@/components/AppShellSearch';
+import { AppShellSearch, AppShellSearchButton } from '@/components/AppShellSearch';
 import AlertsBadge from '@/components/AlertsBadge';
 import { useUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
 
@@ -570,16 +569,8 @@ const AppShellFrame = memo(function AppShellFrame({
 
           {/* Never shrinks: the search field gives way (.app-shell-search in globals.css). */}
           <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
-            {activeItem?.id !== 'search' ? (
-              <Link
-                href="/search"
-                prefetch={false}
-                aria-label="Search creators, posts, and recipes"
-                className="app-shell-search-link ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
-              >
-                <Search className="h-[18px] w-[18px]" aria-hidden />
-              </Link>
-            ) : null}
+            {/* Below 1024px the bar's field folds into this button; the search page has its own box. */}
+            {activeItem?.id !== 'search' ? <AppShellSearchButton /> : null}
             {/* Alerts' only control from 768px, where the side navigation does
                 not name it: pressed on Alerts, it brings the page to its top as
                 the tabs do. */}

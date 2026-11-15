@@ -1,10 +1,13 @@
 'use client';
 
 import Form from 'next/form';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Search, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 
+import { SearchEntrancePart, SearchEntranceStandIn } from '@/components/search/SearchEntrancePart';
+import { isPlainPress, markSearchEntrance } from '@/components/search/search-entrance';
 import { markSearchFieldHandoff } from '@/components/search/search-field-handoff';
 import { readSearchHistory } from '@/components/search/search-history';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
@@ -54,7 +57,11 @@ export function AppShellSearch() {
       // A search lands with the focus in the search page's field
       // (search-field-handoff.ts). Marked only as the leave happens: a leave
       // the person cancels hands nothing on.
-      if (path.startsWith('/search')) markSearchFieldHandoff();
+      // The page's field grows out of this one (search-entrance.ts).
+      if (path.startsWith('/search')) {
+        markSearchFieldHandoff();
+        markSearchEntrance('bar');
+      }
       router.push(path);
     };
     if (!holdForLeaveGuard(leave)) leave();
@@ -84,6 +91,10 @@ export function AppShellSearch() {
   };
 
   return (
+    // The capsule's skin, its magnifier, text and clear button are named for
+    // search's entrance (search-entrance.ts): the search page's field grows
+    // out of them. The skin is an element of its own, under the rest, so each
+    // part travels by itself and only the plain skin is ever stretched.
     <Form
       action="/search"
       // Not a link, so a page's leave guard is asked here: a page with
@@ -95,8 +106,10 @@ export function AppShellSearch() {
           event.preventDefault();
           return;
         }
-        // Enter, leaving: the search page takes the focus on in its own field.
+        // Enter, leaving: the search page takes the focus on in its own field,
+        // which grows out of this one.
         markSearchFieldHandoff();
+        markSearchEntrance('bar');
       }}
       onFocus={() => {
         if (!focused) setRecents(readSearchHistory());
@@ -106,49 +119,61 @@ export function AppShellSearch() {
         const next = event.relatedTarget;
         if (!(next instanceof Node) || !event.currentTarget.contains(next)) setFocused(false);
       }}
-      className="app-shell-search relative mx-auto min-w-0 basis-md items-center gap-2.5 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 transition focus-within:border-[var(--ui-border-strong)] focus-within:bg-[var(--ui-surface-3)]"
+      className="app-shell-search group relative isolate mx-auto min-w-0 basis-md items-center gap-2.5 rounded-full border border-transparent px-4"
     >
+      <SearchEntrancePart origin="bar" part="capsule" side="control">
+        <span aria-hidden="true" className="pointer-events-none absolute -inset-px -z-10 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] transition group-focus-within:border-[var(--ui-border-strong)] group-focus-within:bg-[var(--ui-surface-3)]" />
+      </SearchEntrancePart>
       <button
         type="submit"
         aria-label="Search"
         className="ui-focus-ring -ml-2 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--ui-text-faint)] transition hover:text-[var(--ui-text-primary)]"
       >
-        <Search className="h-4 w-4" aria-hidden />
+        <SearchEntrancePart origin="bar" part="icon" side="control">
+          <Search className="h-4 w-4" aria-hidden />
+        </SearchEntrancePart>
       </button>
       {/* The browser's own clear button is hidden (Chrome and Safari drew it); the field draws its own below. */}
-      <input
-        ref={fieldRef}
-        type="search"
-        name="q"
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={(event) => runTypeaheadAction(typeahead.onKeyDown(event))}
-        placeholder={SEARCH_PLACEHOLDER}
-        aria-label={SEARCH_FIELD_LABEL}
-        role="combobox"
-        aria-autocomplete="list"
-        aria-haspopup="listbox"
-        aria-expanded={typeahead.shown}
-        aria-controls={typeahead.shown ? typeahead.listId : undefined}
-        aria-activedescendant={typeahead.shown ? typeahead.activeOptionId : undefined}
-        autoComplete="off"
-        className="h-12 min-w-0 flex-1 bg-transparent text-sm text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)] [&::-webkit-search-cancel-button]:hidden"
-      />
+      <SearchEntrancePart origin="bar" part="text" side="control">
+        <input
+          ref={fieldRef}
+          type="search"
+          name="q"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => runTypeaheadAction(typeahead.onKeyDown(event))}
+          placeholder={SEARCH_PLACEHOLDER}
+          aria-label={SEARCH_FIELD_LABEL}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-haspopup="listbox"
+          aria-expanded={typeahead.shown}
+          aria-controls={typeahead.shown ? typeahead.listId : undefined}
+          aria-activedescendant={typeahead.shown ? typeahead.activeOptionId : undefined}
+          autoComplete="off"
+          className="h-12 min-w-0 flex-1 bg-transparent text-sm text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)] [&::-webkit-search-cancel-button]:hidden"
+        />
+      </SearchEntrancePart>
       {text ? (
-        <button
-          type="button"
-          aria-label={SEARCH_CLEAR_FIELD_LABEL}
-          // A press keeps the focus in the field, so the bar stays open under the pointer.
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => {
-            setText('');
-            fieldRef.current?.focus();
-          }}
-          className="ui-focus-ring -mr-2 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--ui-text-faint)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
-        >
-          <X className="h-4 w-4" aria-hidden />
-        </button>
-      ) : null}
+        <SearchEntrancePart origin="bar" part="clear" side="control">
+          <button
+            type="button"
+            aria-label={SEARCH_CLEAR_FIELD_LABEL}
+            // A press keeps the focus in the field, so the bar stays open under the pointer.
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              setText('');
+              fieldRef.current?.focus();
+            }}
+            className="ui-focus-ring -mr-2 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--ui-text-faint)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
+          >
+            <X className="h-4 w-4" aria-hidden />
+          </button>
+        </SearchEntrancePart>
+      ) : (
+        // Holding no text, the bar has no clear button: the field's travels into its end and goes.
+        <SearchEntranceStandIn origin="bar" part="clear" className="inset-y-0 right-0 w-11" />
+      )}
       {/* Said politely when the list opens or changes. */}
       <div aria-live="polite" aria-atomic="true" className="sr-only" data-search-typeahead-status="">{typeahead.status}</div>
       {typeahead.shown ? (
@@ -167,5 +192,38 @@ export function AppShellSearch() {
         />
       ) : null}
     </Form>
+  );
+}
+
+/**
+ * The top bar's way into search below 1024px, where its field folds into this
+ * round magnifier. The search page's field grows out of it and shrinks back
+ * into it (search-entrance.ts): its skin and magnifier are named for that,
+ * with unseen stand-ins for the words and the clear button it has no use for.
+ * The shell draws it everywhere but on the search page, so it is mounted, and
+ * named, whenever it can pair.
+ */
+export function AppShellSearchButton() {
+  return (
+    <Link
+      href="/search"
+      prefetch={false}
+      aria-label={SEARCH_FIELD_LABEL}
+      onClick={(event) => {
+        if (isPlainPress(event)) markSearchEntrance('button');
+      }}
+      className="app-shell-search-link group ui-focus-ring relative isolate inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-transparent text-[var(--ui-text-muted)] transition hover:text-[var(--ui-text-primary)]"
+    >
+      <SearchEntrancePart origin="button" part="capsule" side="control">
+        <span aria-hidden className="pointer-events-none absolute -inset-px -z-10 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] transition group-hover:bg-[var(--ui-surface-3)]" />
+      </SearchEntrancePart>
+      <SearchEntrancePart origin="button" part="icon" side="control">
+        <Search className="h-[18px] w-[18px]" aria-hidden />
+      </SearchEntrancePart>
+      {/* No words and no clear button: the field's travel into the
+          button, to the right of its magnifier as in the field, and go. */}
+      <SearchEntranceStandIn origin="button" part="text" className="inset-y-0 left-9 right-0" />
+      <SearchEntranceStandIn origin="button" part="clear" className="inset-y-0 left-9 right-0" />
+    </Link>
   );
 }

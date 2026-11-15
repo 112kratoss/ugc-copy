@@ -4,6 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SearchClient from '@/app/search/SearchClient';
 import {
+  clearSearchEntrance,
+  isSearchPageShown,
+  markSearchEntrance,
+  searchEntrancePending,
+} from '@/components/search/search-entrance';
+import {
   clearSearchFieldHandoff,
   markSearchFieldHandoff,
   searchFieldHandoffPending,
@@ -1411,13 +1417,14 @@ describe('SearchClient', () => {
         expect(JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]')).toEqual(['portrait']);
       });
 
-      it('shows recent searches while the empty box has the focus, each removable, with Clear all', async () => {
+      it('shows recent searches whenever the box is empty, with no focus, each removable, with Clear all (owner, 2026-11-15)', async () => {
         window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['kling portrait', 'neon harbor']));
         render(<SearchClient initialQuery="" initialType="top" />);
         await settle();
-        // Not focused yet in this DOM: the guidance, and no list.
+        // The box gives the focus up: the list stays, as the app's start view keeps it.
         const field = screen.getByRole('combobox');
-        fireEvent.focus(field);
+        act(() => field.blur());
+        expect(field).not.toHaveFocus();
 
         const recents = screen.getByRole('list', { name: 'Recent searches' });
         expect(within(recents).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['kling portrait', 'neon harbor']);
@@ -1432,26 +1439,58 @@ describe('SearchClient', () => {
         await settle(300);
         expect(field).toHaveValue('kling portrait');
         expect(requestedUrls().at(-1)).toBe('/api/search?q=kling+portrait&type=top&related=1');
+        // The box holds text: the results, and no list.
         expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
 
-        // Cleared, the box shows them again; Clear all empties the list and the store.
+        // Cleared, the box shows them again, focused or not; Clear all empties the list and the store.
         fireEvent.keyDown(field, { key: 'Escape' });
-        fireEvent.focus(field);
+        act(() => field.blur());
+        expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Clear all recent searches' }));
         expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
         expect(window.localStorage.getItem(HISTORY_KEY)).toBeNull();
       });
 
-      it('shows the newest five recent searches, and a removal brings the sixth into the fifth place (owner, 2026-11-14)', async () => {
+      it('draws recent searches above the ideas to start from, as the app\'s start view does', async () => {
+        window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['kling portrait']));
+        starterFetchMock.mockResolvedValue({
+          ok: true,
+          status: 200,
+          json: async () => ({ entities: [], creators: [], searches: [{ text: 'portrait' }] }),
+        });
+        render(<SearchClient initialQuery="" initialType="top" />);
+        await settle();
+        const starter = screen.getByRole('region', { name: 'Ideas to start a search' });
+        const recents = screen.getByRole('list', { name: 'Recent searches' });
+        expect(recents.compareDocumentPosition(starter) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      });
+
+      it('shows the newest five recent searches, and a removal brings the sixth into the fifth place, easing in (owner, 2026-11-14)', async () => {
         window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['one', 'two', 'three', 'four', 'five', 'six', 'seven']));
         render(<SearchClient initialQuery="" initialType="top" />);
         await settle();
-        fireEvent.focus(screen.getByRole('combobox'));
         const recents = screen.getByRole('list', { name: 'Recent searches' });
         expect(within(recents).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['one', 'two', 'three', 'four', 'five']);
+        // Nothing eases in as the list is first drawn.
+        expect(recents.querySelectorAll('[data-search-recent-pulled-in]')).toHaveLength(0);
+
         fireEvent.click(screen.getByRole('button', { name: 'Remove two from recent searches' }));
         expect(within(recents).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['one', 'three', 'four', 'five', 'six']);
         expect(JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]')).toEqual(['one', 'three', 'four', 'five', 'six', 'seven']);
+        // The search brought into fifth place fades and rises in; the rest stay as they were.
+        const pulledIn = [...recents.querySelectorAll('[data-search-recent-pulled-in]')];
+        expect(pulledIn.map((row) => row.textContent)).toEqual(['six']);
+        expect(pulledIn[0]).toHaveClass('ui-enter');
+
+        // A second removal names its own arrival.
+        fireEvent.click(screen.getByRole('button', { name: 'Remove three from recent searches' }));
+        expect(within(recents).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['one', 'four', 'five', 'six', 'seven']);
+        expect([...recents.querySelectorAll('[data-search-recent-pulled-in]')].map((row) => row.textContent)).toEqual(['six', 'seven']);
+
+        // Typing and clearing again draws the list afresh, with nothing easing in.
+        typeQuery('on');
+        typeQuery('');
+        expect(screen.getByRole('list', { name: 'Recent searches' }).querySelectorAll('[data-search-recent-pulled-in]')).toHaveLength(0);
       });
 
       it('offers recent searches on arrival when the empty box already has the focus, with no focus event to hear', async () => {
@@ -1479,27 +1518,25 @@ describe('SearchClient', () => {
         expect(window.localStorage.getItem(HISTORY_KEY)).toBeNull();
       });
 
-      it('hides recent searches once the focus leaves the box and the list', async () => {
+      it('keeps recent searches on show as the focus comes and goes, and hides them only while the box holds text', async () => {
         window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['kling portrait']));
         render(<SearchClient initialQuery="" initialType="top" />);
         await settle();
         const field = screen.getByRole('combobox');
         fireEvent.focus(field);
         expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
-        // Into the list: still open.
-        fireEvent.blur(field, { relatedTarget: screen.getByRole('button', { name: 'Search again for kling portrait' }) });
-        expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
-        // Out of both: closed.
         fireEvent.blur(field, { relatedTarget: screen.getByRole('tab', { name: 'Top' }) });
-        expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
-
-        // From a row of the list back to the box it stays open; from a row to anywhere else it closes.
-        fireEvent.focus(field);
-        const row = screen.getByRole('button', { name: 'Search again for kling portrait' });
-        fireEvent.blur(row, { relatedTarget: field });
         expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
-        fireEvent.blur(row, { relatedTarget: screen.getByRole('tab', { name: 'Top' }) });
+        fireEvent.blur(field, { relatedTarget: null });
+        expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
+        // A press on a row leaves the focus where it was: fireEvent says false for a default prevented.
+        expect(fireEvent.mouseDown(screen.getByRole('button', { name: 'Search again for kling portrait' }))).toBe(false);
+        expect(fireEvent.mouseDown(screen.getByRole('button', { name: 'Remove kling portrait from recent searches' }))).toBe(false);
+
+        typeQuery('k');
         expect(screen.queryByRole('list', { name: 'Recent searches' })).not.toBeInTheDocument();
+        typeQuery('');
+        expect(screen.getByRole('list', { name: 'Recent searches' })).toBeInTheDocument();
       });
 
       it('keeps a search committed with Enter or opened from, never each pause in typing', async () => {
@@ -1593,5 +1630,117 @@ describe('SearchClient opened from the top bar', () => {
     render(<SearchClient initialQuery="luna" initialType="top" />);
     await screen.findByText('Luna Studio');
     expect(screen.getByRole('combobox')).not.toHaveFocus();
+  });
+});
+
+// The field grows out of the control that was pressed (search-entrance.ts):
+// it takes the focus once the growth has landed, as the app's does, and at
+// once wherever nothing grows (no view transitions, reduced motion, no control).
+describe('SearchClient opened from a control that grows into its field', () => {
+  const reduceMotion = (reduce: boolean) => vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: reduce && query.includes('reduce'),
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    getSessionMock.mockReset();
+    getSessionMock.mockResolvedValue({ data: { session: null } });
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({ creators: { items: [creator('Luna Studio')], nextCursor: null } })));
+    suggestFetchMock.mockReset();
+    suggestFetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ query: '', normalizedQuery: '', creators: [], entities: [], completions: [] }) });
+    starterFetchMock.mockReset();
+    starterFetchMock.mockResolvedValue(NO_STARTER_ROUTE);
+    vi.stubGlobal('fetch', fetchBySurface);
+    window.history.replaceState(null, '', '/search');
+    reduceMotion(false);
+    // jsdom has no view transitions; the browsers this grows in do.
+    Object.defineProperty(document, 'startViewTransition', { configurable: true, value: () => ({}) });
+  });
+
+  afterEach(() => {
+    cleanup();
+    clearSearchEntrance();
+    clearSearchFieldHandoff();
+    vi.unstubAllGlobals();
+    delete (document as { startViewTransition?: unknown }).startViewTransition;
+    vi.useRealTimers();
+  });
+
+  it('takes the focus into an empty field only once the growth has landed, and takes the press it opened from', async () => {
+    vi.useFakeTimers();
+    markSearchEntrance('button');
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByRole('combobox')).not.toHaveFocus();
+    expect(searchEntrancePending()).toBeNull();
+    act(() => { vi.advanceTimersByTime(329); });
+    expect(screen.getByRole('combobox')).not.toHaveFocus();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(screen.getByRole('combobox')).toHaveFocus();
+  });
+
+  it('leaves the focus where the person put it while the field grew (review of #817)', async () => {
+    vi.useFakeTimers();
+    markSearchEntrance('button');
+    render(
+      <>
+        <button type="button">elsewhere</button>
+        <SearchClient initialQuery="" initialType="top" />
+      </>,
+    );
+    // A recent search pressed, or a Tab, before the growth has landed.
+    const elsewhere = screen.getByRole('button', { name: 'elsewhere' });
+    elsewhere.focus();
+    act(() => { vi.advanceTimersByTime(330); });
+    expect(elsewhere).toHaveFocus();
+    expect(screen.getByRole('combobox')).not.toHaveFocus();
+  });
+
+  it('says it is drawn while it is, so a control on the page it leaves for takes its names', () => {
+    expect(isSearchPageShown()).toBe(false);
+    const { unmount } = render(<SearchClient initialQuery="" initialType="top" />);
+    expect(isSearchPageShown()).toBe(true);
+    unmount();
+    expect(isSearchPageShown()).toBe(false);
+  });
+
+  it('hands the top bar\'s focus on once its field has grown into this one', async () => {
+    vi.useFakeTimers();
+    markSearchEntrance('bar');
+    markSearchFieldHandoff();
+    render(<SearchClient initialQuery="luna" initialType="top" />);
+    expect(screen.getByRole('combobox')).not.toHaveFocus();
+    act(() => { vi.advanceTimersByTime(330); });
+    expect(screen.getByRole('combobox')).toHaveFocus();
+  });
+
+  it('takes the focus at once where nothing grows: reduced motion, no view transitions, no control pressed', () => {
+    reduceMotion(true);
+    markSearchEntrance('button');
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveFocus();
+    cleanup();
+
+    reduceMotion(false);
+    delete (document as { startViewTransition?: unknown }).startViewTransition;
+    markSearchEntrance('button');
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveFocus();
+    cleanup();
+
+    Object.defineProperty(document, 'startViewTransition', { configurable: true, value: () => ({}) });
+    render(<SearchClient initialQuery="" initialType="top" />);
+    expect(screen.getByRole('combobox')).toHaveFocus();
+  });
+
+  it('keeps the document\'s root in the transition while it is drawn, and gives it back after it goes', async () => {
+    const { unmount } = render(<SearchClient initialQuery="" initialType="top" />);
+    expect(document.documentElement.style.viewTransitionName).toBe('root');
+    unmount();
+    expect(document.documentElement.style.viewTransitionName).toBe('');
   });
 });
