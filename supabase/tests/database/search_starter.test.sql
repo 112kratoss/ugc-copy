@@ -295,12 +295,12 @@ select ok(
 );
 select is(
   (select array_agg(key order by key) from jsonb_object_keys(public.search_starter()) as key),
-  array['creators', 'entities', 'searches'],
-  'the answer holds the three lists'
+  array['creators', 'entities', 'periods', 'searches'],
+  'the answer holds the three lists, and which period each is of (20261115105944)'
 );
 select is(
   public.search_starter(null, array['quillonword'], 0, 0, 0),
-  '{"entities": [], "creators": [], "searches": []}'::jsonb,
+  '{"entities": [], "creators": [], "searches": [], "periods": {"entities": "all", "creators": "all", "searches": "all"}}'::jsonb,
   'a list asked for none of is empty, and nothing else is read for it'
 );
 
@@ -309,7 +309,7 @@ select is(
 select is(pg_temp.entity_ids(), array['tool:zephyrtool', 'tool:epsilontool', 'tool:alphatool', 'tool:nimbus', 'model:qwen3', 'tool:blockertool', 'tool:blocktool', 'tool:lumen-2.6'],
   'a visitor is offered the models and tools two creators use, most posts first');
 select is(
-  (select entity from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
+  (select entity - 'thumbnail' from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
    where entity ->> 'key' = 'epsilontool'),
   (select jsonb_build_object('kind', kind, 'key', key, 'label', label, 'post_count', post_count,
                              'post_count_capped', post_count_capped, 'query', 'epsilontool')
@@ -343,13 +343,13 @@ select ok(
 
 -- Both sides of a block, in the name a row is searched by and in its count.
 select is(
-  (select entity - 'kind' - 'post_count_capped' from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
+  (select entity - 'kind' - 'post_count_capped' - 'thumbnail' from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
    where entity ->> 'key' = 'zephyrtool'),
   '{"key": "zephyrtool", "label": "Kestrel Kite", "post_count": 6, "query": "zephyrtool"}'::jsonb,
   'fixture: a visitor''s zephyrtool row is drawn under the name most of its six posts print, "Kestrel Kite", and searched by its key, which all six hold (the name holds four: 20261113152020)'
 );
 select is(
-  (select entity - 'kind' - 'post_count_capped' from jsonb_array_elements(public.search_starter(pg_temp.uid('05'), '{}', 8, 0, 0) -> 'entities') as entity
+  (select entity - 'kind' - 'post_count_capped' - 'thumbnail' from jsonb_array_elements(public.search_starter(pg_temp.uid('05'), '{}', 8, 0, 0) -> 'entities') as entity
    where entity ->> 'key' = 'zephyrtool'),
   '{"key": "zephyrtool", "label": "Zephyrtool", "post_count": 2, "query": "zephyrtool"}'::jsonb,
   'the viewer''s leaves out the posts of the creator they blocked and of the one who blocked them, in its name and its count'
@@ -363,7 +363,7 @@ select ok(not exists (
   ),
   'and searching the catalog''s name for it, "Qwen Image 3.0", finds neither: a row that searched its name would open nothing');
 select is(
-  (select entity from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
+  (select entity - 'thumbnail' from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
    where entity ->> 'key' = 'qwen3'),
   '{"kind": "model", "key": "qwen3", "label": "qwen3", "post_count": 2, "post_count_capped": false, "query": "qwen3"}'::jsonb,
   'the starter sends the name its posts print, which both hold'
@@ -389,7 +389,7 @@ select is(
 select is((select post_count from public.search_public_entities(null, null, 1, 'tool:nimbus')), 3,
   'fixture: the made-with filter counts three posts with the nimbus slug');
 select is(
-  (select entity - 'kind' - 'post_count_capped' from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
+  (select entity - 'kind' - 'post_count_capped' - 'thumbnail' from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
    where entity ->> 'key' = 'nimbus'),
   '{"key": "nimbus", "label": "Nimbus Forge", "post_count": 3, "query": "nimbus"}'::jsonb,
   'the row is searched by its key, which opens all three, where the name most of them print opens two (20261113152020)'

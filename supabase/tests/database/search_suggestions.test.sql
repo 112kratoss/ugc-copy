@@ -18,7 +18,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(147);
+select plan(149);
 
 create function pg_temp.uid(p_suffix text)
 returns uuid
@@ -423,7 +423,9 @@ select is(pg_temp.handles('ARIA'), array['aria', 'aria-fennick', 'brisa-tolland'
 select is(pg_temp.handles('aria', null, true), array['aria', 'aria-fennick'],
   'a query typed as a handle is matched against handles alone');
 select ok('vesper-lund' = any (pg_temp.handles('v')), 'one letter is enough for a handle');
-select is(pg_temp.handles('fennick'), '{}'::text[], 'a word inside a name or handle is search''s to find, not a suggestion');
+select is(pg_temp.handles('fennick'), array['aria-fennick'], 'a later word of a name finds its creator too (20261115105944)');
+select is(pg_temp.handles('ennick'), '{}'::text[], 'letters inside a word are search''s to find, not a suggestion');
+select is(pg_temp.handles('fennick', null, true), '{}'::text[], 'and a handle query is still the handle''s start alone');
 select is(pg_temp.handles('ar', null, false, 2), (pg_temp.handles('ar'))[1:2],
   'the limit cuts the list from its end');
 select is(cardinality(pg_temp.handles('ar', null, false, 2)), 2, 'to as many as asked for');
@@ -614,7 +616,7 @@ from (
 select is(pg_temp.entities('midj'), array['tool:midjourney'],
   'a tool two creators'' posts are made with is offered for the start of its name');
 select is(
-  public.search_suggestions('midj') -> 'entities' -> 0,
+  (public.search_suggestions('midj') -> 'entities' -> 0) - 'thumbnail',
   (select jsonb_build_object('kind', kind, 'key', key, 'label', label, 'post_count', post_count, 'post_count_capped', post_count_capped)
    from public.search_public_entities('midj', null, 10, null)),
   'as search itself offers it: its kind, key, the name its posts print, and the posts the query finds made with it'
@@ -751,8 +753,8 @@ select ok(
   and not has_function_privilege('authenticated', 'public.search_suggestions(text, uuid, boolean, integer, integer)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.search_suggest_creators(text, uuid, boolean, integer)', 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.search_suggest_creators(text, uuid, boolean, integer)', 'EXECUTE')
-  and not has_function_privilege('anon', 'public.search_suggest_completions(text, integer)', 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.search_suggest_completions(text, integer)', 'EXECUTE')
+  and not has_function_privilege('anon', 'public.search_suggest_completions(text, integer, uuid)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.search_suggest_completions(text, integer, uuid)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.rebuild_search_terms()', 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.rebuild_search_terms()', 'EXECUTE'),
   'no client role may call the suggestion functions or the rebuild'
@@ -760,7 +762,7 @@ select ok(
 select ok(
   has_function_privilege('service_role', 'public.search_suggestions(text, uuid, boolean, integer, integer)', 'EXECUTE')
   and has_function_privilege('service_role', 'public.search_suggest_creators(text, uuid, boolean, integer)', 'EXECUTE')
-  and has_function_privilege('service_role', 'public.search_suggest_completions(text, integer)', 'EXECUTE')
+  and has_function_privilege('service_role', 'public.search_suggest_completions(text, integer, uuid)', 'EXECUTE')
   and has_function_privilege('service_role', 'public.rebuild_search_terms()', 'EXECUTE'),
   'the service role may'
 );
