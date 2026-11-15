@@ -3449,6 +3449,24 @@ describe('ExploreSearchOverlay search screen, 2026-11-15', () => {
     await act(async () => tree.unmount());
   });
 
+  it('draws a model\'s picture in its row, and lets a phrase wrap whole at the largest sizes', async () => {
+    const thumbnail = { postId: 'p7', url: 'https://cdn.example/p7.webp', thumbhash: null, width: null, height: null, mediaKind: 'video' as const };
+    suggestSearch.mockResolvedValue({
+      query: 'kli', normalizedQuery: 'kli', creators: [],
+      entities: [{ kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', postCount: 12, postCountCapped: false, thumbnail, inCatalog: true, catalogModel: { id: 'kling-2.6', kind: 'video', web: true, mobile: true }, query: null }],
+      completions: [{ text: 'kling cinematic slow motion drone shot over a neon city' }],
+    });
+    const tree = await typing();
+    await typeOnly(tree, 'kli');
+    await advance(PAUSE);
+    // A video's poster, with no thumbhash to show first: the glyph's frame holds until it loads.
+    expect(hostNodes(tree, 'image').map((image) => [image.props.source.uri, image.props.placeholder])).toEqual([['https://cdn.example/p7.webp', undefined]]);
+    const phrase = hostNodes(tree, 'text').find((node) => textOf(node) === 'kling cinematic slow motion drone shot over a neon city' && node.props.maxFontSizeMultiplier !== undefined);
+    expect(phrase).toBeDefined();
+    expect(phrase!.props.numberOfLines).toBeUndefined();
+    await act(async () => tree.unmount());
+  });
+
   it('searches the search a row carries, on Posts narrowed to it, as entered from a model or tool', async () => {
     const stability = {
       kind: 'tool' as const, key: 'stability-ai', label: 'Stability AI', postCount: 5, postCountCapped: false,
