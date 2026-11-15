@@ -101,7 +101,16 @@ function suggestRequests(): string[] {
 
 function searchRequests(): string[] {
   // Without `entry` (how the query was entered, said to the search log: always the last parameter).
-  return searchFetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, ''));
+// `relatedSearches=1` belongs to the first page of Top and Posts alone (searchRelatedSearchesApply):
+// left out of what these cases compare there, and kept anywhere else, where it must never be sent.
+function asSent(url: string): string {
+  const withoutEntry = url.replace(/&entry=[a-z]+$/u, '');
+  const params = new URL(withoutEntry, 'http://localhost').searchParams;
+  const firstTopOrPosts = !params.has('cursor') && !params.has('probe') && ['top', 'posts'].includes(params.get('type') ?? '');
+  return firstTopOrPosts ? withoutEntry.replace(/&relatedSearches=1(?=&|$)/u, '') : withoutEntry;
+}
+
+  return searchFetchMock.mock.calls.map(([url]) => asSent(url as string));
 }
 
 const box = () => screen.getByRole('combobox');
@@ -202,7 +211,7 @@ describe('search page typeahead', () => {
     type(' Lum ');
     await list();
     // The two earlier texts never reached their pause.
-    expect(suggestRequests()).toEqual(['/api/search/suggest?q=Lum']);
+    expect(suggestRequests()).toEqual(['/api/search/suggest?q=Lum&catalog=1']);
     expect((suggestFetchMock.mock.calls[0][1] as RequestInit).headers).toEqual({ Authorization: 'Bearer token-1' });
     // A handle on Top is not asked about: the list there offers no creator
     // (below, "asks nothing for a handle on Top"); on Posts it keeps its @.
@@ -216,7 +225,7 @@ describe('search page typeahead', () => {
     noList();
     // The focus in the box is what starts it.
     fireEvent.focus(box());
-    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=luma']));
+    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=luma&catalog=1']));
   });
 
   it('never draws the answer of a request the next letter ended', async () => {
@@ -226,7 +235,7 @@ describe('search page typeahead', () => {
     render(<SearchClient initialQuery="" initialType="top" />);
 
     type('lu');
-    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=lu']));
+    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=lu&catalog=1']));
     // The person types on before the answer for "lu" is back, and its request is aborted.
     type('lum');
     expect((suggestFetchMock.mock.calls[0][1] as RequestInit).signal?.aborted).toBe(true);
@@ -261,7 +270,7 @@ describe('search page typeahead', () => {
       'Search for luminous',
       'Search for lumen glow',
     ]);
-    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum', '/api/search/suggest?q=lumi']));
+    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum&catalog=1', '/api/search/suggest?q=lumi&catalog=1']));
     // A stale list is not announced: the region keeps the words it had.
     await pastTheAnnouncePause();
     expect(said()).toBe('5 suggestions');
@@ -446,7 +455,7 @@ describe('search page typeahead', () => {
     suggestFetchMock.mockReturnValueOnce(slow.promise);
     type('v');
     noList();
-    await waitFor(() => expect(suggestRequests()).toContain('/api/search/suggest?q=v'));
+    await waitFor(() => expect(suggestRequests()).toContain('/api/search/suggest?q=v&catalog=1'));
     noList();
     await act(async () => {
       slow.resolve(ok(suggestions({ creators: [], entities: [], completions: [{ text: 'veo' }] })));
@@ -476,7 +485,7 @@ describe('search page typeahead', () => {
     expect(options()).toEqual(['Search for luminous']);
     await settled();
     await pastThePause();
-    expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum', '/api/search/suggest?q=lumi']);
+    expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum&catalog=1', '/api/search/suggest?q=lumi&catalog=1']);
   });
 
   it('keeps answers for one focus of the box only: coming back asks again, and draws nothing from before', async () => {
@@ -490,7 +499,7 @@ describe('search page typeahead', () => {
     fireEvent.focus(box());
     noList();
     await waitFor(() => expect(options()).toEqual(['Search for lumen after']));
-    expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum', '/api/search/suggest?q=lum']);
+    expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum&catalog=1', '/api/search/suggest?q=lum&catalog=1']);
   });
 
   it('never draws a kept answer older than half a minute: the text is asked about again', async () => {
@@ -511,7 +520,7 @@ describe('search page typeahead', () => {
     now.mockReturnValue(start + SEARCH_TYPEAHEAD_KEPT_ANSWER_MS + 1000);
     type('lumi');
     await waitFor(() => expect(suggestRequests()).toEqual([
-      '/api/search/suggest?q=lum', '/api/search/suggest?q=lumi', '/api/search/suggest?q=lumi',
+      '/api/search/suggest?q=lum&catalog=1', '/api/search/suggest?q=lumi&catalog=1', '/api/search/suggest?q=lumi&catalog=1',
     ]));
   });
 
@@ -528,7 +537,7 @@ describe('search page typeahead', () => {
     type('lum');
     noList();
     await list();
-    expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum', '/api/search/suggest?q=lumi', '/api/search/suggest?q=lum']);
+    expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum&catalog=1', '/api/search/suggest?q=lumi&catalog=1', '/api/search/suggest?q=lum&catalog=1']);
     // A token refresh is the same account: nothing is dropped.
     sessionSays('TOKEN_REFRESHED');
     expect(screen.queryByRole('listbox')).not.toBeNull();
@@ -686,7 +695,7 @@ describe('search page typeahead', () => {
     // No pause for typing: the person chose this search.
     await waitFor(() => expect(searchRequests()).toContain('/api/search?q=luminous&type=top&related=1'));
     // Said to the search log: the search came from a completion.
-    expect(searchFetchMock.mock.calls.map(([url]) => url)).toContain('/api/search?q=luminous&type=top&related=1&entry=suggestion');
+    expect(searchFetchMock.mock.calls.map(([url]) => url)).toContain('/api/search?q=luminous&type=top&related=1&relatedSearches=1&entry=suggestion');
     expect(Date.now() - before).toBeLessThan(280);
     // The completion's own suggestions are not drawn over the results it asked for.
     await pastThePause();
@@ -732,7 +741,8 @@ describe('search page typeahead', () => {
     expect(fireEvent.mouseDown(listbox)).toBe(false);
     fireEvent.click(within(listbox).getByRole('option', { name: 'Search for lumen glow' }));
     expect((box() as HTMLInputElement).value).toBe('lumen glow');
-    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lumen+glow&type=top&related=1'));
+    // Chosen, and of two words: in the blended order too (search-blend.ts).
+    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=lumen+glow&type=top&related=1&blend=1'));
     noList();
   });
 
@@ -790,12 +800,17 @@ describe('search page typeahead', () => {
     expect(screen.queryByText(/busy|limit|try again/i)).toBeNull();
   });
 
-  it('draws no model or tool for two characters, whatever an answer carries', async () => {
+  it('draws models and tools from two characters, as an answer asked with the catalog offers them, and none for one', async () => {
     renderBar();
-    type('lu');
+    type('l');
     const listbox = await list();
     expect(within(listbox).queryByText('Models and tools')).toBeNull();
     expect(within(listbox).getAllByRole('option')).toHaveLength(4);
+    // The box asks with the catalog (`catalog=1`), whose names the server offers from two characters.
+    type('lu');
+    await waitFor(() => expect(suggestRequests().at(-1)).toBe('/api/search/suggest?q=lu&catalog=1'));
+    expect(await within(listbox).findByText('Models and tools')).toBeTruthy();
+    expect(within(listbox).getByRole('option', { name: /^Luma Ray 2, model/ })).toBeTruthy();
   });
 
   it('offers the recent searches the text matches first, with a clock, then the completions, and searches one pressed', async () => {
@@ -820,9 +835,9 @@ describe('search page typeahead', () => {
     await settled();
     fireEvent.click(screen.getByRole('option', { name: 'Search again for glowing lumen' }));
     expect((box() as HTMLInputElement).value).toBe('glowing lumen');
-    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=glowing+lumen&type=top&related=1'));
+    await waitFor(() => expect(searchRequests()).toContain('/api/search?q=glowing+lumen&type=top&related=1&blend=1'));
     // Said to the search log: the search came from a recent one.
-    expect(searchFetchMock.mock.calls.map(([url]) => url)).toContain('/api/search?q=glowing+lumen&type=top&related=1&entry=recent');
+    expect(searchFetchMock.mock.calls.map(([url]) => url)).toContain('/api/search?q=glowing+lumen&type=top&related=1&relatedSearches=1&blend=1&entry=recent');
     noList();
   });
 
@@ -847,7 +862,7 @@ describe('search page typeahead', () => {
     suggestFetchMock.mockResolvedValue(ok(suggestions({ completions: [] })));
     render(<SearchClient initialQuery="" initialType="top" />);
     type('lum');
-    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum']));
+    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum&catalog=1']));
     await pastThePause();
     noList();
     expect(box().getAttribute('aria-expanded')).toBe('false');
@@ -859,7 +874,7 @@ describe('search page typeahead', () => {
     render(<SearchClient initialQuery="" initialType="top" />);
     type('Lum');
     await screen.findByRole('option', { name: 'Search for luminous' });
-    const runs = (name: string) => [...screen.getByRole('option', { name }).querySelectorAll('span.truncate > span')]
+    const runs = (name: string) => [...screen.getByRole('option', { name }).querySelectorAll('span.line-clamp-2 > span')]
       .map((run) => [run.textContent, run.classList.contains('font-semibold')]);
     // Typed plain, the rest heavier; found whatever its case.
     expect(runs('Search for luminous')).toEqual([['lum', false], ['inous', true]]);
@@ -917,11 +932,11 @@ describe('search page typeahead', () => {
     noList();
     await pastThePause();
     await pastThePause();
-    expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum']);
+    expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum&catalog=1']);
     noList();
     fireEvent.click(screen.getByRole('tab', { name: 'Posts' }));
     fireEvent.focus(box());
-    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum', '/api/search/suggest?q=%40lum']));
+    await waitFor(() => expect(suggestRequests()).toEqual(['/api/search/suggest?q=lum&catalog=1', '/api/search/suggest?q=%40lum&catalog=1']));
   });
 
   it('writes its address when a creator is chosen within the search’s pause, without a word to Next’s router, and still runs the search', async () => {

@@ -1283,6 +1283,19 @@ export interface PublicSearchResponse {
    * draws nothing for an answer without it.
    */
   related?: { posts: ShowcaseFeedItem[] };
+  /**
+   * Searches near this one, to offer as chips over the answer (2026-11-15):
+   * present only for a request that asked (`relatedSearches=1`, the first page
+   * of a Top or Posts search). Read with searchRelatedSearches, which keeps
+   * six whole rows at most.
+   */
+  relatedSearches?: Array<{ text: string }>;
+  /**
+   * Whether the posts are in the blended order: said only to a request that
+   * asked (`blend=1`), false where the server answered in the word order after
+   * all (isSearchAnswerBlended). A blended answer brings no related posts.
+   */
+  blended?: boolean;
 }
 
 export interface ShowcasePostResponse {

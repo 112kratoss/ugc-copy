@@ -12,6 +12,7 @@ import { markSearchFieldHandoff } from '@/components/search/search-field-handoff
 import { searchEntryForChosenText, type SearchEntry } from '../../ugc-mobile/lib/public-search-policy/search-open-log';
 import { readSearchHistory } from '@/components/search/search-history';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
+import { searchTypeaheadEntityRoute } from '@/components/search/search-typeahead-rows';
 import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 import { holdForLeaveGuard } from '@/lib/use-leave-guard';
@@ -21,7 +22,6 @@ import {
   SEARCH_CLEAR_FIELD_LABEL,
   SEARCH_FIELD_LABEL,
   SEARCH_PLACEHOLDER,
-  normalizeSearchHistoryQuery,
   searchFilterParams,
 } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import type { SearchTypeaheadAction } from '../../ugc-mobile/lib/public-search-policy/search-typeahead';
@@ -77,9 +77,22 @@ export function AppShellSearch() {
     }
     const params = new URLSearchParams();
     if (action.type === 'entity') {
-      // Posts for what is typed, narrowed to the entity and to nothing else:
+      const route = searchTypeaheadEntityRoute(action.entity, text);
+      if (route.type === 'creator') {
+        // A model of the catalog nobody has posted with: its creator, with the model chosen.
+        leaveFor(route.href);
+        return;
+      }
+      if (route.type === 'top') {
+        // A text Posts does not search yet: Top for it, narrowed to nothing (review of #828, N1).
+        params.set('q', route.query);
+        leaveFor(`/search?${params.toString()}`, 'entity');
+        return;
+      }
+      // Posts for the row's search (its own query where the server gave one,
+      // what is typed otherwise), narrowed to the entity and to nothing else:
       // the search page's address for the same press.
-      params.set('q', normalizeSearchHistoryQuery(text));
+      params.set('q', route.query);
       params.set('type', 'posts');
       for (const [name, value] of Object.entries(searchFilterParams({ ...NO_SEARCH_FILTERS, madeWith: action.madeWith }, false))) {
         params.set(name, value);

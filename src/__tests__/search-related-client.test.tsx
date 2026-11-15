@@ -76,7 +76,16 @@ const posts = (count: number) => Array.from({ length: count }, (_, index) => pos
 
 // Without `entry` (how the query was entered, said to the search log: always the last
 // parameter; search-client.test.tsx, "the search log", pins it).
-const asked = () => fetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, ''));
+// `relatedSearches=1` belongs to the first page of Top and Posts alone (searchRelatedSearchesApply):
+// left out of what these cases compare there, and kept anywhere else, where it must never be sent.
+function asSent(url: string): string {
+  const withoutEntry = url.replace(/&entry=[a-z]+$/u, '');
+  const params = new URL(withoutEntry, 'http://localhost').searchParams;
+  const firstTopOrPosts = !params.has('cursor') && !params.has('probe') && ['top', 'posts'].includes(params.get('type') ?? '');
+  return firstTopOrPosts ? withoutEntry.replace(/&relatedSearches=1(?=&|$)/u, '') : withoutEntry;
+}
+
+const asked = () => fetchMock.mock.calls.map(([url]) => asSent(url as string));
 const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 const type = (value: string) => fireEvent.change(screen.getByRole('combobox'), { target: { value } });
 const enter = () => fireEvent.submit(screen.getByRole('search'));
@@ -157,7 +166,8 @@ describe('related posts on the search page', () => {
     type('ocean at dusk');
     enter();
     await tick(PAUSE);
-    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top&related=1']);
+    // Settled and of three words: in the blended order too (search-blend.ts).
+    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top&related=1&blend=1']);
     expect(relatedGroup()).not.toBeNull();
     // It was asked for with the search: there is no second request.
     await tick(SEARCH_RELATED_SETTLE_MS * 2);
@@ -172,7 +182,8 @@ describe('related posts on the search page', () => {
     fetchMock.mockResolvedValue(ok(answer({ related: RELATED })));
     enter();
     await tick(0);
-    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top', '/api/search?q=ocean+at+dusk&type=top&related=1']);
+    // One request brings both: the related posts and the blended order the settled search now has.
+    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top', '/api/search?q=ocean+at+dusk&type=top&related=1&blend=1']);
     expect(relatedGroup()).not.toBeNull();
   });
 
@@ -183,12 +194,13 @@ describe('related posts on the search page', () => {
     enter();
     await tick(PAUSE);
     // Settled, so the first page asks; its answer has its own posts and a next page.
-    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=posts&related=1']);
+    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=posts&related=1&blend=1']);
     await tick(SEARCH_RELATED_SETTLE_MS * 2);
     expect(asked()).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
     await tick(0);
-    expect(asked().at(-1)).toBe('/api/search?q=ocean+at+dusk&type=posts&cursor=page-2');
+    // The blended order goes on with its later pages; related posts never do.
+    expect(asked().at(-1)).toBe('/api/search?q=ocean+at+dusk&type=posts&cursor=page-2&blend=1');
 
     // A full Top answer that came without the parameter is left as it is.
     fetchMock.mockClear();
@@ -201,25 +213,45 @@ describe('related posts on the search page', () => {
   });
 
   it.each([
-    ['Creators', { initialType: 'creators' as const }, '/api/search?q=ocean+at+dusk&type=creators'],
-    ['Recipes', { initialType: 'recipes' as const }, '/api/search?q=ocean+at+dusk&type=recipes'],
-    ['Latest', { initialType: 'posts' as const, initialSort: 'latest' as const }, '/api/search?q=ocean+at+dusk&type=posts&sort=latest'],
+    ['Creators', { initialType: 'creators' as const }, '/api/search?q=ocean+at+dusk&type=creators', null],
+    ['Recipes', { initialType: 'recipes' as const }, '/api/search?q=ocean+at+dusk&type=recipes', null],
+    ['Latest', { initialType: 'posts' as const, initialSort: 'latest' as const }, '/api/search?q=ocean+at+dusk&type=posts&sort=latest', null],
     [
       'a filter',
       { initialType: 'posts' as const, initialFilters: { madeWith: null, mediaKind: 'video' as const, hasRecipe: false, following: false } },
       '/api/search?q=ocean+at+dusk&type=posts&kind=video',
+      // Posts in the ranked order: settled, the same search is asked again in the blended order,
+      // which filters do not change (search-blend.ts).
+      '/api/search?q=ocean+at+dusk&type=posts&kind=video&blend=1',
     ],
-    ['the query as typed', { initialType: 'top' as const, initialExact: true }, '/api/search?q=ocean+at+dusk&type=top&exact=1'],
-  ])('never asks on %s, settled or left alone', async (_name, props, url) => {
+    ['the query as typed', { initialType: 'top' as const, initialExact: true }, '/api/search?q=ocean+at+dusk&type=top&exact=1', null],
+  ])('never asks on %s, settled or left alone', async (_name, props, url, blended) => {
     render(<SearchClient initialQuery="ocean at dusk" {...props} />);
     await tick(0);
     enter();
     await tick(SEARCH_RELATED_SETTLE_MS * 2);
-    // The tab's own search, and at most Top's once more for an empty tab to
-    // say what the other tabs hold (never with related posts).
+    // The tab's own search, at most Top's once more for an empty tab to say
+    // what the other tabs hold, and the blended order only on Posts: never
+    // with related posts.
     expect(asked()[0]).toBe(url);
-    expect(asked().slice(1).every((other) => other === '/api/search?q=ocean+at+dusk&type=top&probe=1')).toBe(true);
+    expect(asked().slice(1).filter((other) => other !== '/api/search?q=ocean+at+dusk&type=top&probe=1')).toEqual(blended ? [blended] : []);
     expect(asked().length).toBeLessThanOrEqual(2);
+  });
+
+  it('leaves the blended order to be asked when a follow-up for related posts alone was refused (review of #828, S3)', async () => {
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('ocean at dusk');
+    await tick(PAUSE);
+    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top']);
+    // Left alone, the thin answer is asked about for related posts alone, and that request is refused.
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 429, json: async () => ({ retryAfterSeconds: 30 }) });
+    await tick(SEARCH_RELATED_SETTLE_MS);
+    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top', '/api/search?q=ocean+at+dusk&type=top&related=1']);
+    // Settled now: it was never asked in the blended order, so it is, at once.
+    enter();
+    await tick(0);
+    expect(asked().at(-1)).toBe('/api/search?q=ocean+at+dusk&type=top&related=1&blend=1');
+    expect(asked()).toHaveLength(3);
   });
 
   it('never asks for a handle search, settled or left alone, and asks for the same letters without the "@"', async () => {
@@ -251,7 +283,7 @@ describe('related posts on the search page', () => {
     await tick(0);
     fireEvent.click(screen.getByRole('button', { name: 'Search again for ocean at dusk' }));
     await tick(PAUSE);
-    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top&related=1']);
+    expect(asked()).toEqual(['/api/search?q=ocean+at+dusk&type=top&related=1&blend=1']);
   });
 
   it('asks for a search that arrived in the address after its answer has stood', async () => {

@@ -447,6 +447,45 @@ describe('mobile api client caching', () => {
     ]);
   });
 
+  it('asks for the blended order and related searches only where the screen says so (review of #828, N9)', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({}));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    // A settled search's first page, a later page of it, and searches it does not apply to.
+    await api.searchPublicContent({ query: 'neon city', type: 'top', blend: true, relatedSearches: true, entry: 'typed' });
+    await api.searchPublicContent({ query: 'neon city', type: 'posts', blend: true, relatedSearches: false, cursor: 'page-2' });
+    await api.searchPublicContent({ query: 'neon city', type: 'posts', sort: 'latest', blend: false, relatedSearches: true });
+    await api.searchPublicContent({ query: 'neon city', type: 'posts', entry: 'link' });
+    await api.searchPublicContent({ query: 'neon city', type: 'creators' });
+    expect((fetcher.mock.calls as unknown as Array<[string]>).map(([url]) => new URL(String(url)).search)).toEqual([
+      '?q=neon+city&type=top&blend=1&relatedSearches=1&entry=typed',
+      '?q=neon+city&type=posts&blend=1&cursor=page-2',
+      '?q=neon+city&type=posts&sort=latest&relatedSearches=1',
+      '?q=neon+city&type=posts&entry=link',
+      '?q=neon+city&type=creators',
+    ]);
+  });
+
+  it('asks the typeahead for every name the product knows only when the box says so (`catalog=1`; review of #828, N9)', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({}));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    await api.suggestSearch({ query: 'se', catalog: true });
+    await api.suggestSearch({ query: 'se', catalog: false });
+    await api.suggestSearch({ query: 'se' });
+    expect((fetcher.mock.calls as unknown as Array<[string]>).map(([url]) => new URL(String(url)).search)).toEqual([
+      '?q=se&catalog=1',
+      '?q=se',
+      '?q=se',
+    ]);
+  });
+
   it('names how a search was entered only when the screen knows, in the web page’s own parameter', async () => {
     const fetcher = vi.fn(async () => jsonResponse({}));
     const api = createApiClient({

@@ -91,6 +91,8 @@
 @source "../components/search/SearchEntryLink.tsx";
 @source "../components/search/search-history.ts";
 @source "../components/search/SearchTypeaheadList.tsx";
+@source "../components/search/SearchRowPicture.tsx";
+@source "../components/search/search-typeahead-rows.ts";
 @source "../components/search/use-search-typeahead.ts";
 @source "../components/SignInAgreement.tsx";
 @source "../components/SignInWorkspaceCard.tsx";
@@ -520,6 +522,15 @@ button:disabled,
 /* A /create tool card (CreatorToolCard) draws the ring of the launch link
    that fills it: the card clips anything drawn outside its own edge. */
 .creator-tool-card:has(> a:focus-visible) {
+  box-shadow:
+    0 0 0 2px var(--ui-bg-app),
+    0 0 0 4px rgba(255, 170, 148, 0.55);
+}
+
+/* A search row whose link fills it and holds a button of its own beside the
+   link (a creator with Follow, CreatorSearchResult): the row draws the link's
+   ring, around all of it. */
+.search-row-card:has(> a:focus-visible) {
   box-shadow:
     0 0 0 2px var(--ui-bg-app),
     0 0 0 4px rgba(255, 170, 148, 0.55);

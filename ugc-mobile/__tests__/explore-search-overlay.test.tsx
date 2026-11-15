@@ -8,6 +8,7 @@ import { ExploreSearchOverlay } from '../components/explore-search-overlay';
 import { ApiError, type MagicbookletApiClient } from '../lib/api-client';
 import { searchEntityActionLabel, searchRecipeCardLabel } from '../lib/public-search-policy/public-search-policy';
 import { SEARCH_ENTRANCE } from '../lib/search-entrance';
+import { themes } from '../lib/theme';
 import { Reveal } from '../components/reveal';
 import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
 import {
@@ -78,6 +79,11 @@ const mocks = vi.hoisted(() => {
     rememberSearchQuery: vi.fn(async (_query: string) => [] as string[]),
     // The phone's text size, as React Native reports it.
     fontScale: { value: 1 },
+    // Follow on a creator row: its hook (lib/use-search-creator-follow.ts, tested on its own) as a stand-in.
+    followPress: vi.fn((_creatorId: string) => {}),
+    followFailed: { value: false },
+    // Where each creator's Follow brings a visitor back after sign-up, by creator id.
+    followReturnTo: { value: {} as Record<string, string> },
   };
 });
 
@@ -159,6 +165,20 @@ vi.mock('@/components/ui', () => ({
   SecondaryButton: (props: MockProps) => React.createElement('secondary-button', props),
   SegmentedControl: (props: MockProps) => React.createElement('segmented-control', props),
   StatusBlock: (props: MockProps) => React.createElement('status-block', props),
+  ToggleButton: (props: MockProps) => React.createElement('toggle-button', props),
+}));
+
+vi.mock('@/lib/use-search-creator-follow', () => ({
+  useSearchCreatorFollow: (creator: { id: string; isFollowing: boolean }, options: { returnTo: string }) => {
+    mocks.followReturnTo.value[creator.id] = options.returnTo;
+    return {
+      offered: creator.id !== mocks.user.value?.id,
+      following: creator.isFollowing,
+      pending: false,
+      failed: mocks.followFailed.value,
+      press: () => mocks.followPress(creator.id),
+    };
+  },
 }));
 
 vi.mock('@/lib/motion', () => ({
@@ -234,6 +254,13 @@ type Instance = renderer.ReactTestInstance;
 
 function hostNodes(tree: Tree, type: string) {
   return tree.root.findAll((node) => node.type === type);
+}
+
+// The nearest host element a host element sits in (a mocked View's own wrapper is skipped).
+function hostParent(node: Instance): Instance | null {
+  let parent = node.parent;
+  while (parent && typeof parent.type !== 'string') parent = parent.parent;
+  return parent;
 }
 
 function textOf(node: Instance): string {
@@ -424,6 +451,9 @@ describe('ExploreSearchOverlay search', () => {
     mocks.router.push.mockClear();
     mocks.readSearchHistory.mockClear();
     mocks.rememberSearchQuery.mockClear();
+    mocks.followPress.mockClear();
+    mocks.followFailed.value = false;
+    mocks.followReturnTo.value = {};
     mocks.user.value = null;
     mocks.announce.mockClear();
     mocks.fontScale.value = 1;
@@ -543,6 +573,46 @@ describe('ExploreSearchOverlay search', () => {
       await typeQuery(tree, 'portrait');
       expect(columns(tree)).toBe(1);
       await act(async () => tree.unmount());
+    });
+
+    it('keeps a creator\'s handle its room and stands Follow under the name at the accessibility sizes (review of #828, S9)', async () => {
+      mocks.user.value = { id: 'viewer-1' };
+      searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { creators: [creator('janet', 3)] }));
+      const followSlot = (tree: Tree) => hostNodes(tree, 'view').find((node) => node.props.testID === 'search-creator-follow')!;
+      const card = (tree: Tree) => hostNodes(tree, 'view').find((node) => node.props.testID === 'search-creator-card')!;
+
+      let tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'jan');
+      await advance(300);
+      // The handle and the count, two texts on a line that wraps: where both do
+      // not fit beside Follow the count goes under the handle, and the dot drawn
+      // before it is clipped at the line's edge.
+      const line = hostNodes(tree, 'view').find((node) => node.props.testID === 'search-creator-handle-line')!;
+      expect(line.props.style).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap', overflow: 'hidden' });
+      const [handle, count] = line.findAll((node) => node.type === 'text');
+      expect([textOf(handle), handle.props.numberOfLines, handle.props.style.flexShrink]).toEqual(['@janet', 1, 1]);
+      expect(textOf(count)).toBe('3 posts');
+      const dot = line.findAll((node) => node.type === 'view' && node.props.style?.position === 'absolute');
+      expect(dot).toHaveLength(1);
+      expect(dot[0].props.style.left).toBeLessThan(0);
+      // Beside the name at the standard sizes.
+      expect(hostParent(followSlot(tree))).not.toBe(card(tree));
+      expect(hostParent(followSlot(tree))!.props.style).toMatchObject({ flexDirection: 'row' });
+      await act(async () => tree.unmount());
+
+      // Under it at the accessibility sizes, where the posts go one across.
+      mocks.fontScale.value = 2.35;
+      tree = await render({ visible: true, onClose: vi.fn() });
+      await typeQuery(tree, 'jan');
+      await advance(300);
+      expect(hostParent(followSlot(tree))).toBe(card(tree));
+      // A row holding the button: in a column drawn `alignItems: 'flex-start'`
+      // the button came out 1,230 pt tall at AX3 on the simulator.
+      expect(followSlot(tree).props.style).toMatchObject({ flexDirection: 'row' });
+      expect(followSlot(tree).props.style.alignItems).toBeUndefined();
+      expect(hostNodes(tree, 'toggle-button').map((node) => node.props.accessibilityLabel)).toEqual(['Follow Creator janet']);
+      await act(async () => tree.unmount());
+      mocks.fontScale.value = 1;
     });
 
     it('names its recents "Clear all", as the web does', async () => {
@@ -1234,6 +1304,8 @@ describe('ExploreSearchOverlay search', () => {
       query: 'jan', type: 'creators', sort: 'top', cursor: 'page-2',
       // Creators are neither narrowed nor read as typed, and bring no related posts.
       filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false }, exact: false, related: false,
+      // Creators bring no related searches and no blended order.
+      relatedSearches: false, blend: false,
       // A later page of a search still says how its query was entered.
       entry: 'typed',
     });
@@ -1299,6 +1371,62 @@ describe('ExploreSearchOverlay search', () => {
     await act(async () => tree.unmount());
   });
 
+  it('puts Follow beside a creator row: its own button, which neither opens the row nor reports an open', async () => {
+    mocks.user.value = { id: 'viewer-1' };
+    mocks.followPress.mockClear();
+    recordSearchOpen.mockClear();
+    searchPublicContent.mockResolvedValueOnce(searchAnswer('jan', 'top', {
+      creators: [creator('jane', 3, { isFollowing: true }), creator('janet', 2), { ...creator('me'), id: 'viewer-1' }],
+    }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'jan');
+    await advance(300);
+
+    const buttons = hostNodes(tree, 'toggle-button');
+    // The creator page's words, and a name for each; none on the viewer's own row.
+    expect(buttons.map((node) => [node.props.label, node.props.on, node.props.accessibilityLabel])).toEqual([
+      ['Following', true, 'Following Creator jane'],
+      ['Follow', false, 'Follow Creator janet'],
+    ]);
+    // Beside the row's press, never inside it: a screen reader reaches it as a control of its own.
+    const row = pressableLabelled(tree, "Open Creator janet's profile, @janet");
+    expect(row.findAll((node) => String(node.type) === 'toggle-button')).toEqual([]);
+
+    await press(buttons[1]);
+    expect(mocks.followPress).toHaveBeenCalledWith('id-janet');
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    expect(recordSearchOpen).not.toHaveBeenCalled();
+    // The row itself still opens the profile.
+    expect(row.props.onPress).toBeTypeOf('function');
+
+    await act(async () => tree.unmount());
+  });
+
+  it('brings a visitor\'s Follow back to the search the row is on, its words and tab (review of #828, S5)', async () => {
+    mocks.user.value = null;
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type ?? 'top', { creators: [creator('janet', 2)] }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'jan lee');
+    await advance(300);
+    expect(mocks.followReturnTo.value['id-janet']).toBe('/search?q=jan%20lee');
+    await press(tab(tree, 'Creators'));
+    await advance(300);
+    expect(mocks.followReturnTo.value['id-janet']).toBe('/search?q=jan%20lee&type=creators');
+    await act(async () => tree.unmount());
+  });
+
+  it('says a refused follow under its row in the creator page\'s sentence', async () => {
+    mocks.user.value = { id: 'viewer-1' };
+    mocks.followFailed.value = true;
+    searchPublicContent.mockResolvedValueOnce(searchAnswer('jan', 'top', { creators: [creator('jane')] }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'jan');
+    await advance(300);
+    expect(shownTexts(tree)).toContain('Could not update follow. Your previous state was restored.');
+    mocks.followFailed.value = false;
+    await act(async () => tree.unmount());
+  });
+
   // What each result card reads, top to bottom: the web's search cards read the same.
   function exactLabel(tree: Tree, label: string) {
     return pressableLabelled(tree, label).props.accessibilityLabel as string;
@@ -1322,15 +1450,17 @@ describe('ExploreSearchOverlay search', () => {
     await typeQuery(tree, 'jan');
     await advance(300);
 
-    // A screen reader hears the mark too: the row reads as its label.
+    // A screen reader hears whom the viewer follows in the row's label; the
+    // mark is the Follow button beside the row (its own control, so not here).
     expect(cardTexts(tree, "Open Creator jane's profile, @jane, following, 3 posts. Films and stills"))
-      .toEqual(['Creator jane', 'Following', '@jane', 'Films and stills', '3 posts']);
+      .toEqual(['Creator jane', '@jane', '3 posts', 'Films and stills']);
     expect(exactLabel(tree, "Open Creator jane's profile, @jane, following")).toBe("Open Creator jane's profile, @jane, following, 3 posts. Films and stills");
     const bio = pressableLabelled(tree, "Open Creator jane's profile, @jane, following")
       .find((node) => node.type === 'text' && textOf(node) === 'Films and stills');
     expect(bio.props.numberOfLines).toBe(1);
     // No bio leaves no empty line, and no follow leaves no mark.
     expect(cardTexts(tree, "Open Creator janet's profile, @janet")).toEqual(['Creator janet', '@janet', '2 posts']);
+    expect(hostNodes(tree, 'toggle-button').map((node) => node.props.label)).toEqual(['Following', 'Follow']);
     expect(exactLabel(tree, "Open Creator janet's profile, @janet")).toBe("Open Creator janet's profile, @janet, 2 posts");
     // Nothing the row shows is missing from what a screen reader hears (review of #784).
     expectLabelHoldsCard(tree, "Open Creator jane's profile");
@@ -2521,11 +2651,15 @@ describe('ExploreSearchOverlay typeahead', () => {
     await act(async () => tree.unmount());
   });
 
-  it('draws no model or tool for two characters, whatever an answer carries', async () => {
+  it('draws models and tools from two characters, as an answer asked with the catalog offers them, and none from one', async () => {
     const tree = await open();
     await typeQuery(tree, 'lu');
     await advance(PAUSE);
-    expect(rowLabels(tree)).toHaveLength(5);
+    expect(suggestSearch.mock.calls.at(-1)?.[0]).toEqual({ query: 'lu', catalog: true });
+    expect(rowLabels(tree)).toHaveLength(6);
+    expect(shownTexts(tree)).toContain('Models and tools');
+    await typeQuery(tree, 'l');
+    await advance(PAUSE);
     expect(shownTexts(tree)).not.toContain('Models and tools');
     await act(async () => tree.unmount());
   });
@@ -3054,6 +3188,35 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
     return tree!;
   }
 
+  it('opens on a link\'s order, filters and exact reading too, and a visitor\'s Follow comes back to all of it (review of #828, S5)', async () => {
+    const NONE = { madeWith: null, mediaKind: null, hasRecipe: false, following: false };
+    // A server with filters says which it applied.
+    searchPublicContent.mockImplementation(async ({ query, type, sort, filters }) => searchAnswer(query, type ?? 'top', { sort }, {
+      filters: { ...NONE, ...filters, madeWith: null },
+    }));
+    const filtered = await openOnLink('neon city', 'posts', { initialSort: 'latest', initialFilters: { ...NONE, mediaKind: 'video' }, initialExact: true });
+    expect(searchPublicContent.mock.calls.map(([params]) => [params.query, params.type, params.sort, params.filters, params.exact]))
+      .toEqual([['neon city', 'posts', 'latest', { ...NONE, mediaKind: 'video' }, true]]);
+    // Its switch drawn on, as one the person pressed is.
+    expect(hostNodes(filtered, 'choice-chip').map((node) => [node.props.label, node.props.active])).toContainEqual(['Videos', true]);
+    await act(async () => filtered.unmount());
+
+    // A search that finds nothing anywhere offers the start's creators, whose
+    // Follow brings a visitor back to the search as it stood.
+    searchPublicContent.mockReset();
+    searchPublicContent.mockImplementation(async ({ query, type, sort }) => searchAnswer(query, type ?? 'top', { sort }));
+    searchStarter.mockResolvedValue({
+      entities: [],
+      creators: [{ id: 'c-luna', username: 'luna', displayName: 'Luna Studio', bio: null, avatarUrl: null, publicPostCount: 42, isFollowing: false }],
+      searches: [],
+    });
+    const empty = await openOnLink('neon city', 'posts', { initialSort: 'latest', initialExact: true });
+    await act(async () => { vi.advanceTimersByTime(1000); });
+    expect(hostNodes(empty, 'toggle-button').map((node) => node.props.accessibilityLabel)).toEqual(['Follow Luna Studio']);
+    expect(mocks.followReturnTo.value['c-luna']).toBe('/search?q=neon%20city&type=posts&sort=latest&exact=1');
+    await act(async () => empty.unmount());
+  });
+
   it('keeps a link\'s search once the person opens a result from it, or presses Search themselves (review of #795)', async () => {
     searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type ?? 'top', { posts: [post('p1')] }));
     const opened = await openOnLink('nano', 'posts');
@@ -3293,5 +3456,256 @@ describe('ExploreSearchOverlay and the search log (search-open-log.ts)', () => {
     await press(pressableLabelled(tree, `Open post Post ${POST_IDS[1]} by Ana`));
     expect(mocks.router.push.mock.calls.map(([path]) => path)).toEqual([`/post/${POST_IDS[0]}`, `/post/${POST_IDS[1]}`]);
     await act(async () => tree.unmount());
+  });
+});
+
+// The search screen's additions of 2026-11-15 (lib/search-screen-view-model.ts):
+// the typeahead asked with the catalog, what a search asks for besides the
+// search, related searches over an answer, and the start's pictures, headings
+// by period and Follow.
+describe('ExploreSearchOverlay search screen, 2026-11-15', () => {
+  const PAUSE = SEARCH_TYPEAHEAD_DEBOUNCE_MS;
+  const SETTLE = SEARCH_TYPEAHEAD_PRESS_SETTLE_MS;
+  const NO_FILTERS = { madeWith: null, mediaKind: null, hasRecipe: false, following: false };
+  const full = (
+    query: string,
+    type: PublicSearchType,
+    kinds: Parameters<typeof searchAnswer>[2] = {},
+    extra: Pick<PublicSearchResponse, 'relatedSearches' | 'blended'> = {},
+  ): PublicSearchResponse => ({
+    ...searchAnswer(query, type, { sort: 'top', ...kinds }, { entities: [], filters: NO_FILTERS, correctedQuery: { posts: null, recipes: null }, exact: false }),
+    ...extra,
+  });
+  const headers = (tree: Tree) => hostNodes(tree, 'text').filter((node) => node.props.accessibilityRole === 'header').map(textOf);
+  const pressableLabels = (tree: Tree) => hostNodes(tree, 'pressable').map((node) => node.props.accessibilityLabel as string | undefined);
+  function rowLabelled(tree: Tree, label: string) {
+    const row = hostNodes(tree, 'pressable').find((node) => node.props.accessibilityLabel === label);
+    if (!row) throw new Error(`Nothing labelled ${label}`);
+    return row;
+  }
+  const seedance = {
+    kind: 'model' as const,
+    key: 'seedance-2',
+    label: 'Seedance 2',
+    postCount: 0,
+    postCountCapped: false,
+    thumbnail: null,
+    inCatalog: true,
+    catalogModel: { id: 'seedance-2', kind: 'video' as const, web: true, mobile: true },
+    query: null,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.listeners.length = 0;
+    mocks.focused.value = true;
+    mocks.router.push.mockClear();
+    mocks.readSearchHistory.mockReset();
+    mocks.readSearchHistory.mockResolvedValue([]);
+    mocks.rememberSearchQuery.mockReset();
+    mocks.rememberSearchQuery.mockResolvedValue([]);
+    mocks.user.value = null;
+    mocks.followPress.mockClear();
+    mocks.followFailed.value = false;
+    mocks.followReturnTo.value = {};
+    searchPublicContent.mockReset();
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', { posts: [post('p1')] }));
+    suggestSearch.mockReset();
+    suggestSearch.mockResolvedValue({ query: '', normalizedQuery: '', creators: [], entities: [], completions: [] });
+    searchStarter.mockReset();
+    searchStarter.mockResolvedValue({ entities: [], creators: [], searches: [] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function typing() {
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await act(async () => { searchInput(tree).props.onFocus(); });
+    return tree;
+  }
+
+  it('opens the creator with a catalog model chosen when nobody has posted with it, never an empty Posts page', async () => {
+    suggestSearch.mockResolvedValue({
+      query: 'se', normalizedQuery: 'se', creators: [], entities: [seedance], completions: [{ text: 'seedance 2' }, { text: 'sea waves' }],
+    });
+    const tree = await typing();
+    await typeOnly(tree, 'se');
+    await advance(PAUSE);
+    expect(suggestSearch.mock.calls.at(-1)?.[0]).toEqual({ query: 'se', catalog: true });
+    // Its words say what pressing it does, never "0 posts"; its name is not offered again as a search.
+    expect(shownTexts(tree)).toEqual(expect.arrayContaining(['Seedance 2', 'Video model · Generate with it']));
+    expect(shownTexts(tree).some((text) => text.includes('0 posts'))).toBe(false);
+    expect(pressableLabels(tree)).toContain('Search for sea waves');
+    expect(pressableLabels(tree)).not.toContain('Search for seedance 2');
+    await advance(SETTLE);
+    await press(rowLabelled(tree, 'Seedance 2, video model, no posts yet. Open the video creator with it'));
+    expect(mocks.router.push).toHaveBeenCalledWith('/create/video?model=seedance-2');
+    expect(searchPublicContent).not.toHaveBeenCalled();
+    await act(async () => tree.unmount());
+  });
+
+  it('draws a model\'s picture in its row, and lets a phrase wrap whole at the largest sizes', async () => {
+    const thumbnail = { postId: 'p7', url: 'https://cdn.example/p7.webp', thumbhash: null, width: null, height: null, mediaKind: 'video' as const };
+    suggestSearch.mockResolvedValue({
+      query: 'kli', normalizedQuery: 'kli', creators: [],
+      entities: [{ kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', postCount: 12, postCountCapped: false, thumbnail, inCatalog: true, catalogModel: { id: 'kling-2.6', kind: 'video', web: true, mobile: true }, query: null }],
+      completions: [{ text: 'kling cinematic slow motion drone shot over a neon city' }],
+    });
+    const tree = await typing();
+    await typeOnly(tree, 'kli');
+    await advance(PAUSE);
+    // A video's poster, with no thumbhash to show first: the glyph's frame holds until it loads.
+    expect(hostNodes(tree, 'image').map((image) => [image.props.source.uri, image.props.placeholder])).toEqual([['https://cdn.example/p7.webp', undefined]]);
+    const phrase = hostNodes(tree, 'text').find((node) => textOf(node) === 'kling cinematic slow motion drone shot over a neon city' && node.props.maxFontSizeMultiplier !== undefined);
+    expect(phrase).toBeDefined();
+    expect(phrase!.props.numberOfLines).toBeUndefined();
+    await act(async () => tree.unmount());
+  });
+
+  it('searches the search a row carries, on Posts narrowed to it, as entered from a model or tool', async () => {
+    const stability = {
+      kind: 'tool' as const, key: 'stability-ai', label: 'Stability AI', postCount: 5, postCountCapped: false,
+      thumbnail: null, inCatalog: false, catalogModel: null, query: 'sdxl',
+    };
+    suggestSearch.mockResolvedValue({ query: 'sdx', normalizedQuery: 'sdx', creators: [], entities: [stability], completions: [] });
+    const tree = await typing();
+    await typeOnly(tree, 'sdx');
+    await advance(PAUSE);
+    await advance(SETTLE);
+    await press(rowLabelled(tree, 'Stability AI, tool, 5 posts. Show posts made with it'));
+    await advance(0);
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({
+      query: 'sdxl', type: 'posts', filters: { madeWith: 'tool:stability-ai' }, entry: 'entity',
+    });
+    expect(searchInput(tree).props.value).toBe('sdxl');
+    await act(async () => tree.unmount());
+  });
+
+  it('asks for related searches with the first page, and for the blended order with every page of a search of two words', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type, cursor }) => full(query, type ?? 'top', {
+      posts: [post(cursor ? 'p2' : 'p1')],
+      ...(cursor ? {} : { postsCursor: 'page-2' }),
+    }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'neon city');
+    await advance(300);
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'neon city', type: 'top', relatedSearches: true, blend: true });
+    await press(tab(tree, 'Posts'));
+    await advance(300);
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'neon city', type: 'posts', cursor: null, relatedSearches: true, blend: true });
+    await press(showMoreButton(tree));
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'posts', cursor: 'page-2', relatedSearches: false, blend: true });
+    // One word is the commonest search, and its word matches are what was asked for.
+    await typeQuery(tree, 'neon');
+    await advance(300);
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'neon', type: 'posts', relatedSearches: true, blend: false });
+    await act(async () => tree.unmount());
+  });
+
+  it('asks a link\'s search and a model\'s or tool\'s row in the word order until the person commits it (review of #828, S6)', async () => {
+    // A link: entered as `link`, neither blended nor asked for related posts
+    // at once; they come after the pause a search left alone waits, as the web's do.
+    let linked: renderer.ReactTestRenderer | null = null;
+    await act(async () => {
+      linked = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn(), initialQuery: 'neon city', initialType: 'posts' }));
+    });
+    expect(searchPublicContent.mock.calls.map(([params]) => [params.entry, params.related, params.blend])).toEqual([['link', false, false]]);
+    await advance(1600);
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'neon city', entry: 'link', related: true, blend: false });
+    // The person presses Search on it: settled, and blended.
+    await act(async () => { searchInput(linked!).props.onFocus(); });
+    await act(async () => { searchInput(linked!).props.onSubmitEditing(); });
+    await advance(0);
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'neon city', type: 'posts', entry: 'typed', related: true, blend: true });
+    await act(async () => linked!.unmount());
+
+    // A model's row of the start: the search it counted, on Posts, narrowed to it.
+    searchPublicContent.mockClear();
+    searchStarter.mockResolvedValue({
+      entities: [{ kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', postCount: 12, postCountCapped: false, thumbnail: null, query: 'kling 2.6' }],
+      creators: [],
+      searches: [],
+    });
+    const start = await render({ visible: true, onClose: vi.fn() });
+    await press(pressableLabelled(start, 'Kling 2.6, model, 12 posts. Show posts made with it'));
+    await advance(0);
+    expect(searchPublicContent.mock.calls.map(([params]) => [params.query, params.type, params.entry, params.related, params.blend]))
+      .toEqual([['kling 2.6', 'posts', 'entity', false, false]]);
+    await act(async () => start.unmount());
+  });
+
+  it('draws related searches over a Top or Posts answer, and searches one pressed as a related entry', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => full(query, type ?? 'top', { posts: [post('p1')], creators: [creator('neo')] }, {
+      relatedSearches: [{ text: 'neon portrait' }, { text: 'city at night' }],
+    }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'neon city');
+    await advance(300);
+    expect(headers(tree)).toContain('Related searches');
+    const chips = hostNodes(tree, 'pressable').filter((node) => node.props.testID === 'search-related-search');
+    expect(chips.map((chip) => chip.props.accessibilityLabel)).toEqual(['Search for neon portrait', 'Search for city at night']);
+    // A thumb's press: the HIG's 44pt and more.
+    for (const chip of chips) expect((chip.props.style as { minHeight: number }).minHeight).toBeGreaterThanOrEqual(44);
+    await press(chips[1]);
+    await advance(300);
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'city at night', type: 'top', entry: 'related' });
+    expect(searchInput(tree).props.value).toBe('city at night');
+    // Creators draw none, whatever an answer carries.
+    await press(tab(tree, 'Creators'));
+    await advance(300);
+    expect(headers(tree)).not.toContain('Related searches');
+    await act(async () => tree.unmount());
+  });
+
+  it('titles the start\'s lists by the period each is of, draws their pictures, and offers Follow on its creators', async () => {
+    const thumbnail = { postId: 'p9', url: 'https://cdn.example/p9.webp', thumbhash: 'abc', width: 720, height: 960, mediaKind: 'image' as const };
+    searchStarter.mockResolvedValue({
+      entities: [
+        { kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', postCount: 12, postCountCapped: false, thumbnail, query: 'kling 2.6' },
+        { kind: 'tool', key: 'comfyui', label: 'ComfyUI', postCount: 4, postCountCapped: false, thumbnail: null, query: 'comfyui' },
+      ],
+      creators: [{ id: 'c-luna', username: 'luna', displayName: 'Luna Studio', bio: null, avatarUrl: null, publicPostCount: 42, isFollowing: false }],
+      searches: [{ text: 'neon portrait', thumbnail }, { text: 'anime', thumbnail: null }],
+      periods: { entities: 'week', creators: 'all', searches: 'week' },
+    });
+    mocks.user.value = { id: 'viewer-1' };
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    expect(headers(tree)).toEqual(['Popular this week', 'Creators to follow', 'Popular searches this week']);
+    // A picture where the answer gives one, its thumbhash first; the glyph's frame where it gives none.
+    expect(hostNodes(tree, 'image').map((image) => [image.props.source.uri, image.props.placeholder])).toEqual([
+      ['https://cdn.example/p9.webp', { thumbhash: 'abc' }],
+      ['https://cdn.example/p9.webp', { thumbhash: 'abc' }],
+    ]);
+    // Follow beside each creator, pressed without opening the profile; a
+    // visitor's comes back to the start once they have signed up.
+    const follow = hostNodes(tree, 'toggle-button');
+    expect(follow.map((node) => node.props.accessibilityLabel)).toEqual(['Follow Luna Studio']);
+    expect(mocks.followReturnTo.value['c-luna']).toBe('/search');
+    await press(follow[0]);
+    expect(mocks.followPress).toHaveBeenCalledWith('c-luna');
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    // A search to try draws its magnifier muted, as a related search's chip does (review of #828, N11).
+    const chipGlyphs = hostNodes(tree, 'pressable')
+      .filter((node) => node.props.testID === 'search-starter-search')
+      .flatMap((chip) => chip.findAll((node) => String(node.type) === 'icon').map((icon) => icon.props.color));
+    expect(chipGlyphs).toEqual([themes.dark.colors.muted, themes.dark.colors.muted]);
+    // The handle keeps its room, as on a result's row (review of #828, S9).
+    const line = hostNodes(tree, 'view').find((node) => node.props.testID === 'search-creator-handle-line')!;
+    expect(line.findAll((node) => node.type === 'text').map(textOf)).toEqual(['@luna', '42 posts']);
+    const besideName = hostNodes(tree, 'view').find((node) => node.props.testID === 'search-creator-follow')!;
+    expect(hostParent(besideName)!.props.style).toMatchObject({ flexDirection: 'row' });
+    await act(async () => tree.unmount());
+
+    // Under the name at the accessibility sizes.
+    mocks.fontScale.value = 2.35;
+    const large = await render({ visible: true, onClose: vi.fn() });
+    const underName = hostNodes(large, 'view').find((node) => node.props.testID === 'search-creator-follow')!;
+    expect(hostParent(underName)!.props.testID).toBe('search-starter-creator-card');
+    expect(underName.props.style).toMatchObject({ flexDirection: 'row' });
+    expect(underName.props.style.alignItems).toBeUndefined();
+    await act(async () => large.unmount());
+    mocks.fontScale.value = 1;
   });
 });

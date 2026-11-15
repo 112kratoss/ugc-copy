@@ -167,7 +167,7 @@ describe('top bar search', () => {
       'Luma Ray 2, model, 14 posts. Show posts made with it',
       'Search for luminous portrait',
     ]);
-    expect(suggestFetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/search/suggest?q=lum']);
+    expect(suggestFetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/search/suggest?q=lum&catalog=1']);
   });
 
   it('takes each row where the search page would: a profile, Posts narrowed to the entity, a search', async () => {

@@ -1,10 +1,7 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Box, Search, Wrench } from 'lucide-react';
-
-import { getUserInitials } from '@/lib/profile';
 
 import {
   searchCreatorCardLabel,
@@ -17,11 +14,15 @@ import {
   SEARCH_STARTER_LABEL,
   isSearchStarterEmpty,
   parseSearchStarterResponse,
+  searchStarterHeading,
+  searchStarterPeriod,
   searchStarterSections,
   type SearchStarterEntity,
   type SearchStarterResponse,
   type SearchStarterSearch,
 } from '../../../ugc-mobile/lib/public-search-policy/search-starter';
+import { CreatorSearchResult } from './CreatorSearchResult';
+import { SearchRowPicture } from './SearchRowPicture';
 
 // The browser's Supabase client, loaded when the request needs the session, as
 // the typeahead loads it.
@@ -100,22 +101,60 @@ function SectionHeading({ id, level, children }: { id: string; level: 2 | 3; chi
 }
 
 /**
+ * A search offered as a chip: its picture (or the magnifier, in the same
+ * round frame) and its words, put in the box and searched when pressed. The
+ * starter's searches and an answer's related searches are drawn alike.
+ */
+export function SearchQueryChip({
+  text,
+  thumbnail = null,
+  onPress,
+}: {
+  text: string;
+  thumbnail?: SearchStarterSearch['thumbnail'];
+  onPress: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={searchTypeaheadRowLabel({ kind: 'completion', key: text, text })}
+      onClick={onPress}
+      className="ui-focus-ring inline-flex min-h-11 max-w-full shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] py-1.5 pl-1.5 pr-4 text-sm font-semibold text-zinc-200 transition-[background-color,border-color,color,scale] duration-150 ease-out hover:border-white/20 hover:bg-white/[0.08] hover:text-white motion-safe:active:scale-[0.97]"
+    >
+      <SearchRowPicture thumbnail={thumbnail} icon={Search} className="h-8 w-8 rounded-full" iconClassName="h-4 w-4 text-zinc-400" />
+      <span className="truncate">{text}</span>
+    </button>
+  );
+}
+
+/**
  * The starter's three lists, each under its heading, in the shared order;
  * an empty list draws no heading. `heading`: one over them all, as on a
- * search that found nothing ("Try one of these instead").
+ * search that found nothing ("Try one of these instead"). A list made from
+ * this week says so in its heading, and only then (`periods`,
+ * searchStarterHeading). Each model, tool and search carries the picture of a
+ * post it opens, where there is one (SearchRowPicture).
  */
 export function SearchStarter({
   answer,
   heading = null,
+  viewerId = null,
+  followed,
   onEntity,
   onSearch,
+  onFollowChange,
 }: {
   answer: SearchStarterResponse;
   heading?: string | null;
+  /** The signed-in account: its own row, if offered, has no Follow. */
+  viewerId?: string | null;
+  /** Creators this page has seen followed or unfollowed since the answer came, by id. */
+  followed?: Readonly<Record<string, boolean>>;
   /** A model or tool pressed: Posts for its own query, narrowed to it. */
   onEntity: (entity: SearchStarterEntity) => void;
   /** A suggested search pressed: put in the box and searched, as Enter does. */
   onSearch: (search: SearchStarterSearch) => void;
+  onFollowChange?: (creatorId: string, following: boolean) => void;
 }) {
   const sections = searchStarterSections(answer);
   if (sections.length === 0) return null;
@@ -125,34 +164,30 @@ export function SearchStarter({
       {heading ? <h2 className="text-xl font-semibold text-white">{heading}</h2> : null}
       {sections.map((section) => {
         const headingId = `search-starter-${section.id}`;
+        const sectionHeading = searchStarterHeading(section.id, searchStarterPeriod(answer, section.id));
         if (section.id === 'entities') {
           return (
             <div key={section.id}>
-              <SectionHeading id={headingId} level={sectionLevel}>{section.heading}</SectionHeading>
+              <SectionHeading id={headingId} level={sectionLevel}>{sectionHeading}</SectionHeading>
               <ul aria-labelledby={headingId} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {section.entities.map((entity) => {
-                  const Icon = entity.kind === 'model' ? Box : Wrench;
-                  return (
-                    <li key={`${entity.kind}:${entity.key}`}>
-                      <button
-                        type="button"
-                        aria-label={searchEntityActionLabel(entity)}
-                        onClick={() => onEntity(entity)}
-                        className="ui-focus-ring flex min-h-16 w-full items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.035] px-4 py-3 text-left transition hover:border-white/15 hover:bg-white/[0.065]"
-                      >
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-[var(--ui-primary)]">
-                          <Icon className="h-4.5 w-4.5" aria-hidden="true" />
+                {section.entities.map((entity) => (
+                  <li key={`${entity.kind}:${entity.key}`} className="min-w-0">
+                    <button
+                      type="button"
+                      aria-label={searchEntityActionLabel(entity)}
+                      onClick={() => onEntity(entity)}
+                      className="ui-focus-ring flex min-h-16 w-full items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.035] p-2 pr-4 text-left transition-[background-color,border-color,scale] duration-150 ease-out hover:border-white/15 hover:bg-white/[0.065] motion-safe:active:scale-[0.985]"
+                    >
+                      <SearchRowPicture thumbnail={entity.thumbnail} icon={entity.kind === 'model' ? Box : Wrench} className="h-12 w-12 rounded-lg" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-semibold text-white">{entity.label}</span>
+                        <span className="mt-0.5 block truncate text-xs text-zinc-400">
+                          {searchEntityKindLabel(entity.kind)} · {searchEntityCountLabel(entity)}
                         </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-semibold text-white">{entity.label}</span>
-                          <span className="mt-0.5 block truncate text-xs text-zinc-400">
-                            {searchEntityKindLabel(entity.kind)} · {searchEntityCountLabel(entity)}
-                          </span>
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
+                      </span>
+                    </button>
+                  </li>
+                ))}
               </ul>
             </div>
           );
@@ -160,50 +195,33 @@ export function SearchStarter({
         if (section.id === 'creators') {
           return (
             <div key={section.id}>
-              <SectionHeading id={headingId} level={sectionLevel}>{section.heading}</SectionHeading>
+              <SectionHeading id={headingId} level={sectionLevel}>{sectionHeading}</SectionHeading>
               <ul aria-labelledby={headingId} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {section.creators.map((creator) => (
-                  <li key={creator.id}>
-                    <Link
-                      href={`/creators/${encodeURIComponent(creator.username)}`}
-                      prefetch={false}
-                      aria-label={searchCreatorCardLabel(creator)}
-                      className="ui-focus-ring flex min-h-16 items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.035] px-4 py-3 transition hover:border-white/15 hover:bg-white/[0.065]"
-                    >
-                      {creator.avatarUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={creator.avatarUrl} alt="" loading="lazy" className="h-10 w-10 shrink-0 rounded-full border border-white/10 object-cover" />
-                      ) : (
-                        <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-xs font-bold text-zinc-200">
-                          {getUserInitials(creator.displayName)}
-                        </span>
-                      )}
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-semibold text-white">{creator.displayName}</span>
-                        <span className="mt-0.5 block truncate text-xs text-zinc-400">@{creator.username}</span>
-                      </span>
-                    </Link>
-                  </li>
-                ))}
+                {section.creators.map((item) => {
+                  const creator = { ...item, isFollowing: followed?.[item.id] ?? item.isFollowing };
+                  return (
+                    <li key={creator.id} className="min-w-0">
+                      <CreatorSearchResult
+                        variant="starter"
+                        creator={creator}
+                        label={searchCreatorCardLabel(creator)}
+                        viewerId={viewerId}
+                        onFollowChange={onFollowChange}
+                      />
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           );
         }
         return (
           <div key={section.id}>
-            <SectionHeading id={headingId} level={sectionLevel}>{section.heading}</SectionHeading>
+            <SectionHeading id={headingId} level={sectionLevel}>{sectionHeading}</SectionHeading>
             <ul aria-labelledby={headingId} className="flex flex-wrap gap-2">
               {section.searches.map((search) => (
-                <li key={search.text}>
-                  <button
-                    type="button"
-                    aria-label={searchTypeaheadRowLabel({ kind: 'completion', key: search.text, text: search.text })}
-                    onClick={() => onSearch(search)}
-                    className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
-                  >
-                    <Search className="h-4 w-4 text-zinc-400" aria-hidden="true" />
-                    {search.text}
-                  </button>
+                <li key={search.text} className="max-w-full">
+                  <SearchQueryChip text={search.text} thumbnail={search.thumbnail} onPress={() => onSearch(search)} />
                 </li>
               ))}
             </ul>
