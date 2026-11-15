@@ -90,9 +90,11 @@
 @source "../components/search/search-field-handoff.ts";
 @source "../components/search/SearchEntryLink.tsx";
 @source "../components/search/search-history.ts";
+@source "../components/search/search-start-panel.ts";
 @source "../components/search/SearchTypeaheadList.tsx";
 @source "../components/search/SearchRowPicture.tsx";
 @source "../components/search/search-typeahead-rows.ts";
+@source "../components/search/use-search-starter.ts";
 @source "../components/search/use-search-typeahead.ts";
 @source "../components/SignInAgreement.tsx";
 @source "../components/SignInWorkspaceCard.tsx";

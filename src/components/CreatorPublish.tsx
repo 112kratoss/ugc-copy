@@ -30,6 +30,7 @@ import {
   type GenerationReference,
   type OwnSourceRecipe,
 } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
+import { noteFollowChange } from '@/lib/follow-changes';
 
 /**
  * Publishing on the canvas (the artboards Result and Posted, owner 2026-10-28): when a run is
@@ -243,7 +244,10 @@ function useCreatorFollow(creatorId: string | null, accessToken: string | null |
       });
       if (!response.ok) throw new Error('Failed to update follow state');
       const data = await response.json() as { following?: unknown };
-      setState({ key, following: typeof data.following === 'boolean' ? data.following : next });
+      const confirmed = typeof data.following === 'boolean' ? data.following : next;
+      setState({ key, following: confirmed });
+      // A search page Back returns to reads it (follow-changes.ts).
+      noteFollowChange(viewerUserId, creatorId, confirmed);
     } catch {
       setState({ key, following: !next });
       setError('Could not update follow. Try again.');

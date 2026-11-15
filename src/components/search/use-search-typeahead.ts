@@ -29,7 +29,9 @@ import {
   type SearchTypeaheadOffer,
   type SearchTypeaheadPlacement,
   type SearchTypeaheadRow,
+  type SearchTypeaheadSection,
 } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
+import type { SearchEntity } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 
 // The browser's Supabase client, loaded when a request first needs the
 // session, as the shell's other readers load it (AuthProvider,
@@ -60,8 +62,19 @@ const NO_ROWS: readonly string[] = [];
 // No recent search: one array, so a box without a list keeps its memo.
 const NO_RECENTS: readonly string[] = [];
 
+// No model or tool named: one array, so a caller's effect on it runs only when an answer names some.
+const NO_ENTITIES: readonly SearchEntity[] = [];
 
-export function useSearchTypeahead({ text, focused, closedFor = null, recents = NO_RECENTS, offer = SEARCH_TYPEAHEAD_OFFER_ALL }: {
+// Nothing offered before typing: one array, so a box without a start panel keeps its memo.
+const NO_START: readonly SearchTypeaheadSection[] = [];
+
+/** What the list is closed for while the box holds nothing: the empty box's own panel (`start`). */
+const EMPTY_BOX = '';
+
+/** A row's action, with the row it came from: a caller may read what else the row says (where it was offered). */
+export type SearchTypeaheadPick<Row extends SearchTypeaheadRow = SearchTypeaheadRow> = SearchTypeaheadAction & { row: Row };
+
+export function useSearchTypeahead<Row extends SearchTypeaheadRow = SearchTypeaheadRow>({ text, focused, closedFor = null, recents = NO_RECENTS, offer = SEARCH_TYPEAHEAD_OFFER_ALL, start = NO_START as readonly (SearchTypeaheadSection & { rows: Row[] })[] }: {
   /** What the box holds. */
   text: string;
   /** The focus is in the box (or its form). */
@@ -75,6 +88,15 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
   recents?: readonly string[];
   /** Which kinds the box offers (the shared SearchTypeaheadOffer): the search page leaves out what its tab's results draw. */
   offer?: SearchTypeaheadOffer;
+  /**
+   * What the box offers before anything is typed (the top bar's start panel,
+   * search-start-panel.ts): drawn while the box has the focus and holds
+   * nothing, and kept on show over the first letters until their own list has
+   * a row or their answer has come, so the panel is filled in place and never
+   * goes and comes back. A box without one (the search page, whose start
+   * screen is the page under it) opens no list on an empty box, as before.
+   */
+  start?: readonly (SearchTypeaheadSection & { rows: Row[] })[];
 }) {
   const listId = `${useId()}-search-typeahead`;
   const query = useMemo(() => searchTypeaheadQuery(text), [text]);
@@ -202,24 +224,51 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
   //     shared rule, searchTypeaheadDrawn): it goes when the box is emptied,
   //     and when the focus leaves, so coming back never draws what was asked
   //     before.
+  //   - a close of the empty box's panel lasts for that focus only: coming
+  //     back to the field is asking for it again.
+  const closeKey = query ?? EMPTY_BOX;
   const [checkedFor, setCheckedFor] = useState({ focused, query });
   if (checkedFor.focused !== focused || checkedFor.query !== query) {
     setCheckedFor({ focused, query });
-    if (closedQuery !== null && closedQuery !== query) setClosedQuery(null);
+    if (closedQuery !== null && (closedQuery !== closeKey || (!focused && closedQuery === EMPTY_BOX))) setClosedQuery(null);
     if ((!focused || query === null) && answer !== null) setAnswer(null);
+    // A highlight belongs to the text it was put on, and goes with it: typed away from and back
+    // to, the text has the highlight in the box again, so Enter searches what is typed (review of
+    // #830: a start row highlighted on the empty box was highlighted again after a letter typed
+    // and deleted, and Enter then picked it).
+    if (highlight !== null && highlight.query !== closeKey) setHighlight(null);
   }
 
   // This text's answer, or until it arrives the one before it, marked stale.
-  const { sections, stale } = useMemo(
+  const typed = useMemo(
     // A text not asked about draws no answer, not even the one before it. Asked with the catalog,
     // models and tools are drawn from two characters; drawn on the web, a row the web has nothing to
     // open for is left out, and a name drawn as a model's or tool's row is not suggested again.
     () => searchTypeaheadDrawn(asks ? answer : null, query, { recents, offer, catalog: true, platform: 'web' }),
     [answer, asks, offer, query, recents],
   );
-  const rows = useMemo(() => searchTypeaheadRows(sections), [sections]);
-  const shown = isSearchTypeaheadShown({ focused, query, closedQuery, rowCount: rows.length });
-  const highlightedAt = shown && highlight !== null && highlight.query === query
+
+  // The start panel, and how long it stays over what is typed: while the text
+  // has no row of its own yet and its answer is still on its way. Only a panel
+  // that was on show is kept (`startHeld`): one closed with Escape (on the
+  // empty box, or while it stood over the first letters: review of #830), or a
+  // list that typing on has emptied, never brings it back mid-word.
+  const typedHasRows = typed.sections.length > 0;
+  const awaiting = asks && query !== null && answer?.query !== query;
+  const startOnShow = query === null && focused && closedQuery !== EMPTY_BOX && start.length > 0;
+  const [startHeld, setStartHeld] = useState(false);
+  const held = query !== null && focused && startHeld && !typedHasRows && awaiting && start.length > 0 && closedQuery !== closeKey;
+  if ((startOnShow || held) !== startHeld) setStartHeld(startOnShow || held);
+  const startDrawn = query === null || held;
+
+  const sections: readonly SearchTypeaheadSection[] = startDrawn ? start : typed.sections;
+  const stale = startDrawn ? held : typed.stale;
+  const rows = useMemo(() => searchTypeaheadRows(sections) as Row[], [sections]);
+  const shown = startDrawn
+    ? focused && closedQuery !== closeKey && rows.length > 0
+    : isSearchTypeaheadShown({ focused, query, closedQuery, rowCount: rows.length });
+  // Held by the text it was put on: typing on returns the highlight to the box.
+  const highlightedAt = shown && highlight !== null && highlight.query === closeKey
     ? rows.findIndex((row) => row.key === highlight.key)
     : -1;
   const activeIndex = highlightedAt >= 0 ? highlightedAt : null;
@@ -237,9 +286,9 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
     placement.current = shown ? placeSearchTypeaheadRows(placement.current, rows, Date.now()) : null;
   }, [rows, shown]);
 
-  // What the list shows of that moment: the rows that do not take a press yet
-  // (the shared rule, searchTypeaheadUnsettledRows), drawn dimmed, and the
-  // list busy, as it is while its rows are stale. From a change of the order
+  // What the list says of that moment: the rows that do not take a press yet
+  // (the shared rule, searchTypeaheadUnsettledRows), marked and drawn as every
+  // other row, and the list busy, as it is while its rows are stale. From a change of the order
   // on show that moved a row until the order has stood for the same time (a
   // little longer than the press rule asks of a row an earlier change moved).
   // A list that comes on show has nothing to settle, and neither has a change
@@ -278,10 +327,29 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
     return () => window.clearTimeout(timer);
   }, [rowCount, shown, stale]);
 
+  // A list taller than its room scrolls inside itself, and the highlight is only a name the box
+  // says (`aria-activedescendant`), which no browser scrolls to: a row the keys highlight is
+  // scrolled into the list's view (review of #830). Only for the keys: the pointer highlights the
+  // row it is over, which is in view already, and scrolling under it would move the rows.
+  const scrollToHighlight = useRef(false);
+  const activeOptionId = activeIndex === null ? undefined : searchTypeaheadOptionId(listId, activeIndex);
+  useLayoutEffect(() => {
+    if (!scrollToHighlight.current) return;
+    scrollToHighlight.current = false;
+    const row = activeOptionId ? document.getElementById(activeOptionId) : null;
+    // `?.()`: a browser without it (and jsdom) leaves the list where it is.
+    row?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeOptionId]);
+
   const close = useCallback(() => {
-    setClosedQuery(query);
+    setClosedQuery(closeKey);
     setHighlight(null);
-  }, [query]);
+  }, [closeKey]);
+
+  /** A click in a field that has the focus already: a list closed for this text is asked for again. */
+  const reopen = useCallback(() => {
+    setClosedQuery((current) => (current === closeKey ? null : current));
+  }, [closeKey]);
 
   /**
    * The list closed for a text the box is about to hold that no row of it said: the page puts a
@@ -290,17 +358,17 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
    * over the search.
    */
   const closeFor = useCallback((text: string) => {
-    setClosedQuery(searchTypeaheadQuery(text));
+    setClosedQuery(searchTypeaheadQuery(text) ?? EMPTY_BOX);
     setHighlight(null);
   }, []);
 
   /** A row was chosen: what to do, with the list closed for the text the box will then hold. */
-  const pick = useCallback((row: SearchTypeaheadRow): SearchTypeaheadAction => {
+  const pick = useCallback((row: Row): SearchTypeaheadPick<Row> => {
     const action = searchTypeaheadAction(row);
-    setClosedQuery(action.type === 'search' ? searchTypeaheadQuery(action.query) : query);
+    setClosedQuery(action.type === 'search' ? searchTypeaheadQuery(action.query) : closeKey);
     setHighlight(null);
-    return action;
-  }, [query]);
+    return { ...action, row };
+  }, [closeKey]);
 
   /**
    * A row was pressed with a pointer or a finger: its action, or null for a
@@ -308,7 +376,7 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
    * under it (isSearchTypeaheadPressAccepted). The keys choose with `pick`:
    * their highlight is on a row by its key, wherever it stands.
    */
-  const press = useCallback((row: SearchTypeaheadRow): SearchTypeaheadAction | null => (
+  const press = useCallback((row: Row): SearchTypeaheadPick<Row> | null => (
     isSearchTypeaheadPressAccepted(placement.current, row.key, Date.now()) ? pick(row) : null
   ), [pick]);
 
@@ -317,21 +385,24 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
    * A key it used is `preventDefault`ed, which the field reads to leave it
    * alone (its own Escape clears the box).
    */
-  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>): SearchTypeaheadAction | null => {
+  const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>): SearchTypeaheadPick<Row> | null => {
     // A key that only confirms an input method's composition is not a choice.
     // Safari sends the Enter that ends a composition after `compositionend`,
     // so it no longer says it is composing: its key code, 229, still does.
     if (event.nativeEvent.isComposing || event.keyCode === 229) return null;
     const { key } = event;
     if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Home' || key === 'End') {
-      if (query === null || rows.length === 0) return null;
+      // Nothing to walk: an empty box with no start panel, or a text with no row.
+      if (rows.length === 0) return null;
       // Home and End are the caret's keys until a row is highlighted.
       if ((key === 'Home' || key === 'End') && activeIndex === null) return null;
       event.preventDefault();
       // An arrow opens a list that was closed for this text.
-      if (closedQuery === query) setClosedQuery(null);
+      if (closedQuery === closeKey) setClosedQuery(null);
       const next = moveSearchTypeaheadHighlight(shown ? activeIndex : null, key, rows.length);
-      setHighlight(next === null ? null : { query, key: rows[next].key });
+      setHighlight(next === null ? null : { query: closeKey, key: rows[next].key });
+      // A key moved the highlight: the row it lands on is brought into the list's view.
+      scrollToHighlight.current = true;
       return null;
     }
     if (key === 'Escape') {
@@ -350,12 +421,12 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
       close();
     }
     return null;
-  }, [activeIndex, close, closedQuery, pick, query, rows, shown]);
+  }, [activeIndex, close, closeKey, closedQuery, pick, rows, shown]);
 
   const highlightRow = useCallback((index: number) => {
     const row = rows[index];
-    if (query !== null && row) setHighlight({ query, key: row.key });
-  }, [query, rows]);
+    if (row) setHighlight({ query: closeKey, key: row.key });
+  }, [closeKey, rows]);
 
   return {
     listId,
@@ -367,12 +438,17 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
     stale: shown && stale,
     /** The list is changing or has just changed: stale, or a row moved a moment ago and takes no press yet. */
     busy: shown && (stale || settling),
-    /** The keys of the rows that moved a moment ago and take no press yet: drawn dimmed. */
+    /** The keys of the rows that moved a moment ago and take no press yet. Drawn as every other row (owner, 2026-11-16). */
     settlingRows,
     sections,
     rows,
+    /**
+     * The models and tools the answer on hand names, drawn or not: a box over results that draw
+     * them leaves them out of its list (`offer`), and the page still wants their pictures.
+     */
+    answerEntities: answer?.response?.entities ?? NO_ENTITIES,
     activeIndex,
-    activeOptionId: activeIndex === null ? undefined : searchTypeaheadOptionId(listId, activeIndex),
+    activeOptionId,
     /** For a polite live region: "5 suggestions" once this text's list has stood for a pause, nothing once it is gone. */
     status,
     onKeyDown,
@@ -381,6 +457,7 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
     highlightRow,
     close,
     closeFor,
+    reopen,
   };
 }
 

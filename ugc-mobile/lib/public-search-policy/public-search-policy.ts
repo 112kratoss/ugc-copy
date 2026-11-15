@@ -272,6 +272,42 @@ export function searchEntityId(entity: { kind: SearchEntityKind; key: string }):
   return `${entity.kind}:${entity.key}`;
 }
 
+/**
+ * The pictures a client holds for models and tools, by entity id, with those
+ * `found` carries added: the same object when nothing is new, so a client that
+ * keeps it in state draws nothing again for an answer that names no picture.
+ *
+ * A search's own answer carries no picture for its "Models and tools" (the
+ * start screen's rows and the typeahead's do), so a result drew a glyph where
+ * the same model had a picture a moment before (owner's brief, 2026-11-16).
+ * Each search client keeps the pictures it has been given, from the starter
+ * and from every suggestion answer, and draws a result with the one it holds.
+ *
+ * An entity that says it has no picture (`thumbnail: null`, as a starter's and
+ * a suggestion's entity always says when it has none) drops the one held: the
+ * server picks a picture this viewer may see, and a creator blocked since, or
+ * a post taken down, must not go on showing from an older answer. One that
+ * does not say (`undefined`: a search result's entity) changes nothing. A
+ * client also starts over when its viewer changes.
+ */
+export function searchEntityPicturesWith(
+  pictures: Readonly<Record<string, SearchThumbnail>>,
+  found: readonly SearchEntity[],
+): Readonly<Record<string, SearchThumbnail>> {
+  let next = pictures;
+  for (const entity of found) {
+    const id = searchEntityId(entity);
+    if (entity.thumbnail) {
+      if (next[id]?.url !== entity.thumbnail.url) next = { ...next, [id]: entity.thumbnail };
+    } else if (entity.thumbnail === null && id in next) {
+      const rest = { ...next };
+      delete rest[id];
+      next = rest;
+    }
+  }
+  return next;
+}
+
 /** An entity id read back, or null when it could not be one. */
 export function parseSearchEntityId(value: string | null | undefined): { kind: SearchEntityKind; key: string } | null {
   if (typeof value !== 'string') return null;

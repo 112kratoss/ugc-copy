@@ -464,6 +464,34 @@ test.describe('search, the web half of the benchmark fixes', () => {
     });
   }
 
+  test('still says Following of a creator followed here, after their profile and Back', async ({ page, context }) => {
+    // A page Back restores draws the answer it kept and asks nothing again: a creator followed from
+    // its own row came back reading "Follow" (known and left in the review of #828; fixed 2026-11-16
+    // by the tab's record of follows, src/lib/follow-changes.ts).
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await signIn(context);
+    const asked = await answerSearch(page);
+    await page.goto('/search?q=harbour+lights');
+    const follow = page.getByRole('button', { name: 'Follow Harbour Studio' });
+    await expect(follow).toBeVisible(COLD_PAGE);
+    await follow.click();
+    await expect(page.getByRole('button', { name: 'Following Harbour Studio' })).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => asked.follows.length).toBe(1);
+
+    // The profile compiles on its first request: asked for now, so the wait below holds only the press.
+    await page.request.get('/creators/harbour-studio', { timeout: 0 });
+    await page.getByRole('link', { name: /Harbour Studio's profile/ }).click();
+    await page.waitForURL(/\/creators\/harbour-studio$/, COLD_PAGE);
+    const searchesBefore = asked.searches.length;
+    await page.goBack();
+    await expect(page).toHaveURL(/\/search\?q=harbour\+lights$/, COLD_PAGE);
+    await expect(page.getByRole('button', { name: 'Following Harbour Studio' })).toHaveAttribute('aria-pressed', 'true', COLD_PAGE);
+    await expect(page.getByRole('button', { name: 'Follow Harbour Studio' })).toHaveCount(0);
+    // Drawn from what was kept: nothing was searched again, and no second follow was sent.
+    expect(asked.searches.length).toBe(searchesBefore);
+    expect(asked.follows.length).toBe(1);
+  });
+
   test('a visitor’s Follow asks them to sign in, and comes back to the search', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const asked = await answerSearch(page);

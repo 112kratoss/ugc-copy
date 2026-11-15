@@ -6,6 +6,7 @@ import SearchClient from '@/app/search/SearchClient';
 import { AppShellSearch } from '@/components/AppShellSearch';
 import { markSearchFieldHandoff } from '@/components/search/search-field-handoff';
 import type { PublicSearchResponse } from '@/lib/public-search';
+import { noteFollowChange, readFollowChanges } from '@/lib/follow-changes';
 import { keepSearchPage } from '@/lib/search-kept-pages';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
@@ -323,6 +324,8 @@ describe('Follow on a creator result', () => {
     expect(screen.getByRole('button', { name: 'Following Luna Studio' })).toBeTruthy();
     // The link's name says it too.
     expect(screen.getByRole('link', { name: /Luna Studio's profile, @luna-studio, following/ })).toBeTruthy();
+    // Kept for this tab under the account, for a page Back restores later (follow-changes.ts).
+    expect(readFollowChanges('viewer-1')).toEqual({ c1: true });
     // A press on Follow opens nothing: no open told to the log, no recent search kept.
     expect(openedFetchMock).not.toHaveBeenCalled();
     expect(window.localStorage.getItem('magicbooklet:public-search-history:v1')).toBeNull();
@@ -358,6 +361,108 @@ describe('a page Back restores', () => {
     expect(screen.getByRole('button', { name: 'Follow Luna Studio' })).toBeTruthy();
     await settle();
     expect(screen.queryByRole('button', { name: /^Follow(ing)? @me$/ })).toBeNull();
+  });
+
+  it('says Following of a creator followed since its answer was kept, on a row, a profile, a post or the reel', async () => {
+    signedIn(VIEWER);
+    cookieUserMock.mockReturnValue('viewer-1');
+    const kept = answer('luna', 'top', {
+      creators: { items: [creator('c1', 'Luna Studio'), creator('c2', 'Luna Lake', true), creator('c3', 'Luna Park')], nextCursor: null },
+    });
+    keepSearchPage('/search?q=luna', {
+      query: 'luna', type: 'top', sort: 'top', narrowing: '', result: kept, relatedAsked: true, blendAsked: false, viewerId: 'viewer-1',
+    }, 0, 'viewer-1');
+    // Since then, in this tab: one followed, one unfollowed. Another account's change is not this one's.
+    noteFollowChange('viewer-1', 'c1', true);
+    noteFollowChange('viewer-1', 'c2', false);
+    window.history.replaceState({ __NA: true }, '', '/search?q=luna');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    render(<SearchClient initialQuery="luna" initialType="top" />);
+    // From the first paint, with nothing asked again.
+    expect(screen.getByRole('button', { name: 'Following Luna Studio' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Follow Luna Lake' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Follow Luna Park' })).toBeTruthy();
+    await settle();
+    expect(searchFetchMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Following Luna Studio' })).toBeTruthy();
+
+    // An answer asked afterwards is the server's own word, newer than the tab's record (review of
+    // #830): c1 was unfollowed in another tab or in the app meanwhile.
+    searchFetchMock.mockResolvedValue(ok(answer('lake', 'top', { creators: { items: [creator('c1', 'Luna Studio'), creator('c2', 'Luna Lake', true)], nextCursor: null } })));
+    fireEvent.focus(box());
+    type('lake');
+    await waitFor(() => expect(searchFetchMock).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Follow Luna Studio' }).getAttribute('aria-pressed')).toBe('false'));
+    expect(screen.getByRole('button', { name: 'Following Luna Lake' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('reads nothing of another account’s changes', async () => {
+    signedIn(VIEWER);
+    cookieUserMock.mockReturnValue('viewer-1');
+    keepSearchPage('/search?q=luna', {
+      query: 'luna', type: 'top', sort: 'top', narrowing: '', relatedAsked: true, blendAsked: false, viewerId: 'viewer-1',
+      result: answer('luna', 'top', { creators: { items: [creator('c1', 'Luna Studio')], nextCursor: null } }),
+    }, 0, 'viewer-1');
+    noteFollowChange('viewer-2', 'c1', true);
+    window.history.replaceState({ __NA: true }, '', '/search?q=luna');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    render(<SearchClient initialQuery="luna" initialType="top" />);
+    expect(screen.getByRole('button', { name: 'Follow Luna Studio' })).toBeTruthy();
+    await settle();
+  });
+});
+
+describe('models and tools on Top', () => {
+  const found = (overrides: Partial<PublicSearchResponse> = {}) => answer('nano', 'top', {
+    entities: [
+      { kind: 'model', key: 'nano-banana-pro', label: 'Nano Banana Pro', postCount: 200, postCountCapped: true },
+      { kind: 'tool', key: 'nanocraft', label: 'Nanocraft', postCount: 2, postCountCapped: false },
+    ],
+    posts: { items: posts(2), nextCursor: null },
+    ...overrides,
+  });
+  const picture = (name: RegExp) => screen.getByRole('button', { name }).querySelector('[data-search-picture]');
+
+  it('draws the picture the start screen gave a model, on the same card, and the glyph for one nothing named', async () => {
+    // A search's answer carries no picture for its models and tools: the card drew a glyph where
+    // the start screen and the typeahead drew the model's picture (owner's brief, 2026-11-16).
+    starterFetchMock.mockResolvedValue(ok(STARTER));
+    searchFetchMock.mockResolvedValue(ok(found()));
+    render(<SearchClient initialQuery="nano" initialType="top" />);
+    await screen.findByText('Post p0');
+    await waitFor(() => expect(picture(/^Nano Banana Pro, model/)?.querySelector('img')?.getAttribute('src')).toBe('https://cdn.example.com/p-nano.webp'));
+    // The start screen's own card: the same frame.
+    expect(picture(/^Nano Banana Pro, model/)?.className).toContain('h-12 w-12 rounded-lg');
+    expect(picture(/^Nanocraft, tool/)?.getAttribute('data-search-picture')).toBe('placeholder');
+    expect(picture(/^Nanocraft, tool/)?.querySelector('svg')).not.toBeNull();
+  });
+
+  it('draws the picture a suggestion gave it while the text was typed, and keeps it when the box loses the focus', async () => {
+    suggestFetchMock.mockResolvedValue(ok({
+      query: 'nano', normalizedQuery: 'nano', creators: [], completions: [],
+      entities: [{ kind: 'tool', key: 'nanocraft', label: 'Nanocraft', postCount: 2, postCountCapped: false, thumbnail: thumbnail('p-craft'), inCatalog: false, catalogModel: null, query: null }],
+    }));
+    searchFetchMock.mockResolvedValue(ok(found()));
+    render(<SearchClient initialQuery="" initialType="top" />);
+    fireEvent.focus(box());
+    type('nano');
+    await screen.findByText('Post p0');
+    // Top's own list offers no models and tools (the results draw them): the answer's pictures are used all the same.
+    await waitFor(() => expect(picture(/^Nanocraft, tool/)?.querySelector('img')?.getAttribute('src')).toBe('https://cdn.example.com/p-craft.webp'));
+    fireEvent.blur(box());
+    await settle();
+    expect(picture(/^Nanocraft, tool/)?.querySelector('img')?.getAttribute('src')).toBe('https://cdn.example.com/p-craft.webp');
+    // Nothing named this one a picture.
+    expect(picture(/^Nano Banana Pro, model/)?.getAttribute('data-search-picture')).toBe('placeholder');
+  });
+
+  it('uses the picture an answer carries itself, should a server send one', async () => {
+    searchFetchMock.mockResolvedValue(ok(found({
+      entities: [{ kind: 'model', key: 'nano-banana-pro', label: 'Nano Banana Pro', postCount: 200, postCountCapped: true, thumbnail: thumbnail('p-own') }],
+    })));
+    render(<SearchClient initialQuery="nano" initialType="top" />);
+    await screen.findByText('Post p0');
+    expect(picture(/^Nano Banana Pro, model/)?.querySelector('img')?.getAttribute('src')).toBe('https://cdn.example.com/p-own.webp');
   });
 });
 
@@ -476,7 +581,7 @@ describe('related searches', () => {
 });
 
 describe('the blended order', () => {
-  it('is asked for once the person settles on a search the answer came for while typing, with the cards dimmed meanwhile', async () => {
+  it('is asked for once the person settles on a search the answer came for while typing, the cards at full strength and the field busy meanwhile', async () => {
     const blended = deferred<ReturnType<typeof ok>>();
     searchFetchMock.mockImplementation(async (url: string) => {
       const params = new URL(url, 'http://localhost').searchParams;
@@ -496,10 +601,12 @@ describe('the blended order', () => {
     enter();
     await waitFor(() => expect(searchUrls()).toHaveLength(2));
     expect(searchUrls()[1]).toBe('/api/search?q=ocean+at+dusk&type=posts&related=1&relatedSearches=1&blend=1&entry=typed');
-    // The cards stay, dimmed, and the field says it is busy: an answer on its way, not cards moving under the pointer.
+    // The cards stay, at full strength (owner, 2026-11-16), and the field says it is busy: an answer on
+    // its way, not cards moving under the pointer.
     const results = document.querySelector('[aria-busy]');
     expect(results?.getAttribute('aria-busy')).toBe('true');
-    expect(results?.querySelector('.opacity-60')).not.toBeNull();
+    expect(screen.getByText('Post p0')).toBeInTheDocument();
+    expect(results?.querySelector('[class*="opacity-60"]')).toBeNull();
     expect(document.querySelector('[data-search-field-busy]')).not.toBeNull();
     // Show more waits for it (review of #828, S3): a press would give the re-ask up, and with it the
     // blended order, and leave the page saying "Searching…".

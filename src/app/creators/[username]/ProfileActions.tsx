@@ -19,6 +19,7 @@ import {
   reportCreatorAfterConfirmation,
   toastSafetyOutcome,
 } from '@/lib/feed-safety-actions';
+import { noteFollowChange } from '@/lib/follow-changes';
 
 interface ProfileActionsProps {
   profile: EditableCreatorProfile;
@@ -364,6 +365,8 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
       const data = await response.json();
       const confirmedFollowing = typeof data.following === 'boolean' ? data.following : nextFollowing;
       setIsFollowing(confirmedFollowing);
+      // A search page Back returns to reads it (follow-changes.ts).
+      noteFollowChange(session.user.id, profile.id, confirmedFollowing);
       showTemporaryFollowStatus(confirmedFollowing ? 'Following creator.' : 'Removed follow.');
     } catch (error) {
       console.error('Failed to update follow state', error);

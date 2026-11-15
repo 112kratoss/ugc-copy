@@ -71,6 +71,7 @@ import { releaseReelOpening } from '@/lib/reel-opening-restore';
 import { getCurrentInternalPath } from '@/lib/share';
 import { displaySourceToolLabel } from '@/lib/source-tools';
 import { type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
+import { noteFollowChange } from '@/lib/follow-changes';
 
 declare global {
   interface Window {
@@ -1326,6 +1327,8 @@ export default function ShowcaseReelViewer({
       const data = await response.json() as { following?: unknown };
       const confirmedFollowing = typeof data.following === 'boolean' ? data.following : nextFollowing;
       setFollowStates((current) => ({ ...current, [key]: confirmedFollowing }));
+      // A search page Back returns to reads it (follow-changes.ts).
+      noteFollowChange(session.user?.id, targetCreatorId, confirmedFollowing);
     } catch {
       setFollowStates((current) => ({ ...current, [key]: wasFollowing }));
       setFollowError({ key, message: 'Could not update follow. Please try again.' });

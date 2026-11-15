@@ -2,7 +2,7 @@ import type { PublicSearchType } from '@/lib/public-search';
 
 /**
  * What the search page draws while its first answer for a search loads, where
- * there are no earlier cards to keep on show (dimmed) instead: blocks in the
+ * there are no earlier cards to keep on show instead: blocks in the
  * shape of the tab's results, so the cards arrive where the eye already is and
  * nothing under them moves. The tab's own status line says "Searching…" to a
  * screen reader; this is drawing only, hidden from assistive technology. The

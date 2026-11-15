@@ -136,10 +136,17 @@ const sessionSays = (event: string) => act(() => { for (const listener of [...se
 /** The list has stood as it is for the moment a moved row needs before it takes a press. */
 const settled = () => waitFor(() => expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false));
 const options = () => screen.getAllByRole('option').map((option) => option.getAttribute('aria-label'));
-/** The rows drawn dimmed: they have only just come to stand where they are, and take no press yet. */
-const dimmed = () => screen.getAllByRole('option')
-  .filter((option) => option.classList.contains('opacity-60'))
-  .map((option) => option.getAttribute('aria-label'));
+/**
+ * The rows marked as settling: they have only just come to stand where they are, and take no press
+ * yet. A mark only: the list and its rows are drawn at full strength throughout (owner, 2026-11-16),
+ * so no element of the list may carry an opacity class.
+ */
+const settlingRows = () => {
+  expect(screen.getByRole('listbox').outerHTML).not.toContain('opacity-60');
+  return screen.getAllByRole('option')
+    .filter((option) => option.hasAttribute('data-settling'))
+    .map((option) => option.getAttribute('aria-label'));
+};
 
 describe('search page typeahead', () => {
   beforeEach(() => {
@@ -370,9 +377,9 @@ describe('search page typeahead', () => {
     // a press there now was aimed at the model.
     suggestFetchMock.mockReturnValueOnce(later.promise);
     type('lumi');
-    // What a sighted person has of it: the rows that moved are dimmed, at
-    // once, and the creators that stayed are not.
-    expect(dimmed()).toEqual(['Search for luminous', 'Search for lumen glow']);
+    // The rows that moved are marked at once, and the creators that stayed
+    // are not; every one is drawn as before (nothing dims).
+    expect(settlingRows()).toEqual(['Search for luminous', 'Search for lumen glow']);
     fireEvent.click(screen.getByRole('option', { name: 'Search for luminous' }));
     expect((box() as HTMLInputElement).value).toBe('lumi');
     expect(screen.queryByRole('listbox')).not.toBeNull();
@@ -394,11 +401,11 @@ describe('search page typeahead', () => {
     expect((box() as HTMLInputElement).value).toBe('lumi');
     expect(pushMock).not.toHaveBeenCalled();
     expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true');
-    expect(dimmed()).toEqual(['Luma Ray 2, model, 14 posts. Show posts made with it', 'Search for luminous', 'Search for lumen glow']);
+    expect(settlingRows()).toEqual(['Luma Ray 2, model, 14 posts. Show posts made with it', 'Search for luminous', 'Search for lumen glow']);
 
     // Once the rows have stood, the press counts, and opens the row it is on.
     await settled();
-    expect(dimmed()).toEqual([]);
+    expect(settlingRows()).toEqual([]);
     fireEvent.click(screen.getByRole('option', { name: 'Search for luminous' }));
     expect((box() as HTMLInputElement).value).toBe('luminous');
   });
@@ -428,16 +435,16 @@ describe('search page typeahead', () => {
     // Stale until the answer lands: busy for that, with every row at full strength.
     expect(options()).toEqual(before);
     expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true');
-    expect(dimmed()).toEqual([]);
+    expect(settlingRows()).toEqual([]);
     await act(async () => {
       later.resolve(ok(suggestions({ query: 'luma', normalizedQuery: 'luma' })));
       await later.promise;
     });
     await waitFor(() => expect(suggestRequests()).toHaveLength(2));
-    // The answer is drawn: not busy at once, no row dimmed, and a press counts.
+    // The answer is drawn: not busy at once, no row settling, and a press counts.
     await waitFor(() => expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false), { timeout: 100 });
     expect(options()).toEqual(before);
-    expect(dimmed()).toEqual([]);
+    expect(settlingRows()).toEqual([]);
     fireEvent.click(screen.getByRole('option', { name: 'Search for luminous' }));
     expect((box() as HTMLInputElement).value).toBe('luminous');
   });

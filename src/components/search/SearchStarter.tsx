@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { Box, Search, Wrench } from 'lucide-react';
 
 import {
@@ -8,12 +7,12 @@ import {
   searchEntityActionLabel,
   searchEntityCountLabel,
   searchEntityKindLabel,
+  type SearchEntity,
+  type SearchThumbnail,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import { searchTypeaheadRowLabel } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
 import {
   SEARCH_STARTER_LABEL,
-  isSearchStarterEmpty,
-  parseSearchStarterResponse,
   searchStarterHeading,
   searchStarterPeriod,
   searchStarterSections,
@@ -24,72 +23,8 @@ import {
 import { CreatorSearchResult } from './CreatorSearchResult';
 import { SearchRowPicture } from './SearchRowPicture';
 
-// The browser's Supabase client, loaded when the request needs the session, as
-// the typeahead loads it.
-const loadSupabase = () => import('@/lib/supabase').then((module) => module.supabase);
-
-/**
- * What to start a search from (`GET /api/search/starter`), asked once per
- * opening of the page and kept for its life: the answer is drawn under the
- * empty box and again under a search that found nothing. Null until it lands,
- * and for good when it cannot be had (the route switched off or not there yet,
- * a refusal, offline, an answer that is not one, or one with nothing in it):
- * the page then draws what it drew before. A visitor's request carries no
- * token and is the edge's to keep (about a minute); an account's carries its
- * token, so a creator it follows or has blocked is left out. So it is asked
- * again when the account changes (a sign-in or a sign-out on this page or in
- * another tab), never for the SIGNED_IN supabase-js repeats for the same
- * account each time the tab comes back into view.
- */
-export function useSearchStarter(): SearchStarterResponse | null {
-  const [answer, setAnswer] = useState<SearchStarterResponse | null>(null);
-  useEffect(() => {
-    let disposed = false;
-    let stopWatching: (() => void) | null = null;
-    let request: AbortController | null = null;
-    // The account the answer on hand was asked for; undefined while none has been asked.
-    let askedFor: string | null | undefined;
-    const ask = async (supabase: Awaited<ReturnType<typeof loadSupabase>>) => {
-      request?.abort();
-      const controller = new AbortController();
-      request = controller;
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (controller.signal.aborted) return;
-        askedFor = session?.user?.id ?? null;
-        const response = await fetch('/api/search/starter', {
-          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
-          signal: controller.signal,
-        });
-        if (!response.ok) return;
-        const parsed = parseSearchStarterResponse(await response.json().catch(() => null));
-        if (!controller.signal.aborted && !isSearchStarterEmpty(parsed)) setAnswer(parsed);
-      } catch {
-        // An extra: its failure is drawn as nothing.
-      }
-    };
-    void loadSupabase().then((supabase) => {
-      if (disposed) return;
-      const { data } = supabase.auth.onAuthStateChange((event, session) => {
-        if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT') return;
-        const next = event === 'SIGNED_OUT' ? null : session?.user?.id ?? null;
-        if (askedFor === undefined || next === askedFor) return;
-        // Another account: what was offered to the one before is not this one's.
-        askedFor = undefined;
-        setAnswer(null);
-        void ask(supabase);
-      });
-      stopWatching = () => data.subscription.unsubscribe();
-      void ask(supabase);
-    }).catch(() => {});
-    return () => {
-      disposed = true;
-      stopWatching?.();
-      request?.abort();
-    };
-  }, []);
-  return answer;
-}
+// The answer's reader, kept beside the starter it feeds (the top bar reads it without this file's cards).
+export { useSearchStarter, useSearchStarterState } from './use-search-starter';
 
 const HEADING_CLASS = 'mb-3 text-base font-semibold text-white';
 
@@ -123,6 +58,43 @@ export function SearchQueryChip({
     >
       <SearchRowPicture thumbnail={thumbnail} icon={Search} className="h-8 w-8 rounded-full" iconClassName="h-4 w-4 text-zinc-400" />
       <span className="truncate">{text}</span>
+    </button>
+  );
+}
+
+/**
+ * A model or tool as a card: its picture (or its glyph, in the same frame),
+ * its name, its kind and count. The start screen's rows and the "Models and
+ * tools" results of a Top search are the same card, so the same model looks
+ * the same wherever search offers it. `thumbnail` stands in where the entity
+ * itself carries none: a search result's entity does not, and the page then
+ * gives the picture it already holds for that model from the start screen or
+ * from a suggestion (SearchClient's `entityPictures`).
+ */
+export function SearchEntityCard<Entity extends SearchEntity>({
+  entity,
+  thumbnail = null,
+  onPress,
+}: {
+  entity: Entity;
+  thumbnail?: SearchThumbnail | null;
+  onPress: (entity: Entity) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={searchEntityActionLabel(entity)}
+      onClick={() => onPress(entity)}
+      className="ui-focus-ring flex min-h-16 w-full items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.035] p-2 pr-4 text-left transition-[background-color,border-color,scale] duration-150 ease-out hover:border-white/15 hover:bg-white/[0.065] motion-safe:active:scale-[0.985]"
+    >
+      {/* The entity's own word first, a "none" included; the picture the page holds only where it says nothing. */}
+      <SearchRowPicture thumbnail={entity.thumbnail !== undefined ? entity.thumbnail : thumbnail} icon={entity.kind === 'model' ? Box : Wrench} className="h-12 w-12 rounded-lg" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-semibold text-white">{entity.label}</span>
+        <span className="mt-0.5 block truncate text-xs text-zinc-400">
+          {searchEntityKindLabel(entity.kind)} · {searchEntityCountLabel(entity)}
+        </span>
+      </span>
     </button>
   );
 }
@@ -172,20 +144,7 @@ export function SearchStarter({
               <ul aria-labelledby={headingId} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {section.entities.map((entity) => (
                   <li key={`${entity.kind}:${entity.key}`} className="min-w-0">
-                    <button
-                      type="button"
-                      aria-label={searchEntityActionLabel(entity)}
-                      onClick={() => onEntity(entity)}
-                      className="ui-focus-ring flex min-h-16 w-full items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.035] p-2 pr-4 text-left transition-[background-color,border-color,scale] duration-150 ease-out hover:border-white/15 hover:bg-white/[0.065] motion-safe:active:scale-[0.985]"
-                    >
-                      <SearchRowPicture thumbnail={entity.thumbnail} icon={entity.kind === 'model' ? Box : Wrench} className="h-12 w-12 rounded-lg" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-semibold text-white">{entity.label}</span>
-                        <span className="mt-0.5 block truncate text-xs text-zinc-400">
-                          {searchEntityKindLabel(entity.kind)} · {searchEntityCountLabel(entity)}
-                        </span>
-                      </span>
-                    </button>
+                    <SearchEntityCard entity={entity} onPress={onEntity} />
                   </li>
                 ))}
               </ul>
@@ -196,7 +155,10 @@ export function SearchStarter({
           return (
             <div key={section.id}>
               <SectionHeading id={headingId} level={sectionLevel}>{sectionHeading}</SectionHeading>
-              <ul aria-labelledby={headingId} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {/* As many columns as fit cards of 20rem: by the room the list has, not the window's
+                  width. Beside the shell's sidebar a 640px breakpoint gave two columns of 15rem,
+                  where Follow left the name three letters ("Mag…", owner's live check 2026-11-16). */}
+              <ul aria-labelledby={headingId} className="grid grid-cols-[repeat(auto-fill,minmax(min(20rem,100%),1fr))] gap-3">
                 {section.creators.map((item) => {
                   const creator = { ...item, isFollowing: followed?.[item.id] ?? item.isFollowing };
                   return (

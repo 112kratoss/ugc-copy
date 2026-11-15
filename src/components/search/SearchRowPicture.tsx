@@ -23,6 +23,7 @@ export function SearchRowPicture({
   icon: Icon,
   className,
   iconClassName = 'h-4 w-4 text-[var(--ui-primary)]',
+  fade = true,
 }: {
   thumbnail: SearchThumbnail | null | undefined;
   /** What the frame holds without a picture: the row's kind (a model, a tool, a search). */
@@ -30,6 +31,14 @@ export function SearchRowPicture({
   /** The frame's size and shape, `h-12 w-12 rounded-lg`. */
   className: string;
   iconClassName?: string;
+  /**
+   * The picture fades in over 200 ms as it loads (the start screen's cards and
+   * chips). False in the typeahead's list, which is drawn at full strength
+   * always: its rows are mounted anew each time it opens and each time typing
+   * replaces them, and a picture already in the browser's cache would fade in
+   * again at every one (review of #830).
+   */
+  fade?: boolean;
 }) {
   // By URL, so a row whose picture changes tries the new one.
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
@@ -54,7 +63,7 @@ export function SearchRowPicture({
           decoding="async"
           onLoad={() => setLoadedUrl(url)}
           onError={() => setFailedUrl(url)}
-          className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-200 ease-out motion-reduce:transition-none ${loadedUrl === url ? 'opacity-100' : 'opacity-0'}`}
+          className={`absolute inset-0 h-full w-full object-cover ${fade ? `transition-opacity duration-200 ease-out motion-reduce:transition-none ${loadedUrl === url ? 'opacity-100' : 'opacity-0'}` : ''}`}
         />
       ) : (
         <Icon className={iconClassName} aria-hidden="true" />

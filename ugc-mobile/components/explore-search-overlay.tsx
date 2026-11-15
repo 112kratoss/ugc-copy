@@ -23,6 +23,7 @@ import { useSearchEntrance } from '@/components/search-entrance';
 import { SearchCreatorHandleLine } from '@/components/search-creator-handle-line';
 import { SearchFollowButton, SearchFollowFailedLine } from '@/components/search-follow-button';
 import { SearchPostMasonry } from '@/components/search-post-masonry';
+import { SearchRowPicture } from '@/components/search-row-picture';
 import { SearchStarterSections } from '@/components/search-starter-sections';
 import { SearchTypeaheadList } from '@/components/search-typeahead-list';
 import { ChoiceChip, CreatorAvatar, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
@@ -97,8 +98,10 @@ import {
   searchTabRuns,
   searchTopSectionHasMore,
   toggleSearchFilterSwitch,
+  searchEntityPicturesWith,
   type SearchEntity,
   type SearchFilters,
+  type SearchThumbnail,
   type SearchRelatedSearch,
   type SearchTopSection,
 } from '@/lib/public-search-policy/public-search-policy';
@@ -265,8 +268,16 @@ function ResultsHeading({
   sort,
   onSortChange,
   seeAll,
+  busy = false,
 }: {
   title: 'Creators' | 'Posts' | 'Recipes' | typeof SEARCH_ENTITIES_HEADING | typeof SEARCH_RELATED_HEADING;
+  /**
+   * The cards under this heading are the other order's, or the ones a filter
+   * just switched narrows, until the answer lands: a small spinner beside the
+   * title says so. The cards themselves stay at full strength (owner,
+   * 2026-11-16: nothing in search dims).
+   */
+  busy?: boolean;
   /** Null where the results have one order, or the server has not said it reads another. */
   sort: PublicSearchSort | null;
   onSortChange: (sort: PublicSearchSort) => void;
@@ -275,7 +286,10 @@ function ResultsHeading({
   const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-      <Text accessibilityRole="header" style={{ flexShrink: 1, color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>{title}</Text>
+      <View style={{ flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Text accessibilityRole="header" style={{ flexShrink: 1, color: theme.colors.text, fontSize: 18, fontWeight: '800' }}>{title}</Text>
+        {busy ? <ActivityIndicator testID="search-results-busy" size="small" color={theme.colors.muted} /> : null}
+      </View>
       {sort ? (
         <SegmentedControl
           role="tab"
@@ -357,9 +371,13 @@ function RelatedSearches({ searches, onSearch }: { searches: readonly SearchRela
 }
 
 // A model or tool as a result: pressing it shows the posts made with it.
-function EntityRow({ entity, onPick }: { entity: SearchEntity; onPick: () => void }) {
+function EntityRow({ entity, thumbnail, onPick }: {
+  entity: SearchEntity;
+  /** The picture the screen holds for it (searchEntityPicturesWith): a search's own answer carries none. */
+  thumbnail: SearchThumbnail | null;
+  onPick: () => void;
+}) {
   const theme = useAppTheme();
-  const Icon = entity.kind === 'model' ? Box : Wrench;
   return (
     <Pressable
       accessibilityRole="button"
@@ -380,18 +398,10 @@ function EntityRow({ entity, onPick }: { entity: SearchEntity; onPick: () => voi
         paddingVertical: 10,
       })}
     >
-      <View
-        style={{
-          width: 40,
-          height: 40,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: appTheme.radii.pill,
-          backgroundColor: theme.colors.surfaceStrong,
-        }}
-      >
-        <Icon size={appTheme.icon.default} color={theme.colors.primary} />
-      </View>
+      {/* The frame the start screen and the typing list draw a model in: its picture where the
+          screen holds one, its kind's glyph in the same frame otherwise. */}
+      {/* The entity's own word first, a "none" included; the picture the screen holds only where it says nothing. */}
+      <SearchRowPicture thumbnail={entity.thumbnail !== undefined ? entity.thumbnail : thumbnail} size={40} Icon={entity.kind === 'model' ? Box : Wrench} testID="search-entity-picture" />
       <View style={{ minWidth: 0, flex: 1 }}>
         <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{entity.label}</Text>
         <Text numberOfLines={1} style={{ marginTop: 2, color: theme.colors.muted, fontSize: 13 }}>
@@ -874,8 +884,8 @@ export function ExploreSearchOverlay({
   // other filters or the other reading, if any.
   const otherOrder = !response && requestKey !== null && answer !== null
     && answer.scope === searchScope(normalizedQuery, type) ? answer.response : null;
-  // While the other order of the same search loads, its cards stay up, dimmed,
-  // with the control on them: the two orders hold the same results, and a
+  // While the other order of the same search loads, its cards stay up, at full
+  // strength, with the control on them and a small spinner by their heading: the two orders hold the same results, and a
   // spinner in their place would take the control from under the finger. The
   // same goes for a filter just switched: the cards it narrows stay under the
   // switches until its answer lands. A request that failed is no longer
@@ -1294,6 +1304,25 @@ export function ExploreSearchOverlay({
   // Ideas to start from: before anything is typed, and when a search finds
   // nothing. Asked once each time the search opens.
   const { answer: starterAnswer, settled: starterSettled } = useSearchStarterState(api, visible, user?.id ?? null);
+  // The pictures the screen holds for models and tools, from the starter and from every
+  // suggestion answer: a result's row draws the one it holds (searchEntityPicturesWith).
+  const [entityPictures, setEntityPictures] = useState<Readonly<Record<string, SearchThumbnail>>>({});
+  // They are one viewer's: the server picks a picture this viewer may see, so another account
+  // (a guest who signs up from a Follow and comes back) starts over, as the typing list's kept
+  // answers and the starter do (review of #830).
+  const picturesViewer = user?.id ?? null;
+  const [picturesFor, setPicturesFor] = useState(picturesViewer);
+  if (picturesFor !== picturesViewer) {
+    setPicturesFor(picturesViewer);
+    setEntityPictures({});
+  }
+  const suggestedEntities = typeahead.answerEntities;
+  useEffect(() => {
+    setEntityPictures((current) => searchEntityPicturesWith(current, suggestedEntities));
+  }, [suggestedEntities]);
+  useEffect(() => {
+    if (starterAnswer) setEntityPictures((current) => searchEntityPicturesWith(current, starterAnswer.entities));
+  }, [starterAnswer]);
   // The start waits for the ideas a moment, so they arrive in place of nothing
   // instead of replacing the idle card (filmed on the iPhone, 2026-11-14); a
   // slow answer gives way to the card after SEARCH_START_HOLD_MS.
@@ -1609,7 +1638,7 @@ export function ExploreSearchOverlay({
               <View style={{ gap: 10 }}>
                 <ResultsHeading title={SEARCH_ENTITIES_HEADING} sort={null} onSortChange={setPickedSort} />
                 {entities.map((entity, index) => (
-                  <EntityRow key={searchEntityId(entity)} entity={entity} onPick={() => { reportOpened('entity', searchEntityId(entity), index + 1); pickEntity(entity); }} />
+                  <EntityRow key={searchEntityId(entity)} entity={entity} thumbnail={entityPictures[searchEntityId(entity)] ?? null} onPick={() => { reportOpened('entity', searchEntityId(entity), index + 1); pickEntity(entity); }} />
                 ))}
               </View>
             ) : null}
@@ -1626,8 +1655,8 @@ export function ExploreSearchOverlay({
             ) : null}
             {(type === 'top' || type === 'posts') && shownResponse.posts.items.length ? (
               <View style={{ gap: 10 }}>
-                <ResultsHeading title="Posts" sort={type === 'posts' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'posts', onPress: () => setPickedType('posts') } : null} />
-                <View accessibilityState={{ busy: reordering }} style={{ opacity: reordering ? appTheme.opacity.disabled : 1 }}>
+                <ResultsHeading title="Posts" busy={reordering} sort={type === 'posts' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'posts', onPress: () => setPickedType('posts') } : null} />
+                <View accessibilityState={{ busy: reordering }}>
                   <SearchPostMasonry
                     testID="search-posts"
                     items={shownResponse.posts.items}
@@ -1643,8 +1672,8 @@ export function ExploreSearchOverlay({
             ) : null}
             {(type === 'top' || type === 'recipes') && shownResponse.recipes.items.length ? (
               <View style={{ gap: 10 }}>
-                <ResultsHeading title="Recipes" sort={type === 'recipes' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'recipes', onPress: () => setPickedType('recipes') } : null} />
-                <View accessibilityState={{ busy: reordering }} style={{ gap: 10, opacity: reordering ? appTheme.opacity.disabled : 1 }}>
+                <ResultsHeading title="Recipes" busy={reordering} sort={type === 'recipes' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'recipes', onPress: () => setPickedType('recipes') } : null} />
+                <View accessibilityState={{ busy: reordering }} style={{ gap: 10 }}>
                   {shownResponse.recipes.items.map((recipe, index) => <RecipeRow key={recipe.id} recipe={recipe} onOpen={() => openRecipe(recipe, index + 1)} />)}
                 </View>
                 {type === 'top' && searchTopSectionHasMore('recipes', shownResponse.recipes.items.length)

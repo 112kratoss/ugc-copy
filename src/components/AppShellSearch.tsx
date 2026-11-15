@@ -4,16 +4,18 @@ import Form from 'next/form';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Search, X } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { SearchEntrancePart, SearchEntranceStandIn } from '@/components/search/SearchEntrancePart';
 import { isPlainPress, markSearchEntrance } from '@/components/search/search-entrance';
 import { markSearchFieldHandoff } from '@/components/search/search-field-handoff';
-import { searchEntryForChosenText, type SearchEntry } from '../../ugc-mobile/lib/public-search-policy/search-open-log';
-import { readSearchHistory } from '@/components/search/search-history';
+import type { SearchEntry } from '../../ugc-mobile/lib/public-search-policy/search-open-log';
+import { clearSearchHistory, forgetSearchQuery, readSearchHistory } from '@/components/search/search-history';
+import { searchStartPanelEntry, searchStartPanelSections, type SearchStartPanelRow } from '@/components/search/search-start-panel';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
 import { searchTypeaheadEntityRoute } from '@/components/search/search-typeahead-rows';
-import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
+import { useSearchStarter } from '@/components/search/use-search-starter';
+import { useSearchTypeahead, type SearchTypeaheadPick } from '@/components/search/use-search-typeahead';
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 import { holdForLeaveGuard } from '@/lib/use-leave-guard';
 
@@ -24,16 +26,20 @@ import {
   SEARCH_PLACEHOLDER,
   searchFilterParams,
 } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
-import type { SearchTypeaheadAction } from '../../ugc-mobile/lib/public-search-policy/search-typeahead';
 
 /**
  * The top bar's search field (from 1024px; below it the bar has a link to
  * /search instead). Enter searches what is typed, on the search page, as it
- * always did. While the person types it offers the recent searches the text
- * matches, then creators, models and tools, and completions
- * (`useSearchTypeahead`): every kind, since no results are drawn under it, where
- * the search page's own box leaves out what its tab's results draw. A row goes
- * where that page would take it.
+ * always did. A click or a tap on it, before anything is typed (or the Down
+ * key, for a field the Tab key reached), opens a panel under it
+ * with what the search page starts from (search-start-panel.ts: this browser's
+ * recent searches, each removable, then the starter's models and tools and its
+ * searches, with their pictures; owner, 2026-11-16). While the person types,
+ * that same panel offers the recent searches the text matches, then creators,
+ * models and tools, and completions (`useSearchTypeahead`): every kind, since
+ * no results are drawn under it, where the search page's own box leaves out
+ * what its tab's results draw. A row goes where that page would take it. The
+ * panel is drawn over the page, never in its flow, so it moves nothing.
  *
  * Every way out of here is the shell's and not a link, so each asks a page's
  * leave guard first (`holdForLeaveGuard`): a page with unsaved work asks its
@@ -51,7 +57,43 @@ export function AppShellSearch() {
   // search made on another page or tab since is among them): the ones the
   // text matches are offered first.
   const [recents, setRecents] = useState<readonly string[]>([]);
-  const typeahead = useSearchTypeahead({ text, focused, recents });
+  // The starter's answer, asked for once a person reaches for the field (the
+  // pointer over it, or the focus in it) and kept for the visit: the field is
+  // on every page, and a page that is never searched from asks nothing.
+  const [reachedFor, setReachedFor] = useState(false);
+  const starter = useSearchStarter({ enabled: reachedFor, kept: true });
+  const start = useMemo(() => searchStartPanelSections({ recents, starter }), [recents, starter]);
+  const typeahead = useSearchTypeahead<SearchStartPanelRow>({ text, focused, recents, start });
+  // Whether the focus now arriving was put there by a pointer or a finger.
+  const pointerDown = useRef(false);
+  const takeFocus = (byPointer: boolean) => {
+    if (!focused) {
+      setRecents(readSearchHistory());
+      // The Tab key passing through the bar opens nothing: the panel under an empty box would put
+      // its buttons between the field and the bar's next control on every page (review of #830),
+      // and Google's and YouTube's boxes open on a click, not on Tab. Down opens it from there.
+      if (!byPointer && text === '') typeahead.closeFor('');
+    }
+    setFocused(true);
+    setReachedFor(true);
+  };
+  // A click that landed before the page's script ran left the focus in the
+  // field with nobody told: taken up as the field mounts, so the panel the
+  // click asked for opens.
+  useEffect(() => {
+    // Taken as a click: that is what puts the focus in a field before its script has run.
+    if (document.activeElement === fieldRef.current) takeFocus(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as the field mounts
+  }, []);
+  // A recent search forgotten, or all of them: the focus stays in (or returns to) the field, so the panel stays.
+  const forgetRecent = (query: string) => {
+    setRecents(forgetSearchQuery(query));
+    fieldRef.current?.focus();
+  };
+  const forgetRecents = () => {
+    setRecents(clearSearchHistory());
+    fieldRef.current?.focus();
+  };
 
   // `entry`: how the search was entered, handed to the search page for the search log.
   const leaveFor = (path: string, entry: SearchEntry = 'typed') => {
@@ -69,7 +111,7 @@ export function AppShellSearch() {
     if (!holdForLeaveGuard(leave)) leave();
   };
 
-  const runTypeaheadAction = (action: SearchTypeaheadAction | null) => {
+  const runTypeaheadAction = (action: SearchTypeaheadPick<SearchStartPanelRow> | null) => {
     if (!action) return;
     if (action.type === 'creator') {
       leaveFor(`/creators/${encodeURIComponent(action.username)}`);
@@ -104,7 +146,7 @@ export function AppShellSearch() {
     }
     leaveFor(
       `/search?${params.toString()}`,
-      action.type === 'entity' ? 'entity' : searchEntryForChosenText(action.query, text, recents),
+      action.type === 'entity' ? 'entity' : searchStartPanelEntry(action.row, action.query, text, recents),
     );
   };
 
@@ -129,9 +171,21 @@ export function AppShellSearch() {
         markSearchFieldHandoff();
         markSearchEntrance('bar');
       }}
+      onPointerDown={() => { pointerDown.current = true; }}
       onFocus={() => {
-        if (!focused) setRecents(readSearchHistory());
-        setFocused(true);
+        const byPointer = pointerDown.current;
+        pointerDown.current = false;
+        takeFocus(byPointer);
+      }}
+      onPointerEnter={() => setReachedFor(true)}
+      onKeyDown={(event) => {
+        // Escape with the focus on a button of the panel (Tab reaches "Clear all" and each remove
+        // button): the panel closes and the focus goes back to the field, as Escape in the field
+        // closes it. The field's own keys are handled on the field.
+        if (event.key !== 'Escape' || event.target === fieldRef.current || !typeahead.shown) return;
+        event.preventDefault();
+        typeahead.close();
+        fieldRef.current?.focus();
       }}
       onBlur={(event) => {
         const next = event.relatedTarget;
@@ -160,6 +214,8 @@ export function AppShellSearch() {
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => runTypeaheadAction(typeahead.onKeyDown(event))}
+          // A click in the field asks for a panel that Escape closed.
+          onClick={typeahead.reopen}
           placeholder={SEARCH_PLACEHOLDER}
           aria-label={SEARCH_FIELD_LABEL}
           role="combobox"
@@ -200,13 +256,16 @@ export function AppShellSearch() {
           sections={typeahead.sections}
           query={typeahead.query}
           activeIndex={typeahead.activeIndex}
-          stale={typeahead.stale}
           busy={typeahead.busy}
           settlingRows={typeahead.settlingRows}
           onPick={(row) => runTypeaheadAction(typeahead.press(row))}
           onHighlight={typeahead.highlightRow}
+          onRemoveRecent={forgetRecent}
+          onClearRecents={forgetRecents}
           // Under the field, over the page: the bar is the page's top layer.
-          className="absolute inset-x-0 top-full mt-2 max-h-[min(26rem,calc(100dvh-6rem))]"
+          // Tall enough for the start panel's three lists on a laptop, and
+          // scrolled inside itself on a shorter window.
+          className="absolute inset-x-0 top-full mt-2 max-h-[min(42rem,calc(100dvh-6rem))]"
         />
       ) : null}
     </Form>

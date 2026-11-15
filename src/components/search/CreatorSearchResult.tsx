@@ -77,11 +77,13 @@ export function CreatorSearchResult({
           </span>
         )}
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold text-white">{creator.displayName}</span>
-          <span className="mt-0.5 block truncate text-xs text-zinc-400">
-            @{creator.username}
+          <span data-search-creator-name="" className="block truncate text-sm font-semibold text-white">{creator.displayName}</span>
+          {/* The handle gives way, never the count: beside Follow on a phone the line was cut
+              inside the count ("@harbour-studio · 48 p…"). */}
+          <span className="mt-0.5 flex min-w-0 text-xs text-zinc-400">
+            <span data-search-creator-handle="" className="truncate">@{creator.username}</span>
             {/* The dot is drawing: the link's name says the two apart with a comma. */}
-            {postCount ? <><span aria-hidden="true"> · </span>{postCount}</> : null}
+            {postCount ? <span data-search-creator-count="" className="shrink-0 whitespace-pre"><span aria-hidden="true"> · </span>{postCount}</span> : null}
           </span>
           {result && creator.bio ? <span className="mt-1 block truncate text-xs text-zinc-400">{creator.bio}</span> : null}
         </span>
