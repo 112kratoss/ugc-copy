@@ -837,6 +837,101 @@ describe('CreationsPage', () => {
       expect(screen.queryByRole('dialog', { name: 'Fresh portrait' })).not.toBeInTheDocument();
     });
 
+    // Review of #819: a load that ended after a later press opened its details too, and pushed a
+    // second entry, so Close brought the first details back.
+    it('open only the last pressed creation when two loads are out', async () => {
+      const first = makeGeneration({ id: 'gen-first', title: 'First portrait', created_at: '2026-06-02T10:00:00.000Z' });
+      const second = makeGeneration({ id: 'gen-second', title: 'Second portrait' });
+      const answers = new Map<string, (response: Response) => void>();
+      stubStudioFetch((url) => {
+        if (url === GENERATIONS_PAGE_URL) return Promise.resolve(jsonResponse({ generations: [first, second] }));
+        if (url === generationDetailUrl('gen-first') || url === generationDetailUrl('gen-second')) {
+          return new Promise<Response>((resolve) => answers.set(url, resolve));
+        }
+        return null;
+      });
+      window.history.replaceState(null, '', '/creations');
+      const push = vi.spyOn(window.history, 'pushState');
+      render(<CreationsPage />);
+
+      fireEvent.click(within(await screen.findByTestId('creation-card-gen-first')).getByRole('button', { name: 'Details' }));
+      fireEvent.click(within(screen.getByTestId('creation-card-gen-second')).getByRole('button', { name: 'Details' }));
+      await act(async () => {
+        answers.get(generationDetailUrl('gen-second'))?.(jsonResponse({ generations: [{ ...second, input_media: [] }] }));
+      });
+      await act(async () => {
+        answers.get(generationDetailUrl('gen-first'))?.(jsonResponse({ generations: [{ ...first, input_media: [] }] }));
+      });
+
+      expect(await screen.findByRole('dialog', { name: 'Second portrait' })).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'First portrait' })).not.toBeInTheDocument();
+      expect(push).toHaveBeenCalledTimes(1);
+      expect(window.location.search).toBe('?generation=gen-second');
+    });
+
+    // Review of #819: Forward onto the entry of a creation deleted here read it again, and the page
+    // said its details were not found.
+    it('take a deleted creation out of the address when Forward reaches its entry', async () => {
+      vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+      const creation = makeGeneration({ id: 'gen-fresh', title: 'Fresh portrait' });
+      const fetchMock = stubStudioFetch((url, init) => {
+        if (url === GENERATIONS_PAGE_URL) return Promise.resolve(jsonResponse({ generations: [creation] }));
+        if (url === generationDetailUrl('gen-fresh')) return Promise.resolve(jsonResponse({ generations: [{ ...creation, input_media: [] }] }));
+        if (url === '/api/generations/gen-fresh' && init?.method === 'DELETE') return Promise.resolve(jsonResponse({ success: true }));
+        return null;
+      });
+      window.history.replaceState(null, '', '/creations');
+      render(<><CreationsPage /><FeedbackViewport /></>);
+      fireEvent.click(within(await screen.findByTestId('creation-card-gen-fresh')).getByRole('button', { name: 'Details' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Fresh portrait' });
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete creation' }));
+      fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this creation?' })).getByRole('button', { name: 'Delete' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Fresh portrait' })).not.toBeInTheDocument());
+
+      const reads = fetchMock.mock.calls.filter(([input]) => String(input) === generationDetailUrl('gen-fresh')).length;
+      act(() => {
+        window.history.replaceState(null, '', '/creations?generation=gen-fresh');
+        window.dispatchEvent(new PopStateEvent('popstate', { state: { reelPushedFor: 'generation' } }));
+      });
+
+      expect(`${window.location.pathname}${window.location.search}`).toBe('/creations');
+      expect(screen.queryByRole('dialog', { name: 'Fresh portrait' })).not.toBeInTheDocument();
+      expect(fetchMock.mock.calls.filter(([input]) => String(input) === generationDetailUrl('gen-fresh'))).toHaveLength(reads);
+    });
+
+    // A link's creation, closed, opens again when a link names it once more: the address's read
+    // starts over once the address names none.
+    it('open a creation a link names again after its details were closed', async () => {
+      navigationState.searchParams = new URLSearchParams('generation=gen-notification');
+      window.history.replaceState(null, '', '/creations?generation=gen-notification');
+      const notificationGeneration = makeGeneration({
+        id: 'gen-notification',
+        title: 'Notification image',
+        input_media: [],
+        paywallPrefill: null,
+      });
+      stubStudioFetch((url) => {
+        if (url === GENERATIONS_PAGE_URL) return Promise.resolve(jsonResponse({ generations: [] }));
+        if (url === generationDetailUrl('gen-notification')) {
+          return Promise.resolve(jsonResponse({ generations: [notificationGeneration] }));
+        }
+        return null;
+      });
+      const view = render(<CreationsPage />);
+      fireEvent.click(within(await screen.findByRole('dialog', { name: 'Notification image' })).getByRole('button', { name: 'Close preview' }));
+      expect(screen.queryByRole('dialog', { name: 'Notification image' })).not.toBeInTheDocument();
+
+      // The router reads the address without the creation, then a link names it again.
+      navigationState.searchParams = new URLSearchParams();
+      view.rerender(<CreationsPage />);
+      navigationState.searchParams = new URLSearchParams('generation=gen-notification');
+      window.history.replaceState(null, '', '/creations?generation=gen-notification');
+      view.rerender(<CreationsPage />);
+
+      expect(await screen.findByRole('dialog', { name: 'Notification image' })).toBeInTheDocument();
+    });
+
     it('take a creation the address opened out of the address in place on Close', async () => {
       const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
       navigationState.searchParams = new URLSearchParams('generation=gen-notification');

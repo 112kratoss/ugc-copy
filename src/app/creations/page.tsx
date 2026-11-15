@@ -628,6 +628,11 @@ export default function CreationsPage() {
     // (an alert, a link), so it closes by taking the creation out of the address in place.
     const previewHistoryModeRef = useRef<ReelHistoryMode>(null);
     const mountedRef = useRef(false);
+    // The last press on a creation's details: a load that ends after a later press, or after the
+    // address moved on (Back, another view of Studio), opens nothing (review of #819).
+    const previewRequestRef = useRef(0);
+    // Creations deleted here: an entry that still names one (Forward onto it) opens nothing.
+    const deletedGenerationIdsRef = useRef(new Set<string>());
     const [highlightedGenerationId, setHighlightedGenerationId] = useState<string | null>(null);
     const scrolledToGenerationRef = useRef<string | null>(null);
     const [restoreTarget, setRestoreTarget] = useState<Generation | null>(null);
@@ -1083,7 +1088,8 @@ export default function CreationsPage() {
             return;
         }
 
-        if (requestedGenerationRef.current === requestedGenerationId) {
+        if (requestedGenerationRef.current === requestedGenerationId
+            || deletedGenerationIdsRef.current.has(requestedGenerationId)) {
             return;
         }
 
@@ -1156,10 +1162,16 @@ export default function CreationsPage() {
     }, [hasProcessingGenerations, refreshProcessingGenerationStatuses]);
 
     const openPreviewModal = async (generation: Generation) => {
+        const request = previewRequestRef.current + 1;
+        previewRequestRef.current = request;
+        const pressedAt = window.location.href;
         try {
             const detailedGeneration = await loadGenerationDetail(generation);
-            // Left meanwhile (Back pressed while the details loaded): nothing opens.
-            if (!mountedRef.current) return;
+            // Left meanwhile, pressed again, or Back pressed while the details loaded: nothing
+            // opens, and nothing is pushed over the entry the reader went to.
+            if (!mountedRef.current || previewRequestRef.current !== request || window.location.href !== pressedAt) {
+                return;
+            }
             setPreviewGen(detailedGeneration);
             // An entry of its own, as a reel opened from a tile has: Back closes the preview,
             // and Forward, a reload or Back from a page it links to opens it again.
@@ -1199,6 +1211,12 @@ export default function CreationsPage() {
             const generationId = params.get('generation');
             if (!generationId) {
                 setPreviewGen(null);
+                return;
+            }
+            // Forward onto the entry of a creation deleted here: it leaves the address.
+            if (deletedGenerationIdsRef.current.has(generationId)) {
+                setPreviewGen(null);
+                replaceReelEntry(studioPreviewAddress(null));
                 return;
             }
             // Forward onto a preview's entry: a creation the page holds opens at once; any other
@@ -1391,8 +1409,10 @@ export default function CreationsPage() {
         // reload draws first, and from an open preview, whatever the refresh
         // below brings back.
         dropGeneration(generationId);
+        deletedGenerationIdsRef.current.add(generationId);
         setPreviewGen((current) => (current?.id === generationId ? null : current));
-        if (new URLSearchParams(window.location.search).get('generation') === generationId) {
+        // Only while Studio is the page: one the reader went on to may name it too.
+        if (mountedRef.current && new URLSearchParams(window.location.search).get('generation') === generationId) {
             closePreview();
         }
         await fetchCreations();
@@ -1678,7 +1698,8 @@ export default function CreationsPage() {
                         <button
                             type="button"
                             onClick={() => {
-                                closePreview();
+                                // Without a session the restore goes to sign-in, back to these details.
+                                if (session?.access_token) closePreview();
                                 void handleGenerationRestore(generation.id);
                             }}
                             className={secondaryClass}
