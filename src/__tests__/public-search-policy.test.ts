@@ -235,12 +235,22 @@ describe('the pictures a client holds for models and tools', () => {
     const held = searchEntityPicturesWith({}, [entity('kling-2.6', picture('p1')), entity('veo-3', null), entity('sora')]);
     expect(held).toEqual({ 'model:kling-2.6': picture('p1') });
     // Nothing new: the same object, so a client that keeps it in state draws nothing again.
-    expect(searchEntityPicturesWith(held, [entity('kling-2.6', picture('p1')), entity('veo-3')])).toBe(held);
+    expect(searchEntityPicturesWith(held, [entity('kling-2.6', picture('p1')), entity('veo-3'), entity('sora', null)])).toBe(held);
     expect(searchEntityPicturesWith(held, [])).toBe(held);
     // A newer picture replaces the one held; the rest stay.
     const next = searchEntityPicturesWith(held, [entity('kling-2.6', picture('p2')), entity('veo-3', picture('p3'))]);
     expect(next).toEqual({ 'model:kling-2.6': picture('p2'), 'model:veo-3': picture('p3') });
     expect(held).toEqual({ 'model:kling-2.6': picture('p1') });
+  });
+
+  it('drops the picture of an entity that says it has none, and keeps it for one that does not say', () => {
+    const held = searchEntityPicturesWith({}, [entity('kling-2.6', picture('p1')), entity('veo-3', picture('p3'))]);
+    // "None" from a newer answer: the creator was blocked, or the post taken down, since.
+    const next = searchEntityPicturesWith(held, [entity('kling-2.6', null), entity('veo-3'), entity('sora', null)]);
+    expect(next).toEqual({ 'model:veo-3': picture('p3') });
+    expect(held).toEqual({ 'model:kling-2.6': picture('p1'), 'model:veo-3': picture('p3') });
+    // Nothing to drop: the same object.
+    expect(searchEntityPicturesWith(next, [entity('kling-2.6', null), entity('sora', null)])).toBe(next);
   });
 });
 

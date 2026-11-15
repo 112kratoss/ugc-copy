@@ -130,7 +130,7 @@ type Strength = { list: number; row: number; frames: number; gone: number };
 
 /**
  * Every animation frame from now on: the list's own opacity, its faintest
- * row's, and whether the list was on the page at all. `stop()` answers the
+ * row's (or picture's, inside a row), and whether the list was on the page at all. `stop()` answers the
  * lowest of each and the frames that had no list.
  */
 async function watchStrength(page: Page, within = 'body') {
@@ -144,7 +144,8 @@ async function watchStrength(page: Page, within = 'body') {
       if (!list) seen.gone += 1;
       else {
         seen.list = Math.min(seen.list, Number(getComputedStyle(list).opacity));
-        for (const row of list.querySelectorAll('[role="option"]')) seen.row = Math.min(seen.row, Number(getComputedStyle(row).opacity));
+        // Each row, and each picture in it: a picture that faded in on every replaced row was a dim of its own.
+        for (const part of list.querySelectorAll('[role="option"], [role="option"] img')) seen.row = Math.min(seen.row, Number(getComputedStyle(part).opacity));
       }
       requestAnimationFrame(tick);
     };
@@ -206,8 +207,9 @@ test.describe('the top bar’s search panel', () => {
     ]);
     // The search page's own headings; "this week" only where the answer says so. No creators: their rows carry Follow.
     await expect(list.getByRole('group')).toHaveCount(3);
-    await expect(list.locator('[role="group"] > [role="presentation"]:first-child, [role="group"] > div:first-child > [role="presentation"]'))
-      .toHaveText(['Recent searches', 'Popular this week', 'Try searching for']);
+    expect(await list.getByRole('group').evaluateAll(
+      (groups) => groups.map((group) => document.getElementById(group.getAttribute('aria-labelledby') ?? '')?.textContent),
+    )).toEqual(['Recent searches', 'Popular this week', 'Try searching for']);
     await expect(list.getByText('Luna Studio')).toHaveCount(0);
     await expect(box).toHaveAttribute('aria-expanded', 'true');
     await expect(box).toHaveAttribute('aria-controls', (await list.getAttribute('id')) ?? 'no id');
@@ -239,6 +241,17 @@ test.describe('the top bar’s search panel', () => {
     await box.click();
     await expect(list.getByRole('option')).toHaveCount(10);
     expect(asked.starter).toBe(1);
+
+    // The Tab key passing through the bar opens nothing (its buttons would stand between the field
+    // and the bar's next control on every page); Down opens it from there.
+    await box.blur();
+    await page.getByRole('banner').getByRole('button').first().focus();
+    await box.focus();
+    await expect(box).toBeFocused();
+    await expect(list).toHaveCount(0);
+    await expect(box).toHaveAttribute('aria-expanded', 'false');
+    await box.press('ArrowDown');
+    await expect(list.getByRole('option').first()).toHaveAttribute('aria-selected', 'true');
     // Nothing was typed: no suggestion was asked for.
     expect(asked.suggests).toEqual([]);
   });
@@ -343,7 +356,7 @@ test.describe('the top bar’s search panel', () => {
 
     // "seed", then "seeda": the rows of the text before stay at full strength until the answer lands.
     await box.press('d');
-    await page.waitForTimeout(450);
+    // Read at once, while the answer is held back most of a second: no wait a slow runner could outlast.
     await expect(list).toHaveAttribute('aria-busy', 'true');
     await expectSolid(list);
     await shot(page, 'desktop-typing-seed-waiting');
@@ -352,7 +365,6 @@ test.describe('the top bar’s search panel', () => {
     // A model the text no longer names goes at once, and the rest move up: marked for the press rule, drawn as before.
     await expect(list.getByRole('option')).toHaveText([/Seedance 2\.5/, /Seedance 2Model/, /Seedance 2 Fast/, 'seed portrait']);
     await expect(list.getByRole('option').first()).toHaveCSS('opacity', '1');
-    await page.waitForTimeout(450);
     await expectSolid(list);
     await shot(page, 'desktop-typing-seeda-waiting');
     await expect(list.getByRole('option', { name: /Seedance 2 Mini/ })).toBeVisible();
@@ -375,9 +387,10 @@ test.describe('the top bar’s search panel', () => {
     const list = panel(page);
     // No entrance and no exit: the list and its rows run no animation and no transition of their
     // own, whatever the person's motion setting (a picture's own load fade is inside a row).
-    const motion = () => list.evaluate((element) => [element, ...element.querySelectorAll('[role="option"]')].map((part) => {
+    const motion = () => list.evaluate((element) => [element, ...element.querySelectorAll('[role="option"], [role="option"] img')].map((part) => {
       const style = getComputedStyle(part);
-      return `${style.opacity} ${style.animationName} ${part.getAnimations().length}`;
+      // The list's own count takes in everything inside it (`subtree`), a row's picture included.
+      return `${style.opacity} ${style.animationName} ${part.getAnimations({ subtree: true }).length}`;
     }).filter((value, index, all) => all.indexOf(value) === index));
     for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await page.emulateMedia({ reducedMotion });
@@ -403,9 +416,24 @@ test.describe('the top bar’s search panel', () => {
       const row = (await option.boundingBox())!;
       expect(row.x + row.width).toBeLessThanOrEqual(frame.x + frame.width);
     }
-    // The last row is reached with the keys, scrolled into the panel.
+    // Taller than its room here, so it scrolls: the last row starts out of sight.
+    const inView = async (index: number) => {
+      const row = (await list.getByRole('option').nth(index).boundingBox())!;
+      const room = (await list.boundingBox())!;
+      return row.y >= room.y - 0.5 && row.y + row.height <= room.y + room.height + 0.5;
+    };
+    expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    expect(await inView(10)).toBe(false);
+    // The keys bring the row they highlight into the list's view, both ways.
     await box.press('ArrowUp');
     await expect(list.getByRole('option').last()).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(() => inView(10)).toBe(true);
+    expect(await inView(0)).toBe(false);
+    await box.press('ArrowUp');
+    await box.press('ArrowUp');
+    await box.press('Home');
+    await expect(list.getByRole('option').first()).toHaveAttribute('aria-selected', 'true');
+    await expect.poll(() => inView(0)).toBe(true);
   });
 
   test('on a phone the bar’s magnifier opens the search page, whose start screen is the page, and its typing list never dims', async ({ page }) => {

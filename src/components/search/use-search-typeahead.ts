@@ -232,6 +232,11 @@ export function useSearchTypeahead<Row extends SearchTypeaheadRow = SearchTypeah
     setCheckedFor({ focused, query });
     if (closedQuery !== null && (closedQuery !== closeKey || (!focused && closedQuery === EMPTY_BOX))) setClosedQuery(null);
     if ((!focused || query === null) && answer !== null) setAnswer(null);
+    // A highlight belongs to the text it was put on, and goes with it: typed away from and back
+    // to, the text has the highlight in the box again, so Enter searches what is typed (review of
+    // #830: a start row highlighted on the empty box was highlighted again after a letter typed
+    // and deleted, and Enter then picked it).
+    if (highlight !== null && highlight.query !== closeKey) setHighlight(null);
   }
 
   // This text's answer, or until it arrives the one before it, marked stale.
@@ -245,13 +250,14 @@ export function useSearchTypeahead<Row extends SearchTypeaheadRow = SearchTypeah
 
   // The start panel, and how long it stays over what is typed: while the text
   // has no row of its own yet and its answer is still on its way. Only a panel
-  // that was on show is kept (`startHeld`): one closed with Escape, or a list
-  // that typing on has emptied, never brings it back mid-word.
+  // that was on show is kept (`startHeld`): one closed with Escape (on the
+  // empty box, or while it stood over the first letters: review of #830), or a
+  // list that typing on has emptied, never brings it back mid-word.
   const typedHasRows = typed.sections.length > 0;
   const awaiting = asks && query !== null && answer?.query !== query;
   const startOnShow = query === null && focused && closedQuery !== EMPTY_BOX && start.length > 0;
   const [startHeld, setStartHeld] = useState(false);
-  const held = query !== null && focused && startHeld && !typedHasRows && awaiting && start.length > 0;
+  const held = query !== null && focused && startHeld && !typedHasRows && awaiting && start.length > 0 && closedQuery !== closeKey;
   if ((startOnShow || held) !== startHeld) setStartHeld(startOnShow || held);
   const startDrawn = query === null || held;
 
@@ -321,6 +327,20 @@ export function useSearchTypeahead<Row extends SearchTypeaheadRow = SearchTypeah
     return () => window.clearTimeout(timer);
   }, [rowCount, shown, stale]);
 
+  // A list taller than its room scrolls inside itself, and the highlight is only a name the box
+  // says (`aria-activedescendant`), which no browser scrolls to: a row the keys highlight is
+  // scrolled into the list's view (review of #830). Only for the keys: the pointer highlights the
+  // row it is over, which is in view already, and scrolling under it would move the rows.
+  const scrollToHighlight = useRef(false);
+  const activeOptionId = activeIndex === null ? undefined : searchTypeaheadOptionId(listId, activeIndex);
+  useLayoutEffect(() => {
+    if (!scrollToHighlight.current) return;
+    scrollToHighlight.current = false;
+    const row = activeOptionId ? document.getElementById(activeOptionId) : null;
+    // `?.()`: a browser without it (and jsdom) leaves the list where it is.
+    row?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeOptionId]);
+
   const close = useCallback(() => {
     setClosedQuery(closeKey);
     setHighlight(null);
@@ -381,6 +401,8 @@ export function useSearchTypeahead<Row extends SearchTypeaheadRow = SearchTypeah
       if (closedQuery === closeKey) setClosedQuery(null);
       const next = moveSearchTypeaheadHighlight(shown ? activeIndex : null, key, rows.length);
       setHighlight(next === null ? null : { query: closeKey, key: rows[next].key });
+      // A key moved the highlight: the row it lands on is brought into the list's view.
+      scrollToHighlight.current = true;
       return null;
     }
     if (key === 'Escape') {
@@ -426,7 +448,7 @@ export function useSearchTypeahead<Row extends SearchTypeaheadRow = SearchTypeah
      */
     answerEntities: answer?.response?.entities ?? NO_ENTITIES,
     activeIndex,
-    activeOptionId: activeIndex === null ? undefined : searchTypeaheadOptionId(listId, activeIndex),
+    activeOptionId,
     /** For a polite live region: "5 suggestions" once this text's list has stood for a pause, nothing once it is gone. */
     status,
     onKeyDown,

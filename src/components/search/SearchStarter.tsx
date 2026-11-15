@@ -87,7 +87,8 @@ export function SearchEntityCard<Entity extends SearchEntity>({
       onClick={() => onPress(entity)}
       className="ui-focus-ring flex min-h-16 w-full items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.035] p-2 pr-4 text-left transition-[background-color,border-color,scale] duration-150 ease-out hover:border-white/15 hover:bg-white/[0.065] motion-safe:active:scale-[0.985]"
     >
-      <SearchRowPicture thumbnail={entity.thumbnail ?? thumbnail} icon={entity.kind === 'model' ? Box : Wrench} className="h-12 w-12 rounded-lg" />
+      {/* The entity's own word first, a "none" included; the picture the page holds only where it says nothing. */}
+      <SearchRowPicture thumbnail={entity.thumbnail !== undefined ? entity.thumbnail : thumbnail} icon={entity.kind === 'model' ? Box : Wrench} className="h-12 w-12 rounded-lg" />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-semibold text-white">{entity.label}</span>
         <span className="mt-0.5 block truncate text-xs text-zinc-400">

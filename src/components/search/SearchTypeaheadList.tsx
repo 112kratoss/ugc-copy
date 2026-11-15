@@ -96,7 +96,7 @@ function RowBody({ row, query }: { row: SearchTypeaheadListRow; query: string | 
     return (
       <>
         {/* The name drawn whole: it need not hold what was typed ("sdxl" offers Stability AI). */}
-        <SearchRowPicture thumbnail={entity.thumbnail} icon={entity.kind === 'model' ? Box : Wrench} className="h-9 w-9 rounded-lg" />
+        <SearchRowPicture thumbnail={entity.thumbnail} icon={entity.kind === 'model' ? Box : Wrench} className="h-9 w-9 rounded-lg" fade={false} />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-semibold text-white">{entity.label}</span>
           <span className="block truncate text-xs text-zinc-400">
@@ -112,7 +112,7 @@ function RowBody({ row, query }: { row: SearchTypeaheadListRow; query: string | 
   return (
     <>
       {row.thumbnail !== undefined ? (
-        <SearchRowPicture thumbnail={row.thumbnail} icon={Search} className="h-9 w-9 rounded-full" iconClassName="h-4 w-4 text-zinc-400" />
+        <SearchRowPicture thumbnail={row.thumbnail} icon={Search} className="h-9 w-9 rounded-full" iconClassName="h-4 w-4 text-zinc-400" fade={false} />
       ) : (
         <span className={`${ICON_FRAME_CLASS} text-zinc-400`}>
           <Icon className="h-4 w-4" aria-hidden="true" />
@@ -135,6 +135,7 @@ function RowBody({ row, query }: { row: SearchTypeaheadListRow; query: string | 
  * stay on show until this text's answer replaces them in place, and neither
  * the list nor a row is made fainter meanwhile: opacity on the list let the
  * page show through it, and a row dimmed at each letter read as a flicker.
+ * A row's picture does not fade in either (SearchRowPicture's `fade`).
  * What a list still says while it changes, it says to assistive technology
  * (`busy`), and a press on a row that has only just moved is ignored as before
  * (`useSearchTypeahead`'s `press`). It has no entrance and no exit either: a

@@ -385,6 +385,15 @@ describe('a page Back restores', () => {
     await settle();
     expect(searchFetchMock).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Following Luna Studio' })).toBeTruthy();
+
+    // An answer asked afterwards is the server's own word, newer than the tab's record (review of
+    // #830): c1 was unfollowed in another tab or in the app meanwhile.
+    searchFetchMock.mockResolvedValue(ok(answer('lake', 'top', { creators: { items: [creator('c1', 'Luna Studio'), creator('c2', 'Luna Lake', true)], nextCursor: null } })));
+    fireEvent.focus(box());
+    type('lake');
+    await waitFor(() => expect(searchFetchMock).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Follow Luna Studio' }).getAttribute('aria-pressed')).toBe('false'));
+    expect(screen.getByRole('button', { name: 'Following Luna Lake' }).getAttribute('aria-pressed')).toBe('true');
   });
 
   it('reads nothing of another account’s changes', async () => {

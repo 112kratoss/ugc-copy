@@ -295,6 +295,8 @@ const starter = {
 };
 const panel = () => screen.findByRole('listbox', { name: 'Search suggestions' });
 const names = () => screen.getAllByRole('option').map((option) => option.getAttribute('aria-label'));
+/** The field reached with a pointer or a finger: what opens the panel on an empty box (the Tab key does not). */
+const reach = () => { fireEvent.pointerDown(box()); fireEvent.focus(box()); };
 const starterAsked = () => starterFetchMock.mock.calls.length;
 /** The list's own classes and its rows' that touch opacity: none (a picture's own load fade is inside a row, and is not the row). */
 const strengths = (list: HTMLElement) => [list, ...within(list).getAllByRole('option')]
@@ -331,17 +333,17 @@ describe('top bar search: the panel on an empty box', () => {
     await waitFor(() => expect(starterAsked()).toBe(1));
     expect(screen.queryByRole('listbox')).toBeNull();
 
-    fireEvent.focus(box());
+    reach();
     await panel();
     await waitFor(() => expect(names()).toHaveLength(4));
     // Leaving the field and coming back, and the field itself coming back (the bar leaves the page on Search).
     fireEvent.blur(box());
     expect(screen.queryByRole('listbox')).toBeNull();
-    fireEvent.focus(box());
+    reach();
     await panel();
     first.unmount();
     render(<AppShellSearch />);
-    fireEvent.focus(box());
+    reach();
     await panel();
     await waitFor(() => expect(names()).toHaveLength(4));
     expect(starterAsked()).toBe(1);
@@ -353,7 +355,7 @@ describe('top bar search: the panel on an empty box', () => {
     starterFetchMock.mockReturnValue(new Promise((resolve) => { land = resolve; }));
     render(<AppShellSearch />);
     expect(box().getAttribute('aria-expanded')).toBe('false');
-    fireEvent.focus(box());
+    reach();
     const list = await panel();
     // The recent searches are this browser's own: there at once, before any answer.
     await waitFor(() => expect(starterAsked()).toBe(1));
@@ -384,7 +386,7 @@ describe('top bar search: the panel on an empty box', () => {
   it('walks the rows with the arrows, picks with Enter and a press, and says how each search was entered', async () => {
     window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['neon harbor']));
     render(<AppShellSearch />);
-    fireEvent.focus(box());
+    reach();
     await panel();
     await waitFor(() => expect(names()).toHaveLength(5));
 
@@ -414,7 +416,7 @@ describe('top bar search: the panel on an empty box', () => {
 
   it('closes on Escape, opens again on Down, on a click in the field and on coming back to it', async () => {
     render(<AppShellSearch />);
-    fireEvent.focus(box());
+    reach();
     await panel();
     fireEvent.keyDown(box(), { key: 'Escape' });
     expect(screen.queryByRole('listbox')).toBeNull();
@@ -429,13 +431,14 @@ describe('top bar search: the panel on an empty box', () => {
 
     fireEvent.keyDown(box(), { key: 'Escape' });
     fireEvent.blur(box());
-    fireEvent.focus(box());
+    reach();
     await panel();
   });
 
   it('forgets one recent search, or all of them, and keeps the focus in the field', async () => {
     window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['neon harbor', 'glowing lumen', 'lumen city', 'fourth search']));
     render(<AppShellSearch />);
+    fireEvent.pointerDown(box());
     box().focus();
     const list = await panel();
     await waitFor(() => expect(names()).toHaveLength(7));
@@ -474,7 +477,7 @@ describe('top bar search: the panel on an empty box', () => {
     let land: (value: unknown) => void = () => {};
     suggestFetchMock.mockReturnValue(new Promise((resolve) => { land = resolve; }));
     render(<AppShellSearch />);
-    fireEvent.focus(box());
+    reach();
     const list = await panel();
     await waitFor(() => expect(names()).toHaveLength(4));
     const before = names();
@@ -507,10 +510,99 @@ describe('top bar search: the panel on an empty box', () => {
     expect(names()).toEqual(before);
   });
 
+  it('opens nothing for the Tab key passing through the bar, and opens on Down from there', async () => {
+    window.localStorage.setItem(HISTORY_KEY, JSON.stringify(['neon harbor']));
+    render(<AppShellSearch />);
+    // No pointer went down: the focus came from the keyboard.
+    fireEvent.focus(box());
+    await waitFor(() => expect(starterAsked()).toBe(1));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+    // The panel's buttons would stand between the field and the bar's next control on every page.
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Clear all recent searches' })).toBeNull();
+    expect(box().getAttribute('aria-expanded')).toBe('false');
+    fireEvent.keyDown(box(), { key: 'ArrowDown' });
+    expect(screen.getAllByRole('option')[0].getAttribute('aria-selected')).toBe('true');
+    // Typing still offers its list, as before.
+    fireEvent.keyDown(box(), { key: 'Escape' });
+    fireEvent.change(box(), { target: { value: 'lum' } });
+    await waitFor(() => expect(names()).toContain('Search for luminous portrait'));
+  });
+
+  it('does not bring the panel back mid-word after Escape closed it over the first letter (review of #830)', async () => {
+    suggestFetchMock.mockReturnValue(new Promise(() => {}));
+    render(<AppShellSearch />);
+    reach();
+    await panel();
+    await waitFor(() => expect(names()).toHaveLength(4));
+    // The first letter's answer is on its way: the panel is kept over it. Escape closes it.
+    fireEvent.change(box(), { target: { value: 'a' } });
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    fireEvent.keyDown(box(), { key: 'Escape' });
+    expect(screen.queryByRole('listbox')).toBeNull();
+    // The next letter, still with no answer: nothing comes back.
+    fireEvent.change(box(), { target: { value: 'ab' } });
+    expect(screen.queryByRole('listbox')).toBeNull();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); });
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('returns the highlight to the box when the text changes and comes back: Enter searches what is typed (review of #830)', async () => {
+    suggestFetchMock.mockReturnValue(new Promise(() => {}));
+    render(<AppShellSearch />);
+    reach();
+    await panel();
+    await waitFor(() => expect(names()).toHaveLength(4));
+    fireEvent.keyDown(box(), { key: 'ArrowDown' });
+    expect(screen.getAllByRole('option')[0].getAttribute('aria-selected')).toBe('true');
+    // A letter typed and deleted: the empty box again, with nothing highlighted.
+    fireEvent.change(box(), { target: { value: 'x' } });
+    fireEvent.change(box(), { target: { value: '' } });
+    expect(screen.getAllByRole('option').some((option) => option.getAttribute('aria-selected') === 'true')).toBe(false);
+    expect(box().getAttribute('aria-activedescendant')).toBeNull();
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it('scrolls a row the keys highlight into the list’s view, and never for the pointer', async () => {
+    // The highlight is a name the box says (aria-activedescendant), which no browser scrolls to: a
+    // list taller than its room would walk the highlight out of sight (review of #830).
+    const scrolled: (string | null)[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function scrollIntoView(this: Element) { scrolled.push(this.getAttribute('aria-label')); };
+    try {
+      render(<AppShellSearch />);
+      reach();
+      await panel();
+      await waitFor(() => expect(names()).toHaveLength(4));
+      fireEvent.keyDown(box(), { key: 'ArrowUp' });
+      expect(scrolled).toEqual(['Search for anime']);
+      fireEvent.keyDown(box(), { key: 'ArrowUp' });
+      expect(scrolled).toEqual(['Search for anime', 'Search for portrait']);
+      // The pointer highlights the row it is over, which is in view: scrolling there would move the rows under it.
+      fireEvent.mouseMove(screen.getAllByRole('option')[0]);
+      expect(screen.getAllByRole('option')[0].getAttribute('aria-selected')).toBe('true');
+      expect(scrolled).toHaveLength(2);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it('draws a row’s picture at full strength from its first frame: no fade inside the list', async () => {
+    render(<AppShellSearch />);
+    reach();
+    const list = await panel();
+    await waitFor(() => expect(names()).toHaveLength(4));
+    const pictures = [...list.querySelectorAll('img')];
+    expect(pictures.map((img) => img.getAttribute('src'))).toEqual(['https://cdn.example/p1.webp', 'https://cdn.example/p3.webp']);
+    // Nothing anywhere in the list touches opacity or runs a transition of it: the list, its rows and what is in them.
+    expect(list.outerHTML).not.toMatch(/opacity-|transition-opacity/);
+  });
+
   it('opens no panel where there is nothing to offer, and the field still offers its list while typing', async () => {
     starterFetchMock.mockResolvedValue({ ok: false, status: 503, json: async () => ({}) });
     render(<AppShellSearch />);
-    fireEvent.focus(box());
+    reach();
     await waitFor(() => expect(starterAsked()).toBe(1));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
     expect(screen.queryByRole('listbox')).toBeNull();

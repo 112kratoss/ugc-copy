@@ -30,7 +30,8 @@ import {
 /**
  * The top bar's search field (from 1024px; below it the bar has a link to
  * /search instead). Enter searches what is typed, on the search page, as it
- * always did. A click on it, before anything is typed, opens a panel under it
+ * always did. A click or a tap on it, before anything is typed (or the Down
+ * key, for a field the Tab key reached), opens a panel under it
  * with what the search page starts from (search-start-panel.ts: this browser's
  * recent searches, each removable, then the starter's models and tools and its
  * searches, with their pictures; owner, 2026-11-16). While the person types,
@@ -63,8 +64,16 @@ export function AppShellSearch() {
   const starter = useSearchStarter({ enabled: reachedFor, kept: true });
   const start = useMemo(() => searchStartPanelSections({ recents, starter }), [recents, starter]);
   const typeahead = useSearchTypeahead<SearchStartPanelRow>({ text, focused, recents, start });
-  const takeFocus = () => {
-    if (!focused) setRecents(readSearchHistory());
+  // Whether the focus now arriving was put there by a pointer or a finger.
+  const pointerDown = useRef(false);
+  const takeFocus = (byPointer: boolean) => {
+    if (!focused) {
+      setRecents(readSearchHistory());
+      // The Tab key passing through the bar opens nothing: the panel under an empty box would put
+      // its buttons between the field and the bar's next control on every page (review of #830),
+      // and Google's and YouTube's boxes open on a click, not on Tab. Down opens it from there.
+      if (!byPointer && text === '') typeahead.closeFor('');
+    }
     setFocused(true);
     setReachedFor(true);
   };
@@ -72,7 +81,8 @@ export function AppShellSearch() {
   // field with nobody told: taken up as the field mounts, so the panel the
   // click asked for opens.
   useEffect(() => {
-    if (document.activeElement === fieldRef.current) takeFocus();
+    // Taken as a click: that is what puts the focus in a field before its script has run.
+    if (document.activeElement === fieldRef.current) takeFocus(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, as the field mounts
   }, []);
   // A recent search forgotten, or all of them: the focus stays in (or returns to) the field, so the panel stays.
@@ -161,7 +171,12 @@ export function AppShellSearch() {
         markSearchFieldHandoff();
         markSearchEntrance('bar');
       }}
-      onFocus={takeFocus}
+      onPointerDown={() => { pointerDown.current = true; }}
+      onFocus={() => {
+        const byPointer = pointerDown.current;
+        pointerDown.current = false;
+        takeFocus(byPointer);
+      }}
       onPointerEnter={() => setReachedFor(true)}
       onKeyDown={(event) => {
         // Escape with the focus on a button of the panel (Tab reaches "Clear all" and each remove

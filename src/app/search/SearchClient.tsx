@@ -279,7 +279,6 @@ const CHIP_CLASS = 'ui-focus-ring inline-flex min-h-11 shrink-0 items-center gap
 const CHIP_OFF_CLASS = 'border-white/10 bg-white/[0.04] text-zinc-300 hover:border-white/20 hover:bg-white/[0.08] hover:text-white';
 const CHIP_ON_CLASS = 'border-white bg-white text-black';
 
-// A model or tool as a result: pressing it shows the posts made with it.
 /** An answer whose models and tools carry the pictures the page drew them with (`entityPictures`). */
 function withEntityPictures(answer: SearchAnswer, pictures: Readonly<Record<string, SearchThumbnail>>): SearchAnswer {
   // An older server's answer has no list of them at all.
@@ -287,7 +286,32 @@ function withEntityPictures(answer: SearchAnswer, pictures: Readonly<Record<stri
   if (!Array.isArray(entities) || !entities.some((entity) => !entity.thumbnail && pictures[searchEntityId(entity)])) return answer;
   return {
     ...answer,
-    result: { ...answer.result, entities: entities.map((entity) => (entity.thumbnail ? entity : { ...entity, thumbnail: pictures[searchEntityId(entity)] ?? null })) },
+    result: {
+      ...answer.result,
+      // Only where the page holds one: an entity left without says nothing, so a picture named later still shows.
+      entities: entities.map((entity) => {
+        const held = entity.thumbnail ? null : pictures[searchEntityId(entity)];
+        return held ? { ...entity, thumbnail: held } : entity;
+      }),
+    },
+  };
+}
+
+/**
+ * A kept answer with the follows and unfollows this account made in this tab since (`changes`,
+ * follow-changes.ts) written into its creators. Applied to the answer Back restores and to nothing
+ * else: an answer asked afterwards is the server's own word, and newer than the record (review of
+ * #830: read into the page's own changes, the record went on overriding every later answer).
+ */
+function withFollowChanges(answer: SearchAnswer, changes: Readonly<Record<string, boolean>>): SearchAnswer {
+  const creators = answer.result.creators;
+  if (!creators?.items.some((creator) => creator.id in changes && changes[creator.id] !== creator.isFollowing)) return answer;
+  return {
+    ...answer,
+    result: {
+      ...answer.result,
+      creators: { ...creators, items: creators.items.map((creator) => (creator.id in changes ? { ...creator, isFollowing: changes[creator.id] } : creator)) },
+    },
   };
 }
 
@@ -509,13 +533,8 @@ export default function SearchClient({
   // by id: the start screen's answer is not this page's to change, and a
   // creator can be on it and among the results at once. They belong to the
   // account that made them, so another account draws none of them.
-  // A page Back restored starts from the changes this account made in this tab since (on a row
-  // here, on a creator's page, a post page or the reel: follow-changes.ts): its kept answer was
-  // asked before them, and nothing is asked again.
   const [followChanges, setFollowChanges] = useState<{ viewerId: string | null; byId: Readonly<Record<string, boolean>> }>(
-    () => (restored?.answer.viewerId
-      ? { viewerId: restored.answer.viewerId, byId: readFollowChanges(restored.answer.viewerId) }
-      : { viewerId: null, byId: {} }),
+    { viewerId: null, byId: {} },
   );
   const followed = followChanges.viewerId === viewerId ? followChanges.byId : NO_FOLLOW_CHANGES;
   // Recent searches live in this browser alone, and are read after the first
@@ -555,7 +574,12 @@ export default function SearchClient({
   const searchFormRef = useRef<HTMLFormElement | null>(null);
   // A search committed with Enter before its answer landed: kept once it finds something.
   const rememberOnAnswer = useRef<string | null>(null);
-  const [answer, setAnswer] = useState<SearchAnswer | null>(() => restored?.answer ?? null);
+  // A page Back restored draws the answer it kept, with the follows this account made in this tab
+  // since written into it (on a row here, on a creator's page, a post page or the reel:
+  // follow-changes.ts): the answer was asked before them, and nothing is asked again.
+  const [answer, setAnswer] = useState<SearchAnswer | null>(() => (
+    restored ? withFollowChanges(restored.answer, readFollowChanges(restored.answer.viewerId)) : null
+  ));
   // Top's answers this page has had, by query and reading (topAnswerKey): what
   // an empty tab of one kind reads to say what the other tabs hold. A few, the
   // latest kept; one more request at most when none is on hand (below).
@@ -578,6 +602,14 @@ export default function SearchClient({
   // from the starter and from every suggestion answer the box receives; a model neither has named
   // keeps its glyph.
   const [entityPictures, setEntityPictures] = useState<Readonly<Record<string, SearchThumbnail>>>({});
+  // They are one viewer's: the server picks a picture this viewer may see, so another account
+  // starts over (review of #830). Not the session's first read, which names the viewer the
+  // answers on hand were already asked for.
+  const [picturesFor, setPicturesFor] = useState(viewerId);
+  if (picturesFor !== viewerId) {
+    setPicturesFor(viewerId);
+    if (picturesFor !== null) setEntityPictures({});
+  }
   const noteEntityPictures = useCallback((found: readonly SearchEntity[]) => {
     setEntityPictures((current) => searchEntityPicturesWith(current, found));
   }, []);

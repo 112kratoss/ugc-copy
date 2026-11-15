@@ -211,8 +211,8 @@ export function useSearchTypeahead({ api, text, active, viewerKey, history, runs
   }, [rows, shown]);
 
   // What the panel shows of that moment: the rows that do not take a press
-  // yet (the shared rule, searchTypeaheadUnsettledRows), drawn dimmed, and the
-  // panel busy, as it is while its rows are stale. From a change of the order
+  // yet (the shared rule, searchTypeaheadUnsettledRows), which show no press
+  // and are drawn as every other row, and the panel busy, as it is while its rows are stale. From a change of the order
   // on show that moved a row until the order has stood for the same time (a
   // little longer than the press rule asks of a row an earlier change moved).
   // A list that comes on show has nothing to settle, and neither has a change

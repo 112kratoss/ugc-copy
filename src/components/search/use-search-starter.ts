@@ -64,7 +64,8 @@ export function useSearchStarter(options: { enabled?: boolean; kept?: boolean } 
 /**
  * The starter's answer, and whether the question is settled: true once the
  * answer is in, once it is known there will be none (a refusal, a failure, an
- * answer with nothing in it), and in any case after SEARCH_STARTER_SETTLE_MS.
+ * answer with nothing in it), and in any case after SEARCH_STARTER_SETTLE_MS;
+ * false again while another account's answer is asked for.
  * The search page draws its idle invitation only then: drawn before, it stood
  * for a moment on every opening and was then pushed down by the recent
  * searches and replaced by the start screen (owner's brief, 2026-11-16:
@@ -80,7 +81,7 @@ export function useSearchStarterState({ enabled = true, kept = false }: { enable
     if (!enabled) return;
     let disposed = false;
     const settle = () => { if (!disposed) setSettled(true); };
-    const giveUp = window.setTimeout(settle, SEARCH_STARTER_SETTLE_MS);
+    let giveUp = window.setTimeout(settle, SEARCH_STARTER_SETTLE_MS);
     let stopWatching: (() => void) | null = null;
     let request: AbortController | null = null;
     // The account the answer on hand was asked for; undefined while none has been asked.
@@ -129,6 +130,11 @@ export function useSearchStarterState({ enabled = true, kept = false }: { enable
         askedFor = undefined;
         keptAnswer = null;
         setAnswer(null);
+        // A new question, to be waited for as the first was (review of #830: the invitation
+        // stood in for the moment the new account's answer took, and was then replaced).
+        setSettled(false);
+        window.clearTimeout(giveUp);
+        giveUp = window.setTimeout(settle, SEARCH_STARTER_SETTLE_MS);
         void ask(supabase);
       });
       stopWatching = () => data.subscription.unsubscribe();

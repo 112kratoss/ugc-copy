@@ -2057,9 +2057,20 @@ describe('ExploreSearchOverlay typeahead', () => {
       const drawn = (typeof style === 'function' ? style({ pressed: false }) : style) as { opacity?: number };
       expect(drawn.opacity).toBe(1);
     }
-    return rows
+    const settling = rows
       .filter((_, index) => (props.settlingRows ?? []).includes(keys[index]))
       .map((node) => node.props.accessibilityLabel as string);
+    // What a settling row shows of it: no press, since a press on it does nothing. Read from the
+    // rows' own style functions (the host's style is already the unpressed one).
+    const pressedStrength = panel
+      .findAll((node) => typeof node.props.style === 'function' && typeof node.props.accessibilityLabel === 'string')
+      .map((node) => [node.props.accessibilityLabel as string, ((node.props.style as (state: { pressed: boolean }) => { opacity?: number })({ pressed: true })).opacity]);
+    expect(new Set(pressedStrength.map(([label]) => label))).toEqual(new Set(rows.map((node) => node.props.accessibilityLabel as string)));
+    for (const [label, opacity] of pressedStrength) {
+      if (settling.includes(label as string)) expect(opacity, `${label} shows no press while it settles`).toBe(1);
+      else expect(opacity, `${label} shows a press`).toBeLessThan(1);
+    }
+    return settling;
   }
   function asked() {
     return suggestSearch.mock.calls.map(([params]) => params.query);
@@ -3701,6 +3712,41 @@ describe('ExploreSearchOverlay search screen, 2026-11-15', () => {
     ]);
     // The glyph is in both frames: under the picture, and alone where there is none.
     expect(frames.map((frame) => frame.findAll((node) => String(node.type) === 'icon').length)).toEqual([1, 1]);
+    await act(async () => tree.unmount());
+  });
+
+  it('draws a model\'s result with the picture the typing list drew it with, drops one a newer answer says is gone, and starts over with the account', async () => {
+    const thumbnail = { postId: 'p7', url: 'https://cdn.example/p7.webp', thumbhash: null, width: 720, height: 960, mediaKind: 'image' as const };
+    const suggested = (picture: typeof thumbnail | null) => ({
+      query: 'kling', normalizedQuery: 'kling', creators: [], completions: [],
+      entities: [{ kind: 'model' as const, key: 'kling-2.6', label: 'Kling 2.6', postCount: 12, postCountCapped: false, thumbnail: picture, inCatalog: false, catalogModel: null, query: null }],
+    });
+    suggestSearch.mockResolvedValue(suggested(thumbnail));
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { posts: [post('p1')] }, {
+      entities: [{ kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', postCount: 12, postCountCapped: false }],
+    }));
+    mocks.user.value = { id: 'viewer-1' };
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    const resultPictures = () => hostNodes(tree, 'view')
+      .filter((node) => node.props.testID === 'search-entity-picture')
+      .map((frame) => frame.findAll((node) => String(node.type) === 'image').map((image) => image.props.source.uri));
+
+    // Typed, its suggestions land (the typing list draws the model with its picture), then the search is made.
+    await typeOnly(tree, 'kling');
+    await advance(300);
+    await press(pressableLabelled(tree, 'Search for “kling”'));
+    await advance(300);
+    expect(resultPictures()).toEqual([['https://cdn.example/p7.webp']]);
+
+    // A newer suggestion answer says the model has no picture this viewer may see: the one held goes.
+    suggestSearch.mockResolvedValue(suggested(null));
+    await typeOnly(tree, 'klin');
+    await advance(300);
+    await typeOnly(tree, 'kling');
+    await advance(300);
+    await press(pressableLabelled(tree, 'Search for “kling”'));
+    await advance(300);
+    expect(resultPictures()).toEqual([[]]);
     await act(async () => tree.unmount());
   });
 

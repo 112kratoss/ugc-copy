@@ -400,7 +400,8 @@ function EntityRow({ entity, thumbnail, onPick }: {
     >
       {/* The frame the start screen and the typing list draw a model in: its picture where the
           screen holds one, its kind's glyph in the same frame otherwise. */}
-      <SearchRowPicture thumbnail={entity.thumbnail ?? thumbnail} size={40} Icon={entity.kind === 'model' ? Box : Wrench} testID="search-entity-picture" />
+      {/* The entity's own word first, a "none" included; the picture the screen holds only where it says nothing. */}
+      <SearchRowPicture thumbnail={entity.thumbnail !== undefined ? entity.thumbnail : thumbnail} size={40} Icon={entity.kind === 'model' ? Box : Wrench} testID="search-entity-picture" />
       <View style={{ minWidth: 0, flex: 1 }}>
         <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{entity.label}</Text>
         <Text numberOfLines={1} style={{ marginTop: 2, color: theme.colors.muted, fontSize: 13 }}>
@@ -1306,6 +1307,15 @@ export function ExploreSearchOverlay({
   // The pictures the screen holds for models and tools, from the starter and from every
   // suggestion answer: a result's row draws the one it holds (searchEntityPicturesWith).
   const [entityPictures, setEntityPictures] = useState<Readonly<Record<string, SearchThumbnail>>>({});
+  // They are one viewer's: the server picks a picture this viewer may see, so another account
+  // (a guest who signs up from a Follow and comes back) starts over, as the typing list's kept
+  // answers and the starter do (review of #830).
+  const picturesViewer = user?.id ?? null;
+  const [picturesFor, setPicturesFor] = useState(picturesViewer);
+  if (picturesFor !== picturesViewer) {
+    setPicturesFor(picturesViewer);
+    setEntityPictures({});
+  }
   const suggestedEntities = typeahead.answerEntities;
   useEffect(() => {
     setEntityPictures((current) => searchEntityPicturesWith(current, suggestedEntities));

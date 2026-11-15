@@ -146,7 +146,7 @@ test.describe('search UX pass', () => {
       await page.goto('/search', COLD_PAGE);
       const starter = page.getByRole('region', { name: 'Ideas to start a search' });
       await expect(starter.getByRole('button', { name: 'Follow Magic Booklet' })).toBeVisible(COLD_PAGE);
-      const names = '[data-search-starter] ul[aria-labelledby="search-starter-creators"] a span.font-semibold';
+      const names = '[data-search-starter] [data-search-creator-name]';
       await expect(page.locator(names)).toHaveText(['Magic Booklet', 'Sasikumar R', 'Luna Studio', 'Neon Fox']);
       expect(await cut(page, names)).toEqual([]);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
@@ -160,7 +160,7 @@ test.describe('search UX pass', () => {
     const cards = page.locator('[data-search-result="creator"]');
     await expect(cards).toHaveCount(2, COLD_PAGE);
     // The counts are drawn whole, each beside its handle on one line.
-    const counts = cards.locator('span.shrink-0.whitespace-pre');
+    const counts = cards.locator('[data-search-creator-count]');
     await expect(counts).toHaveText([' · 48 posts', ' · 1240 posts']);
     for (const count of await counts.all()) {
       const box = (await count.boundingBox())!;
@@ -169,7 +169,7 @@ test.describe('search UX pass', () => {
       expect(await count.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
     }
     // The long handle is what was shortened.
-    expect(await cut(page, '[data-search-result="creator"] span.truncate')).toContain('@sasikumar-rajendran-photography');
+    expect(await cut(page, '[data-search-result="creator"] [data-search-creator-handle]')).toContain('@sasikumar-rajendran-photography');
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
 
@@ -186,8 +186,9 @@ test.describe('search UX pass', () => {
     const models = page.getByRole('region', { name: 'Models and tools' });
     const model = models.getByRole('button', { name: /^Harbour XL, model/ });
     await expect(model.locator('img')).toHaveAttribute('src', picture(6));
-    // The start screen's card: the same frame, and the glyph in it where nothing named a picture.
-    await expect(model.locator('[data-search-picture]')).toHaveClass(/h-12 w-12 rounded-lg/);
+    // The start screen's card: the same 48px frame, and the glyph in it where nothing named a picture.
+    const frame = (await model.locator('[data-search-picture]').boundingBox())!;
+    expect([Math.round(frame.width), Math.round(frame.height)]).toEqual([48, 48]);
     await expect(models.getByRole('button', { name: /^Harbourcraft, tool/ }).locator('[data-search-picture="placeholder"] svg')).toHaveCount(1);
 
     // Away to a creator and Back: the page is drawn as it was left, picture included.
