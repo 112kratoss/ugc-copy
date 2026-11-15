@@ -142,3 +142,29 @@ export function withoutShownSearchPosts<Post extends { id: string }>(
   }
   return fresh;
 }
+
+/** The posts on show with a later page added: what the page holds that is not on show yet, after them. */
+export function appendSearchPosts<Post extends { id: string }>(
+  shown: readonly Post[],
+  page: readonly Post[],
+): Post[] {
+  return [...shown, ...withoutShownSearchPosts(shown, page)];
+}
+
+/**
+ * Whether a later page is made of nothing but posts already on show while
+ * the list goes on (its cursor is not null). Appending it would look like a
+ * press that did nothing, so a client asks for the page after it, once, in
+ * the same press: `nextCursor` of the page of repeats. Once, never until
+ * something new comes: if that page is repeats too the client stops, keeps
+ * its cursor, and the next press asks again. A page of repeats with no
+ * cursor is the end of the list, and an empty page is not a page of repeats.
+ */
+export function isSearchPageAllRepeats<Post extends { id: string }>(
+  shown: readonly Post[],
+  page: { items: readonly Post[]; nextCursor: string | null },
+): boolean {
+  return page.nextCursor !== null
+    && page.items.length > 0
+    && withoutShownSearchPosts(shown, page.items).length === 0;
+}

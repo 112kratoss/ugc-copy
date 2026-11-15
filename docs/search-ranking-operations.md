@@ -51,8 +51,12 @@ parameter the answer is what it was before the blend, field for field.
 (`withoutShownSearchPosts` in `search-blend.ts`; the contract states it under
 `searchPublicContent.laterPages`). The server never skips a post where it can avoid it, and where it
 must choose it repeats one: a repeat is removed by the client, a skipped post is seen by nobody. An
-empty page after the removal is not the end of the list; `nextCursor` being null is. "Pages" below
-says where repeats come from.
+empty page after the removal is not the end of the list; `nextCursor` being null is. Both clients do
+this for every Posts list, blended or not (`appendSearchPosts` in `src/app/search/SearchClient.tsx`
+and `ugc-mobile/components/explore-search-overlay.tsx`), and when a page is made of nothing but
+posts already on show and has a cursor (`isSearchPageAllRepeats`) they ask for the page after it in
+the same press, once: if that one is repeats too they keep its cursor and wait for the next press,
+so a press never looks empty and never loops. "Pages" below says where repeats come from.
 
 **Related posts beside it.** A blended answer already holds, in its own order, every post the
 "Related posts" group would bring, so with both `blend=1` and `related=1` a blended answer looks for
