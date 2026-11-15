@@ -68,7 +68,16 @@ const ok = (body: PublicSearchResponse) => ({ ok: true, status: 200, json: async
 // Every request of a search carries how its query was entered (`entry`, the
 // last parameter the page sets); these cases are about paging, so it is left
 // out of what they compare, as the page's other tests do.
-const asked = () => fetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, ''));
+// `relatedSearches=1` belongs to the first page of Top and Posts alone (searchRelatedSearchesApply):
+// left out of what these cases compare there, and kept anywhere else, where it must never be sent.
+function asSent(url: string): string {
+  const withoutEntry = url.replace(/&entry=[a-z]+$/u, '');
+  const params = new URL(withoutEntry, 'http://localhost').searchParams;
+  const firstTopOrPosts = !params.has('cursor') && !params.has('probe') && ['top', 'posts'].includes(params.get('type') ?? '');
+  return firstTopOrPosts ? withoutEntry.replace(/&relatedSearches=1(?=&|$)/u, '') : withoutEntry;
+}
+
+const asked = () => fetchMock.mock.calls.map(([url]) => asSent(url as string));
 const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 /** The posts on show, by the id their link opens, in the order drawn. */
 const drawn = () => Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href^="/showcase/"]'))
@@ -76,7 +85,9 @@ const drawn = () => Array.from(document.querySelectorAll<HTMLAnchorElement>('a[h
 const showMore = () => screen.queryByRole('button', { name: SEARCH_SHOW_MORE_LABEL });
 const PAGE = '/api/search?q=ocean+at+dusk&type=posts';
 // A search the person settled on asks for related posts with its first page; a later page never does.
-const FIRST = `${PAGE}&related=1`;
+// Settled and of three words, it is asked for in the blended order, and so is every later page of it
+// (search-blend.ts): a cursor pages the order it was issued for.
+const FIRST = `${PAGE}&related=1&blend=1`;
 
 async function openFirstPage(first: PublicSearchResponse) {
   fetchMock.mockResolvedValueOnce(ok(first));
@@ -116,7 +127,7 @@ describe('a later page of posts on the search page', () => {
     fireEvent.click(showMore()!);
     await tick(50);
 
-    expect(asked()).toEqual([FIRST, `${PAGE}&cursor=cursor-2`]);
+    expect(asked()).toEqual([FIRST, `${PAGE}&cursor=cursor-2&blend=1`]);
     expect(drawn()).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
     expect(showMore()).toBeNull();
   });
@@ -131,7 +142,7 @@ describe('a later page of posts on the search page', () => {
     await tick(50);
 
     // One press: the page of repeats, then the page after it. Not an empty-looking press.
-    expect(asked()).toEqual([FIRST, `${PAGE}&cursor=cursor-2`, `${PAGE}&cursor=cursor-3`]);
+    expect(asked()).toEqual([FIRST, `${PAGE}&cursor=cursor-2&blend=1`, `${PAGE}&cursor=cursor-3&blend=1`]);
     expect(drawn()).toEqual(['p1', 'p2', 'p3', 'p4']);
     expect(showMore()).toBeNull();
   });
@@ -147,14 +158,14 @@ describe('a later page of posts on the search page', () => {
     await tick(500);
 
     // Two requests for the press, and no more: no loop.
-    expect(asked()).toEqual([FIRST, `${PAGE}&cursor=cursor-2`, `${PAGE}&cursor=cursor-3`]);
+    expect(asked()).toEqual([FIRST, `${PAGE}&cursor=cursor-2&blend=1`, `${PAGE}&cursor=cursor-3&blend=1`]);
     expect(drawn()).toEqual(['p1', 'p2', 'p3']);
     // The list has not ended: its cursor is not null.
     expect(showMore()).not.toBeNull();
 
     fireEvent.click(showMore()!);
     await tick(50);
-    expect(asked().at(-1)).toBe(`${PAGE}&cursor=cursor-4`);
+    expect(asked().at(-1)).toBe(`${PAGE}&cursor=cursor-4&blend=1`);
     expect(drawn()).toEqual(['p1', 'p2', 'p3', 'p9']);
     expect(showMore()).toBeNull();
   });

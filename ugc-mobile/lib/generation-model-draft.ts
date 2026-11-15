@@ -1735,6 +1735,17 @@ function restoredRemixMediaCount(draft: CreationDraft): number {
   return (draft.characterImage ? 1 : 0) + (draft.referenceVideo ? 1 : 0);
 }
 
+/**
+ * What a creator says of a model it was asked to open on and does not give
+ * (a remix's, a link's from search), and of the one it opened on in its place:
+ * "kling-2.6 is no longer available. Switched to Seedance 2 Mini." The model is
+ * named by its catalog name where the catalog still has it, by its id where it
+ * does not.
+ */
+export function modelNoLongerAvailableNotice(requested: string, opened: { displayName: string }): string {
+  return `${requested} is no longer available. Switched to ${opened.displayName}.`;
+}
+
 export function hydrateCatalogCreationDraftFromRemixSource(
   baseDraft: CreationDraft,
   bundle: RemixSourceBundle,
@@ -1792,9 +1803,7 @@ export function hydrateCatalogCreationDraftFromRemixSource(
   const droppedByCatalog = restoredRemixMediaCount(restored.draft) - restoredRemixMediaCount(draft);
   const restoreWarning = restored.warning ?? (droppedByCatalog > 0 ? REMIX_RESTORE_WARNING_MESSAGE : null);
   const switchedModel = model.id !== requestedModelId;
-  const retirementWarning = switchedModel
-    ? `${requestedModelId} is no longer available. Switched to ${model.displayName}.`
-    : null;
+  const retirementWarning = switchedModel ? modelNoLongerAvailableNotice(requestedModelId, model) : null;
   return {
     draft,
     model,

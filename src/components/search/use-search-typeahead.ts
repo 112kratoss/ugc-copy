@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 
 import {
   SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS,
+  SEARCH_TYPEAHEAD_CATALOG_PARAM,
   SEARCH_TYPEAHEAD_DEBOUNCE_MS,
   SEARCH_TYPEAHEAD_KEPT_ANSWERS,
   SEARCH_TYPEAHEAD_KEPT_ANSWER_MS,
@@ -58,6 +59,7 @@ const NO_ROWS: readonly string[] = [];
 
 // No recent search: one array, so a box without a list keeps its memo.
 const NO_RECENTS: readonly string[] = [];
+
 
 export function useSearchTypeahead({ text, focused, closedFor = null, recents = NO_RECENTS, offer = SEARCH_TYPEAHEAD_OFFER_ALL }: {
   /** What the box holds. */
@@ -156,7 +158,9 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
         }
         const { data: { session } } = await supabase.auth.getSession();
         if (controller.signal.aborted) return;
-        const reply = await fetch(`/api/search/suggest?q=${encodeURIComponent(query)}`, {
+        // Asked for every name the product keeps (`catalog=1`): this box opens the creator for a
+        // catalog model nobody has posted with, and searches the query a row carries.
+        const reply = await fetch(`/api/search/suggest?q=${encodeURIComponent(query)}&${SEARCH_TYPEAHEAD_CATALOG_PARAM}=1`, {
           headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
           signal: controller.signal,
         });
@@ -207,8 +211,10 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
 
   // This text's answer, or until it arrives the one before it, marked stale.
   const { sections, stale } = useMemo(
-    // A text not asked about draws no answer, not even the one before it.
-    () => searchTypeaheadDrawn(asks ? answer : null, query, { recents, offer }),
+    // A text not asked about draws no answer, not even the one before it. Asked with the catalog,
+    // models and tools are drawn from two characters; drawn on the web, a row the web has nothing to
+    // open for is left out, and a name drawn as a model's or tool's row is not suggested again.
+    () => searchTypeaheadDrawn(asks ? answer : null, query, { recents, offer, catalog: true, platform: 'web' }),
     [answer, asks, offer, query, recents],
   );
   const rows = useMemo(() => searchTypeaheadRows(sections), [sections]);
@@ -276,6 +282,17 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
     setClosedQuery(query);
     setHighlight(null);
   }, [query]);
+
+  /**
+   * The list closed for a text the box is about to hold that no row of it said: the page puts a
+   * model's or tool's own search in the box when that row is chosen (review of #828, S1). A close is
+   * kept only for the text it was made on, so one made on the typed text would open the list again
+   * over the search.
+   */
+  const closeFor = useCallback((text: string) => {
+    setClosedQuery(searchTypeaheadQuery(text));
+    setHighlight(null);
+  }, []);
 
   /** A row was chosen: what to do, with the list closed for the text the box will then hold. */
   const pick = useCallback((row: SearchTypeaheadRow): SearchTypeaheadAction => {
@@ -363,6 +380,7 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
     press,
     highlightRow,
     close,
+    closeFor,
   };
 }
 

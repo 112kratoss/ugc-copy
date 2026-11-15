@@ -86,7 +86,16 @@ function answer(query: string, type: string, overrides: Partial<PublicSearchResp
 const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
 // Without `entry` (how the query was entered, said to the search log: always the last
 // parameter; search-client.test.tsx, "the search log", pins it).
-const searches = () => searchFetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, ''));
+// `relatedSearches=1` belongs to the first page of Top and Posts alone (searchRelatedSearchesApply):
+// left out of what these cases compare there, and kept anywhere else, where it must never be sent.
+function asSent(url: string): string {
+  const withoutEntry = url.replace(/&entry=[a-z]+$/u, '');
+  const params = new URL(withoutEntry, 'http://localhost').searchParams;
+  const firstTopOrPosts = !params.has('cursor') && !params.has('probe') && ['top', 'posts'].includes(params.get('type') ?? '');
+  return firstTopOrPosts ? withoutEntry.replace(/&relatedSearches=1(?=&|$)/u, '') : withoutEntry;
+}
+
+const searches = () => searchFetchMock.mock.calls.map(([url]) => asSent(url as string));
 const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 /** How long a wait in a test that renders the page several times over may take on a loaded runner. */
 const SLOW_RUNNER_MS = 10_000;
@@ -212,7 +221,7 @@ describe('search starter', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Nano Banana Pro, model/ }));
     await waitFor(() => expect(searches()).toContain('/api/search?q=nano+banana+pro&type=posts&madeWith=model%3Anano-banana-pro'));
     // Said to the search log: the search came from a model's row, and the next from a start-screen row.
-    expect(searchFetchMock.mock.calls.map(([url]) => url)).toContain('/api/search?q=nano+banana+pro&type=posts&madeWith=model%3Anano-banana-pro&entry=entity');
+    expect(searchFetchMock.mock.calls.map(([url]) => url)).toContain('/api/search?q=nano+banana+pro&type=posts&madeWith=model%3Anano-banana-pro&relatedSearches=1&entry=entity');
     expect(screen.getByRole('combobox')).toHaveValue('nano banana pro');
     expect(screen.getByRole('tab', { name: 'Posts' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('button', { name: 'Remove filter: made with Nano Banana Pro' })).toBeTruthy();
@@ -223,7 +232,7 @@ describe('search starter', () => {
     expect(screen.getByRole('combobox')).toHaveValue('portrait');
     // Committed as Enter commits: with related posts, no pause for typing.
     await waitFor(() => expect(searches()).toContain('/api/search?q=portrait&type=top&related=1'));
-    expect(searchFetchMock.mock.calls.map(([url]) => url)).toContain('/api/search?q=portrait&type=top&related=1&entry=starter');
+    expect(searchFetchMock.mock.calls.map(([url]) => url)).toContain('/api/search?q=portrait&type=top&related=1&relatedSearches=1&entry=starter');
   });
 
   it('draws the starter for half a word that found no creator', async () => {

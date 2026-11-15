@@ -17,11 +17,13 @@ import { searchScreenParams } from '@/lib/search-screen-route';
  * post or a profile opened from it comes back to it. Each
  * opening starts on an empty field, the recent searches and the ideas to start
  * from; `q` and `type` (a search link's) open it on that search, which is not
- * the person's commit and is not kept among their recent searches by itself.
+ * the person's commit and is not kept among their recent searches by itself,
+ * with the order, filters and exact reading the address names as the web's
+ * does (`searchScreenHref`: where a visitor's Follow comes back to).
  */
 export default function SearchRoute() {
   const { api } = useAuth();
-  const params = searchScreenParams(useLocalSearchParams<{ q?: string | string[]; type?: string | string[] }>());
+  const params = searchScreenParams(useLocalSearchParams<Record<string, string | string[]>>());
   const window = useWindowDimensions();
   // The control this opening was pressed from, taken once: none for a link.
   const [origin] = useState(() => usableSearchEntranceOrigin(searchScreenOpener.takeOrigin(), window));
@@ -48,6 +50,9 @@ export default function SearchRoute() {
       visible
       initialQuery={params.query}
       initialType={params.type}
+      initialSort={params.sort}
+      initialFilters={params.filters}
+      initialExact={params.exact}
       entranceFrom={origin}
       onClose={() => {
         if (closing.current || navigation.isFocused?.() === false) return;

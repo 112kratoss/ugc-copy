@@ -214,6 +214,14 @@ export const SEARCH_TYPEAHEAD_CATALOG_PARAM = 'catalog';
 /** Entities are offered from the length Posts are searched from: pressing one opens Posts. */
 const SEARCH_TYPEAHEAD_MIN_ENTITY_QUERY_LENGTH = 3;
 
+/**
+ * Entities are drawn from this length for an answer asked with the catalog
+ * (`catalog=1`, SearchTypeaheadOptions.catalog): the server offers the names
+ * it knows from two characters, each row with the `query` that opens it
+ * (2026-11-15).
+ */
+export const SEARCH_TYPEAHEAD_MIN_CATALOG_ENTITY_QUERY_LENGTH = 2;
+
 // C0 and C1 controls and DEL: nothing a person types, and a U+0000 is refused by the database.
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
 
@@ -315,6 +323,23 @@ export interface SearchTypeaheadOptions {
   /** This device's recent searches, most recent first, as the client keeps them. */
   recents?: readonly string[];
   offer?: SearchTypeaheadOffer;
+  /**
+   * The answer was asked with `catalog=1` (SEARCH_TYPEAHEAD_CATALOG_PARAM):
+   * models and tools are drawn from two characters
+   * (SEARCH_TYPEAHEAD_MIN_CATALOG_ENTITY_QUERY_LENGTH), as the server offers
+   * them, instead of three.
+   */
+  catalog?: boolean;
+  /**
+   * The client the list is drawn on (2026-11-15). A model's or tool's row
+   * with nothing to open there is left out (isSearchTypeaheadEntityOffered),
+   * and a completion that is the name, or the search, of a model's or tool's
+   * row drawn in the list is not offered again: the server leaves both in, for
+   * a box that draws no models and tools ("nano banana pro" as a model and as
+   * a completion). A recent search is the person's own and stays. A caller
+   * that names no client is drawn as before.
+   */
+  platform?: SearchTypeaheadPlatform;
 }
 
 /** A query folded as rows are compared: lower case, as typed (a leading "@" kept, as searchTypeaheadQuery keeps it). */
@@ -359,21 +384,33 @@ function wordStartOf(folded: string, typed: string): number {
  * cap; a section with no row is left out. `query` is what the box asks about
  * now (searchTypeaheadQuery). The recent searches the text matches come first
  * and need no answer; a completion one of them already offers is not offered
- * twice. Entities are drawn only from three characters and never for a query
- * typed as a handle, whatever an answer carries; a completion that is what the
- * box already holds is not offered back. `offer` leaves out creators, or
- * models and tools, where the box does not offer them (SearchTypeaheadOffer).
+ * twice. Entities are drawn only from three characters (two for an answer
+ * asked with the catalog) and never for a query typed as a handle, whatever an
+ * answer carries; a completion that is what the box already holds is not
+ * offered back. `offer` leaves out creators, or models and tools, where the
+ * box does not offer them (SearchTypeaheadOffer); `platform` leaves out a
+ * model or tool with nothing to open there, and a completion that repeats one
+ * drawn (SearchTypeaheadOptions).
  */
 export function searchTypeaheadSections(
   answer: SearchSuggestResponse | null,
   query: string | null,
-  { recents = [], offer = SEARCH_TYPEAHEAD_OFFER_ALL }: SearchTypeaheadOptions = {},
+  { recents = [], offer = SEARCH_TYPEAHEAD_OFFER_ALL, catalog = false, platform }: SearchTypeaheadOptions = {},
 ): SearchTypeaheadSection[] {
   if (query === null) return [];
   const asHandle = query.startsWith('@');
   const read = normalizeCreatorSearchQuery(query).trim();
   const typed = read.toLowerCase();
-  const entitiesOffered = offer.entities && !asHandle && searchQueryLength(read) >= SEARCH_TYPEAHEAD_MIN_ENTITY_QUERY_LENGTH;
+  const minEntityLength = catalog ? SEARCH_TYPEAHEAD_MIN_CATALOG_ENTITY_QUERY_LENGTH : SEARCH_TYPEAHEAD_MIN_ENTITY_QUERY_LENGTH;
+  const entitiesOffered = offer.entities && !asHandle && searchQueryLength(read) >= minEntityLength;
+  const entities = (entitiesOffered && answer ? answer.entities : [])
+    .filter((entity) => !platform || isSearchTypeaheadEntityOffered(entity, platform))
+    .slice(0, SEARCH_TYPEAHEAD_MAX_ENTITIES);
+  // The names the model and tool rows say, and the searches they run: a
+  // completion that is one of them is not offered again.
+  const entityNames = new Set<string>(platform
+    ? entities.flatMap((entity) => [foldedQuery(entity.label), ...(entity.query ? [foldedQuery(entity.query)] : [])])
+    : []);
 
   const recentRows: SearchTypeaheadRow[] = searchTypeaheadMatchingRecents(recents, query)
     .map((text) => ({ kind: 'completion' as const, key: `recent:${text.toLowerCase()}`, text, recent: true as const }));
@@ -383,7 +420,7 @@ export function searchTypeaheadSections(
   for (const completion of asHandle || !answer ? [] : answer.completions) {
     const text = normalizeSearchHistoryQuery(completion.text);
     const folded = text.toLowerCase();
-    if (!text || seenCompletions.has(folded)) continue;
+    if (!text || seenCompletions.has(folded) || entityNames.has(folded)) continue;
     seenCompletions.add(folded);
     completions.push({ kind: 'completion', key: `completion:${folded}`, text });
     if (completions.length === SEARCH_TYPEAHEAD_MAX_COMPLETIONS) break;
@@ -400,8 +437,7 @@ export function searchTypeaheadSections(
     {
       id: 'entities',
       heading: SEARCH_TYPEAHEAD_HEADINGS.entities,
-      rows: (entitiesOffered && answer ? answer.entities : []).slice(0, SEARCH_TYPEAHEAD_MAX_ENTITIES)
-        .map((entity) => ({ kind: 'entity' as const, key: `entity:${searchEntityId(entity)}`, entity })),
+      rows: entities.map((entity) => ({ kind: 'entity' as const, key: `entity:${searchEntityId(entity)}`, entity })),
     },
     { id: 'completions', heading: SEARCH_TYPEAHEAD_HEADINGS.completions, rows: completions },
   ];

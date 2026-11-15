@@ -130,6 +130,21 @@ describe('create tool route', () => {
     expect(mediaCreationState.props).toMatchObject({ initialTool: 'video' });
   });
 
+  // Search's row for a catalog model nobody has posted with (2026-11-15).
+  it('opens the creator on the model its link names, and never a remix on one', () => {
+    routeState.params = creatorRoute(`/create/video?model=${encodeURIComponent('seedance-2')}`);
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+    expect(mediaCreationState.props).toMatchObject({ initialTool: 'video', initialModel: 'seedance-2' });
+
+    routeState.params = creatorRoute('/create/video?model=seedance-2&remix=gen-1');
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+    expect(mediaCreationState.props).toMatchObject({ initialTool: 'video', initialModel: null });
+  });
+
   it('asks nothing on the screen that only says the mode is unavailable', () => {
     routeState.params = { tool: 'audio' };
 

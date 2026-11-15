@@ -187,7 +187,7 @@ test.describe('search typeahead', () => {
     expect(await list.locator('[data-typeahead-row]').evaluateAll((rows) => rows.map((row) => row.getAttribute('data-typeahead-row'))))
       .toEqual(['recent', 'recent', 'completion', 'completion']);
     // What was typed is drawn plain and what the row adds heavier; the row's name is whole.
-    const weights = await list.getByRole('option', { name: 'Search for luminous portrait' }).locator('span.truncate > span')
+    const weights = await list.getByRole('option', { name: 'Search for luminous portrait' }).locator('span.line-clamp-2 > span')
       .evaluateAll((runs) => runs.map((run) => [run.textContent, getComputedStyle(run).fontWeight]));
     expect(weights).toEqual([['lum', '400'], ['inous portrait', '600']]);
     await shot(page, 'desktop-recents-and-completions');

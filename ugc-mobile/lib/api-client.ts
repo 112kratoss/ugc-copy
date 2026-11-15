@@ -90,7 +90,16 @@ import type {
   UndoFeedFeedbackRequest,
   UndoFeedFeedbackResponse,
 } from './types';
-import { NO_SEARCH_FILTERS, SEARCH_PROBE_PARAM, SEARCH_RELATED_PARAM, searchFilterParams, type SearchFilters } from './public-search-policy/public-search-policy';
+import {
+  NO_SEARCH_FILTERS,
+  SEARCH_PROBE_PARAM,
+  SEARCH_RELATED_PARAM,
+  SEARCH_RELATED_SEARCHES_PARAM,
+  searchFilterParams,
+  type SearchFilters,
+} from './public-search-policy/public-search-policy';
+import { searchBlendParams } from './public-search-policy/search-blend';
+import { SEARCH_TYPEAHEAD_CATALOG_PARAM } from './public-search-policy/search-typeahead';
 import { SEARCH_OPENED_PATH, searchEntryParams, type SearchEntry, type SearchOpenBody } from './public-search-policy/search-open-log';
 import {
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
@@ -1419,6 +1428,16 @@ export function createApiClient({
        */
       probe?: boolean;
       /**
+       * Ask for searches near this one too (`relatedSearches=1`): only with
+       * the first page of a Top or Posts search (searchRelatedSearchesApply).
+       */
+      relatedSearches?: boolean;
+      /**
+       * Ask for the blended Posts order (`blend=1`): with every page of a
+       * search it applies to (searchBlendApplies), the first page's included.
+       */
+      blend?: boolean;
+      /**
        * How the query was entered (typed, a suggestion, a recent search...),
        * for the search log alone: named only when the screen knows it
        * (search-open-log.ts).
@@ -1431,6 +1450,8 @@ export function createApiClient({
       ...searchFilterParams(params.filters ?? NO_SEARCH_FILTERS, params.exact ?? false),
       [SEARCH_RELATED_PARAM]: params.related ? '1' : undefined,
       [SEARCH_PROBE_PARAM]: params.probe ? '1' : undefined,
+      ...searchBlendParams(params.blend === true),
+      [SEARCH_RELATED_SEARCHES_PARAM]: params.relatedSearches ? '1' : undefined,
       ...searchEntryParams(params.entry),
       cursor: params.cursor,
       limit: params.limit,
@@ -1438,10 +1459,16 @@ export function createApiClient({
     /**
      * What the search box offers while a person types: creators, models and
      * tools, and completions. Read with parseSearchSuggestResponse; a failure
-     * is drawn as nothing.
+     * is drawn as nothing. `catalog` asks for every name the product knows
+     * (`catalog=1`): a catalog model nobody has posted with among them, from
+     * two characters, each row with the search that opens it
+     * (SEARCH_TYPEAHEAD_CATALOG_PARAM).
      */
-    suggestSearch: (params: { query: string }, signal?: AbortSignal) =>
-      request<SearchSuggestResponse>('/api/search/suggest' + buildQuery({ q: params.query }), { signal }, { auth: true }),
+    suggestSearch: (params: { query: string; catalog?: boolean }, signal?: AbortSignal) =>
+      request<SearchSuggestResponse>('/api/search/suggest' + buildQuery({
+        q: params.query,
+        [SEARCH_TYPEAHEAD_CATALOG_PARAM]: params.catalog ? '1' : undefined,
+      }), { signal }, { auth: true }),
     /**
      * What a search screen shows before anything is typed, and on a search
      * that finds nothing: popular models and tools, creators to follow and
