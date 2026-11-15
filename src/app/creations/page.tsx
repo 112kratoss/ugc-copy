@@ -47,6 +47,13 @@ import { isAudioModel, isImageModel, isMotionModel } from '@/lib/client-generati
 import { pushToast, requestConfirmation } from '@/components/feedback-state';
 import { HOME_WORKSPACE_ACTIVE_STATUSES } from '@/lib/home-dashboard';
 import { reportGeneration } from '@/lib/moderation-client';
+import {
+    pushReelEntry,
+    readCurrentReelHistoryMode,
+    readReelHistoryMode,
+    replaceReelEntry,
+    type ReelHistoryMode,
+} from '@/lib/reel-history-entry';
 import { buildCreatorNameStepPath } from '@/lib/auth-onboarding';
 import { getCreatorProfileReadiness, type ProfileApiResponse } from '@/lib/profile';
 import { resolveRemixTool } from '@/lib/remix-tools';
@@ -438,6 +445,15 @@ function hasFullGenerationDetails(generation: Generation): boolean {
     return generation.input_media !== undefined || generation.paywallPrefill !== undefined;
 }
 
+/** Studio's address with a creation open in its preview, or with none; the rest of it kept. */
+function studioPreviewAddress(generationId: string | null): string {
+    const params = new URLSearchParams(window.location.search);
+    if (generationId) params.set('generation', generationId);
+    else params.delete('generation');
+    const query = params.toString();
+    return `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`;
+}
+
 function getNextGenerationCursor(payload: GenerationsApiResponse): string | null {
     const nextCursor = payload.pagination?.nextCursor;
     return typeof nextCursor === 'string' && nextCursor.length > 0 ? nextCursor : null;
@@ -606,6 +622,17 @@ export default function CreationsPage() {
     const generationStatusRefreshInFlightRef = useRef(false);
     const [previewGen, setPreviewGen] = useState<Generation | null>(null);
     const requestedGenerationRef = useRef<string | null>(null);
+    // The preview is an entry of the browser's history, as a reel is (owner, 2026-11-15: Back
+    // with it open left Studio). How its entry came (reel-history-entry.ts): pushed by a press
+    // on a creation, so it closes by going Back to Studio's own entry; or named by the address
+    // (an alert, a link), so it closes by taking the creation out of the address in place.
+    const previewHistoryModeRef = useRef<ReelHistoryMode>(null);
+    const mountedRef = useRef(false);
+    // The last press on a creation's details: a load that ends after a later press, or after the
+    // address moved on (Back, another view of Studio), opens nothing (review of #819).
+    const previewRequestRef = useRef(0);
+    // Creations deleted here: an entry that still names one (Forward onto it) opens nothing.
+    const deletedGenerationIdsRef = useRef(new Set<string>());
     const [highlightedGenerationId, setHighlightedGenerationId] = useState<string | null>(null);
     const scrolledToGenerationRef = useRef<string | null>(null);
     const [restoreTarget, setRestoreTarget] = useState<Generation | null>(null);
@@ -1049,11 +1076,20 @@ export default function CreationsPage() {
     );
 
     useEffect(() => {
-        if (!requestedGenerationId || !accessToken || !userId) {
+        if (!requestedGenerationId) {
+            // No creation in the address (none asked for, or the preview closed): the next one
+            // the address names opens. Kept until then, so a close is not undone while the
+            // router's reading of the address is a render behind it.
+            requestedGenerationRef.current = null;
             return;
         }
 
-        if (requestedGenerationRef.current === requestedGenerationId) {
+        if (!accessToken || !userId) {
+            return;
+        }
+
+        if (requestedGenerationRef.current === requestedGenerationId
+            || deletedGenerationIdsRef.current.has(requestedGenerationId)) {
             return;
         }
 
@@ -1126,13 +1162,77 @@ export default function CreationsPage() {
     }, [hasProcessingGenerations, refreshProcessingGenerationStatuses]);
 
     const openPreviewModal = async (generation: Generation) => {
+        const request = previewRequestRef.current + 1;
+        previewRequestRef.current = request;
+        const pressedAt = window.location.href;
         try {
             const detailedGeneration = await loadGenerationDetail(generation);
+            // Left meanwhile, pressed again, or Back pressed while the details loaded: nothing
+            // opens, and nothing is pushed over the entry the reader went to.
+            if (!mountedRef.current || previewRequestRef.current !== request || window.location.href !== pressedAt) {
+                return;
+            }
             setPreviewGen(detailedGeneration);
+            // An entry of its own, as a reel opened from a tile has: Back closes the preview,
+            // and Forward, a reload or Back from a page it links to opens it again.
+            if (new URLSearchParams(window.location.search).get('generation') !== detailedGeneration.id) {
+                requestedGenerationRef.current = detailedGeneration.id;
+                previewHistoryModeRef.current = 'pushed';
+                pushReelEntry('generation', studioPreviewAddress(detailedGeneration.id));
+            }
         } catch {
             // Error state is stored in generationDetailError for the page-level notice.
         }
     };
+
+    // Close, Escape, a press outside it, Restore, a delete: Back to Studio's own entry when the
+    // press that opened the preview pushed one, else the creation leaves the address in place.
+    const closePreview = useCallback(() => {
+        setPreviewGen(null);
+        const mode = previewHistoryModeRef.current;
+        previewHistoryModeRef.current = null;
+        if (!new URLSearchParams(window.location.search).get('generation')) return;
+        if (mode === 'pushed') {
+            window.history.back();
+            return;
+        }
+        replaceReelEntry(studioPreviewAddress(null));
+    }, []);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        // The entry Studio mounts on says how its preview was opened: one a press pushed (a
+        // reload, or Back from a page the preview linked to, came back to it) closes by going
+        // Back to the entry under it.
+        previewHistoryModeRef.current = readCurrentReelHistoryMode('generation');
+        const handlePopState = (event: PopStateEvent) => {
+            const params = new URLSearchParams(window.location.search);
+            previewHistoryModeRef.current = readReelHistoryMode('generation', params, event.state);
+            const generationId = params.get('generation');
+            if (!generationId) {
+                setPreviewGen(null);
+                return;
+            }
+            // Forward onto the entry of a creation deleted here: it leaves the address.
+            if (deletedGenerationIdsRef.current.has(generationId)) {
+                setPreviewGen(null);
+                replaceReelEntry(studioPreviewAddress(null));
+                return;
+            }
+            // Forward onto a preview's entry: a creation the page holds opens at once; any other
+            // is read by the address's own effect, as a link's is.
+            const held = generationsRef.current.find((item) => item.id === generationId);
+            if (held && hasFullGenerationDetails(held)) {
+                requestedGenerationRef.current = generationId;
+                setPreviewGen(held);
+            }
+        };
+        window.addEventListener('popstate', handlePopState);
+        return () => {
+            mountedRef.current = false;
+            window.removeEventListener('popstate', handlePopState);
+        };
+    }, []);
 
     // Publish opens the full composer for a creation with no post yet, as the
     // app's does, and its Back returns to the view it was opened from. Recipe
@@ -1309,7 +1409,12 @@ export default function CreationsPage() {
         // reload draws first, and from an open preview, whatever the refresh
         // below brings back.
         dropGeneration(generationId);
+        deletedGenerationIdsRef.current.add(generationId);
         setPreviewGen((current) => (current?.id === generationId ? null : current));
+        // Only while Studio is the page: one the reader went on to may name it too.
+        if (mountedRef.current && new URLSearchParams(window.location.search).get('generation') === generationId) {
+            closePreview();
+        }
         await fetchCreations();
     };
 
@@ -1593,7 +1698,8 @@ export default function CreationsPage() {
                         <button
                             type="button"
                             onClick={() => {
-                                setPreviewGen(null);
+                                // Without a session the restore goes to sign-in, back to these details.
+                                if (session?.access_token) closePreview();
                                 void handleGenerationRestore(generation.id);
                             }}
                             className={secondaryClass}
@@ -1633,6 +1739,7 @@ export default function CreationsPage() {
 
         return (
             <>
+                {/* Leaving for the composer keeps the preview's entry: Back from there opens it again. */}
                 {publishHref ? (
                     <Link
                         href={publishHref}
@@ -2815,7 +2922,7 @@ export default function CreationsPage() {
 
             <MediaDetailsPreviewModal
                 isOpen={Boolean(previewGen)}
-                onClose={() => setPreviewGen(null)}
+                onClose={closePreview}
                 mediaType={previewGen ? getPreviewMediaType(previewGen) : 'image'}
                 src={previewGen?.output_url ? resolvePlaybackUrl({
                     url: previewGen.output_url, renditionUrl: previewGen.media?.renditionUrl,
