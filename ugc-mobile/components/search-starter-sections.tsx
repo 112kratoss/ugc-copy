@@ -110,7 +110,9 @@ function CreatorStarterRow({ creator, onOpen, followReturnTo }: { creator: Searc
         <>
           {opener}
           {followButton ? (
-            <View testID="search-creator-follow" style={{ alignItems: 'flex-start', paddingLeft: ROW_MARK_SIZE + ROW_MARK_GAP }}>
+            // A row holding the button at its start, as on a result's card: a column drawn
+            // `alignItems: 'flex-start'` grew the button to 1,230 pt at AX3 on iOS.
+            <View testID="search-creator-follow" style={{ flexDirection: 'row', paddingLeft: ROW_MARK_SIZE + ROW_MARK_GAP }}>
               {followButton}
             </View>
           ) : null}

@@ -568,9 +568,12 @@ function CreatorRow({ creator, onOpen, followReturnTo }: { creator: CreatorSearc
         <>
           {opener}
           {followButton ? (
+            // A row holding the button at its start, never a column drawn
+            // `alignItems: 'flex-start'`: there the button, whose press grows to
+            // fill it, came out 1,230 pt tall at AX3 on iOS (simulator, 2026-11-16).
             <View
               testID="search-creator-follow"
-              style={{ alignItems: 'flex-start', paddingLeft: CREATOR_ROW_TEXT_INSET, paddingRight: CREATOR_ROW_PADDING, paddingBottom: CREATOR_ROW_PADDING }}
+              style={{ flexDirection: 'row', paddingLeft: CREATOR_ROW_TEXT_INSET, paddingRight: CREATOR_ROW_PADDING, paddingBottom: CREATOR_ROW_PADDING }}
             >
               {followButton}
             </View>

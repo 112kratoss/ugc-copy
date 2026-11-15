@@ -606,8 +606,13 @@ describe('ExploreSearchOverlay search', () => {
       await typeQuery(tree, 'jan');
       await advance(300);
       expect(hostParent(followSlot(tree))).toBe(card(tree));
+      // A row holding the button: in a column drawn `alignItems: 'flex-start'`
+      // the button came out 1,230 pt tall at AX3 on the simulator.
+      expect(followSlot(tree).props.style).toMatchObject({ flexDirection: 'row' });
+      expect(followSlot(tree).props.style.alignItems).toBeUndefined();
       expect(hostNodes(tree, 'toggle-button').map((node) => node.props.accessibilityLabel)).toEqual(['Follow Creator janet']);
       await act(async () => tree.unmount());
+      mocks.fontScale.value = 1;
     });
 
     it('names its recents "Clear all", as the web does', async () => {
@@ -3698,6 +3703,9 @@ describe('ExploreSearchOverlay search screen, 2026-11-15', () => {
     const large = await render({ visible: true, onClose: vi.fn() });
     const underName = hostNodes(large, 'view').find((node) => node.props.testID === 'search-creator-follow')!;
     expect(hostParent(underName)!.props.testID).toBe('search-starter-creator-card');
+    expect(underName.props.style).toMatchObject({ flexDirection: 'row' });
+    expect(underName.props.style.alignItems).toBeUndefined();
     await act(async () => large.unmount());
+    mocks.fontScale.value = 1;
   });
 });
