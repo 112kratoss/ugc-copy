@@ -561,7 +561,7 @@ select is(
 --   Veiltool      …01, and …02's labelled post          (one creator a visitor sees)
 --   Lumen Forge   …01 and …02                           (a name of two words)
 --   Blocktool     …06 and …07: the viewer blocked one, the other blocked the viewer
---   Triptool A–D  …01 and …02 each                      (four entities for one query)
+--   Triptool A–E  …01 and …02 each                      (five entities for one query)
 --   lumenmodel-2  the model of creations by …01 and …02
 
 create function pg_temp.entities(p_query text, p_viewer uuid default null, p_handles_only boolean default false)
@@ -609,6 +609,7 @@ from (
     ('79', '01', false, 'Triptool B', null), ('7a', '02', false, 'Triptool B', null),
     ('7b', '01', false, 'Triptool C', null), ('7c', '02', false, 'Triptool C', null),
     ('7d', '01', false, 'Triptool D', null), ('7e', '02', false, 'Triptool D', null),
+    ('e1', '01', false, 'Triptool E', null), ('e2', '02', false, 'Triptool E', null),
     ('7f', '01', false, 'Midjourney', '61'),
     ('80', '02', false, 'Midjourney', '62')
 ) as post(suffix, owner, is_nsfw, tool, generation);
@@ -662,9 +663,9 @@ delete from public.search_suggestion_denylist;
 select is(pg_temp.entities('quillonto'), array['tool:quillontool'], 'taken off the list, it is offered again at once');
 select is(pg_temp.entities('lumen f'), array['tool:lumen-forge'], 'and so is the other');
 
--- At most three, search's first three that pass.
-select is(cardinality(pg_temp.search_entities('triptool')), 4, 'fixture: four tools start the same way');
-select is(pg_temp.entities('triptool'), (pg_temp.search_entities('triptool'))[1:3], 'three are offered, in search''s order');
+-- At most four (three until 20261115105944), search's first four that pass.
+select is(cardinality(pg_temp.search_entities('triptool')), 5, 'fixture: five tools start the same way');
+select is(pg_temp.entities('triptool'), (pg_temp.search_entities('triptool'))[1:4], 'four are offered, in search''s order');
 
 -- Handles only.
 select is(pg_temp.entities('midj', null, true), '{}'::text[], 'a query typed as a handle is offered no models or tools');

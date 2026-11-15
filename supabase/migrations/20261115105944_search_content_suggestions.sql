@@ -92,33 +92,50 @@
 --    least two posts of a result page hold, for /api/search?relatedSearches=1.
 --    A function of its own, so search_public_posts is not touched.
 --
--- 9. CATALOG MODELS IN THE TYPEAHEAD (owner, 2026-11-15: typing "see" must
---    offer Seedance). `suggest?q=see` answered nothing while a search for
+-- 9. KNOWN NAMES IN THE TYPEAHEAD (owner, 2026-11-15: typing "see" must
+--    offer Seedance; then: "seedance was an example, I want ideal
+--    solutions"). `suggest?q=see` answered nothing while a search for
 --    "seedance" found a tool one creator names and our own Seedance model on
 --    another creator's post: a typeahead entity needed unlabelled posts of
 --    two creators (20261112192423), and each had one. That rule is there so
---    one account cannot plant a made-up name; a model of the product's own
---    public catalog is ours and already public, so it is exempt. The source
---    is the catalog's public projection as /api/model-catalog/v1 reads it:
---    the entries of the active release (the newest by schema version) that
---    are enabled on the web or in the app, by their public displayName. A
---    model no longer in that release, or switched off on both, is not a
---    catalog model here. search_suggestions gains a sixth parameter:
---      p_catalog = false (the code and the apps live today): a catalog model
+--    one account cannot plant a made-up name; a name the product itself
+--    maintains cannot be planted, so it is exempt. Those names
+--    (search_suggest_known_names) are:
+--      - the models of the public catalog, as /api/model-catalog/v1 reads
+--        it: the entries of the active release (the newest by schema
+--        version) enabled on the web or in the app, by their displayName;
+--      - the tools and tools' models of the source-tools catalog that an
+--        operator keeps: is_active, verified (last_verified_at) and made by
+--        no account. A row a creator added by naming a tool in Made with is
+--        in that catalog too, and is a made-up name like any other.
+--    HOW A NAME IS MATCHED, over the names alone (some 150 rows), never over
+--    posts or documents: every typed word but the last is a word of the
+--    name, its id or an alias and the last starts one, read as written
+--    ('kling 2.', 'gen-4') or with letters and digits apart ('veo3',
+--    'kling 3'); or the text as one word starts the name as one word
+--    ('nanobanana', 'gptimage'). From two characters.
+--    search_suggestions gains a sixth parameter:
+--      p_catalog = false (the code and the apps live today): a known name
 --        search itself answers for the query is offered though one creator
---        alone uses it. Nothing else changes, so a row still opens posts.
---      p_catalog = true (a client that sends catalog=1 and knows what to do
---        with a row that has no posts): every catalog model with a word of
---        its name or id starting with the typed text is offered, from two
---        characters, with the posts this viewer may see that are made with
---        it (0 when none) and the `query` whose Posts search, narrowed to
---        it, opens exactly those.
---    Every entity row says `in_catalog`, and a catalog model's row its id,
---    kind and platforms. A catalog model the text starts stands first, then
---    the rest, most posts first. The word "seedance" is still no completion
---    there, by the dictionary's own rule: a word is counted only where a
---    post writes it, never where it is the post's tool or model name, so
---    both posts count for nothing; the entity row is what offers it.
+--        alone posts with it. Nothing else changes, so a row still opens
+--        the posts the typed text finds.
+--      p_catalog = true (a client that sends catalog=1, opens the creator
+--        for a row with no posts and searches the `query` a row carries):
+--        every known name the text names, from two characters. A model of
+--        the product's own whatever its posts (0 when this viewer may see
+--        none); a tool or a tool's model only where it has posts, since
+--        with none it has nothing to open. And, when the answer would
+--        otherwise be empty and the text is four characters or more, the
+--        names it names with ONE MISTAKE a word: a letter wrong, left out or
+--        added, or two neighbours swapped, never the first letter
+--        ('seedence', 'klnig').
+--    Every entity row says `in_catalog` (a model of the product's own) and
+--    such a row its id, kind and platforms. A known name the text starts
+--    stands first, then the name that is the text, then the most posts; four
+--    rows at most (three before), so a family fits. The word "seedance" is
+--    still no completion for "see", by the dictionary's own rule: a word is
+--    counted only where a post writes it, never where it is the post's tool
+--    or model name; the entity row is what offers it.
 --
 -- THE RELEASE WINDOW. Migrations apply before the new app is promoted. The
 -- app live meanwhile calls search_suggestions and search_starter by name
@@ -1414,18 +1431,158 @@ GRANT EXECUTE ON FUNCTION public.search_suggest_creators(text, uuid, boolean, in
 
 -- ─── 7. The one call the suggest route makes ────────────────────────────────
 
--- The product's own models a typed text names: the public projection of the
--- catalog (the active release's entries enabled on a platform), matched as an
--- entity's name is (every typed word, the last a prefix, against the name and
--- the id as written, split and joined). No posts are read here.
-CREATE FUNCTION public.search_suggest_catalog_models(p_query text)
+-- How a known name is read, and how typed text is held against it. Written
+-- over the names themselves, not over a text-search vector: the list is
+-- small (the catalog's models, the tools and their models: under 200), and
+-- the rule must hold for every name, whatever punctuation it carries
+-- ('Gen-4.5', 'Leonardo.Ai', 'Google Gemini / Flow', 'V8.1').
+
+CREATE FUNCTION public.search_name_words(p_name text)
+RETURNS text[]
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+SET search_path = ''
+AS $function$
+  -- The words as written (a dot kept inside one: '2.6', 'v8.1', 'leonardo.ai')
+  -- and with letters and digits apart (search_split_terms: 'v', '8', '1').
+  SELECT coalesce(array_agg(DISTINCT parts.word), ARRAY[]::text[])
+  FROM (
+    SELECT btrim(written.word, '.') AS word
+    FROM unnest(regexp_split_to_array(lower(coalesce(p_name, '')), '[^[:alnum:].]+')) AS written(word)
+    UNION ALL
+    SELECT split.word
+    FROM unnest(regexp_split_to_array(public.search_split_terms(p_name), ' ')) AS split(word)
+  ) AS parts
+  WHERE parts.word <> '';
+$function$;
+
+COMMENT ON FUNCTION public.search_name_words(text) IS
+  'The words of a model''s or tool''s name, for the typeahead: lowercased, as written (a dot kept inside a word: 2.6, v8.1) and with letters and digits apart (search_split_terms), each once.';
+
+CREATE FUNCTION public.search_name_squashes(p_name text)
+RETURNS text[]
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+SET search_path = ''
+AS $function$
+  -- The name as one word, from its first word and from each later one:
+  -- 'nanobananapro', 'bananapro', 'pro'.
+  SELECT coalesce(array_agg(DISTINCT joined.squash), ARRAY[]::text[])
+  FROM (
+    SELECT (
+      SELECT string_agg(later.word, '' ORDER BY later.place)
+      FROM unnest(ordered.words) WITH ORDINALITY AS later(word, place)
+      WHERE later.place >= first.place
+    ) AS squash
+    FROM (
+      SELECT array_remove(regexp_split_to_array(lower(coalesce(p_name, '')), '[^[:alnum:]]+'), '') AS words
+    ) AS ordered
+    CROSS JOIN LATERAL generate_subscripts(ordered.words, 1) AS first(place)
+  ) AS joined
+  WHERE joined.squash <> '';
+$function$;
+
+COMMENT ON FUNCTION public.search_name_squashes(text) IS
+  'A model''s or tool''s name written as one word, from its first word and from each later one (nanobananapro, bananapro, pro), lowercased, letters and digits only.';
+
+-- plpgsql, one call per comparison: the three lengths are tried here, not by
+-- three calls.
+CREATE FUNCTION public.search_one_mistake_prefix(p_typed text, p_word text)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+SET search_path = ''
+AS $function$
+DECLARE
+  v_typed_length integer := char_length(coalesce(p_typed, ''));
+  v_word_length integer := char_length(coalesce(p_word, ''));
+  v_length integer;
+  v_start text;
+  v_short integer;
+  v_prefix integer;
+  v_suffix integer;
+BEGIN
+  -- A mistake is looked for from four characters, and never in the first.
+  IF v_typed_length < 4 OR v_word_length = 0 OR left(p_typed, 1) <> left(p_word, 1) THEN
+    RETURN false;
+  END IF;
+  -- The typed text against the start of the word, one character shorter,
+  -- as long, or one longer: one letter wrong, left out, added, or two
+  -- neighbours swapped.
+  FOR v_length IN greatest(v_typed_length - 1, 1) .. least(v_typed_length + 1, v_word_length) LOOP
+    v_start := left(p_word, v_length);
+    v_short := least(v_typed_length, v_length);
+    v_prefix := 0;
+    WHILE v_prefix < v_short AND substr(p_typed, v_prefix + 1, 1) = substr(v_start, v_prefix + 1, 1) LOOP
+      v_prefix := v_prefix + 1;
+    END LOOP;
+    v_suffix := 0;
+    WHILE v_suffix < v_short - v_prefix
+      AND substr(p_typed, v_typed_length - v_suffix, 1) = substr(v_start, v_length - v_suffix, 1) LOOP
+      v_suffix := v_suffix + 1;
+    END LOOP;
+    IF v_typed_length = v_length THEN
+      -- The same, or one letter wrong.
+      IF v_prefix + v_suffix >= v_length - 1 THEN
+        RETURN true;
+      END IF;
+      -- Two neighbours swapped.
+      IF v_prefix + v_suffix = v_length - 2
+        AND substr(p_typed, v_prefix + 1, 1) = substr(v_start, v_prefix + 2, 1)
+        AND substr(p_typed, v_prefix + 2, 1) = substr(v_start, v_prefix + 1, 1) THEN
+        RETURN true;
+      END IF;
+    ELSIF v_prefix + v_suffix >= v_short THEN
+      -- One letter left out or added.
+      RETURN true;
+    END IF;
+  END LOOP;
+  RETURN false;
+END;
+$function$;
+
+COMMENT ON FUNCTION public.search_one_mistake_prefix(text, text) IS
+  'Whether p_typed (four characters or more) is the start of p_word with at most one mistake: one letter wrong, left out or added, or two neighbours swapped; never in the first letter. seedence and seedanc for seedance, klnig for kling.';
+
+-- The names we maintain: nobody can plant one.
+--   - the product's own models: the public projection of the catalog, as
+--     /api/model-catalog/v1 reads it (the active release's entries enabled
+--     on the web or in the app, by their public displayName);
+--   - the tools of the source-tools catalog (public.source_tools: the list
+--     /api/source-tools serves and save_post_source_tools_with_catalog
+--     validates a Made with row against), never the app's own tool;
+--   - those tools' models (public.source_tool_models), never the ones listed
+--     under the app itself: the product's own models are known by the
+--     catalog alone, so one retired there is known nowhere.
+-- Of the source-tools catalog, only the rows an operator keeps: is_active,
+-- verified against their source (last_verified_at) and made by no account
+-- (created_by_user_id). That catalog also holds the rows creators add by
+-- naming a tool or a model of their own in Made with
+-- (save_post_source_tools_with_catalog: ten tools and thirty models a day,
+-- active at once), and such a row is a made-up name like any other: it is
+-- never verified, and stays unverified when its account is deleted and its
+-- created_by_user_id is set to null.
+-- A tool or a tool's model is also named by its aliases (source_tools.aliases:
+-- 'SDXL' for Stability AI, 'Niji' for Niji 7), which operators alone write.
+-- Every known name is returned, with whether the typed text names it
+-- (matches) and whether its name or key starts with it (starts). No post is
+-- read here.
+CREATE FUNCTION public.search_suggest_known_names(
+  p_query text,
+  p_one_mistake boolean DEFAULT false
+)
 RETURNS TABLE(
+  kind text,
   key text,
+  label text,
   model_id text,
   model_kind text,
-  label text,
   web boolean,
   mobile boolean,
+  matches boolean,
   starts boolean
 )
 LANGUAGE plpgsql
@@ -1435,60 +1592,419 @@ SET search_path = ''
 AS $function$
 DECLARE
   v_query text := lower(btrim(regexp_replace(coalesce(p_query, ''), '[[:space:]]+', ' ', 'g')));
+  v_one_mistake boolean := coalesce(p_one_mistake, false);
+  -- What was typed, as a name's words are read: as written and split, the
+  -- last word the one being typed; and as one word.
+  v_written text[];
+  v_split text[];
+  v_squash text;
   v_like text;
-  v_tsquery tsquery;
+  -- From two characters: one letter starts a word of most names. A mistake
+  -- is looked for from four.
+  v_live boolean;
 BEGIN
-  -- From two characters: one letter starts a word of most names.
-  IF char_length(v_query) < 2 OR char_length(v_query) > 100 THEN
-    RETURN;
-  END IF;
-  -- Names are not stemmed (search_public_entities).
-  v_tsquery := public.search_query_tsquery(v_query, false);
-  IF numnode(v_tsquery) = 0 THEN
-    RETURN;
-  END IF;
+  v_written := ARRAY(
+    SELECT btrim(typed.word, '.')
+    FROM unnest(regexp_split_to_array(v_query, '[^[:alnum:].]+')) WITH ORDINALITY AS typed(word, place)
+    WHERE btrim(typed.word, '.') <> ''
+    ORDER BY typed.place
+  );
+  v_split := array_remove(regexp_split_to_array(public.search_split_terms(v_query), ' '), '');
+  v_squash := regexp_replace(v_query, '[^[:alnum:]]+', '', 'g');
+  -- A %, an _ or a \ typed is never a wildcard: v_squash holds letters and
+  -- digits only, and the words are compared by starts_with, not LIKE.
   v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_') || '%';
+  v_live := char_length(v_query) BETWEEN 2 AND 100
+    AND char_length(v_squash) >= CASE WHEN v_one_mistake THEN 4 ELSE 2 END;
 
   RETURN QUERY
-  SELECT
-    named.key,
-    entries.model_id,
-    models.kind,
-    named.label,
-    entries.web_enabled,
-    entries.mobile_enabled,
-    -- The name or the id starts with what is typed.
-    (lower(named.label) LIKE v_like OR named.key LIKE v_like)
-  FROM (
-    -- The release /api/model-catalog/v1 serves (read_model_catalog_v1_current).
-    SELECT releases.id
-    FROM public.generation_model_catalog_releases AS releases
-    WHERE releases.status = 'active'
-    ORDER BY releases.schema_version DESC, releases.activated_at DESC
-    LIMIT 1
-  ) AS current_release
-  JOIN public.generation_model_catalog_entries AS entries ON entries.release_id = current_release.id
-  JOIN public.generation_models AS models ON models.model_id = entries.model_id
-  CROSS JOIN LATERAL (
+  WITH listed AS (
+    -- The product's own models.
     SELECT
+      'model'::text AS kind,
       public.search_entity_key(entries.model_id) AS key,
-      left(coalesce(nullif(btrim(entries.public_descriptor ->> 'displayName'), ''), entries.model_id), 80) AS label
-  ) AS named
-  -- Offered to someone: a model switched off on the web and in the app is not public.
-  WHERE (entries.web_enabled OR entries.mobile_enabled)
-    AND named.key IS NOT NULL
-    AND to_tsvector(
-      'pg_catalog.simple',
-      coalesce(public.search_term_variants(named.label), '') || ' ' || coalesce(public.search_term_variants(entries.model_id), '')
-    ) @@ v_tsquery;
+      left(coalesce(nullif(btrim(entries.public_descriptor ->> 'displayName'), ''), entries.model_id), 80) AS label,
+      entries.model_id,
+      models.kind AS model_kind,
+      entries.web_enabled AS web,
+      entries.mobile_enabled AS mobile,
+      ARRAY[]::text[] AS aliases,
+      1 AS source
+    FROM (
+      -- The release /api/model-catalog/v1 serves (read_model_catalog_v1_current).
+      SELECT releases.id
+      FROM public.generation_model_catalog_releases AS releases
+      WHERE releases.status = 'active'
+      ORDER BY releases.schema_version DESC, releases.activated_at DESC
+      LIMIT 1
+    ) AS current_release
+    JOIN public.generation_model_catalog_entries AS entries ON entries.release_id = current_release.id
+    JOIN public.generation_models AS models ON models.model_id = entries.model_id
+    -- Offered to someone: a model switched off on the web and in the app is not public.
+    WHERE entries.web_enabled OR entries.mobile_enabled
+    UNION ALL
+    -- The tools people name in Made with.
+    SELECT
+      'tool', public.search_entity_key(tools.slug), left(btrim(tools.label), 80),
+      NULL::text, NULL::text, NULL::boolean, NULL::boolean, tools.aliases, 2
+    FROM public.source_tools AS tools
+    WHERE tools.is_active
+      AND tools.last_verified_at IS NOT NULL
+      AND tools.created_by_user_id IS NULL
+      AND replace(public.search_entity_key(tools.slug), '-', '') NOT IN ('magicbooklet', 'emptybooklet')
+    UNION ALL
+    -- Their models.
+    SELECT
+      'model', public.search_entity_key(tool_models.slug), left(btrim(tool_models.label), 80),
+      NULL::text, NULL::text, NULL::boolean, NULL::boolean, tool_models.aliases, 3
+    FROM public.source_tool_models AS tool_models
+    JOIN public.source_tools AS tools ON tools.id = tool_models.source_tool_id
+    WHERE tool_models.is_active
+      AND tool_models.last_verified_at IS NOT NULL
+      AND tool_models.created_by_user_id IS NULL
+      AND tools.is_active
+      AND tools.last_verified_at IS NOT NULL
+      AND tools.created_by_user_id IS NULL
+      AND replace(public.search_entity_key(tools.slug), '-', '') NOT IN ('magicbooklet', 'emptybooklet')
+  ),
+  known AS (
+    -- One row per kind and key: the product's own model before an outside
+    -- tool's model of the same key.
+    SELECT DISTINCT ON (listed.kind, listed.key)
+      listed.kind, listed.key, listed.label, listed.model_id, listed.model_kind, listed.web, listed.mobile,
+      listed.aliases
+    FROM listed
+    WHERE listed.key IS NOT NULL AND listed.label <> ''
+    ORDER BY listed.kind, listed.key, listed.source, listed.label
+  ),
+  read AS (
+    SELECT
+      gated.kind, gated.key, gated.label, gated.model_id, gated.model_kind, gated.web, gated.mobile,
+      gated.label_squash, gated.reads,
+      -- The words are read only for a name that can match: reading all of
+      -- them costs 15 ms, and most names hold none of what was typed.
+      CASE WHEN gated.reads THEN
+        public.search_name_words(gated.label)
+          || public.search_name_words(coalesce(gated.model_id, gated.key))
+          || public.search_name_words(array_to_string(gated.aliases, ' '))
+      END AS words,
+      CASE WHEN gated.reads THEN
+        public.search_name_squashes(gated.label)
+          || public.search_name_squashes(coalesce(gated.model_id, gated.key))
+          || ARRAY(
+            SELECT joined.squash
+            FROM unnest(gated.aliases) AS alias(name)
+            CROSS JOIN LATERAL unnest(public.search_name_squashes(alias.name)) AS joined(squash)
+          )
+      END AS squashes
+    FROM (
+      SELECT
+        squashed.kind, squashed.key, squashed.label, squashed.model_id, squashed.model_kind, squashed.web, squashed.mobile,
+        squashed.aliases, squashed.label_squash,
+        v_live AND (
+          -- With a mistake allowed, the first letter is still right.
+          CASE WHEN v_one_mistake THEN
+            strpos(squashed.label_squash || squashed.id_squash, left(v_squash, 1)) > 0
+          -- Without one, every typed word, letters and digits apart, is
+          -- somewhere in the name: true of every match below.
+          ELSE NOT EXISTS (
+            SELECT 1 FROM unnest(v_split) AS typed(word)
+            WHERE strpos(squashed.label_squash, typed.word) = 0 AND strpos(squashed.id_squash, typed.word) = 0
+          ) END
+        ) AS reads
+      FROM (
+        SELECT
+          known.kind, known.key, known.label, known.model_id, known.model_kind, known.web, known.mobile,
+          known.aliases,
+          regexp_replace(lower(known.label), '[^[:alnum:]]+', '', 'g') AS label_squash,
+          -- The id and the aliases, as one text to look a typed word up in.
+          regexp_replace(
+            lower(coalesce(known.model_id, known.key) || ' ' || array_to_string(known.aliases, ' ')),
+            '[^[:alnum:] ]+', '', 'g'
+          ) AS id_squash
+        FROM known
+      ) AS squashed
+    ) AS gated
+  )
+  SELECT
+    read.kind, read.key, read.label, read.model_id, read.model_kind, read.web, read.mobile,
+    CASE
+      WHEN NOT read.reads THEN false
+      WHEN NOT v_one_mistake THEN (
+        -- Every earlier typed word is a word of the name and the last starts
+        -- one, read as written ('kling 2.', 'gen-4')...
+        (
+          cardinality(v_written) > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest(v_written[1:cardinality(v_written) - 1]) AS earlier(word)
+            WHERE earlier.word <> ALL (read.words)
+          )
+          AND EXISTS (
+            SELECT 1 FROM unnest(read.words) AS named(word)
+            WHERE starts_with(named.word, v_written[cardinality(v_written)])
+          )
+        )
+        -- ... or with letters and digits apart ('veo3', 'kling 3')...
+        OR (
+          cardinality(v_split) > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest(v_split[1:cardinality(v_split) - 1]) AS earlier(word)
+            WHERE earlier.word <> ALL (read.words)
+          )
+          AND EXISTS (
+            SELECT 1 FROM unnest(read.words) AS named(word)
+            WHERE starts_with(named.word, v_split[cardinality(v_split)])
+          )
+        )
+        -- ... or as one word ('nanobanana', 'gptimage', 'bananapro').
+        OR EXISTS (
+          SELECT 1 FROM unnest(read.squashes) AS joined(squash)
+          WHERE starts_with(joined.squash, v_squash)
+        )
+      )
+      ELSE (
+        -- One mistake: every typed word starts a word of the name, or does
+        -- so with one mistake ('seedence 2'); or the whole text, as one
+        -- word, starts the name so ('nanobanna').
+        (
+          (
+            cardinality(v_written) > 0
+            AND NOT EXISTS (
+              SELECT 1 FROM unnest(v_written) AS typed(word)
+              WHERE NOT EXISTS (
+                SELECT 1 FROM unnest(read.words) AS named(word)
+                WHERE starts_with(named.word, typed.word)
+                  OR public.search_one_mistake_prefix(typed.word, named.word)
+              )
+            )
+          )
+          OR EXISTS (
+            SELECT 1 FROM unnest(read.squashes) AS joined(squash)
+            WHERE public.search_one_mistake_prefix(v_squash, joined.squash)
+          )
+        )
+      )
+    END AS matches,
+    (
+      lower(read.label) LIKE v_like
+      OR read.key LIKE v_like
+      OR (v_squash <> '' AND starts_with(read.label_squash, v_squash))
+    ) AS starts
+  FROM read;
 END;
 $function$;
 
-COMMENT ON FUNCTION public.search_suggest_catalog_models(text) IS
-  'The product''s own models a typed text names, for the typeahead: the entries of the active catalog release enabled on the web or in the app (the public projection /api/model-catalog/v1 reads), by their public displayName, where every typed word is in the name or the id and the last starts one of their words; from two characters. key is the model''s search key (search_entity_key of its id), starts whether the name or the id starts with the text. Only public descriptor fields are read: no provider mapping, no price. Service role only.';
+COMMENT ON FUNCTION public.search_suggest_known_names(text, boolean) IS
+  'Every name the product maintains, for the typeahead, with whether a typed text names it: the public catalog''s models (the active release''s entries enabled on the web or in the app, by displayName, with their id, kind and platforms), and the tools and tools'' models of the source-tools catalog an operator keeps (is_active, last_verified_at set, created_by_user_id null: never a row a creator added, never the app''s own tool or its models), by label, key and aliases. matches: every earlier typed word is a word of the name and the last starts one, as written or with letters and digits apart, or the text as one word starts the name squashed, from two characters; with p_one_mistake, the same with at most one mistake a word, from four. starts: the name or the key starts with the text. Only public fields are read: no provider mapping, no price. Service role only.';
 
-REVOKE ALL ON FUNCTION public.search_suggest_catalog_models(text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.search_suggest_catalog_models(text) TO service_role;
+REVOKE ALL ON FUNCTION public.search_name_words(text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.search_name_squashes(text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.search_one_mistake_prefix(text, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.search_suggest_known_names(text, boolean) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.search_name_words(text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.search_name_squashes(text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.search_one_mistake_prefix(text, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.search_suggest_known_names(text, boolean) TO service_role;
+
+-- The models and tools of one answer.
+CREATE FUNCTION public.search_suggest_entities(
+  p_query text,
+  p_viewer_user_id uuid DEFAULT NULL,
+  p_catalog boolean DEFAULT false,
+  p_one_mistake boolean DEFAULT false,
+  p_limit integer DEFAULT 4
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $function$
+DECLARE
+  v_query text := lower(btrim(regexp_replace(coalesce(p_query, ''), '[[:space:]]+', ' ', 'g')));
+  v_catalog boolean := coalesce(p_catalog, false);
+  v_one_mistake boolean := coalesce(p_one_mistake, false);
+  v_limit integer := least(greatest(coalesce(p_limit, 4), 0), 50);
+BEGIN
+  RETURN coalesce((
+    WITH known AS MATERIALIZED (
+      SELECT names.kind, names.key, names.label, names.model_id, names.model_kind, names.web, names.mobile,
+        names.matches, names.starts
+      FROM public.search_suggest_known_names(p_query, v_one_mistake) AS names
+    ),
+    found AS MATERIALIZED (
+      -- Models and tools: search's own answer for this query and viewer. On
+      -- the one-mistake reading there is none: that reading is taken only
+      -- when the text as typed found nothing.
+      SELECT answered.kind, answered.key, answered.label, answered.post_count, answered.post_count_capped, answered.position
+      FROM public.search_public_entities(p_query, p_viewer_user_id, 10, NULL)
+        WITH ORDINALITY AS answered(kind, key, label, post_count, post_count_capped, position)
+      WHERE NOT v_one_mistake
+    ),
+    candidates AS (
+      -- What search answers, less what a suggestion must not put in front of
+      -- someone who did not ask.
+      SELECT
+        -- A known name under the name we give it; anything else under the
+        -- name most of its posts print.
+        found.kind, found.key, coalesce(known.label, found.label) AS label,
+        found.post_count, found.post_count_capped, found.position,
+        known.key IS NOT NULL AS is_known,
+        known.model_id, known.model_kind, known.web, known.mobile,
+        coalesce(known.starts, false) AS starts,
+        false AS added
+      FROM found
+      LEFT JOIN known ON known.kind = found.kind AND known.key = found.key
+      WHERE (
+        -- A name we maintain: nobody planted it.
+        known.key IS NOT NULL
+        -- Anything else, two creators: an unlabelled post made with it by
+        -- someone other than the first creator found, among the first 500 of
+        -- its posts.
+        OR EXISTS (
+          SELECT 1
+          FROM (
+            SELECT members.creator_user_id
+            FROM public.post_search_entities AS members
+            JOIN public.posts AS posts ON posts.id = members.post_id
+            WHERE members.kind = found.kind
+              AND members.key = found.key
+              AND posts.is_nsfw = false
+            LIMIT 500
+          ) AS makers
+          WHERE makers.creator_user_id <> (
+            SELECT members.creator_user_id
+            FROM public.post_search_entities AS members
+            JOIN public.posts AS posts ON posts.id = members.post_id
+            WHERE members.kind = found.kind
+              AND members.key = found.key
+              AND posts.is_nsfw = false
+            LIMIT 1
+          )
+        )
+      )
+      UNION ALL
+      -- For a client that asked (p_catalog): the known names the text names
+      -- that search did not answer, because the text is too short to search
+      -- posts by, is misspelt, names it by a word its posts do not hold, or
+      -- no post this viewer may see is made with it. Counted here to order
+      -- them; the count a row states is made below, with the search that
+      -- opens it.
+      SELECT
+        named.kind, named.key, named.label, visible.post_count, false, NULL::bigint,
+        true,
+        named.model_id, named.model_kind, named.web, named.mobile,
+        named.starts,
+        true
+      FROM (
+        SELECT known.kind, known.key, known.label, known.model_id, known.model_kind, known.web, known.mobile, known.starts
+        FROM known
+        WHERE v_catalog AND known.matches
+      ) AS named
+      CROSS JOIN LATERAL (
+        -- The posts this viewer may see that are made with it. A template
+        -- result has no model here (post_search_entities holds none).
+        SELECT count(*)::integer AS post_count
+        FROM (
+          SELECT 1
+          FROM public.post_search_entities AS members
+          JOIN public.posts AS posts ON posts.id = members.post_id
+          WHERE members.kind = named.kind
+            AND members.key = named.key
+            AND posts.is_nsfw = false
+            AND NOT EXISTS (
+              SELECT 1
+              FROM public.user_blocks AS blocks
+              WHERE blocks.blocker_user_id = p_viewer_user_id
+                AND blocks.blocked_user_id = members.creator_user_id
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM public.user_blocks AS blocks
+              WHERE blocks.blocker_user_id = members.creator_user_id
+                AND blocks.blocked_user_id = p_viewer_user_id
+            )
+          LIMIT 201
+        ) AS seen
+      ) AS visible
+      WHERE NOT EXISTS (
+          SELECT 1 FROM found WHERE found.kind = named.kind AND found.key = named.key
+        )
+        -- With no post, only a model of the product's own has something to
+        -- open: its creator. A tool nobody posted with opens nothing.
+        AND (named.model_id IS NOT NULL OR visible.post_count > 0)
+    ),
+    offered AS (
+      SELECT
+        candidates.kind, candidates.key, candidates.label, candidates.post_count, candidates.post_count_capped,
+        candidates.is_known, candidates.model_id, candidates.model_kind, candidates.web, candidates.mobile, candidates.added,
+        row_number() OVER (
+          ORDER BY
+            -- A known name the text starts, then the rest: the one whose
+            -- name is the text, then the most posts, then search's own order.
+            (candidates.is_known AND candidates.starts) DESC,
+            (lower(candidates.label) = v_query OR candidates.key = v_query) DESC,
+            candidates.post_count DESC,
+            candidates.position NULLS LAST,
+            candidates.kind,
+            candidates.key
+        ) AS place
+      FROM candidates
+      -- No withdrawn word in its name or key, read as post_search_entities.name_vector reads them.
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM public.search_suggestion_denylist AS denied
+        WHERE denied.term = ANY (tsvector_to_array(to_tsvector(
+          'pg_catalog.simple',
+          coalesce(public.search_term_variants(candidates.label), '') || ' ' || coalesce(public.search_term_variants(candidates.key), '')
+        )))
+      )
+    )
+    SELECT jsonb_agg(jsonb_build_object(
+      'kind', chosen.kind,
+      'key', chosen.key,
+      'label', chosen.label,
+      -- What pressing the row opens: for a row search answered, the posts
+      -- the typed text finds narrowed to it; for a row added here, the posts
+      -- `query` finds narrowed to it, none when it has no post this viewer
+      -- may see.
+      'post_count', CASE WHEN chosen.added THEN coalesce(opened.post_count, 0) ELSE chosen.post_count END,
+      'post_count_capped', CASE WHEN chosen.added THEN coalesce(opened.post_count_capped, false) ELSE chosen.post_count_capped END,
+      -- A picture of a post made with it that this viewer may see, or null.
+      'thumbnail', public.search_entity_picture(chosen.kind, chosen.key, p_viewer_user_id, NULL),
+      -- A model of the product's own catalog, and which.
+      'in_catalog', chosen.model_id IS NOT NULL,
+      'catalog_model', CASE WHEN chosen.model_id IS NOT NULL THEN jsonb_build_object(
+        'id', chosen.model_id,
+        'kind', chosen.model_kind,
+        'web', chosen.web,
+        'mobile', chosen.mobile
+      ) END,
+      'query', opened.query
+    ) ORDER BY chosen.place)
+    FROM (
+      SELECT offered.kind, offered.key, offered.label, offered.post_count, offered.post_count_capped,
+        offered.is_known, offered.model_id, offered.model_kind, offered.web, offered.mobile, offered.added, offered.place
+      FROM offered
+      ORDER BY offered.place
+      LIMIT v_limit
+    ) AS chosen
+    -- Only for the rows added here, at most the cap: the search pressing one
+    -- runs and what it finds for this viewer (search_starter_entity_offer).
+    LEFT JOIN LATERAL public.search_starter_entity_offer(chosen.kind, chosen.key, p_viewer_user_id) AS opened
+      ON chosen.added
+    -- A row added for a tool whose posts no search of its name opens (a name
+    -- under three characters) has nothing to open.
+    WHERE NOT (chosen.added AND chosen.model_id IS NULL AND coalesce(opened.post_count, 0) = 0)
+  ), '[]'::jsonb);
+END;
+$function$;
+
+COMMENT ON FUNCTION public.search_suggest_entities(text, uuid, boolean, boolean, integer) IS
+  'The models and tools of a typeahead answer: [{kind, key, label, post_count, post_count_capped, thumbnail, in_catalog, catalog_model, query}], at most p_limit (4). search_public_entities'' answer for the query and the viewer, each kept when it is a name we maintain (search_suggest_known_names) or two creators'' posts are made with it. With p_catalog, also the known names the text names that search did not answer, from two characters: a model of the product''s own whatever its posts (0 when the viewer may see none), a tool or a tool''s model only with a post, each with the posts search opens for it and the query that opens them. With p_one_mistake, the names the text names with one mistake. None whose name holds a withdrawn word. A known name the text starts first, then the name that is the text, then the most posts. Service role only.';
+
+REVOKE ALL ON FUNCTION public.search_suggest_entities(text, uuid, boolean, boolean, integer) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.search_suggest_entities(text, uuid, boolean, boolean, integer) TO service_role;
 
 -- Dropped and re-created for its sixth parameter, in this transaction: the
 -- five-argument named call of the code live during the release resolves to
@@ -1504,190 +2020,66 @@ CREATE FUNCTION public.search_suggestions(
   p_catalog boolean DEFAULT false
 )
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SET search_path = ''
 AS $function$
-  WITH catalog AS MATERIALIZED (
-    -- A query typed as a handle ('@lu') asks for people: no models.
-    SELECT models.key, models.model_id, models.model_kind, models.label, models.web, models.mobile, models.starts
-    FROM public.search_suggest_catalog_models(p_query) AS models
-    WHERE NOT coalesce(p_handles_only, false)
-  ),
-  found AS MATERIALIZED (
-    -- Models and tools: search's own answer for this query and viewer.
-    SELECT answered.kind, answered.key, answered.label, answered.post_count, answered.post_count_capped, answered.position
-    FROM public.search_public_entities(p_query, p_viewer_user_id, 10, NULL)
-      WITH ORDINALITY AS answered(kind, key, label, post_count, post_count_capped, position)
-    WHERE NOT coalesce(p_handles_only, false)
-  ),
-  candidates AS (
-    -- What search answers, less what a suggestion must not put in front of
-    -- someone who did not ask.
-    SELECT
-      -- A catalog model under the catalog's own name; anything else under
-      -- the name most of its posts print.
-      found.kind, found.key, coalesce(catalog.label, found.label) AS label,
-      found.post_count, found.post_count_capped, found.position,
-      catalog.model_id, catalog.model_kind, catalog.web, catalog.mobile,
-      coalesce(catalog.starts, false) AS starts,
-      false AS added
-    FROM found
-    LEFT JOIN catalog ON found.kind = 'model' AND catalog.key = found.key
-    WHERE (
-      -- A model of the product's own catalog: ours, and already public.
-      catalog.model_id IS NOT NULL
-      -- Anything else, two creators: an unlabelled post made with it by
-      -- someone other than the first creator found, among the first 500 of
-      -- its posts.
-      OR EXISTS (
-        SELECT 1
-        FROM (
-          SELECT members.creator_user_id
-          FROM public.post_search_entities AS members
-          JOIN public.posts AS posts ON posts.id = members.post_id
-          WHERE members.kind = found.kind
-            AND members.key = found.key
-            AND posts.is_nsfw = false
-          LIMIT 500
-        ) AS makers
-        WHERE makers.creator_user_id <> (
-          SELECT members.creator_user_id
-          FROM public.post_search_entities AS members
-          JOIN public.posts AS posts ON posts.id = members.post_id
-          WHERE members.kind = found.kind
-            AND members.key = found.key
-            AND posts.is_nsfw = false
-          LIMIT 1
-        )
-      )
-    )
-    UNION ALL
-    -- For a client that asked (p_catalog): the catalog models search did not
-    -- answer, because no post this viewer may see is made with one, or the
-    -- text is too short to search posts by. Counted here to order them; the
-    -- count a row states is made below, with the search that opens it.
-    SELECT
-      'model', catalog.key, catalog.label, visible.post_count, false, NULL::bigint,
-      catalog.model_id, catalog.model_kind, catalog.web, catalog.mobile,
-      catalog.starts,
-      true
-    FROM catalog
-    CROSS JOIN LATERAL (
-      -- The posts this viewer may see that are made with it. A template
-      -- result has no model here (post_search_entities holds none).
-      SELECT count(*)::integer AS post_count
-      FROM (
-        SELECT 1
-        FROM public.post_search_entities AS members
-        JOIN public.posts AS posts ON posts.id = members.post_id
-        WHERE members.kind = 'model'
-          AND members.key = catalog.key
-          AND posts.is_nsfw = false
-          AND NOT EXISTS (
-            SELECT 1
-            FROM public.user_blocks AS blocks
-            WHERE blocks.blocker_user_id = p_viewer_user_id
-              AND blocks.blocked_user_id = members.creator_user_id
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM public.user_blocks AS blocks
-            WHERE blocks.blocker_user_id = members.creator_user_id
-              AND blocks.blocked_user_id = p_viewer_user_id
-          )
-        LIMIT 201
-      ) AS seen
-    ) AS visible
-    WHERE coalesce(p_catalog, false)
-      AND NOT EXISTS (
-        SELECT 1 FROM found WHERE found.kind = 'model' AND found.key = catalog.key
-      )
-  ),
-  offered AS (
-    SELECT
-      candidates.kind, candidates.key, candidates.label, candidates.post_count, candidates.post_count_capped,
-      candidates.model_id, candidates.model_kind, candidates.web, candidates.mobile, candidates.added,
-      row_number() OVER (
-        ORDER BY
-          -- A catalog model the text starts, then the rest: the one whose
-          -- name is the text, then the most posts, then search's own order.
-          (candidates.model_id IS NOT NULL AND candidates.starts) DESC,
-          (lower(candidates.label) = lower(btrim(coalesce(p_query, ''))) OR candidates.key = lower(btrim(coalesce(p_query, '')))) DESC,
-          candidates.post_count DESC,
-          candidates.position NULLS LAST,
-          candidates.kind,
-          candidates.key
-      ) AS place
-    FROM candidates
-    -- No withdrawn word in its name or key, read as post_search_entities.name_vector reads them.
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM public.search_suggestion_denylist AS denied
-      WHERE denied.term = ANY (tsvector_to_array(to_tsvector(
-        'pg_catalog.simple',
-        coalesce(public.search_term_variants(candidates.label), '') || ' ' || coalesce(public.search_term_variants(candidates.key), '')
-      )))
-    )
-  )
-  SELECT jsonb_build_object(
-    'creators', coalesce((
-      SELECT jsonb_agg(jsonb_build_object(
-        'id', creators.creator_user_id,
-        'username', creators.username,
-        'display_name', creators.display_name,
-        'avatar_url', creators.avatar_url,
-        'is_following', creators.is_following
-      ) ORDER BY creators.position)
-      FROM public.search_suggest_creators(p_query, p_viewer_user_id, p_handles_only, p_creator_limit)
-        WITH ORDINALITY AS creators(creator_user_id, username, display_name, avatar_url, is_following, position)
-    ), '[]'::jsonb),
-    'entities', coalesce((
-      SELECT jsonb_agg(jsonb_build_object(
-        'kind', chosen.kind,
-        'key', chosen.key,
-        'label', chosen.label,
-        -- What pressing the row opens: for a row search answered, the posts
-        -- the typed text finds narrowed to it; for a catalog model added
-        -- here, the posts `query` finds narrowed to it, none when it has no
-        -- post this viewer may see.
-        'post_count', CASE WHEN chosen.added THEN coalesce(opened.post_count, 0) ELSE chosen.post_count END,
-        'post_count_capped', CASE WHEN chosen.added THEN coalesce(opened.post_count_capped, false) ELSE chosen.post_count_capped END,
-        -- A picture of a post made with it that this viewer may see, or null.
-        'thumbnail', public.search_entity_picture(chosen.kind, chosen.key, p_viewer_user_id, NULL),
-        'in_catalog', chosen.model_id IS NOT NULL,
-        'catalog_model', CASE WHEN chosen.model_id IS NOT NULL THEN jsonb_build_object(
-          'id', chosen.model_id,
-          'kind', chosen.model_kind,
-          'web', chosen.web,
-          'mobile', chosen.mobile
-        ) END,
-        'query', opened.query
-      ) ORDER BY chosen.place)
-      FROM (
-        SELECT offered.kind, offered.key, offered.label, offered.post_count, offered.post_count_capped,
-          offered.model_id, offered.model_kind, offered.web, offered.mobile, offered.added, offered.place
-        FROM offered
-        ORDER BY offered.place
-        LIMIT 3
-      ) AS chosen
-      -- Only for the rows added here, at most three: the search pressing one
-      -- runs and what it finds for this viewer (search_starter_entity_offer).
-      LEFT JOIN LATERAL public.search_starter_entity_offer(chosen.kind, chosen.key, p_viewer_user_id) AS opened
-        ON chosen.added
-    ), '[]'::jsonb),
-    -- A query typed as a handle ('@lu') asks for people, not words.
-    'completions', coalesce((
+DECLARE
+  -- The most models and tools one answer holds.
+  c_entity_limit CONSTANT integer := 4;
+  -- A misspelt name is looked for from this many characters.
+  c_one_mistake_length CONSTANT integer := 4;
+  v_query text := lower(btrim(regexp_replace(coalesce(p_query, ''), '[[:space:]]+', ' ', 'g')));
+  v_handles_only boolean := coalesce(p_handles_only, false);
+  v_catalog boolean := coalesce(p_catalog, false);
+  v_creators jsonb;
+  v_entities jsonb := '[]'::jsonb;
+  v_completions jsonb := '[]'::jsonb;
+BEGIN
+  v_creators := coalesce((
+    SELECT jsonb_agg(jsonb_build_object(
+      'id', creators.creator_user_id,
+      'username', creators.username,
+      'display_name', creators.display_name,
+      'avatar_url', creators.avatar_url,
+      'is_following', creators.is_following
+    ) ORDER BY creators.position)
+    FROM public.search_suggest_creators(p_query, p_viewer_user_id, p_handles_only, p_creator_limit)
+      WITH ORDINALITY AS creators(creator_user_id, username, display_name, avatar_url, is_following, position)
+  ), '[]'::jsonb);
+
+  -- A query typed as a handle ('@lu') asks for people: no models, no words.
+  IF NOT v_handles_only THEN
+    v_entities := public.search_suggest_entities(p_query, p_viewer_user_id, v_catalog, false, c_entity_limit);
+    v_completions := coalesce((
       SELECT jsonb_agg(jsonb_build_object('text', completions.completion) ORDER BY completions.position)
       FROM public.search_suggest_completions(p_query, p_completion_limit, p_viewer_user_id)
         WITH ORDINALITY AS completions(completion, position)
-      WHERE NOT coalesce(p_handles_only, false)
-    ), '[]'::jsonb)
+    ), '[]'::jsonb);
+
+    -- Nothing in the answer, for a client that asked for the catalog: the
+    -- names the text names with one mistake ('seedence', 'klnig'). Only
+    -- then, and only over the names: a row found this way carries the search
+    -- that opens it, which a client from before the catalog does not read.
+    IF v_catalog
+      AND char_length(v_query) >= c_one_mistake_length
+      AND jsonb_array_length(v_creators) = 0
+      AND jsonb_array_length(v_entities) = 0
+      AND jsonb_array_length(v_completions) = 0 THEN
+      v_entities := public.search_suggest_entities(p_query, p_viewer_user_id, true, true, c_entity_limit);
+    END IF;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'creators', v_creators,
+    'entities', v_entities,
+    'completions', v_completions
   );
+END;
 $function$;
 
 COMMENT ON FUNCTION public.search_suggestions(text, uuid, boolean, integer, integer, boolean) IS
-  'GET /api/search/suggest in one call: {creators: [{id, username, display_name, avatar_url, is_following}], entities: [{kind, key, label, post_count, post_count_capped, thumbnail, in_catalog, catalog_model, query}], completions: [{text}]}, each list in the order to show it. Creators from search_suggest_creators. Entities (at most 3): search_public_entities'' answer for the query and the viewer, each kept when it is a model of the public catalog (search_suggest_catalog_models) or two creators'' posts are made with it; with p_catalog, also every catalog model the text names that search did not answer, from two characters, with the posts the viewer may see made with it (0 when none) and the query whose search opens them. None whose name holds a withdrawn word. A catalog model the text starts first, then the most posts. Completions from search_suggest_completions for this viewer. No entities or completions for a handles-only query.';
+  'GET /api/search/suggest in one call: {creators: [{id, username, display_name, avatar_url, is_following}], entities: [{kind, key, label, post_count, post_count_capped, thumbnail, in_catalog, catalog_model, query}], completions: [{text}]}, each list in the order to show it. Creators from search_suggest_creators; entities (at most 4) from search_suggest_entities, with p_catalog every known name the text names and, when the answer would be empty and the text is four characters or more, the names it names with one mistake; completions from search_suggest_completions for this viewer. No entities or completions for a handles-only query.';
 
 REVOKE ALL ON FUNCTION public.search_suggestions(text, uuid, boolean, integer, integer, boolean) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.search_suggestions(text, uuid, boolean, integer, integer, boolean) TO service_role;

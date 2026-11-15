@@ -18,7 +18,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(174);
+select plan(229);
 
 create function pg_temp.uid(p_suffix text)
 returns uuid
@@ -694,6 +694,7 @@ delete from public.search_suggestion_denylist where term = 'lanterns';
 --   zephyrmodel-off   "Zephyr Off"        switched off on both; a creation of …01
 --   zephyrmodel-old   "Zephyr Old"        of no live release; a creation of …01
 --   Zephyrtool        an outside tool one creator, …03, names
+--   quillprime-1      "Quill Prime"       no post (for the known names below)
 
 create function pg_temp.entity_rows(p_query text, p_catalog boolean default false, p_viewer uuid default null)
 returns text[]
@@ -706,7 +707,7 @@ $$;
 
 insert into public.generation_models (model_id, kind) values
   ('zephyrmodel-2', 'video'), ('zephyrmodel-lite', 'image'), ('zephyrmodel-web', 'image'),
-  ('zephyrmodel-off', 'image'), ('zephyrmodel-old', 'image');
+  ('zephyrmodel-off', 'image'), ('zephyrmodel-old', 'image'), ('quillprime-1', 'image');
 insert into public.generation_model_catalog_releases (revision, schema_version, status, defaults, created_by)
 values ('c5e6-typeahead-catalog', 2, 'draft',
   '{"web":{"image":null,"video":null,"motion":null},"mobile":{"image":null,"video":null,"motion":null}}', 'database-test');
@@ -725,7 +726,8 @@ cross join (
     ('zephyrmodel-2', 'video', 'Zephyr Motion 2', true, true),
     ('zephyrmodel-lite', 'image', 'Zephyr Lite', true, true),
     ('zephyrmodel-web', 'image', 'Lumen Zephyr Web', true, false),
-    ('zephyrmodel-off', 'image', 'Zephyr Off', false, false)
+    ('zephyrmodel-off', 'image', 'Zephyr Off', false, false),
+    ('quillprime-1', 'image', 'Quill Prime', true, true)
 ) as model(id, kind, name, web, mobile)
 where releases.revision = 'c5e6-typeahead-catalog';
 update public.generation_model_catalog_releases set status = 'retired', retired_at = now() where status = 'active';
@@ -760,29 +762,27 @@ insert into public.post_media (post_id, storage_path, media_kind, content_type, 
 values (pg_temp.uid('81'), 'c5e6/81/source.png', 'image', 'image/png', 800, 800, 0, 'c5e6/81/preview.webp', 'hash-81', 'ready');
 select ok((select phrases > 0 from public.rebuild_search_phrases()), 'fixture: a rebuild reads the creations');
 
-select is(
-  (select array_agg(model_id order by model_id) from public.search_suggest_catalog_models('zeph')),
-  array['zephyrmodel-2', 'zephyrmodel-lite', 'zephyrmodel-web'],
-  'the catalog''s models a text names are those of the live release that are on the web or in the app: never one switched off on both, never one of no live release'
-);
-select is(
-  (select array_agg(model_id order by model_id) from public.search_suggest_catalog_models('lite')),
-  array['zephyrmodel-lite'],
-  'by any word of the name or the id'
-);
-select is(
-  (select array_agg(model_id order by model_id) from public.search_suggest_catalog_models('motion 2')),
-  array['zephyrmodel-2'],
-  'every typed word, the last a prefix'
-);
-select is((select count(*) from public.search_suggest_catalog_models('z')), 0::bigint, 'not from one character');
+create function pg_temp.named_models(p_query text, p_one_mistake boolean default false)
+returns text[]
+language sql
+as $$
+  select coalesce(array_agg(model_id order by model_id), '{}')
+  from public.search_suggest_known_names(p_query, p_one_mistake)
+  where matches and model_id is not null;
+$$;
+
+select is(pg_temp.named_models('zeph'), array['zephyrmodel-2', 'zephyrmodel-lite', 'zephyrmodel-web'],
+  'the catalog''s models a text names are those of the live release that are on the web or in the app: never one switched off on both, never one of no live release');
+select is(pg_temp.named_models('lite'), array['zephyrmodel-lite'], 'by any word of the name or the id');
+select is(pg_temp.named_models('motion 2'), array['zephyrmodel-2'], 'every typed word, the last a prefix');
+select is(pg_temp.named_models('z'), '{}'::text[], 'not from one character');
 select results_eq(
-  $$ select key, model_kind, label, web, mobile, starts from public.search_suggest_catalog_models('zephyr web') $$,
+  $$ select key, model_kind, label, web, mobile, starts from public.search_suggest_known_names('zephyr web') where matches $$,
   $$ values ('zephyrmodel-web', 'image', 'Lumen Zephyr Web', true, false, false) $$,
   'each with its search key, its kind, its public name and where it is offered'
 );
 select is(
-  (select array_agg(model_id || '=' || starts order by model_id) from public.search_suggest_catalog_models('lumen z')),
+  (select array_agg(model_id || '=' || starts order by model_id) from public.search_suggest_known_names('lumen z') where matches),
   array['zephyrmodel-web=true'],
   'and whether its name or its id starts with the text'
 );
@@ -906,6 +906,353 @@ select is(
   'the call the live route makes, by its five names, is answered'
 );
 
+-- ─── Known names: every model and tool we maintain ──────────────────────────
+--
+-- The rule is for every name, not one: each known name is answered for every
+-- prefix, from two characters, of every word of its label and of the label
+-- written as one word, and for the label written with spaces and with
+-- hyphens. Known: the live catalog's models, and the tools and tools' models
+-- of the source-tools catalog an operator keeps. Fixture, all Made with rows
+-- of one creator, …01, alone:
+--   quillforge      "Quill Forge"     tool, alias "QF Studio"; posts 90 to 96
+--   quill-gen-4.5   "Quill Gen-4.5"   its model; posts 90, 91, 92
+--   quill-v8.1      "Quill V8.1"      its model; posts 93, 94
+--   quillmax        "QuillMax 3"      its model; post 95
+--   quill-idle      "Quill Idle"      its model; no post
+--   quill-retired   "Quill Retired"   its model, switched off; post 96
+--   quill-planted   "Quill Planted"   its model, added by the creator …03; post 99
+--   quillidle       "Quillidle Studio" tool, no post
+--   quillgone       "Quillgone Lab"   tool, switched off; post 97 of …03
+--   quillmine       "Quillmine"       tool added by the creator …03; post 98
+--   quillorphan     "Quillorphan"     tool a deleted account added (no creator,
+--                                     never verified); post 9a of …03
+--   kytelabs        "Kyte Labs"       tool; post 9b. One letter from "kite",
+--                                     which two creators write.
+
+create function pg_temp.name_prefixes()
+returns table(kind text, key text, own boolean, typed text)
+language sql
+as $$
+  with names as (
+    select known.kind, known.key, known.model_id is not null as own, lower(known.label) as label
+    from public.search_suggest_known_names('zz') as known
+  ),
+  forms as (
+    select names.kind, names.key, names.own, word.form
+    from names
+    cross join lateral regexp_split_to_table(names.label, '[^[:alnum:]]+') as word(form)
+    union
+    select names.kind, names.key, names.own, regexp_replace(names.label, '[^[:alnum:]]+', '', 'g')
+    from names
+  )
+  select forms.kind, forms.key, forms.own, left(forms.form, size.length)
+  from forms
+  cross join lateral generate_series(2, char_length(forms.form)) as size(length)
+  union
+  select names.kind, names.key, names.own, btrim(regexp_replace(names.label, '[^[:alnum:]]+', ' ', 'g'))
+  from names
+  where char_length(names.label) >= 2
+  union
+  select names.kind, names.key, names.own, btrim(regexp_replace(names.label, '[^[:alnum:]]+', '-', 'g'), '-')
+  from names
+  where char_length(names.label) >= 2;
+$$;
+
+-- The prefixes of known names the matcher does not answer with their name.
+create function pg_temp.unanswered_names()
+returns table(kind text, key text, typed text)
+language sql
+as $$
+  with wanted as materialized (select prefixes.kind, prefixes.key, prefixes.typed from pg_temp.name_prefixes() as prefixes),
+  answered as materialized (
+    select texts.typed, known.kind, known.key
+    from (select distinct wanted.typed from wanted) as texts
+    cross join lateral public.search_suggest_known_names(texts.typed) as known
+    where known.matches
+  )
+  select wanted.kind, wanted.key, wanted.typed
+  from wanted
+  where not exists (
+    select 1 from answered
+    where answered.typed = wanted.typed and answered.kind = wanted.kind and answered.key = wanted.key
+  );
+$$;
+
+-- The prefixes of known names that have something to open (a model of the
+-- product's own, or a name a post a guest may see is made with) for which the
+-- typeahead's candidates, before the cap, lack the name.
+create function pg_temp.unoffered_names()
+returns table(kind text, key text, typed text)
+language sql
+as $$
+  with wanted as materialized (
+    select prefixes.kind, prefixes.key, prefixes.typed
+    from pg_temp.name_prefixes() as prefixes
+    where prefixes.own or exists (
+      select 1
+      from public.post_search_entities as members
+      join public.posts as posts on posts.id = members.post_id
+      where members.kind = prefixes.kind and members.key = prefixes.key and posts.is_nsfw = false
+    )
+  ),
+  offered as materialized (
+    select texts.typed, entity ->> 'kind' as kind, entity ->> 'key' as key
+    from (select distinct wanted.typed from wanted) as texts
+    cross join lateral jsonb_array_elements(public.search_suggest_entities(texts.typed, null, true, false, 50)) as entity
+  )
+  select wanted.kind, wanted.key, wanted.typed
+  from wanted
+  where not exists (
+    select 1 from offered
+    where offered.typed = wanted.typed and offered.kind = wanted.kind and offered.key = wanted.key
+  );
+$$;
+
+create function pg_temp.candidates(p_query text, p_catalog boolean default true, p_one_mistake boolean default false)
+returns text[]
+language sql
+as $$
+  select coalesce(array_agg((entity ->> 'kind') || ':' || (entity ->> 'key') || '=' || (entity ->> 'post_count') order by position), '{}')
+  from jsonb_array_elements(public.search_suggest_entities(p_query, null, p_catalog, p_one_mistake, 50))
+    with ordinality as offered(entity, position);
+$$;
+
+-- The names the migrations themselves ship: the source-tools catalog as
+-- seeded (the catalog's own models are this test's release by now; the
+-- seeded release's are read below, with it live again).
+select ok(
+  (select count(*) from public.search_suggest_known_names('zz') where kind = 'tool') >= 50
+  and (select count(*) from public.search_suggest_known_names('zz') where kind = 'model' and model_id is null) >= 50,
+  'fixture: the seeded source-tools catalog is known, tools and models'
+);
+select is_empty(
+  $$ select * from pg_temp.unanswered_names() $$,
+  'every seeded tool and tool''s model is named by every prefix of every word of its label, by the label as one word, and by it split with spaces or hyphens'
+);
+
+insert into public.source_tools (slug, label, is_active, last_verified_at, aliases, created_by_user_id) values
+  ('quillforge', 'Quill Forge', true, current_date, array['QF Studio'], null),
+  ('quillidle', 'Quillidle Studio', true, current_date, '{}', null),
+  ('quillgone', 'Quillgone Lab', false, current_date, '{}', null),
+  ('quillmine', 'Quillmine', true, null, '{}', pg_temp.uid('03')),
+  ('quillorphan', 'Quillorphan', true, null, '{}', null),
+  ('kytelabs', 'Kyte Labs', true, current_date, '{}', null);
+insert into public.source_tool_models (source_tool_id, slug, label, is_active, last_verified_at, created_by_user_id)
+select tools.id, model.slug, model.label, model.is_active, model.verified, model.maker
+from public.source_tools as tools
+cross join (
+  values
+    ('quill-gen-4.5', 'Quill Gen-4.5', true, current_date, null::uuid),
+    ('quill-v8.1', 'Quill V8.1', true, current_date, null),
+    ('quillmax', 'QuillMax 3', true, current_date, null),
+    ('quill-idle', 'Quill Idle', true, current_date, null),
+    ('quill-retired', 'Quill Retired', false, current_date, null),
+    ('quill-planted', 'Quill Planted', true, null, pg_temp.uid('03'))
+) as model(slug, label, is_active, verified, maker)
+where tools.slug = 'quillforge';
+
+insert into public.posts (
+  id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw,
+  title, showcase_asset_path, source_tool, source_tool_slug, created_at, updated_at
+)
+select pg_temp.uid(post.suffix), pg_temp.uid(post.owner), 'public', 'image', 'external', 'media', 'visible', false,
+       'Paper crane ' || post.suffix, 'showcase/c5e6-' || post.suffix || '.png', post.tool, post.tool_slug, now(), now()
+from (
+  values
+    -- The first prints the tool's name its own way: the row is named by the catalog.
+    ('90', '01', 'QUILL forge!', 'quillforge'),
+    ('91', '01', 'Quill Forge', 'quillforge'),
+    ('92', '01', 'Quill Forge', 'quillforge'),
+    ('93', '01', 'Quill Forge', 'quillforge'),
+    ('94', '01', 'Quill Forge', 'quillforge'),
+    ('95', '01', 'Quill Forge', 'quillforge'),
+    ('96', '01', 'Quill Forge', 'quillforge'),
+    ('97', '03', 'Quillgone Lab', 'quillgone'),
+    ('98', '03', 'Quillmine', 'quillmine'),
+    ('99', '03', 'Quill Forge', 'quillforge'),
+    ('9a', '03', 'Quillorphan', 'quillorphan'),
+    ('9b', '01', 'Kyte Labs', 'kytelabs')
+) as post(suffix, owner, tool, tool_slug);
+insert into public.post_source_tools (post_id, tool_label, tool_slug, model_label, model_slug)
+select pg_temp.uid(made.suffix), 'Quill Forge', 'quillforge', made.model_label, made.model_slug
+from (
+  values
+    ('90', 'Quill Gen-4.5', 'quill-gen-4.5'), ('91', 'Quill Gen-4.5', 'quill-gen-4.5'), ('92', 'Quill Gen-4.5', 'quill-gen-4.5'),
+    ('93', 'Quill V8.1', 'quill-v8.1'), ('94', 'Quill V8.1', 'quill-v8.1'),
+    ('95', 'QuillMax 3', 'quillmax'),
+    ('96', 'Quill Retired', 'quill-retired'),
+    ('99', 'Quill Planted', 'quill-planted')
+) as made(suffix, model_label, model_slug);
+
+select is(
+  (select array_agg(kind || ':' || key order by kind, key) from public.search_suggest_known_names('quill') where matches),
+  array['model:quill-gen-4.5', 'model:quill-idle', 'model:quill-v8.1', 'model:quillmax', 'model:quillprime-1', 'tool:quillforge', 'tool:quillidle'],
+  'known: the catalog''s model and the tools and models an operator keeps. Never one switched off, never one a creator added, never one a deleted account left'
+);
+select is_empty(
+  $$ select * from pg_temp.unanswered_names() $$,
+  'every known name of this test, the catalog''s models with them, is named by every prefix of every word and of its name as one word'
+);
+select is_empty(
+  $$ select * from pg_temp.unoffered_names() $$,
+  'and each that has something to open is among the typeahead''s candidates for every one of those prefixes, before the cap'
+);
+select ok(
+  (select count(distinct key) from pg_temp.name_prefixes() where key in (
+     'zephyrmodel-2', 'zephyrmodel-lite', 'zephyrmodel-web', 'quillprime-1', 'quillforge', 'quill-gen-4.5', 'quill-v8.1', 'quillmax', 'midjourney', 'runway'
+   )) = 10
+  and (select count(*) from pg_temp.name_prefixes()) > 1000,
+  'fixture: that was asked of the catalog''s models with and without posts, the fixture''s tools and models, and seeded tools posts are made with'
+);
+select is(
+  (select count(*) from pg_temp.name_prefixes() as prefixes
+   cross join lateral jsonb_array_elements(
+     public.search_suggest_entities(prefixes.typed, null, true, false, 50) || public.search_suggest_entities(prefixes.typed, null, true, true, 50)
+   ) as entity
+   where prefixes.key in ('quillforge', 'quill-gen-4.5', 'zephyrmodel-2')
+     and entity ->> 'key' in (
+       'zephyrmodel-off', 'zephyrmodel-old', 'quill-retired', 'quill-planted', 'quillgone', 'quillmine', 'quillorphan',
+       'quill-idle', 'quillidle', 'magicbooklet'
+     )),
+  0::bigint,
+  'no prefix, as typed or with a mistake allowed, is answered with a retired model, a row switched off, a row a creator added, a name with nothing to open, or the app''s own tool'
+);
+
+-- One creator's post is enough for a known name; a made-up one keeps the rule.
+select is(pg_temp.entity_rows('quillforge'), array['tool:quillforge=8'],
+  'a known tool one creator alone posts with is offered, to a client that did not ask too');
+select is(pg_temp.entity_rows('quillmax'), array['model:quillmax=1'], 'and a known tool''s model');
+select is(pg_temp.entity_rows('quillmine'), '{}'::text[],
+  'a tool a creator added to the catalog by naming it is a made-up name: one creator is not enough');
+select is(pg_temp.entity_rows('quillorphan'), '{}'::text[],
+  'nor is it known once its account is gone and the row has no creator: it was never verified');
+select is(pg_temp.entity_rows('quill planted'), '{}'::text[], 'nor a model a creator added under a known tool');
+select is(pg_temp.entity_rows('quillgone'), '{}'::text[], 'nor a tool switched off');
+select is(pg_temp.entity_rows('quill retired'), '{}'::text[], 'nor a tool''s model switched off');
+select is(pg_temp.entity_rows('quillidle', true), '{}'::text[],
+  'a known tool nobody posted with is not offered, asked or not: it has nothing to open');
+select is(
+  (select jsonb_build_object('label', entity -> 'label', 'in_catalog', entity -> 'in_catalog', 'catalog_model', entity -> 'catalog_model')
+   from jsonb_array_elements(public.search_suggestions('quillforge') -> 'entities') as entity),
+  '{"label": "Quill Forge", "in_catalog": false, "catalog_model": null}'::jsonb,
+  'a known tool is named as the catalog names it, whatever a post prints, and is no catalog model'
+);
+
+-- The forms search understands, for a client that asked.
+select is(pg_temp.candidates('quillgen'), array['model:quill-gen-4.5=3'], 'a name written as one word');
+select is(pg_temp.candidates('quill-gen'), array['model:quill-gen-4.5=3'], 'with a hyphen');
+select is(pg_temp.candidates('quill gen 4'), array['model:quill-gen-4.5=3'], 'with spaces, the version started');
+select is(pg_temp.candidates('gen-4.5'), array['model:quill-gen-4.5=3'], 'a later word, as written');
+select is(pg_temp.candidates('quillv8'), array['model:quill-v8.1=2'], 'letters and digits run together');
+select is(pg_temp.candidates('quill v 8'), array['model:quill-v8.1=2'], 'or apart');
+select is(pg_temp.candidates('quillmax3'), array['model:quillmax=1'], 'a name and its number run together');
+select is(pg_temp.candidates('qf'), array['tool:quillforge=8'], 'an alias an operator gave the tool, from two characters');
+select is(pg_temp.candidates('qf stu'), array['tool:quillforge=8'], 'and its later word');
+select is(pg_temp.candidates('q'), '{}'::text[], 'nothing from one character');
+select is(pg_temp.candidates('qu%ll'), '{}'::text[], 'a typed % is no wildcard');
+select is(pg_temp.candidates('qu_ll'), '{}'::text[], 'nor a typed _');
+select is(
+  (select count(*) from jsonb_array_elements(public.search_suggest_entities('qu', null, true, false, 50)) as entity
+   where entity ->> 'key' like 'quill%'
+     and (entity ->> 'post_count')::integer <> pg_temp.opened(entity ->> 'query', null, (entity ->> 'kind') || ':' || (entity ->> 'key'))
+     and (entity ->> 'post_count')::integer > 0),
+  0::bigint,
+  'a tool or a tool''s model added for a short text carries the search that opens its posts, and counts them'
+);
+
+-- More names than the cap holds: the order decides.
+select is(pg_temp.candidates('quill'),
+  array['tool:quillforge=8', 'model:quill-gen-4.5=3', 'model:quill-v8.1=2', 'model:quillmax=1', 'model:quillprime-1=0'],
+  'the candidates for a family: the names the text starts, the most posts first');
+select is(pg_temp.entity_rows('quill', true),
+  array['tool:quillforge=8', 'model:quill-gen-4.5=3', 'model:quill-v8.1=2', 'model:quillmax=1'],
+  'the answer holds four: the first four of that order');
+select is(pg_temp.entity_rows('quill forge', true), array['tool:quillforge=8'],
+  'the name that is the text alone, when only it is named');
+select is(pg_temp.entity_rows('prime', true), array['model:quillprime-1=0'],
+  'a catalog model with no post still opens its creator');
+
+-- One mistake: only for a client that asked, from four characters, and only
+-- when nothing else answers.
+select is(pg_temp.entity_rows('quilforge', true), array['tool:quillforge=8'], 'a letter left out');
+select is(pg_temp.entity_rows('quillfroge', true), array['tool:quillforge=8'], 'two neighbours swapped');
+select is(pg_temp.entity_rows('quillforhe', true), array['tool:quillforge=8'], 'a letter wrong');
+select is(pg_temp.entity_rows('quillfforge', true), array['tool:quillforge=8'], 'a letter added');
+select is(pg_temp.entity_rows('quillmxa', true), array['model:quillmax=1'], 'in a model''s name');
+select is(pg_temp.entity_rows('zephir', true), array['model:zephyrmodel-2=2', 'model:zephyrmodel-lite=0', 'model:zephyrmodel-web=0'],
+  'in a catalog model''s, the ones with posts first');
+select is(
+  (select array_agg((entity ->> 'key') || '/' || (entity ->> 'query') order by entity ->> 'key')
+   from jsonb_array_elements(public.search_suggestions('quilforge', null, false, 5, 6, true) -> 'entities') as entity),
+  array['quillforge/' || (select query from public.search_starter_entity_offer('tool', 'quillforge', null))],
+  'a row found by a mistake carries the search that opens its posts: the typed text opens none'
+);
+select is(pg_temp.entity_rows('quilforge'), '{}'::text[], 'not for a client that did not ask: it would open the misspelt search');
+select is(pg_temp.entity_rows('quillfrgoe', true), '{}'::text[], 'not with two mistakes');
+select is(pg_temp.entity_rows('wuillforge', true), '{}'::text[], 'not in the first letter');
+select is(pg_temp.entity_rows('qul', true), '{}'::text[], 'not under four characters');
+select is(pg_temp.candidates('quilforge', true, true) && array['model:quill-retired=1', 'tool:quillgone=1', 'tool:quillmine=1'], false,
+  'a mistake finds no name that is not known');
+select ok(
+  (select count(*) from public.search_suggest_completions('kite', 6, null)) > 0
+  and exists (select 1 from public.search_suggest_known_names('kite', true) where matches and key = 'kytelabs')
+  and not exists (
+    select 1 from jsonb_array_elements(public.search_suggestions('kite', null, false, 5, 6, true) -> 'entities') as entity
+    where entity ->> 'key' = 'kytelabs'
+  ),
+  'no mistake is looked for when the text as typed has an answer: "kite" completes, so Kyte Labs is not offered'
+);
+select ok(public.search_one_mistake_prefix('seedence', 'seedance')
+  and public.search_one_mistake_prefix('seedanc', 'seedance')
+  and public.search_one_mistake_prefix('klnig', 'kling')
+  and public.search_one_mistake_prefix('seeda', 'seedance')
+  and public.search_one_mistake_prefix('sedan', 'seedance')
+  and public.search_one_mistake_prefix('seeedan', 'seedance'),
+  'one mistake: a letter wrong, left out, added or swapped with its neighbour, in a whole word or its start');
+select ok(not public.search_one_mistake_prefix('see', 'seedance')
+  and not public.search_one_mistake_prefix('xeedance', 'seedance')
+  and not public.search_one_mistake_prefix('sadence', 'seedance')
+  and not public.search_one_mistake_prefix('kling', '')
+  and not public.search_one_mistake_prefix('seedancers', 'seedance'),
+  'never under four characters, in the first letter, with two mistakes, or past the word''s end by more than a letter');
+select is(public.search_name_words('Gen-4.5 Turbo'), array['4', '4.5', '5', 'gen', 'turbo'],
+  'a name''s words: as written, a dot kept inside one, and with letters and digits apart');
+select is(public.search_name_squashes('Nano Banana Pro'), array['bananapro', 'nanobananapro', 'pro'],
+  'a name as one word, from each of its words on');
+
+-- The models the migrations ship, with their release live again.
+update public.generation_model_catalog_releases set status = 'retired', retired_at = now() where revision = 'c5e6-typeahead-catalog';
+update public.generation_model_catalog_releases as releases
+set status = 'active', retired_at = null, activated_at = now()
+where releases.id = (
+  select previous.id from public.generation_model_catalog_releases as previous
+  where previous.revision <> 'c5e6-typeahead-catalog'
+  order by previous.schema_version desc, previous.activated_at desc
+  limit 1
+);
+select ok(
+  (select count(*) from public.search_suggest_known_names('zz') where model_id is not null) >= 20
+  and not exists (select 1 from public.search_suggest_known_names('zz') where model_id like 'zephyrmodel%'),
+  'fixture: the seeded release is live, this test''s is retired and its models are known no more'
+);
+select is_empty(
+  $$ select * from pg_temp.unanswered_names() $$,
+  'every model of the seeded catalog is named by every prefix of every word of its name and of its name as one word'
+);
+select is_empty(
+  $$ select unoffered.* from pg_temp.unoffered_names() as unoffered
+     join public.search_suggest_known_names('zz') as known on known.kind = unoffered.kind and known.key = unoffered.key
+     where known.model_id is not null $$,
+  'and is among the typeahead''s candidates for each of them, with or without a post'
+);
+select is(pg_temp.entity_rows('zeph', true), array['model:zephyrmodel-2=2'],
+  'a retired release''s models are known no more: the ones with no post are not answered, and the one two creators'' posts are made with is offered as any model is');
+select is(
+  (select entity -> 'in_catalog' from jsonb_array_elements(public.search_suggestions('zeph', null, false, 5, 6, true) -> 'entities') as entity),
+  'false'::jsonb,
+  'and says it is no catalog model'
+);
+
 -- ─── Who may read what ───────────────────────────────────────────────────────
 
 select ok(
@@ -938,7 +1285,8 @@ select is(
        'rebuild_search_phrases', 'search_text_phrases', 'search_entity_phrase', 'search_post_picture',
        'search_entity_picture', 'search_query_picture', 'search_query_post_floor', 'search_week_score',
        'search_suggest_completions', 'search_suggest_creators', 'search_suggestions', 'search_starter',
-       'search_related_searches', 'search_suggest_catalog_models'
+       'search_related_searches', 'search_suggest_known_names', 'search_suggest_entities',
+       'search_name_words', 'search_name_squashes', 'search_one_mistake_prefix'
      )
      and (
        has_function_privilege('anon', oid, 'EXECUTE')
@@ -956,13 +1304,13 @@ select is(
      and proname in (
        'rebuild_search_phrases', 'search_post_picture', 'search_entity_picture', 'search_query_picture',
        'search_query_post_floor', 'search_suggest_completions', 'search_suggest_creators', 'search_starter',
-       'search_related_searches', 'search_suggest_catalog_models'
+       'search_related_searches', 'search_suggest_known_names', 'search_suggest_entities'
      )
      and prosecdef),
   array[
     'rebuild_search_phrases', 'search_entity_picture', 'search_post_picture', 'search_query_picture',
-    'search_query_post_floor', 'search_related_searches', 'search_starter', 'search_suggest_catalog_models',
-    'search_suggest_completions', 'search_suggest_creators'
+    'search_query_post_floor', 'search_related_searches', 'search_starter', 'search_suggest_completions',
+    'search_suggest_creators', 'search_suggest_entities', 'search_suggest_known_names'
   ],
   'the ones that read posts run with their owner''s rights'
 );
