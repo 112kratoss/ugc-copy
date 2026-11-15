@@ -92,7 +92,10 @@ entity id such as `model:kling-2.6`; `media_kind`, `image` or `video`;
 `has_recipe` and `followed_only`, true when on: each empty when off, and
 `followed_only` says only that the filter was on, never who is followed),
 whether the answer's posts or recipes were found on a corrected reading of the
-query (`corrected`; empty for a Creators search), when the request arrived, and
+query (`corrected`; empty for a Creators search), how the search was entered as
+the client says it (`entry`: `typed`, `suggestion`, `entity`, `recent`,
+`starter`, `related`, `correction` or `link`; empty from a client that sends
+none, which is every app installed before 2026-11-15), when the request arrived, and
 `visitor_day`. A search asked to read the query as typed ("search instead for",
 `exact=1`) writes no row: it re-asks a search already counted and by its nature
 finds no post or recipe. `visitor_day` is an HMAC of the
@@ -130,13 +133,38 @@ from before that migration, search keeps working against it: that app's call
 names none of the new parameters, so nothing is narrowed, and a cursor issued
 under filters by the newer app pages the unfiltered search from its place.
 
+`public.search_result_opens` (`20261115105353`) is the log's second table: one
+row per result a person pressed from a search, written behind
+`POST /api/search/opened` (`src/lib/search-opened-route-adapter-service.ts`,
+`src/lib/search-open-log.ts`). A row holds the query cleaned as the search row's
+is, the tab, the order of a Posts or Recipes list, the search's `entry`, the
+kind opened (`post`, `creator`, `recipe`, `entity`), its id (a uuid, or an
+entity's `model:<key>` / `tool:<key>`), its 1-based place in the list it was
+pressed in (500 means 500 or later), when the request arrived, and the same
+`visitor_day` as the search row, which is all that ties an open to its search:
+no account id, no address, no signed-in flag. The route stores the id as sent
+and never looks it up, so it answers every well-formed report 204 with no body
+whether the id names a public post, a private one or nothing; the report is
+where an id is checked. It has its own rate limit (`public-search:opened`, 120
+per 10 minutes per account, or per network for a visitor), is admitted as
+`/api/search` is, shares the switch (`SEARCH_QUERY_LOG_DISABLED=1` stops both
+tables) and the 90 days (`search_result_opens_deleted` in the sweep's summary).
+
 ```bash
 npm run ops:search-report -- --days 7 [--limit 50] [--json]
 ```
 
 Read-only, service role. It prints, per final query, how many distinct
-visitor-days searched it and how many of those found nothing in any kind, zero
-results first, under a line with the window's totals and zero-result rate. A
+visitor-days searched it, how many of those found nothing in any kind, how many
+opened a result, how many found something and opened nothing, the mean place of
+the results opened and how the searches were entered, under three lines with
+the window's totals; then the same columns again for the queries most often left
+without an open (`search_query_report(7, 50, 'unopened')`). An open counts only
+while its id is something search shows the public (a post with a search
+document and no NSFW label, a creator with one, a listable recipe, an entity
+such a post has), a result pressed several times from one search is one open at
+its first place, and a query a result was opened from is always a search of its
+own, never a typing step. A
 "final query" is one that no later query of the same visitor-day extends within
 15 seconds, so "po" → "por" → "port" is the single search "port". The same words
 asked on several tabs within that window are one search, and a zero-result one

@@ -6,6 +6,7 @@ import { encodePublicSearchCursor, publicSearchCursorFilterMark } from '@/lib/pu
 import type { PublicSearchOptions } from '@/lib/public-search-service';
 import { getPublicSearchRouteResponse } from '@/lib/public-search-route-adapter-service';
 import type { PublicSearchResponse } from '@/lib/public-search';
+import { SEARCH_ENTRIES } from '../../ugc-mobile/lib/public-search-policy/search-open-log';
 
 function emptyResponse(query: string, type: PublicSearchResponse['type']): PublicSearchResponse {
   return {
@@ -583,13 +584,47 @@ describe('public search route adapter service', () => {
       expect(row).toMatchObject({
         query: 'port', search_type: 'top', signed_in: false, creator_count: 0, post_count: 0, recipe_count: 0,
         sort: null, made_with: null, media_kind: null, has_recipe: null, followed_only: null, corrected: false,
-        related_count: null,
+        related_count: null, entry: null,
       });
       expect(Object.keys(row).sort()).toEqual([
-        'corrected', 'created_at', 'creator_count', 'followed_only', 'has_recipe', 'made_with', 'media_kind',
+        'corrected', 'created_at', 'creator_count', 'entry', 'followed_only', 'has_recipe', 'made_with', 'media_kind',
         'post_count', 'query', 'recipe_count', 'related_count', 'search_type', 'signed_in', 'sort', 'visitor_day',
       ]);
       expect(JSON.stringify(row)).not.toContain('network-key');
+    });
+
+    it.each(SEARCH_ENTRIES)('logs how the search was entered: entry=%s', async (entry) => {
+      const { ask, insert, tasks } = logHarness();
+      const response = await ask(`http://localhost/api/search?q=Port&entry=${entry}`);
+      expect(response.status).toBe(200);
+      await tasks[0]();
+      const [row] = insert.mock.calls[0] as unknown as [Record<string, unknown>];
+      expect(row).toMatchObject({ query: 'port', entry });
+    });
+
+    it('answers 400 to an entry it does not know, on any type, and logs nothing', async () => {
+      for (const url of [
+        'http://localhost/api/search?q=Port&entry=voice',
+        'http://localhost/api/search?q=Port&entry=',
+        'http://localhost/api/search?q=Port&entry=TYPED',
+        'http://localhost/api/search?q=Port&type=creators&entry=voice',
+      ]) {
+        const { ask, tasks } = logHarness();
+        const response = await ask(url);
+        expect(response.status, url).toBe(400);
+        await expect(response.json()).resolves.toEqual({
+          error: 'entry must be one of typed, suggestion, entity, recent, starter, related, correction, link.',
+        });
+        expect(tasks).toHaveLength(0);
+      }
+    });
+
+    it('changes nothing of the search itself: the service is asked the same with an entry and without', async () => {
+      const searchWith = vi.fn(async () => emptyResponse('Port', 'top'));
+      const searchWithout = vi.fn(async () => emptyResponse('Port', 'top'));
+      await logHarness().ask('http://localhost/api/search?q=Port&entry=starter', { searchPublicContent: searchWith });
+      await logHarness().ask('http://localhost/api/search?q=Port', { searchPublicContent: searchWithout });
+      expect(searchWith.mock.calls[0]).toEqual(searchWithout.mock.calls[0]);
     });
 
     it('logs what narrowed a Posts search, the filters applied and nothing of who is followed', async () => {

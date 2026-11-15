@@ -250,6 +250,11 @@ const PUBLIC_ROUTES = [
   // /api/search is. A token only leaves out whom the viewer is blocked with
   // or already follows, and keys the rate limit on them.
   '/api/search/starter',
+  // A result opened from a search, for the anonymous search log: admitted as
+  // /api/search is. A token only keys the rate limit and the per-day visitor
+  // code on its viewer, as that search's was; no identity is stored, and the
+  // answer is the same 204 whatever the id names.
+  '/api/search/opened',
   '/api/showcase/feed',
   '/api/showcase/feed/events',
   // Whether a lane has a post newer than the one a client holds: no identity

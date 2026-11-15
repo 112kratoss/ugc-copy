@@ -40,6 +40,11 @@ import { recordSearchAnswer } from '@/lib/public-search-query-log';
 import { searchPublicContent } from '@/lib/public-search-service';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
+import {
+  SEARCH_ENTRIES,
+  SEARCH_ENTRY_PARAM,
+  readSearchEntry,
+} from '../../ugc-mobile/lib/public-search-policy/search-open-log';
 
 type PublicSearchRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
@@ -175,6 +180,13 @@ async function handlePublicSearchGET(
     const rawProbe = url.searchParams.get(PUBLIC_SEARCH_PROBE_PARAM);
     if (rawProbe !== null && rawProbe !== '1') return badRequest(request, 'probe must be 1.');
 
+    // How the search was entered (typed, a suggestion, a recent search...), for
+    // the search log alone: it changes nothing of the answer. Left out by every
+    // client installed before it; any other value is refused, as an unknown
+    // type is.
+    const entry = readSearchEntry(url.searchParams.get(SEARCH_ENTRY_PARAM));
+    if (!entry.ok) return badRequest(request, `${SEARCH_ENTRY_PARAM} must be one of ${SEARCH_ENTRIES.join(', ')}.`);
+
     const limit = parsePublicSearchLimit(url.searchParams.get('limit'));
     if (!limit) return badRequest(request, 'limit must be an integer between 1 and 24.');
 
@@ -264,6 +276,7 @@ async function handlePublicSearchGET(
       sort,
       filters,
       exact: filterParams.exact,
+      entry: entry.entry,
       viewerKey,
       // Most sessions here are guests, which the log does not call signed in.
       signedIn: registered,
