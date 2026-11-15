@@ -3017,6 +3017,9 @@ function IdentityCreationScreen({
       setLastPredictionId(started.predictionId);
       setLastGenerationId(started.generationId ?? null);
       if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
+      // A start the server queued says so in its answer. The wait says it from
+      // there, not "Queued with the model" until the first status read comes back.
+      if (started.queued === true) setStatus({ status: 'waiting', queued: true });
       const finalStatus = await pollGenerationForTool(attempt.tool, started.predictionId, pollController);
       await finishGenerationPolling(finalStatus, attempt.tool, started.predictionId);
     } catch (error) {
