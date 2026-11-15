@@ -15,6 +15,8 @@ import FeedPostCard, { type FeedDetailContext } from '@/app/feed/FeedPostCard';
 import WindowedFeedList from '@/app/feed/WindowedFeedList';
 import SkeletonLoader from '@/components/SkeletonLoader';
 import { FEED_CHIPS, FEED_PAGE_SIZE, getFeedChip, type FeedChipId } from '@/lib/post-feed-chips';
+import { HOME_CHIP_MARK } from '@/lib/address-first-paint';
+import { useFirstPaintMark } from '@/lib/use-first-paint-mark';
 import {
     blockCreatorAfterConfirmation,
     reportCreatorAfterConfirmation,
@@ -223,6 +225,9 @@ export default function FeedClient({
     const accessToken = session?.access_token ?? null;
 
     const [chipId, setChipId] = useState<FeedChipId>(initialChipId);
+    // The lane the address named was drawn from the first paint by the stylesheet; the feed
+    // takes it over once it draws that lane (src/lib/address-first-paint.ts).
+    useFirstPaintMark(HOME_CHIP_MARK, chipId === FEED_CHIPS[0].id ? null : chipId);
     const viewerId = user?.id ?? null;
     // Posts and creators removed through the card menu. Pages and lanes that
     // arrive afterwards are filtered the same way, for the rest of the visit.
@@ -1127,6 +1132,7 @@ export default function FeedClient({
                     type="button"
                     onClick={() => selectChip(chip.id)}
                     aria-pressed={chipId === chip.id}
+                    data-feed-chip={chip.id}
                     // The same classes as the row Home's skeleton holds in its place.
                     className={`ui-focus-ring transition ${feedChipClassName(chipId === chip.id)}${
                         chipId === chip.id ? '' : ' hover:border-[var(--ui-border-default)] hover:text-[var(--ui-text-primary)]'
@@ -1202,7 +1208,9 @@ export default function FeedClient({
                     </div>
                 ))
             ) : (
-                <div className="relative">
+                // The lane's posts, left out while the address names another lane before the
+                // page's script runs (src/lib/address-first-paint.ts).
+                <div className="relative" data-feed-lane-list data-feed-lane={chipId}>
                     {hasNewerPosts ? (
                         // Floats over the top of the lane and stays under the
                         // shell's bar as the reader scrolls; takes no room.

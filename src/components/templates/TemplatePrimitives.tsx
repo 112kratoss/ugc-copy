@@ -93,7 +93,13 @@ export function TemplateCard({
   const OutputIcon = template.outputKind === 'video' ? Video : ImageIcon;
 
   return (
-    <Link href={href} className="ui-card ui-card-interactive ui-focus-ring group flex h-full flex-col overflow-hidden rounded-3xl">
+    <Link
+      href={href}
+      // The media it takes, for the catalog's filter drawn from the address before the page's
+      // script (src/lib/address-first-paint.ts).
+      data-template-inputs={[...new Set(template.inputSlots.map((slot) => slot.kind))].join(' ')}
+      className="ui-card ui-card-interactive ui-focus-ring group flex h-full flex-col overflow-hidden rounded-3xl"
+    >
       <MediaFrame aspectRatio="4 / 5" className="relative rounded-none border-0 border-b border-white/8">
         <TemplateCardPoster
           key={`${template.thumbnailUrl}:${previewAttempt}`}

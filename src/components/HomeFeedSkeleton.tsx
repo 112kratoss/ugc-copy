@@ -30,7 +30,7 @@ export function HomeFeedSkeleton({ activeChipId = 'for-you' }: { activeChipId?: 
     <div className={HOME_FEED_COLUMN_CLASS} aria-label="Loading feed">
       <div className="flex flex-wrap items-center gap-2" aria-hidden data-testid="home-feed-skeleton-chips">
         {FEED_CHIPS.map((chip) => (
-          <span key={chip.id} className={`inline-flex items-center ${feedChipClassName(chip.id === activeChipId)}`}>
+          <span key={chip.id} data-feed-chip={chip.id} className={`inline-flex items-center ${feedChipClassName(chip.id === activeChipId)}`}>
             {chip.label}
           </span>
         ))}
