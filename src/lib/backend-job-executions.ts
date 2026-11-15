@@ -665,7 +665,8 @@ export function runSearchDictionaryBackendJob(options: {
       completed: 'search_dictionary_completed',
       failed: 'search_dictionary_failed',
     },
-    // One bounded SQL call that reports zeros when nothing changed.
+    // Two bounded SQL calls (the dictionary, then the phrases), each
+    // reporting what it holds; zeros when nothing changed.
     hasWork: async () => true,
     run: (client) => rebuildSearchDictionary(client),
   });

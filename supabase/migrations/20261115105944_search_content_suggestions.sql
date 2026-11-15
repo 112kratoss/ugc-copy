@@ -36,7 +36,9 @@
 --    from a labelled, private, hidden or archived post, or from a paid
 --    recipe's caption or prompt: none of that is in a document a rebuild
 --    reads. Words next to each other inside one run of text between
---    punctuation; a phrase neither starts nor ends on a stop word, and no
+--    punctuation, of at most 60 characters together (three long words are
+--    read as their two-word halves, never raised against the table's
+--    check); a phrase neither starts nor ends on a stop word, and no
 --    word of it is one of that post's own tool or model names (read as the
 --    dictionary reads them: a template result's model is 'template-workflow',
 --    never its own). A name comes from post_search_entities, which holds no
@@ -52,9 +54,19 @@
 --    creators on either side of a block with them.
 --
 -- 3. rebuild_search_phrases makes both tables exactly that, adding, changing
---    and removing. The search-dictionary job calls it after
---    rebuild_search_terms, as a call of its own: the app live before this
---    file's code does not call it, and reads neither table.
+--    and removing, and stamps search_phrases_state. The search-dictionary
+--    job calls it after rebuild_search_terms, as a call of its own. The app
+--    live before this file's code does not call it, but DOES read both
+--    tables: search_suggestions and search_starter are re-created here and
+--    it calls them by name. A phrase is checked against the posts only at a
+--    rebuild, so every read of either table asks search_phrases_are_fresh
+--    first and, once the last rebuild is over three hours old, answers what
+--    it did before this file: completions from the dictionary, the all-time
+--    lists, the hand-picked searches, no picture picked at a rebuild, no
+--    related search. That covers the hours between this migration and the
+--    new job's first run (the migration's own rebuild is fresh for three),
+--    a job that stopped or was switched off, and code rolled back without
+--    the migration.
 --
 -- 4. COMPLETIONS (search_suggest_completions). Words as before, and now
 --    phrases: every typed word is in the phrase and the last is a prefix of
@@ -79,7 +91,12 @@
 --    post result carries. search_suggestions gives each entity one,
 --    search_starter each entity and each search. A picture is read from the
 --    candidates a rebuild kept and checked again at the read, so it is
---    always of a post pressing the row finds now.
+--    always of a post pressing the row finds now. The candidates are
+--    ordered by what accounts other than the post's creator gave it in the
+--    last 28 days (saves, commenters), the newest of equals: never by the
+--    post's own counters, which a creator's comments on their own post
+--    raise. A known name one creator alone posts with is pictured by that
+--    creator's post, the post its search shows.
 --
 -- 7. POPULAR THIS WEEK (search_starter). Models and tools, and creators, are
 --    ordered by their week against their own three weeks before; with fewer
@@ -199,9 +216,9 @@ COMMENT ON COLUMN public.search_phrases.core IS
 COMMENT ON COLUMN public.search_phrases.recent_weight IS
   'The posts that hold the phrase, each counted 0.5 ^ (its age in days / 30).';
 COMMENT ON COLUMN public.search_phrases.week_activity IS
-  'What the posts that hold the phrase gained in the 7 days before the rebuild: 1 for a post made then, plus the saves and the commenters it received then from accounts other than its creator.';
+  'What the posts that hold the phrase gained in the 7 days before the rebuild, added up by creator: a creator''s posts made then (counted to 10), plus the saves and the commenters those posts received then from accounts other than their creator.';
 COMMENT ON COLUMN public.search_phrases.picture_post_ids IS
-  'Up to 8 of the posts that hold the phrase whose cover has a ready preview, the most saved, commented and remixed first. A read checks each again before it draws one.';
+  'Up to 8 of the posts that hold the phrase whose cover has a ready preview: the one accounts other than its creator saved and commented on most in the 28 days before the rebuild first, then the newest. A read checks each again before it draws one.';
 
 CREATE TABLE public.search_popularity (
   subject text NOT NULL CHECK (subject IN ('model', 'tool', 'creator')),
@@ -213,6 +230,7 @@ CREATE TABLE public.search_popularity (
   base_activity real NOT NULL CHECK (base_activity >= 0),
   picture_post_id uuid,
   picture_score real NOT NULL DEFAULT 0,
+  picture_created_at timestamptz,
   PRIMARY KEY (subject, key, creator_user_id),
   CONSTRAINT search_popularity_creator_key CHECK ((subject = 'creator') = (key = '*'))
 );
@@ -229,7 +247,46 @@ COMMENT ON COLUMN public.search_popularity.week_activity IS
 COMMENT ON COLUMN public.search_popularity.base_activity IS
   'The same over the 21 days before that (new posts counted to 30), divided by 3: an average week.';
 COMMENT ON COLUMN public.search_popularity.picture_post_id IS
-  'The creator''s post for this model or tool whose cover has a ready preview and that is saved, commented and remixed most. NULL on a creator''s own row and when none has a picture.';
+  'The creator''s post for this model or tool whose cover has a ready preview and that accounts other than the creator saved and commented on most in the 28 days before the rebuild (picture_score), the newest of equals (picture_created_at). NULL on a creator''s own row and when none has a picture. Never ordered by a post''s own counters: a creator''s comments on their own post raise those.';
+
+-- When both tables were last made what the posts show. One row.
+CREATE TABLE public.search_phrases_state (
+  only_row boolean PRIMARY KEY DEFAULT true CHECK (only_row),
+  rebuilt_at timestamptz NOT NULL
+);
+
+ALTER TABLE public.search_phrases_state ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE public.search_phrases_state FROM PUBLIC, anon, authenticated, service_role;
+GRANT SELECT ON TABLE public.search_phrases_state TO service_role;
+
+COMMENT ON TABLE public.search_phrases_state IS
+  'Backend-owned, one row: when rebuild_search_phrases last made search_phrases and search_popularity what the posts show. Every read of those two tables asks search_phrases_are_fresh first and, past three hours, answers what it did before them (dictionary completions, all-time lists, no picture picked at a rebuild, no related search): a phrase is checked against the posts only at a rebuild, so a job that stopped, or code rolled back without this migration, must not leave suggestions from posts since labelled or removed.';
+
+CREATE FUNCTION public.search_phrases_are_fresh()
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $function$
+DECLARE
+  -- The job runs hourly: three hours is two missed runs.
+  c_fresh CONSTANT interval := interval '3 hours';
+BEGIN
+  RETURN EXISTS (
+    SELECT 1
+    FROM public.search_phrases_state AS state
+    WHERE state.rebuilt_at >= now() - c_fresh
+  );
+END;
+$function$;
+
+COMMENT ON FUNCTION public.search_phrases_are_fresh() IS
+  'Whether rebuild_search_phrases ran within the last three hours (search_phrases_state): what every read of search_phrases and search_popularity asks before it reads them. Service role only.';
+
+REVOKE ALL ON FUNCTION public.search_phrases_are_fresh() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.search_phrases_are_fresh() TO service_role;
 
 -- ─── 2. How text is read into phrases ───────────────────────────────────────
 
@@ -248,6 +305,10 @@ DECLARE
   -- prompt. A prompt can run to thousands of words, and every word read is
   -- two rows for a rebuild to count.
   c_chars CONSTANT integer := 500;
+  -- The longest phrase kept (search_phrases.phrase). Three words of 24
+  -- letters are 74 characters: such a run is read as its two-word halves and
+  -- never as a whole, so a rebuild cannot raise the table's check.
+  c_phrase_chars CONSTANT integer := 60;
   v_text text := lower(coalesce(p_text, ''));
 BEGIN
   IF char_length(v_text) > c_chars THEN
@@ -306,12 +367,13 @@ BEGIN
     FROM chained
     WHERE chained.is_content AND chained.second_is_word AND chained.third_is_content
       AND NOT (chained.word = chained.second_word AND chained.second_word = chained.third_word)
-  ) AS found;
+  ) AS found
+  WHERE char_length(found.gram) <= c_phrase_chars;
 END;
 $function$;
 
 COMMENT ON FUNCTION public.search_text_phrases(text) IS
-  'The two- and three-word phrases of a text''s first 500 characters, lowercased: words of letters next to each other inside one run between punctuation, neither end a stop word, each phrase once. A rebuild of search_phrases and related searches read a post''s public search text with it.';
+  'The two- and three-word phrases of a text''s first 500 characters, lowercased: words of letters next to each other inside one run between punctuation, neither end a stop word, none over 60 characters, each phrase once. A rebuild of search_phrases and related searches read a post''s public search text with it.';
 
 CREATE FUNCTION public.search_entity_phrase(p_kind text, p_key text, p_label text)
 RETURNS text
@@ -382,7 +444,6 @@ BEGIN
         documents.creator_user_id,
         documents.created_at,
         documents.search_text,
-        (posts.save_count + posts.comment_count + posts.remix_count) AS engagement,
         names.words AS name_words,
         coalesce(cover.ready, false) AS pictured
       FROM public.post_search_documents AS documents
@@ -454,7 +515,13 @@ BEGIN
         shown.post_id,
         shown.creator_user_id,
         shown.created_at,
-        shown.engagement,
+        -- What orders the pictures: the saves and the commenters a post
+        -- received from other accounts in the 28 days read. Never the post's
+        -- own counters: a creator's comments on their own post raise
+        -- comment_count, and one account could put its picture on a model's
+        -- row for everyone.
+        (coalesce(saved.this_week, 0) + coalesce(saved.earlier, 0)
+          + coalesce(commented.this_week, 0) + coalesce(commented.earlier, 0))::integer AS engagement,
         shown.pictured,
         (shown.created_at >= v_week)::integer AS new_this_week,
         (shown.created_at >= v_month AND shown.created_at < v_week)::integer AS new_earlier,
@@ -528,24 +595,45 @@ BEGIN
         kept.creator_count,
         measured.recent_weight,
         measured.week_activity,
-        measured.picture_post_ids
+        coalesce(pictured.post_ids, '{}'::uuid[]) AS picture_post_ids
       FROM kept
       JOIN (
+        -- By creator first: one creator's new posts count toward a phrase's
+        -- week up to c_week_posts, as they do toward a model's below, so one
+        -- account's volume does not decide the start screen's searches.
+        SELECT
+          by_maker.phrase,
+          round(sum(by_maker.recent_weight)::numeric, 2)::real AS recent_weight,
+          sum(least(by_maker.new_this_week, c_week_posts) + by_maker.received_this_week)::real AS week_activity
+        FROM (
+          SELECT
+            occurrences.phrase,
+            occurrences.creator_user_id,
+            sum(power(
+              0.5::double precision,
+              (greatest(extract(epoch FROM (v_now - active.created_at)), 0) / 86400.0 / c_half_life_days)::double precision
+            )) AS recent_weight,
+            sum(active.new_this_week) AS new_this_week,
+            sum(active.received_this_week) AS received_this_week
+          FROM occurrences
+          JOIN active ON active.post_id = occurrences.post_id
+          WHERE EXISTS (SELECT 1 FROM kept AS wanted WHERE wanted.phrase = occurrences.phrase)
+          GROUP BY occurrences.phrase, occurrences.creator_user_id
+        ) AS by_maker
+        GROUP BY by_maker.phrase
+      ) AS measured ON measured.phrase = kept.phrase
+      LEFT JOIN (
         SELECT
           occurrences.phrase,
-          round(sum(power(
-            0.5::double precision,
-            (greatest(extract(epoch FROM (v_now - active.created_at)), 0) / 86400.0 / c_half_life_days)::double precision
-          ))::numeric, 2)::real AS recent_weight,
-          sum(active.new_this_week + active.received_this_week)::real AS week_activity,
-          coalesce((array_agg(
+          (array_agg(
             occurrences.post_id ORDER BY active.engagement DESC, active.created_at DESC, occurrences.post_id
-          ) FILTER (WHERE active.pictured))[1:c_pictures], '{}'::uuid[]) AS picture_post_ids
+          ))[1:c_pictures] AS post_ids
         FROM occurrences
         JOIN active ON active.post_id = occurrences.post_id
-        WHERE EXISTS (SELECT 1 FROM kept AS wanted WHERE wanted.phrase = occurrences.phrase)
+        WHERE active.pictured
+          AND EXISTS (SELECT 1 FROM kept AS wanted WHERE wanted.phrase = occurrences.phrase)
         GROUP BY occurrences.phrase
-      ) AS measured ON measured.phrase = kept.phrase
+      ) AS pictured ON pictured.phrase = kept.phrase
     ),
     gone_phrases AS (
       DELETE FROM public.search_phrases AS stored
@@ -583,7 +671,10 @@ BEGIN
         (array_agg(
           members.post_id ORDER BY active.engagement DESC, active.created_at DESC, members.post_id
         ) FILTER (WHERE active.pictured))[1] AS picture_post_id,
-        coalesce(max(active.engagement) FILTER (WHERE active.pictured), 0)::real AS picture_score
+        coalesce(max(active.engagement) FILTER (WHERE active.pictured), 0)::real AS picture_score,
+        (array_agg(
+          active.created_at ORDER BY active.engagement DESC, active.created_at DESC, members.post_id
+        ) FILTER (WHERE active.pictured))[1] AS picture_created_at
       FROM public.post_search_entities AS members
       JOIN active ON active.post_id = members.post_id
       GROUP BY members.kind, members.key, members.creator_user_id
@@ -597,7 +688,8 @@ BEGIN
         (least(sum(active.new_this_week), c_week_posts) + sum(active.received_this_week))::real,
         ((least(sum(active.new_earlier), c_week_posts * 3) + sum(active.received_earlier)) / 3.0)::real,
         NULL::uuid,
-        0::real
+        0::real,
+        NULL::timestamptz
       FROM active
       GROUP BY active.creator_user_id
     ),
@@ -614,22 +706,30 @@ BEGIN
     ),
     put_popular AS (
       INSERT INTO public.search_popularity AS stored (
-        subject, key, creator_user_id, post_count, week_activity, base_activity, picture_post_id, picture_score
+        subject, key, creator_user_id, post_count, week_activity, base_activity, picture_post_id, picture_score,
+        picture_created_at
       )
       SELECT
         popular.subject, popular.key, popular.creator_user_id, popular.post_count, popular.week_activity,
-        popular.base_activity, popular.picture_post_id, popular.picture_score
+        popular.base_activity, popular.picture_post_id, popular.picture_score, popular.picture_created_at
       FROM popular
       ON CONFLICT (subject, key, creator_user_id) DO UPDATE
         SET post_count = excluded.post_count, week_activity = excluded.week_activity,
             base_activity = excluded.base_activity, picture_post_id = excluded.picture_post_id,
-            picture_score = excluded.picture_score
-        WHERE (stored.post_count, stored.week_activity, stored.base_activity, stored.picture_post_id, stored.picture_score)
+            picture_score = excluded.picture_score, picture_created_at = excluded.picture_created_at
+        WHERE (stored.post_count, stored.week_activity, stored.base_activity, stored.picture_post_id, stored.picture_score,
+               stored.picture_created_at)
           IS DISTINCT FROM (excluded.post_count, excluded.week_activity, excluded.base_activity,
-               excluded.picture_post_id, excluded.picture_score)
+               excluded.picture_post_id, excluded.picture_score, excluded.picture_created_at)
       RETURNING 1
     )
     SELECT count(*) INTO v_read FROM shown;
+
+    -- Both tables are what the posts show as of now: every read of them asks
+    -- for this stamp (search_phrases_are_fresh).
+    INSERT INTO public.search_phrases_state AS state (only_row, rebuilt_at)
+    VALUES (true, v_now)
+    ON CONFLICT (only_row) DO UPDATE SET rebuilt_at = excluded.rebuilt_at;
   END IF;
 
   RETURN QUERY
@@ -640,7 +740,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.rebuild_search_phrases() IS
-  'Makes search_phrases and search_popularity exactly what unlabelled public posts show now (phrases and names two creators'' posts hold; each model''s, tool''s and creator''s week), and says how many rows each holds. Run by the search-dictionary backend job after rebuild_search_terms; no post save writes either table.';
+  'Makes search_phrases and search_popularity exactly what unlabelled public posts show now (phrases and names two creators'' posts hold; each model''s, tool''s and creator''s week), stamps search_phrases_state, and says how many rows each holds. Run by the search-dictionary backend job after rebuild_search_terms; no post save writes either table.';
 
 REVOKE ALL ON FUNCTION public.rebuild_search_phrases() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.rebuild_search_phrases() TO service_role;
@@ -738,6 +838,10 @@ DECLARE
   v_post_id uuid;
   v_picture jsonb;
 BEGIN
+  -- The candidates are as old as the last rebuild: past three hours none is read.
+  IF NOT public.search_phrases_are_fresh() THEN
+    RETURN NULL;
+  END IF;
   IF v_query <> '' THEN
     v_tsquery := public.search_query_tsquery(v_query, true);
   END IF;
@@ -760,7 +864,7 @@ BEGIN
         WHERE blocks.blocker_user_id = stats.creator_user_id
           AND blocks.blocked_user_id = p_viewer_user_id
       )
-    ORDER BY stats.picture_score DESC, stats.creator_user_id
+    ORDER BY stats.picture_score DESC, stats.picture_created_at DESC NULLS LAST, stats.creator_user_id
     LIMIT c_tries
   LOOP
     -- The candidate is as old as the last rebuild: the post must still be
@@ -788,12 +892,13 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.search_entity_picture(text, text, uuid, text) IS
-  'A picture for a model''s or tool''s row: search_post_picture of the most saved, commented and remixed pictured post made with it that p_viewer_user_id may see, tried over the best posts of up to 4 creators not blocked with them (search_popularity), each still made with it and, with p_query, still found by that query''s search. NULL when none. Service role only.';
+  'A picture for a model''s or tool''s row: search_post_picture of the pictured post made with it that accounts other than its creator saved and commented on most (the newest of equals) and that p_viewer_user_id may see, tried over the best posts of up to 4 creators not blocked with them (search_popularity), each still made with it and, with p_query, still found by that query''s search. A name one creator alone posts with is pictured by that creator''s post: it is the post its search shows. NULL when none, and when the last rebuild is over three hours old. Service role only.';
 
 CREATE FUNCTION public.search_query_post_floor(
   p_query text,
   p_viewer_user_id uuid DEFAULT NULL,
-  p_floor integer DEFAULT 2
+  p_floor integer DEFAULT 2,
+  p_two_creators boolean DEFAULT false
 )
 RETURNS boolean
 LANGUAGE plpgsql
@@ -804,42 +909,87 @@ SET enable_seqscan = off
 SET enable_indexscan = off
 AS $function$
 DECLARE
+  -- With p_two_creators: the most posts read for a second creator.
+  c_creators_read CONSTANT integer := 200;
   -- Every word as written, lowercased: no prefix, no stem
   -- (search_starter_term_finds_post, whose plan settings these are).
   v_tsquery tsquery := plainto_tsquery('pg_catalog.simple', coalesce(p_query, ''));
   v_floor integer := least(greatest(coalesce(p_floor, 2), 1), 10);
+  v_creator uuid;
+  v_first uuid;
+  v_second boolean := false;
+  v_read integer := 0;
 BEGIN
   IF numnode(v_tsquery) = 0 THEN
     RETURN false;
   END IF;
-  RETURN (
-    SELECT count(*) >= v_floor
-    FROM (
-      SELECT 1
-      FROM public.post_search_documents AS documents
-      JOIN public.posts AS posts ON posts.id = documents.post_id
-      WHERE posts.is_nsfw = false
-        AND documents.search_vector @@ v_tsquery
-        AND NOT EXISTS (
-          SELECT 1
-          FROM public.user_blocks AS blocks
-          WHERE blocks.blocker_user_id = p_viewer_user_id
-            AND blocks.blocked_user_id = documents.creator_user_id
-        )
-        AND NOT EXISTS (
-          SELECT 1
-          FROM public.user_blocks AS blocks
-          WHERE blocks.blocker_user_id = documents.creator_user_id
-            AND blocks.blocked_user_id = p_viewer_user_id
-        )
-      LIMIT v_floor
-    ) AS held
-  );
+
+  IF NOT coalesce(p_two_creators, false) THEN
+    RETURN (
+      SELECT count(*) >= v_floor
+      FROM (
+        SELECT 1
+        FROM public.post_search_documents AS documents
+        JOIN public.posts AS posts ON posts.id = documents.post_id
+        WHERE posts.is_nsfw = false
+          AND documents.search_vector @@ v_tsquery
+          AND NOT EXISTS (
+            SELECT 1
+            FROM public.user_blocks AS blocks
+            WHERE blocks.blocker_user_id = p_viewer_user_id
+              AND blocks.blocked_user_id = documents.creator_user_id
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM public.user_blocks AS blocks
+            WHERE blocks.blocker_user_id = documents.creator_user_id
+              AND blocks.blocked_user_id = p_viewer_user_id
+          )
+        LIMIT v_floor
+      ) AS held
+    );
+  END IF;
+
+  -- Two creators the viewer may see: a table's count of creators includes the
+  -- ones on either side of a block with them, who must not be the second
+  -- creator of what this viewer is offered. Read until a second creator and
+  -- the floor are both reached, which is a few rows for a phrase many write.
+  FOR v_creator IN
+    SELECT documents.creator_user_id
+    FROM public.post_search_documents AS documents
+    JOIN public.posts AS posts ON posts.id = documents.post_id
+    WHERE posts.is_nsfw = false
+      AND documents.search_vector @@ v_tsquery
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.user_blocks AS blocks
+        WHERE blocks.blocker_user_id = p_viewer_user_id
+          AND blocks.blocked_user_id = documents.creator_user_id
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.user_blocks AS blocks
+        WHERE blocks.blocker_user_id = documents.creator_user_id
+          AND blocks.blocked_user_id = p_viewer_user_id
+      )
+    LIMIT c_creators_read
+  LOOP
+    v_read := v_read + 1;
+    IF v_first IS NULL THEN
+      v_first := v_creator;
+    ELSIF v_creator <> v_first THEN
+      v_second := true;
+    END IF;
+    IF v_second AND v_read >= v_floor THEN
+      RETURN true;
+    END IF;
+  END LOOP;
+  RETURN false;
 END;
 $function$;
 
-COMMENT ON FUNCTION public.search_query_post_floor(text, uuid, integer) IS
-  'Whether at least p_floor posts search_public_posts may show p_viewer_user_id (unlabelled, neither side of a block) hold every word of p_query as written, each of which search_public_posts then finds: a phrase this says yes to never opens a page of fewer. The documents'' word index only, read no further than p_floor posts. Service role only.';
+COMMENT ON FUNCTION public.search_query_post_floor(text, uuid, integer, boolean) IS
+  'Whether at least p_floor posts search_public_posts may show p_viewer_user_id (unlabelled, neither side of a block) hold every word of p_query as written, each of which search_public_posts then finds: a phrase this says yes to never opens a page of fewer. With p_two_creators (asked for a viewer who has a block), also whether two different creators among them write it, read over at most 200 such posts. The documents'' word index only. Service role only.';
 
 CREATE FUNCTION public.search_query_picture(
   p_query text,
@@ -867,12 +1017,13 @@ BEGIN
   END IF;
 
   -- A phrase: the pictured posts its last rebuild kept, best first, each
-  -- still holding its words.
+  -- still holding its words. None when that rebuild is over three hours old.
   FOR v_post_id IN
     SELECT kept.post_id
     FROM public.search_phrases AS phrases
     CROSS JOIN LATERAL unnest(phrases.picture_post_ids) WITH ORDINALITY AS kept(post_id, place)
     WHERE phrases.phrase = v_query
+      AND public.search_phrases_are_fresh()
     ORDER BY kept.place
   LOOP
     CONTINUE WHEN NOT EXISTS (
@@ -889,11 +1040,13 @@ BEGIN
 
   -- Any other text (a hand-picked search): of the posts search may show this
   -- viewer that hold every word of it as written (each one its search
-  -- finds), the most saved, commented and remixed that has a picture. No
-  -- more than c_posts_read of them are read, in no order, so the cost does
-  -- not grow with a common word (search_starter_entity_offer reads its 201
-  -- the same way); scoring the whole search for one picture took 28 ms a
-  -- term on 5,000 posts.
+  -- finds), the one other accounts saved most in the last 28 days that has a
+  -- picture, the newest of equals. Saves by others, read from the saves
+  -- themselves: never the post's counters, which its creator can raise
+  -- alone. No more than c_posts_read of them are read, in no order, so the
+  -- cost does not grow with a common word (search_starter_entity_offer reads
+  -- its 201 the same way); scoring the whole search for one picture took
+  -- 28 ms a term on 5,000 posts.
   IF coalesce(p_search, false) THEN
     FOR v_post_id IN
       SELECT held.post_id
@@ -901,7 +1054,13 @@ BEGIN
         SELECT
           documents.post_id,
           documents.created_at,
-          (posts.save_count + posts.comment_count + posts.remix_count) AS engagement
+          (
+            SELECT count(*)
+            FROM public.post_saves AS saves
+            WHERE saves.post_id = documents.post_id
+              AND saves.user_id <> documents.creator_user_id
+              AND saves.created_at >= now() - interval '28 days'
+          ) AS engagement
         FROM public.post_search_documents AS documents
         JOIN public.posts AS posts ON posts.id = documents.post_id
         WHERE posts.is_nsfw = false
@@ -934,7 +1093,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.search_query_picture(text, uuid, boolean) IS
-  'A picture for a search''s row: search_post_picture of the best pictured post that holds the phrase (search_phrases.picture_post_ids, each still holding its words) and that p_viewer_user_id may see; for a text that is no kept phrase and with p_search, of the most saved, commented and remixed of up to 300 posts they may see that hold every word of it as written. NULL when none. Service role only.';
+  'A picture for a search''s row: search_post_picture of the best pictured post that holds the phrase (search_phrases.picture_post_ids while the last rebuild is under three hours old, each still holding its words) and that p_viewer_user_id may see; for a text that is no kept phrase and with p_search, of the one other accounts saved most in the last 28 days (the newest of equals) among up to 300 posts they may see that hold every word of it as written. NULL when none. Service role only.';
 
 CREATE FUNCTION public.search_week_score(p_week double precision, p_base double precision)
 RETURNS double precision
@@ -957,12 +1116,12 @@ COMMENT ON FUNCTION public.search_week_score(double precision, double precision)
 
 REVOKE ALL ON FUNCTION public.search_post_picture(uuid, uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.search_entity_picture(text, text, uuid, text) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.search_query_post_floor(text, uuid, integer) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.search_query_post_floor(text, uuid, integer, boolean) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.search_query_picture(text, uuid, boolean) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.search_week_score(double precision, double precision) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.search_post_picture(uuid, uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.search_entity_picture(text, text, uuid, text) TO service_role;
-GRANT EXECUTE ON FUNCTION public.search_query_post_floor(text, uuid, integer) TO service_role;
+GRANT EXECUTE ON FUNCTION public.search_query_post_floor(text, uuid, integer, boolean) TO service_role;
 GRANT EXECUTE ON FUNCTION public.search_query_picture(text, uuid, boolean) TO service_role;
 GRANT EXECUTE ON FUNCTION public.search_week_score(double precision, double precision) TO service_role;
 
@@ -1018,10 +1177,14 @@ DECLARE
     WHERE blocks.blocker_user_id = p_viewer_user_id
        OR blocks.blocked_user_id = p_viewer_user_id
   );
+  -- search_phrases is read only while its last rebuild is under three hours
+  -- old; past that, completions are the dictionary's, as before the phrases.
+  v_phrases_fresh boolean;
 BEGIN
   IF v_limit = 0 OR char_length(v_query) < 2 OR char_length(v_query) > 100 THEN
     RETURN;
   END IF;
+  v_phrases_fresh := public.search_phrases_are_fresh();
 
   v_text := v_query;
   LOOP
@@ -1121,7 +1284,8 @@ BEGIN
           phrases.phrase LIKE v_like AS starts,
           phrases.core
         FROM public.search_phrases AS phrases
-        WHERE v_phrase_tsquery IS NOT NULL
+        WHERE v_phrases_fresh
+          AND v_phrase_tsquery IS NOT NULL
           AND numnode(v_phrase_tsquery) > 0
           AND NOT v_head_withdrawn
           AND phrases.words @@ v_phrase_tsquery
@@ -1191,8 +1355,10 @@ BEGIN
       ORDER BY ordered.position
       LIMIT CASE WHEN v_viewer_has_blocks THEN v_limit * 3 ELSE v_limit END
     ) AS ordered
+    -- For a viewer with a block: two posts they may see, of two creators
+    -- they may see.
     WHERE NOT v_viewer_has_blocks
-      OR public.search_query_post_floor(ordered.offer, p_viewer_user_id, c_post_floor)
+      OR public.search_query_post_floor(ordered.offer, p_viewer_user_id, c_post_floor, true)
     ORDER BY ordered.position
     LIMIT v_limit;
 
@@ -1213,7 +1379,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.search_suggest_completions(text, integer, uuid) IS
-  'Typeahead completions. Of one word: the words unlabelled public posts of two or more creators write that start with it (search_terms). Of several: the words that posts holding the earlier ones hold, each only when two creators'' posts hold it. And phrases and names (search_phrases) that hold every typed word, the last as a prefix of any of their words: one the text starts first, then by recent_weight, with at most three single words ahead of them. When nothing completes the text as typed, its corrected reading (search_corrected_query) is completed instead and offered itself. Never a word or phrase holding a word of search_suggestion_denylist; for a viewer with a block, only what two posts they may see hold. At most 10.';
+  'Typeahead completions. Of one word: the words unlabelled public posts of two or more creators write that start with it (search_terms). Of several: the words that posts holding the earlier ones hold, each only when two creators'' posts hold it. And phrases and names (search_phrases) that hold every typed word, the last as a prefix of any of their words: one the text starts first, then by recent_weight, with at most three single words ahead of them. When nothing completes the text as typed, its corrected reading (search_corrected_query) is completed instead and offered itself. Never a word or phrase holding a word of search_suggestion_denylist; for a viewer with a block, only what two posts of two creators they may see hold. No phrase or name while search_phrases'' last rebuild is over three hours old. At most 10.';
 
 REVOKE ALL ON FUNCTION public.search_suggest_completions(text, integer, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.search_suggest_completions(text, integer, uuid) TO service_role;
@@ -1640,8 +1806,11 @@ BEGIN
     ) AS current_release
     JOIN public.generation_model_catalog_entries AS entries ON entries.release_id = current_release.id
     JOIN public.generation_models AS models ON models.model_id = entries.model_id
-    -- Offered to someone: a model switched off on the web and in the app is not public.
-    WHERE entries.web_enabled OR entries.mobile_enabled
+    -- Offered to someone: a model switched off on the web and in the app is
+    -- not public, nor is one whose descriptor needs a newer catalog transport
+    -- than the one served (the three reads of 20260914054905 hold version 3).
+    WHERE (entries.web_enabled OR entries.mobile_enabled)
+      AND (entries.public_descriptor ->> 'minClientSchemaVersion')::integer <= 3
     UNION ALL
     -- The tools people name in Made with.
     SELECT
@@ -1795,7 +1964,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.search_suggest_known_names(text, boolean) IS
-  'Every name the product maintains, for the typeahead, with whether a typed text names it: the public catalog''s models (the active release''s entries enabled on the web or in the app, by displayName, with their id, kind and platforms), and the tools and tools'' models of the source-tools catalog an operator keeps (is_active, last_verified_at set, created_by_user_id null: never a row a creator added, never the app''s own tool or its models), by label, key and aliases. matches: every earlier typed word is a word of the name and the last starts one, as written or with letters and digits apart, or the text as one word starts the name squashed, from two characters; with p_one_mistake, the same with at most one mistake a word, from four. starts: the name or the key starts with the text. Only public fields are read: no provider mapping, no price. Service role only.';
+  'Every name the product maintains, for the typeahead, with whether a typed text names it: the public catalog''s models (the active release''s entries enabled on the web or in the app that the served transport version, 3, can draw, by displayName, with their id, kind and platforms), and the tools and tools'' models of the source-tools catalog an operator keeps (is_active, last_verified_at set, created_by_user_id null: never a row a creator added, never the app''s own tool or its models), by label, key and aliases. matches: every earlier typed word is a word of the name and the last starts one, as written or with letters and digits apart, or the text as one word starts the name squashed, from two characters; with p_one_mistake, the same with at most one mistake a word, from four. starts: the name or the key starts with the text. Only public fields are read: no provider mapping, no price. Service role only.';
 
 REVOKE ALL ON FUNCTION public.search_name_words(text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.search_name_squashes(text) FROM PUBLIC, anon, authenticated;
@@ -1860,7 +2029,10 @@ BEGIN
         known.key IS NOT NULL
         -- Anything else, two creators: an unlabelled post made with it by
         -- someone other than the first creator found, among the first 500 of
-        -- its posts.
+        -- its posts this viewer may see.
+        -- Neither creator on either side of a block with the viewer: for
+        -- them such a creator's posts do not exist, so one is no second
+        -- creator.
         OR EXISTS (
           SELECT 1
           FROM (
@@ -1870,6 +2042,18 @@ BEGIN
             WHERE members.kind = found.kind
               AND members.key = found.key
               AND posts.is_nsfw = false
+              AND NOT EXISTS (
+                SELECT 1
+                FROM public.user_blocks AS blocks
+                WHERE blocks.blocker_user_id = p_viewer_user_id
+                  AND blocks.blocked_user_id = members.creator_user_id
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM public.user_blocks AS blocks
+                WHERE blocks.blocker_user_id = members.creator_user_id
+                  AND blocks.blocked_user_id = p_viewer_user_id
+              )
             LIMIT 500
           ) AS makers
           WHERE makers.creator_user_id <> (
@@ -1879,6 +2063,18 @@ BEGIN
             WHERE members.kind = found.kind
               AND members.key = found.key
               AND posts.is_nsfw = false
+              AND NOT EXISTS (
+                SELECT 1
+                FROM public.user_blocks AS blocks
+                WHERE blocks.blocker_user_id = p_viewer_user_id
+                  AND blocks.blocked_user_id = members.creator_user_id
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM public.user_blocks AS blocks
+                WHERE blocks.blocker_user_id = members.creator_user_id
+                  AND blocks.blocked_user_id = p_viewer_user_id
+              )
             LIMIT 1
           )
         )
@@ -1991,8 +2187,19 @@ BEGIN
     ) AS chosen
     -- Only for the rows added here, at most the cap: the search pressing one
     -- runs and what it finds for this viewer (search_starter_entity_offer).
-    LEFT JOIN LATERAL public.search_starter_entity_offer(chosen.kind, chosen.key, p_viewer_user_id) AS opened
-      ON chosen.added
+    -- The test is inside the lateral, behind OFFSET 0: as a join condition
+    -- it was applied after the function had run for every row, three
+    -- milliseconds each, on every keystroke of a client that asked for
+    -- nothing. Without the OFFSET the planner pulls the subquery up and the
+    -- test is a join condition again (measured: four calls for four rows);
+    -- with it the test gates the function scan, which then never starts for
+    -- a row search itself answered.
+    LEFT JOIN LATERAL (
+      SELECT offer.query, offer.post_count, offer.post_count_capped
+      FROM public.search_starter_entity_offer(chosen.kind, chosen.key, p_viewer_user_id) AS offer
+      WHERE chosen.added
+      OFFSET 0
+    ) AS opened ON true
     -- A row added for a tool whose posts no search of its name opens (a name
     -- under three characters) has nothing to open.
     WHERE NOT (chosen.added AND chosen.model_id IS NULL AND coalesce(opened.post_count, 0) = 0)
@@ -2001,7 +2208,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.search_suggest_entities(text, uuid, boolean, boolean, integer) IS
-  'The models and tools of a typeahead answer: [{kind, key, label, post_count, post_count_capped, thumbnail, in_catalog, catalog_model, query}], at most p_limit (4). search_public_entities'' answer for the query and the viewer, each kept when it is a name we maintain (search_suggest_known_names) or two creators'' posts are made with it. With p_catalog, also the known names the text names that search did not answer, from two characters: a model of the product''s own whatever its posts (0 when the viewer may see none), a tool or a tool''s model only with a post, each with the posts search opens for it and the query that opens them. With p_one_mistake, the names the text names with one mistake. None whose name holds a withdrawn word. A known name the text starts first, then the name that is the text, then the most posts. Service role only.';
+  'The models and tools of a typeahead answer: [{kind, key, label, post_count, post_count_capped, thumbnail, in_catalog, catalog_model, query}], at most p_limit (4). search_public_entities'' answer for the query and the viewer, each kept when it is a name we maintain (search_suggest_known_names) or two creators'' posts this viewer may see are made with it. With p_catalog, also the known names the text names that search did not answer, from two characters: a model of the product''s own whatever its posts (0 when the viewer may see none), a tool or a tool''s model only with a post, each with the posts search opens for it and the query that opens them. With p_one_mistake, the names the text names with one mistake. None whose name holds a withdrawn word. A known name the text starts first, then the name that is the text, then the most posts. Service role only.';
 
 REVOKE ALL ON FUNCTION public.search_suggest_entities(text, uuid, boolean, boolean, integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.search_suggest_entities(text, uuid, boolean, boolean, integer) TO service_role;
@@ -2161,9 +2368,20 @@ DECLARE
   v_term_query text;
   v_seen text[] := ARRAY[]::text[];
   v_offered integer := 0;
+  -- search_phrases and search_popularity are read only while their last
+  -- rebuild is under three hours old; past that every list is the all-time
+  -- one and the searches are the hand-picked terms, as before them.
+  v_fresh boolean := public.search_phrases_are_fresh();
+  -- A viewer with a block: a phrase must be written by two creators they may see.
+  v_viewer_has_blocks boolean := p_viewer_user_id IS NOT NULL AND EXISTS (
+    SELECT 1
+    FROM public.user_blocks AS blocks
+    WHERE blocks.blocker_user_id = p_viewer_user_id
+       OR blocks.blocked_user_id = p_viewer_user_id
+  );
 BEGIN
   -- ── Models and tools, this week ──
-  IF v_entity_limit > 0 THEN
+  IF v_entity_limit > 0 AND v_fresh THEN
     SELECT
       coalesce(jsonb_agg(jsonb_build_object(
         'kind', offered.kind,
@@ -2252,7 +2470,7 @@ BEGIN
   END IF;
 
   -- ── Creators, this week ──
-  IF v_creator_limit > 0 THEN
+  IF v_creator_limit > 0 AND v_fresh THEN
     SELECT
       coalesce(jsonb_agg(jsonb_build_object(
         'id', ranked.creator_user_id,
@@ -2506,7 +2724,8 @@ BEGIN
     FOR v_phrase IN
       SELECT phrases.phrase, phrases.core, phrases.week_activity
       FROM public.search_phrases AS phrases
-      WHERE phrases.in_text
+      WHERE v_fresh
+        AND phrases.in_text
         AND NOT phrases.is_name
         AND char_length(phrases.phrase) BETWEEN 3 AND 100
       ORDER BY phrases.week_activity DESC, phrases.recent_weight DESC, phrases.phrase
@@ -2526,8 +2745,11 @@ BEGIN
           coalesce(public.search_term_variants(v_phrase.phrase), '')
         )))
       );
-      -- Two posts search may show this viewer hold it.
-      CONTINUE WHEN NOT public.search_query_post_floor(v_phrase.phrase, p_viewer_user_id, c_post_floor);
+      -- Two posts search may show this viewer hold it; for a viewer with a
+      -- block, of two creators they may see.
+      CONTINUE WHEN NOT public.search_query_post_floor(
+        v_phrase.phrase, p_viewer_user_id, c_post_floor, v_viewer_has_blocks
+      );
       v_searches := v_searches || jsonb_build_array(jsonb_build_object(
         'text', v_phrase.phrase,
         'thumbnail', public.search_query_picture(v_phrase.phrase, p_viewer_user_id, false)
@@ -2553,6 +2775,9 @@ BEGIN
         -- a phrase, is read once.
         CONTINUE WHEN v_term_query = ANY (v_seen);
         v_seen := v_seen || v_term_query;
+        -- One search per subject here too: none that shares a word with a
+        -- phrase offered above ('portrait' after 'cinematic portrait').
+        CONTINUE WHEN string_to_array(v_term_query, ' ') && v_used_words;
         -- No withdrawn word, as written, split or joined.
         CONTINUE WHEN EXISTS (
           SELECT 1
@@ -2588,7 +2813,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.search_starter(uuid, text[], integer, integer, integer) IS
-  'GET /api/search/starter in one call: {entities: [{kind, key, label, post_count, post_count_capped, query, thumbnail}], creators: [{id, username, display_name, bio, avatar_url, public_post_count, is_following}], searches: [{text, thumbnail}], periods: {entities, creators, searches}}, each list in the order to show it and each period ''week'' or ''all''. Entities and creators are this week''s when three or more were active in the last 7 days (search_popularity without the creators blocked with the viewer, by search_week_score), else the all-time lists of 20261113152020 read from the newest 2,000 posts search may show the viewer; entities two creators use, never the app''s own tool, no withdrawn word, each with the query pressing it searches and the count search gives it (to 200); creators never a guest, suspended, deleting, blocked, followed account or the viewer. Searches: phrases posts write (search_phrases), the most active this week first, no two sharing a word, each held by two posts the viewer may see, then p_terms until there are six. A thumbnail is search_post_picture''s answer or null. Service role only.';
+  'GET /api/search/starter in one call: {entities: [{kind, key, label, post_count, post_count_capped, query, thumbnail}], creators: [{id, username, display_name, bio, avatar_url, public_post_count, is_following}], searches: [{text, thumbnail}], periods: {entities, creators, searches}}, each list in the order to show it and each period ''week'' or ''all''. Entities and creators are this week''s when three or more were active in the last 7 days (search_popularity without the creators blocked with the viewer, by search_week_score), else the all-time lists of 20261113152020 read from the newest 2,000 posts search may show the viewer; entities two creators use, never the app''s own tool, no withdrawn word, each with the query pressing it searches and the count search gives it (to 200); creators never a guest, suspended, deleting, blocked, followed account or the viewer. Searches: phrases posts write (search_phrases), the most active this week first, no two sharing a word, each held by two posts the viewer may see (of two creators, for a viewer with a block), then p_terms until there are six, none sharing a word with a phrase offered. While the last rebuild of search_phrases and search_popularity is over three hours old, the all-time lists and p_terms alone. A thumbnail is search_post_picture''s answer or null. Service role only.';
 
 REVOKE ALL ON FUNCTION public.search_starter(uuid, text[], integer, integer, integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.search_starter(uuid, text[], integer, integer, integer) TO service_role;
@@ -2631,6 +2856,10 @@ DECLARE
   v_other text;
 BEGIN
   IF v_limit = 0 OR v_query = '' OR p_post_ids IS NULL OR cardinality(p_post_ids) = 0 THEN
+    RETURN;
+  END IF;
+  -- Only kept phrases are offered, and they are as old as the last rebuild.
+  IF NOT public.search_phrases_are_fresh() THEN
     RETURN;
   END IF;
   v_said := string_to_array(v_query, ' ')
@@ -2721,7 +2950,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.search_related_searches(text, uuid, uuid[], text, integer) IS
-  'Related searches for a result page (/api/search?relatedSearches=1): the phrases and model or tool names (search_phrases) that at least two of p_post_ids hold, each post read again as search reads one for p_viewer_user_id (a document, unlabelled, neither side of a block; at most 30): what the posts write first, most-held first, then at most two names. Never the query or its corrected reading, one whose every word the query says, one holding a withdrawn word, or one that only widens or narrows another offered. Each is held by two posts the viewer may see, which its own search then finds. At most 10. Service role only.';
+  'Related searches for a result page (/api/search?relatedSearches=1): the phrases and model or tool names (search_phrases) that at least two of p_post_ids hold, each post read again as search reads one for p_viewer_user_id (a document, unlabelled, neither side of a block; at most 30): what the posts write first, most-held first, then at most two names. Never the query or its corrected reading, one whose every word the query says, one holding a withdrawn word, or one that only widens or narrows another offered. Each is held by two posts the viewer may see, which its own search then finds. None while the last rebuild of search_phrases is over three hours old. At most 10. Service role only.';
 
 REVOKE ALL ON FUNCTION public.search_related_searches(text, uuid, uuid[], text, integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.search_related_searches(text, uuid, uuid[], text, integer) TO service_role;

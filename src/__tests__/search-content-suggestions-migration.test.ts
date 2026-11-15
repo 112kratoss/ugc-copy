@@ -65,7 +65,8 @@ const FUNCTIONS: Record<string, { signature: string; definer: boolean }> = {
   rebuild_search_phrases: { signature: 'public.rebuild_search_phrases()', definer: true },
   search_post_picture: { signature: 'public.search_post_picture(uuid, uuid)', definer: true },
   search_entity_picture: { signature: 'public.search_entity_picture(text, text, uuid, text)', definer: true },
-  search_query_post_floor: { signature: 'public.search_query_post_floor(text, uuid, integer)', definer: true },
+  search_query_post_floor: { signature: 'public.search_query_post_floor(text, uuid, integer, boolean)', definer: true },
+  search_phrases_are_fresh: { signature: 'public.search_phrases_are_fresh()', definer: true },
   search_query_picture: { signature: 'public.search_query_picture(text, uuid, boolean)', definer: true },
   search_week_score: { signature: 'public.search_week_score(double precision, double precision)', definer: false },
   search_suggest_completions: { signature: 'public.search_suggest_completions(text, integer, uuid)', definer: true },
@@ -104,8 +105,10 @@ describe('search content suggestions migration', () => {
     expect(statements.trim()).toMatch(/SELECT \* FROM public\.rebuild_search_phrases\(\);\s+COMMIT;$/);
   });
 
-  it('keeps both tables to the backend: row-secured, no policy, read-only even for the service role', () => {
-    for (const table of ['search_phrases', 'search_popularity']) {
+  it('keeps its tables to the backend: row-secured, no policy, read-only even for the service role', () => {
+    expect(Array.from(statements.matchAll(/CREATE TABLE public\.(\w+) \(/g), (match) => match[1]))
+      .toEqual(['search_phrases', 'search_popularity', 'search_phrases_state']);
+    for (const table of ['search_phrases', 'search_popularity', 'search_phrases_state']) {
       expect(statements).toMatch(new RegExp(`CREATE TABLE public\\.${table} \\(`));
       expect(statements).toContain(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY;`);
       expect(statements).toContain(`REVOKE ALL ON TABLE public.${table} FROM PUBLIC, anon, authenticated, service_role;`);
@@ -120,6 +123,7 @@ describe('search content suggestions migration', () => {
     const orphans = source('src/lib/storage-orphans.ts');
     expect(orphans).toContain('search_phrases: SEARCH_PHRASES,');
     expect(orphans).toContain('search_popularity: SEARCH_POPULARITY,');
+    expect(orphans).toContain('search_phrases_state: SEARCH_PHRASES_STATE,');
   });
 
   it('holds a phrase to two creators and to lowercase words, by the table itself', () => {
@@ -218,6 +222,7 @@ describe('where a phrase comes from', () => {
       'public.post_source_tools',
       'public.posts',
       'public.search_phrases',
+      'public.search_phrases_state',
       'public.search_popularity',
     ]);
     // Every read of them is of a shown post: each other table is joined to `shown` or `active`.
@@ -260,8 +265,56 @@ describe('where a phrase comes from', () => {
     expect(rebuild).toMatch(/WHERE comments\.created_at >= v_month\s+AND comments\.status = 'active'\s+AND comments\.user_id <> shown\.creator_user_id/);
     expect(rebuild).toContain("v_week timestamptz := now() - interval '7 days';");
     expect(rebuild).toContain("v_month timestamptz := now() - interval '28 days';");
-    // A creator's new posts count toward a week up to a cap.
-    expect(rebuild).toMatch(/least\(sum\(active\.new_this_week\), c_week_posts\)/);
+    // A creator's new posts count toward a week up to a cap: a model's, a tool's, a creator's own...
+    expect(rebuild.match(/least\(sum\(active\.new_this_week\), c_week_posts\)/g)).toHaveLength(2);
+    // ... and a phrase's, added up by creator first (review of PR #826, finding 10).
+    expect(rebuild).toContain('sum(least(by_maker.new_this_week, c_week_posts) + by_maker.received_this_week)::real AS week_activity');
+    expect(rebuild).toMatch(/GROUP BY occurrences\.phrase, occurrences\.creator_user_id\s+\) AS by_maker\s+GROUP BY by_maker\.phrase/);
+    expect(rebuild).not.toContain('sum(active.new_this_week + active.received_this_week)');
+  });
+
+  it('orders pictures by what other accounts gave a post, never by a counter its creator can raise', () => {
+    const rebuild = mine('rebuild_search_phrases');
+    // create_post_comment adds one to comment_count for the creator's own comment too.
+    expect(statements).not.toMatch(/\b(?:save_count|comment_count|remix_count|like_count)\b/);
+    expect(squash(rebuild)).toContain(
+      '(coalesce(saved.this_week, 0) + coalesce(saved.earlier, 0) + coalesce(commented.this_week, 0) + coalesce(commented.earlier, 0))::integer AS engagement',
+    );
+    // The best first, the newest of equals: a phrase's posts, and a creator's post for a model or tool.
+    expect(rebuild.match(/ORDER BY active\.engagement DESC, active\.created_at DESC, (?:occurrences|members)\.post_id/g)).toHaveLength(3);
+    expect(mine('search_entity_picture')).toContain(
+      'ORDER BY stats.picture_score DESC, stats.picture_created_at DESC NULLS LAST, stats.creator_user_id',
+    );
+    // Read from the posts as they are (a hand-picked search): other accounts' saves, counted from the saves.
+    expect(mine('search_query_picture')).toMatch(
+      /FROM public\.post_saves AS saves\s+WHERE saves\.post_id = documents\.post_id\s+AND saves\.user_id <> documents\.creator_user_id\s+AND saves\.created_at >= now\(\) - interval '28 days'/,
+    );
+  });
+
+  it('reads neither table once its last rebuild is over three hours old', () => {
+    // The stamp is written by the rebuild alone, in the statement after the tables are made.
+    const rebuild = mine('rebuild_search_phrases');
+    expect(rebuild).toMatch(/INSERT INTO public\.search_phrases_state AS state \(only_row, rebuilt_at\)\s+VALUES \(true, v_now\)\s+ON CONFLICT \(only_row\) DO UPDATE SET rebuilt_at = excluded\.rebuilt_at;/);
+    expect(statements.match(/(?:INSERT INTO|UPDATE|DELETE FROM) public\.search_phrases_state/g)).toHaveLength(1);
+    const fresh = mine('search_phrases_are_fresh');
+    expect(fresh).toContain("c_fresh CONSTANT interval := interval '3 hours';");
+    expect(fresh).toContain('WHERE state.rebuilt_at >= now() - c_fresh');
+    // Every function that reads either table asks first.
+    const readers = Object.keys(FUNCTIONS).filter((name) => name !== 'rebuild_search_phrases'
+      && /public\.search_(?:phrases|popularity)\b(?!_)/.test(mine(name)));
+    expect(readers.sort()).toEqual([
+      'search_entity_picture', 'search_query_picture', 'search_related_searches', 'search_starter', 'search_suggest_completions',
+    ]);
+    for (const name of readers) expect(mine(name), name).toContain('public.search_phrases_are_fresh()');
+    // Completions: no phrase. The starter: no week list, no phrase. Pictures and related searches: none.
+    expect(mine('search_suggest_completions')).toMatch(/FROM public\.search_phrases AS phrases\s+WHERE v_phrases_fresh/);
+    const starter = mine('search_starter');
+    expect(starter).toContain('IF v_entity_limit > 0 AND v_fresh THEN');
+    expect(starter).toContain('IF v_creator_limit > 0 AND v_fresh THEN');
+    expect(starter).toMatch(/FROM public\.search_phrases AS phrases\s+WHERE v_fresh/);
+    expect(mine('search_entity_picture')).toMatch(/IF NOT public\.search_phrases_are_fresh\(\) THEN\s+RETURN NULL;/);
+    expect(mine('search_related_searches')).toMatch(/IF NOT public\.search_phrases_are_fresh\(\) THEN\s+RETURN;/);
+    expect(mine('search_query_picture')).toMatch(/WHERE phrases\.phrase = v_query\s+AND public\.search_phrases_are_fresh\(\)/);
   });
 
   it('reads a text 500 characters deep, in runs between punctuation', () => {
@@ -270,6 +323,12 @@ describe('where a phrase comes from', () => {
     expect(phrases).toContain("regexp_split_to_table(v_text, '[^[:alnum:] ]+') WITH ORDINALITY AS runs(content, run)");
     expect(phrases).toContain("spoken.word ~ '^[[:alpha:]]{2,24}$' AS is_word");
     expect(phrases).toContain('WINDOW following AS (PARTITION BY marked.run ORDER BY marked.place)');
+    // Never a phrase longer than the table holds: three words of 24 letters are 74 characters, and
+    // one such phrase of two creators stopped every rebuild (review of PR #826, finding 1).
+    expect(phrases).toContain('c_phrase_chars CONSTANT integer := 60;');
+    expect(phrases).toMatch(/\) AS found\s+WHERE char_length\(found\.gram\) <= c_phrase_chars;/);
+    expect(statements).toContain('AND char_length(phrase) BETWEEN 2 AND 60');
+    expect(statements).toContain('core text NOT NULL CHECK (char_length(core) BETWEEN 1 AND 60)');
     // plpgsql, for the kept plan: a rebuild calls it once per post.
     expect(phrases).toMatch(/LANGUAGE plpgsql\s+STABLE/);
   });
@@ -340,6 +399,13 @@ describe('a picture is of a post the viewer may see', () => {
     expect(floor).toMatch(BLOCKED_BY_VIEWER('documents\\.creator_user_id'));
     expect(floor).toMatch(BLOCKS_VIEWER('documents\\.creator_user_id'));
     expect(floor).toContain('LIMIT v_floor');
+    // For a viewer with a block: two creators they may see, over a bounded read.
+    expect(floor).toContain('p_two_creators boolean DEFAULT false');
+    expect(floor).toContain('c_creators_read CONSTANT integer := 200;');
+    expect(floor).toContain('LIMIT c_creators_read');
+    expect(floor).toMatch(/ELSIF v_creator <> v_first THEN\s+v_second := true;/);
+    expect(floor).toMatch(/IF v_second AND v_read >= v_floor THEN\s+RETURN true;/);
+    expect(floor.match(/AND documents\.search_vector @@ v_tsquery/g)).toHaveLength(2);
     for (const setting of ['SET enable_seqscan = off', 'SET enable_indexscan = off']) expect(floor).toContain(setting);
   });
 });
@@ -365,7 +431,7 @@ describe('completions, creators and the one call', () => {
     expect(definition).toContain('AND phrases.words @@ v_phrase_tsquery');
     // The parser drops what is not a letter or a digit: 'amb%' is not read as 'amb'.
     expect(definition).toMatch(/v_phrase_tsquery := CASE\s+WHEN v_text ~ '\^\[\[:alnum:\] \.\+\]\+\$' THEN public\.search_prefix_tsquery\('pg_catalog\.simple', v_text\)\s+END;/);
-    expect(definition).toMatch(/WHERE v_phrase_tsquery IS NOT NULL\s+AND numnode\(v_phrase_tsquery\) > 0/);
+    expect(definition).toMatch(/WHERE v_phrases_fresh\s+AND v_phrase_tsquery IS NOT NULL\s+AND numnode\(v_phrase_tsquery\) > 0/);
     // No empty tsquery literal: its cast prints a NOTICE where the expression is planned.
     expect(definition).not.toContain("''::tsquery");
     expect(definition).toContain(String.raw`v_like := replace(replace(replace(v_text, '\', '\\'), '%', '\%'), '_', '\_') || '%';`);
@@ -389,7 +455,7 @@ describe('completions, creators and the one call', () => {
     expect(definition).toContain('v_corrected := public.search_corrected_query(v_query);');
     // The correction is search's own; a text it only split is not a correction.
     expect(definition).toContain('OR v_corrected = public.search_split_terms(v_query)');
-    expect(definition).toMatch(/WHERE NOT v_viewer_has_blocks\s+OR public\.search_query_post_floor\(ordered\.offer, p_viewer_user_id, c_post_floor\)/);
+    expect(definition).toMatch(/WHERE NOT v_viewer_has_blocks\s+OR public\.search_query_post_floor\(ordered\.offer, p_viewer_user_id, c_post_floor, true\)/);
     expect(definition).toContain('c_post_floor CONSTANT integer := 2;');
     // The third parameter is last, with a default: the two-argument call still resolves.
     expect(squash(statements)).toContain(
@@ -511,7 +577,12 @@ describe('completions, creators and the one call', () => {
     // Kept when it is a known name, or two creators' unlabelled posts are made with it.
     expect(definition).toMatch(/LEFT JOIN known ON known\.kind = found\.kind AND known\.key = found\.key\s+WHERE \(\s+known\.key IS NOT NULL\s+OR EXISTS \(/);
     expect(definition).toMatch(/WHERE makers\.creator_user_id <> \(/);
-    expect(definition).toMatch(/AND posts\.is_nsfw = false\s+LIMIT 500/);
+    // Neither of the two on either side of a block with the viewer (review of PR #826, finding 12).
+    const twoCreators = definition.slice(definition.indexOf('OR EXISTS ('), definition.indexOf('UNION ALL'));
+    expect(twoCreators.match(/AND posts\.is_nsfw = false\s+AND NOT EXISTS \(/g)).toHaveLength(2);
+    expect(twoCreators.match(new RegExp(BLOCKED_BY_VIEWER('members\\.creator_user_id').source, 'g'))).toHaveLength(2);
+    expect(twoCreators.match(new RegExp(BLOCKS_VIEWER('members\\.creator_user_id').source, 'g'))).toHaveLength(2);
+    expect(twoCreators).toMatch(/\)\s+LIMIT 500\s+\) AS makers/);
     // A known name is printed as we name it, never as a post does.
     expect(definition).toContain('coalesce(known.label, found.label) AS label');
     // No withdrawn word in the name or the key, a known name's included: asked of every candidate.
@@ -533,7 +604,13 @@ describe('completions, creators and the one call', () => {
     expect(added).toMatch(BLOCKED_BY_VIEWER('members\\.creator_user_id'));
     expect(added).toMatch(BLOCKS_VIEWER('members\\.creator_user_id'));
     // The count a row states, and its query, are the search that opens it: asked of the rows chosen, at most the cap.
-    expect(definition).toMatch(/LEFT JOIN LATERAL public\.search_starter_entity_offer\(chosen\.kind, chosen\.key, p_viewer_user_id\) AS opened\s+ON chosen\.added/);
+    // The test is inside the lateral, so the function runs only for a row added here: as a join
+    // condition it ran for every row and was thrown away (review of PR #826, finding 2). OFFSET 0
+    // keeps the planner from pulling the subquery up, which makes the test a join condition again:
+    // measured on a replay stack, four calls for four rows without it, none with it
+    // ("Function Scan on search_starter_entity_offer ... (never executed)").
+    expect(definition).toMatch(/LEFT JOIN LATERAL \(\s+SELECT offer\.query, offer\.post_count, offer\.post_count_capped\s+FROM public\.search_starter_entity_offer\(chosen\.kind, chosen\.key, p_viewer_user_id\) AS offer\s+WHERE chosen\.added\s+OFFSET 0\s+\) AS opened ON true/);
+    expect(definition).not.toMatch(/ON chosen\.added/);
     expect(definition).toContain("'post_count', CASE WHEN chosen.added THEN coalesce(opened.post_count, 0) ELSE chosen.post_count END,");
     expect(definition).toContain("'query', opened.query");
     expect(definition).toContain('WHERE NOT (chosen.added AND chosen.model_id IS NULL AND coalesce(opened.post_count, 0) = 0)');
@@ -552,7 +629,11 @@ describe('completions, creators and the one call', () => {
     expect(squash(definitionIn(read('20260914054905_model_catalog_v1_reads.sql'), 'read_model_catalog_v1_current')))
       .toContain("WHERE status = 'active' ORDER BY schema_version DESC, activated_at DESC LIMIT 1");
     // A model switched off on the web and in the app is not public.
-    expect(definition).toContain('WHERE entries.web_enabled OR entries.mobile_enabled');
+    expect(definition).toContain('WHERE (entries.web_enabled OR entries.mobile_enabled)');
+    // Nor is one whose descriptor needs a newer transport than the catalog reads serve.
+    const versionRule = "(entries.public_descriptor ->> 'minClientSchemaVersion')::integer <= 3";
+    expect(definition).toContain(`AND ${versionRule}`);
+    expect(read('20260914054905_model_catalog_v1_reads.sql').match(/\(e\.public_descriptor ->> 'minClientSchemaVersion'\)::integer <= 3/g)).toHaveLength(3);
     // Only what the public descriptor shows: never a provider mapping, a price or a rule.
     expect(definition).toContain("entries.public_descriptor ->> 'displayName'");
     expect(definition).not.toMatch(/provider_model_map|pricing_|validation_|verification_|adapter_/);
@@ -671,9 +752,11 @@ describe('the starter', () => {
 
   it('offers a phrase only when two posts the viewer may see hold it, and fills with the hand-picked terms as before', () => {
     const searches = definition.slice(definition.indexOf('FOR v_phrase IN'));
-    expect(searches).toMatch(/WHERE phrases\.in_text\s+AND NOT phrases\.is_name/);
+    expect(searches).toMatch(/WHERE v_fresh\s+AND phrases\.in_text\s+AND NOT phrases\.is_name/);
     expect(searches).toContain('ORDER BY phrases.week_activity DESC, phrases.recent_weight DESC, phrases.phrase');
-    expect(searches).toContain('CONTINUE WHEN NOT public.search_query_post_floor(v_phrase.phrase, p_viewer_user_id, c_post_floor);');
+    expect(searches).toMatch(/CONTINUE WHEN NOT public\.search_query_post_floor\(\s+v_phrase\.phrase, p_viewer_user_id, c_post_floor, v_viewer_has_blocks\s+\);/);
+    // A hand-picked term that shares a word with a phrase offered is the same subject again.
+    expect(searches).toContain("CONTINUE WHEN string_to_array(v_term_query, ' ') && v_used_words;");
     expect(searches).toContain("CONTINUE WHEN string_to_array(v_phrase.core, ' ') && v_used_words;");
     expect(searches.match(/FROM public\.search_suggestion_denylist AS denied/g)).toHaveLength(2);
     // The hand-picked terms, read and checked as 20261113100423 read and checked them.

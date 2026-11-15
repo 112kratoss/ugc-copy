@@ -47,9 +47,12 @@ export const SEARCH_STARTER_SEARCH_LIMIT = SEARCH_STARTER_MAX_SEARCHES;
  * The database offers a term only while at least one post search may show the
  * viewer matches it as typed, and never one holding a word of
  * `search_suggestion_denylist`, so a term with nothing behind it is skipped
- * rather than shown as an empty search. At most the first 20 are read and 8
- * are offered: list a few more than 8 so a term that finds nothing today
- * leaves room for the next. Each must be 3 to 100 characters.
+ * rather than shown as an empty search, nor one that shares a word with a
+ * phrase already offered. At most the first 20 are read and the list is filled
+ * to six in all (phrases included; `SEARCH_STARTER_SEARCH_LIMIT`, 8, is only
+ * the most a week of phrases alone may fill): list a few more than six so a
+ * term that finds nothing today leaves room for the next. Each must be 3 to
+ * 100 characters.
  *
  * No query anyone typed reaches the list: the phrases come from posts, not
  * from the search log.
