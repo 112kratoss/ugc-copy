@@ -48,7 +48,7 @@ questions and plan the build", 2026-11-09). Each is a recommendation the owner c
 | # | Question | Decision | Why |
 |---|---|---|---|
 | 1 | Credit confirmation | **Quote, then create.** `create_media` requires `expected_cost_credits`; the start service already refuses to charge above the price shown (`unified-generation-start-service.ts`, "never charged more than that"), so a drifted price comes back as `COST_CHANGED` with the fresh quote and the agent confirms again. `create_media` also carries `destructiveHint: true`, but the spike found that Claude Code's permission prompts ignore tool annotations, so the required `expected_cost_credits` is the guard and the hint is only a label. `quote_generation` is free and returns `affordable`. | Krea's `preflight` and fal's "each submit bills" pattern, with no server state of our own. |
-| 2 | Publish default | **Live by default**, `visibility` of `public` or `private` (the publish service's own values). Guards: the existing publish limit (20 per 10 min), a new agent cap of 10 public posts per account per day, the moderation queue as for any post, and an audit row per agent call so moderation can list and revert agent posts. Publishing the same generation twice returns its existing post (the service already treats a second publish as a republish). | Publishing is the differentiator nobody has; a draft-only default would make the second job a dead end. The caps and the audit trail are what make live acceptable. |
+| 2 | Publish default | **Live by default**, `visibility` of `public` or `private` (the publish service's own values). Guards: the existing publish limit (20 per 10 min), a new agent cap of 10 public posts per account per day (60 since 2026-11-15, the owner's word), the moderation queue as for any post, and an audit row per agent call so moderation can list and revert agent posts. Publishing the same generation twice returns its existing post (the service already treats a second publish as a republish). | Publishing is the differentiator nobody has; a draft-only default would make the second job a dead end. The caps and the audit trail are what make live acceptable. |
 | 3 | Gating | **Registered accounts, any plan.** The consent page refuses a guest session, and the route refuses an anonymous token even if one arrives. Credits are the only gate, as on the web. | Guests exist for checkout; an agent acting as a guest would create media nobody can find again. |
 | 4 | Templates | **Not in v1.** `run_template` is a phase-3 candidate once template usage is checked (owner's rule: check usage before offering parity). | Keep v1 to the two jobs the owner named. |
 
@@ -308,7 +308,7 @@ public publications per UTC day from the audit table, not attempts, and `upload_
 - Migration `agent_tool_calls` (id, user_id, client_id, tool, ok, generation_id, post_id,
   cost_credits, created_at; owner-read RLS; service-role write) with its `*-migration.test.ts`
   and pgTAP; the audit write in the adapter.
-- `AGENT_PUBLISH_RATE_LIMIT` (10 per UTC day) in `backend-rate-limit.ts`.
+- `AGENT_PUBLISH_RATE_LIMIT` (10 per UTC day; 60 since 2026-11-15) in `backend-rate-limit.ts`.
 - Connected apps on `/profile/edit`: `listGrants` and `revokeGrant`.
 - Moderation: `ops:moderation -- list --source agent` (joins the audit table; the CLI must stay
   loadable under tsx, no server-only imports).

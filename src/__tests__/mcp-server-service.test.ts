@@ -1317,7 +1317,7 @@ describe('publish_post', () => {
     const limits = vi.mocked(services.enforceBackendRateLimit).mock.calls.map(([, options]) => options);
     expect(limits).toEqual([{ ...SHOWCASE_PUBLISH_RATE_LIMIT, key: USER_ID }]);
     expect(services.countAgentPublicPublishesSince).toHaveBeenCalledWith(admin, { userId: USER_ID, since: new Date('1970-01-01T00:00:00.000Z') });
-    expect(AGENT_PUBLISH_RATE_LIMIT).toEqual({ scope: 'agent:publish-public', limit: 10, windowSeconds: 24 * 60 * 60 });
+    expect(AGENT_PUBLISH_RATE_LIMIT).toEqual({ scope: 'agent:publish-public', limit: 60, windowSeconds: 24 * 60 * 60 });
   });
 
   it('sends the title the web\'s Publish starts from when none is given: the creation\'s own, else one from its prompt', async () => {
@@ -1394,18 +1394,18 @@ describe('publish_post', () => {
     expect((await tool('publish_post').handle(args, linked.context)).isError).toBeUndefined();
   });
 
-  it('answers the daily cap RATE_LIMITED with the next UTC midnight once the day holds ten public publications, and the web limit with its wait', async () => {
-    const capped = harness({ countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
+  it('answers the daily cap RATE_LIMITED with the next UTC midnight once the day holds sixty public publications, and the web limit with its wait', async () => {
+    const capped = harness({ countAgentPublicPublishesSince: vi.fn(async () => 60) as never });
     const result = await tool('publish_post').handle(args, capped.context);
     expect(toolFailureCode(result)).toBe('RATE_LIMITED');
     // The clock stands at 1,000 seconds into 1970-01-01 UTC: the window ends at the next midnight.
-    expect(structured(result).error).toMatchObject({ retry_after_seconds: 86_400 - 1_000, reset_at: '1970-01-02T00:00:00.000Z', limit: 10, published_today: 10 });
-    expect(text(result)).toContain('10 public posts per UTC day');
+    expect(structured(result).error).toMatchObject({ retry_after_seconds: 86_400 - 1_000, reset_at: '1970-01-02T00:00:00.000Z', limit: 60, published_today: 60 });
+    expect(text(result)).toContain('60 public posts per UTC day');
     expect(text(result)).toContain('1970-01-02T00:00:00.000Z');
     expect(text(result)).toContain('visibility private');
     expect(capped.services.publishGenerationToShowcaseForRoute).not.toHaveBeenCalled();
-    // Nine published today: the tenth goes through.
-    const room = harness({ countAgentPublicPublishesSince: vi.fn(async () => 9) as never });
+    // Fifty-nine published today: the sixtieth goes through.
+    const room = harness({ countAgentPublicPublishesSince: vi.fn(async () => 59) as never });
     expect((await tool('publish_post').handle(args, room.context)).isError).toBeUndefined();
 
     const busy = harness({ enforceBackendRateLimit: vi.fn(async () => { throw rateLimit(90); }) as never });
@@ -1929,7 +1929,7 @@ describe('publish_post with uploads', () => {
   });
 
   it('saves a private post without counting the daily cap, and passes the choices on as the composer sends them', async () => {
-    const { context, services } = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
+    const { context, services } = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 60) as never });
     const result = await tool('publish_post').handle({ ...args, visibility: 'private', is_nsfw: true, category: 'image' }, context);
     expect(result.isError).toBeUndefined();
     expect(structured(result)).toMatchObject({ post_id: UPLOAD_POST_ID, visibility: 'private', state: 'private', already_published: false, source: 'upload', media_count: 1 });
@@ -1941,12 +1941,12 @@ describe('publish_post with uploads', () => {
   });
 
   it('answers the daily cap for a public post before the composer is called, and the web\'s limit with its wait', async () => {
-    const capped = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
+    const capped = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 60) as never });
     const result = await tool('publish_post').handle(args, capped.context);
     expect(toolFailureCode(result)).toBe('RATE_LIMITED');
-    expect(structured(result).error).toMatchObject({ limit: 10, published_today: 10, reset_at: '1970-01-02T00:00:00.000Z' });
+    expect(structured(result).error).toMatchObject({ limit: 60, published_today: 60, reset_at: '1970-01-02T00:00:00.000Z' });
     expect(capped.services.createOwnerPostForRoute).not.toHaveBeenCalled();
-    const room = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 9) as never });
+    const room = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 59) as never });
     expect((await tool('publish_post').handle(args, room.context)).isError).toBeUndefined();
 
     const busy = fresh({ enforceBackendRateLimit: vi.fn(async () => { throw rateLimit(90); }) as never });
@@ -2187,7 +2187,7 @@ describe('publish_post with uploads', () => {
     expect(text(result)).not.toMatch(/[Ss]tage the file again/u);
     expect(services.createOwnerPostForRoute).not.toHaveBeenCalled();
     expect(services.enforceBackendRateLimit).not.toHaveBeenCalled();
-    const capped = harness({ readPostForAgent: found({ visibility: 'private', state: 'private' }), countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
+    const capped = harness({ readPostForAgent: found({ visibility: 'private', state: 'private' }), countAgentPublicPublishesSince: vi.fn(async () => 60) as never });
     expect(toolFailureCode(await tool('publish_post').handle({ ...args, visibility: 'public' }, capped.context))).toBe('RATE_LIMITED');
     expect(capped.services.updateOwnerPostForRoute).not.toHaveBeenCalled();
 
@@ -2651,16 +2651,16 @@ describe('publish_post as a text post', () => {
   });
 
   it('counts a public text post against the daily cap and a private one not at all', async () => {
-    const capped = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
+    const capped = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 60) as never });
     const result = await tool('publish_post').handle(args, capped.context);
     expect(toolFailureCode(result)).toBe('RATE_LIMITED');
-    expect(structured(result).error).toMatchObject({ limit: 10, published_today: 10, reset_at: '1970-01-02T00:00:00.000Z' });
+    expect(structured(result).error).toMatchObject({ limit: 60, published_today: 60, reset_at: '1970-01-02T00:00:00.000Z' });
     expect(capped.services.createOwnerPostForRoute).not.toHaveBeenCalled();
-    const room = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 9) as never });
+    const room = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 59) as never });
     expect((await tool('publish_post').handle(args, room.context)).isError).toBeUndefined();
 
     // A private post is no public publication: a full day does not stop it.
-    const privately = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
+    const privately = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 60) as never });
     const saved = await tool('publish_post').handle({ ...args, visibility: 'private', is_nsfw: true }, privately.context);
     expect(structured(saved)).toMatchObject({ post_id: TEXT_POST_ID, visibility: 'private', state: 'private', source: 'text' });
     expect(text(saved)).toMatch(/Saved the text post as private post .* publish again with the same title and body and visibility public/u);
