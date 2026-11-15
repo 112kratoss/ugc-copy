@@ -239,6 +239,8 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   search_query_embeddings: TELEMETRY,
   // The anonymous search log: a short query, a hash and three counts per row.
   search_query_events: TELEMETRY,
+  // Results opened from a search: a short query, a hash, an id and a place per row.
+  search_result_opens: TELEMETRY,
   search_visitor_day_keys: TELEMETRY,
   // Search's spelling dictionary: one lowercase word of letters per row.
   search_terms: SEARCH_DICTIONARY,

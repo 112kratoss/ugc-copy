@@ -142,6 +142,7 @@ export type OperationalRetentionSummary = IdleGuestRetentionSummary & ContentGue
   expiredJobLocksDeleted: number;
   searchQueryEventsDeleted: number;
   searchVisitorDayKeysDeleted: number;
+  searchResultOpensDeleted: number;
   totalDeleted: number;
   /** Calls of `prune_operational_backend_data` this run made. */
   pruneBatches: number;
@@ -195,6 +196,7 @@ const PRUNE_COUNTERS = {
   expiredJobLocksDeleted: 'expired_job_locks_deleted',
   searchQueryEventsDeleted: 'search_query_events_deleted',
   searchVisitorDayKeysDeleted: 'search_visitor_day_keys_deleted',
+  searchResultOpensDeleted: 'search_result_opens_deleted',
   totalDeleted: 'total_deleted',
 } as const;
 
