@@ -44,6 +44,8 @@ import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
 import { fetchShowcaseViewerExclusions } from '@/lib/showcase-viewer-exclusions-client';
 import ReelHostMark from '@/components/ReelHostMark';
+import { CREATOR_TAB_HASHES, CREATOR_TAB_MARK, type CreatorTab } from '@/lib/address-first-paint';
+import { useFirstPaintMark } from '@/lib/use-first-paint-mark';
 import { itemsWithoutBlockedRemixCredits } from '../../../../ugc-mobile/lib/remix-credit/remix-credit';
 
 function ShowcaseReelLoadingFallback() {
@@ -69,14 +71,8 @@ const ShowcaseReelViewer = dynamic(
   }
 );
 
-type CreatorTab = 'creations' | 'unlocks' | 'tools';
-
 const PAGE_SIZE = 24;
-const tabHashes: Record<CreatorTab, string> = {
-  creations: '#creator-creations',
-  unlocks: '#creator-unlocks',
-  tools: '#creator-tools',
-};
+const tabHashes: Record<CreatorTab, string> = CREATOR_TAB_HASHES;
 
 function getTabFromHash(hash: string): CreatorTab {
   if (hash === tabHashes.unlocks) return 'unlocks';
@@ -132,6 +128,9 @@ function CreatorContentTabsView({
   // picks its tab once the page is live (below), so hydration meets the
   // markup the server sent.
   const [activeTab, setActiveTab] = useState<CreatorTab>('creations');
+  // The tab the address named was drawn from the first paint by the stylesheet; the page takes
+  // it over once it draws that tab (src/lib/address-first-paint.ts).
+  useFirstPaintMark(CREATOR_TAB_MARK, activeTab === 'creations' ? null : activeTab);
   const [pageInfo, setPageInfo] = useState(initialData.pageInfo);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -559,7 +558,7 @@ function CreatorContentTabsView({
         {activeTab === 'tools' ? (
           <ToolsGrid tools={initialData.stats.toolsUsed} />
         ) : visibleItems.length > 0 ? (
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4" data-creator-grid>
             {visibleItems.map((item) => (
               <CreatorCard
                 key={item.id}
@@ -655,7 +654,13 @@ function CreatorCard({
   const unlockLabel = item.asset ? getAssetAccessLabel(item.asset, { isOwner }) : null;
 
   return (
-    <article className="group min-w-0 overflow-hidden rounded-ui-xl border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] focus-within:border-white/24">
+    // A recipe says so, for the Recipes tab drawn from the address before the page's script
+    // (src/lib/address-first-paint.ts).
+    <article
+      data-creator-card
+      data-creator-recipe={item.asset ? '' : undefined}
+      className="group min-w-0 overflow-hidden rounded-ui-xl border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] focus-within:border-white/24"
+    >
       <div className="relative aspect-[4/5] overflow-hidden bg-black">
         {isText ? (
           <button

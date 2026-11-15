@@ -80,6 +80,7 @@
 @source "../components/PublicIdentityFields.tsx";
 @source "../components/PublicShareButton.tsx";
 @source "../components/RecoverableMediaVideo.tsx";
+@source "../components/AddressFirstPaintRelease.tsx";
 @source "../components/ReelHostMark.tsx";
 @source "../components/ReelOpeningCover.tsx";
 @source "../components/ResourceMediaPreview.tsx";
@@ -1949,6 +1950,68 @@ html[data-reel-opening]:has([data-reel-host]) .reel-opening-cover {
   .reel-opening-cover-spinner {
     animation: none;
   }
+}
+
+/* A choice a page drawn ahead of time keeps in its address, drawn from the first paint
+   (src/lib/address-first-paint.ts): the root layout's inline script marks it on the root
+   element, these rules draw it over the server's default, and the page takes the mark away once
+   it draws the same choice itself. Each look is the one the control draws with its own classes. */
+
+/* Home: the lane `?chip=` names (feedChipClassName, HomeFeedSkeleton.tsx), and none of another
+   lane's posts. */
+html[data-home-chip] [data-feed-chip] {
+  border-color: var(--ui-border-subtle);
+  background-color: var(--ui-surface-2);
+  color: var(--ui-text-muted);
+}
+
+html[data-home-chip="notes"] [data-feed-chip="notes"],
+html[data-home-chip="recent"] [data-feed-chip="recent"],
+html[data-home-chip="unlocks"] [data-feed-chip="unlocks"] {
+  border-color: var(--ui-primary-strong);
+  background-color: var(--ui-primary);
+  color: var(--ui-primary-on);
+}
+
+html[data-home-chip="notes"] [data-feed-lane-list]:not([data-feed-lane="notes"]),
+html[data-home-chip="recent"] [data-feed-lane-list]:not([data-feed-lane="recent"]),
+html[data-home-chip="unlocks"] [data-feed-lane-list]:not([data-feed-lane="unlocks"]) {
+  display: none;
+}
+
+/* A creator's page: the tab its fragment names (SegmentedControl's thumb), and in the Posts the
+   server drew, only what that tab shows: the recipes for Recipes, nothing for Tools. */
+html[data-creator-tab] #creator-tab-creations > span {
+  background-color: transparent;
+  color: var(--ui-text-muted);
+}
+
+html[data-creator-tab="unlocks"] #creator-tab-unlocks > span,
+html[data-creator-tab="tools"] #creator-tab-tools > span {
+  background-color: var(--ui-primary);
+  color: var(--ui-primary-on);
+}
+
+html[data-creator-tab="unlocks"] #creator-panel-creations > :not([data-creator-grid]),
+html[data-creator-tab="unlocks"] #creator-panel-creations [data-creator-card]:not([data-creator-recipe]),
+html[data-creator-tab="tools"] #creator-panel-creations {
+  display: none;
+}
+
+/* Templates: the media filter `?input=` names (TemplateCatalogClient's chips), and only the
+   templates it keeps. */
+html[data-template-input] [data-template-input-chip] {
+  @apply border-white/10 bg-white/[0.03] text-zinc-300;
+}
+
+html[data-template-input="image"] [data-template-input-chip="image"],
+html[data-template-input="video"] [data-template-input-chip="video"] {
+  @apply border-rose-300/25 bg-rose-400/12 text-rose-100;
+}
+
+html[data-template-input="image"] [data-template-inputs]:not([data-template-inputs~="image"]),
+html[data-template-input="video"] [data-template-inputs]:not([data-template-inputs~="video"]) {
+  display: none;
 }
 
 /* The Create menu (AppShellCreateMenu.tsx), a popover in the top layer, over

@@ -12,6 +12,8 @@ import {
   Text,
 } from '@/components/DesignSystem';
 import { useAddressParam, writeAddressParam } from '@/lib/address-param';
+import { TEMPLATE_INPUT_FILTERS, TEMPLATE_INPUT_MARK, type TemplateInputFilter } from '@/lib/address-first-paint';
+import { useFirstPaintMark } from '@/lib/use-first-paint-mark';
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
 import { listTemplatePage, listTemplates } from './api';
@@ -19,13 +21,13 @@ import { TemplateCard, TemplatePageShell } from './TemplatePrimitives';
 import type { MediaTemplate } from './types';
 import { useTemplatePosterRecovery } from './useTemplatePosterRecovery';
 
-type InputFilter = 'all' | 'image' | 'video';
+type InputFilter = 'all' | TemplateInputFilter;
 
 /** The address's name for the input filter: `?input=image`; All formats goes unsaid. */
 const INPUT_FILTER_PARAM = 'input';
 
 function parseInputFilter(value: string | null): InputFilter {
-  return value === 'image' || value === 'video' ? value : 'all';
+  return TEMPLATE_INPUT_FILTERS.find((filter) => filter === value) ?? 'all';
 }
 
 function CatalogSkeleton() {
@@ -96,6 +98,9 @@ export default function TemplateCatalogClient({
   // The filter is the address's, so a refresh and Back from a template keep it. The catalog is
   // drawn ahead of time for everyone, with All formats, and reads the address once it is live.
   const inputFilter = parseInputFilter(useAddressParam(INPUT_FILTER_PARAM));
+  // The filter the address named was drawn from the first paint by the stylesheet; the catalog
+  // takes it over once it draws that filter (src/lib/address-first-paint.ts).
+  useFirstPaintMark(TEMPLATE_INPUT_MARK, inputFilter === 'all' ? null : inputFilter);
   const chooseInputFilter = (value: InputFilter) => {
     writeAddressParam(INPUT_FILTER_PARAM, value === 'all' ? null : value);
   };
@@ -236,6 +241,7 @@ export default function TemplateCatalogClient({
               type="button"
               onClick={() => chooseInputFilter(value)}
               aria-pressed={inputFilter === value}
+              data-template-input-chip={value}
               className={`ui-focus-ring min-h-11 shrink-0 rounded-full border px-4 text-sm font-bold transition ${
                 inputFilter === value
                   ? 'border-rose-300/25 bg-rose-400/12 text-rose-100'

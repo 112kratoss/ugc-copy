@@ -10,6 +10,7 @@ import { buildAppShellAccountRestore } from "@/lib/app-shell-account-restore";
 import { APP_SHELL_SIDEBAR_RESTORE } from "@/lib/app-shell-sidebar-restore";
 import { WELCOME_PROMISE_RESTORE } from "@/lib/welcome-promise-restore";
 import { REEL_OPENING_RESTORE } from "@/lib/reel-opening-restore";
+import { ADDRESS_FIRST_PAINT_RESTORE } from "@/lib/address-first-paint";
 
 import "./globals.css";
 import AppShell from "@/components/AppShell";
@@ -18,6 +19,7 @@ import DeferredWelcomeCreditsPopup from "@/components/DeferredWelcomeCreditsPopu
 import FeedbackViewport from "@/components/FeedbackViewport";
 import NavigationProgress from "@/components/NavigationProgress";
 import ReelOpeningCover from "@/components/ReelOpeningCover";
+import AddressFirstPaintRelease from "@/components/AddressFirstPaintRelease";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -119,6 +121,10 @@ export default function RootLayout({
         {/* An address that opens a post in its page's reel (`?post=`), marked on the root element so the reel's stage, below, covers the page from the first paint until the reel attaches (`src/lib/reel-opening-restore.ts`). */}
         <script dangerouslySetInnerHTML={{ __html: REEL_OPENING_RESTORE }} />
         <ReelOpeningCover />
+        {/* The choice a page drawn ahead of time keeps in its address, drawn from the first
+            paint (src/lib/address-first-paint.ts). */}
+        <script dangerouslySetInnerHTML={{ __html: ADDRESS_FIRST_PAINT_RESTORE }} />
+        <AddressFirstPaintRelease />
         <a
           href="#main-content"
           className="ui-focus-ring fixed left-4 top-3 z-[120] -translate-y-24 rounded-full bg-[var(--ui-primary)] px-4 py-3 text-sm font-bold text-[var(--ui-primary-on)] transition focus:translate-y-0"
