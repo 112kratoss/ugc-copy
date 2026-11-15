@@ -1017,4 +1017,156 @@ describe('public search service', () => {
     });
   });
 
+  describe('related searches', () => {
+    const post = (index: number) => `${index.toString().padStart(8, '0')}-2222-4222-8222-222222222222`;
+    const rows = (count: number, corrected: string | null = null) => Array.from({ length: count }, (_, index) => ({
+      post_id: post(index + 1),
+      creator_user_id: `creator-${index + 1}`,
+      search_score: 20 - index,
+      created_at: '2026-11-12T09:00:00.000000+00:00',
+      corrected_query: corrected,
+    }));
+    const FOUND = [{ text: 'cinematic portrait' }, { text: 'nano banana pro' }];
+
+    function harness({
+      lexical = rows(3),
+      found = FOUND as typeof FOUND | Error,
+      blocked = [] as string[],
+      env = {} as Record<string, string | undefined>,
+    } = {}) {
+      const rpc = vi.fn(async (name: string) => {
+        if (name === 'search_public_posts') return { data: lexical, error: null };
+        if (name === 'search_public_creators' || name === 'search_public_entities') return { data: [], error: null };
+        if (name === 'search_recipes_corrected_query') return { data: null, error: null };
+        throw new Error(`Unexpected RPC ${name}`);
+      });
+      const client = { rpc } as unknown as SupabaseClient;
+      const findRelatedSearches = vi.fn<(
+        client: SupabaseClient,
+        options: { query: string; correctedQuery: string | null; postIds: string[]; viewerUserId: string | null },
+        dependencies: unknown,
+      ) => Promise<typeof FOUND>>(async () => {
+        if (found instanceof Error) throw found;
+        return found;
+      });
+      const logEvent = vi.fn();
+      const search = (options: Partial<Parameters<typeof searchPublicContent>[0]> = {}) => searchPublicContent({
+        query: 'Portrait',
+        normalizedQuery: 'Portrait',
+        type: 'top',
+        cursor: null,
+        limit: 20,
+        viewerUserId: 'viewer-1',
+        countryCode: 'IN',
+        relatedSearches: true,
+        ...options,
+      }, {
+        createServiceClient: vi.fn(() => client),
+        findRelatedSearches: findRelatedSearches as never,
+        getShowcaseFeedItemsByPostIds: vi.fn(async ({ postIds }: { postIds: string[] }) => postIds.map((id) => ({ id, isNsfw: false }))) as never,
+        getMarketplaceResourceList: vi.fn(async () => ({
+          items: [],
+          pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 6 },
+        })) as never,
+        loadBlockedCreatorIds: vi.fn(async ({ creatorIds }: { creatorIds: string[] }) => (
+          new Set(creatorIds.filter((id) => blocked.includes(id)))
+        )) as never,
+        logEvent,
+        env,
+        now,
+      });
+      return { search, rpc, findRelatedSearches, logEvent };
+    }
+
+    it('answers the searches the page’s posts suggest, asked with the query, the viewer and those posts', async () => {
+      const { search, findRelatedSearches } = harness();
+      const result = await search();
+      expect(result.relatedSearches).toEqual(FOUND);
+      expect(findRelatedSearches).toHaveBeenCalledTimes(1);
+      expect(findRelatedSearches.mock.calls[0][1]).toEqual({
+        query: 'Portrait',
+        correctedQuery: null,
+        postIds: [post(1), post(2), post(3)],
+        viewerUserId: 'viewer-1',
+      });
+      // On a Posts search too, for a visitor as for an account.
+      const posts = harness();
+      expect((await posts.search({ type: 'posts', viewerUserId: null })).relatedSearches).toEqual(FOUND);
+      expect(posts.findRelatedSearches.mock.calls[0][1]).toMatchObject({ viewerUserId: null });
+    });
+
+    it('looks for none unless the request asked, and then the answer carries no field: an older client sees no change', async () => {
+      for (const options of [{ relatedSearches: false }, { relatedSearches: undefined }]) {
+        const { search, findRelatedSearches } = harness();
+        const result = await search(options);
+        expect(result).not.toHaveProperty('relatedSearches');
+        expect(findRelatedSearches).not.toHaveBeenCalled();
+      }
+    });
+
+    it.each([
+      ['a later page', { type: 'posts' as const, cursor: { version: 1 as const, type: 'posts' as const, score: 3, id: 'post-1', asOf: 1 } }],
+      ['a Creators search', { type: 'creators' as const }],
+      ['a Recipes search', { type: 'recipes' as const }],
+      ['a query under three characters', { query: 'po', normalizedQuery: 'po' }],
+    ])('looks for none on %s, and the answer carries no field', async (_name, options) => {
+      const { search, findRelatedSearches } = harness();
+      expect(await search(options)).not.toHaveProperty('relatedSearches');
+      expect(findRelatedSearches).not.toHaveBeenCalled();
+    });
+
+    it('still answers on Latest, on a filtered search and on one read as typed: they are about the page, whatever its order', async () => {
+      for (const options of [
+        { type: 'posts' as const, sort: 'latest' as const },
+        { type: 'posts' as const, filters: { madeWith: null, mediaKind: 'video' as const, hasRecipe: false, following: false } },
+        { exact: true },
+      ]) {
+        const { search } = harness();
+        expect((await search(options)).relatedSearches).toEqual(FOUND);
+      }
+    });
+
+    it('names the corrected reading, so it is never offered back; none when the query was read as typed', async () => {
+      const corrected = harness({ lexical: rows(3, 'portrait') });
+      await corrected.search({ query: 'portrt', normalizedQuery: 'portrt' });
+      expect(corrected.findRelatedSearches.mock.calls[0][1]).toMatchObject({ query: 'portrt', correctedQuery: 'portrait' });
+      const exact = harness({ lexical: rows(3, 'portrait') });
+      await exact.search({ query: 'portrt', normalizedQuery: 'portrt', exact: true });
+      expect(exact.findRelatedSearches.mock.calls[0][1]).toMatchObject({ correctedQuery: null });
+    });
+
+    it('asks only about posts the answer may show: none of a creator blocked since the ranked read', async () => {
+      const { search, findRelatedSearches } = harness({ blocked: ['creator-2'] });
+      const result = await search();
+      expect(result.posts.items.map((item) => item.id)).toEqual([post(1), post(3)]);
+      expect(findRelatedSearches.mock.calls[0][1].postIds).toEqual([post(1), post(3)]);
+    });
+
+    it('answers an empty list when the page has none, and when the read fails: the search stands without them', async () => {
+      expect((await harness({ found: [] }).search()).relatedSearches).toEqual([]);
+      const failure = new Error('function public.search_related_searches does not exist');
+      const { search, logEvent } = harness({ found: failure });
+      const result = await search();
+      expect(result.relatedSearches).toEqual([]);
+      expect(result.posts.items).toHaveLength(3);
+      expect(logEvent).toHaveBeenCalledWith('warn', 'public_search_related_searches_failed', { error: failure });
+    });
+
+    it.each(['1', 'true', ' TRUE '])('SEARCH_RELATED_SEARCHES_DISABLED=%j looks for none and answers no field', async (value) => {
+      const { search, findRelatedSearches } = harness({ env: { SEARCH_RELATED_SEARCHES_DISABLED: value } });
+      expect(await search()).not.toHaveProperty('relatedSearches');
+      expect(findRelatedSearches).not.toHaveBeenCalled();
+    });
+
+    it('adds no call to a search that did not ask: the same database calls with and without the feature', async () => {
+      const asked = harness();
+      await asked.search();
+      const notAsked = harness();
+      await notAsked.search({ relatedSearches: false });
+      const names = (calls: unknown[][]) => calls.map(([name]) => name).sort();
+      // The related searches are read by their own function, never by the search's.
+      expect(names(asked.rpc.mock.calls)).toEqual(names(notAsked.rpc.mock.calls));
+    });
+  });
+
 });

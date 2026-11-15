@@ -152,6 +152,46 @@ export function searchHistoryWithout(current: readonly string[], query: string):
   return current.filter((item) => item.toLocaleLowerCase() !== lowered);
 }
 
+// ─── Pictures ────────────────────────────────────────────────────────────────
+
+/**
+ * A picture for a row that is not a post (a model or tool, a search to try):
+ * the cover preview of a post the row opens for this viewer, by the fields a
+ * post result's own cover carries (`previewUrl`, `previewThumbhash`, its
+ * size). A video's is its poster. Never of a labelled post, nor of a post by
+ * a creator on either side of a block with the viewer. A row has none when no
+ * such post has a ready preview: draw the row without a picture.
+ */
+export interface SearchThumbnail {
+  /** The post the picture is of: a key for the image, and nothing a press opens. */
+  postId: string;
+  url: string;
+  thumbhash: string | null;
+  /** The cover's own size, for its shape; null when the post never recorded one. */
+  width: number | null;
+  height: number | null;
+  mediaKind: 'image' | 'video';
+}
+
+function positiveSize(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** A thumbnail as a client may draw it, or null for anything that is not one. */
+export function readSearchThumbnail(value: unknown): SearchThumbnail | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if (typeof row.postId !== 'string' || !row.postId || typeof row.url !== 'string' || !row.url) return null;
+  return {
+    postId: row.postId,
+    url: row.url,
+    thumbhash: typeof row.thumbhash === 'string' && row.thumbhash ? row.thumbhash : null,
+    width: positiveSize(row.width),
+    height: positiveSize(row.height),
+    mediaKind: row.mediaKind === 'video' ? 'video' : 'image',
+  };
+}
+
 // ─── Entities ────────────────────────────────────────────────────────────────
 
 export const SEARCH_ENTITY_KINDS = ['model', 'tool'] as const;
@@ -168,6 +208,12 @@ export interface SearchEntity {
   postCount: number;
   /** There are more than `postCount`. */
   postCountCapped: boolean;
+  /**
+   * A picture of a post made with it, on a typeahead row and a starter row
+   * (2026-11-15). Null when none has one; absent on a search result's entity
+   * and from a server before it.
+   */
+  thumbnail?: SearchThumbnail | null;
 }
 
 // The server's keys hold letters, digits, dots and hyphens (search_entity_key);
@@ -771,4 +817,53 @@ const NO_RELATED_POSTS: readonly never[] = Object.freeze([]);
 /** What a screen reader is told of them, after the search's own count: "3 related posts". */
 export function searchRelatedStatus(count: number): string {
   return count <= 0 ? '' : `${count} related ${count === 1 ? 'post' : 'posts'}`;
+}
+
+// ─── Related searches ────────────────────────────────────────────────────────
+//
+// Searches near the one just made (`relatedSearches` on the answer of
+// /api/search, 2026-11-15): the phrases, and at most two names of models and
+// tools, that at least two posts of the result page hold. Never the query or
+// its corrected reading, and each finds at least two posts for this viewer.
+// The server looks for them only for a request that asks
+// (`relatedSearches=1`), on the first page of a Top or Posts search; pressing
+// one searches its text.
+
+/** The parameter a client asks for related searches with; its one value is `1`. */
+export const SEARCH_RELATED_SEARCHES_PARAM = 'relatedSearches';
+
+/** The most an answer holds. */
+export const SEARCH_RELATED_SEARCHES_MAX = 6;
+
+/** A search to offer after results: the text to put in the box and search for. */
+export interface SearchRelatedSearch {
+  text: string;
+}
+
+/**
+ * Whether related searches can come with a search at all: the first page of
+ * a Top or Posts search. A client sends the parameter only then; the server
+ * answers none anywhere else.
+ */
+export function searchRelatedSearchesApply(search: { type: SearchTabId; firstPage: boolean }): boolean {
+  return search.firstPage && (search.type === 'top' || search.type === 'posts');
+}
+
+/**
+ * The related searches an answer brings, to draw: none for an answer without
+ * the field (a request that did not ask, another tab, a later page, a server
+ * from before them), and never a row that is not whole.
+ */
+export function searchRelatedSearches(answer: unknown): SearchRelatedSearch[] {
+  const rows = typeof answer === 'object' && answer !== null
+    ? (answer as { relatedSearches?: unknown }).relatedSearches
+    : null;
+  if (!Array.isArray(rows)) return [];
+  const searches: SearchRelatedSearch[] = [];
+  for (const row of rows) {
+    const text = typeof row === 'object' && row !== null ? (row as { text?: unknown }).text : null;
+    if (typeof text === 'string' && text.trim()) searches.push({ text: text.trim() });
+    if (searches.length === SEARCH_RELATED_SEARCHES_MAX) break;
+  }
+  return searches;
 }

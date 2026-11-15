@@ -31,6 +31,7 @@ import { sanitizeProfileRecord } from '@/lib/profile';
 import {
   PUBLIC_SEARCH_PROBE_PARAM,
   PUBLIC_SEARCH_RELATED_PARAM,
+  PUBLIC_SEARCH_RELATED_SEARCHES_PARAM,
   decodePublicSearchCursor,
   encodePublicSearchCursor,
   publicSearchCursorFilterMark,
@@ -85,7 +86,12 @@ import type {
   ShowcaseFeedEventBatchResponse,
   ShowcaseFeedEventRequest,
 } from '../../ugc-mobile/lib/types';
-import { SEARCH_FILTER_PARAMS } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
+import {
+  SEARCH_FILTER_PARAMS,
+  SEARCH_RELATED_SEARCHES_MAX,
+  SEARCH_RELATED_SEARCHES_PARAM,
+  searchRelatedSearches,
+} from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
 
 type MobileApiContractEndpoint<Response> = {
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -138,6 +144,14 @@ type MobileApiContractFixture = {
       /** The parameter a client asks for related posts with. */
       relatedParameter: string;
       probeParameter: string;
+      /** Related searches: the parameter a client asks with, the cap, and the field the answer gains. */
+      relatedSearches: {
+        parameter: string;
+        max: number;
+        query: Record<string, string>;
+        responseFields: { relatedSearches: Array<{ text: string }> };
+        none: { query: Record<string, string>; responseFields: { relatedSearches: Array<{ text: string }> } };
+      };
       responseVariants: Record<
         | 'latestPosts' | 'latestPostsNextPage' | 'beforeSorts'
         | 'filteredPosts' | 'filteredPostsNextPage' | 'correctedPosts' | 'exactPosts' | 'beforeFilters'
@@ -156,7 +170,7 @@ type MobileApiContractFixture = {
         /** The filters and reading a marked cursor was issued under. */
         issuedFor?: { filters: PublicSearchFilters; exact: boolean };
       }>;
-      errors: Record<'unknownSort' | 'unknownMediaKind' | 'unknownMadeWith' | 'cursorOfOtherFilters' | 'unknownRelated', {
+      errors: Record<'unknownSort' | 'unknownMediaKind' | 'unknownMadeWith' | 'cursorOfOtherFilters' | 'unknownRelated' | 'unknownRelatedSearches', {
         query: Record<string, string>; status: number; response: { error: string };
       }>;
     };
@@ -759,6 +773,101 @@ describe('shared mobile API v1 contract fixture', () => {
       for (const [name, variant] of Object.entries(endpoint.responseVariants)) {
         if (name === 'relatedPosts') continue;
         expect(variant.response, name).not.toHaveProperty('related');
+      }
+    });
+
+    // Related searches (2026-11-15): asked for with a parameter of their own,
+    // answered in a field of their own. A request that does not ask gets the
+    // answer it always got, so an app from before them sees no change.
+    it('carries related searches in a field of their own, only for a request that asks', async () => {
+      const pinned = endpoint.relatedSearches;
+      expect(pinned.parameter).toBe(PUBLIC_SEARCH_RELATED_SEARCHES_PARAM);
+      expect(pinned.parameter).toBe(SEARCH_RELATED_SEARCHES_PARAM);
+      expect(pinned.max).toBe(SEARCH_RELATED_SEARCHES_MAX);
+      expect(pinned.query).toEqual({ q: 'portrait', type: 'top', [pinned.parameter]: '1' });
+      expect(pinned.responseFields.relatedSearches.length).toBeLessThanOrEqual(pinned.max);
+
+      // The route asks the service for them only with the parameter, and sends its answer as it is.
+      const answer = (type: 'top' | 'posts', relatedSearches?: Array<{ text: string }>): WebPublicSearchResponse => ({
+        query: 'portrait',
+        normalizedQuery: 'portrait',
+        type,
+        sort: 'top',
+        entities: [],
+        filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false },
+        correctedQuery: { posts: null, recipes: null },
+        exact: false,
+        creators: { items: [], nextCursor: null },
+        posts: { items: [], nextCursor: null },
+        recipes: { items: [], nextCursor: null },
+        ...(relatedSearches ? { relatedSearches } : {}),
+      });
+      const asked = await ask(pinned.query, 'visitor', answer('top', pinned.responseFields.relatedSearches));
+      expect(asked.response.status).toBe(200);
+      expect(asked.options).toMatchObject({ type: 'top', relatedSearches: true, related: false });
+      await expect(asked.response.json()).resolves.toEqual({ ...answer('top'), ...pinned.responseFields });
+      const withoutParameter = { ...pinned.query };
+      delete withoutParameter[pinned.parameter];
+      const notAsked = await ask(withoutParameter, 'visitor', answer('top'));
+      expect(notAsked.options).toMatchObject({ relatedSearches: false });
+      expect(await notAsked.response.json()).not.toHaveProperty('relatedSearches');
+
+      // A page with none answers an empty list: asked for and looked for, nothing to offer.
+      const none = await ask(pinned.none.query, 'visitor', answer('posts', []));
+      await expect(none.response.json()).resolves.toMatchObject(pinned.none.responseFields);
+
+      // The service builds the field from the page's posts, by the one function that reads them.
+      const rows = [
+        { post_id: 'post-1', creator_user_id: 'creator-1', search_score: 2, created_at: '2026-11-15T00:00:00+00:00', corrected_query: null },
+        { post_id: 'post-2', creator_user_id: 'creator-2', search_score: 1, created_at: '2026-11-15T00:00:00+00:00', corrected_query: null },
+      ];
+      const findRelatedSearches = vi.fn(async () => pinned.responseFields.relatedSearches);
+      const built = await searchPublicContentService({
+        query: pinned.query.q,
+        normalizedQuery: pinned.query.q,
+        type: 'top',
+        cursor: null,
+        limit: 20,
+        viewerUserId: null,
+        countryCode: null,
+        relatedSearches: true,
+      }, {
+        createServiceClient: vi.fn(() => ({
+          rpc: vi.fn(async (name: string) => ({ data: name === 'search_public_posts' ? rows : [], error: null })),
+        }) as unknown as SupabaseClient),
+        findRelatedSearches,
+        getShowcaseFeedItemsByPostIds: vi.fn(async ({ postIds }: { postIds: string[] }) => postIds.map((id) => ({ id }))) as never,
+        getMarketplaceResourceList: vi.fn(async () => ({
+          items: [],
+          pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 6 },
+        })) as never,
+        loadBlockedCreatorIds: vi.fn(async () => new Set<string>()) as never,
+        env: {},
+      });
+      expect(built.relatedSearches).toEqual(pinned.responseFields.relatedSearches);
+      expect(findRelatedSearches).toHaveBeenCalledWith(
+        expect.anything(),
+        { query: 'portrait', correctedQuery: null, postIds: ['post-1', 'post-2'], viewerUserId: null },
+        expect.anything(),
+      );
+
+      // Both clients read the field with one reader, which holds it to the cap.
+      expect(searchRelatedSearches(pinned.responseFields)).toEqual(pinned.responseFields.relatedSearches);
+      expect(searchRelatedSearches(endpoint.response)).toEqual([]);
+    });
+
+    it('refuses another value of the relatedSearches parameter with the words the fixture pins', async () => {
+      const refusal = endpoint.errors.unknownRelatedSearches;
+      const { response, options } = await ask(refusal.query);
+      expect(response.status).toBe(refusal.status);
+      await expect(response.json()).resolves.toEqual(refusal.response);
+      expect(options).toBeNull();
+    });
+
+    it('pins no relatedSearches field on any other answer: an older client is sent what it always was', () => {
+      expect(endpoint.response).not.toHaveProperty('relatedSearches');
+      for (const [name, variant] of Object.entries(endpoint.responseVariants)) {
+        expect(variant.response, name).not.toHaveProperty('relatedSearches');
       }
     });
 

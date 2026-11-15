@@ -10,6 +10,7 @@ import {
   type SearchEntityKind,
   type SearchFilters,
   type SearchMediaKind,
+  type SearchRelatedSearch,
 } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
 
 // What a request may name, and the words both clients show, are one copy the
@@ -82,6 +83,14 @@ export const PUBLIC_SEARCH_RELATED_PARAM = 'related';
  * Any other value is refused.
  */
 export const PUBLIC_SEARCH_PROBE_PARAM = 'probe';
+
+/**
+ * The request parameter a client asks for related searches with:
+ * `relatedSearches=1` (`SEARCH_RELATED_SEARCHES_PARAM`, the clients' shared
+ * rule). Any other value is refused, as `related`'s is. Without it the
+ * server looks for none, and the answer is what it was before them.
+ */
+export { SEARCH_RELATED_SEARCHES_PARAM as PUBLIC_SEARCH_RELATED_SEARCHES_PARAM } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
 
 /** How many entities the Top tab offers. */
 export const PUBLIC_SEARCH_ENTITY_LIMIT = 5;
@@ -208,6 +217,16 @@ export interface PublicSearchResponse {
    * reordered or shortened for it.
    */
   related?: PublicSearchRelated;
+  /**
+   * Searches near this one: the phrases, and at most two model or tool
+   * names, that at least two of this page's posts hold, never the query or
+   * its corrected reading, each finding two posts or more for this viewer.
+   * At most six. Present only for a request that asked
+   * (`relatedSearches=1`) for the first page of a Top or Posts search, and
+   * then a list, empty when there are none or they could not be read. Left
+   * out everywhere else and by a server from before them.
+   */
+  relatedSearches?: SearchRelatedSearch[];
 }
 
 export interface PublicSearchRelated {

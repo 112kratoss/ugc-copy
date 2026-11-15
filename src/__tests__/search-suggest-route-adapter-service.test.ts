@@ -18,6 +18,21 @@ import { proxy } from '@/proxy';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 const contract = mobileApiContract.endpoints.suggestSearch;
+
+// A stored preview path and the public bucket's address of it: the contract's
+// URLs stand under one host, so a path is the address less that host.
+const PREVIEW_HOST = 'https://cdn.example.test/';
+function thumbnailRow(thumbnail: { postId: string; url: string; thumbhash: string | null; width: number | null; height: number | null; mediaKind: string } | null) {
+  return thumbnail && {
+    post_id: thumbnail.postId,
+    path: thumbnail.url.slice(PREVIEW_HOST.length),
+    thumbhash: thumbnail.thumbhash,
+    width: thumbnail.width,
+    height: thumbnail.height,
+    media_kind: thumbnail.mediaKind,
+  };
+}
+const publicStorage = { from: () => ({ getPublicUrl: (path: string) => ({ data: { publicUrl: `${PREVIEW_HOST}${path}` } }) }) };
 const VIEWER_ID = '33333333-3333-4333-8333-333333333333';
 
 const requestIdBoundary = <T>(_requestId: string, callback: () => T): T => callback();
@@ -322,12 +337,13 @@ describe('search suggest route adapter', () => {
         label: entity.label,
         post_count: entity.postCount,
         post_count_capped: entity.postCountCapped,
+        thumbnail: thumbnailRow(entity.thumbnail),
       })),
       completions: contract.response.completions,
     };
     const rpc = vi.fn(async () => ({ data: rows, error: null }));
     const viaService = vi.fn((options: SearchSuggestOptions) => suggestSearch(options, {
-      createServiceClient: () => ({ rpc }) as unknown as SupabaseClient,
+      createServiceClient: () => ({ rpc, storage: publicStorage }) as unknown as SupabaseClient,
     }));
 
     const { response } = await ask(`http://localhost/api/search/suggest?q=${contract.query.q}`, { suggest: viaService });
@@ -353,6 +369,39 @@ describe('search suggest route adapter', () => {
     const typedAsHandle = await ask(`http://localhost/api/search/suggest?q=${encodeURIComponent(handle.query.q)}`, { suggest: viaService });
     await expect(typedAsHandle.response.json()).resolves.toEqual(handle.response);
     expect(rpc).toHaveBeenLastCalledWith('search_suggestions', expect.objectContaining({ p_query: 'lu', p_handles_only: true }));
+
+    // Phrases and names (20261115105944): a completion need not start with
+    // what was typed, a creator is found by a later word of the name, and an
+    // entity with no pictured post carries a null picture.
+    for (const variant of [
+      contract.responseVariants.phrasesAndNames,
+      contract.responseVariants.correctedReading,
+      contract.responseVariants.entityWithoutPicture,
+    ]) {
+      rpc.mockResolvedValueOnce({
+        data: {
+          creators: variant.response.creators.map((creator: { id: string; username: string; displayName: string; avatarUrl: string | null; isFollowing: boolean }) => ({
+            id: creator.id,
+            username: creator.username,
+            display_name: creator.displayName,
+            avatar_url: creator.avatarUrl,
+            is_following: creator.isFollowing,
+          })),
+          entities: variant.response.entities.map((entity: { kind: string; key: string; label: string; postCount: number; postCountCapped: boolean }) => ({
+            kind: entity.kind,
+            key: entity.key,
+            label: entity.label,
+            post_count: entity.postCount,
+            post_count_capped: entity.postCountCapped,
+            thumbnail: null,
+          })),
+          completions: variant.response.completions,
+        },
+        error: null,
+      });
+      const answered = await ask(`http://localhost/api/search/suggest?q=${encodeURIComponent(variant.query.q)}`, { suggest: viaService });
+      await expect(answered.response.json()).resolves.toEqual(variant.response);
+    }
 
     const phrase = contract.responseVariants.lastWordOfSeveral;
     rpc.mockResolvedValueOnce({ data: { creators: [], entities: [], completions: phrase.response.completions }, error: null });

@@ -64,6 +64,41 @@ describe('search typeahead: the answer', () => {
     });
   });
 
+  it('reads phrases, names and the corrected reading as completions like any other (2026-11-15)', () => {
+    for (const variant of [
+      contract.responseVariants.phrasesAndNames,
+      contract.responseVariants.correctedReading,
+      contract.responseVariants.entityWithoutPicture,
+    ]) {
+      expect(parseSearchSuggestResponse(variant.response)).toEqual(variant.response);
+    }
+    // A completion need not start with what was typed: "port" offers "cinematic portrait".
+    const completions = contract.responseVariants.phrasesAndNames.response.completions.map((completion) => completion.text);
+    expect(completions).toContain('cinematic portrait');
+    // Drawn with the typed part plain where a word of it starts so, and whole
+    // where the text does not hold what was typed (a corrected reading).
+    expect(searchTypeaheadTextRuns('cinematic portrait', 'port')).toEqual([
+      { text: 'cinematic ', typed: false }, { text: 'port', typed: true }, { text: 'rait', typed: false },
+    ]);
+    expect(searchTypeaheadTextRuns('portrait', 'portrt')).toEqual([{ text: 'portrait', typed: false }]);
+  });
+
+  it('reads an entity’s picture, null where there is none and from a server before pictures', () => {
+    const [pictured] = parseSearchSuggestResponse(contract.response)!.entities;
+    expect(pictured.thumbnail).toEqual(contract.response.entities[0].thumbnail);
+    expect(pictured.thumbnail?.mediaKind).toBe('video');
+    expect(parseSearchSuggestResponse(contract.responseVariants.entityWithoutPicture.response)!.entities[0].thumbnail).toBeNull();
+    const before = contract.responseVariants.beforePictures.response;
+    expect(parseSearchSuggestResponse(before)!.entities).toEqual([{ ...before.entities[0], thumbnail: null }]);
+    // A picture that is not whole is none; the row is still drawn.
+    const broken = parseSearchSuggestResponse({
+      creators: [],
+      completions: [],
+      entities: [{ ...before.entities[0], thumbnail: { postId: 'p', url: '' } }],
+    });
+    expect(broken?.entities).toEqual([{ ...before.entities[0], thumbnail: null }]);
+  });
+
   it('reads anything that is not an answer as nothing, never as an error', () => {
     for (const notOne of [
       null, undefined, '', 'ok', 7, [], {},
@@ -103,7 +138,7 @@ describe('search typeahead: the answer', () => {
     // An empty avatar is none, and only `true` is a follow.
     expect(read?.creators[1]).toEqual({ id: 'x0', username: 'luna-0', displayName: 'Luna 0', avatarUrl: null, isFollowing: false });
     expect(read?.entities).toHaveLength(SEARCH_TYPEAHEAD_MAX_ENTITIES);
-    expect(read?.entities[0]).toEqual({ kind: 'tool', key: 'lumen-forge', label: 'Lumen Forge', postCount: 3, postCountCapped: false });
+    expect(read?.entities[0]).toEqual({ kind: 'tool', key: 'lumen-forge', label: 'Lumen Forge', postCount: 3, postCountCapped: false, thumbnail: null });
     expect(read?.completions).toHaveLength(SEARCH_TYPEAHEAD_MAX_COMPLETIONS);
     expect(read?.completions[0]).toEqual({ text: 'lunar' });
   });

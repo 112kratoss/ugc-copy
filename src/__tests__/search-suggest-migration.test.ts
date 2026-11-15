@@ -46,6 +46,22 @@ function newestDefinition(name: string): { file: string; definition: string } {
   return { file, definition: fromDefinition.slice(0, closing) };
 }
 
+// The file that re-creates the completions, the creators and the one call for
+// phrases, any word of a name and pictures; what it must still hold is in
+// search-content-suggestions-migration.test.ts.
+const CONTENT_MIGRATION = '20261115105944_search_content_suggestions.sql';
+
+/** A function as one migration defines it, comments left out. */
+function definitionIn(sql: string, name: string): string {
+  const pattern = new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+public\\.${name}\\s*\\(`, 'i');
+  const start = sql.search(pattern);
+  expect(start, `${name} must be defined here`).toBeGreaterThanOrEqual(0);
+  const fromDefinition = sql.slice(start);
+  const closing = fromDefinition.search(/\n\$(?:function)?\$;/);
+  expect(closing, `the definition of ${name} must close`).toBeGreaterThan(0);
+  return fromDefinition.slice(0, closing);
+}
+
 /** The tables and views a definition names, schema included. */
 function relationsOf(definition: string): string[] {
   return Array.from(new Set(
@@ -161,8 +177,10 @@ describe('search suggestions migration', () => {
   });
 
   it('offers a completion only for a word, or a phrase, that two creators write', () => {
-    const { file, definition } = newestDefinition('search_suggest_completions');
-    expect(file).toBe(MIGRATION);
+    // As this file made it. 20261115105944 re-creates it with phrases from
+    // search_phrases and a viewer; its test holds the rules below to that one.
+    expect(newestDefinition('search_suggest_completions').file).toBe(CONTENT_MIGRATION);
+    const definition = definitionIn(statements, 'search_suggest_completions');
     expect(definition).toContain('c_min_creators CONSTANT integer := 2;');
     // Both readings of the dictionary, the one word and a phrase's word.
     expect(definition.match(/AND terms\.in_posts\s+AND terms\.creator_count >= c_min_creators/g)).toHaveLength(2);
@@ -197,8 +215,10 @@ describe('search suggestions migration', () => {
   });
 
   it('offers creators by prefix, in search’s order, and never a guest, a suspended account or a blocked pair', () => {
-    const { file, definition } = newestDefinition('search_suggest_creators');
-    expect(file).toBe(MIGRATION);
+    // As this file made it. 20261115105944 re-creates it to match any word of
+    // a display name too; its test holds the rules below to that one.
+    expect(newestDefinition('search_suggest_creators').file).toBe(CONTENT_MIGRATION);
+    const definition = definitionIn(statements, 'search_suggest_creators');
     expect(definition).toMatch(/RETURNS TABLE\(\s+creator_user_id uuid,\s+username text,\s+display_name text,\s+avatar_url text,\s+is_following boolean\s+\)/);
     // A %, an _ or a \ typed matches itself.
     expect(definition).toContain(String.raw`v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_') || '%';`);
@@ -309,8 +329,9 @@ describe('search suggestions entities migration', () => {
   });
 
   it('re-creates search_suggestions under the parameters the live route calls it by', () => {
-    const { file, definition } = newestDefinition('search_suggestions');
-    expect(file).toBe(ENTITIES_MIGRATION);
+    // As this file made it; 20261115105944 re-creates it again, under the same parameters.
+    expect(newestDefinition('search_suggestions').file).toBe(CONTENT_MIGRATION);
+    const definition = definitionIn(entitiesStatements, 'search_suggestions');
     // CREATE OR REPLACE: the same five parameters, or Postgres refuses it. No second function of the name.
     expect(entitiesStatements).not.toMatch(/DROP FUNCTION/i);
     const header = /CREATE OR REPLACE FUNCTION public\.search_suggestions\(([\s\S]*?)\)\s+RETURNS jsonb/.exec(entitiesStatements);
@@ -325,7 +346,7 @@ describe('search suggestions entities migration', () => {
   });
 
   it('keeps the two lists the live route reads exactly as they were', () => {
-    const { definition } = newestDefinition('search_suggestions');
+    const definition = definitionIn(entitiesStatements, 'search_suggestions');
     const start = statements.indexOf('CREATE FUNCTION public.search_suggestions(');
     const earlier = statements.slice(start, statements.indexOf('\n$function$;', start));
     const squash = (sql: string) => sql.replace(/\s+/g, ' ');
@@ -336,10 +357,12 @@ describe('search suggestions entities migration', () => {
     };
     expect(list(definition, 'creators')).toBe(list(earlier, 'creators'));
     expect(list(definition, 'completions')).toBe(list(earlier, 'completions'));
-    // The helpers are not re-created: they are the typeahead file's still.
+    // The helpers are not re-created by the entities file: the dictionary's
+    // rebuild is the typeahead file's still, the other two 20261115105944's.
     for (const helper of ['search_suggest_creators', 'search_suggest_completions', 'rebuild_search_terms']) {
-      expect(newestDefinition(helper).file, helper).toBe(MIGRATION);
+      expect(entitiesStatements, helper).not.toMatch(new RegExp(`FUNCTION public\\.${helper}\\(`));
     }
+    expect(newestDefinition('rebuild_search_terms').file).toBe(MIGRATION);
   });
 
   it('takes entities from search itself, and only takes away from its answer', () => {
@@ -382,7 +405,7 @@ describe('search suggestions entities migration', () => {
   });
 
   it('is read by the service list for list, with the cap the SQL holds', () => {
-    expect(serviceSource).toContain('entities: entityRows.slice(0, SEARCH_SUGGEST_MAX_ENTITIES).map(entityFromRow),');
+    expect(serviceSource).toContain('entities: entityRows.slice(0, SEARCH_SUGGEST_MAX_ENTITIES).map((row) => entityFromRow(client, row)),');
     for (const column of ['kind', 'key', 'label', 'post_count', 'post_count_capped']) {
       expect(serviceSource, column).toContain(`row.${column}`);
     }

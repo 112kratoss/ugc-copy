@@ -40,6 +40,7 @@ import {
   type RelatedPostRow,
 } from '@/lib/search-embeddings';
 import { searchEntityLabel } from '@/lib/search-entity-label';
+import { findRelatedSearches, isSearchRelatedSearchesDisabled } from '@/lib/search-related-searches';
 import { createServiceClient } from '@/lib/server-helpers';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { getShowcaseFeedItemsByPostIds } from '@/lib/showcase-feed';
@@ -82,6 +83,10 @@ type PublicSearchServiceDependencies = {
   createServiceClient?: typeof createServiceClient;
   /** The posts nearest the query by meaning, or null when they cannot be looked for. */
   findRelatedPostRows?: typeof findRelatedPostRows;
+  /** The searches a result page's posts suggest. */
+  findRelatedSearches?: typeof findRelatedSearches;
+  /** Where the related searches' kill switch is read from; `process.env` by default. */
+  env?: Record<string, string | undefined>;
   getMarketplaceResourceList?: typeof getMarketplaceResourceList;
   getShowcaseFeedItemsByPostIds?: typeof getShowcaseFeedItemsByPostIds;
   loadBlockedCreatorIds?: typeof loadBlockedCreatorIds;
@@ -118,6 +123,11 @@ export type PublicSearchOptions = {
    */
   related?: boolean;
   /**
+   * The client asked for related searches (`relatedSearches=1`): it draws
+   * them. Without it none are looked for and the answer carries no field.
+   */
+  relatedSearches?: boolean;
+  /**
    * Who the request is counted against: the key the route's rate limit uses
    * (the account, or the hashed network of a visitor). Related posts are
    * looked for only with one, since a new query is counted against it.
@@ -151,6 +161,8 @@ function resolveDependencies(dependencies?: PublicSearchServiceDependencies) {
   return {
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     findRelatedPostRows: dependencies?.findRelatedPostRows ?? findRelatedPostRows,
+    findRelatedSearches: dependencies?.findRelatedSearches ?? findRelatedSearches,
+    env: dependencies?.env ?? process.env,
     runAfterResponse: dependencies?.runAfterResponse ?? runAfterResponseByDefault,
     getMarketplaceResourceList: dependencies?.getMarketplaceResourceList ?? getMarketplaceResourceList,
     getShowcaseFeedItemsByPostIds:
@@ -649,6 +661,34 @@ export async function searchPublicContent(
   const visiblePostRows = postRows
     .slice(0, isTop ? postTake : options.limit)
     .filter((row) => !blockedIds.has(row.creator_user_id));
+  // Related searches, only for a client that asked for them
+  // (`relatedSearches=1`), on the first page of a Top or Posts search: what
+  // this page's posts share. One call of its own, started beside the
+  // hydration of those posts and awaited after it, so the search's own read
+  // is untouched and nothing waits on it. The database reads each post again
+  // as search reads one (unlabelled, neither side of a block), so a post
+  // labelled or blocked since the ranked read counts for nothing.
+  const relatedSearchesAsked = (options.relatedSearches ?? false)
+    && contentQueryAllowed
+    && (options.type === 'top' || options.type === 'posts')
+    && options.cursor === null
+    && !isSearchRelatedSearchesDisabled(dependencies.env);
+  const relatedSearchesPromise = relatedSearchesAsked
+    ? dependencies.findRelatedSearches(
+      adminSupabase,
+      {
+        query: options.normalizedQuery,
+        correctedQuery: exact ? null : postRows[0]?.corrected_query ?? null,
+        postIds: visiblePostRows.map((row) => row.post_id),
+        viewerUserId: options.viewerUserId,
+      },
+      { logEvent: dependencies.logEvent },
+    ).catch((error) => {
+      // Never rejects on its own; held so a search cannot fail for it.
+      dependencies.logEvent('warn', 'public_search_related_searches_failed', { error });
+      return [];
+    })
+    : null;
   const hydratedPosts = visiblePostRows.length > 0
     ? await dependencies.getShowcaseFeedItemsByPostIds({
       postIds: visiblePostRows.map((row) => row.post_id),
@@ -688,6 +728,8 @@ export async function searchPublicContent(
   const related = relatedRowsPromise
     ? await relatedPostCards({ adminSupabase, dependencies, options, rows: await relatedRowsPromise })
     : undefined;
+
+  const relatedSearches = relatedSearchesPromise ? await relatedSearchesPromise : undefined;
 
   // A posts cursor pages the filters and the reading it was issued under.
   const postCursorFilters = publicSearchCursorFilterMark(filters, exact);
@@ -752,5 +794,6 @@ export async function searchPublicContent(
       }
       : emptyPublicSearchPage(),
     ...(related ? { related: { posts: related } } : {}),
+    ...(relatedSearches ? { relatedSearches } : {}),
   };
 }

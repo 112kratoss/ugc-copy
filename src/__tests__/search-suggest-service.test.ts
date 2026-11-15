@@ -27,7 +27,10 @@ function creatorRow(index: number, overrides: Record<string, unknown> = {}) {
 
 function clientAnswering(answer: { data: unknown; error: unknown }) {
   const rpc = vi.fn(async () => answer);
-  return { rpc, createServiceClient: () => ({ rpc }) as unknown as SupabaseClient };
+  // The public bucket's address of a stored path, as supabase-js builds it: no request is made.
+  const getPublicUrl = vi.fn((path: string) => ({ data: { publicUrl: `https://cdn.example.test/showcase_media/${path}` } }));
+  const from = vi.fn(() => ({ getPublicUrl }));
+  return { rpc, from, getPublicUrl, createServiceClient: () => ({ rpc, storage: { from } }) as unknown as SupabaseClient };
 }
 
 const options: SearchSuggestOptions = {
@@ -70,7 +73,7 @@ describe('search suggest service', () => {
           isFollowing: false,
         },
       ],
-      entities: [{ kind: 'tool', key: 'lumen-forge', label: 'Lumen Forge', postCount: 14, postCountCapped: false }],
+      entities: [{ kind: 'tool', key: 'lumen-forge', label: 'Lumen Forge', postCount: 14, postCountCapped: false, thumbnail: null }],
       completions: [{ text: 'luminous' }, { text: 'lunar' }],
     });
     expect(rpc).toHaveBeenCalledTimes(1);
@@ -120,9 +123,9 @@ describe('search suggest service', () => {
     });
     const answer = await suggestSearch(options, { createServiceClient });
     expect(answer.entities).toEqual([
-      { kind: 'model', key: catalogModel, label: getPostModelDisplayName(catalogModel), postCount: 1000, postCountCapped: true },
-      { kind: 'model', key: 'some-outside-model', label: 'Some Outside Model', postCount: 2, postCountCapped: false },
-      { kind: 'tool', key: catalogModel, label: 'A tool of that name', postCount: 3, postCountCapped: false },
+      { kind: 'model', key: catalogModel, label: getPostModelDisplayName(catalogModel), postCount: 1000, postCountCapped: true, thumbnail: null },
+      { kind: 'model', key: 'some-outside-model', label: 'Some Outside Model', postCount: 2, postCountCapped: false, thumbnail: null },
+      { kind: 'tool', key: catalogModel, label: 'A tool of that name', postCount: 3, postCountCapped: false, thumbnail: null },
     ]);
     // By the one function full search maps an entity with.
     expect(readFileSync(join(process.cwd(), 'src/lib/search-suggest-service.ts'), 'utf8'))
@@ -141,8 +144,77 @@ describe('search suggest service', () => {
     });
     const answer = await suggestSearch(options, { createServiceClient });
     expect(answer.entities).toEqual([
-      { kind: 'model', key: 'kling-2.6-motion-control', label: 'Kling 2.6', postCount: 31, postCountCapped: false },
+      { kind: 'model', key: 'kling-2.6-motion-control', label: 'Kling 2.6', postCount: 31, postCountCapped: false, thumbnail: null },
     ]);
+  });
+
+  describe('an entity’s picture (20261115105944)', () => {
+    const entity = { kind: 'tool', key: 'lumen-forge', label: 'Lumen Forge', post_count: 14, post_count_capped: false };
+    const picture = {
+      post_id: '44444444-4444-4444-8444-444444444444',
+      path: 'owner/post/preview.webp',
+      thumbhash: '1QcSHQRnh493V4dIh4eXh1h4kJUI',
+      width: 1024,
+      height: 1536,
+      media_kind: 'video',
+    };
+    const answerWith = async (thumbnail: unknown) => {
+      const fake = clientAnswering({
+        data: { creators: [], entities: [{ ...entity, ...(thumbnail === undefined ? {} : { thumbnail }) }], completions: [] },
+        error: null,
+      });
+      const answer = await suggestSearch(options, { createServiceClient: fake.createServiceClient });
+      return { ...fake, thumbnail: answer.entities[0].thumbnail };
+    };
+
+    it('is the stored preview’s public address and the cover’s thumbhash, size and kind, with no read of storage', async () => {
+      const { thumbnail, rpc, from, getPublicUrl } = await answerWith(picture);
+      expect(thumbnail).toEqual({
+        postId: '44444444-4444-4444-8444-444444444444',
+        url: 'https://cdn.example.test/showcase_media/owner/post/preview.webp',
+        thumbhash: '1QcSHQRnh493V4dIh4eXh1h4kJUI',
+        width: 1024,
+        height: 1536,
+        mediaKind: 'video',
+      });
+      // The typeahead stays one database round trip: the address is built, not fetched.
+      expect(rpc).toHaveBeenCalledTimes(1);
+      expect(from).toHaveBeenCalledWith('showcase_media');
+      expect(getPublicUrl).toHaveBeenCalledWith('owner/post/preview.webp');
+    });
+
+    it('is null when the database answers none, and from a database before pictures', async () => {
+      expect((await answerWith(null)).thumbnail).toBeNull();
+      expect((await answerWith(undefined)).thumbnail).toBeNull();
+    });
+
+    it('is never an address of the private bucket, where a labelled post’s media lives', async () => {
+      const { thumbnail, from } = await answerWith({ ...picture, path: 'private-posts/owner/post/preview.webp' });
+      expect(thumbnail).toBeNull();
+      expect(from).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['no path', { ...picture, path: null }],
+      ['an empty path', { ...picture, path: '' }],
+      ['no post', { ...picture, post_id: null }],
+      ['a list', [picture]],
+      ['a string', 'owner/post/preview.webp'],
+    ])('is null for a row it cannot read (%s): the entity is still offered', async (_name, row) => {
+      expect((await answerWith(row)).thumbnail).toBeNull();
+    });
+
+    it('reads a missing thumbhash or size as null, and any kind but video as an image', async () => {
+      const { thumbnail } = await answerWith({ post_id: picture.post_id, path: picture.path, width: 0, height: 'tall', media_kind: 'gif' });
+      expect(thumbnail).toEqual({
+        postId: picture.post_id,
+        url: 'https://cdn.example.test/showcase_media/owner/post/preview.webp',
+        thumbhash: null,
+        width: null,
+        height: null,
+        mediaKind: 'image',
+      });
+    });
   });
 
   it('offers no entities from a database that answers none, as before 20261112192423', async () => {
@@ -189,7 +261,7 @@ describe('search suggest service', () => {
     });
     const answer = await suggestSearch(options, { createServiceClient });
     expect(Object.keys(answer).sort()).toEqual(['completions', 'creators', 'entities', 'normalizedQuery', 'query']);
-    expect(Object.keys(answer.entities[0]).sort()).toEqual(['key', 'kind', 'label', 'postCount', 'postCountCapped']);
+    expect(Object.keys(answer.entities[0]).sort()).toEqual(['key', 'kind', 'label', 'postCount', 'postCountCapped', 'thumbnail']);
     expect(Object.keys(answer.creators[0]).sort()).toEqual(['avatarUrl', 'displayName', 'id', 'isFollowing', 'username']);
     expect(answer.completions).toEqual([{ text: 'lunar' }]);
   });

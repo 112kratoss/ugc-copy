@@ -11,6 +11,12 @@
  *   - Try searching for: a hand-picked list of plain searches (kept in
  *     `src/lib/search-starter.ts`), each offered only while it finds a post.
  *
+ * Since 2026-11-15 the lists are made from this week where there is one
+ * (`periods`): models, tools and creators by what their posts gained in the
+ * last 7 days against their own three weeks before, searches from the
+ * phrases posts write. A list with too little this week is the one above,
+ * and says `all`. Models, tools and searches each carry a `thumbnail`.
+ *
  * The answer's shape, its caps, the section headings and order, what a row
  * does, and a reader that turns any body into an answer a client may draw.
  * The web's search page and the app's search screen draw it; the server
@@ -20,9 +26,11 @@
  */
 import {
   SEARCH_ENTITY_KINDS,
+  readSearchThumbnail,
   searchEntityId,
   type SearchEntity,
   type SearchEntityKind,
+  type SearchThumbnail,
 } from './public-search-policy';
 
 // ─── The answer ──────────────────────────────────────────────────────────────
@@ -57,25 +65,61 @@ export interface SearchStarterCreator {
   isFollowing: boolean;
 }
 
-/** A search to offer: the text to put in the box and search for. */
+/**
+ * A search to offer: the text to put in the box and search for, and a picture
+ * of a post it finds. The server and parseSearchStarterResponse always say:
+ * null when none of them has one, or from a server before pictures.
+ */
 export interface SearchStarterSearch {
   text: string;
+  thumbnail?: SearchThumbnail | null;
 }
 
+/**
+ * What a list is made from: `week`, the last 7 days (a client may then say
+ * "this week"), or `all`, the all-time list of before 2026-11-15.
+ */
+export const SEARCH_STARTER_PERIODS = ['week', 'all'] as const;
+export type SearchStarterPeriod = (typeof SEARCH_STARTER_PERIODS)[number];
+
+export interface SearchStarterPeriods {
+  entities: SearchStarterPeriod;
+  creators: SearchStarterPeriod;
+  searches: SearchStarterPeriod;
+}
+
+/** Every list all-time: what an answer without `periods` is read as. */
+export const SEARCH_STARTER_ALL_TIME: SearchStarterPeriods = Object.freeze({
+  entities: 'all',
+  creators: 'all',
+  searches: 'all',
+}) as SearchStarterPeriods;
+
 export interface SearchStarterResponse {
-  /** Models and tools, as a search result names them, most posts first. */
+  /** Models and tools, as a search result names them, in the order to show them, each with a `thumbnail`. */
   entities: SearchStarterEntity[];
   /** In the order to show them. */
   creators: SearchStarterCreator[];
   /** In the order to show them. */
   searches: SearchStarterSearch[];
+  /**
+   * Which period each list is of. `week` for searches means every one of
+   * them is a phrase posts wrote this week; with a hand-picked term among
+   * them it is `all`. The server and parseSearchStarterResponse always say;
+   * an answer built without it is all-time (searchStarterPeriod).
+   */
+  periods?: SearchStarterPeriods;
 }
+
+/** An answer's three lists: what the sections are made from, whatever period each is of. */
+export type SearchStarterLists = Pick<SearchStarterResponse, 'entities' | 'creators' | 'searches'>;
 
 /** The answer of a server that offers nothing (switched off, or nothing to offer yet). */
 export const SEARCH_STARTER_EMPTY_RESPONSE: SearchStarterResponse = Object.freeze({
   entities: [],
   creators: [],
   searches: [],
+  periods: SEARCH_STARTER_ALL_TIME,
 }) as SearchStarterResponse;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -105,6 +149,7 @@ function readEntity(value: unknown): SearchStarterEntity | null {
     label: value.label,
     postCount: Math.max(0, Math.floor(value.postCount)),
     postCountCapped: value.postCountCapped === true,
+    thumbnail: readSearchThumbnail(value.thumbnail),
     query: value.query.trim(),
   };
 }
@@ -125,7 +170,23 @@ function readCreator(value: unknown): SearchStarterCreator | null {
 }
 
 function readSearch(value: unknown): SearchStarterSearch | null {
-  return isRecord(value) && isText(value.text) && value.text.trim() ? { text: value.text.trim() } : null;
+  return isRecord(value) && isText(value.text) && value.text.trim()
+    ? { text: value.text.trim(), thumbnail: readSearchThumbnail(value.thumbnail) }
+    : null;
+}
+
+function readPeriod(value: unknown): SearchStarterPeriod {
+  return value === 'week' ? 'week' : 'all';
+}
+
+/** A list is `week` only when the answer says so: anything else, a server from before periods included, is `all`. */
+function readPeriods(value: unknown): SearchStarterPeriods {
+  if (!isRecord(value)) return SEARCH_STARTER_ALL_TIME;
+  return {
+    entities: readPeriod(value.entities),
+    creators: readPeriod(value.creators),
+    searches: readPeriod(value.searches),
+  };
 }
 
 function readList<T>(value: unknown, read: (item: unknown) => T | null, limit: number): T[] {
@@ -151,11 +212,12 @@ export function parseSearchStarterResponse(value: unknown): SearchStarterRespons
     entities: readList(value.entities, readEntity, SEARCH_STARTER_MAX_ENTITIES),
     creators: readList(value.creators, readCreator, SEARCH_STARTER_MAX_CREATORS),
     searches: readList(value.searches, readSearch, SEARCH_STARTER_MAX_SEARCHES),
+    periods: readPeriods(value.periods),
   };
 }
 
 /** Whether an answer has nothing to draw: a client then shows what it showed before the starter. */
-export function isSearchStarterEmpty(answer: SearchStarterResponse | null | undefined): boolean {
+export function isSearchStarterEmpty(answer: SearchStarterLists | null | undefined): boolean {
   return !answer || (answer.entities.length === 0 && answer.creators.length === 0 && answer.searches.length === 0);
 }
 
@@ -171,6 +233,29 @@ export const SEARCH_STARTER_HEADINGS: Readonly<Record<SearchStarterSectionId, st
   searches: 'Try searching for',
 });
 
+/**
+ * The headings of a list made from this week (`periods`): said only when the
+ * answer says `week` for that list, so "this week" is never untrue.
+ */
+export const SEARCH_STARTER_WEEK_HEADINGS: Readonly<Record<SearchStarterSectionId, string>> = Object.freeze({
+  entities: 'Popular this week',
+  creators: 'Creators popular this week',
+  searches: 'Popular searches this week',
+});
+
+/** The period a list of an answer is of: `all` for an answer that does not say. */
+export function searchStarterPeriod(
+  answer: Pick<SearchStarterResponse, 'periods'> | null | undefined,
+  id: SearchStarterSectionId,
+): SearchStarterPeriod {
+  return answer?.periods?.[id] === 'week' ? 'week' : 'all';
+}
+
+/** A section's heading for the period its list is of. */
+export function searchStarterHeading(id: SearchStarterSectionId, period: SearchStarterPeriod): string {
+  return period === 'week' ? SEARCH_STARTER_WEEK_HEADINGS[id] : SEARCH_STARTER_HEADINGS[id];
+}
+
 /** The label of the whole starter, for a screen reader's region. */
 export const SEARCH_STARTER_LABEL = 'Ideas to start a search';
 
@@ -183,7 +268,7 @@ export type SearchStarterSection =
   | { id: 'searches'; heading: string; searches: SearchStarterSearch[] };
 
 /** The sections an answer fills, in order; an empty list has no section. */
-export function searchStarterSections(answer: SearchStarterResponse | null | undefined): SearchStarterSection[] {
+export function searchStarterSections(answer: SearchStarterLists | null | undefined): SearchStarterSection[] {
   if (!answer) return [];
   const sections: SearchStarterSection[] = [];
   if (answer.entities.length) sections.push({ id: 'entities', heading: SEARCH_STARTER_HEADINGS.entities, entities: answer.entities });
@@ -214,6 +299,6 @@ export function searchStarterCreatorAction(creator: SearchStarterCreator): Searc
   return { type: 'creator', username: creator.username };
 }
 
-export function searchStarterSearchAction(search: SearchStarterSearch): SearchStarterAction {
+export function searchStarterSearchAction(search: Pick<SearchStarterSearch, 'text'>): SearchStarterAction {
   return { type: 'search', query: search.text };
 }

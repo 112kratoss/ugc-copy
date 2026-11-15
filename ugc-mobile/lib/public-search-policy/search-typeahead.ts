@@ -34,6 +34,7 @@ import {
   SEARCH_RECENTS_HEADING,
   normalizeCreatorSearchQuery,
   normalizeSearchHistoryQuery,
+  readSearchThumbnail,
   searchEntityActionLabel,
   searchEntityId,
   searchQueryLength,
@@ -59,7 +60,14 @@ export interface SearchSuggestCreator {
   isFollowing: boolean;
 }
 
-/** A query to search for: what was typed, with its last word completed. */
+/**
+ * A query to search for. Until 2026-11-15 always what was typed with its last
+ * word completed; since then also a phrase or a model's or tool's name that
+ * holds every typed word, the last as the start of any of its words ("port"
+ * offers "cinematic portrait"), and, when nothing completes the text as
+ * typed, its corrected reading. So a completion need not start with what was
+ * typed: searchTypeaheadTextRuns draws such a one whole.
+ */
 export interface SearchSuggestCompletion {
   text: string;
 }
@@ -71,7 +79,11 @@ export interface SearchSuggestResponse {
   normalizedQuery: string;
   /** In the order to show them. */
   creators: SearchSuggestCreator[];
-  /** Models and tools, as a search result names them. Empty under three characters and for a query typed as a handle. */
+  /**
+   * Models and tools, as a search result names them, each with a `thumbnail`
+   * (a picture of a post made with it, or null). Empty under three characters
+   * and for a query typed as a handle.
+   */
   entities: SearchEntity[];
   /** In the order to show them. Empty for a query typed as a handle. */
   completions: SearchSuggestCompletion[];
@@ -113,6 +125,9 @@ function readEntity(value: unknown): SearchEntity | null {
     label: value.label,
     postCount: Math.max(0, Math.floor(value.postCount)),
     postCountCapped: value.postCountCapped === true,
+    // A picture of a post made with it, or null: a server from before
+    // pictures sends none.
+    thumbnail: readSearchThumbnail(value.thumbnail),
   };
 }
 

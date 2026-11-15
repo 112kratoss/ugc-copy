@@ -1,5 +1,7 @@
 import 'server-only';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 import type { SearchEntityResult } from '@/lib/public-search';
 import { entityResult } from '@/lib/public-search-service';
 import {
@@ -10,6 +12,7 @@ import {
   type SearchSuggestCreator,
   type SearchSuggestResponse,
 } from '@/lib/search-suggest';
+import { searchThumbnailFromRow } from '@/lib/search-thumbnail';
 import { createServiceClient } from '@/lib/server-helpers';
 
 type SearchSuggestServiceDependencies = {
@@ -64,9 +67,11 @@ function creatorFromRow(row: unknown): SearchSuggestCreator {
 /**
  * A model or tool, named as full search names it (entityResult: a model made
  * here by its catalog name, anything else by the name its posts print), so a
- * row in the box and the result it opens read the same.
+ * row in the box and the result it opens read the same; with the picture the
+ * database answers for it, of a post made with it that this viewer may see
+ * (null when none has one, or from a database before 20261115105944).
  */
-function entityFromRow(row: unknown): SearchEntityResult {
+function entityFromRow(client: SupabaseClient, row: unknown): SearchEntityResult {
   if (
     !isRecord(row)
     || !(row.kind === 'model' || row.kind === 'tool')
@@ -78,13 +83,16 @@ function entityFromRow(row: unknown): SearchEntityResult {
   ) {
     throw new Error(UNEXPECTED_ANSWER);
   }
-  return entityResult({
-    kind: row.kind,
-    key: row.key,
-    label: row.label,
-    post_count: row.post_count,
-    post_count_capped: row.post_count_capped,
-  });
+  return {
+    ...entityResult({
+      kind: row.kind,
+      key: row.key,
+      label: row.label,
+      post_count: row.post_count,
+      post_count_capped: row.post_count_capped,
+    }),
+    thumbnail: searchThumbnailFromRow(client, row.thumbnail),
+  };
 }
 
 function completionFromRow(row: unknown): SearchSuggestCompletion {
@@ -98,7 +106,11 @@ function completionFromRow(row: unknown): SearchSuggestCompletion {
  * must never show (a guest, a suspended or deleting account, either side of a
  * block with the viewer; a word fewer than two creators write, or one only a
  * labelled, private or hidden post or a paid recipe's locked text holds; a
- * model or tool no post the viewer may see names, or only one creator uses).
+ * model or tool no post the viewer may see names, or only one creator uses;
+ * a picture of a labelled post or of a creator blocked with the viewer).
+ * Completions are words, phrases and model and tool names that public posts
+ * of two creators show, and the corrected reading of a text nothing
+ * completes.
  *
  * Unlike searchPublicContent this makes no second pass over blocks: the
  * function reads them in the statement that picks the creators, and a block
@@ -131,7 +143,7 @@ export async function suggestSearch(
     // The caps are the database's too; held here so the answer's size never
     // rests on one side alone.
     creators: data.creators.slice(0, SEARCH_SUGGEST_MAX_CREATORS).map(creatorFromRow),
-    entities: entityRows.slice(0, SEARCH_SUGGEST_MAX_ENTITIES).map(entityFromRow),
+    entities: entityRows.slice(0, SEARCH_SUGGEST_MAX_ENTITIES).map((row) => entityFromRow(client, row)),
     completions: data.completions.slice(0, SEARCH_SUGGEST_MAX_COMPLETIONS).map(completionFromRow),
   };
 }
