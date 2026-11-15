@@ -568,7 +568,12 @@ test.describe('search typeahead', () => {
       query: suggestFixture.query,
       normalizedQuery: suggestFixture.query,
       creators: [{ id: 'workflow-user', username: 'e2e-creator', displayName: 'E2E Creator', avatarUrl: null, isFollowing: false }],
-      entities: [{ kind: 'tool', key: 'e2e-tool', label: 'E2E Tool', postCount: 2, postCountCapped: false }],
+      // The stub's row has no picture, is no model of the product's catalog and is opened by the
+      // typed text itself: the fields a server since 2026-11-15 always sets say so.
+      entities: [{
+        kind: 'tool', key: 'e2e-tool', label: 'E2E Tool', postCount: 2, postCountCapped: false,
+        thumbnail: null, inCatalog: false, catalogModel: null, query: null,
+      }],
       completions: [{ text: 'e2e typeahead vary proof' }],
     });
     const headers = response.headers();
