@@ -469,6 +469,38 @@ describe('PostComments', () => {
         ]);
     });
 
+    it('keeps rows short, with the line moving with their padding', async () => {
+        signIn();
+        const root = comment({ id: 'root-1', body: 'Root comment', replyCount: 1 });
+        const reply = comment({ id: 'reply-1', parentId: root.id, body: 'First reply' });
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (
+            String(input).includes('parentId=root-1')
+                ? jsonResponse(page([reply]))
+                : jsonResponse(page([root]))
+        )));
+
+        render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={2} />);
+        await screen.findByText('Root comment');
+        fireEvent.click(screen.getByRole('button', { name: 'View 1 reply' }));
+        await screen.findByText('First reply');
+
+        // jsdom lays nothing out, so the geometry is read from the classes: a
+        // row's 6px padding, the spine reaching down through it, and a reply's
+        // elbow turning at its 24px avatar's middle under it (6 + 12 = 18px).
+        const [commentRow, replyRow] = threadItems();
+        expect(commentRow).toHaveClass('py-1.5');
+        expect(replyRow).toHaveClass('py-1.5');
+        expect(commentRow.querySelector('[data-thread-line="spine"]')).toHaveClass('top-9', '-bottom-1.5');
+        expect(replyRow.querySelector('[data-thread-line="elbow"]')).toHaveClass('h-4.5');
+        // The actions under a comment are drawn 28px tall, not 36: taller, they
+        // read as a gap between comments (owner, 2026-11-15).
+        for (const name of ["Like @creator's comment", "Dislike @creator's comment", 'Reply to @creator']) {
+            for (const action of screen.getAllByRole('button', { name })) {
+                expect(action).toHaveClass('min-h-7');
+            }
+        }
+    });
+
     it("draws a thread's line when its first reply is posted, keeps it whole while that reply is deleted, and takes it away after", async () => {
         signIn();
         let replies: PostComment[] = [];

@@ -532,7 +532,7 @@ describe('comments sheet', () => {
       .toBe('Add a comment…');
   });
 
-  it('renders the count and uses accessible 48pt comment actions', () => {
+  it('renders the count, with comment actions drawn 32pt tall that reach 44pt', () => {
     pages = [page([comment()])];
     const root = renderSheet().root;
 
@@ -541,7 +541,13 @@ describe('comments sheet', () => {
       '@batman',
       'This prompt is unreal.',
     ]));
-    expect(pressable(root, 'Reply to @batman').props.style).toMatchObject({ minHeight: 48 });
+    // Drawn short so a one-line comment is not mostly the row of actions under
+    // it (owner, 2026-11-15); each still answers a 44pt reach.
+    for (const label of ["Like @batman's comment", "Dislike @batman's comment", 'Reply to @batman']) {
+      const action = pressable(root, label);
+      expect(action.props.style).toMatchObject({ minHeight: 32 });
+      expect(action.props.hitSlop).toEqual({ top: 6, bottom: 6 });
+    }
     expect(pressable(root, "Options for @batman's comment").props.style)
       .toMatchObject({ width: 48, height: 48 });
   });
@@ -1226,7 +1232,7 @@ describe('comments sheet', () => {
     // Folded: a line from under @batman's avatar into "View 2 replies". The
     // comment without replies draws none.
     expect(stems().map(rowAuthor)).toEqual(['@batman']);
-    expect(flat(stems()[0].props.style)).toMatchObject({ position: 'absolute', top: 41, bottom: 0 });
+    expect(flat(stems()[0].props.style)).toMatchObject({ position: 'absolute', top: 37, bottom: 0 });
     expect(elbows()).toHaveLength(1);
     expect(flat(elbows()[0].props.style)).toMatchObject({ left: 32, width: 17, top: -1, bottom: '50%' });
 
@@ -1241,14 +1247,14 @@ describe('comments sheet', () => {
     expect(elbows().slice(0, 2).map(rowAuthor)).toEqual(['@robin', '@robin']);
     // Every piece under the stem reaches a point up into the one above, so
     // layout rounding never opens a gap; a reply's elbow still turns at its
-    // avatar's middle (24.5 under the row's top), the toggle's at its middle.
+    // avatar's middle (20.5 under the row's top), the toggle's at its middle.
     expect(stems().slice(1).map((node) => flat(node.props.style))).toEqual([
       expect.objectContaining({ left: 32, top: -1, bottom: 0 }),
       expect.objectContaining({ left: 32, top: -1, bottom: 0 }),
     ]);
     expect(elbows().map((node) => flat(node.props.style))).toEqual([
-      expect.objectContaining({ left: 32, width: 17, top: -1, height: 26 }),
-      expect.objectContaining({ left: 32, width: 17, top: -1, height: 26 }),
+      expect.objectContaining({ left: 32, width: 17, top: -1, height: 22 }),
+      expect.objectContaining({ left: 32, width: 17, top: -1, height: 22 }),
       expect.objectContaining({ left: 32, width: 17, top: -1, bottom: '50%' }),
     ]);
     // One solid colour, borderStrong on the sheet's panel, so an overlap never
