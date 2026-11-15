@@ -2187,13 +2187,18 @@ BEGIN
     ) AS chosen
     -- Only for the rows added here, at most the cap: the search pressing one
     -- runs and what it finds for this viewer (search_starter_entity_offer).
-    -- The test is inside the lateral: as a join condition it was applied
-    -- after the function had run for every row, three milliseconds each, on
-    -- every keystroke of a client that asked for nothing.
+    -- The test is inside the lateral, behind OFFSET 0: as a join condition
+    -- it was applied after the function had run for every row, three
+    -- milliseconds each, on every keystroke of a client that asked for
+    -- nothing. Without the OFFSET the planner pulls the subquery up and the
+    -- test is a join condition again (measured: four calls for four rows);
+    -- with it the test gates the function scan, which then never starts for
+    -- a row search itself answered.
     LEFT JOIN LATERAL (
       SELECT offer.query, offer.post_count, offer.post_count_capped
       FROM public.search_starter_entity_offer(chosen.kind, chosen.key, p_viewer_user_id) AS offer
       WHERE chosen.added
+      OFFSET 0
     ) AS opened ON true
     -- A row added for a tool whose posts no search of its name opens (a name
     -- under three characters) has nothing to open.

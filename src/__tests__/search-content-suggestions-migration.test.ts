@@ -605,8 +605,11 @@ describe('completions, creators and the one call', () => {
     expect(added).toMatch(BLOCKS_VIEWER('members\\.creator_user_id'));
     // The count a row states, and its query, are the search that opens it: asked of the rows chosen, at most the cap.
     // The test is inside the lateral, so the function runs only for a row added here: as a join
-    // condition it ran for every row and was thrown away (review of PR #826, finding 2).
-    expect(definition).toMatch(/LEFT JOIN LATERAL \(\s+SELECT offer\.query, offer\.post_count, offer\.post_count_capped\s+FROM public\.search_starter_entity_offer\(chosen\.kind, chosen\.key, p_viewer_user_id\) AS offer\s+WHERE chosen\.added\s+\) AS opened ON true/);
+    // condition it ran for every row and was thrown away (review of PR #826, finding 2). OFFSET 0
+    // keeps the planner from pulling the subquery up, which makes the test a join condition again:
+    // measured on a replay stack, four calls for four rows without it, none with it
+    // ("Function Scan on search_starter_entity_offer ... (never executed)").
+    expect(definition).toMatch(/LEFT JOIN LATERAL \(\s+SELECT offer\.query, offer\.post_count, offer\.post_count_capped\s+FROM public\.search_starter_entity_offer\(chosen\.kind, chosen\.key, p_viewer_user_id\) AS offer\s+WHERE chosen\.added\s+OFFSET 0\s+\) AS opened ON true/);
     expect(definition).not.toMatch(/ON chosen\.added/);
     expect(definition).toContain("'post_count', CASE WHEN chosen.added THEN coalesce(opened.post_count, 0) ELSE chosen.post_count END,");
     expect(definition).toContain("'query', opened.query");
