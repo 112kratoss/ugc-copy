@@ -1375,7 +1375,7 @@ export default function PostComments({
                                 aria-label={isReply ? `Reply from ${display.authorLabel}` : undefined}
                                 aria-level={isReply ? 2 : 1}
                                 aria-busy={isBusy}
-                                className={`py-2 ${isReply ? 'relative pl-11' : ''}`}
+                                className={`py-1.5 ${isReply ? 'relative pl-11' : ''}`}
                             >
                                 {isReply ? (
                                     <>
@@ -1480,6 +1480,9 @@ export default function PostComments({
                                             <CommentBody text={display.bodyText} deleted={display.isDeleted} />
                                         )}
                                         {display.isDeleted || editing?.id === comment.id ? null : (
+                                            // Drawn 28px tall around 16px icons: at 36 the row of
+                                            // actions read as a gap under every comment (owner,
+                                            // 2026-11-15). Still above WCAG's 24px target floor.
                                             <div className="-ml-2 mt-0.5 flex flex-wrap items-center gap-0.5">
                                                 {user ? (
                                                     <>
@@ -1502,7 +1505,7 @@ export default function PostComments({
                                                     <Link
                                                         href={loginHref}
                                                         aria-label={`Sign in to like ${display.authorLabel}'s comment`}
-                                                        className="ui-focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full px-2 text-xs font-bold text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
+                                                        className="ui-focus-ring inline-flex min-h-7 items-center gap-1.5 rounded-full px-2 text-xs font-bold text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
                                                     >
                                                         <ThumbsUp className="h-4 w-4" aria-hidden="true" />
                                                         {comment.likeCount > 0 ? formatCompactCount(comment.likeCount) : null}
@@ -1515,7 +1518,7 @@ export default function PostComments({
                                                         aria-pressed={comment.hearted}
                                                         aria-label={`Heart ${display.authorLabel}'s comment`}
                                                         title={comment.hearted ? 'Remove your heart' : 'Heart this comment'}
-                                                        className={`ui-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-full transition hover:bg-[var(--ui-surface-2)] ${
+                                                        className={`ui-focus-ring inline-flex h-7 w-9 items-center justify-center rounded-full transition hover:bg-[var(--ui-surface-2)] ${
                                                             comment.hearted
                                                                 ? 'text-[var(--ui-primary)]'
                                                                 : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
@@ -1529,7 +1532,7 @@ export default function PostComments({
                                                 ) : comment.hearted ? (
                                                     <span
                                                         title="Loved by the creator"
-                                                        className="inline-flex h-9 items-center gap-1 px-2 text-[var(--ui-primary)]"
+                                                        className="inline-flex h-7 items-center gap-1 px-2 text-[var(--ui-primary)]"
                                                     >
                                                         <Heart className="h-4 w-4 fill-current" aria-hidden="true" />
                                                         <span className="sr-only">Loved by the creator</span>
@@ -1589,7 +1592,9 @@ export default function PostComments({
  * falls from under the comment's avatar, and each reply, then the replies
  * toggle that ends the thread, branches off it on a rounded elbow. The rows
  * stay one flat list (aria-level tells the levels apart), so each row draws its
- * own piece and the pieces meet at the row edges. In px from the list's left
+ * own piece and the pieces meet at the row edges, so a change to a row's
+ * padding (`py-1.5`) moves the spine's `-bottom-1.5` and the reply elbow's
+ * `h-4.5` with it. In px from the list's left
  * edge: the comment's avatar is 32 wide, so the spine runs at 16; an elbow
  * turns at 16 and ends at 40, short of a reply's avatar at 44 (`pl-11`) and at
  * the toggle's edge (`pl-10`). Decoration only: hidden from screen readers.
@@ -1607,8 +1612,8 @@ function CommentThreadSpine({ from }: { from: 'avatar' | 'row-top' }) {
             style={{ borderColor: THREAD_LINE_COLOR }}
             className={`pointer-events-none absolute left-4 w-0 border-l ${
                 // Under the 32px avatar with a 4px gap, down through the row's
-                // bottom padding (`py-2`) to where the next row's piece starts.
-                from === 'avatar' ? 'top-9 -bottom-2' : 'inset-y-0'
+                // bottom padding (`py-1.5`) to where the next row's piece starts.
+                from === 'avatar' ? 'top-9 -bottom-1.5' : 'inset-y-0'
             }`}
         />
     );
@@ -1622,8 +1627,8 @@ function CommentThreadElbow({ target }: { target: 'reply' | 'toggle' }) {
             style={{ borderColor: THREAD_LINE_COLOR }}
             className={`pointer-events-none absolute left-4 top-0 w-6 rounded-bl-xl border-b border-l ${
                 // Turns at the middle of what it points to: a reply's 24px
-                // avatar under the row's 8px top padding, or the toggle's 44px button.
-                target === 'reply' ? 'h-5' : 'h-5.5'
+                // avatar under the row's 6px top padding, or the toggle's 44px button.
+                target === 'reply' ? 'h-4.5' : 'h-5.5'
             }`}
         />
     );
@@ -1677,7 +1682,7 @@ function CommentBody({ text, deleted }: { text: string; deleted: boolean }) {
                     type="button"
                     onClick={() => setUnfolded((current) => !current)}
                     aria-expanded={unfolded}
-                    className="ui-focus-ring -ml-2 min-h-9 rounded-full px-2 text-xs font-bold text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]"
+                    className="ui-focus-ring -ml-2 min-h-7 rounded-full px-2 text-xs font-bold text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]"
                 >
                     {unfolded ? 'Show less' : 'Read more'}
                 </button>
@@ -1708,7 +1713,7 @@ function CommentReaction({
             onClick={onClick}
             aria-pressed={pressed}
             aria-label={accessibleLabel}
-            className={`ui-focus-ring inline-flex min-h-9 min-w-9 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-bold tabular-nums transition hover:bg-[var(--ui-surface-2)] ${
+            className={`ui-focus-ring inline-flex min-h-7 min-w-9 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-bold tabular-nums transition hover:bg-[var(--ui-surface-2)] ${
                 pressed
                     ? 'text-[var(--ui-text-primary)]'
                     : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
@@ -1735,7 +1740,7 @@ function CommentAction({
             type="button"
             onClick={onClick}
             aria-label={accessibleLabel}
-            className="ui-focus-ring inline-flex min-h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
+            className="ui-focus-ring inline-flex min-h-7 items-center gap-1.5 rounded-full px-3 text-xs font-bold text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
         >
             {label}
         </button>
