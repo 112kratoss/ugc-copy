@@ -260,11 +260,21 @@ export function selectFailedCreations<T extends GenerationListItem>(items: T[]):
   return items.filter((item) => !item.archived_at && item.status === 'failed');
 }
 
-export function formatRenderingStartedLabel(createdAt: string | null | undefined, now: number) {
+/**
+ * `pending` is a run the server holds and has not sent to the model yet: one
+ * waiting its turn in the queue of starts. It has not started, so the tile
+ * says when it was queued.
+ */
+export function isQueuedCreationStatus(status: string | null | undefined) {
+  return status === 'pending';
+}
+
+export function formatRenderingStartedLabel(createdAt: string | null | undefined, now: number, status?: string | null) {
+  const verb = isQueuedCreationStatus(status) ? 'Queued' : 'Started';
   const startedAt = createdAt ? Date.parse(createdAt) : Number.NaN;
-  if (!Number.isFinite(startedAt)) return 'Started recently';
+  if (!Number.isFinite(startedAt)) return `${verb} recently`;
   const minutes = Math.floor(Math.max(0, now - startedAt) / 60_000);
-  if (minutes < 1) return 'Started just now';
-  if (minutes < 60) return `Started ${minutes} min ago`;
-  return `Started ${Math.floor(minutes / 60)} h ago`;
+  if (minutes < 1) return `${verb} just now`;
+  if (minutes < 60) return `${verb} ${minutes} min ago`;
+  return `${verb} ${Math.floor(minutes / 60)} h ago`;
 }

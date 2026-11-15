@@ -183,6 +183,12 @@ describe('the Rendering strip', () => {
     expect(formatRenderingStartedLabel(startedAt, at(-3))).toBe('Started just now');
     expect(formatRenderingStartedLabel(null, at(3))).toBe('Started recently');
     expect(formatRenderingStartedLabel('not a date', at(3))).toBe('Started recently');
+    // A run the server has not sent yet has not started: it says when it was queued.
+    expect(formatRenderingStartedLabel(startedAt, at(0.5), 'pending')).toBe('Queued just now');
+    expect(formatRenderingStartedLabel(startedAt, at(4), 'pending')).toBe('Queued 4 min ago');
+    expect(formatRenderingStartedLabel(null, at(3), 'pending')).toBe('Queued recently');
+    expect(formatRenderingStartedLabel(startedAt, at(4), 'waiting')).toBe('Started 4 min ago');
+    expect(formatRenderingStartedLabel(startedAt, at(4), 'processing')).toBe('Started 4 min ago');
   });
 
   it('refreshes every 15 seconds', () => {

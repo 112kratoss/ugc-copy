@@ -97,6 +97,7 @@ import {
   flattenProfileGenerationPages,
   flattenProfileOwnerPostPages,
   formatRenderingStartedLabel,
+  isQueuedCreationStatus,
   profileArchivedGenerationsQueryKey,
   profileArchivedGenerationsQueryOptions,
   profileFailedGenerationsQueryKey,
@@ -1525,8 +1526,10 @@ function ProfileRenderingTile({
 }) {
   const theme = useAppTheme();
   const label = getGenerationLabel(getGenerationKind(item), item.audioKind);
-  const started = formatRenderingStartedLabel(item.created_at, asOf);
-  const spokenLabel = `${label}, rendering, ${started.toLowerCase()}`;
+  const started = formatRenderingStartedLabel(item.created_at, asOf, item.status);
+  const spokenLabel = isQueuedCreationStatus(item.status)
+    ? `${label}, ${started.toLowerCase()}`
+    : `${label}, rendering, ${started.toLowerCase()}`;
 
   return (
     <View

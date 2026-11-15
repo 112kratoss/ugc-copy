@@ -7350,6 +7350,57 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(barWidth(tree)).toBe('96%');
       });
 
+      it('says a run the server queued is in line, with its place, and never that it is running', async () => {
+        // More starts than the provider takes at once: the server holds this
+        // one and sends it when its turn comes. The model does not have it.
+        const queued = (queuePosition: number) => ({
+          status: 'waiting',
+          queued: true,
+          queuePosition,
+          retryAfterMs: 3_000,
+          timing: { appStatus: 'waiting', phaseLabel: 'Queued', startedAtMs: Date.now(), completedAtMs: null, completedInMs: null, estimatedTotalMs: null },
+        });
+        let release: ((status: unknown) => void) | undefined;
+        authState.api.startGeneration.mockResolvedValue(started('6a0c7f2e-4d1b-4f6a-9c3e-2b8d5e7f9a10', { status: 'waiting', queued: true }));
+        authState.api.getImageGeneration
+          .mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }))
+          .mockResolvedValueOnce(queued(1))
+          .mockImplementation(processing(null));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        await typePrompt(tree, 'A bottle on linen');
+        await pressGenerate(tree);
+
+        // From the start's own answer, before any status has been read.
+        let said = collectText(waitPanel(tree)).join(' ');
+        expect(said).toContain('Queued');
+        expect(said).not.toContain('Queued with the model');
+        expect(said).toContain('It starts by itself when its turn comes.');
+        expect(said).not.toContain('Running');
+
+        await renderer.act(async () => { release!(queued(4)); await vi.advanceTimersByTimeAsync(0); });
+        said = collectText(waitPanel(tree)).join(' ');
+        expect(said).toContain('Queued · 3 ahead of you');
+        // Nothing has started: no estimate to count down, no bar to fill.
+        expect(estimate(tree)).toHaveLength(0);
+        expect(spinners(tree)).toHaveLength(1);
+
+        /** Lets the poll's own waits pass, a second at a time, until the panel says `words`. */
+        const until = async (words: string) => {
+          for (let second = 0; second < 60 && !collectText(waitPanel(tree)).join(' ').includes(words); second += 1) {
+            await renderer.act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+          }
+          return collectText(waitPanel(tree)).join(' ');
+        };
+
+        expect(await until('Queued · starting soon')).toContain('Queued · starting soon');
+
+        // Sent: the wait is the model's from here, and no place lingers.
+        said = await until('Making your image');
+        expect(said).toContain('Making your image');
+        expect(said).not.toContain('ahead of you');
+        expect(said).not.toContain('starting soon');
+      });
+
       it('keeps the spinner, the phase and the time it has run for a status with no estimate', async () => {
         authState.api.startGeneration.mockResolvedValue(started('pred-no-estimate'));
         authState.api.getImageGeneration.mockImplementation(processing(null));
