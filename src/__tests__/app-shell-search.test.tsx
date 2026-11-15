@@ -449,7 +449,16 @@ describe('top bar search: the panel on an empty box', () => {
     expect(JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]')).toEqual(['neon harbor', 'lumen city', 'fourth search']);
     expect(box()).toHaveFocus();
 
-    fireEvent.click(within(list).getByRole('button', { name: 'Clear all recent searches' }));
+    // Escape from a button the Tab key reached closes the panel and returns the focus to the field.
+    const clear = within(list).getByRole('button', { name: 'Clear all recent searches' });
+    clear.focus();
+    expect(screen.getByRole('listbox')).toBe(list);
+    fireEvent.keyDown(clear, { key: 'Escape' });
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(box()).toHaveFocus();
+    fireEvent.keyDown(box(), { key: 'ArrowDown' });
+
+    fireEvent.click(within(screen.getByRole('listbox')).getByRole('button', { name: 'Clear all recent searches' }));
     expect(names()).toEqual([
       'Nano Banana Pro, model, 200+ posts. Show posts made with it',
       'Midjourney, tool, 14 posts. Show posts made with it',

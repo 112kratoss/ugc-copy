@@ -163,6 +163,15 @@ export function AppShellSearch() {
       }}
       onFocus={takeFocus}
       onPointerEnter={() => setReachedFor(true)}
+      onKeyDown={(event) => {
+        // Escape with the focus on a button of the panel (Tab reaches "Clear all" and each remove
+        // button): the panel closes and the focus goes back to the field, as Escape in the field
+        // closes it. The field's own keys are handled on the field.
+        if (event.key !== 'Escape' || event.target === fieldRef.current || !typeahead.shown) return;
+        event.preventDefault();
+        typeahead.close();
+        fieldRef.current?.focus();
+      }}
       onBlur={(event) => {
         const next = event.relatedTarget;
         if (!(next instanceof Node) || !event.currentTarget.contains(next)) setFocused(false);
