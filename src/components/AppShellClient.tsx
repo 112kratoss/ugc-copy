@@ -6,7 +6,6 @@ import {
   Menu,
   PanelLeft,
   Plus,
-  Search,
   WandSparkles,
   X,
 } from 'lucide-react';
@@ -43,9 +42,7 @@ import AppShellCreateMenu, {
   openCreateMenuWithoutPopovers,
 } from './AppShellCreateMenu';
 import DeferredAppShellAccount from './DeferredAppShellAccount';
-import { AppShellSearch } from '@/components/AppShellSearch';
-import { SearchEntrancePart, SearchEntranceStandIn } from '@/components/search/SearchEntrancePart';
-import { isPlainPress, markSearchEntrance } from '@/components/search/search-entrance';
+import { AppShellSearch, AppShellSearchButton } from '@/components/AppShellSearch';
 import AlertsBadge from '@/components/AlertsBadge';
 import { useUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
 
@@ -536,30 +533,8 @@ const AppShellFrame = memo(function AppShellFrame({
 
           {/* Never shrinks: the search field gives way (.app-shell-search in globals.css). */}
           <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
-            {activeItem?.id !== 'search' ? (
-              // The search page's field grows out of this button: its skin and
-              // magnifier are named for search's entrance (search-entrance.ts).
-              <Link
-                href="/search"
-                prefetch={false}
-                aria-label="Search creators, posts, and recipes"
-                onClick={(event) => {
-                  if (isPlainPress(event)) markSearchEntrance('button');
-                }}
-                className="app-shell-search-link group ui-focus-ring relative isolate inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-transparent text-[var(--ui-text-muted)] transition hover:text-[var(--ui-text-primary)]"
-              >
-                <SearchEntrancePart origin="button" part="capsule" side="control">
-                  <span aria-hidden className="pointer-events-none absolute -inset-px -z-10 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] transition group-hover:bg-[var(--ui-surface-3)]" />
-                </SearchEntrancePart>
-                <SearchEntrancePart origin="button" part="icon" side="control">
-                  <Search className="h-[18px] w-[18px]" aria-hidden />
-                </SearchEntrancePart>
-                {/* No words and no clear button: the field's travel into the
-                    button, to the right of its magnifier as in the field, and go. */}
-                <SearchEntranceStandIn origin="button" part="text" className="inset-y-0 left-9 right-0" />
-                <SearchEntranceStandIn origin="button" part="clear" className="inset-y-0 left-9 right-0" />
-              </Link>
-            ) : null}
+            {/* Below 1024px the bar's field folds into this button; the search page has its own box. */}
+            {activeItem?.id !== 'search' ? <AppShellSearchButton /> : null}
             {/* Alerts' only control from 768px, where the side navigation does
                 not name it: pressed on Alerts, it brings the page to its top as
                 the tabs do. */}

@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The stable React the tests run on has no <ViewTransition> (Next draws the
@@ -19,13 +19,25 @@ vi.mock('next/link', () => ({
   },
 }));
 
-import { SearchEntrancePart, SearchEntranceStandIn } from '@/components/search/SearchEntrancePart';
+const { pushMock } = vi.hoisted(() => ({ pushMock: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: pushMock }) }));
+vi.mock('next/form', () => ({
+  default: ({ action, children, ...props }: { action: string; children: React.ReactNode } & Record<string, unknown>) => (
+    <form action={action} {...props}>{children}</form>
+  ),
+}));
+vi.mock('@/lib/use-leave-guard', () => ({ holdForLeaveGuard: () => false }));
+
+import { AppShellSearch, AppShellSearchButton } from '@/components/AppShellSearch';
+import { SearchEntrancePart, SearchEntranceStandIn, useSearchScreenCrossFade } from '@/components/search/SearchEntrancePart';
 import { SearchEntryLink } from '@/components/search/SearchEntryLink';
 import { SearchField } from '@/components/search/SearchField';
 import {
   clearSearchEntrance,
   isPlainPress,
+  isSearchPageShown,
   markSearchEntrance,
+  noteSearchPageShown,
   searchEntranceMoves,
   searchEntrancePending,
   searchEntranceTransition,
@@ -43,8 +55,15 @@ function boundaries(container: HTMLElement): Boundary[] {
 afterEach(() => {
   cleanup();
   clearSearchEntrance();
+  noteSearchPageShown(false);
   vi.unstubAllGlobals();
 });
+
+/** A press on a link, its navigation held: jsdom has none. */
+function press(link: Element, init: MouseEventInit = {}) {
+  link.addEventListener('click', (event) => event.preventDefault(), { once: true });
+  fireEvent.click(link, { button: 0, ...init });
+}
 
 describe('search-entrance names and classes', () => {
   it('names each part for its control, and gives each side the class of the direction it arrives in', () => {
@@ -110,16 +129,13 @@ describe('the parts each end of the motion draws', () => {
     expect(parts.every(({ props }) => props.name === undefined && props.default === 'none')).toBe(true);
   });
 
-  it('names Explore\'s bar as a control, with an unseen stand-in for the clear button it has no use for', () => {
+  it('draws Explore\'s bar as itself at rest: no part named, no boundary to start a transition (review of #817)', () => {
+    // Explore draws the bar in its loading state and again in its page: named
+    // at rest, the two copies paired as React revealed the page, and the bar
+    // ran the close with nothing to close.
     const { container } = render(<SearchEntryLink />);
-    const parts = boundaries(container);
-    expect(parts.map(({ props }) => [props.name, props.share])).toEqual([
-      ['search-entry-capsule', 'search-close-capsule'],
-      ['search-entry-icon', 'search-close-icon'],
-      ['search-entry-text', 'search-close-text'],
-      ['search-entry-clear', 'search-close-clear'],
-    ]);
-    const standIn = parts[3].element;
+    expect(boundaries(container)).toEqual([]);
+    const standIn = container.querySelector('[data-search-entrance-stand-in="clear"]');
     expect(standIn).toHaveAttribute('aria-hidden', 'true');
     expect(standIn).toHaveClass('pointer-events-none', 'absolute', 'opacity-0');
     // The link reads as before: its words, and nothing from the stand-in or the skin.
@@ -127,14 +143,100 @@ describe('the parts each end of the motion draws', () => {
     expect(container.querySelector('a')).toHaveAccessibleName('Search');
   });
 
-  it('marks a plain press on Explore\'s bar, so the search page\'s field grows out of it', () => {
+  it('names Explore\'s bar as a control once pressed, before the navigation, and marks the press', () => {
     const { container } = render(<SearchEntryLink />);
     const link = container.querySelector('a') as HTMLAnchorElement;
-    link.addEventListener('click', (event) => event.preventDefault());
-    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }));
+    press(link, { metaKey: true });
     expect(searchEntrancePending()).toBeNull();
-    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+    expect(boundaries(container)).toEqual([]);
+
+    press(link);
     expect(searchEntrancePending()).toBe('entry');
+    const parts = boundaries(container);
+    expect(parts.map(({ props }) => [props.name, props.share])).toEqual([
+      ['search-entry-capsule', 'search-close-capsule'],
+      ['search-entry-icon', 'search-close-icon'],
+      ['search-entry-text', 'search-close-text'],
+      ['search-entry-clear', 'search-close-clear'],
+    ]);
+    expect(parts[3].element).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('names Explore\'s bar drawn while the search page is, so the field shrinks back into it', () => {
+    noteSearchPageShown(true);
+    const { container } = render(<SearchEntryLink />);
+    expect(boundaries(container).map(({ props }) => props.name)).toEqual([
+      'search-entry-capsule',
+      'search-entry-icon',
+      'search-entry-text',
+      'search-entry-clear',
+    ]);
+    // One drawn after the search page has gone (the page swapping in for its loading state) is not.
+    noteSearchPageShown(false);
+    expect(isSearchPageShown()).toBe(false);
+    const later = render(<SearchEntryLink />);
+    expect(boundaries(later.container)).toEqual([]);
+  });
+
+  it('names the top bar\'s field as a control, with a stand-in for its clear button while it holds no text', () => {
+    const { container, getByRole } = render(<AppShellSearch />);
+    expect(boundaries(container).map(({ props }) => [props.name, props.share])).toEqual([
+      ['search-bar-capsule', 'search-close-capsule'],
+      ['search-bar-icon', 'search-close-icon'],
+      ['search-bar-text', 'search-close-text'],
+      ['search-bar-clear', 'search-close-clear'],
+    ]);
+    const [skin, , text, clear] = boundaries(container).map(({ element }) => element);
+    expect(skin).toHaveAttribute('aria-hidden', 'true');
+    expect(text.tagName).toBe('INPUT');
+    expect(clear).toHaveAttribute('data-search-entrance-stand-in', 'clear');
+
+    // With text, the real clear button takes the name, and the stand-in goes.
+    fireEvent.change(getByRole('combobox'), { target: { value: 'neon' } });
+    const named = boundaries(container);
+    expect(named.map(({ props }) => props.name)).toEqual(['search-bar-capsule', 'search-bar-icon', 'search-bar-text', 'search-bar-clear']);
+    expect(named[3].element).toHaveAccessibleName('Clear search');
+    expect(container.querySelector('[data-search-entrance-stand-in]')).toBeNull();
+  });
+
+  it('marks a search from the top bar\'s field on Enter', () => {
+    const { getByRole } = render(<AppShellSearch />);
+    const box = getByRole('combobox');
+    fireEvent.change(box, { target: { value: 'neon city' } });
+    const form = box.closest('form') as HTMLFormElement;
+    form.addEventListener('submit', (event) => event.preventDefault(), { once: true });
+    fireEvent.submit(form);
+    expect(searchEntrancePending()).toBe('bar');
+  });
+
+  it('names the top bar\'s round magnifier as a control, with stand-ins for the words and clear button it has none of', () => {
+    const { container } = render(<AppShellSearchButton />);
+    const parts = boundaries(container);
+    expect(parts.map(({ props }) => [props.name, props.share])).toEqual([
+      ['search-button-capsule', 'search-close-capsule'],
+      ['search-button-icon', 'search-close-icon'],
+      ['search-button-text', 'search-close-text'],
+      ['search-button-clear', 'search-close-clear'],
+    ]);
+    expect(parts[2].element).toHaveAttribute('data-search-entrance-stand-in', 'text');
+    expect(parts[3].element).toHaveAttribute('data-search-entrance-stand-in', 'clear');
+    for (const { element } of parts.slice(2)) {
+      expect(element).toHaveAttribute('aria-hidden', 'true');
+      expect(element).toHaveClass('pointer-events-none', 'opacity-0', 'left-9');
+    }
+    const link = container.querySelector('a') as HTMLAnchorElement;
+    expect(link).toHaveAttribute('href', '/search');
+    expect(link).toHaveAccessibleName('Search creators, posts, and recipes');
+    expect(link).toHaveTextContent('');
+  });
+
+  it('marks only a plain press on the top bar\'s round magnifier', () => {
+    const { container } = render(<AppShellSearchButton />);
+    const link = container.querySelector('a') as HTMLAnchorElement;
+    press(link, { ctrlKey: true });
+    expect(searchEntrancePending()).toBeNull();
+    press(link);
+    expect(searchEntrancePending()).toBe('button');
   });
 
   it('draws a stand-in as a control\'s part, placed by its class', () => {
@@ -148,5 +250,30 @@ describe('the parts each end of the motion draws', () => {
     expect(standIn.props).toEqual({ name: 'search-button-text', share: 'search-close-text', default: 'none' });
     expect(standIn.element).toHaveClass('left-9', 'opacity-0');
     expect(icon.props.name).toBe('search-button-icon');
+  });
+});
+
+describe('the screen\'s cross-fade', () => {
+  function CrossFade() {
+    useSearchScreenCrossFade();
+    return null;
+  }
+
+  afterEach(() => {
+    document.documentElement.style.viewTransitionName = '';
+  });
+
+  it('keeps the document root in the transition while the search page is drawn, and clears only the name it wrote', () => {
+    const page = render(<CrossFade />);
+    expect(document.documentElement.style.viewTransitionName).toBe('root');
+    page.unmount();
+    expect(document.documentElement.style.viewTransitionName).toBe('');
+  });
+
+  it('leaves a root name another page set first (review of #817)', () => {
+    document.documentElement.style.viewTransitionName = 'root';
+    const page = render(<CrossFade />);
+    page.unmount();
+    expect(document.documentElement.style.viewTransitionName).toBe('root');
   });
 });

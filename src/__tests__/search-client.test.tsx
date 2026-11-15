@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SearchClient from '@/app/search/SearchClient';
 import {
   clearSearchEntrance,
+  isSearchPageShown,
   markSearchEntrance,
   searchEntrancePending,
 } from '@/components/search/search-entrance';
@@ -1680,6 +1681,31 @@ describe('SearchClient opened from a control that grows into its field', () => {
     expect(screen.getByRole('combobox')).not.toHaveFocus();
     act(() => { vi.advanceTimersByTime(1); });
     expect(screen.getByRole('combobox')).toHaveFocus();
+  });
+
+  it('leaves the focus where the person put it while the field grew (review of #817)', async () => {
+    vi.useFakeTimers();
+    markSearchEntrance('button');
+    render(
+      <>
+        <button type="button">elsewhere</button>
+        <SearchClient initialQuery="" initialType="top" />
+      </>,
+    );
+    // A recent search pressed, or a Tab, before the growth has landed.
+    const elsewhere = screen.getByRole('button', { name: 'elsewhere' });
+    elsewhere.focus();
+    act(() => { vi.advanceTimersByTime(330); });
+    expect(elsewhere).toHaveFocus();
+    expect(screen.getByRole('combobox')).not.toHaveFocus();
+  });
+
+  it('says it is drawn while it is, so a control on the page it leaves for takes its names', () => {
+    expect(isSearchPageShown()).toBe(false);
+    const { unmount } = render(<SearchClient initialQuery="" initialType="top" />);
+    expect(isSearchPageShown()).toBe(true);
+    unmount();
+    expect(isSearchPageShown()).toBe(false);
   });
 
   it('hands the top bar\'s focus on once its field has grown into this one', async () => {

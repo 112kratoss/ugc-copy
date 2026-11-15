@@ -70,6 +70,26 @@ export function clearSearchEntrance(): void {
 }
 
 /**
+ * Whether the search page is drawn: set while it is mounted, and still set
+ * while the page a navigation out of it opens is drawn (its unmount comes
+ * after), so a control there drawn in that navigation takes its names and the
+ * field shrinks back into it. A control that mounts at any other time
+ * (Explore's bar as the page swaps in for its loading state, which draws the
+ * bar too) takes none: the two copies would pair as React reveals the page,
+ * and the bar would run the close with nothing to close (review of #817).
+ * Never set on the server, where no effect runs.
+ */
+let searchPageShown = false;
+
+export function noteSearchPageShown(shown: boolean): void {
+  searchPageShown = shown;
+}
+
+export function isSearchPageShown(): boolean {
+  return searchPageShown;
+}
+
+/**
  * A plain press of a link that opens search: the left button, no modifier.
  * One that opens a new tab or window leaves this page as it is, so nothing is marked.
  */

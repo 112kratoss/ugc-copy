@@ -1,12 +1,13 @@
 'use client';
 
 import Form from 'next/form';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Search, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 
 import { SearchEntrancePart, SearchEntranceStandIn } from '@/components/search/SearchEntrancePart';
-import { markSearchEntrance } from '@/components/search/search-entrance';
+import { isPlainPress, markSearchEntrance } from '@/components/search/search-entrance';
 import { markSearchFieldHandoff } from '@/components/search/search-field-handoff';
 import { readSearchHistory } from '@/components/search/search-history';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
@@ -191,5 +192,38 @@ export function AppShellSearch() {
         />
       ) : null}
     </Form>
+  );
+}
+
+/**
+ * The top bar's way into search below 1024px, where its field folds into this
+ * round magnifier. The search page's field grows out of it and shrinks back
+ * into it (search-entrance.ts): its skin and magnifier are named for that,
+ * with unseen stand-ins for the words and the clear button it has no use for.
+ * The shell draws it everywhere but on the search page, so it is mounted, and
+ * named, whenever it can pair.
+ */
+export function AppShellSearchButton() {
+  return (
+    <Link
+      href="/search"
+      prefetch={false}
+      aria-label={SEARCH_FIELD_LABEL}
+      onClick={(event) => {
+        if (isPlainPress(event)) markSearchEntrance('button');
+      }}
+      className="app-shell-search-link group ui-focus-ring relative isolate inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-transparent text-[var(--ui-text-muted)] transition hover:text-[var(--ui-text-primary)]"
+    >
+      <SearchEntrancePart origin="button" part="capsule" side="control">
+        <span aria-hidden className="pointer-events-none absolute -inset-px -z-10 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] transition group-hover:bg-[var(--ui-surface-3)]" />
+      </SearchEntrancePart>
+      <SearchEntrancePart origin="button" part="icon" side="control">
+        <Search className="h-[18px] w-[18px]" aria-hidden />
+      </SearchEntrancePart>
+      {/* No words and no clear button: the field's travel into the
+          button, to the right of its magnifier as in the field, and go. */}
+      <SearchEntranceStandIn origin="button" part="text" className="inset-y-0 left-9 right-0" />
+      <SearchEntranceStandIn origin="button" part="clear" className="inset-y-0 left-9 right-0" />
+    </Link>
   );
 }

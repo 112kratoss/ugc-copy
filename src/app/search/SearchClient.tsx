@@ -15,7 +15,13 @@ import { SearchStarter, useSearchStarter } from '@/components/search/SearchStart
 import { SearchStateBlock } from '@/components/search/SearchStateBlock';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
 import { clearSearchFieldHandoff, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
-import { SEARCH_ENTRANCE, clearSearchEntrance, searchEntranceMoves, searchEntrancePending } from '@/components/search/search-entrance';
+import {
+  SEARCH_ENTRANCE,
+  clearSearchEntrance,
+  noteSearchPageShown,
+  searchEntranceMoves,
+  searchEntrancePending,
+} from '@/components/search/search-entrance';
 import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
 import {
   NO_PUBLIC_SEARCH_FILTERS,
@@ -695,14 +701,27 @@ export default function SearchClient({
   // The traversal that brought the page back, if one did, has been read above.
   useEffect(() => forgetSearchPageTraversal(), []);
 
+  // A control drawn while this page is takes its names (search-entrance.ts),
+  // so the field shrinks back into one on a page the person goes to from here.
+  useEffect(() => {
+    noteSearchPageShown(true);
+    return () => noteSearchPageShown(false);
+  }, []);
+
   useEffect(() => {
     clearSearchFieldHandoff();
     clearSearchEntrance();
     const focusField = () => searchFormRef.current?.querySelector('input')?.focus({ preventScroll: true });
     // An empty search takes the focus (autoFocus below), and so does one the
-    // top bar handed on; while the field grows, once it has landed.
+    // top bar handed on; while the field grows, once it has landed, and only
+    // if nothing took the focus meanwhile (a recent search pressed, a Tab):
+    // the pressed control has gone, so until then the page body has it
+    // (review of #817).
     if (focusAfterGrowth && (handedOff || !opening.query)) {
-      const timer = window.setTimeout(focusField, SEARCH_ENTRANCE.focusAfterMs);
+      const timer = window.setTimeout(() => {
+        const active = document.activeElement;
+        if (active === null || active === document.body || active === document.documentElement) focusField();
+      }, SEARCH_ENTRANCE.focusAfterMs);
       return () => window.clearTimeout(timer);
     }
     if (handedOff) focusField();

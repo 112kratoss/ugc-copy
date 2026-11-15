@@ -2,7 +2,7 @@
 
 /// <reference types="react/canary" />
 import * as React from 'react';
-import { useEffect, useLayoutEffect, type ReactElement } from 'react';
+import { useEffect, useLayoutEffect, useRef, type ReactElement } from 'react';
 
 import {
   searchEntranceTransition,
@@ -32,6 +32,10 @@ const ViewTransition = (React as { ViewTransition?: typeof React.ViewTransition 
  * (`useSearchScreenCrossFade`). Never one boundary around the whole page: React
  * names a boundary inside another that arrives or leaves only when it pairs,
  * so the field's words would no longer fade in where a round button has none.
+ *
+ * A control with no origin is drawn as itself, with no boundary at all: it
+ * never starts a transition of its own (Explore's bar while it is not named,
+ * SearchEntryLink).
  */
 export function SearchEntrancePart({
   origin,
@@ -45,7 +49,7 @@ export function SearchEntrancePart({
   children: ReactElement;
 }) {
   if (!ViewTransition) return children;
-  if (!origin) return <ViewTransition default="none">{children}</ViewTransition>;
+  if (!origin) return side === 'field' ? <ViewTransition default="none">{children}</ViewTransition> : children;
   return <ViewTransition {...searchEntranceTransition(origin, part, side)}>{children}</ViewTransition>;
 }
 
@@ -60,7 +64,7 @@ export function SearchEntranceStandIn({
   part,
   className,
 }: {
-  origin: SearchEntranceOrigin;
+  origin: SearchEntranceOrigin | null;
   part: Part;
   className: string;
 }) {
@@ -80,14 +84,20 @@ export function SearchEntranceStandIn({
  * mount's layout effect, which runs before React's check in the navigation
  * that opens it, until after the navigation that leaves it has been captured
  * (a passive cleanup runs after the transition's update; a layout cleanup
- * would run before React's check and lose the fade).
+ * would run before React's check and lose the fade). It clears only a name it
+ * wrote itself: one another page set first stays (review of #817).
  */
 export function useSearchScreenCrossFade() {
+  const wroteRoot = useRef(false);
   useLayoutEffect(() => {
     const root = document.documentElement;
-    if (root.style.viewTransitionName === '') root.style.viewTransitionName = 'root';
+    if (root.style.viewTransitionName !== '') return;
+    root.style.viewTransitionName = 'root';
+    wroteRoot.current = true;
   }, []);
   useEffect(() => () => {
+    if (!wroteRoot.current) return;
+    wroteRoot.current = false;
     const root = document.documentElement;
     if (root.style.viewTransitionName === 'root') root.style.viewTransitionName = '';
   }, []);
