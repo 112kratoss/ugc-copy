@@ -21,6 +21,7 @@ import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
 import {
   PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
+  PUBLIC_SEARCH_BLEND_PARAM,
   PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH,
   PUBLIC_SEARCH_PROBE_PARAM,
   PUBLIC_SEARCH_RELATED_PARAM,
@@ -198,6 +199,13 @@ async function handlePublicSearchGET(
     const limit = parsePublicSearchLimit(url.searchParams.get('limit'));
     if (!limit) return badRequest(request, 'limit must be an integer between 1 and 24.');
 
+    // The blended Posts order, asked for the same way by a client that
+    // settled on the search: any request may name the parameter, any other
+    // value is refused, and it changes nothing where the blend does not apply
+    // (another tab, Latest, one word, the query read as typed).
+    const rawBlend = url.searchParams.get(PUBLIC_SEARCH_BLEND_PARAM);
+    if (rawBlend !== null && rawBlend !== '1') return badRequest(request, 'blend must be 1.');
+
     const rawCursor = url.searchParams.get('cursor');
     if (type === 'top' && rawCursor) return badRequest(request, 'Top search does not accept a cursor.');
     // A cursor pages the order it was issued for: one from Top is refused on Latest.
@@ -266,6 +274,7 @@ async function handlePublicSearchGET(
       limit,
       viewerUserId: actor.viewerUserId,
       countryCode: request.headers.get('x-vercel-ip-country'),
+      ...(rawBlend === '1' ? { blend: true } : {}),
     });
     const response = NextResponse.json(responseBody, {
       headers: createApiResponseHeaders(request, API_CACHE_CONTROL.privateNoStore, {

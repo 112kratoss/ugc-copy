@@ -1061,6 +1061,8 @@
         "exact": "exact"
       },
       "relatedParameter": "related",
+      "blendParameter": "blend",
+      "matchSources": ["words", "meaning", "both"],
       "probeParameter": "probe",
       "entryParameter": "entry",
       "entries": [
@@ -1442,6 +1444,136 @@
             }
           }
         },
+        "blendedPosts": {
+          "query": {
+            "q": "ocean at dusk",
+            "type": "posts",
+            "blend": "1"
+          },
+          "response": {
+            "query": "ocean at dusk",
+            "normalizedQuery": "ocean at dusk",
+            "type": "posts",
+            "sort": "top",
+            "entities": [],
+            "filters": {
+              "madeWith": null,
+              "mediaKind": null,
+              "hasRecipe": false,
+              "following": false
+            },
+            "correctedQuery": {
+              "posts": null,
+              "recipes": null
+            },
+            "exact": false,
+            "creators": {
+              "items": [],
+              "nextCursor": null
+            },
+            "posts": {
+              "items": [
+                {
+                  "id": "post-4",
+                  "mediaUrl": "https://cdn.example.test/post-9.png",
+                  "mediaKind": "image",
+                  "mediaItems": [
+                    {
+                      "id": "post-media-9",
+                      "url": "https://cdn.example.test/post-9.png",
+                      "previewUrl": "https://cdn.example.test/post-9-preview.png",
+                      "previewThumbhash": null,
+                      "previewStatus": "ready",
+                      "previewCacheKey": "post-media:9",
+                      "gridReady": true,
+                      "mediaKind": "image",
+                      "contentType": "image/png",
+                      "originalName": "sea.png",
+                      "width": 1024,
+                      "height": 1024,
+                      "durationSeconds": null,
+                      "sortOrder": 0
+                    }
+                  ],
+                  "model": "Nano Banana 2.0",
+                  "title": "Ocean at dusk",
+                  "prompt": null,
+                  "body": "The last light on the water.",
+                  "category": "image",
+                  "creationMode": null,
+                  "postFormat": "media",
+                  "saveCount": 5,
+                  "remixCount": 0,
+                  "commentCount": 1,
+                  "createdAt": "2026-11-10T06:00:00.000Z",
+                  "creator": {
+                    "id": "user-1",
+                    "username": "creator",
+                    "name": "Creator One",
+                    "avatar": "https://cdn.example.test/avatar.png"
+                  },
+                  "isSaved": false,
+                  "generationId": null,
+                  "asset": null,
+                  "canRemix": false,
+                  "generationSetup": [],
+                  "matchedBy": "both"
+                },
+                {
+                  "id": "post-9",
+                  "mediaUrl": "https://cdn.example.test/post-9.png",
+                  "mediaKind": "image",
+                  "mediaItems": [
+                    {
+                      "id": "post-media-9",
+                      "url": "https://cdn.example.test/post-9.png",
+                      "previewUrl": "https://cdn.example.test/post-9-preview.png",
+                      "previewThumbhash": null,
+                      "previewStatus": "ready",
+                      "previewCacheKey": "post-media:9",
+                      "gridReady": true,
+                      "mediaKind": "image",
+                      "contentType": "image/png",
+                      "originalName": "sea.png",
+                      "width": 1024,
+                      "height": 1024,
+                      "durationSeconds": null,
+                      "sortOrder": 0
+                    }
+                  ],
+                  "model": "Nano Banana 2.0",
+                  "title": "Sea after sunset",
+                  "prompt": null,
+                  "body": "Waves under a violet sky.",
+                  "category": "image",
+                  "creationMode": null,
+                  "postFormat": "media",
+                  "saveCount": 5,
+                  "remixCount": 0,
+                  "commentCount": 1,
+                  "createdAt": "2026-11-10T06:00:00.000Z",
+                  "creator": {
+                    "id": "user-1",
+                    "username": "creator",
+                    "name": "Creator One",
+                    "avatar": "https://cdn.example.test/avatar.png"
+                  },
+                  "isSaved": false,
+                  "generationId": null,
+                  "asset": null,
+                  "canRemix": false,
+                  "generationSetup": [],
+                  "matchedBy": "meaning"
+                }
+              ],
+              "nextCursor": "eyJ2IjoxLCJ0IjoicG9zdHMiLCJzIjoxMy4xOCwiaSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImEiOjE3ODY0OTI4MDAwMDAsInciOjIwfQ"
+            },
+            "recipes": {
+              "items": [],
+              "nextCursor": null
+            }
+          }
+        },
         "relatedPosts": {
           "query": {
             "q": "ocean at dusk",
@@ -1550,6 +1682,26 @@
             "asOf": 1786492800000
           }
         },
+        "blendedTopPosts": {
+          "encoded": "eyJ2IjoxLCJ0IjoicG9zdHMiLCJzIjoxMy4xOCwiaSI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImEiOjE3ODY0OTI4MDAwMDAsInciOjIwfQ",
+          "decoded": {
+            "version": 1,
+            "type": "posts",
+            "score": 13.18,
+            "id": "11111111-1111-4111-8111-111111111111",
+            "asOf": 1786492800000,
+            "window": 20
+          }
+        },
+        "blendedTopPostsWithoutFloor": {
+          "encoded": "eyJ2IjoxLCJ0IjoicG9zdHMiLCJhIjoxNzg2NDkyODAwMDAwLCJ3Ijo4fQ",
+          "decoded": {
+            "version": 1,
+            "type": "posts",
+            "asOf": 1786492800000,
+            "window": 8
+          }
+        },
         "topPostsBeforeInstants": {
           "encoded": "eyJ2IjoxLCJ0IjoicG9zdHMiLCJzIjo4LjI1LCJpIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIn0",
           "decoded": {
@@ -1624,6 +1776,16 @@
           "status": 400,
           "response": {
             "error": "cursor is invalid for these filters."
+          }
+        },
+        "unknownBlend": {
+          "query": {
+            "q": "Neon product",
+            "blend": "yes"
+          },
+          "status": 400,
+          "response": {
+            "error": "blend must be 1."
           }
         },
         "unknownRelated": {

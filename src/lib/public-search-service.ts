@@ -39,6 +39,12 @@ import {
   findRelatedPostRows,
   type RelatedPostRow,
 } from '@/lib/search-embeddings';
+import {
+  blendedCursorPlace,
+  isBlendedPage,
+  loadBlendedPostRows,
+  type BlendedPostRow,
+} from '@/lib/search-blended-posts';
 import { searchEntityLabel } from '@/lib/search-entity-label';
 import { findRelatedSearches, isSearchRelatedSearchesDisabled } from '@/lib/search-related-searches';
 import { createServiceClient } from '@/lib/server-helpers';
@@ -46,6 +52,7 @@ import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { getShowcaseFeedItemsByPostIds } from '@/lib/showcase-feed';
 
 import { SEARCH_TOP_SECTION_SIZES } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
+import { searchBlendApplies } from '../../ugc-mobile/lib/public-search-policy/search-blend';
 
 type CreatorSearchRpcRow = {
   creator_user_id: string;
@@ -89,6 +96,8 @@ type PublicSearchServiceDependencies = {
   env?: Record<string, string | undefined>;
   getMarketplaceResourceList?: typeof getMarketplaceResourceList;
   getShowcaseFeedItemsByPostIds?: typeof getShowcaseFeedItemsByPostIds;
+  /** A page of the blended Posts order, or null when it cannot be read. */
+  loadBlendedPostRows?: typeof loadBlendedPostRows;
   loadBlockedCreatorIds?: typeof loadBlockedCreatorIds;
   /** Where a new query's vector is kept once the answer is out; Next's `after` by default. */
   runAfterResponse?: RunAfterResponse;
@@ -142,6 +151,13 @@ export type PublicSearchOptions = {
   limit: number;
   viewerUserId: string | null;
   countryCode: string | null;
+  /**
+   * The client asked for the blended Posts order (`blend=1`): posts that hold
+   * the query's words and posts that mean what it says, merged into one
+   * order, each saying how it matched. Without it posts are in the word
+   * order and say nothing more than before.
+   */
+  blend?: boolean;
 };
 
 /**
@@ -167,6 +183,7 @@ function resolveDependencies(dependencies?: PublicSearchServiceDependencies) {
     getMarketplaceResourceList: dependencies?.getMarketplaceResourceList ?? getMarketplaceResourceList,
     getShowcaseFeedItemsByPostIds:
       dependencies?.getShowcaseFeedItemsByPostIds ?? getShowcaseFeedItemsByPostIds,
+    loadBlendedPostRows: dependencies?.loadBlendedPostRows ?? loadBlendedPostRows,
     loadBlockedCreatorIds: dependencies?.loadBlockedCreatorIds ?? loadBlockedCreatorIds,
     logEvent: dependencies?.logEvent ?? logBackendEvent,
     now: dependencies?.now ?? (() => new Date()),
@@ -527,18 +544,60 @@ export async function searchPublicContent(
       viewerUserId: options.viewerUserId,
     })
     : Promise.resolve([] as CreatorSearchRpcRow[]);
+  const postCursor = options.type === 'posts' ? options.cursor : null;
+  const readWordPosts = () => searchPosts({
+    adminSupabase,
+    after: postCursor,
+    asOf: postsAsOf,
+    exact,
+    filters,
+    limit: postTake,
+    query: options.normalizedQuery,
+    sort,
+    viewerUserId: options.viewerUserId,
+  });
+  // The blended order, only for a client that asked for it (`blend=1`): a
+  // ranked search of two words or more, not a handle and not read as typed
+  // (searchBlendApplies), counted against a viewer; on a later page only from
+  // a cursor issued inside the blended window. Whenever the blend cannot be
+  // read the posts are today's: the word order, from the cursor's floor on a
+  // later page, which repeats nothing the blended pages showed.
+  const blendAsked = options.blend ?? false;
+  const blends = blendAsked
+    && contentQueryAllowed
+    && (options.viewerKey?.trim() ?? '') !== ''
+    && searchBlendApplies({ query: options.query, type: options.type, sort, exact, settled: true })
+    && (postCursor === null || postCursor.window !== undefined);
+  let blendedRows: BlendedPostRow[] | null = null;
+  const readPosts = async (): Promise<PostSearchRpcRow[]> => {
+    if (blends) {
+      blendedRows = await dependencies.loadBlendedPostRows(
+        adminSupabase,
+        {
+          query: options.normalizedQuery,
+          viewerUserId: options.viewerUserId,
+          viewerKey: options.viewerKey?.trim() ?? '',
+          guestNetworkKey: options.guestNetworkKey ?? null,
+          asOf: postsAsOf,
+          after: postCursor,
+          limit: postTake,
+          filters,
+        },
+        { logEvent: dependencies.logEvent, runAfterResponse: dependencies.runAfterResponse },
+      );
+      if (blendedRows) {
+        // A post only the meaning list holds has no word score; its row is
+        // never one a word-order cursor is made from (blendedCursorPlace).
+        return blendedRows.map((row) => ({ ...row, search_score: row.search_score ?? 0 }));
+      }
+    }
+    // A cursor from inside the window with no floor: no post held the words
+    // when the search began, so the word order has nothing to continue with.
+    if (postCursor?.window !== undefined && postCursor.id === undefined) return [];
+    return readWordPosts();
+  };
   const postsPromise = contentQueryAllowed && (options.type === 'top' || options.type === 'posts')
-    ? searchPosts({
-      adminSupabase,
-      after: options.type === 'posts' ? options.cursor : null,
-      asOf: postsAsOf,
-      exact,
-      filters,
-      limit: postTake,
-      query: options.normalizedQuery,
-      sort,
-      viewerUserId: options.viewerUserId,
-    })
+    ? readPosts()
     : Promise.resolve([] as PostSearchRpcRow[]);
   // The Top tab offers the models and tools the query names, from the three
   // characters posts are searched from: pressing one opens Posts narrowed to
@@ -618,6 +677,11 @@ export async function searchPublicContent(
     && !exact
     && !hasPublicSearchFilters(filters)
     && !postHasMore;
+  // A blended answer holds, in its own order, every post the related group
+  // would bring (the nearest posts, at a lower bar): none is looked for, so
+  // no post is shown twice, here or on a later page of the blended list.
+  const blended = isBlendedPage(blendedRows);
+  const relatedLooked = relatedAsked && !blended;
   const startRelatedRows = () => relatedPostRows({
     adminSupabase,
     dependencies,
@@ -630,7 +694,7 @@ export async function searchPublicContent(
   // Started here, the moment the ranked rows are known to be few, so the
   // query's vector is fetched while the search's own posts are hydrated and
   // the wait for it is beside that work, not after it. Not awaited yet.
-  let relatedRowsPromise = relatedAsked && Math.min(postRows.length, isTop ? postTake : options.limit) < SEARCH_RELATED_THIN_POST_COUNT
+  let relatedRowsPromise = relatedLooked && Math.min(postRows.length, isTop ? postTake : options.limit) < SEARCH_RELATED_THIN_POST_COUNT
     ? startRelatedRows()
     : null;
 
@@ -722,17 +786,24 @@ export async function searchPublicContent(
   // Enough rows were ranked, and fewer than that are shown (a post labelled
   // or a creator blocked since the ranked read): the answer is thin after
   // all, and related posts are looked for now.
-  if (relatedAsked && !relatedRowsPromise && shownPosts.length < SEARCH_RELATED_THIN_POST_COUNT) {
+  if (relatedLooked && !relatedRowsPromise && shownPosts.length < SEARCH_RELATED_THIN_POST_COUNT) {
     relatedRowsPromise = startRelatedRows();
   }
   const related = relatedRowsPromise
     ? await relatedPostCards({ adminSupabase, dependencies, options, rows: await relatedRowsPromise })
-    : undefined;
+    // Asked for, and the blended answer is thin: the group is there and empty.
+    : relatedAsked && blended && shownPosts.length < SEARCH_RELATED_THIN_POST_COUNT ? [] : undefined;
 
   const relatedSearches = relatedSearchesPromise ? await relatedSearchesPromise : undefined;
 
   // A posts cursor pages the filters and the reading it was issued under.
   const postCursorFilters = publicSearchCursorFilterMark(filters, exact);
+  // How each post matched, said only to a client that asked for the blend: a
+  // post the word order returned matched by its words.
+  const matchedBy = new Map((blendedRows as BlendedPostRow[] | null)?.map((row) => [row.post_id, row.matched_by]));
+  const postCursorBlendedRow = blended && postCursorRow
+    ? (blendedRows as BlendedPostRow[] | null)?.[options.limit - 1] ?? null
+    : null;
 
   return {
     query: options.query,
@@ -766,7 +837,9 @@ export async function searchPublicContent(
       : emptyPublicSearchPage(),
     posts: options.type === 'top' || options.type === 'posts'
       ? {
-        items: shownPosts,
+        items: blendAsked
+          ? shownPosts.map((item) => ({ ...item, matchedBy: matchedBy.get(item.id) ?? 'words' }))
+          : shownPosts,
         nextCursor: postCursorRow
           ? encodePublicSearchCursor({
             version: 1,
@@ -774,7 +847,12 @@ export async function searchPublicContent(
             id: postCursorRow.post_id,
             ...(sort === 'latest'
               ? { sort, createdAt: postCursorRow.created_at }
-              : { score: postCursorRow.search_score, asOf: postsAsOf.getTime() }),
+              : postCursorBlendedRow
+                ? {
+                  ...blendedCursorPlace(postCursorBlendedRow, (blendedRows as BlendedPostRow[] | null)?.[options.limit]),
+                  asOf: postsAsOf.getTime(),
+                }
+                : { score: postCursorRow.search_score, asOf: postsAsOf.getTime() }),
             ...(postCursorFilters ? { filters: postCursorFilters } : {}),
           })
           : null,
