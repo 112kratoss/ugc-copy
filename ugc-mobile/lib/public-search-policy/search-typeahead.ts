@@ -50,7 +50,7 @@ import {
 
 /** The most each list of an answer holds: the server's caps, and what a client draws at most. */
 export const SEARCH_TYPEAHEAD_MAX_CREATORS = 5;
-export const SEARCH_TYPEAHEAD_MAX_ENTITIES = 3;
+export const SEARCH_TYPEAHEAD_MAX_ENTITIES = 4;
 export const SEARCH_TYPEAHEAD_MAX_COMPLETIONS = 6;
 
 /** What a creator row draws. A subset of a search result's creator, under the same names. */
@@ -197,14 +197,17 @@ export const SEARCH_TYPEAHEAD_KEPT_ANSWER_MS = 30_000;
 export const SEARCH_TYPEAHEAD_KEPT_ANSWERS = 30;
 
 /**
- * The parameter a client asks for every catalog model with: `catalog=1`
+ * The parameter a client asks for every known name with: `catalog=1`
  * (2026-11-15). Any other value is refused. Without it the server offers a
- * catalog model only where it has a post to open, from three characters, so a
- * client from before it never draws a row that opens an empty page. With it,
- * every model of the product's catalog that the text names is offered, from
- * two characters, with `postCount` 0 where nobody has posted with it: a
- * client sends it only once it opens the creator for such a row
- * (searchTypeaheadEntityOpening).
+ * name only where the typed text finds its posts, from three characters, so
+ * a client from before it never draws a row that opens an empty page. With
+ * it, every name the product maintains that the text names is offered, from
+ * two characters: a model of the product's catalog, with `postCount` 0 where
+ * nobody has posted with it, and a tool or a tool's model people name in
+ * Made with, where it has posts. And when nothing answers the text as typed,
+ * from four characters, the names it misspells by one mistake ("seedence").
+ * A client sends it only once it opens the creator for a row with no posts
+ * and searches the `query` a row carries (searchTypeaheadEntityOpening).
  */
 export const SEARCH_TYPEAHEAD_CATALOG_PARAM = 'catalog';
 

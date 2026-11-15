@@ -331,7 +331,7 @@ describe('search suggest service', () => {
     const answer = await suggestSearch(options, { createServiceClient });
     expect(answer.creators).toHaveLength(SEARCH_SUGGEST_MAX_CREATORS);
     expect(answer.entities).toHaveLength(SEARCH_SUGGEST_MAX_ENTITIES);
-    expect(answer.entities.map((entity) => entity.key)).toEqual(['tool-0', 'tool-1', 'tool-2']);
+    expect(answer.entities.map((entity) => entity.key)).toEqual(['tool-0', 'tool-1', 'tool-2', 'tool-3']);
     expect(answer.completions).toHaveLength(SEARCH_SUGGEST_MAX_COMPLETIONS);
     // The database's order is kept: the cut is from the end.
     expect(answer.creators.map((creator) => creator.username)).toEqual(['luna-1', 'luna-2', 'luna-3', 'luna-4', 'luna-5']);

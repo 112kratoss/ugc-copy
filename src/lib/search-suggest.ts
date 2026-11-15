@@ -33,14 +33,14 @@ export type {
  */
 
 /**
- * The request parameter a client asks for every catalog model with:
+ * The request parameter a client asks for every known name with:
  * `catalog=1` (the clients' shared rule, `SEARCH_TYPEAHEAD_CATALOG_PARAM`).
  * Any other value is refused, as search's opt-ins are. Without it the answer
  * holds no row a client from before it cannot open.
  */
 export const SEARCH_SUGGEST_CATALOG_PARAM = SEARCH_TYPEAHEAD_CATALOG_PARAM;
 
-/** One character is enough to offer handles; a completion needs two letters of its word, an entity three characters (a catalog model two, for a request that asked). */
+/** One character is enough to offer handles; a completion needs two letters of its word, an entity three characters (a known name two, for a request that asked). */
 export const SEARCH_SUGGEST_MIN_QUERY_LENGTH = 1;
 /** The most the answer ever holds, whatever the database returns. */
 export const SEARCH_SUGGEST_MAX_CREATORS = SEARCH_TYPEAHEAD_MAX_CREATORS;

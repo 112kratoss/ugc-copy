@@ -105,6 +105,18 @@ describe('typeahead: the product’s own models', () => {
     expect(isSearchTypeaheadEntityOffered(webOnly, 'web')).toBe(true);
   });
 
+  it('is offered a tool we keep a name for, and a name it misspelt, each opening the search its row carries', () => {
+    const [tool] = parseSearchSuggestResponse(suggest.responseVariants.knownTool.response)!.entities;
+    expect(tool).toMatchObject({ kind: 'tool', inCatalog: false, catalogModel: null });
+    expect(searchTypeaheadEntityOpening(tool, 'mobile')).toEqual({ type: 'posts', madeWith: 'tool:midjourney', query: null });
+    const misspelt = suggest.responseVariants.oneMistake;
+    expect(misspelt.query.q.length).toBeGreaterThanOrEqual(suggest.limits.minOneMistakeQueryLength);
+    expect(parseSearchSuggestResponse(misspelt.response)).toEqual(misspelt.response);
+    const [model, named] = parseSearchSuggestResponse(misspelt.response)!.entities;
+    expect(searchTypeaheadEntityOpening(model, 'mobile')).toEqual({ type: 'posts', madeWith: 'model:seedance-2', query: 'seedance-2' });
+    expect(searchTypeaheadEntityOpening(named, 'mobile')).toEqual({ type: 'posts', madeWith: 'tool:seedance', query: 'seedance' });
+  });
+
   it('searches the query a row carries when two letters were typed', () => {
     const [entity] = parseSearchSuggestResponse(twoLetters.response)!.entities;
     expect(twoLetters.query.q).toHaveLength(suggest.limits.minCatalogQueryLength);

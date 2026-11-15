@@ -1652,10 +1652,11 @@
         "minQueryLength": 1,
         "maxQueryLength": 100,
         "maxCreators": 5,
-        "maxEntities": 3,
+        "maxEntities": 4,
         "maxCompletions": 6,
         "minEntityQueryLength": 3,
-        "minCatalogQueryLength": 2
+        "minCatalogQueryLength": 2,
+        "minOneMistakeQueryLength": 4
       },
       "rateLimit": {
         "scope": "public-search:suggest",
@@ -1977,6 +1978,87 @@
                   "mobile": true
                 },
                 "query": "seedance-2"
+              }
+            ],
+            "completions": []
+          }
+        },
+        "knownTool": {
+          "query": {
+            "q": "midj"
+          },
+          "response": {
+            "query": "midj",
+            "normalizedQuery": "midj",
+            "creators": [],
+            "entities": [
+              {
+                "kind": "tool",
+                "key": "midjourney",
+                "label": "Midjourney",
+                "postCount": 1,
+                "postCountCapped": false,
+                "thumbnail": null,
+                "inCatalog": false,
+                "catalogModel": null,
+                "query": null
+              }
+            ],
+            "completions": []
+          }
+        },
+        "oneMistake": {
+          "query": {
+            "q": "seedence",
+            "catalog": "1"
+          },
+          "response": {
+            "query": "seedence",
+            "normalizedQuery": "seedence",
+            "creators": [],
+            "entities": [
+              {
+                "kind": "model",
+                "key": "seedance-2",
+                "label": "Seedance 2",
+                "postCount": 1,
+                "postCountCapped": false,
+                "thumbnail": null,
+                "inCatalog": true,
+                "catalogModel": {
+                  "id": "seedance-2",
+                  "kind": "video",
+                  "web": true,
+                  "mobile": true
+                },
+                "query": "seedance-2"
+              },
+              {
+                "kind": "tool",
+                "key": "seedance",
+                "label": "Seedance",
+                "postCount": 3,
+                "postCountCapped": false,
+                "thumbnail": null,
+                "inCatalog": false,
+                "catalogModel": null,
+                "query": "seedance"
+              },
+              {
+                "kind": "model",
+                "key": "seedance-1.5-pro",
+                "label": "Seedance 1.5 Pro",
+                "postCount": 0,
+                "postCountCapped": false,
+                "thumbnail": null,
+                "inCatalog": true,
+                "catalogModel": {
+                  "id": "seedance-1.5-pro",
+                  "kind": "video",
+                  "web": true,
+                  "mobile": true
+                },
+                "query": null
               }
             ],
             "completions": []

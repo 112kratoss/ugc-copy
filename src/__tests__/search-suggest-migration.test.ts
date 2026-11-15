@@ -382,7 +382,8 @@ describe('search suggestions entities migration', () => {
     }
     // Not for a query typed as a handle; at most the cap, in search's order.
     expect(definition).toMatch(/WITH ORDINALITY AS found\(kind, key, label, post_count, post_count_capped, position\)\s+WHERE NOT coalesce\(p_handles_only, false\)/);
-    expect(definition).toContain(`ORDER BY found.position\n        LIMIT ${SEARCH_SUGGEST_MAX_ENTITIES}`);
+    // Three then; four since 20261115105944, whose own test holds the cap now.
+    expect(definition).toContain('ORDER BY found.position\n        LIMIT 3');
     // Two creators, of unlabelled posts, within a bounded read.
     expect(definition).toMatch(/WHERE makers\.creator_user_id <> \(/);
     expect(definition.match(/AND posts\.is_nsfw = false/g)).toHaveLength(2);

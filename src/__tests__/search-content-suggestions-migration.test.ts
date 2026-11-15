@@ -70,7 +70,11 @@ const FUNCTIONS: Record<string, { signature: string; definer: boolean }> = {
   search_week_score: { signature: 'public.search_week_score(double precision, double precision)', definer: false },
   search_suggest_completions: { signature: 'public.search_suggest_completions(text, integer, uuid)', definer: true },
   search_suggest_creators: { signature: 'public.search_suggest_creators(text, uuid, boolean, integer)', definer: true },
-  search_suggest_catalog_models: { signature: 'public.search_suggest_catalog_models(text)', definer: true },
+  search_name_words: { signature: 'public.search_name_words(text)', definer: false },
+  search_name_squashes: { signature: 'public.search_name_squashes(text)', definer: false },
+  search_one_mistake_prefix: { signature: 'public.search_one_mistake_prefix(text, text)', definer: false },
+  search_suggest_known_names: { signature: 'public.search_suggest_known_names(text, boolean)', definer: true },
+  search_suggest_entities: { signature: 'public.search_suggest_entities(text, uuid, boolean, boolean, integer)', definer: true },
   search_suggestions: { signature: 'public.search_suggestions(text, uuid, boolean, integer, integer, boolean)', definer: false },
   search_starter: { signature: 'public.search_starter(uuid, text[], integer, integer, integer)', definer: true },
   search_related_searches: { signature: 'public.search_related_searches(text, uuid, uuid[], text, integer)', definer: true },
@@ -149,9 +153,12 @@ describe('search content suggestions migration', () => {
       expect(newestDefiner(name), name).toBe(MIGRATION);
     }
     // Every function that reads a post runs with its owner's rights; the
-    // three that do not read a table need none, and the one call is the
+    // six that do not read a table need none, and the one call is the
     // caller's, as 20261112192423 left it.
-    for (const name of ['search_text_phrases', 'search_entity_phrase', 'search_week_score']) {
+    for (const name of [
+      'search_text_phrases', 'search_entity_phrase', 'search_week_score',
+      'search_name_words', 'search_name_squashes', 'search_one_mistake_prefix', 'search_suggestions',
+    ]) {
       expect(relationsOf(mine(name)), name).toEqual([]);
     }
   });
@@ -180,8 +187,8 @@ describe('search content suggestions migration', () => {
       .toBeLessThan(statements.indexOf('CREATE FUNCTION public.search_suggest_completions('));
     expect(statements.indexOf('DROP FUNCTION public.search_suggestions(text, uuid, boolean, integer, integer);'))
       .toBeLessThan(statements.indexOf('CREATE FUNCTION public.search_suggestions('));
-    // The catalog's own tables and functions are read, never changed.
-    expect(statements).not.toMatch(/\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+public\.generation_model/i);
+    // The catalog's own tables and functions, and the source-tools catalog, are read, never changed.
+    expect(statements).not.toMatch(/\b(?:INSERT INTO|UPDATE|DELETE FROM)\s+public\.(?:generation_model|source_tool)/i);
     // search_public_entities keeps the nested loops 20261112192423 gave it: nothing here re-creates it.
     expect(newestDefiner('search_public_entities')).toBe('20261112174210_search_entities_filters_corrected_reading.sql');
     expect(newestDefiner('rebuild_search_terms')).toBe('20261112144018_search_suggestions_typeahead.sql');
@@ -426,6 +433,7 @@ describe('completions, creators and the one call', () => {
 
   it('keeps the one call’s five parameters and its creators and completions, and adds a sixth that changes nothing by default', () => {
     const definition = mine('search_suggestions');
+    const entities = mine('search_suggest_entities');
     const earlier = definitionIn(read('20261112192423_search_suggestions_entities.sql'), 'search_suggestions');
     const header = (sql: string) => squash(/public\.search_suggestions\(([\s\S]*?)\)\s+RETURNS jsonb/.exec(sql)![1]);
     // The five the live route names, as they were, then p_catalog: the
@@ -433,24 +441,40 @@ describe('completions, creators and the one call', () => {
     expect(header(definition)).toBe(`${header(earlier)}, p_catalog boolean DEFAULT false`);
     expect(header(definition)).toContain(`p_creator_limit integer DEFAULT ${SEARCH_SUGGEST_MAX_CREATORS}`);
     expect(header(definition)).toContain(`p_completion_limit integer DEFAULT ${SEARCH_SUGGEST_MAX_COMPLETIONS}`);
-    expect(definition).toMatch(/RETURNS jsonb\s+LANGUAGE sql\s+STABLE\s+SET search_path = ''/);
-    const list = (sql: string, key: string) => {
-      const from = sql.indexOf(`'${key}', coalesce((`);
-      expect(from, key).toBeGreaterThan(0);
-      return squash(sql.slice(from, sql.indexOf("'[]'::jsonb)", from)));
+    // The caller's rights, as it was: everything it reads is read by the functions it calls.
+    expect(definition).toMatch(/RETURNS jsonb\s+LANGUAGE plpgsql\s+STABLE\s+SET search_path = ''/);
+    expect(relationsOf(definition)).toEqual([]);
+    // One list of an answer: from its jsonb_agg to its empty default.
+    const list = (sql: string, marker: string) => {
+      const at = sql.indexOf(marker);
+      expect(at, marker).toBeGreaterThan(0);
+      return squash(sql.slice(sql.lastIndexOf('SELECT jsonb_agg(', at), sql.indexOf("'[]'::jsonb)", at)));
     };
-    // Creators: as they were. Completions: for this viewer.
-    expect(list(definition, 'creators')).toBe(list(earlier, 'creators'));
-    expect(list(definition, 'completions')).toBe(list(earlier, 'completions').replace(
-      'public.search_suggest_completions(p_query, p_completion_limit)',
-      'public.search_suggest_completions(p_query, p_completion_limit, p_viewer_user_id)',
-    ));
+    // Creators: as they were.
+    expect(list(definition, "'id', creators.creator_user_id")).toBe(list(earlier, "'id', creators.creator_user_id"));
+    // Completions: for this viewer, and still none for a query typed as a handle.
+    expect(list(definition, "'text', completions.completion")).toBe(
+      list(earlier, "'text', completions.completion")
+        .replace(
+          'public.search_suggest_completions(p_query, p_completion_limit)',
+          'public.search_suggest_completions(p_query, p_completion_limit, p_viewer_user_id)',
+        )
+        .replace(' WHERE NOT coalesce(p_handles_only, false)', ''),
+    );
+    expect(definition.indexOf('IF NOT v_handles_only THEN')).toBeGreaterThan(0);
+    expect(definition.indexOf('IF NOT v_handles_only THEN')).toBeLessThan(definition.indexOf('public.search_suggest_entities('));
+    expect(definition.indexOf('IF NOT v_handles_only THEN')).toBeLessThan(definition.indexOf('public.search_suggest_completions('));
+    expect(squash(definition)).toContain(
+      "RETURN jsonb_build_object( 'creators', v_creators, 'entities', v_entities, 'completions', v_completions );",
+    );
     // Every key an entity had, and the new ones.
-    for (const key of ['kind', 'key', 'label']) expect(definition, key).toContain(`'${key}', chosen.${key}`);
+    for (const key of ['kind', 'key', 'label']) expect(entities, key).toContain(`'${key}', chosen.${key}`);
     for (const key of ['post_count', 'post_count_capped', 'thumbnail', 'in_catalog', 'catalog_model', 'query']) {
-      expect(definition, key).toContain(`'${key}',`);
+      expect(entities, key).toContain(`'${key}',`);
     }
-    expect(definition).toContain("'thumbnail', public.search_entity_picture(chosen.kind, chosen.key, p_viewer_user_id, NULL)");
+    expect(entities).toContain("'thumbnail', public.search_entity_picture(chosen.kind, chosen.key, p_viewer_user_id, NULL)");
+    // A catalog model is a model of the product's own: a known tool is none.
+    expect(entities).toContain("'in_catalog', chosen.model_id IS NOT NULL,");
     // The service sends the six arguments under their names, and reads the new keys.
     const service = source('src/lib/search-suggest-service.ts');
     expect(Array.from(service.matchAll(/^\s+(p_\w+):/gm), (match) => match[1]))
@@ -460,64 +484,119 @@ describe('completions, creators and the one call', () => {
     for (const key of ['in_catalog', 'catalog_model', 'query']) expect(service, key).toContain(`row.${key}`);
   });
 
-  it('still takes entities from search itself, and exempts only the catalog’s own models from the two-creator rule', () => {
+  it('holds an answer to the cap, and reads a mistake only for a client that asked, when nothing else answers', () => {
     const definition = mine('search_suggestions');
-    // The one source of an entity with posts: the call /api/search makes, for this query and viewer.
+    // The cap the clients read, as the answer's own.
+    expect(SEARCH_SUGGEST_MAX_ENTITIES).toBe(4);
+    expect(definition).toContain(`c_entity_limit CONSTANT integer := ${SEARCH_SUGGEST_MAX_ENTITIES};`);
+    expect(definition).toContain('v_entities := public.search_suggest_entities(p_query, p_viewer_user_id, v_catalog, false, c_entity_limit);');
+    // From four characters, with no creator, no entity and no completion for the text as typed.
+    expect(definition).toContain('c_one_mistake_length CONSTANT integer := 4;');
+    expect(definition).toMatch(/IF v_catalog\s+AND char_length\(v_query\) >= c_one_mistake_length\s+AND jsonb_array_length\(v_creators\) = 0\s+AND jsonb_array_length\(v_entities\) = 0\s+AND jsonb_array_length\(v_completions\) = 0 THEN\s+v_entities := public\.search_suggest_entities\(p_query, p_viewer_user_id, true, true, c_entity_limit\);\s+END IF;/);
+    expect(definition.match(/public\.search_suggest_entities\(/g)).toHaveLength(2);
+    // The cut itself, in the candidates' order.
+    const entities = mine('search_suggest_entities');
+    expect(entities).toContain('v_limit integer := least(greatest(coalesce(p_limit, 4), 0), 50);');
+    expect(entities).toMatch(/FROM offered\s+ORDER BY offered\.place\s+LIMIT v_limit/);
+  });
+
+  it('still takes entities from search itself, and exempts only the names we maintain from the two-creator rule', () => {
+    const definition = mine('search_suggest_entities');
+    // The one source of an entity search answers: the call /api/search makes, for this query and viewer.
     expect(definition).toContain('FROM public.search_public_entities(p_query, p_viewer_user_id, 10, NULL)');
     expect(definition.match(/search_public_entities/g)).toHaveLength(1);
     expect(newestDefiner('search_public_entities')).toBe('20261112174210_search_entities_filters_corrected_reading.sql');
-    // Kept when it is a catalog model, or two creators' unlabelled posts are made with it.
-    expect(definition).toMatch(/LEFT JOIN catalog ON found\.kind = 'model' AND catalog\.key = found\.key\s+WHERE \(\s+catalog\.model_id IS NOT NULL\s+OR EXISTS \(/);
+    // Not read at all on the one-mistake reading.
+    expect(definition).toMatch(/WITH ORDINALITY AS answered\(kind, key, label, post_count, post_count_capped, position\)\s+WHERE NOT v_one_mistake/);
+    // Kept when it is a known name, or two creators' unlabelled posts are made with it.
+    expect(definition).toMatch(/LEFT JOIN known ON known\.kind = found\.kind AND known\.key = found\.key\s+WHERE \(\s+known\.key IS NOT NULL\s+OR EXISTS \(/);
     expect(definition).toMatch(/WHERE makers\.creator_user_id <> \(/);
     expect(definition).toMatch(/AND posts\.is_nsfw = false\s+LIMIT 500/);
-    // No withdrawn word in the name or the key, a catalog model's included: asked of every candidate.
+    // A known name is printed as we name it, never as a post does.
+    expect(definition).toContain('coalesce(known.label, found.label) AS label');
+    // No withdrawn word in the name or the key, a known name's included: asked of every candidate.
     expect(definition).toMatch(/FROM candidates\s+WHERE NOT EXISTS \(\s+SELECT 1\s+FROM public\.search_suggestion_denylist AS denied\s+WHERE denied\.term = ANY \(tsvector_to_array\(to_tsvector\(\s+'pg_catalog\.simple',\s+coalesce\(public\.search_term_variants\(candidates\.label\), ''\) \|\| ' ' \|\| coalesce\(public\.search_term_variants\(candidates\.key\), ''\)/);
-    // Not for a query typed as a handle: neither source is read for one.
-    expect(definition.match(/WHERE NOT coalesce\(p_handles_only, false\)/g)).toHaveLength(3);
-    // At most the cap, a catalog model the text starts first, then the name that is the text, then the most posts.
-    expect(definition).toContain(`ORDER BY offered.place\n        LIMIT ${SEARCH_SUGGEST_MAX_ENTITIES}`);
-    expect(definition).toMatch(/ORDER BY\s+\(candidates\.model_id IS NOT NULL AND candidates\.starts\) DESC,\s+\(lower\(candidates\.label\) = [^\n]+\) DESC,\s+candidates\.post_count DESC,\s+candidates\.position NULLS LAST,\s+candidates\.kind,\s+candidates\.key/);
+    // A known name the text starts first, then the name that is the text, then the most posts.
+    expect(definition).toMatch(/ORDER BY\s+\(candidates\.is_known AND candidates\.starts\) DESC,\s+\(lower\(candidates\.label\) = [^\n]+\) DESC,\s+candidates\.post_count DESC,\s+candidates\.position NULLS LAST,\s+candidates\.kind,\s+candidates\.key/);
   });
 
-  it('adds a catalog model with nothing to open only for a request that asked, counted as the viewer may see', () => {
-    const definition = mine('search_suggestions');
+  it('adds a known name search did not answer only for a request that asked, counted as the viewer may see', () => {
+    const definition = mine('search_suggest_entities');
     const added = definition.slice(definition.indexOf('UNION ALL'), definition.indexOf('offered AS ('));
-    // Only with p_catalog, and only a model search did not already answer.
-    expect(added).toMatch(/WHERE coalesce\(p_catalog, false\)\s+AND NOT EXISTS \(\s+SELECT 1 FROM found WHERE found\.kind = 'model' AND found\.key = catalog\.key\s+\)/);
+    // Only with p_catalog, only a name the text names, and only one search did not already answer.
+    expect(added).toContain('WHERE v_catalog AND known.matches');
+    expect(added).toMatch(/WHERE NOT EXISTS \(\s+SELECT 1 FROM found WHERE found\.kind = named\.kind AND found\.key = named\.key\s+\)/);
+    // With no post, only a model of the product's own: a tool nobody posted with opens nothing.
+    expect(added).toMatch(/AND \(named\.model_id IS NOT NULL OR visible\.post_count > 0\)/);
     // The posts made with it that this viewer may see: unlabelled, neither side of a block.
-    expect(added).toMatch(/WHERE members\.kind = 'model'\s+AND members\.key = catalog\.key\s+AND posts\.is_nsfw = false/);
+    expect(added).toMatch(/WHERE members\.kind = named\.kind\s+AND members\.key = named\.key\s+AND posts\.is_nsfw = false/);
     expect(added).toMatch(BLOCKED_BY_VIEWER('members\\.creator_user_id'));
     expect(added).toMatch(BLOCKS_VIEWER('members\\.creator_user_id'));
-    // The count a row states, and its query, are the search that opens it: asked of the rows chosen, at most three.
+    // The count a row states, and its query, are the search that opens it: asked of the rows chosen, at most the cap.
     expect(definition).toMatch(/LEFT JOIN LATERAL public\.search_starter_entity_offer\(chosen\.kind, chosen\.key, p_viewer_user_id\) AS opened\s+ON chosen\.added/);
     expect(definition).toContain("'post_count', CASE WHEN chosen.added THEN coalesce(opened.post_count, 0) ELSE chosen.post_count END,");
     expect(definition).toContain("'query', opened.query");
+    expect(definition).toContain('WHERE NOT (chosen.added AND chosen.model_id IS NULL AND coalesce(opened.post_count, 0) = 0)');
     // It reads the entities' rows, the posts, the blocks and the withdrawn words, and no catalog table itself.
     expect(relationsOf(definition)).toEqual([
       'public.post_search_entities', 'public.posts', 'public.search_suggestion_denylist', 'public.user_blocks',
     ]);
+    expect(definition).toContain('FROM public.search_suggest_known_names(p_query, v_one_mistake) AS names');
+    expect(definition.match(/search_suggest_known_names/g)).toHaveLength(1);
   });
 
-  it('reads the catalog as its public projection: the active release’s entries on a platform, by their public name', () => {
-    const definition = mine('search_suggest_catalog_models');
+  it('knows a name only from the lists an operator keeps: the public catalog, and the verified source tools', () => {
+    const definition = mine('search_suggest_known_names');
     // The release /api/model-catalog/v1 serves, chosen as its own read chooses it.
     expect(definition).toMatch(/WHERE releases\.status = 'active'\s+ORDER BY releases\.schema_version DESC, releases\.activated_at DESC\s+LIMIT 1/);
     expect(squash(definitionIn(read('20260914054905_model_catalog_v1_reads.sql'), 'read_model_catalog_v1_current')))
       .toContain("WHERE status = 'active' ORDER BY schema_version DESC, activated_at DESC LIMIT 1");
     // A model switched off on the web and in the app is not public.
-    expect(definition).toContain('WHERE (entries.web_enabled OR entries.mobile_enabled)');
+    expect(definition).toContain('WHERE entries.web_enabled OR entries.mobile_enabled');
     // Only what the public descriptor shows: never a provider mapping, a price or a rule.
     expect(definition).toContain("entries.public_descriptor ->> 'displayName'");
     expect(definition).not.toMatch(/provider_model_map|pricing_|validation_|verification_|adapter_/);
-    // From two characters, every typed word in the name or the id, the last a prefix.
-    expect(definition).toContain('IF char_length(v_query) < 2 OR char_length(v_query) > 100 THEN');
-    expect(definition).toContain('v_tsquery := public.search_query_tsquery(v_query, false);');
-    expect(definition).toContain(String.raw`v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_') || '%';`);
-    // The key posts are found under: search's own key of the catalog's id.
+    // The key posts are found under: search's own key of the catalog's id, of a tool's slug, of a tool's model's.
     expect(definition).toContain('public.search_entity_key(entries.model_id) AS key');
+    expect(definition).toContain("'tool', public.search_entity_key(tools.slug),");
+    expect(definition).toContain("'model', public.search_entity_key(tool_models.slug),");
+    // A source tool or its model only when an operator keeps it: creators add rows to that catalog by naming a
+    // tool (save_post_source_tools_with_catalog), and an account's deletion leaves its rows with no creator.
+    const maker = squash(read('20261101062452_made_with_keeps_dotted_model_slugs.sql'));
+    expect(maker).toMatch(/INSERT INTO public\.source_tools \( slug, label, supported_media_kinds, sort_order, is_active, created_by_user_id \)/);
+    expect(maker).not.toContain('last_verified_at');
+    expect(definition).toMatch(/FROM public\.source_tools AS tools\s+WHERE tools\.is_active\s+AND tools\.last_verified_at IS NOT NULL\s+AND tools\.created_by_user_id IS NULL/);
+    expect(definition).toMatch(/WHERE tool_models\.is_active\s+AND tool_models\.last_verified_at IS NOT NULL\s+AND tool_models\.created_by_user_id IS NULL\s+AND tools\.is_active\s+AND tools\.last_verified_at IS NOT NULL\s+AND tools\.created_by_user_id IS NULL/);
+    // Never the app's own tool, nor the models listed under it: those are the catalog's to know.
+    expect(definition.match(/NOT IN \('magicbooklet', 'emptybooklet'\)/g)).toHaveLength(2);
+    for (const label of ['magicbooklet', 'Magic Booklet', 'magic-booklet']) expect(isAppSourceToolLabel(label), label).toBe(true);
     expect(relationsOf(definition)).toEqual([
       'public.generation_model_catalog_entries', 'public.generation_model_catalog_releases', 'public.generation_models',
+      'public.source_tool_models', 'public.source_tools',
     ]);
+  });
+
+  it('matches a name over the names alone: words, the name as one word, and one mistake from four characters', () => {
+    const definition = mine('search_suggest_known_names');
+    // From two characters; a mistake from four.
+    expect(squash(definition)).toContain(
+      'v_live := char_length(v_query) BETWEEN 2 AND 100 AND char_length(v_squash) >= CASE WHEN v_one_mistake THEN 4 ELSE 2 END;',
+    );
+    expect(definition).toContain('WHEN NOT read.reads THEN false');
+    // Words are compared by their start, never by a pattern: a typed % or _ is no wildcard.
+    expect(definition).toContain('WHERE starts_with(named.word, v_written[cardinality(v_written)])');
+    expect(definition).toContain('WHERE starts_with(named.word, v_split[cardinality(v_split)])');
+    expect(definition).toContain('WHERE starts_with(joined.squash, v_squash)');
+    expect(definition).toContain(String.raw`v_like := replace(replace(replace(v_query, '\', '\\'), '%', '\%'), '_', '\_') || '%';`);
+    expect(definition.match(/\bLIKE\b/g)).toHaveLength(2);
+    expect(definition).not.toMatch(/\bILIKE\b|~\*?\s*v_|similarity\(|to_tsquery|@@/);
+    // One mistake a word, or in the whole text as one word.
+    expect(definition).toContain('OR public.search_one_mistake_prefix(typed.word, named.word)');
+    expect(definition).toContain('WHERE public.search_one_mistake_prefix(v_squash, joined.squash)');
+    const mistake = mine('search_one_mistake_prefix');
+    expect(mistake).toContain('IF v_typed_length < 4 OR v_word_length = 0 OR left(p_typed, 1) <> left(p_word, 1) THEN');
+    // The names are read from the lists, a few hundred rows: no post, no document.
+    expect(definition).not.toMatch(/public\.posts|post_search_documents|post_search_entities/);
   });
 });
 

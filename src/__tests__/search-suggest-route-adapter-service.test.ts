@@ -454,6 +454,8 @@ describe('search suggest route adapter', () => {
         contract.responseVariants.catalogModelWithPosts,
         contract.responseVariants.catalogModels,
         contract.responseVariants.catalogModelsOfTwoLetters,
+        contract.responseVariants.knownTool,
+        contract.responseVariants.oneMistake,
       ]) {
         rpc.mockResolvedValueOnce({
           data: {

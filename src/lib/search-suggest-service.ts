@@ -30,9 +30,13 @@ export type SearchSuggestOptions = {
   /** The verified viewer, a guest included, or null for a visitor with no token. */
   viewerUserId: string | null;
   /**
-   * The client asked for every catalog model the text names (`catalog=1`):
-   * it opens the creator for one nobody has posted with. Without it a
-   * catalog model is offered only where it has a post to open.
+   * The client asked for every known name the text names (`catalog=1`): a
+   * model of the product's catalog, a tool or a tool's model of the
+   * source-tools catalog an operator keeps, from two characters, and by one
+   * mistake when nothing else answers. It opens the creator for a catalog
+   * model nobody has posted with, and searches the `query` a row carries.
+   * Without it a known name is offered only where the typed text itself
+   * finds its posts.
    */
   catalog?: boolean;
 };
@@ -142,9 +146,11 @@ function completionFromRow(row: unknown): SearchSuggestCompletion {
  * block with the viewer; a word fewer than two creators write, or one only a
  * labelled, private or hidden post or a paid recipe's locked text holds; a
  * model or tool no post the viewer may see names, or only one creator uses,
- * unless it is a model of the product's own public catalog; a catalog model
- * that is retired or switched off; a picture of a labelled post or of a
- * creator blocked with the viewer).
+ * unless it is a name the product maintains: a model of its public catalog,
+ * or a tool or tool's model an operator verified in the source-tools catalog,
+ * never a row a creator added there; a catalog model that is retired or
+ * switched off; a picture of a labelled post or of a creator blocked with
+ * the viewer).
  * Completions are words, phrases and model and tool names that public posts
  * of two creators show, and the corrected reading of a text nothing
  * completes.

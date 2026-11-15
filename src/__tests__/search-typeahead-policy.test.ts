@@ -118,9 +118,31 @@ describe('search typeahead: the answer', () => {
     });
 
     it('reads the contract’s answers as they are', () => {
-      for (const variant of [withPosts, asked, twoLetters]) {
+      for (const variant of [withPosts, asked, twoLetters, contract.responseVariants.knownTool, contract.responseVariants.oneMistake]) {
         expect(parseSearchSuggestResponse(variant.response)).toEqual(variant.response);
       }
+    });
+
+    it('reads a tool we keep a name for as a tool like any other: it opens its posts', () => {
+      const { query, response } = contract.responseVariants.knownTool;
+      const [tool] = parseSearchSuggestResponse(response)!.entities;
+      // Offered to a client that did not ask, from the text it typed.
+      expect(query).toEqual({ q: 'midj' });
+      expect(tool).toMatchObject({ kind: 'tool', key: 'midjourney', inCatalog: false, catalogModel: null, query: null });
+      expect(searchTypeaheadEntityOpening(tool, 'web')).toEqual({ type: 'posts', madeWith: 'tool:midjourney', query: null });
+    });
+
+    it('opens a row found by a misspelling with the search the row carries, never the misspelt text', () => {
+      const { query, response } = contract.responseVariants.oneMistake;
+      const [model, tool, unposted] = parseSearchSuggestResponse(response)!.entities;
+      expect(query).toEqual({ q: 'seedence', [SEARCH_TYPEAHEAD_CATALOG_PARAM]: '1' });
+      expect(query.q.length).toBeGreaterThanOrEqual(contract.limits.minOneMistakeQueryLength);
+      // Nothing else answered the text as typed.
+      expect(response.creators).toEqual([]);
+      expect(response.completions).toEqual([]);
+      expect(searchTypeaheadEntityOpening(model, 'web')).toEqual({ type: 'posts', madeWith: 'model:seedance-2', query: 'seedance-2' });
+      expect(searchTypeaheadEntityOpening(tool, 'web')).toEqual({ type: 'posts', madeWith: 'tool:seedance', query: 'seedance' });
+      expect(searchTypeaheadEntityOpening(unposted, 'web').type).toBe('creator');
     });
 
     it('offers a client that did not ask only rows with posts to open', () => {

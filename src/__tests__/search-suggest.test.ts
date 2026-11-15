@@ -111,7 +111,7 @@ describe('search suggest query', () => {
 describe('search suggest limits', () => {
   it('holds a hard cap on each list, as the contract states it', () => {
     expect(SEARCH_SUGGEST_MAX_CREATORS).toBe(5);
-    expect(SEARCH_SUGGEST_MAX_ENTITIES).toBe(3);
+    expect(SEARCH_SUGGEST_MAX_ENTITIES).toBe(4);
     expect(SEARCH_SUGGEST_MAX_COMPLETIONS).toBe(6);
     expect(contract.limits).toEqual({
       minQueryLength: SEARCH_SUGGEST_MIN_QUERY_LENGTH,
@@ -121,8 +121,10 @@ describe('search suggest limits', () => {
       maxCompletions: SEARCH_SUGGEST_MAX_COMPLETIONS,
       // An entity opens Posts, which are searched from three characters.
       minEntityQueryLength: PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
-      // A catalog model, for a request that asked for the catalog, from two.
+      // A known name, for a request that asked for the catalog, from two.
       minCatalogQueryLength: 2,
+      // And, when nothing answers the text as typed, a name it misspells by one mistake, from four.
+      minOneMistakeQueryLength: 4,
     });
     expect(contract.response.creators.length).toBeLessThanOrEqual(SEARCH_SUGGEST_MAX_CREATORS);
     expect(contract.response.entities.length).toBeLessThanOrEqual(SEARCH_SUGGEST_MAX_ENTITIES);

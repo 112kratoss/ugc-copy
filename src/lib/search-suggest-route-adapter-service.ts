@@ -99,8 +99,8 @@ async function handleSearchSuggestGET(
         { status: 400, headers: createPrivateNoStoreApiResponseHeaders(request) },
       );
     }
-    // Every catalog model the text names, for a client that opens the
-    // creator for one with no posts: asked for with catalog=1, and any other
+    // Every known name the text names, for a client that opens the creator
+    // for a catalog model with no posts: asked for with catalog=1, and any other
     // value refused, as search's own opt-ins are. Without it the answer holds
     // no row a client from before it cannot open.
     const rawCatalog = searchParams.get(SEARCH_SUGGEST_CATALOG_PARAM);

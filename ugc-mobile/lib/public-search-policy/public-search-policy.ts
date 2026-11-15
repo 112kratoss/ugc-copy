@@ -255,9 +255,10 @@ export interface SearchEntity {
   /**
    * On a typeahead row: the Posts search that opens this row's `postCount`
    * posts, narrowed to it, when that is not the text in the box (a row the
-   * server added for a catalog model: the text was too short to search posts
-   * by, or names it by a word its posts do not hold). Null when the text in
-   * the box is that search, and when the row has no posts.
+   * server added for a name it maintains: the text was too short to search
+   * posts by, misspells the name, or names it by a word its posts do not
+   * hold). Null when the text in the box is that search, and when the row
+   * has no posts.
    */
   query?: string | null;
 }
