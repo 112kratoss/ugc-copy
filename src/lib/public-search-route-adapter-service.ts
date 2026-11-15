@@ -176,15 +176,15 @@ async function handlePublicSearchGET(
     const rawProbe = url.searchParams.get(PUBLIC_SEARCH_PROBE_PARAM);
     if (rawProbe !== null && rawProbe !== '1') return badRequest(request, 'probe must be 1.');
 
+    const limit = parsePublicSearchLimit(url.searchParams.get('limit'));
+    if (!limit) return badRequest(request, 'limit must be an integer between 1 and 24.');
+
     // The blended Posts order, asked for the same way by a client that
     // settled on the search: any request may name the parameter, any other
     // value is refused, and it changes nothing where the blend does not apply
     // (another tab, Latest, one word, the query read as typed).
     const rawBlend = url.searchParams.get(PUBLIC_SEARCH_BLEND_PARAM);
     if (rawBlend !== null && rawBlend !== '1') return badRequest(request, 'blend must be 1.');
-
-    const limit = parsePublicSearchLimit(url.searchParams.get('limit'));
-    if (!limit) return badRequest(request, 'limit must be an integer between 1 and 24.');
 
     const rawCursor = url.searchParams.get('cursor');
     if (type === 'top' && rawCursor) return badRequest(request, 'Top search does not accept a cursor.');

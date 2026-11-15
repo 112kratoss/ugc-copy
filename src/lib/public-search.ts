@@ -84,6 +84,9 @@ export const PUBLIC_SEARCH_RELATED_PARAM = 'related';
  */
 export const PUBLIC_SEARCH_PROBE_PARAM = 'probe';
 
+/** How many entities the Top tab offers. */
+export const PUBLIC_SEARCH_ENTITY_LIMIT = 5;
+
 /**
  * The request parameter a client asks for the blended Posts order with:
  * `blend=1` (`SEARCH_BLEND_PARAM`, the clients' shared rule, which also says
@@ -100,9 +103,6 @@ export { SEARCH_BLEND_PARAM as PUBLIC_SEARCH_BLEND_PARAM } from '../../ugc-mobil
  * refuses.
  */
 export const PUBLIC_SEARCH_BLEND_MAX_PLACE = 80;
-
-/** How many entities the Top tab offers. */
-export const PUBLIC_SEARCH_ENTITY_LIMIT = 5;
 
 /** Whether a tab's results can be narrowed: only Posts. */
 export function publicSearchTypeHasFilters(type: PublicSearchType): boolean {
