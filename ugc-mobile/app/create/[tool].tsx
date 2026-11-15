@@ -6,6 +6,7 @@ import { AiDataConsentOnOpen } from '@/components/ai-data-consent-on-open';
 import { ContentPolicyGate } from '@/components/content-policy-gate';
 import { MediaCreationScreen } from '@/components/media-creation-screen';
 import { PrimaryButton, Screen, SecondaryButton, SectionTitle } from '@/components/ui';
+import { creatorLinkModel } from '@/lib/creator-link-model-view-model';
 import { findRemixLaunch } from '@/lib/remix-start';
 import type { CreatorToolId } from '@/lib/types';
 
@@ -40,6 +41,9 @@ export default function CreateToolScreen() {
     sourceThumbnail?: string | string[];
     // `REMIX_LAUNCH_PARAM`: the Remix tap that opened this creator before its start was answered.
     remixLaunch?: string | string[];
+    // The model to open on (`/create/video?model=seedance-2`): search's row for a catalog model
+    // nobody has posted with yet (lib/creator-link-model-view-model.ts).
+    model?: string | string[];
   };
   const beforeClose = useRef<(() => Promise<boolean>) | null>(null);
   const navigation = useNavigation();
@@ -82,6 +86,7 @@ export default function CreateToolScreen() {
   const remixId = firstParam(params.remix);
   const remixPostId = firstParam(params.remixPost);
   const guided = firstParam(params.guided) === '1';
+  const initialModel = creatorLinkModel({ model: params.model, remix: Boolean(remixId || remixPostId), guided });
   const remixSource = remixId || remixPostId
     ? {
         ...(remixId ? { generationId: remixId } : {}),
@@ -104,9 +109,10 @@ export default function CreateToolScreen() {
       <ContentPolicyGate chrome="headerless">
         <AiDataConsentOnOpen />
         <MediaCreationScreen
-          key={`${initialTool}:${remixId ?? ''}:${remixPostId ?? ''}:${initialPrompt ?? ''}`}
+          key={`${initialTool}:${remixId ?? ''}:${remixPostId ?? ''}:${initialPrompt ?? ''}:${initialModel ?? ''}`}
           initialTool={initialTool}
           initialPrompt={initialPrompt}
+          initialModel={initialModel}
           remixSource={remixSource}
           remixLaunchId={firstParam(params.remixLaunch)}
           // Each navigation here opens its remix from the source; one keyed afresh on this route resumes it.

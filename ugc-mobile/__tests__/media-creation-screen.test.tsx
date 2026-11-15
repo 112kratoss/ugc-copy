@@ -4326,6 +4326,29 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(modelChip(tree)).toContain('Nano Banana 2.0');
     });
 
+    // Search's row for a catalog model nobody has posted with opens its creator on it (2026-11-15).
+    it('opens on the model its link names, chosen as the picker chooses one, once the catalog is confirmed', async () => {
+      catalogState.catalog = createTestGenerationModelCatalog([orbitMax()]);
+      catalogState.isCheckingRevision = true;
+      const tree = await open(<MediaCreationScreen initialTool="video" initialModel="orbit-max" />);
+      // Asked for with the drafts' models, and not chosen on a stored catalog a release may have replaced.
+      expect(catalogHookCalls.selectedIds).toContain('orbit-max');
+      expect(modelChip(tree)).not.toContain('Orbit Max');
+
+      // The network confirms the revision: the screen draws again with it.
+      catalogState.isCheckingRevision = false;
+      await renderer.act(async () => { tree.update(<MediaCreationScreen initialTool="video" initialModel="orbit-max" />); });
+      expect(modelChip(tree)).toBe('Selected model Orbit Max. Change model');
+    });
+
+    it('keeps the draft\'s own model for a link model this creator cannot run', async () => {
+      catalogState.catalog = createTestGenerationModelCatalog([orbitMax()]);
+      const tree = await open(<MediaCreationScreen initialTool="image" initialModel="orbit-max" />);
+      expect(modelChip(tree)).toContain('Nano Banana 2.0');
+      // Dropped, it is no longer asked for: it would hold the creator unavailable through a catalog error.
+      expect(catalogHookCalls.selectedIds).not.toContain('orbit-max');
+    });
+
     it('turns the chip while the model’s details load, holds Generate, and lands the model without the picker', async () => {
       vi.useFakeTimers();
       const full = createTestGenerationModelCatalog([pixelFlash()]);
