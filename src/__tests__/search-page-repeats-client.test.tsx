@@ -65,7 +65,10 @@ function page(ids: string[], nextCursor: string | null): PublicSearchResponse {
 }
 
 const ok = (body: PublicSearchResponse) => ({ ok: true, status: 200, json: async () => body });
-const asked = () => fetchMock.mock.calls.map(([url]) => url as string);
+// Every request of a search carries how its query was entered (`entry`, the
+// last parameter the page sets); these cases are about paging, so it is left
+// out of what they compare, as the page's other tests do.
+const asked = () => fetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, ''));
 const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 /** The posts on show, by the id their link opens, in the order drawn. */
 const drawn = () => Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href^="/showcase/"]'))
