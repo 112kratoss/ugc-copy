@@ -32,7 +32,7 @@ create function pg_temp.row_of(p_key text, p_viewer uuid default null)
 returns jsonb
 language sql
 as $$
-  select entity - 'kind' - 'post_count_capped'
+  select entity - 'kind' - 'post_count_capped' - 'thumbnail'
   from jsonb_array_elements(public.search_starter(p_viewer, '{}', 10, 0, 0) -> 'entities') as entity
   where entity ->> 'key' = p_key;
 $$;

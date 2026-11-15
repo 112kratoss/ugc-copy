@@ -24,6 +24,7 @@ import {
   PUBLIC_SEARCH_MIN_CREATOR_QUERY_LENGTH,
   PUBLIC_SEARCH_PROBE_PARAM,
   PUBLIC_SEARCH_RELATED_PARAM,
+  PUBLIC_SEARCH_RELATED_SEARCHES_PARAM,
   appliedPublicSearchFilters,
   decodePublicSearchCursor,
   isPublicSearchQueryTooLong,
@@ -175,6 +176,13 @@ async function handlePublicSearchGET(
     // the query read as typed).
     const rawRelated = url.searchParams.get(PUBLIC_SEARCH_RELATED_PARAM);
     if (rawRelated !== null && rawRelated !== '1') return badRequest(request, 'related must be 1.');
+    // Related searches, asked for the same way by a client that draws them:
+    // any request may name the parameter, any other value is refused, and it
+    // changes nothing where they do not apply (another tab, a later page).
+    const rawRelatedSearches = url.searchParams.get(PUBLIC_SEARCH_RELATED_SEARCHES_PARAM);
+    if (rawRelatedSearches !== null && rawRelatedSearches !== '1') {
+      return badRequest(request, 'relatedSearches must be 1.');
+    }
     // A search the client asks for itself (PUBLIC_SEARCH_PROBE_PARAM): answered
     // and limited as any, never written to the search log.
     const rawProbe = url.searchParams.get(PUBLIC_SEARCH_PROBE_PARAM);
@@ -248,6 +256,7 @@ async function handlePublicSearchGET(
       filters,
       exact: filterParams.exact,
       related: rawRelated === '1',
+      relatedSearches: rawRelatedSearches === '1',
       // A new query's vector is counted against the same key as the request,
       // and a guest session's against its network too: a guest's id is new
       // with every anonymous sign-in, so its own key alone is no limit.

@@ -37,8 +37,13 @@ function entityRow(index: number, overrides: Record<string, unknown> = {}) {
 
 function clientAnswering(answer: { data: unknown; error: unknown }) {
   const rpc = vi.fn<(name: string, args: Record<string, unknown>) => Promise<typeof answer>>(async () => answer);
-  return { rpc, createServiceClient: () => ({ rpc }) as unknown as SupabaseClient };
+  // The public bucket's address of a stored path, as supabase-js builds it: no request is made.
+  const getPublicUrl = vi.fn((path: string) => ({ data: { publicUrl: `https://cdn.example.test/showcase_media/${path}` } }));
+  const from = vi.fn(() => ({ getPublicUrl }));
+  return { rpc, from, createServiceClient: () => ({ rpc, storage: { from } }) as unknown as SupabaseClient };
 }
+
+const ALL_TIME = { entities: 'all', creators: 'all', searches: 'all' };
 
 describe('search starter service', () => {
   it('makes one database call with the viewer, the hand-picked searches and the three caps, and answers its lists in order', async () => {
@@ -59,8 +64,8 @@ describe('search starter service', () => {
 
     await expect(getSearchStarter({ viewerUserId: VIEWER_ID }, { createServiceClient })).resolves.toEqual({
       entities: [
-        { kind: 'tool', key: 'lumen-forge', label: 'Lumen Forge', postCount: 1000, postCountCapped: true, query: 'lumen forge' },
-        { kind: 'tool', key: 'tool-2', label: 'Tool 2', postCount: 8, postCountCapped: false, query: 'tool 2' },
+        { kind: 'tool', key: 'lumen-forge', label: 'Lumen Forge', postCount: 1000, postCountCapped: true, thumbnail: null, query: 'lumen forge' },
+        { kind: 'tool', key: 'tool-2', label: 'Tool 2', postCount: 8, postCountCapped: false, thumbnail: null, query: 'tool 2' },
       ],
       creators: [
         {
@@ -82,7 +87,9 @@ describe('search starter service', () => {
           isFollowing: false,
         },
       ],
-      searches: [{ text: 'portrait' }, { text: 'nano banana' }],
+      searches: [{ text: 'portrait', thumbnail: null }, { text: 'nano banana', thumbnail: null }],
+      // A database from before 20261115105944 answers no periods: every list is the all-time one.
+      periods: ALL_TIME,
     });
     expect(rpc).toHaveBeenCalledTimes(1);
     expect(rpc).toHaveBeenCalledWith('search_starter', {
@@ -97,7 +104,7 @@ describe('search starter service', () => {
   it('asks for a visitor with no viewer', async () => {
     const { rpc, createServiceClient } = clientAnswering({ data: { entities: [], creators: [], searches: [] }, error: null });
     await expect(getSearchStarter({ viewerUserId: null }, { createServiceClient }))
-      .resolves.toEqual({ entities: [], creators: [], searches: [] });
+      .resolves.toEqual({ entities: [], creators: [], searches: [], periods: ALL_TIME });
     expect(rpc.mock.calls[0][1]).toMatchObject({ p_viewer_user_id: null });
   });
 
@@ -108,6 +115,86 @@ describe('search starter service', () => {
     const sent = rpc.mock.calls[0][1].p_terms as string[];
     expect(sent).toHaveLength(20);
     expect(sent.slice(0, 2)).toEqual(['anime', 'term 0']);
+  });
+
+  describe('this week’s lists and their pictures (20261115105944)', () => {
+    const picture = {
+      post_id: '44444444-4444-4444-8444-444444444444',
+      path: 'owner/post/preview.webp',
+      thumbhash: '1QcSHQRnh493V4dIh4eXh1h4kJUI',
+      width: 832,
+      height: 1248,
+      media_kind: 'image',
+    };
+    const drawn = {
+      postId: '44444444-4444-4444-8444-444444444444',
+      url: 'https://cdn.example.test/showcase_media/owner/post/preview.webp',
+      thumbhash: '1QcSHQRnh493V4dIh4eXh1h4kJUI',
+      width: 832,
+      height: 1248,
+      mediaKind: 'image',
+    };
+
+    it('says which period each list is of, as the database answered it', async () => {
+      const { createServiceClient } = clientAnswering({
+        data: { entities: [], creators: [], searches: [], periods: { entities: 'week', creators: 'all', searches: 'week' } },
+        error: null,
+      });
+      await expect(getSearchStarter({ viewerUserId: null }, { createServiceClient }))
+        .resolves.toMatchObject({ periods: { entities: 'week', creators: 'all', searches: 'week' } });
+    });
+
+    it.each([
+      ['no periods', undefined],
+      ['periods that are not an object', 'week'],
+      ['a period it does not know', { entities: 'month', creators: 7, searches: null }],
+    ])('reads %s as all-time: a heading says "this week" only when that is true', async (_name, periods) => {
+      const { createServiceClient } = clientAnswering({ data: { entities: [], creators: [], searches: [], periods }, error: null });
+      await expect(getSearchStarter({ viewerUserId: null }, { createServiceClient })).resolves.toMatchObject({ periods: ALL_TIME });
+    });
+
+    it('gives a model, a tool and a search its picture, by the stored preview’s public address, in the one database call', async () => {
+      const { rpc, createServiceClient } = clientAnswering({
+        data: {
+          entities: [entityRow(1, { thumbnail: picture }), entityRow(2, { thumbnail: null })],
+          creators: [],
+          searches: [{ text: 'cinematic portrait', thumbnail: picture }, { text: 'neon city', thumbnail: null }, { text: 'anime' }],
+        },
+        error: null,
+      });
+      const answer = await getSearchStarter({ viewerUserId: null }, { createServiceClient });
+      expect(answer.entities.map((entity) => entity.thumbnail)).toEqual([drawn, null]);
+      expect(answer.searches).toEqual([
+        { text: 'cinematic portrait', thumbnail: drawn },
+        { text: 'neon city', thumbnail: null },
+        { text: 'anime', thumbnail: null },
+      ]);
+      expect(rpc).toHaveBeenCalledTimes(1);
+    });
+
+    it('never draws an address of the private bucket, where a labelled post’s media lives', async () => {
+      const { from, createServiceClient } = clientAnswering({
+        data: {
+          entities: [entityRow(1, { thumbnail: { ...picture, path: 'private-posts/owner/post/preview.webp' } })],
+          creators: [],
+          searches: [{ text: 'anime', thumbnail: { ...picture, path: 'private-posts/owner/post/preview.webp' } }],
+        },
+        error: null,
+      });
+      const answer = await getSearchStarter({ viewerUserId: null }, { createServiceClient });
+      expect(answer.entities[0].thumbnail).toBeNull();
+      expect(answer.searches[0].thumbnail).toBeNull();
+      expect(from).not.toHaveBeenCalled();
+    });
+
+    it('leaves out a search the route would search as other words than the database held', async () => {
+      const { createServiceClient } = clientAnswering({
+        data: { entities: [], creators: [], searches: [{ text: 'ｎeon city' }, { text: 'Product Photo' }, { text: 'neon city' }] },
+        error: null,
+      });
+      const answer = await getSearchStarter({ viewerUserId: null }, { createServiceClient });
+      expect(answer.searches.map((search) => search.text)).toEqual(['Product Photo', 'neon city']);
+    });
   });
 
   it('names a model made here as search names it, so a row and the search it opens read the same', async () => {

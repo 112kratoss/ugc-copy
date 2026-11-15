@@ -41,12 +41,13 @@ describe('search starter follow-up migration', () => {
   });
 
   it('keeps both functions’ signatures, settings and grants', () => {
-    for (const [name, signature] of [
-      ['search_starter_entity_offer', 'public.search_starter_entity_offer(text, text, uuid)'],
-      ['search_starter', 'public.search_starter(uuid, text[], integer, integer, integer)'],
+    for (const [name, signature, newest] of [
+      ['search_starter_entity_offer', 'public.search_starter_entity_offer(text, text, uuid)', MIGRATION],
+      // Re-created once more, for the week's lists and the pictures, under the same signature.
+      ['search_starter', 'public.search_starter(uuid, text[], integer, integer, integer)', '20261115105944_search_content_suggestions.sql'],
     ] as const) {
       const { file, definition } = newestDefinition(name);
-      expect(file, name).toBe(MIGRATION);
+      expect(file, name).toBe(newest);
       expect(definition).toMatch(/SECURITY DEFINER/);
       expect(definition).toMatch(/SET search_path = ''/);
       const escaped = signature.replace(/[()[\]]/g, '\\$&');
@@ -61,7 +62,8 @@ describe('search starter follow-up migration', () => {
 
   it('leaves the app’s own tool out of the candidates before they are cut, read as the app reads its name', () => {
     const sql = newestDefinition('search_starter').definition;
-    const candidates = sql.slice(sql.indexOf('FROM recent\n            JOIN public.post_search_entities'), sql.indexOf('LIMIT c_entity_candidates'));
+    // The all-time list's candidates, whichever file defines the function now.
+    const candidates = sql.slice(sql.search(/FROM recent\s+JOIN public\.post_search_entities/), sql.lastIndexOf('LIMIT c_entity_candidates'));
     expect(candidates).toMatch(/WHERE NOT \(\s*members\.kind = 'tool'\s+AND replace\(members\.key, '-', ''\) IN \('magicbooklet', 'emptybooklet'\)\s*\)\s+GROUP BY/);
     // The names the SQL leaves out are the ones the app's own reading calls the app.
     expect(isAppSourceToolLabel('magicbooklet')).toBe(true);

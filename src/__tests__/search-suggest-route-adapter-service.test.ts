@@ -18,6 +18,21 @@ import { proxy } from '@/proxy';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 const contract = mobileApiContract.endpoints.suggestSearch;
+
+// A stored preview path and the public bucket's address of it: the contract's
+// URLs stand under one host, so a path is the address less that host.
+const PREVIEW_HOST = 'https://cdn.example.test/';
+function thumbnailRow(thumbnail: { postId: string; url: string; thumbhash: string | null; width: number | null; height: number | null; mediaKind: string } | null) {
+  return thumbnail && {
+    post_id: thumbnail.postId,
+    path: thumbnail.url.slice(PREVIEW_HOST.length),
+    thumbhash: thumbnail.thumbhash,
+    width: thumbnail.width,
+    height: thumbnail.height,
+    media_kind: thumbnail.mediaKind,
+  };
+}
+const publicStorage = { from: () => ({ getPublicUrl: (path: string) => ({ data: { publicUrl: `${PREVIEW_HOST}${path}` } }) }) };
 const VIEWER_ID = '33333333-3333-4333-8333-333333333333';
 
 const requestIdBoundary = <T>(_requestId: string, callback: () => T): T => callback();
@@ -97,7 +112,7 @@ describe('search suggest route adapter', () => {
       windowSeconds: 60,
       key: 'network-key',
     });
-    expect(suggest).toHaveBeenCalledWith({ query: 'Lu', normalizedQuery: 'Lu', handlesOnly: false, viewerUserId: null });
+    expect(suggest).toHaveBeenCalledWith({ query: 'Lu', normalizedQuery: 'Lu', handlesOnly: false, viewerUserId: null, catalog: false });
   });
 
   it('answers a signed-in viewer privately, keyed and personalised on the verified account', async () => {
@@ -146,7 +161,7 @@ describe('search suggest route adapter', () => {
 
   it('reads a query typed as a handle as asking for handles', async () => {
     const { suggest } = await ask('http://localhost/api/search/suggest?q=%40Lu');
-    expect(suggest).toHaveBeenCalledWith({ query: '@Lu', normalizedQuery: 'Lu', handlesOnly: true, viewerUserId: null });
+    expect(suggest).toHaveBeenCalledWith({ query: '@Lu', normalizedQuery: 'Lu', handlesOnly: true, viewerUserId: null, catalog: false });
   });
 
   it.each([
@@ -191,7 +206,7 @@ describe('search suggest route adapter', () => {
     // `q=a%00` reached Postgres, which refuses U+0000 in a text: a 500.
     const nul = await ask('http://localhost/api/search/suggest?q=a%00');
     expect(nul.response.status).toBe(200);
-    expect(nul.suggest).toHaveBeenCalledWith({ query: 'a', normalizedQuery: 'a', handlesOnly: false, viewerUserId: null });
+    expect(nul.suggest).toHaveBeenCalledWith({ query: 'a', normalizedQuery: 'a', handlesOnly: false, viewerUserId: null, catalog: false });
     await expect(nul.response.json()).resolves.toMatchObject({ query: 'a', normalizedQuery: 'a' });
 
     const escape = await ask('http://localhost/api/search/suggest?q=%1Bpo%00rt%7F');
@@ -208,7 +223,7 @@ describe('search suggest route adapter', () => {
 
   it('reads `@ lu` as the handle lu, with no space left where the @ was', async () => {
     const { suggest } = await ask('http://localhost/api/search/suggest?q=%40%20lu');
-    expect(suggest).toHaveBeenCalledWith({ query: '@ lu', normalizedQuery: 'lu', handlesOnly: true, viewerUserId: null });
+    expect(suggest).toHaveBeenCalledWith({ query: '@ lu', normalizedQuery: 'lu', handlesOnly: true, viewerUserId: null, catalog: false });
   });
 
   describe('the kill switch', () => {
@@ -322,12 +337,13 @@ describe('search suggest route adapter', () => {
         label: entity.label,
         post_count: entity.postCount,
         post_count_capped: entity.postCountCapped,
+        thumbnail: thumbnailRow(entity.thumbnail),
       })),
       completions: contract.response.completions,
     };
     const rpc = vi.fn(async () => ({ data: rows, error: null }));
     const viaService = vi.fn((options: SearchSuggestOptions) => suggestSearch(options, {
-      createServiceClient: () => ({ rpc }) as unknown as SupabaseClient,
+      createServiceClient: () => ({ rpc, storage: publicStorage }) as unknown as SupabaseClient,
     }));
 
     const { response } = await ask(`http://localhost/api/search/suggest?q=${contract.query.q}`, { suggest: viaService });
@@ -354,10 +370,123 @@ describe('search suggest route adapter', () => {
     await expect(typedAsHandle.response.json()).resolves.toEqual(handle.response);
     expect(rpc).toHaveBeenLastCalledWith('search_suggestions', expect.objectContaining({ p_query: 'lu', p_handles_only: true }));
 
+    // Phrases and names (20261115105944): a completion need not start with
+    // what was typed, a creator is found by a later word of the name, and an
+    // entity with no pictured post carries a null picture.
+    for (const variant of [
+      contract.responseVariants.phrasesAndNames,
+      contract.responseVariants.correctedReading,
+      contract.responseVariants.entityWithoutPicture,
+    ]) {
+      rpc.mockResolvedValueOnce({
+        data: {
+          creators: variant.response.creators.map((creator: { id: string; username: string; displayName: string; avatarUrl: string | null; isFollowing: boolean }) => ({
+            id: creator.id,
+            username: creator.username,
+            display_name: creator.displayName,
+            avatar_url: creator.avatarUrl,
+            is_following: creator.isFollowing,
+          })),
+          entities: variant.response.entities.map((entity: { kind: string; key: string; label: string; postCount: number; postCountCapped: boolean }) => ({
+            kind: entity.kind,
+            key: entity.key,
+            label: entity.label,
+            post_count: entity.postCount,
+            post_count_capped: entity.postCountCapped,
+            thumbnail: null,
+          })),
+          completions: variant.response.completions,
+        },
+        error: null,
+      });
+      const answered = await ask(`http://localhost/api/search/suggest?q=${encodeURIComponent(variant.query.q)}`, { suggest: viaService });
+      await expect(answered.response.json()).resolves.toEqual(variant.response);
+    }
+
     const phrase = contract.responseVariants.lastWordOfSeveral;
     rpc.mockResolvedValueOnce({ data: { creators: [], entities: [], completions: phrase.response.completions }, error: null });
     const lastWord = await ask(`http://localhost/api/search/suggest?q=${encodeURIComponent(phrase.query.q)}`, { suggest: viaService });
     await expect(lastWord.response.json()).resolves.toEqual(phrase.response);
+  });
+
+  describe('the catalog parameter (2026-11-15)', () => {
+    it('asks the service for every catalog model only when the request says catalog=1', async () => {
+      expect((await ask('http://localhost/api/search/suggest?q=see')).suggest)
+        .toHaveBeenCalledWith(expect.objectContaining({ normalizedQuery: 'see', catalog: false }));
+      expect((await ask('http://localhost/api/search/suggest?q=see&catalog=1')).suggest)
+        .toHaveBeenCalledWith(expect.objectContaining({ normalizedQuery: 'see', catalog: true }));
+      // A handle query takes it too: the service offers such a query no model either way.
+      expect((await ask('http://localhost/api/search/suggest?q=%40see&catalog=1')).suggest)
+        .toHaveBeenCalledWith(expect.objectContaining({ handlesOnly: true, catalog: true }));
+    });
+
+    it.each(['0', 'true', 'yes', '', '2', '1,1'])('refuses catalog=%s with a 400 and the fixture’s words, before anything is read', async (value) => {
+      const { response, suggest, enforceBackendRateLimit, createUserClient } = await ask(
+        `http://localhost/api/search/suggest?q=see&catalog=${encodeURIComponent(value)}`,
+        { headers: { Authorization: 'Bearer token' } },
+      );
+      expect(response.status).toBe(contract.errors.unknownCatalog.status);
+      await expect(response.json()).resolves.toEqual(contract.errors.unknownCatalog.response);
+      expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+      expect(suggest).not.toHaveBeenCalled();
+      expect(enforceBackendRateLimit).not.toHaveBeenCalled();
+      expect(createUserClient).not.toHaveBeenCalled();
+    });
+
+    it('keeps a visitor’s answer the edge’s for a minute, apart from the answer without the parameter by its address', async () => {
+      const { response } = await ask('http://localhost/api/search/suggest?q=see&catalog=1');
+      expect(response.headers.get('Cache-Control')).toBe(contract.cacheControlWithoutToken);
+      expect(response.headers.get('Vary')).toBe(contract.vary);
+    });
+
+    it('still answers nothing, with no lookup, when suggestions are switched off', async () => {
+      const { response, suggest } = await ask('http://localhost/api/search/suggest?q=see&catalog=1', { env: { SEARCH_SUGGEST_DISABLED: '1' } });
+      await expect(response.json()).resolves.toMatchObject({ entities: [], completions: [], creators: [] });
+      expect(suggest).not.toHaveBeenCalled();
+    });
+
+    it('answers the contract’s examples through the real service, sending the database what the request asked', async () => {
+      const rpc = vi.fn<(name: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: null }>>();
+      const viaService = vi.fn((options: SearchSuggestOptions) => suggestSearch(options, {
+        createServiceClient: () => ({ rpc, storage: publicStorage }) as unknown as SupabaseClient,
+      }));
+      for (const variant of [
+        contract.responseVariants.catalogModelWithPosts,
+        contract.responseVariants.catalogModels,
+        contract.responseVariants.catalogModelsOfTwoLetters,
+        contract.responseVariants.knownTool,
+        contract.responseVariants.oneMistake,
+      ]) {
+        rpc.mockResolvedValueOnce({
+          data: {
+            creators: [],
+            entities: variant.response.entities.map((entity) => ({
+              kind: entity.kind,
+              key: entity.key,
+              label: entity.label,
+              post_count: entity.postCount,
+              post_count_capped: entity.postCountCapped,
+              thumbnail: thumbnailRow(entity.thumbnail),
+              in_catalog: entity.inCatalog,
+              catalog_model: entity.catalogModel,
+              query: entity.query,
+            })),
+            completions: [],
+          },
+          error: null,
+        });
+        const { response } = await ask(
+          `http://localhost/api/search/suggest?${new URLSearchParams(variant.query)}`,
+          { suggest: viaService },
+        );
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual(variant.response);
+        expect(rpc).toHaveBeenLastCalledWith('search_suggestions', expect.objectContaining({
+          p_query: variant.query.q,
+          p_catalog: 'catalog' in variant.query,
+        }));
+      }
+    });
   });
 
   it('writes no row to the search log: a suggestion is not a search', () => {

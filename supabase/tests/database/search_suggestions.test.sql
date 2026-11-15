@@ -18,7 +18,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(147);
+select plan(149);
 
 create function pg_temp.uid(p_suffix text)
 returns uuid
@@ -423,7 +423,9 @@ select is(pg_temp.handles('ARIA'), array['aria', 'aria-fennick', 'brisa-tolland'
 select is(pg_temp.handles('aria', null, true), array['aria', 'aria-fennick'],
   'a query typed as a handle is matched against handles alone');
 select ok('vesper-lund' = any (pg_temp.handles('v')), 'one letter is enough for a handle');
-select is(pg_temp.handles('fennick'), '{}'::text[], 'a word inside a name or handle is search''s to find, not a suggestion');
+select is(pg_temp.handles('fennick'), array['aria-fennick'], 'a later word of a name finds its creator too (20261115105944)');
+select is(pg_temp.handles('ennick'), '{}'::text[], 'letters inside a word are search''s to find, not a suggestion');
+select is(pg_temp.handles('fennick', null, true), '{}'::text[], 'and a handle query is still the handle''s start alone');
 select is(pg_temp.handles('ar', null, false, 2), (pg_temp.handles('ar'))[1:2],
   'the limit cuts the list from its end');
 select is(cardinality(pg_temp.handles('ar', null, false, 2)), 2, 'to as many as asked for');
@@ -559,7 +561,7 @@ select is(
 --   Veiltool      …01, and …02's labelled post          (one creator a visitor sees)
 --   Lumen Forge   …01 and …02                           (a name of two words)
 --   Blocktool     …06 and …07: the viewer blocked one, the other blocked the viewer
---   Triptool A–D  …01 and …02 each                      (four entities for one query)
+--   Triptool A–E  …01 and …02 each                      (five entities for one query)
 --   lumenmodel-2  the model of creations by …01 and …02
 
 create function pg_temp.entities(p_query text, p_viewer uuid default null, p_handles_only boolean default false)
@@ -607,6 +609,7 @@ from (
     ('79', '01', false, 'Triptool B', null), ('7a', '02', false, 'Triptool B', null),
     ('7b', '01', false, 'Triptool C', null), ('7c', '02', false, 'Triptool C', null),
     ('7d', '01', false, 'Triptool D', null), ('7e', '02', false, 'Triptool D', null),
+    ('e1', '01', false, 'Triptool E', null), ('e2', '02', false, 'Triptool E', null),
     ('7f', '01', false, 'Midjourney', '61'),
     ('80', '02', false, 'Midjourney', '62')
 ) as post(suffix, owner, is_nsfw, tool, generation);
@@ -614,7 +617,7 @@ from (
 select is(pg_temp.entities('midj'), array['tool:midjourney'],
   'a tool two creators'' posts are made with is offered for the start of its name');
 select is(
-  public.search_suggestions('midj') -> 'entities' -> 0,
+  (public.search_suggestions('midj') -> 'entities' -> 0) - 'thumbnail' - 'in_catalog' - 'catalog_model' - 'query',
   (select jsonb_build_object('kind', kind, 'key', key, 'label', label, 'post_count', post_count, 'post_count_capped', post_count_capped)
    from public.search_public_entities('midj', null, 10, null)),
   'as search itself offers it: its kind, key, the name its posts print, and the posts the query finds made with it'
@@ -660,9 +663,9 @@ delete from public.search_suggestion_denylist;
 select is(pg_temp.entities('quillonto'), array['tool:quillontool'], 'taken off the list, it is offered again at once');
 select is(pg_temp.entities('lumen f'), array['tool:lumen-forge'], 'and so is the other');
 
--- At most three, search's first three that pass.
-select is(cardinality(pg_temp.search_entities('triptool')), 4, 'fixture: four tools start the same way');
-select is(pg_temp.entities('triptool'), (pg_temp.search_entities('triptool'))[1:3], 'three are offered, in search''s order');
+-- At most four (three until 20261115105944), search's first four that pass.
+select is(cardinality(pg_temp.search_entities('triptool')), 5, 'fixture: five tools start the same way');
+select is(pg_temp.entities('triptool'), (pg_temp.search_entities('triptool'))[1:4], 'four are offered, in search''s order');
 
 -- Handles only.
 select is(pg_temp.entities('midj', null, true), '{}'::text[], 'a query typed as a handle is offered no models or tools');
@@ -747,20 +750,20 @@ select is(
 -- ─── Whose they are ─────────────────────────────────────────────────────────
 
 select ok(
-  not has_function_privilege('anon', 'public.search_suggestions(text, uuid, boolean, integer, integer)', 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.search_suggestions(text, uuid, boolean, integer, integer)', 'EXECUTE')
+  not has_function_privilege('anon', 'public.search_suggestions(text, uuid, boolean, integer, integer, boolean)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.search_suggestions(text, uuid, boolean, integer, integer, boolean)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.search_suggest_creators(text, uuid, boolean, integer)', 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.search_suggest_creators(text, uuid, boolean, integer)', 'EXECUTE')
-  and not has_function_privilege('anon', 'public.search_suggest_completions(text, integer)', 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.search_suggest_completions(text, integer)', 'EXECUTE')
+  and not has_function_privilege('anon', 'public.search_suggest_completions(text, integer, uuid)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.search_suggest_completions(text, integer, uuid)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.rebuild_search_terms()', 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.rebuild_search_terms()', 'EXECUTE'),
   'no client role may call the suggestion functions or the rebuild'
 );
 select ok(
-  has_function_privilege('service_role', 'public.search_suggestions(text, uuid, boolean, integer, integer)', 'EXECUTE')
+  has_function_privilege('service_role', 'public.search_suggestions(text, uuid, boolean, integer, integer, boolean)', 'EXECUTE')
   and has_function_privilege('service_role', 'public.search_suggest_creators(text, uuid, boolean, integer)', 'EXECUTE')
-  and has_function_privilege('service_role', 'public.search_suggest_completions(text, integer)', 'EXECUTE')
+  and has_function_privilege('service_role', 'public.search_suggest_completions(text, integer, uuid)', 'EXECUTE')
   and has_function_privilege('service_role', 'public.rebuild_search_terms()', 'EXECUTE'),
   'the service role may'
 );

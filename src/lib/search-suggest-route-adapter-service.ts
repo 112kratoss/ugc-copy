@@ -15,7 +15,7 @@ import {
 } from '@/lib/backend-rate-limit';
 import { logBackendRouteError } from '@/lib/backend-logger';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
-import { SEARCH_SUGGEST_RATE_LIMIT, searchSuggestQuery } from '@/lib/search-suggest';
+import { SEARCH_SUGGEST_CATALOG_PARAM, SEARCH_SUGGEST_RATE_LIMIT, searchSuggestQuery } from '@/lib/search-suggest';
 import { suggestSearch } from '@/lib/search-suggest-service';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
@@ -90,11 +90,23 @@ async function handleSearchSuggestGET(
 ) {
   const startedAt = performance.now();
   try {
-    const rawQuery = new URL(request.url).searchParams.get('q');
+    const searchParams = new URL(request.url).searchParams;
+    const rawQuery = searchParams.get('q');
     const query = searchSuggestQuery(rawQuery);
     if (!query.ok) {
       return NextResponse.json(
         { error: query.error },
+        { status: 400, headers: createPrivateNoStoreApiResponseHeaders(request) },
+      );
+    }
+    // Every known name the text names, for a client that opens the creator
+    // for a catalog model with no posts: asked for with catalog=1, and any other
+    // value refused, as search's own opt-ins are. Without it the answer holds
+    // no row a client from before it cannot open.
+    const rawCatalog = searchParams.get(SEARCH_SUGGEST_CATALOG_PARAM);
+    if (rawCatalog !== null && rawCatalog !== '1') {
+      return NextResponse.json(
+        { error: 'catalog must be 1.' },
         { status: 400, headers: createPrivateNoStoreApiResponseHeaders(request) },
       );
     }
@@ -143,6 +155,7 @@ async function handleSearchSuggestGET(
       normalizedQuery: query.normalizedQuery,
       handlesOnly: query.handlesOnly,
       viewerUserId: actor.viewerUserId,
+      catalog: rawCatalog === '1',
     });
     // A token's answer is its viewer's (their follows, their blocks): private,
     // never stored. A visitor's is the same for every visitor, so the edge may

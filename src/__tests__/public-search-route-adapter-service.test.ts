@@ -72,6 +72,8 @@ describe('public search route adapter service', () => {
       exact: false,
       // Related posts were not asked for; a new query would be counted against the request's own key.
       related: false,
+      // Nor were related searches.
+      relatedSearches: false,
       viewerKey: 'network-key',
       // A visitor is no guest session: its one key is the network already.
       guestNetworkKey: null,
@@ -151,6 +153,80 @@ describe('public search route adapter service', () => {
         expect(response.status, search).toBe(200);
         expect(options, search).toMatchObject({ related: true });
       }
+    });
+  });
+
+  describe('the relatedSearches parameter', () => {
+    async function ask(search: string) {
+      const searchPublicContent = vi.fn(async (options: PublicSearchOptions) => emptyResponse(options.query, options.type));
+      const response = await getPublicSearchRouteResponse({
+        request: new Request(`http://localhost/api/search?${search}`),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          createUserClient: vi.fn(),
+          enforceBackendRateLimit: vi.fn(allowedRateLimit),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
+          searchPublicContent,
+          runAfterResponse: () => {},
+          withProviderFetchRequestId: requestIdBoundary,
+        },
+      });
+      return { response, options: searchPublicContent.mock.calls[0]?.[0] ?? null };
+    }
+
+    it('asks the service for related searches only when the request says relatedSearches=1', async () => {
+      expect((await ask('q=portrait')).options).toMatchObject({ relatedSearches: false });
+      expect((await ask('q=portrait&relatedSearches=1')).options).toMatchObject({ relatedSearches: true, type: 'top' });
+      expect((await ask('q=portrait&type=posts&relatedSearches=1')).options).toMatchObject({ relatedSearches: true, type: 'posts' });
+      // Apart from related posts: either may be asked for without the other.
+      expect((await ask('q=portrait&relatedSearches=1')).options).toMatchObject({ related: false });
+      expect((await ask('q=portrait&related=1')).options).toMatchObject({ relatedSearches: false });
+      expect((await ask('q=portrait&related=1&relatedSearches=1')).options).toMatchObject({ related: true, relatedSearches: true });
+    });
+
+    it.each(['0', 'true', 'yes', '', '2', '1,1'])('refuses relatedSearches=%s with a 400, whatever the type', async (value) => {
+      for (const type of ['top', 'posts', 'creators', 'recipes']) {
+        const { response, options } = await ask(`q=portrait&type=${type}&relatedSearches=${encodeURIComponent(value)}`);
+        expect(response.status, type).toBe(400);
+        await expect(response.json()).resolves.toEqual({ error: 'relatedSearches must be 1.' });
+        expect(options, type).toBeNull();
+      }
+    });
+
+    it('takes it on any search, where it changes nothing the service does not apply', async () => {
+      // The service alone decides where related searches apply (public-search-service.test.ts).
+      for (const search of [
+        'q=portrait&type=creators&relatedSearches=1',
+        'q=portrait&type=recipes&relatedSearches=1',
+        'q=portrait&type=posts&sort=latest&relatedSearches=1',
+        'q=portrait&exact=1&relatedSearches=1',
+      ]) {
+        const { response, options } = await ask(search);
+        expect(response.status, search).toBe(200);
+        expect(options, search).toMatchObject({ relatedSearches: true });
+      }
+    });
+
+    it('answers what the service answers: the field only when the service sent one', async () => {
+      const withSearches = vi.fn(async (options: PublicSearchOptions) => ({
+        ...emptyResponse(options.query, options.type),
+        relatedSearches: [{ text: 'cinematic portrait' }],
+      }));
+      const response = await getPublicSearchRouteResponse({
+        request: new Request('http://localhost/api/search?q=portrait&relatedSearches=1'),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          createUserClient: vi.fn(),
+          enforceBackendRateLimit: vi.fn(allowedRateLimit),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-key'),
+          searchPublicContent: withSearches,
+          runAfterResponse: () => {},
+          withProviderFetchRequestId: requestIdBoundary,
+        },
+      });
+      await expect(response.json()).resolves.toMatchObject({ relatedSearches: [{ text: 'cinematic portrait' }] });
+      const without = await ask('q=portrait');
+      expect(await without.response.json()).not.toHaveProperty('relatedSearches');
     });
   });
 

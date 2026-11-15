@@ -30,8 +30,23 @@ const allowedRateLimit = () => Promise.resolve({
 });
 
 function emptyAnswer(): SearchStarterResponse {
-  return { entities: [], creators: [], searches: [] };
+  return { entities: [], creators: [], searches: [], periods: { entities: 'all', creators: 'all', searches: 'all' } };
 }
+
+// A stored preview path and the public bucket's address of it: the contract's
+// URLs stand under one host, so a path is the address less that host.
+const PREVIEW_HOST = 'https://cdn.example.test/';
+function thumbnailRow(thumbnail: { postId: string; url: string; thumbhash: string | null; width: number | null; height: number | null; mediaKind: string } | null) {
+  return thumbnail && {
+    post_id: thumbnail.postId,
+    path: thumbnail.url.slice(PREVIEW_HOST.length),
+    thumbhash: thumbnail.thumbhash,
+    width: thumbnail.width,
+    height: thumbnail.height,
+    media_kind: thumbnail.mediaKind,
+  };
+}
+const publicStorage = { from: () => ({ getPublicUrl: (path: string) => ({ data: { publicUrl: `${PREVIEW_HOST}${path}` } }) }) };
 
 function userClient(user: Record<string, unknown> | null, error: unknown = null) {
   return vi.fn(() => ({
@@ -236,6 +251,7 @@ describe('search starter route adapter', () => {
         post_count: entity.postCount,
         post_count_capped: entity.postCountCapped,
         query: entity.query,
+        thumbnail: thumbnailRow(entity.thumbnail),
       })),
       creators: contract.response.creators.map((creator) => ({
         id: creator.id,
@@ -246,11 +262,12 @@ describe('search starter route adapter', () => {
         public_post_count: creator.publicPostCount,
         is_following: creator.isFollowing,
       })),
-      searches: contract.response.searches,
+      searches: contract.response.searches.map((search) => ({ text: search.text, thumbnail: thumbnailRow(search.thumbnail) })),
+      periods: contract.response.periods,
     };
     const rpc = vi.fn(async () => ({ data: rows, error: null }));
     const viaService = vi.fn((options: SearchStarterOptions) => getSearchStarter(options, {
-      createServiceClient: () => ({ rpc }) as unknown as SupabaseClient,
+      createServiceClient: () => ({ rpc, storage: publicStorage }) as unknown as SupabaseClient,
     }));
 
     const { response } = await ask(URL_, { starter: viaService });

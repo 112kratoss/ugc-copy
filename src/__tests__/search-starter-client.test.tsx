@@ -58,7 +58,8 @@ const STARTER: SearchStarterResponse = {
   creators: [{
     id: 'c1', username: 'luna-studio', displayName: 'Luna Studio', bio: null, avatarUrl: null, publicPostCount: 42, isFollowing: false,
   }],
-  searches: [{ text: 'portrait' }, { text: 'anime' }],
+  searches: [{ text: 'portrait', thumbnail: null }, { text: 'anime', thumbnail: null }],
+  periods: { entities: 'all', creators: 'all', searches: 'all' },
 };
 
 function post(id: string): ShowcaseFeedItem {
