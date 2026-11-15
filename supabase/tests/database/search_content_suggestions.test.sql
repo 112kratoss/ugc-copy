@@ -18,7 +18,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(261);
+select plan(264);
 
 create function pg_temp.uid(p_suffix text)
 returns uuid
@@ -736,6 +736,22 @@ from (
     ('b1', '01', 'Tidal ledger', 'Midjourney', 0, interval '1 hour'),
     ('b2', '02', 'Tidal ledger', 'Midjourney', 0, interval '1 hour')
 ) as post(suffix, owner, title, tool, counted, age);
+-- 10, the order of completions. Two phrases that start with one word: "opal
+-- garden", thirty posts of one creator today and one of another's; "opal
+-- river", one post each of five creators.
+insert into public.posts (
+  id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw,
+  title, showcase_asset_path, source_tool, source_tool_slug, created_at, updated_at
+)
+select pg_temp.uid(post.suffix), pg_temp.uid(post.owner), 'public', 'image', 'external', 'media', 'visible', false,
+       post.title, 'showcase/c5e6-' || post.suffix || '.png', 'Canyonkit', 'canyonkit', now(), now()
+from (
+  select to_hex(192 + n) as suffix, '01' as owner, 'Opal garden' as title from generate_series(0, 29) as n
+  union all
+  values ('de', '02', 'Opal garden'),
+         ('e3', '03', 'Opal river'), ('e4', '04', 'Opal river'), ('e5', '06', 'Opal river'),
+         ('e6', '07', 'Opal river'), ('e7', '08', 'Opal river')
+) as post(suffix, owner, title);
 insert into public.post_media (post_id, storage_path, media_kind, content_type, width, height, sort_order,
   preview_storage_path, preview_thumbhash, preview_status)
 select pg_temp.uid(cover.suffix), 'c5e6/' || cover.suffix || '/source.png', 'image', 'image/png', 800, 1200, 0,
@@ -773,6 +789,22 @@ select is(
   (select week_activity from public.search_phrases where phrase = 'saffron canyon'),
   11::real,
   'a creator''s new posts count toward a phrase''s week up to ten, as they do toward a model''s: twelve posts and one reader''s save count 11'
+);
+
+-- 10, second half. recent_weight orders the completions, so one creator's
+-- volume must not decide it either: a creator's posts count toward it by
+-- their square root, to ten posts.
+select results_eq(
+  $$ select phrase, post_count, creator_count from public.search_phrases where phrase like 'opal %' order by phrase $$,
+  $$ values ('opal garden', 31, 2), ('opal river', 5, 5) $$,
+  'fixture: a phrase one creator writes thirty times and another once, and a phrase five creators write once each'
+);
+select is(pg_temp.completions('opal'), array['opal river', 'opal garden'],
+  'the phrase five creators write is completed before the one a single creator writes thirty times');
+select results_eq(
+  $$ select phrase, recent_weight from public.search_phrases where phrase like 'opal %' order by phrase $$,
+  $$ values ('opal garden', 4.16::real), ('opal river', 5::real) $$,
+  'one creator''s thirty posts weigh the square root of ten, 3.16, beside the other creator''s one; five creators'' posts weigh five'
 );
 
 -- 6. Pictures are ordered by what other accounts gave, never by a counter or

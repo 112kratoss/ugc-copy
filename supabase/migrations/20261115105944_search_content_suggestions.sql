@@ -214,7 +214,7 @@ COMMENT ON TABLE public.search_phrases IS
 COMMENT ON COLUMN public.search_phrases.core IS
   'The phrase less its english stop words (the phrase itself when every word is one).';
 COMMENT ON COLUMN public.search_phrases.recent_weight IS
-  'The posts that hold the phrase, each counted 0.5 ^ (its age in days / 30).';
+  'The posts that hold the phrase, each counted 0.5 ^ (its age in days / 30), added up by creator: a creator''s posts count whole up to one post''s worth and past that by their square root, to ten posts'' worth (3.16 at most), so the order of completions is decided by how many creators write a phrase, not by how often one of them does.';
 COMMENT ON COLUMN public.search_phrases.week_activity IS
   'What the posts that hold the phrase gained in the 7 days before the rebuild, added up by creator: a creator''s posts made then (counted to 10), plus the saves and the commenters those posts received then from accounts other than their creator.';
 COMMENT ON COLUMN public.search_phrases.picture_post_ids IS
@@ -601,9 +601,19 @@ BEGIN
         -- By creator first: one creator's new posts count toward a phrase's
         -- week up to c_week_posts, as they do toward a model's below, so one
         -- account's volume does not decide the start screen's searches.
+        -- Nor the order of completions, which is recent_weight's: a
+        -- creator's posts count toward it whole up to one post's worth, and
+        -- past that by their square root, to c_week_posts posts' worth
+        -- (3.16 at most). A plain cap of ten would not do: thirty posts of
+        -- one account and one of a second would weigh 11 against the 5 of a
+        -- phrase five creators write once each. A phrase's standing is how
+        -- many write it; what one account adds by repeating it tails off.
         SELECT
           by_maker.phrase,
-          round(sum(by_maker.recent_weight)::numeric, 2)::real AS recent_weight,
+          round(sum(CASE
+            WHEN by_maker.recent_weight <= 1 THEN by_maker.recent_weight
+            ELSE sqrt(least(by_maker.recent_weight, c_week_posts))
+          END)::numeric, 2)::real AS recent_weight,
           sum(least(by_maker.new_this_week, c_week_posts) + by_maker.received_this_week)::real AS week_activity
         FROM (
           SELECT

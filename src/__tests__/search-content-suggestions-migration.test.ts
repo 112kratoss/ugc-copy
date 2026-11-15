@@ -271,6 +271,14 @@ describe('where a phrase comes from', () => {
     expect(rebuild).toContain('sum(least(by_maker.new_this_week, c_week_posts) + by_maker.received_this_week)::real AS week_activity');
     expect(rebuild).toMatch(/GROUP BY occurrences\.phrase, occurrences\.creator_user_id\s+\) AS by_maker\s+GROUP BY by_maker\.phrase/);
     expect(rebuild).not.toContain('sum(active.new_this_week + active.received_this_week)');
+    // And recent_weight, which orders the completions: a creator's posts count by their square
+    // root past one post's worth, to ten (review of PR #826, finding 10, second half). A plain
+    // cap of ten would leave thirty posts of one account (10 + 1) ahead of five creators (5).
+    expect(squash(rebuild)).toContain(
+      'round(sum(CASE WHEN by_maker.recent_weight <= 1 THEN by_maker.recent_weight ELSE sqrt(least(by_maker.recent_weight, c_week_posts)) END)::numeric, 2)::real AS recent_weight',
+    );
+    expect(rebuild).not.toContain('round(sum(by_maker.recent_weight)::numeric, 2)');
+    expect(rebuild).toContain('c_week_posts CONSTANT integer := 10;');
   });
 
   it('orders pictures by what other accounts gave a post, never by a counter its creator can raise', () => {
