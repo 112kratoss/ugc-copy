@@ -1,9 +1,10 @@
 import { Box, Clock3, Search, Wrench } from 'lucide-react-native';
 import { Pressable, Text, View } from 'react-native';
 
+import { SearchRowPicture } from '@/components/search-row-picture';
 import { CreatorAvatar } from '@/components/ui';
 import { creatorProfilePress } from '@/lib/creator-profile-opening';
-import { searchEntityCountLabel, searchEntityKindLabel } from '@/lib/public-search-policy/public-search-policy';
+import { searchTypeaheadEntityWords } from '@/lib/search-screen-view-model';
 import {
   SEARCH_TYPEAHEAD_LIST_LABEL,
   searchForRowLabel,
@@ -26,7 +27,11 @@ function RowMark({ row }: { row: SearchTypeaheadRow }) {
   if (row.kind === 'creator') {
     return <CreatorAvatar uri={row.creator.avatarUrl} name={row.creator.displayName} size={MARK_SIZE} />;
   }
-  const Icon = row.kind === 'completion' && row.recent ? Clock3 : row.kind === 'entity' ? (row.entity.kind === 'model' ? Box : Wrench) : Search;
+  if (row.kind === 'entity') {
+    // A post made with it, where the answer has one; its kind's glyph in the same frame otherwise.
+    return <SearchRowPicture thumbnail={row.entity.thumbnail} size={MARK_SIZE} Icon={row.entity.kind === 'model' ? Box : Wrench} />;
+  }
+  const Icon = row.kind === 'completion' && row.recent ? Clock3 : Search;
   return (
     <View
       style={{
@@ -38,7 +43,7 @@ function RowMark({ row }: { row: SearchTypeaheadRow }) {
         backgroundColor: theme.colors.surfaceStrong,
       }}
     >
-      <Icon size={appTheme.icon.sm} color={row.kind === 'entity' ? theme.colors.primary : theme.colors.muted} />
+      <Icon size={appTheme.icon.sm} color={theme.colors.muted} />
     </View>
   );
 }
@@ -49,8 +54,11 @@ function RowMark({ row }: { row: SearchTypeaheadRow }) {
 function TypedRuns({ text, query }: { text: string; query: string | null }) {
   const theme = useAppTheme();
   return (
-    // Two lines at most, so a long search still reads whole at the largest text sizes.
-    <Text numberOfLines={2} style={{ color: theme.colors.text, fontSize: 15 }}>
+    // Whole at every size: since 2026-11-15 a completion can be a phrase posts
+    // wrote ("cinematic neon portrait"), which two lines cut at the largest
+    // sizes. It wraps instead, up to running text's cap. Its key is its text,
+    // so a row that wraps differently is another row to the press rule.
+    <Text maxFontSizeMultiplier={appTheme.typeScale.body} style={{ color: theme.colors.text, fontSize: 15 }}>
       {searchTypeaheadTextRuns(text, query).map((run, index) => (
         <Text
           key={index}
@@ -87,14 +95,18 @@ function RowWords({ row, query }: { row: SearchTypeaheadRow; query: string | nul
     );
   }
   const title = row.kind === 'creator' ? row.creator.displayName : row.entity.label;
+  // A model's or tool's name is drawn whole and plain of any "typed part": it
+  // can differ from what was typed altogether ("sdxl" offers Stability AI). A
+  // catalog model nobody has posted with says what pressing it does
+  // ("Video model · Generate with it"), never "0 posts".
   const detail = row.kind === 'creator'
     ? `@${row.creator.username}${row.creator.isFollowing ? ' · Following' : ''}`
     : row.kind === 'entity'
-      ? `${searchEntityKindLabel(row.entity.kind)} · ${searchEntityCountLabel(row.entity)}`
+      ? searchTypeaheadEntityWords(row.entity).detail
       : null;
   return (
     <View style={{ minWidth: 0, flex: 1 }}>
-      <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>
+      <Text numberOfLines={row.kind === 'entity' ? 2 : 1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>
         {title}
       </Text>
       {detail ? <Text numberOfLines={1} style={{ marginTop: 1, color: theme.colors.muted, fontSize: 13 }}>{detail}</Text> : null}
@@ -170,7 +182,7 @@ export function SearchTypeaheadList({
               <Pressable
                 key={row.key}
                 accessibilityRole="button"
-                accessibilityLabel={searchTypeaheadRowLabel(row)}
+                accessibilityLabel={row.kind === 'entity' ? searchTypeaheadEntityWords(row.entity).accessibilityLabel : searchTypeaheadRowLabel(row)}
                 testID={`search-typeahead-${row.kind}`}
                 // A creator's page is read once the finger has rested on their row,
                 // as on a found creator's (`creatorProfilePress`).
