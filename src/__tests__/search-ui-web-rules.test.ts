@@ -33,4 +33,17 @@ describe('where a model’s or tool’s typeahead row leads (searchTypeaheadEnti
     expect(searchTypeaheadEntityRoute({ ...seedance, postCount: 3, query: 'seedance 1.5' }, 'see'))
       .toEqual({ type: 'posts', query: 'seedance 1.5', madeWith: 'model:seedance-1.5-pro' });
   });
+
+  it('opens Top, narrowed to nothing, for a text Posts does not search yet (review of #828, N1)', () => {
+    const kling: SearchEntity = {
+      kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', postCount: 412, postCountCapped: false, inCatalog: false, catalogModel: null, query: null,
+    };
+    // A row kept on show from "kli", pressed at "kl": Posts would be idle under a filter it does not draw.
+    expect(searchTypeaheadEntityRoute(kling, 'kl')).toEqual({ type: 'top', query: 'kl' });
+    // Counted as the server counts: without a leading "@", an emoji as one.
+    expect(searchTypeaheadEntityRoute(kling, '@kl')).toEqual({ type: 'top', query: '@kl' });
+    expect(searchTypeaheadEntityRoute(kling, 'kli')).toEqual({ type: 'posts', query: 'kli', madeWith: 'model:kling-2.6' });
+    // A row's own search is held to the same rule.
+    expect(searchTypeaheadEntityRoute({ ...kling, query: 'kl' }, 'k')).toEqual({ type: 'top', query: 'kl' });
+  });
 });

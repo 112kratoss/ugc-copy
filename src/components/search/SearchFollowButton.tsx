@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import { pushToast } from '@/components/feedback-state';
 import { supabase } from '@/lib/supabase';
@@ -50,39 +50,49 @@ export function SearchFollowButton({
   const [state, setState] = useState({ from: creator.isFollowing, following: creator.isFollowing });
   if (state.from !== creator.isFollowing) setState({ from: creator.isFollowing, following: creator.isFollowing });
   const [pending, setPending] = useState(false);
+  // A press under way, from its first moment: a second press while the session is read (behind its
+  // lock while a token is refreshed) is the same press, never a second follow (review of #828, N4).
+  const pressing = useRef(false);
   const { following } = state;
 
   const press = async () => {
-    if (pending) return;
-    let session = null;
-    try {
-      ({ data: { session } } = await supabase.auth.getSession());
-    } catch {
-      session = null;
-    }
-    if (!session || session.user.is_anonymous === true) {
-      router.push(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
-      return;
-    }
-    if (session.user.id === creator.id) return;
-    const next = !following;
-    setState((current) => ({ ...current, following: next }));
+    if (pressing.current) return;
+    pressing.current = true;
     setPending(true);
     try {
-      const response = await fetch('/api/profile/follow', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ followingId: creator.id, following: next }),
-      });
-      if (!response.ok) throw new Error('The follow was refused.');
-      const data = await response.json().catch(() => null) as { following?: unknown } | null;
-      const confirmed = typeof data?.following === 'boolean' ? data.following : next;
-      setState((current) => ({ ...current, following: confirmed }));
-      onChange?.(creator.id, confirmed);
-    } catch {
-      setState((current) => ({ ...current, following: !next }));
-      pushToast({ tone: 'error', message: SEARCH_FOLLOW_FAILED });
+      let session: Awaited<ReturnType<typeof supabase.auth.getSession>>['data']['session'];
+      try {
+        ({ data: { session } } = await supabase.auth.getSession());
+      } catch {
+        // The session could not be read: that is no sign of being signed out, so nothing changes
+        // and the creator page's sentence says so.
+        pushToast({ tone: 'error', message: SEARCH_FOLLOW_FAILED });
+        return;
+      }
+      if (!session || session.user.is_anonymous === true) {
+        router.push(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
+        return;
+      }
+      if (session.user.id === creator.id) return;
+      const next = !following;
+      setState((current) => ({ ...current, following: next }));
+      try {
+        const response = await fetch('/api/profile/follow', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ followingId: creator.id, following: next }),
+        });
+        if (!response.ok) throw new Error('The follow was refused.');
+        const data = await response.json().catch(() => null) as { following?: unknown } | null;
+        const confirmed = typeof data?.following === 'boolean' ? data.following : next;
+        setState((current) => ({ ...current, following: confirmed }));
+        onChange?.(creator.id, confirmed);
+      } catch {
+        setState((current) => ({ ...current, following: !next }));
+        pushToast({ tone: 'error', message: SEARCH_FOLLOW_FAILED });
+      }
     } finally {
+      pressing.current = false;
       setPending(false);
     }
   };

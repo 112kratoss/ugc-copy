@@ -6,6 +6,7 @@ import SearchClient from '@/app/search/SearchClient';
 import { AppShellSearch } from '@/components/AppShellSearch';
 import { markSearchFieldHandoff } from '@/components/search/search-field-handoff';
 import type { PublicSearchResponse } from '@/lib/public-search';
+import { keepSearchPage } from '@/lib/search-kept-pages';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 import { SEARCH_RELATED_SEARCHES_MAX, SEARCH_RELATED_THIN_POSTS } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
@@ -38,6 +39,12 @@ vi.mock('next/form', () => ({
   ),
 }));
 vi.mock('@/lib/use-leave-guard', () => ({ holdForLeaveGuard: () => false }));
+// The account the session cookie names: what a page kept for Back is drawn for.
+const { cookieUserMock } = vi.hoisted(() => ({ cookieUserMock: vi.fn<() => string | null>(() => null) }));
+vi.mock('@/lib/supabase-auth-cookie', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase-auth-cookie')>()),
+  readSupabaseAuthCookieUserId: () => cookieUserMock(),
+}));
 vi.mock('@/components/feedback-state', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/components/feedback-state')>()),
   pushToast: (toast: unknown) => pushToastMock(toast),
@@ -121,6 +128,8 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/search');
   getSessionMock.mockReset();
   signedIn(null);
+  cookieUserMock.mockReset();
+  cookieUserMock.mockReturnValue(null);
   pushMock.mockReset();
   pushToastMock.mockReset();
   starterFetchMock.mockReset();
@@ -234,7 +243,7 @@ describe('the start screen', () => {
     signedIn(VIEWER);
     render(<SearchClient initialQuery="" initialType="top" />);
     await screen.findByRole('button', { name: 'Follow Luna Studio' });
-    await waitFor(() => expect(screen.queryByRole('button', { name: /Follow Me$/ })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Follow(ing)? @me$/ })).toBeNull());
     expect(screen.getByRole('link', { name: /Me's profile/ })).toBeTruthy();
   });
 
@@ -246,6 +255,38 @@ describe('the start screen', () => {
     render(<SearchClient initialQuery="" initialType="top" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Follow Luna Studio' }));
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/login?returnUrl=%2Fsearch'));
+    expect(followFetchMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Follow Luna Studio' }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('sends one follow for a double press, however long the session takes to read (review of #828, N4)', async () => {
+    signedIn(VIEWER);
+    render(<SearchClient initialQuery="" initialType="top" />);
+    const follow = await screen.findByRole('button', { name: 'Follow Luna Studio' });
+    await settle();
+    // The session is behind its lock (a token being refreshed) as the person presses twice.
+    const session = deferred<{ data: { session: typeof VIEWER } }>();
+    getSessionMock.mockReturnValueOnce(session.promise);
+    fireEvent.click(follow);
+    fireEvent.click(follow);
+    await act(async () => {
+      session.resolve({ data: { session: VIEWER } });
+      await session.promise;
+    });
+    await settle();
+    expect(followFetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Following Luna Studio' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('stays, and says so, when the session cannot be read: a signed-in viewer is never sent to sign in for it (N4)', async () => {
+    signedIn(VIEWER);
+    render(<SearchClient initialQuery="" initialType="top" />);
+    const follow = await screen.findByRole('button', { name: 'Follow Luna Studio' });
+    await settle();
+    getSessionMock.mockRejectedValueOnce(new Error('The session lock was not released.'));
+    fireEvent.click(follow);
+    await waitFor(() => expect(pushToastMock).toHaveBeenCalledWith({ tone: 'error', message: SEARCH_FOLLOW_FAILED }));
+    expect(pushMock).not.toHaveBeenCalled();
     expect(followFetchMock).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Follow Luna Studio' }).getAttribute('aria-pressed')).toBe('false');
   });
@@ -270,7 +311,7 @@ describe('Follow on a creator result', () => {
     const follow = await screen.findByRole('button', { name: 'Follow Luna Studio' });
     expect(screen.getByRole('button', { name: 'Following Luna Lake' }).getAttribute('aria-pressed')).toBe('true');
     // The viewer's own card opens their profile and offers nothing to follow.
-    expect(screen.queryByRole('button', { name: /^Follow(ing)? Me$/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Follow(ing)? @me$/ })).toBeNull();
     // The links, in rank order, are what the search log counts; the buttons are not among them.
     expect([...document.querySelectorAll('[data-search-result]')].map((node) => [node.tagName, node.getAttribute('data-search-result-id')]))
       .toEqual([['A', 'c1'], ['A', 'c2'], ['A', 'viewer-1']]);
@@ -297,6 +338,29 @@ describe('Follow on a creator result', () => {
   });
 });
 
+describe('a page Back restores', () => {
+  it('draws no Follow on the viewer’s own card from its first paint (review of #828, N3)', async () => {
+    signedIn(VIEWER);
+    cookieUserMock.mockReturnValue('viewer-1');
+    const kept = answer('luna', 'top', {
+      creators: { items: [creator('viewer-1', 'Me'), creator('c1', 'Luna Studio')], nextCursor: null },
+    });
+    keepSearchPage('/search?q=luna', {
+      query: 'luna', type: 'top', sort: 'top', narrowing: '', result: kept, relatedAsked: true, blendAsked: false, viewerId: 'viewer-1',
+    }, 0, 'viewer-1');
+    window.history.replaceState({ __NA: true }, '', '/search?q=luna');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    render(<SearchClient initialQuery="luna" initialType="top" />);
+    // Drawn from what was kept, before the session is read: the viewer's own card has no button to lose.
+    // (Its name would be "Follow @me": "Me" is only the handle.)
+    expect(screen.getByRole('link', { name: /Me's profile/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Follow(ing)? @me$/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Follow Luna Studio' })).toBeTruthy();
+    await settle();
+    expect(screen.queryByRole('button', { name: /^Follow(ing)? @me$/ })).toBeNull();
+  });
+});
+
 describe('related searches', () => {
   const RELATED = ['neon harbour', 'harbour at night', 'fog lights', 'rainy pier', 'lighthouse', 'sea glass', 'one too many']
     .map((text) => ({ text }));
@@ -307,7 +371,11 @@ describe('related searches', () => {
       const kind = params.get('type') ?? 'top';
       return ok(answer('harbour', kind, {
         posts: { items: posts(3), nextCursor: kind === 'posts' && !params.get('cursor') ? 'page-2' : null },
-        creators: { items: [creator('c1', 'Harbour Studio')], nextCursor: kind === 'creators' && !params.get('cursor') ? 'creators-2' : null },
+        // A later page holds another creator: one creator twice in one list would be one key twice.
+        creators: {
+          items: [params.get('cursor') ? creator('c2', 'Harbour Lights') : creator('c1', 'Harbour Studio')],
+          nextCursor: kind === 'creators' && !params.get('cursor') ? 'creators-2' : null,
+        },
       }));
     });
     render(<SearchClient initialQuery="harbour" initialType="top" />);
@@ -366,6 +434,26 @@ describe('related searches', () => {
     expect(openedFetchMock).not.toHaveBeenCalled();
   });
 
+  it('keeps the chips over the list when Show more adds a page (review of #828, S2)', async () => {
+    searchFetchMock.mockImplementation(async (url: string) => {
+      const params = new URL(url, 'http://localhost').searchParams;
+      const later = params.get('cursor') === 'page-2';
+      return ok(answer('harbour', 'posts', {
+        posts: { items: later ? posts(3, 50) : posts(SEARCH_RELATED_THIN_POSTS), nextCursor: later ? null : 'page-2' },
+        // Asked with the first page only: a later page has none.
+        ...(later ? {} : { relatedSearches: RELATED.slice(0, 3) }),
+      }));
+    });
+    render(<SearchClient initialQuery="harbour" initialType="posts" />);
+    const section = await screen.findByRole('region', { name: SEARCH_RELATED_SEARCHES_HEADING });
+    expect(within(section).getAllByRole('button')).toHaveLength(3);
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    await screen.findByText('Post p50');
+    expect(new URL(searchUrls().at(-1) ?? '', 'http://localhost').searchParams.get('relatedSearches')).toBeNull();
+    expect(within(screen.getByRole('region', { name: SEARCH_RELATED_SEARCHES_HEADING })).getAllByRole('button').map((chip) => chip.textContent))
+      .toEqual(['neon harbour', 'harbour at night', 'fog lights']);
+  });
+
   it('keeps the tab, the order and the filters it was pressed under', async () => {
     searchFetchMock.mockImplementation(async (url: string) => {
       const params = new URL(url, 'http://localhost').searchParams;
@@ -413,6 +501,13 @@ describe('the blended order', () => {
     expect(results?.getAttribute('aria-busy')).toBe('true');
     expect(results?.querySelector('.opacity-60')).not.toBeNull();
     expect(document.querySelector('[data-search-field-busy]')).not.toBeNull();
+    // Show more waits for it (review of #828, S3): a press would give the re-ask up, and with it the
+    // blended order, and leave the page saying "Searching…".
+    const showMore = screen.getByRole('button', { name: 'Show more' });
+    expect(showMore).toBeDisabled();
+    fireEvent.click(showMore);
+    await settle();
+    expect(searchUrls()).toHaveLength(2);
 
     await act(async () => {
       blended.resolve(ok(answer('ocean at dusk', 'posts', {
@@ -422,6 +517,7 @@ describe('the blended order', () => {
       await blended.promise;
     });
     await screen.findByText('Post p100');
+    expect(screen.getByRole('button', { name: 'Show more' })).toBeEnabled();
     expect(document.querySelector('[aria-busy]')?.getAttribute('aria-busy')).toBe('false');
     expect(document.querySelector('[data-search-field-busy]')).toBeNull();
     // Asked for once.
@@ -577,6 +673,11 @@ describe('the typeahead’s catalog rows', () => {
     fireEvent.click(screen.getByRole('option', { name: /^Stability AI/ }));
     expect(box()).toHaveValue('stability ai');
     await waitFor(() => expect(searchUrls().at(-1)).toBe('/api/search?q=stability+ai&type=posts&madeWith=tool%3Astability-ai&relatedSearches=1&entry=entity'));
+    // The list is closed for the text the box now holds, and stays closed (review of #828, S1).
+    expect(screen.queryByRole('listbox')).toBeNull();
+    await settle(SEARCH_TYPEAHEAD_DEBOUNCE_MS + 60);
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(box().getAttribute('aria-expanded')).toBe('false');
     unmount();
 
     render(<AppShellSearch />);
@@ -586,5 +687,51 @@ describe('the typeahead’s catalog rows', () => {
     await settledList();
     fireEvent.click(screen.getByRole('option', { name: /^Stability AI/ }));
     expect(pushMock).toHaveBeenLastCalledWith('/search?q=stability+ai&type=posts&madeWith=tool%3Astability-ai');
+  });
+
+  it('closes the list for the row’s own search when the row is chosen with Enter too (S1)', async () => {
+    render(<SearchClient initialQuery="" initialType="posts" />);
+    fireEvent.focus(box());
+    type('sdx');
+    await screen.findByRole('listbox', { name: 'Search suggestions' });
+    // Down to Stability AI (Seedance, then Stability), and Enter.
+    fireEvent.keyDown(box(), { key: 'ArrowDown' });
+    fireEvent.keyDown(box(), { key: 'ArrowDown' });
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(box()).toHaveValue('stability ai');
+    await settle(SEARCH_TYPEAHEAD_DEBOUNCE_MS + 60);
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  describe('a model or tool row for a text Posts does not search yet (review of #828, N1)', () => {
+    const KLING = {
+      kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', postCount: 412, postCountCapped: false, thumbnail: null,
+      inCatalog: true, catalogModel: { id: 'kling-2.6', kind: 'video', web: true, mobile: true }, query: null,
+    };
+    beforeEach(() => {
+      suggestFetchMock.mockResolvedValue(ok({ query: 'kl', normalizedQuery: 'kl', creators: [], entities: [KLING], completions: [] }));
+    });
+
+    it('searches the text on Top, narrowed to nothing, from the search page', async () => {
+      render(<SearchClient initialQuery="" initialType="posts" />);
+      fireEvent.focus(box());
+      type('kl');
+      await screen.findByRole('option', { name: /^Kling 2\.6, model/ });
+      await settledList();
+      fireEvent.click(screen.getByRole('option', { name: /^Kling 2\.6, model/ }));
+      expect(screen.getByRole('tab', { name: 'Top' }).getAttribute('aria-selected')).toBe('true');
+      await waitFor(() => expect(searchUrls().at(-1)).toBe('/api/search?q=kl&type=top&relatedSearches=1&entry=entity'));
+      expect(searchUrls().some((url) => url.includes('madeWith'))).toBe(false);
+    });
+
+    it('opens the search for the text on Top from the top bar', async () => {
+      render(<AppShellSearch />);
+      fireEvent.focus(box());
+      type('kl');
+      await screen.findByRole('option', { name: /^Kling 2\.6, model/ });
+      await settledList();
+      fireEvent.click(screen.getByRole('option', { name: /^Kling 2\.6, model/ }));
+      expect(pushMock).toHaveBeenLastCalledWith('/search?q=kl');
+    });
   });
 });

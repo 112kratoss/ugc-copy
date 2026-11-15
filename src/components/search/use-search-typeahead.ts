@@ -283,6 +283,17 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
     setHighlight(null);
   }, [query]);
 
+  /**
+   * The list closed for a text the box is about to hold that no row of it said: the page puts a
+   * model's or tool's own search in the box when that row is chosen (review of #828, S1). A close is
+   * kept only for the text it was made on, so one made on the typed text would open the list again
+   * over the search.
+   */
+  const closeFor = useCallback((text: string) => {
+    setClosedQuery(searchTypeaheadQuery(text));
+    setHighlight(null);
+  }, []);
+
   /** A row was chosen: what to do, with the list closed for the text the box will then hold. */
   const pick = useCallback((row: SearchTypeaheadRow): SearchTypeaheadAction => {
     const action = searchTypeaheadAction(row);
@@ -369,6 +380,7 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
     press,
     highlightRow,
     close,
+    closeFor,
   };
 }
 

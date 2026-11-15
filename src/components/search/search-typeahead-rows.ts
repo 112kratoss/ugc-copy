@@ -1,7 +1,10 @@
 import { remixToolCreatePath } from '@/lib/remix-tools';
 
 import {
+  normalizeCreatorSearchQuery,
   normalizeSearchHistoryQuery,
+  searchQueryLength,
+  searchTabRuns,
   type SearchEntity,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import { searchTypeaheadEntityOpening } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
@@ -17,7 +20,14 @@ export type SearchTypeaheadEntityRoute =
   /** Posts for `query`, narrowed to the row by `madeWith`: the search its count was made for. */
   | { type: 'posts'; query: string; madeWith: string }
   /** The creator of the catalog model's kind, the model chosen (`?model=`): nobody has posted with it. */
-  | { type: 'creator'; href: string };
+  | { type: 'creator'; href: string }
+  /**
+   * Top for `query`, narrowed to nothing: a text Posts does not search yet (under three
+   * characters), as the app's search does with it (review of #828, N1). A row kept on show from the
+   * text before can be pressed at two characters; Posts narrowed to it would be an idle page under a
+   * filter it does not draw.
+   */
+  | { type: 'top'; query: string };
 
 /**
  * The shared opening (searchTypeaheadEntityOpening, for the web) as a place to
@@ -30,7 +40,9 @@ export function searchTypeaheadEntityRoute(entity: SearchEntity, boxText: string
   if (opening.type === 'creator') {
     return { type: 'creator', href: `${remixToolCreatePath(opening.model.kind)}?model=${encodeURIComponent(opening.model.id)}` };
   }
-  return { type: 'posts', query: opening.query ?? normalizeSearchHistoryQuery(boxText), madeWith: opening.madeWith };
+  const query = opening.query ?? normalizeSearchHistoryQuery(boxText);
+  if (!searchTabRuns('posts', searchQueryLength(normalizeCreatorSearchQuery(query)))) return { type: 'top', query };
+  return { type: 'posts', query, madeWith: opening.madeWith };
 }
 
 /** Whether a row opens the creator rather than posts: a catalog model nobody this viewer may see has posted with. */

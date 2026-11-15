@@ -168,8 +168,17 @@ function deferred<T>() {
  * The searches asked, each without its `entry` (how the query was entered, said to the search
  * log and to nothing else: always the last parameter). "the search log" below pins the entries.
  */
+// `relatedSearches=1` belongs to the first page of Top and Posts alone (searchRelatedSearchesApply):
+// left out of what these cases compare there, and kept anywhere else, where it must never be sent.
+function asSent(url: string): string {
+  const withoutEntry = url.replace(/&entry=[a-z]+$/u, '');
+  const params = new URL(withoutEntry, 'http://localhost').searchParams;
+  const firstTopOrPosts = !params.has('cursor') && !params.has('probe') && ['top', 'posts'].includes(params.get('type') ?? '');
+  return firstTopOrPosts ? withoutEntry.replace(/&relatedSearches=1(?=&|$)/u, '') : withoutEntry;
+}
+
 function requestedUrls() {
-  return fetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, '').replace(/&relatedSearches=1/u, ''));
+  return fetchMock.mock.calls.map(([url]) => asSent(url as string));
 }
 
 /** How each search asked says it was entered. */

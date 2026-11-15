@@ -86,7 +86,16 @@ function answer(query: string, type: string, overrides: Partial<PublicSearchResp
 const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
 // Without `entry` (how the query was entered, said to the search log: always the last
 // parameter; search-client.test.tsx, "the search log", pins it).
-const searches = () => searchFetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, '').replace(/&relatedSearches=1/u, ''));
+// `relatedSearches=1` belongs to the first page of Top and Posts alone (searchRelatedSearchesApply):
+// left out of what these cases compare there, and kept anywhere else, where it must never be sent.
+function asSent(url: string): string {
+  const withoutEntry = url.replace(/&entry=[a-z]+$/u, '');
+  const params = new URL(withoutEntry, 'http://localhost').searchParams;
+  const firstTopOrPosts = !params.has('cursor') && !params.has('probe') && ['top', 'posts'].includes(params.get('type') ?? '');
+  return firstTopOrPosts ? withoutEntry.replace(/&relatedSearches=1(?=&|$)/u, '') : withoutEntry;
+}
+
+const searches = () => searchFetchMock.mock.calls.map(([url]) => asSent(url as string));
 const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 /** How long a wait in a test that renders the page several times over may take on a loaded runner. */
 const SLOW_RUNNER_MS = 10_000;

@@ -101,7 +101,16 @@ function suggestRequests(): string[] {
 
 function searchRequests(): string[] {
   // Without `entry` (how the query was entered, said to the search log: always the last parameter).
-  return searchFetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, '').replace(/&relatedSearches=1/u, ''));
+// `relatedSearches=1` belongs to the first page of Top and Posts alone (searchRelatedSearchesApply):
+// left out of what these cases compare there, and kept anywhere else, where it must never be sent.
+function asSent(url: string): string {
+  const withoutEntry = url.replace(/&entry=[a-z]+$/u, '');
+  const params = new URL(withoutEntry, 'http://localhost').searchParams;
+  const firstTopOrPosts = !params.has('cursor') && !params.has('probe') && ['top', 'posts'].includes(params.get('type') ?? '');
+  return firstTopOrPosts ? withoutEntry.replace(/&relatedSearches=1(?=&|$)/u, '') : withoutEntry;
+}
+
+  return searchFetchMock.mock.calls.map(([url]) => asSent(url as string));
 }
 
 const box = () => screen.getByRole('combobox');

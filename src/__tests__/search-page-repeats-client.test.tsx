@@ -68,7 +68,16 @@ const ok = (body: PublicSearchResponse) => ({ ok: true, status: 200, json: async
 // Every request of a search carries how its query was entered (`entry`, the
 // last parameter the page sets); these cases are about paging, so it is left
 // out of what they compare, as the page's other tests do.
-const asked = () => fetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, '').replace(/&relatedSearches=1/u, ''));
+// `relatedSearches=1` belongs to the first page of Top and Posts alone (searchRelatedSearchesApply):
+// left out of what these cases compare there, and kept anywhere else, where it must never be sent.
+function asSent(url: string): string {
+  const withoutEntry = url.replace(/&entry=[a-z]+$/u, '');
+  const params = new URL(withoutEntry, 'http://localhost').searchParams;
+  const firstTopOrPosts = !params.has('cursor') && !params.has('probe') && ['top', 'posts'].includes(params.get('type') ?? '');
+  return firstTopOrPosts ? withoutEntry.replace(/&relatedSearches=1(?=&|$)/u, '') : withoutEntry;
+}
+
+const asked = () => fetchMock.mock.calls.map(([url]) => asSent(url as string));
 const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 /** The posts on show, by the id their link opens, in the order drawn. */
 const drawn = () => Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href^="/showcase/"]'))

@@ -512,8 +512,10 @@ export default function SearchClient({
   // The account the session names now, once read (undefined until then):
   // an answer asked for another is never kept for Back.
   const viewer = useRef<string | null | undefined>(undefined);
-  // The same account, for drawing: its own creator card offers no Follow.
-  const [viewerId, setViewerId] = useState<string | null>(null);
+  // The same account, for drawing: its own creator card offers no Follow. On a page Back restores,
+  // the account the kept answer was asked for (the only one it is drawn for), so the viewer's own card
+  // never draws a Follow it loses once the session is read (review of #828, N3).
+  const [viewerId, setViewerId] = useState<string | null>(() => restored?.answer.viewerId ?? null);
   // Creators followed or unfollowed from this page since their answer came,
   // by id: the start screen's answer is not this page's to change, and a
   // creator can be on it and among the results at once. They belong to the
@@ -690,7 +692,10 @@ export default function SearchClient({
       setCanFollow(registered);
       const viewerId = session?.user?.id ?? null;
       // Whose session this is, if the page's own read has not said yet.
-      if (viewer.current === undefined) viewer.current = viewerId;
+      if (viewer.current === undefined) {
+        viewer.current = viewerId;
+        setViewerId(viewerId);
+      }
       if (!registered && activeFilters.following) {
         // A visitor or a guest follows nobody, and the server would leave the
         // filter out: a shared link that names it is read without it, in the
@@ -760,11 +765,13 @@ export default function SearchClient({
         return {
           ...current,
           result: {
-            ...next,
-            creators: request.type === 'creators' ? { ...next.creators, items: [...current.result.creators.items, ...next.creators.items] } : next.creators,
+            // The first page's answer with the page added to its list: what only the first page
+            // brings (its related searches, its models and tools) stays (review of #828, S2).
+            ...current.result,
+            creators: request.type === 'creators' ? { ...next.creators, items: [...current.result.creators.items, ...next.creators.items] } : current.result.creators,
             // Left out by id: the posts this page holds that are already on show.
-            posts: request.type === 'posts' ? { ...next.posts, items: appendSearchPosts(current.result.posts.items, next.posts.items) } : next.posts,
-            recipes: request.type === 'recipes' ? { ...next.recipes, items: [...current.result.recipes.items, ...next.recipes.items] } : next.recipes,
+            posts: request.type === 'posts' ? { ...next.posts, items: appendSearchPosts(current.result.posts.items, next.posts.items) } : current.result.posts,
+            recipes: request.type === 'recipes' ? { ...next.recipes, items: [...current.result.recipes.items, ...next.recipes.items] } : current.result.recipes,
           },
         };
       });
@@ -772,10 +779,12 @@ export default function SearchClient({
       if (sequence !== requestSequence.current) return;
       if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
       if (followUp) {
-        // The answer on hand stands, and is not asked about again.
+        // The answer on hand stands, and is not asked about again: its related posts, and the
+        // blended order if this follow-up asked for it. One for related posts alone leaves the
+        // blend to be asked when the person settles on the search (review of #828, S3).
         setAnswer((current) => (
           current && isSameRequest(current, request.query, request.type, request.sort, request.narrowing)
-            ? { ...current, relatedAsked: true, blendAsked: true }
+            ? { ...current, relatedAsked: true, blendAsked: current.blendAsked || askBlend }
             : current
         ));
         return;
@@ -1202,12 +1211,18 @@ export default function SearchClient({
       }
       // As pressing the entity among the results does: Posts narrowed to it, for the search its
       // count was made for, which is the row's own query where the server gave one ("sdxl" opens
-      // Stability AI's posts for "stability ai"), and what is typed otherwise.
+      // Stability AI's posts for "stability ai"), and what is typed otherwise. A text Posts does not
+      // search yet runs on Top, narrowed to nothing (review of #828, N1). Asked at once, and the list
+      // closed for the text the box now holds, not the one typed (S1).
       searchEntry.current = 'entity';
       const next = normalizePublicSearchQuery(route.query);
-      if (next !== normalizedQuery) {
-        scheduledQuery.current = next;
-        setQuery(next);
+      scheduledQuery.current = next;
+      if (next !== normalizedQuery) setQuery(next);
+      typeahead.closeFor(next);
+      if (route.type === 'top') {
+        setPickedFilters(NO_PUBLIC_SEARCH_FILTERS);
+        setPickedType('top');
+        return;
       }
       pickEntity(action.entity);
       return;
@@ -1700,7 +1715,11 @@ export default function SearchClient({
                 <div className="flex justify-center pt-2">
                   <button
                     type="button"
-                    disabled={loadingMore || retryBlocked}
+                    // Not while the search in front is asked again (a follow-up, for related posts
+                    // or the blended order): a page would give that request up, and nothing else asks
+                    // it, so the page would stay "Searching…" (review of #828, S3). Show more is the
+                    // only other request of the same search, so a follow-up is never given up otherwise.
+                    disabled={loadingMore || retryBlocked || followUpDelay !== null}
                     onClick={() => void requestSearch({ append: true, cursor: nextCursor, blend: currentAnswer?.blendAsked === true })}
                     className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-6 text-sm font-semibold text-white transition hover:bg-white/[0.09] disabled:opacity-50"
                   >

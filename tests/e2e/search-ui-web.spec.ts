@@ -237,6 +237,22 @@ async function signIn(context: BrowserContext) {
 const field = (page: Page) => page.getByRole('main').getByRole('combobox');
 
 /**
+ * React has committed the page's hydration: until then a press on the server's HTML is dropped and
+ * typed text never reaches the page's state (.claude/rules/e2e.md). Its own record, as
+ * search-typeahead.spec.ts reads it.
+ */
+async function hydrated(page: Page) {
+  await expect.poll(() => page.evaluate(() => {
+    const key = Object.keys(document).find((name) => name.startsWith('__reactContainer$'));
+    const root = key ? (document as unknown as Record<string, { stateNode?: { current?: { memoizedState?: { isDehydrated?: boolean } } } }>)[key] : undefined;
+    return root?.stateNode?.current?.memoizedState?.isDehydrated === false;
+  }), { timeout: 60_000, message: 'React commits the page’s hydration' }).toBe(true);
+}
+
+/** The video creator compiles on its first request: asked for now, so a wait for it holds only the press (.claude/rules/e2e.md). */
+const warmVideoCreator = (page: Page) => page.request.get('/create-video', { timeout: 0 });
+
+/**
  * The page's own errors, as the console and uncaught exceptions report them: none expected. Left
  * out: a resource the offline run refuses (the shell's signed-in requests answered 503 here, the
  * picture that is missing on purpose) and the shell's notification sync, which says so when its 503 comes.
@@ -341,15 +357,21 @@ test.describe('search, the web half of the benchmark fixes', () => {
       await expect(list).not.toHaveAttribute('aria-busy', 'true');
       await shot(page, `${name}-03-typeahead-catalog-rows`);
 
-      // A row's own query, narrowed to it.
+      // A row's own query, narrowed to it, with the list closed over it, and kept closed once the
+      // answer for that text lands (review of #828, S1).
       await list.getByRole('option', { name: /^Stability AI/ }).click();
       await expect(field(page)).toHaveValue('stability ai');
       await expect.poll(() => asked.searches.at(-1)?.toString()).toBe('q=stability+ai&type=posts&madeWith=tool%3Astability-ai&relatedSearches=1&entry=entity');
+      await expect(list).toHaveCount(0);
+      await page.waitForTimeout(500);
+      await expect(list).toHaveCount(0);
+      await expect(field(page)).toHaveAttribute('aria-expanded', 'false');
 
       // The catalog model: its creator, the model chosen, never an empty Posts page.
       await field(page).fill('sdx');
       await expect(list).toBeVisible();
       await expect(list).not.toHaveAttribute('aria-busy', 'true');
+      await warmVideoCreator(page);
       await list.getByRole('option', { name: /^Seedance 1\.5 Pro/ }).click();
       await page.waitForURL(/\/create-video\?model=seedance-1\.5-pro$/, COLD_PAGE);
       expect(asked.searches.some((params) => params.get('madeWith') === 'model:seedance-1.5-pro')).toBe(false);
@@ -362,12 +384,15 @@ test.describe('search, the web half of the benchmark fixes', () => {
     await page.goto('/contact');
     const bar = page.getByRole('banner').getByRole('combobox', { name: 'Search creators, posts, and recipes' });
     await expect(bar).toBeVisible(COLD_PAGE);
+    // The field is the server's until the page's script has run: typed text would reach nobody.
+    await hydrated(page);
     await bar.click();
     await bar.fill('sdx');
     const list = page.getByRole('listbox', { name: 'Search suggestions' });
     await expect(list.getByRole('option', { name: /^Seedance 1\.5 Pro/ })).toBeVisible();
     await expect(list).not.toHaveAttribute('aria-busy', 'true');
     await shot(page, 'desktop-04-top-bar-typeahead');
+    await warmVideoCreator(page);
     await list.getByRole('option', { name: /^Seedance 1\.5 Pro/ }).click();
     await page.waitForURL(/\/create-video\?model=seedance-1\.5-pro$/, COLD_PAGE);
   });

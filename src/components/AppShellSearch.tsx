@@ -83,6 +83,12 @@ export function AppShellSearch() {
         leaveFor(route.href);
         return;
       }
+      if (route.type === 'top') {
+        // A text Posts does not search yet: Top for it, narrowed to nothing (review of #828, N1).
+        params.set('q', route.query);
+        leaveFor(`/search?${params.toString()}`, 'entity');
+        return;
+      }
       // Posts for the row's search (its own query where the server gave one,
       // what is typed otherwise), narrowed to the entity and to nothing else:
       // the search page's address for the same press.
