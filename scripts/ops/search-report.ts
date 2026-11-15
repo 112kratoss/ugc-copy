@@ -14,14 +14,19 @@ Magicbooklet search report (service role, read only)
 Usage:
   npm run ops:search-report -- [--days 7] [--limit 50] [--json]
 
-Reads public.search_query_events through search_query_report: per final query
-(typing steps within 15 seconds collapse into the query they led to), how many
-distinct visitor-days searched it and how many of those found nothing in any
-kind, zero-result searches first. The log is anonymous and kept 90 days.
+Reads public.search_query_events and public.search_result_opens through
+search_query_report: per final query (typing steps within 15 seconds collapse
+into the query they led to) and overall, how many distinct visitor-days
+searched it, how many of those found nothing in any kind, how many opened a
+result, how many found something and opened nothing, the mean place of the
+results opened and how the searches were entered (typed, a suggestion, a
+recent search...). Two tables: zero-result searches first, then the queries
+most often left without an open. An opened result counts only while search
+still shows it to the public. The log is anonymous and kept 90 days.
 
   --days   window in days, 1 to 90 (default 7)
-  --limit  rows, 1 to 1000 (default 50)
-  --json   print the rows as JSON
+  --limit  rows per table, 1 to 1000 (default 50)
+  --json   print both tables' rows as JSON: { zeroResult, unopened }
 
 Environment:
   SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)
@@ -70,8 +75,13 @@ export async function runSearchReport(
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false },
   });
-  const rows: SearchQueryReportRow[] = await fetchSearchQueryReport(supabase, { days, limit });
-  print(json ? JSON.stringify(rows, null, 2) : formatSearchQueryReport(rows, { days }));
+  const [rows, unopenedRows]: SearchQueryReportRow[][] = await Promise.all([
+    fetchSearchQueryReport(supabase, { days, limit, order: 'zero_result' }),
+    fetchSearchQueryReport(supabase, { days, limit, order: 'unopened' }),
+  ]);
+  print(json
+    ? JSON.stringify({ zeroResult: rows, unopened: unopenedRows }, null, 2)
+    : formatSearchQueryReport(rows, { days, unopenedRows }));
 }
 
 const isMain = process.argv[1]

@@ -16,8 +16,8 @@ select columns_are(
   'public', 'search_query_events',
   array['id', 'created_at', 'query', 'search_type', 'signed_in', 'visitor_day',
         'creator_count', 'post_count', 'recipe_count', 'sort',
-        'made_with', 'media_kind', 'has_recipe', 'followed_only', 'corrected', 'related_count'],
-  'a row holds the normalized query, the search type, whether a session was presented, the hashed visitor-day, three counts, the order asked for, what narrowed a Posts search, whether the query was read corrected and how many related posts were added: nothing else about the person'
+        'made_with', 'media_kind', 'has_recipe', 'followed_only', 'corrected', 'related_count', 'entry'],
+  'a row holds the normalized query, the search type, whether a session was presented, the hashed visitor-day, three counts, the order asked for, what narrowed a Posts search, whether the query was read corrected, how many related posts were added and how the search was entered: nothing else about the person'
 );
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.search_query_events'::regclass),
@@ -232,12 +232,12 @@ select throws_ok(
   'a limit under one is refused'
 );
 select ok(
-  not has_function_privilege('anon', 'public.search_query_report(integer, integer)', 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.search_query_report(integer, integer)', 'EXECUTE'),
+  not has_function_privilege('anon', 'public.search_query_report(integer, integer, text)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.search_query_report(integer, integer, text)', 'EXECUTE'),
   'no client can run the report'
 );
 select ok(
-  has_function_privilege('service_role', 'public.search_query_report(integer, integer)', 'EXECUTE'),
+  has_function_privilege('service_role', 'public.search_query_report(integer, integer, text)', 'EXECUTE'),
   'the service role can'
 );
 

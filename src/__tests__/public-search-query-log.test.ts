@@ -86,7 +86,16 @@ describe('buildSearchQueryEventRow', () => {
       corrected: false,
       // No related posts were looked for.
       related_count: null,
+      // The client said nothing of how the search was entered.
+      entry: null,
     });
+  });
+
+  it('says how the search was entered when the request named it, and nothing otherwise', () => {
+    expect(buildSearchQueryEventRow({ ...input, entry: 'recent' }, DAY_KEY)?.entry).toBe('recent');
+    expect(buildSearchQueryEventRow({ ...input, entry: 'link' }, DAY_KEY)?.entry).toBe('link');
+    expect(buildSearchQueryEventRow({ ...input, entry: null }, DAY_KEY)?.entry).toBeNull();
+    expect(buildSearchQueryEventRow(input, DAY_KEY)?.entry).toBeNull();
   });
 
   it('says how many related posts the answer added: 0 when none passed, null when none were looked for', () => {

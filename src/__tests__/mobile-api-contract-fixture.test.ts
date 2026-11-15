@@ -219,6 +219,7 @@ const expectedEndpointKeys = [
   'searchPublicContent',
   'suggestSearch',
   'searchStarter',
+  'recordSearchOpen',
   'getSavedMedia',
   'getShowcasePost',
   'resolveShowcasePost',
@@ -321,7 +322,8 @@ describe('shared mobile API v1 contract fixture', () => {
       endpoint.method
       && endpoint.path.startsWith('/api/')
       && endpoint.cacheControl
-      && (endpoint.response || endpoint.status === 302)
+      // A redirect has no body, and neither has the search log's 204.
+      && (endpoint.response || endpoint.status === 302 || endpoint.status === 204)
     ))).toBe(true);
     expect(contract.endpoints.appVersion).toMatchObject({
       method: 'GET',

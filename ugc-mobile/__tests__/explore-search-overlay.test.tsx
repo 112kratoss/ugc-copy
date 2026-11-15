@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExploreSearchOverlay } from '../components/explore-search-overlay';
 import { ApiError, type MagicbookletApiClient } from '../lib/api-client';
+import { searchEntityActionLabel, searchRecipeCardLabel } from '../lib/public-search-policy/public-search-policy';
 import { SEARCH_ENTRANCE } from '../lib/search-entrance';
 import { Reveal } from '../components/reveal';
 import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
@@ -187,7 +188,9 @@ const searchPublicContent = vi.fn<MagicbookletApiClient['searchPublicContent']>(
 const suggestSearch = vi.fn<MagicbookletApiClient['suggestSearch']>();
 // The starter (ideas before anything is typed): nothing, unless a case gives some.
 const searchStarter = vi.fn<MagicbookletApiClient['searchStarter']>(async () => ({ entities: [], creators: [], searches: [] }));
-const api = { searchPublicContent, suggestSearch, searchStarter } as unknown as MagicbookletApiClient;
+// What the search log is told of an opened result: answered with the route's empty 204.
+const recordSearchOpen = vi.fn<MagicbookletApiClient['recordSearchOpen']>(async () => '');
+const api = { searchPublicContent, suggestSearch, searchStarter, recordSearchOpen } as unknown as MagicbookletApiClient;
 
 async function render(props: { visible: boolean; onClose: () => void }) {
   let tree: renderer.ReactTestRenderer | null = null;
@@ -883,6 +886,8 @@ describe('ExploreSearchOverlay search', () => {
       await advance(0);
       // (Then Top, once, for what an empty Posts would point to: finding 8.)
       expect(asked().filter((params) => params.type === 'posts').at(-1)).toMatchObject({ type: 'posts', exact: true });
+      // The search asked for as typed says so to the search log; the probe of Top says nothing.
+      expect(searchPublicContent.mock.calls.filter(([params]) => params.exact && params.type === 'posts').at(-1)?.[0].entry).toBe('correction');
       expect(shownTexts(tree)).toContain('Showing results for “portriat” as typed');
       expect(shownTexts(tree)).not.toContain('Showing results for “portrait”');
       expect(saysNoResults(tree)).toBe(true);
@@ -1229,6 +1234,8 @@ describe('ExploreSearchOverlay search', () => {
       query: 'jan', type: 'creators', sort: 'top', cursor: 'page-2',
       // Creators are neither narrowed nor read as typed, and bring no related posts.
       filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false }, exact: false, related: false,
+      // A later page of a search still says how its query was entered.
+      entry: 'typed',
     });
     // The first page stays up, with the reason under it.
     expect(() => pressableLabelled(tree, "Open Creator jane's profile, @jane")).not.toThrow();
@@ -2385,6 +2392,8 @@ describe('ExploreSearchOverlay typeahead', () => {
       query: 'lum',
       type: 'posts',
       filters: { madeWith: 'model:luma-ray-2', mediaKind: null, hasRecipe: false, following: false },
+      // For the search log: the search was started from a model's row.
+      entry: 'entity',
     });
     // Named on its chip at once.
     expect(textOf(pressableLabelled(tree, 'Remove filter: made with Luma Ray 2'))).toBe('Made with Luma Ray 2');
@@ -2401,7 +2410,7 @@ describe('ExploreSearchOverlay typeahead', () => {
 
     expect(searchInput(tree).props.value).toBe('luminous');
     expect(mocks.keyboardDismiss).toHaveBeenCalledTimes(1);
-    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'luminous', type: 'top', related: true });
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({ query: 'luminous', type: 'top', related: true, entry: 'suggestion' });
     // Committed as the Search key commits one: kept once it finds something.
     expect(mocks.rememberSearchQuery).toHaveBeenCalledWith('luminous');
     await advance(PAUSE);
@@ -2421,27 +2430,34 @@ describe('ExploreSearchOverlay typeahead', () => {
     mocks.rememberSearchQuery.mockImplementation(async (query: string) => [query, 'lumen glow']);
     const tree = await open();
     const searched = () => searchPublicContent.mock.calls.map(([params]) => `${params.query}|${params.type}`);
+    // How each was entered, for the search log (search-open-log.ts).
+    const entered = () => searchPublicContent.mock.calls.map(([params]) => params.entry);
 
     await typeQuery(tree, 'lum');
     await commit(tree);
     expect(list(tree)).toBeNull();
     expect(searched()).toEqual(['lum|top']);
+    expect(entered()).toEqual(['typed']);
 
     await focusField(tree);
     await typeQuery(tree, 'lumi');
     await press(pressableLabelled(tree, searchFor('lumi')));
     expect(searched()).toEqual(['lum|top', 'lumi|top']);
+    // The "Search for" row is the text as typed.
+    expect(entered().at(-1)).toBe('typed');
 
     await typeQuery(tree, 'lumen');
     await press(pressableLabelled(tree, 'Search again for lumen glow'));
     expect(searchInput(tree).props.value).toBe('lumen glow');
     expect(searched()).toEqual(['lum|top', 'lumi|top', 'lumen glow|top']);
+    expect(entered().at(-1)).toBe('recent');
 
     // A tab pressed while typing opens on the results for what is typed.
     await typeQuery(tree, 'luma');
     await press(tab(tree, 'Creators'));
     expect(list(tree)).toBeNull();
     expect(searched().at(-1)).toBe('luma|creators');
+    expect(entered().at(-1)).toBe('typed');
     // The Search key on an empty field searches nothing.
     await typeQuery(tree, '');
     await commit(tree);
@@ -2742,6 +2758,7 @@ describe('ExploreSearchOverlay starting and ending screens', () => {
     await press(pressableLabelled(tree, 'Nano Banana Pro, model, 200+ posts. Show posts made with it'));
     // The search the starter counted: its own query, on Posts, narrowed to it, named on the chip.
     expect(searched()).toEqual(['nano-banana-pro|posts|model:nano-banana-pro']);
+    expect(searchPublicContent.mock.calls.at(-1)?.[0].entry).toBe('entity');
     expect(searchInput(tree).props.value).toBe('nano-banana-pro');
     expect(textOf(pressableLabelled(tree, 'Remove filter: made with Nano Banana Pro'))).toBe('Made with Nano Banana Pro');
 
@@ -2749,6 +2766,7 @@ describe('ExploreSearchOverlay starting and ending screens', () => {
     await press(pressableLabelled(tree, 'Search for anime'));
     expect(searchInput(tree).props.value).toBe('anime');
     expect(searched().at(-1)).toBe('anime|posts');
+    expect(searchPublicContent.mock.calls.at(-1)?.[0].entry).toBe('starter');
 
     await typeQuery(tree, '');
     await act(async () => { pressableLabelled(tree, 'Luna Studio, @luna, 42 posts. Open profile').props.onPress(); });
@@ -3020,6 +3038,7 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
     expect(searchInput(tree!).props.value).toBe('nano');
     expect(tab(tree!, 'Posts').props.accessibilityState).toMatchObject({ selected: true });
     expect(searchPublicContent.mock.calls.map(([params]) => `${params.query}|${params.type}`)).toEqual(['nano|posts']);
+    expect(searchPublicContent.mock.calls[0][0].entry).toBe('link');
     // A link is not the person's commit (review of #795): nothing is kept,
     // not when it finds something, and not when the screen leaves.
     expect(mocks.rememberSearchQuery).not.toHaveBeenCalled();
@@ -3175,5 +3194,104 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
     expect(statusTitles(tree!)).toEqual([SEARCH_IDLE_TITLE]);
     await act(async () => tree!.unmount());
     searchStarter.mockImplementation(async () => ({ entities: [], creators: [], searches: [] }));
+  });
+});
+
+describe('ExploreSearchOverlay and the search log (search-open-log.ts)', () => {
+  const CREATOR_ID = '0b9e0000-0000-4000-8000-000000000002';
+  const POST_IDS = ['0b9e1000-0000-4000-8000-000000000011', '0b9e1000-0000-4000-8000-000000000012'];
+  const RELATED_ID = '0b9e1000-0000-4000-8000-000000000019';
+  const RECIPE_ID = '0b9e5000-0000-4000-8000-000000000014';
+  const kling = { kind: 'model' as const, key: 'kling-2.6', label: 'Kling 2.6', postCount: 14, postCountCapped: false };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.listeners.length = 0;
+    mocks.focused.value = true;
+    mocks.router.push.mockClear();
+    mocks.readSearchHistory.mockReset();
+    mocks.readSearchHistory.mockResolvedValue([]);
+    mocks.rememberSearchQuery.mockClear();
+    mocks.user.value = null;
+    mocks.fontScale.value = 1;
+    searchPublicContent.mockReset();
+    recordSearchOpen.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function answer(query: string, type: PublicSearchType) {
+    return {
+      ...searchAnswer(query, type, {
+        sort: 'top',
+        creators: [{ ...creator('zed'), id: 'c0000000-0000-4000-8000-000000000001' }, { ...creator('wren'), id: CREATOR_ID }],
+        posts: POST_IDS.map((id) => post(id)),
+        recipes: [{ ...recipe('r1', { accessMode: 'free', priceUsdCents: 0 }, 'Wren'), id: RECIPE_ID }],
+      }, {
+        entities: [kling],
+        filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false },
+        correctedQuery: { posts: null, recipes: null },
+        exact: false,
+      }),
+      related: { posts: [post(RELATED_ID)] },
+    };
+  }
+
+  it('tells the log each result opened: its kind, id and 1-based place in its own list, with the search it came from', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => answer(query, type ?? 'top'));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'Harbour');
+    await advance(300);
+    expect(recordSearchOpen).not.toHaveBeenCalled();
+    const search = { q: 'Harbour', type: 'top', sort: 'top', entry: 'typed' };
+
+    // The second creator, the second post, the recipe, and the related post, which follows the search's own two.
+    await press(pressableLabelled(tree, "Open Creator wren's profile, @wren, 3 posts"));
+    await advance(CREATOR_PROFILE_PRESS_DELAY_MS + 10);
+    await press(pressableLabelled(tree, `Open post Post ${POST_IDS[1]} by Ana`));
+    await press(pressableLabelled(tree, searchRecipeCardLabel({ title: 'Recipe r1', sellerName: 'Wren', price: 'Free', summary: 'Lighting, lens and grade' })));
+    await press(pressableLabelled(tree, `Open post Post ${RELATED_ID} by Ana`));
+    expect(recordSearchOpen.mock.calls.map(([body]) => body)).toEqual([
+      { ...search, kind: 'creator', id: CREATOR_ID, position: 2 },
+      { ...search, kind: 'post', id: POST_IDS[1], position: 2 },
+      { ...search, kind: 'recipe', id: RECIPE_ID, position: 1 },
+      { ...search, kind: 'post', id: RELATED_ID, position: 3 },
+    ]);
+    // The presses went where they always went.
+    expect(mocks.router.push).toHaveBeenCalledWith('/creators/wren');
+    expect(mocks.router.push).toHaveBeenCalledWith(`/post/${POST_IDS[1]}`);
+    await act(async () => tree.unmount());
+  });
+
+  it('tells the log a model or tool row pressed among the results, then narrows Posts to it under the same entry', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => answer(query, type ?? 'top'));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'harbour');
+    await advance(300);
+    await press(pressableLabelled(tree, searchEntityActionLabel(kling)));
+    await advance(0);
+    expect(recordSearchOpen.mock.calls.map(([body]) => body)).toEqual([
+      { q: 'harbour', type: 'top', sort: 'top', entry: 'typed', kind: 'entity', id: 'model:kling-2.6', position: 1 },
+    ]);
+    // The narrowed search is the same query: it keeps the entry it was typed under.
+    expect(searchPublicContent.mock.calls.at(-1)?.[0]).toMatchObject({
+      query: 'harbour', type: 'posts', filters: { madeWith: 'model:kling-2.6' }, entry: 'typed',
+    });
+    await act(async () => tree.unmount());
+  });
+
+  it('opens the result all the same when the log cannot be told', async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => answer(query, type ?? 'top'));
+    recordSearchOpen.mockRejectedValueOnce(new ApiError('Too many requests.', 429, {}));
+    recordSearchOpen.mockImplementationOnce(() => { throw new Error('no client'); });
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'harbour');
+    await advance(300);
+    await press(pressableLabelled(tree, `Open post Post ${POST_IDS[0]} by Ana`));
+    await press(pressableLabelled(tree, `Open post Post ${POST_IDS[1]} by Ana`));
+    expect(mocks.router.push.mock.calls.map(([path]) => path)).toEqual([`/post/${POST_IDS[0]}`, `/post/${POST_IDS[1]}`]);
+    await act(async () => tree.unmount());
   });
 });

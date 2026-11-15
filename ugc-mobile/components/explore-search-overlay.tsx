@@ -109,6 +109,8 @@ import {
 } from '@/lib/public-search-policy/search-starter';
 import { useSearchStarterState } from '@/lib/use-search-starter';
 import { searchTypeaheadQuery, type SearchTypeaheadRow } from '@/lib/public-search-policy/search-typeahead';
+import { searchEntryForChosenText, type SearchEntry, type SearchOpenKind } from '@/lib/public-search-policy/search-open-log';
+import { reportSearchOpen } from '@/lib/search-open-report';
 import {
   clearSearchHistory,
   forgetSearchQuery,
@@ -664,6 +666,11 @@ export function ExploreSearchOverlay({
   // "Related posts").
   // The ref is read as a request is sent, the state by the wait after an
   // answer: a request that read the state would be made again when it changed.
+  // How the query was entered, for the search log (search-open-log.ts): sent
+  // with every search of it and with every result opened from it. It belongs
+  // to the query, so a tab, an order or a filter leaves it alone; each commit
+  // says how. A search the screen opened on came from a link.
+  const searchEntry = useRef<SearchEntry | null>(openedOn ? 'link' : null);
   const settledQueryAtSend = useRef<string | null>(openedOn || null);
   const [settledQuery, setSettledQuery] = useState<string | null>(openedOn || null);
   const settleOn = (settled: string) => {
@@ -895,7 +902,7 @@ export function ExploreSearchOverlay({
     if (cursor) setLoadingMore(true);
     if (!relatedFollowUp) setFailure(null);
     try {
-      const next = await api.searchPublicContent({ query: normalizedQuery, type, sort, filters, exact, cursor, related: askRelated }, controller.signal);
+      const next = await api.searchPublicContent({ query: normalizedQuery, type, sort, filters, exact, cursor, related: askRelated, entry: searchEntry.current }, controller.signal);
       if (sequence !== requestSequence.current) return;
       if (next.filters !== undefined) setFiltersOffered(true);
       // The names this answer gives: its entities, and the one its filter is read with.
@@ -983,9 +990,11 @@ export function ExploreSearchOverlay({
   // holds `text`, the keyboard goes, and the results are asked for at once;
   // they are kept among the recent searches when the answer finds something.
   // `onType` is the tab it is searched on, when a press picks it with the commit.
-  const commitSearch = (text: string, onType: PublicSearchType = type) => {
+  // `entry` is how the text was entered: typed unless the press says otherwise.
+  const commitSearch = (text: string, onType: PublicSearchType = type, entry: SearchEntry = 'typed') => {
     const next = normalizeSearchHistoryQuery(text);
     if (searchTypeaheadQuery(next) === null || !tabRunsText(next, onType)) return;
+    searchEntry.current = entry;
     committedByPerson.current = true;
     pendingCommit.current = next;
     settleOn(next);
@@ -997,20 +1006,38 @@ export function ExploreSearchOverlay({
   // A recent search pressed under the empty field: searched on the picked tab
   // when it searches a text this long, else on Top, picked with it (a search
   // of two characters kept from Top would otherwise do nothing on Posts).
-  const searchAgain = (text: string) => {
+  const searchAgain = (text: string, entry: SearchEntry = 'recent') => {
     const onType: PublicSearchType = tabRunsText(text) ? type : 'top';
     if (onType !== type) setPickedType(onType);
-    commitSearch(text, onType);
+    commitSearch(text, onType, entry);
   };
 
+  // What the search log is told of a result opened from the search in front:
+  // never awaited, never in the way of the press (lib/search-open-report.ts).
+  // `position` is the result's 1-based place in the list it was pressed in.
+  const reportOpened = (kind: SearchOpenKind, id: string, position: number) => {
+    if (!showingResults || position < 1) return;
+    reportSearchOpen(api, { query: normalizedQuery, type, sort, entry: searchEntry.current, kind, id, position });
+  };
   const openResult = (opened: SearchOpenedResult) => rememberQuery(historyQueryFor(opened));
-  const openCreator = () => openResult('creator');
+  const openCreator = (creator: CreatorSearchResult, position: number) => {
+    reportOpened('creator', creator.id, position);
+    openResult('creator');
+  };
   // A post opens on its own page, over the search, which stays as it is under it.
   const openPost = (item: ShowcaseFeedItem) => {
+    // Its place among the search's posts; a related post's follows them.
+    const own = shownResponse?.posts.items ?? [];
+    const place = own.findIndex((post) => post.id === item.id);
+    const relatedPlace = place < 0 ? relatedPosts.findIndex((post) => post.id === item.id) : -1;
+    reportOpened('post', item.id, place >= 0 ? place + 1 : relatedPlace >= 0 ? own.length + relatedPlace + 1 : 0);
     openResult('post');
     router.push(`/post/${encodeURIComponent(item.id)}` as never);
   };
-  const openRecipe = () => openResult('recipe');
+  const openRecipe = (recipe: RecipeSearchResult, position: number) => {
+    reportOpened('recipe', recipe.id, position);
+    openResult('recipe');
+  };
 
   // An entity pressed among the results: Posts, narrowed to it and to nothing
   // else, named at once. Its count is of the posts this query finds with it,
@@ -1040,12 +1067,12 @@ export function ExploreSearchOverlay({
       // server that narrows by them.
       setFiltersOffered(true);
       pickEntity(action.entity);
-      commitSearch(query, 'posts');
+      commitSearch(query, 'posts', 'entity');
       return;
     }
     // "Search for", a recent search or a completion: the field holds its
     // text and that search is committed.
-    commitSearch(action.query);
+    commitSearch(action.query, type, searchEntryForChosenText(action.query, query, history));
   };
 
   // The list is drawn in the scroll view the results use, which may have been
@@ -1141,14 +1168,14 @@ export function ExploreSearchOverlay({
     if (!tabRunsText(action.query, 'posts')) {
       setPickedFilters(NO_SEARCH_FILTERS);
       setPickedType('top');
-      commitSearch(action.query, 'top');
+      commitSearch(action.query, 'top', 'entity');
       return;
     }
     setEntityLabels((current) => ({ ...current, [action.madeWith]: entity.label }));
     setFiltersOffered(true);
     setPickedFilters({ ...NO_SEARCH_FILTERS, madeWith: action.madeWith });
     setPickedType('posts');
-    commitSearch(action.query, 'posts');
+    commitSearch(action.query, 'posts', 'entity');
   };
   const startFromCreator = (creator: SearchStarterCreator) => {
     router.push(`/creators/${encodeURIComponent(creator.username)}` as never);
@@ -1156,7 +1183,7 @@ export function ExploreSearchOverlay({
   // A search to try starts afresh: a filter left on from an earlier search would narrow it.
   const startFromSearch = (search: SearchStarterSearch) => {
     setPickedFilters(NO_SEARCH_FILTERS);
-    searchAgain(search.text);
+    searchAgain(search.text, 'starter');
   };
 
   // A search that found nothing on its tab says what another tab holds
@@ -1333,7 +1360,7 @@ export function ExploreSearchOverlay({
           <ReadingNotice
             line={correctionNotice}
             actionLabel={searchInsteadLabel(normalizedQuery)}
-            onAction={() => setExactQuery(normalizedQuery)}
+            onAction={() => { searchEntry.current = 'correction'; setExactQuery(normalizedQuery); }}
           />
         ) : exactNotice ? (
           <ReadingNotice line={exactNotice} actionLabel={SEARCH_CORRECTED_AGAIN_LABEL} onAction={() => setExactQuery(null)} />
@@ -1424,15 +1451,15 @@ export function ExploreSearchOverlay({
             {entities.length ? (
               <View style={{ gap: 10 }}>
                 <ResultsHeading title={SEARCH_ENTITIES_HEADING} sort={null} onSortChange={setPickedSort} />
-                {entities.map((entity) => (
-                  <EntityRow key={searchEntityId(entity)} entity={entity} onPick={() => pickEntity(entity)} />
+                {entities.map((entity, index) => (
+                  <EntityRow key={searchEntityId(entity)} entity={entity} onPick={() => { reportOpened('entity', searchEntityId(entity), index + 1); pickEntity(entity); }} />
                 ))}
               </View>
             ) : null}
             {(type === 'top' || type === 'creators') && shownResponse.creators.items.length ? (
               <View style={{ gap: 10 }}>
                 <ResultsHeading title="Creators" sort={null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'creators', onPress: () => setPickedType('creators') } : null} />
-                {shownResponse.creators.items.map((creator) => <CreatorRow key={creator.id} creator={creator} onOpen={openCreator} />)}
+                {shownResponse.creators.items.map((creator, index) => <CreatorRow key={creator.id} creator={creator} onOpen={() => openCreator(creator, index + 1)} />)}
                 {type === 'top' && searchTopSectionHasMore('creators', shownResponse.creators.items.length)
                   ? <SeeAllButton section="creators" onPress={() => setPickedType('creators')} />
                   : null}
@@ -1459,7 +1486,7 @@ export function ExploreSearchOverlay({
               <View style={{ gap: 10 }}>
                 <ResultsHeading title="Recipes" sort={type === 'recipes' ? shownSort : null} onSortChange={setPickedSort} seeAll={type === 'top' ? { section: 'recipes', onPress: () => setPickedType('recipes') } : null} />
                 <View accessibilityState={{ busy: reordering }} style={{ gap: 10, opacity: reordering ? appTheme.opacity.disabled : 1 }}>
-                  {shownResponse.recipes.items.map((recipe) => <RecipeRow key={recipe.id} recipe={recipe} onOpen={openRecipe} />)}
+                  {shownResponse.recipes.items.map((recipe, index) => <RecipeRow key={recipe.id} recipe={recipe} onOpen={() => openRecipe(recipe, index + 1)} />)}
                 </View>
                 {type === 'top' && searchTopSectionHasMore('recipes', shownResponse.recipes.items.length)
                   ? <SeeAllButton section="recipes" onPress={() => setPickedType('recipes')} />

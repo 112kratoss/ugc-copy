@@ -100,7 +100,8 @@ function suggestRequests(): string[] {
 }
 
 function searchRequests(): string[] {
-  return searchFetchMock.mock.calls.map(([url]) => url as string);
+  // Without `entry` (how the query was entered, said to the search log: always the last parameter).
+  return searchFetchMock.mock.calls.map(([url]) => (url as string).replace(/&entry=[a-z]+$/u, ''));
 }
 
 const box = () => screen.getByRole('combobox');
@@ -684,6 +685,8 @@ describe('search page typeahead', () => {
     expect((box() as HTMLInputElement).value).toBe('luminous');
     // No pause for typing: the person chose this search.
     await waitFor(() => expect(searchRequests()).toContain('/api/search?q=luminous&type=top&related=1'));
+    // Said to the search log: the search came from a completion.
+    expect(searchFetchMock.mock.calls.map(([url]) => url)).toContain('/api/search?q=luminous&type=top&related=1&entry=suggestion');
     expect(Date.now() - before).toBeLessThan(280);
     // The completion's own suggestions are not drawn over the results it asked for.
     await pastThePause();
@@ -818,6 +821,8 @@ describe('search page typeahead', () => {
     fireEvent.click(screen.getByRole('option', { name: 'Search again for glowing lumen' }));
     expect((box() as HTMLInputElement).value).toBe('glowing lumen');
     await waitFor(() => expect(searchRequests()).toContain('/api/search?q=glowing+lumen&type=top&related=1'));
+    // Said to the search log: the search came from a recent one.
+    expect(searchFetchMock.mock.calls.map(([url]) => url)).toContain('/api/search?q=glowing+lumen&type=top&related=1&entry=recent');
     noList();
   });
 

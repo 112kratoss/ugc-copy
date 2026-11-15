@@ -6,7 +6,7 @@ import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppShellSearch } from '@/components/AppShellSearch';
-import { clearSearchFieldHandoff, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
+import { clearSearchFieldHandoff, searchFieldHandoffEntry, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
 
 // The top bar's search field: Enter searches on the search page as it always
 // did, and while the person types it offers what the search page's own box
@@ -100,6 +100,8 @@ describe('top bar search', () => {
     fireEvent.change(box(), { target: { value: 'neon city' } });
     fireEvent.submit(box().closest('form')!);
     expect(searchFieldHandoffPending()).toBe(true);
+    // Said with it: how the search was entered, which the search page tells the search log.
+    expect(searchFieldHandoffEntry()).toBe('typed');
 
     clearSearchFieldHandoff();
     await typeFocused('lum');
@@ -187,6 +189,8 @@ describe('top bar search', () => {
     expect(screen.getByRole('option', { name: /Luma Ray 2/ }).classList.contains('opacity-60')).toBe(false);
     fireEvent.click(await screen.findByRole('option', { name: /Luma Ray 2/ }));
     expect(pushMock).toHaveBeenLastCalledWith('/search?q=lum&type=posts&madeWith=model%3Aluma-ray-2');
+    // The address is the search page's own, with nothing added: the entry travels in the hand-off.
+    expect(searchFieldHandoffEntry()).toBe('entity');
 
     // Another text, then this one again: its list is offered anew.
     fireEvent.change(box(), { target: { value: 'lumx' } });
@@ -194,6 +198,7 @@ describe('top bar search', () => {
     await settled();
     fireEvent.click(await screen.findByRole('option', { name: 'Search for luminous portrait' }));
     expect(pushMock).toHaveBeenLastCalledWith('/search?q=luminous+portrait');
+    expect(searchFieldHandoffEntry()).toBe('suggestion');
     // A row is not the form's submit.
     expect(submitted).toEqual([]);
   });

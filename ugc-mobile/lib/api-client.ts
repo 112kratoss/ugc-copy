@@ -91,6 +91,7 @@ import type {
   UndoFeedFeedbackResponse,
 } from './types';
 import { NO_SEARCH_FILTERS, SEARCH_PROBE_PARAM, SEARCH_RELATED_PARAM, searchFilterParams, type SearchFilters } from './public-search-policy/public-search-policy';
+import { SEARCH_OPENED_PATH, searchEntryParams, type SearchEntry, type SearchOpenBody } from './public-search-policy/search-open-log';
 import {
   GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
   parseGenerationModelCatalog,
@@ -1417,6 +1418,12 @@ export function createApiClient({
        * left out of the search log (`probe=1`, the contract's probeParameter).
        */
       probe?: boolean;
+      /**
+       * How the query was entered (typed, a suggestion, a recent search...),
+       * for the search log alone: named only when the screen knows it
+       * (search-open-log.ts).
+       */
+      entry?: SearchEntry | null;
     }, signal?: AbortSignal) => request<PublicSearchResponse>('/api/search' + buildQuery({
       q: params.query,
       type: params.type ?? 'top',
@@ -1424,6 +1431,7 @@ export function createApiClient({
       ...searchFilterParams(params.filters ?? NO_SEARCH_FILTERS, params.exact ?? false),
       [SEARCH_RELATED_PARAM]: params.related ? '1' : undefined,
       [SEARCH_PROBE_PARAM]: params.probe ? '1' : undefined,
+      ...searchEntryParams(params.entry),
       cursor: params.cursor,
       limit: params.limit,
     }), { signal }, { auth: true }),
@@ -1443,6 +1451,15 @@ export function createApiClient({
      */
     searchStarter: (signal?: AbortSignal) =>
       request<SearchStarterResponse>('/api/search/starter', { signal }, { auth: true }),
+    /**
+     * Tells the search log which result was pressed (the body of
+     * searchOpenBody). Sent with the session's token when there is one, as
+     * the search was, so the server keys both on the same viewer; answered
+     * 204 with no body. Call it through lib/search-open-report.ts, which
+     * never waits for it and swallows its failure.
+     */
+    recordSearchOpen: (body: SearchOpenBody) =>
+      request<unknown>(SEARCH_OPENED_PATH, { method: 'POST', body: JSON.stringify(body) }, { auth: true }),
     recordShowcaseFeedEvent: (body: ShowcaseFeedEventRequest) =>
       request<ShowcaseFeedEventResponse>('/api/showcase/feed/events', {
         method: 'POST',

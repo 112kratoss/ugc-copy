@@ -1030,6 +1030,17 @@
       },
       "relatedParameter": "related",
       "probeParameter": "probe",
+      "entryParameter": "entry",
+      "entries": [
+        "typed",
+        "suggestion",
+        "entity",
+        "recent",
+        "starter",
+        "related",
+        "correction",
+        "link"
+      ],
       "response": {
         "query": "Neon product",
         "normalizedQuery": "Neon product",
@@ -1839,6 +1850,50 @@
             "code": "RATE_LIMITED"
           }
         }
+      }
+    },
+    "recordSearchOpen": {
+      "method": "POST",
+      "path": "/api/search/opened",
+      "auth": "optional",
+      "cacheControl": "private, no-store",
+      "maxBodyBytes": 2048,
+      "kinds": [
+        "post",
+        "creator",
+        "recipe",
+        "entity"
+      ],
+      "maxPosition": 500,
+      "rateLimit": {
+        "scope": "public-search:opened",
+        "limit": 120,
+        "windowSeconds": 600
+      },
+      "request": {
+        "q": "Neon product",
+        "type": "posts",
+        "sort": "latest",
+        "entry": "suggestion",
+        "kind": "post",
+        "id": "0b9e1000-0000-4000-8000-000000000011",
+        "position": 3
+      },
+      "entityRequest": {
+        "q": "kling",
+        "type": "top",
+        "sort": "top",
+        "kind": "entity",
+        "id": "model:kling-2.6",
+        "position": 1
+      },
+      "status": 204,
+      "response": null,
+      "refusals": {
+        "malformed": 400,
+        "invalidToken": 401,
+        "tooLarge": 413,
+        "rateLimited": 429
       }
     },
     "getSavedMedia": {
