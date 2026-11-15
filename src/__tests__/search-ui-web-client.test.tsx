@@ -5,13 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SearchClient from '@/app/search/SearchClient';
 import { AppShellSearch } from '@/components/AppShellSearch';
 import { markSearchFieldHandoff } from '@/components/search/search-field-handoff';
-import { SEARCH_FOLLOW_FAILED, SEARCH_RELATED_SEARCHES_HEADING } from '@/components/search/search-ui-words';
 import type { PublicSearchResponse } from '@/lib/public-search';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 import { SEARCH_RELATED_SEARCHES_MAX, SEARCH_RELATED_THIN_POSTS } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import { searchStarterHeading, type SearchStarterResponse } from '../../ugc-mobile/lib/public-search-policy/search-starter';
 import { SEARCH_TYPEAHEAD_DEBOUNCE_MS, type SearchSuggestResponse } from '../../ugc-mobile/lib/public-search-policy/search-typeahead';
+import { SEARCH_FOLLOW_FAILED, SEARCH_RELATED_SEARCHES_HEADING } from '../../ugc-mobile/lib/public-search-policy/search-ui-words';
 
 // The web half of the search benchmark's fixes (2026-11-15), drawn by the real
 // search page and the real top bar over stubbed requests: the start screen's
@@ -525,6 +525,25 @@ describe('the typeahead’s catalog rows', () => {
     expect(stability.querySelector('[data-search-picture="picture"] img')?.getAttribute('src')).toBe('https://cdn.example.com/p-stability.webp');
     expect(seedance.querySelector('[data-search-picture="placeholder"]')).not.toBeNull();
     expect(stability.textContent).toContain('Stability AI');
+  });
+
+  it('offers a catalog row from two characters, as the server answers a box that asks with the catalog', async () => {
+    render(<AppShellSearch />);
+    fireEvent.focus(box());
+    // One character: a suggested search at most, never a model or tool.
+    type('s');
+    await waitFor(() => expect(suggestFetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/search/suggest?q=s&catalog=1']));
+    await settle(SEARCH_TYPEAHEAD_DEBOUNCE_MS);
+    expect(screen.queryByRole('option', { name: /^Seedance 1\.5 Pro/ })).toBeNull();
+
+    type('se');
+    await waitFor(() => expect(suggestFetchMock.mock.calls.map(([url]) => url).at(-1)).toBe('/api/search/suggest?q=se&catalog=1'));
+    await settle(SEARCH_TYPEAHEAD_DEBOUNCE_MS);
+    expect(await screen.findByRole('option', {
+      name: 'Seedance 1.5 Pro, video model, no posts yet. Open the video creator with it',
+    })).toBeTruthy();
+    // The app-only model is left out at two characters too.
+    expect(screen.queryByRole('option', { name: /App Only Model/ })).toBeNull();
   });
 
   it('opens the creator with the model chosen for a catalog model nobody has posted with, from either box', async () => {

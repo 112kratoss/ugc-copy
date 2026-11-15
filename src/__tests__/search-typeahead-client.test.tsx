@@ -791,12 +791,17 @@ describe('search page typeahead', () => {
     expect(screen.queryByText(/busy|limit|try again/i)).toBeNull();
   });
 
-  it('draws no model or tool for two characters, whatever an answer carries', async () => {
+  it('draws models and tools from two characters, as an answer asked with the catalog offers them, and none for one', async () => {
     renderBar();
-    type('lu');
+    type('l');
     const listbox = await list();
     expect(within(listbox).queryByText('Models and tools')).toBeNull();
     expect(within(listbox).getAllByRole('option')).toHaveLength(4);
+    // The box asks with the catalog (`catalog=1`), whose names the server offers from two characters.
+    type('lu');
+    await waitFor(() => expect(suggestRequests().at(-1)).toBe('/api/search/suggest?q=lu&catalog=1'));
+    expect(await within(listbox).findByText('Models and tools')).toBeTruthy();
+    expect(within(listbox).getByRole('option', { name: /^Luma Ray 2, model/ })).toBeTruthy();
   });
 
   it('offers the recent searches the text matches first, with a clock, then the completions, and searches one pressed', async () => {

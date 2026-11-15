@@ -10,8 +10,8 @@ import {
   type SearchTypeaheadRow,
   type SearchTypeaheadSection,
 } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
+import { searchCatalogModelActionLabel, searchCatalogModelLine } from '../../../ugc-mobile/lib/public-search-policy/search-ui-words';
 import { SearchRowPicture } from './SearchRowPicture';
-import { searchCatalogModelActionLabel, searchCatalogModelLine } from './search-ui-words';
 import { isSearchTypeaheadCreatorRow } from './search-typeahead-rows';
 import { searchTypeaheadOptionId } from './use-search-typeahead';
 

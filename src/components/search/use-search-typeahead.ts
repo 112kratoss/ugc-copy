@@ -11,7 +11,6 @@ import {
   SEARCH_TYPEAHEAD_KEPT_ANSWER_MS,
   SEARCH_TYPEAHEAD_OFFER_ALL,
   SEARCH_TYPEAHEAD_PRESS_SETTLE_MS,
-  isSearchTypeaheadEntityOffered,
   isSearchTypeaheadPressAccepted,
   searchTypeaheadAsks,
   isSearchTypeaheadShown,
@@ -31,7 +30,6 @@ import {
   type SearchTypeaheadPlacement,
   type SearchTypeaheadRow,
 } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
-import { withoutRepeatedEntityNames } from './search-typeahead-rows';
 
 // The browser's Supabase client, loaded when a request first needs the
 // session, as the shell's other readers load it (AuthProvider,
@@ -62,15 +60,6 @@ const NO_ROWS: readonly string[] = [];
 // No recent search: one array, so a box without a list keeps its memo.
 const NO_RECENTS: readonly string[] = [];
 
-/**
- * An answer with only the model and tool rows the web can open: every row
- * with posts, and a catalog model nobody has posted with only where the web
- * has its creator (isSearchTypeaheadEntityOffered).
- */
-function offeredOnTheWeb(response: SearchSuggestResponse): SearchSuggestResponse {
-  const entities = response.entities.filter((entity) => isSearchTypeaheadEntityOffered(entity, 'web'));
-  return entities.length === response.entities.length ? response : { ...response, entities };
-}
 
 export function useSearchTypeahead({ text, focused, closedFor = null, recents = NO_RECENTS, offer = SEARCH_TYPEAHEAD_OFFER_ALL }: {
   /** What the box holds. */
@@ -180,8 +169,7 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
           const seconds = typeof body?.retryAfterSeconds === 'number' && body.retryAfterSeconds > 0 ? body.retryAfterSeconds : 5;
           refusedUntil.current = Date.now() + Math.min(seconds, 60) * 1000;
         }
-        const parsed = reply.ok ? parseSearchSuggestResponse(body) : null;
-        response = parsed ? offeredOnTheWeb(parsed) : null;
+        response = reply.ok ? parseSearchSuggestResponse(body) : null;
       } catch {
         // Offline, aborted, or not JSON: a suggestion is an extra, and its failure is nothing.
         response = null;
@@ -222,12 +210,13 @@ export function useSearchTypeahead({ text, focused, closedFor = null, recents = 
   }
 
   // This text's answer, or until it arrives the one before it, marked stale.
-  const { sections, stale } = useMemo(() => {
-    // A text not asked about draws no answer, not even the one before it.
-    const drawn = searchTypeaheadDrawn(asks ? answer : null, query, { recents, offer });
-    // A name drawn as a model's or tool's row is not suggested again as a search under it.
-    return { ...drawn, sections: withoutRepeatedEntityNames(drawn.sections) };
-  }, [answer, asks, offer, query, recents]);
+  const { sections, stale } = useMemo(
+    // A text not asked about draws no answer, not even the one before it. Asked with the catalog,
+    // models and tools are drawn from two characters; drawn on the web, a row the web has nothing to
+    // open for is left out, and a name drawn as a model's or tool's row is not suggested again.
+    () => searchTypeaheadDrawn(asks ? answer : null, query, { recents, offer, catalog: true, platform: 'web' }),
+    [answer, asks, offer, query, recents],
+  );
   const rows = useMemo(() => searchTypeaheadRows(sections), [sections]);
   const shown = isSearchTypeaheadShown({ focused, query, closedQuery, rowCount: rows.length });
   const highlightedAt = shown && highlight !== null && highlight.query === query

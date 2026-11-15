@@ -11,7 +11,7 @@ import {
   SEARCH_FOLLOW_FAILED,
   SEARCH_FOLLOW_LABEL,
   searchFollowButtonLabel,
-} from './search-ui-words';
+} from '../../../ugc-mobile/lib/public-search-policy/search-ui-words';
 
 export type SearchFollowCreator = {
   id: string;

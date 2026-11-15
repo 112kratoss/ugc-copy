@@ -93,7 +93,6 @@
 @source "../components/search/SearchTypeaheadList.tsx";
 @source "../components/search/SearchRowPicture.tsx";
 @source "../components/search/search-typeahead-rows.ts";
-@source "../components/search/search-ui-words.ts";
 @source "../components/search/use-search-typeahead.ts";
 @source "../components/SignInAgreement.tsx";
 @source "../components/SignInWorkspaceCard.tsx";

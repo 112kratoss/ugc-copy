@@ -24,7 +24,6 @@ import {
 } from '@/components/search/search-entrance';
 import { useSearchTypeahead } from '@/components/search/use-search-typeahead';
 import { searchTypeaheadEntityRoute } from '@/components/search/search-typeahead-rows';
-import { SEARCH_RELATED_SEARCHES_HEADING } from '@/components/search/search-ui-words';
 import {
   NO_PUBLIC_SEARCH_FILTERS,
   PUBLIC_SEARCH_MIN_CONTENT_QUERY_LENGTH,
@@ -125,6 +124,7 @@ import {
   searchBlendParams,
 } from '../../../ugc-mobile/lib/public-search-policy/search-blend';
 import { searchTypeaheadOfferForTab, type SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
+import { SEARCH_RELATED_SEARCHES_HEADING } from '../../../ugc-mobile/lib/public-search-policy/search-ui-words';
 import {
   SEARCH_STARTER_NO_RESULTS_HEADING,
   searchStarterEntityAction,
