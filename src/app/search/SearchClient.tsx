@@ -122,6 +122,7 @@ import {
   isSearchPageAllRepeats,
   searchBlendApplies,
   searchBlendParams,
+  searchEntrySettles,
 } from '../../../ugc-mobile/lib/public-search-policy/search-blend';
 import { searchTypeaheadOfferForTab, type SearchTypeaheadAction } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
 import { SEARCH_RELATED_SEARCHES_HEADING } from '../../../ugc-mobile/lib/public-search-policy/search-ui-words';
@@ -593,22 +594,32 @@ export default function SearchClient({
   // The query of the last scheduled search. A URL query arrives already typed
   // and a tab change keeps the query, so only a new query waits for a pause.
   const scheduledQuery = useRef(opening.query);
-  // The query the person settled on: Enter, a suggestion pressed, a recent
-  // search opened. A search for it is asked with related posts
-  // (public-search-policy.ts, "Related posts"); one still being typed is not.
+  // The query the person settled on. A search for it is asked with related
+  // posts (public-search-policy.ts, "Related posts") and in the blended order
+  // (search-blend.ts); one still being typed is not. Whether a search is settled
+  // as it is made is the app's rule too, read from how it was entered
+  // (searchEntrySettles): a suggestion, a recent, a starter or a related search
+  // pressed is; an address opened as it was and a model's or tool's row are not,
+  // until the person commits them with Enter (commitSearch), which settles any
+  // search. A typed one is sent at each pause in typing and settled by Enter
+  // alone: the rule's `typed` is a typed search committed. A search the top
+  // bar's field handed over is read by the entry it came with: its Enter, a
+  // suggestion or a recent search settle it, a model's or tool's row does not.
   // The ref is read as a request is sent, the state by the wait after an
   // answer: a request that read the state would be made again when it changed.
-  // A search the top bar's field handed over was settled there (Enter, a
-  // suggestion, a recent search), all but a model's or tool's row, which
-  // opens Posts narrowed to it here as it does on this page.
   const [handedOffSettled] = useState(() => (
-    openingEntry !== null && handedOff && openingEntry !== 'entity' ? normalizePublicSearchQuery(opening.query) : null
+    handedOff && searchEntrySettles(openingEntry) ? normalizePublicSearchQuery(opening.query) : null
   ));
   const settledQueryAtSend = useRef<string | null>(handedOffSettled);
   const [settledQuery, setSettledQuery] = useState<string | null>(handedOffSettled);
   const settleOn = (settled: string) => {
     settledQueryAtSend.current = settled;
     setSettledQuery(settled);
+  };
+  /** A search put in the box by a row or a chip, entered as `entry`: settled as it is made where the shared rule says. */
+  const enterSearch = (next: string, entry: SearchEntry) => {
+    searchEntry.current = entry;
+    if (searchEntrySettles(entry)) settleOn(next);
   };
   const tabRefs = useRef<Partial<Record<PublicSearchType, HTMLButtonElement | null>>>({});
   const normalizedQuery = useMemo(() => normalizePublicSearchQuery(query), [query]);
@@ -1214,8 +1225,8 @@ export default function SearchClient({
       // Stability AI's posts for "stability ai"), and what is typed otherwise. A text Posts does not
       // search yet runs on Top, narrowed to nothing (review of #828, N1). Asked at once, and the list
       // closed for the text the box now holds, not the one typed (S1).
-      searchEntry.current = 'entity';
       const next = normalizePublicSearchQuery(route.query);
+      enterSearch(next, 'entity');
       scheduledQuery.current = next;
       if (next !== normalizedQuery) setQuery(next);
       typeahead.closeFor(next);
@@ -1235,8 +1246,7 @@ export default function SearchClient({
     const nextSort: PublicSearchSort = publicSearchTypeHasSorts(pickedType) ? pickedSort : 'top';
     scheduledQuery.current = next;
     rememberOnAnswer.current = `${pickedType}:${nextSort}:${publicSearchFilterKey(nextFilters, false)}:${next}`;
-    searchEntry.current = searchEntryForChosenText(action.query, query, history);
-    settleOn(next);
+    enterSearch(next, searchEntryForChosenText(action.query, query, history));
     setQuery(action.query);
   };
   // A related search pressed (the chips over a Top or Posts answer): its text
@@ -1248,8 +1258,7 @@ export default function SearchClient({
     if (!next || next === normalizedQuery) return;
     scheduledQuery.current = next;
     rememberOnAnswer.current = `${activeType}:${activeSort}:${publicSearchFilterKey(activeFilters, false)}:${next}`;
-    searchEntry.current = 'related';
-    settleOn(next);
+    enterSearch(next, 'related');
     setQuery(next);
   };
   // The starter's rows (SearchStarter.tsx). A model or tool: Posts for its
@@ -1267,7 +1276,7 @@ export default function SearchClient({
     setPickedFilters({ ...NO_PUBLIC_SEARCH_FILTERS, madeWith: action.madeWith });
     setPickedType('posts');
     scheduledQuery.current = next;
-    searchEntry.current = 'entity';
+    enterSearch(next, 'entity');
     setQuery(next);
   };
   const pickStarterSearch = (search: SearchStarterSearch) => {
@@ -1278,8 +1287,7 @@ export default function SearchClient({
     setPickedType('top');
     scheduledQuery.current = next;
     rememberOnAnswer.current = `top:top:${publicSearchFilterKey(NO_PUBLIC_SEARCH_FILTERS, false)}:${next}`;
-    searchEntry.current = 'starter';
-    settleOn(next);
+    enterSearch(next, 'starter');
     setQuery(action.query);
   };
 
@@ -1400,7 +1408,7 @@ export default function SearchClient({
             <button
               type="button"
               aria-label={searchRecentAgainLabel(item)}
-              onClick={() => { searchEntry.current = 'recent'; settleOn(normalizePublicSearchQuery(item)); setQuery(item); }}
+              onClick={() => { enterSearch(normalizePublicSearchQuery(item), 'recent'); setQuery(item); }}
               className="ui-focus-ring flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-xl px-2 text-left text-sm text-zinc-200 hover:bg-white/[0.06]"
             >
               <Clock3 className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />

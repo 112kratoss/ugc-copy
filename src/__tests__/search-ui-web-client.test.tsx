@@ -559,6 +559,13 @@ describe('the blended order', () => {
     const { unmount } = render(<SearchClient initialQuery="ocean at dusk" initialType="top" />);
     await waitFor(() => expect(searchUrls()).toHaveLength(1));
     expect(searchUrls()[0]).toBe('/api/search?q=ocean+at+dusk&type=top&relatedSearches=1&entry=link');
+    // Not settled by how it was entered (searchEntrySettles('link') is false, the app's rule too):
+    // Enter settles it, and the same search is asked again, blended, under the same entry.
+    await settle(SEARCH_TYPEAHEAD_DEBOUNCE_MS);
+    expect(searchUrls()).toHaveLength(1);
+    enter();
+    await waitFor(() => expect(searchUrls()).toHaveLength(2));
+    expect(searchUrls()[1]).toBe('/api/search?q=ocean+at+dusk&type=top&related=1&relatedSearches=1&blend=1&entry=link');
     unmount();
 
     searchFetchMock.mockClear();
@@ -687,6 +694,24 @@ describe('the typeahead’s catalog rows', () => {
     await settledList();
     fireEvent.click(screen.getByRole('option', { name: /^Stability AI/ }));
     expect(pushMock).toHaveBeenLastCalledWith('/search?q=stability+ai&type=posts&madeWith=tool%3Astability-ai');
+  });
+
+  it('leaves a model’s or tool’s own search of two words unblended until the person presses Enter (S6)', async () => {
+    render(<SearchClient initialQuery="" initialType="posts" />);
+    fireEvent.focus(box());
+    type('sdx');
+    await screen.findByRole('listbox', { name: 'Search suggestions' });
+    await settledList();
+    fireEvent.click(screen.getByRole('option', { name: /^Stability AI/ }));
+    // A row's words are not the person's (searchEntrySettles('entity') is false): no blend yet.
+    await waitFor(() => expect(searchUrls().at(-1)).toBe('/api/search?q=stability+ai&type=posts&madeWith=tool%3Astability-ai&relatedSearches=1&entry=entity'));
+    const asked = searchUrls().length;
+    await settle(SEARCH_TYPEAHEAD_DEBOUNCE_MS);
+    expect(searchUrls()).toHaveLength(asked);
+    // Enter commits it: its first page asked again in the blended order, inside its filter, under the same entry.
+    enter();
+    await waitFor(() => expect(searchUrls()).toHaveLength(asked + 1));
+    expect(searchUrls().at(-1)).toBe('/api/search?q=stability+ai&type=posts&madeWith=tool%3Astability-ai&relatedSearches=1&blend=1&entry=entity');
   });
 
   it('closes the list for the row’s own search when the row is chosen with Enter too (S1)', async () => {
