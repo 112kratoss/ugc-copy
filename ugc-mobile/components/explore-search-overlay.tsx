@@ -23,6 +23,7 @@ import { useSearchEntrance } from '@/components/search-entrance';
 import { SearchCreatorHandleLine } from '@/components/search-creator-handle-line';
 import { SearchFollowButton, SearchFollowFailedLine } from '@/components/search-follow-button';
 import { SearchPostMasonry } from '@/components/search-post-masonry';
+import { SearchRowPicture } from '@/components/search-row-picture';
 import { SearchStarterSections } from '@/components/search-starter-sections';
 import { SearchTypeaheadList } from '@/components/search-typeahead-list';
 import { ChoiceChip, CreatorAvatar, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
@@ -97,8 +98,10 @@ import {
   searchTabRuns,
   searchTopSectionHasMore,
   toggleSearchFilterSwitch,
+  searchEntityPicturesWith,
   type SearchEntity,
   type SearchFilters,
+  type SearchThumbnail,
   type SearchRelatedSearch,
   type SearchTopSection,
 } from '@/lib/public-search-policy/public-search-policy';
@@ -368,9 +371,13 @@ function RelatedSearches({ searches, onSearch }: { searches: readonly SearchRela
 }
 
 // A model or tool as a result: pressing it shows the posts made with it.
-function EntityRow({ entity, onPick }: { entity: SearchEntity; onPick: () => void }) {
+function EntityRow({ entity, thumbnail, onPick }: {
+  entity: SearchEntity;
+  /** The picture the screen holds for it (searchEntityPicturesWith): a search's own answer carries none. */
+  thumbnail: SearchThumbnail | null;
+  onPick: () => void;
+}) {
   const theme = useAppTheme();
-  const Icon = entity.kind === 'model' ? Box : Wrench;
   return (
     <Pressable
       accessibilityRole="button"
@@ -391,18 +398,9 @@ function EntityRow({ entity, onPick }: { entity: SearchEntity; onPick: () => voi
         paddingVertical: 10,
       })}
     >
-      <View
-        style={{
-          width: 40,
-          height: 40,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: appTheme.radii.pill,
-          backgroundColor: theme.colors.surfaceStrong,
-        }}
-      >
-        <Icon size={appTheme.icon.default} color={theme.colors.primary} />
-      </View>
+      {/* The frame the start screen and the typing list draw a model in: its picture where the
+          screen holds one, its kind's glyph in the same frame otherwise. */}
+      <SearchRowPicture thumbnail={entity.thumbnail ?? thumbnail} size={40} Icon={entity.kind === 'model' ? Box : Wrench} testID="search-entity-picture" />
       <View style={{ minWidth: 0, flex: 1 }}>
         <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{entity.label}</Text>
         <Text numberOfLines={1} style={{ marginTop: 2, color: theme.colors.muted, fontSize: 13 }}>
@@ -1305,6 +1303,16 @@ export function ExploreSearchOverlay({
   // Ideas to start from: before anything is typed, and when a search finds
   // nothing. Asked once each time the search opens.
   const { answer: starterAnswer, settled: starterSettled } = useSearchStarterState(api, visible, user?.id ?? null);
+  // The pictures the screen holds for models and tools, from the starter and from every
+  // suggestion answer: a result's row draws the one it holds (searchEntityPicturesWith).
+  const [entityPictures, setEntityPictures] = useState<Readonly<Record<string, SearchThumbnail>>>({});
+  const suggestedEntities = typeahead.answerEntities;
+  useEffect(() => {
+    setEntityPictures((current) => searchEntityPicturesWith(current, suggestedEntities));
+  }, [suggestedEntities]);
+  useEffect(() => {
+    if (starterAnswer) setEntityPictures((current) => searchEntityPicturesWith(current, starterAnswer.entities));
+  }, [starterAnswer]);
   // The start waits for the ideas a moment, so they arrive in place of nothing
   // instead of replacing the idle card (filmed on the iPhone, 2026-11-14); a
   // slow answer gives way to the card after SEARCH_START_HOLD_MS.
@@ -1620,7 +1628,7 @@ export function ExploreSearchOverlay({
               <View style={{ gap: 10 }}>
                 <ResultsHeading title={SEARCH_ENTITIES_HEADING} sort={null} onSortChange={setPickedSort} />
                 {entities.map((entity, index) => (
-                  <EntityRow key={searchEntityId(entity)} entity={entity} onPick={() => { reportOpened('entity', searchEntityId(entity), index + 1); pickEntity(entity); }} />
+                  <EntityRow key={searchEntityId(entity)} entity={entity} thumbnail={entityPictures[searchEntityId(entity)] ?? null} onPick={() => { reportOpened('entity', searchEntityId(entity), index + 1); pickEntity(entity); }} />
                 ))}
               </View>
             ) : null}

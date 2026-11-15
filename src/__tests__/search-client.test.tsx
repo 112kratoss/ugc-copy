@@ -220,10 +220,13 @@ describe('SearchClient', () => {
     authListeners.length = 0;
   });
 
-  it('renders the idle invitation, in the shared words, until two characters are typed', () => {
+  it('renders the idle invitation, in the shared words, until two characters are typed', async () => {
     render(<SearchClient initialQuery="" initialType="top" />);
 
-    expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
+    // Once it is known there is no start screen to draw in its place (the starter's answer, here a
+    // route that is not there): drawn before, it flashed on every opening and was then replaced.
+    expect(screen.queryByText(SEARCH_IDLE_TITLE)).toBeNull();
+    expect(await screen.findByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
     expect(screen.getByText(SEARCH_IDLE_BODY)).toBeInTheDocument();
     // No sentence explains how many characters to type.
     expect(document.body.textContent).not.toMatch(/character/i);
@@ -285,7 +288,7 @@ describe('SearchClient', () => {
     window.dispatchEvent(new PopStateEvent('popstate'));
     render(<SearchClient initialQuery="luna" initialType="top" />);
     expect(screen.getByRole('combobox')).toHaveValue('');
-    expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
+    expect(await screen.findByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -430,7 +433,7 @@ describe('SearchClient', () => {
     window.history.replaceState({ __NA: true }, '', '/search?q=cat');
     render(<SearchClient initialQuery="" initialType="top" />);
     expect(screen.getByRole('combobox')).toHaveValue('');
-    expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
+    expect(await screen.findByText(SEARCH_IDLE_TITLE)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
 
     // A traversal is spent by the mount it brought: the next mount at the same address is not one.

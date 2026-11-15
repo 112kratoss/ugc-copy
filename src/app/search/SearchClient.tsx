@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Box, Clock3, LoaderCircle, RefreshCcw, Wrench, X } from 'lucide-react';
+import { BookOpen, Clock3, LoaderCircle, RefreshCcw, X } from 'lucide-react';
 
 import { SegmentedControl } from '@/components/DesignSystem';
 import { CreatorSearchResult } from '@/components/search/CreatorSearchResult';
@@ -11,7 +11,7 @@ import { useSearchScreenCrossFade } from '@/components/search/SearchEntrancePart
 import { SearchField } from '@/components/search/SearchField';
 import { SearchPostWall } from '@/components/search/SearchPostWall';
 import { SearchResultsPlaceholder } from '@/components/search/SearchResultsPlaceholder';
-import { SearchQueryChip, SearchStarter, useSearchStarter } from '@/components/search/SearchStarter';
+import { SearchEntityCard, SearchQueryChip, SearchStarter, useSearchStarterState } from '@/components/search/SearchStarter';
 import { SearchStateBlock } from '@/components/search/SearchStateBlock';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
 import { clearSearchFieldHandoff, searchFieldHandoffEntry, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
@@ -46,6 +46,7 @@ import {
   type SearchEntityResult,
 } from '@/lib/public-search';
 import { formatRecipeCreditPrice } from '@/lib/showcase-asset-labels';
+import { readFollowChanges } from '@/lib/follow-changes';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { supabase } from '@/lib/supabase';
@@ -82,9 +83,6 @@ import {
   isSearchFilterSwitchOn,
   parseSearchEntityId,
   searchCorrectionNotice,
-  searchEntityActionLabel,
-  searchEntityCountLabel,
-  searchEntityKindLabel,
   searchBusyBody,
   searchCreatorCardLabel,
   searchDocumentTitle,
@@ -115,6 +113,9 @@ import {
   searchTabRuns,
   searchTopSectionHasMore,
   toggleSearchFilterSwitch,
+  searchEntityPicturesWith,
+  type SearchEntity,
+  type SearchThumbnail,
   type SearchTopSection,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import {
@@ -279,28 +280,15 @@ const CHIP_OFF_CLASS = 'border-white/10 bg-white/[0.04] text-zinc-300 hover:bord
 const CHIP_ON_CLASS = 'border-white bg-white text-black';
 
 // A model or tool as a result: pressing it shows the posts made with it.
-function EntityResult({ entity, onPick }: { entity: SearchEntityResult; onPick: (entity: SearchEntityResult) => void }) {
-  const Icon = entity.kind === 'model' ? Box : Wrench;
-  return (
-    <li>
-      <button
-        type="button"
-        aria-label={searchEntityActionLabel(entity)}
-        onClick={() => onPick(entity)}
-        className="ui-focus-ring flex min-h-16 w-full items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.035] px-4 py-3 text-left transition hover:border-white/15 hover:bg-white/[0.065]"
-      >
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-[var(--ui-primary)]">
-          <Icon className="h-4.5 w-4.5" aria-hidden="true" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-semibold text-white">{entity.label}</span>
-          <span className="mt-0.5 block truncate text-xs text-zinc-400">
-            {searchEntityKindLabel(entity.kind)} · {searchEntityCountLabel(entity)}
-          </span>
-        </span>
-      </button>
-    </li>
-  );
+/** An answer whose models and tools carry the pictures the page drew them with (`entityPictures`). */
+function withEntityPictures(answer: SearchAnswer, pictures: Readonly<Record<string, SearchThumbnail>>): SearchAnswer {
+  // An older server's answer has no list of them at all.
+  const entities = answer.result.entities;
+  if (!Array.isArray(entities) || !entities.some((entity) => !entity.thumbnail && pictures[searchEntityId(entity)])) return answer;
+  return {
+    ...answer,
+    result: { ...answer.result, entities: entities.map((entity) => (entity.thumbnail ? entity : { ...entity, thumbnail: pictures[searchEntityId(entity)] ?? null })) },
+  };
 }
 
 // What narrows a Posts search: toggle buttons, pressed while on, and the
@@ -521,8 +509,13 @@ export default function SearchClient({
   // by id: the start screen's answer is not this page's to change, and a
   // creator can be on it and among the results at once. They belong to the
   // account that made them, so another account draws none of them.
+  // A page Back restored starts from the changes this account made in this tab since (on a row
+  // here, on a creator's page, a post page or the reel: follow-changes.ts): its kept answer was
+  // asked before them, and nothing is asked again.
   const [followChanges, setFollowChanges] = useState<{ viewerId: string | null; byId: Readonly<Record<string, boolean>> }>(
-    { viewerId: null, byId: {} },
+    () => (restored?.answer.viewerId
+      ? { viewerId: restored.answer.viewerId, byId: readFollowChanges(restored.answer.viewerId) }
+      : { viewerId: null, byId: {} }),
   );
   const followed = followChanges.viewerId === viewerId ? followChanges.byId : NO_FOLLOW_CHANGES;
   // Recent searches live in this browser alone, and are read after the first
@@ -576,8 +569,21 @@ export default function SearchClient({
       return next;
     });
   }, []);
-  // What to start a search from, asked once as the page opens (SearchStarter.tsx).
-  const starter = useSearchStarter();
+  // What to start a search from, asked once as the page opens (SearchStarter.tsx), and whether
+  // that question is settled: until it is, the idle page draws no invitation in its place.
+  const { answer: starter, settled: starterSettled } = useSearchStarterState();
+  // The pictures the page holds for models and tools, by id: a search's own answer carries none
+  // for its "Models and tools" (the start screen's rows and the typeahead's do), so a card there
+  // drew a glyph where the same model had a picture a moment before in the list over it. Filled
+  // from the starter and from every suggestion answer the box receives; a model neither has named
+  // keeps its glyph.
+  const [entityPictures, setEntityPictures] = useState<Readonly<Record<string, SearchThumbnail>>>({});
+  const noteEntityPictures = useCallback((found: readonly SearchEntity[]) => {
+    setEntityPictures((current) => searchEntityPicturesWith(current, found));
+  }, []);
+  useEffect(() => {
+    if (starter) noteEntityPictures(starter.entities);
+  }, [noteEntityPictures, starter]);
   // The request the restored answer is, while the page still asks it: the
   // search it would make on mount is not made. Forgotten once the search
   // changes, so coming back to the same text later asks as any search does.
@@ -974,7 +980,8 @@ export default function SearchClient({
   // one is gone. Never an answer asked for an account the session no longer
   // names: a sign-out unmounts the page with the account's answer on screen.
   const onScreen = useRef<{ address: string; answer: SearchAnswer | null }>({ address, answer: null });
-  onScreen.current = { address, answer: currentAnswer };
+  // Kept with the pictures its models and tools were drawn with, so Back draws them as they were.
+  onScreen.current = { address, answer: currentAnswer && withEntityPictures(currentAnswer, entityPictures) };
   shownPosts.current = currentAnswer?.result.posts.items ?? [];
   const lastScrollY = useRef(restored?.scrollY ?? 0);
   // A live region speaks when its words change, never for what it held when
@@ -1202,6 +1209,11 @@ export default function SearchClient({
     recents: history,
     offer: searchTypeaheadOfferForTab(activeType),
   });
+  // Every model and tool the box's answer names, whatever the tab's list draws of them.
+  const suggestedEntities = typeahead.answerEntities;
+  useEffect(() => {
+    noteEntityPictures(suggestedEntities);
+  }, [noteEntityPictures, suggestedEntities]);
   const runTypeaheadAction = (action: SearchTypeaheadAction | null) => {
     if (!action) return;
     if (action.type === 'creator') {
@@ -1373,9 +1385,9 @@ export default function SearchClient({
       onSearch={pickStarterSearch}
       onFollowChange={noteFollow}
     />
-  ) : (
+  ) : starterSettled ? (
     <SearchStateBlock tone="initial" title={SEARCH_IDLE_TITLE} body={SEARCH_IDLE_BODY} />
-  );
+  ) : null;
 
   // The newest five recent searches, each removable, with Clear all by the
   // heading: shown on the idle page whenever the box is empty (recentsShown).
@@ -1655,11 +1667,13 @@ export default function SearchClient({
                   <h2 id="search-entities-heading" className="mb-4 text-xl font-semibold text-white">{SEARCH_ENTITIES_HEADING}</h2>
                   <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                     {entities.map((entity, index) => (
-                      <EntityResult
-                        key={searchEntityId(entity)}
-                        entity={entity}
-                        onPick={(picked) => { reportOpened('entity', searchEntityId(picked), index + 1); pickEntity(picked); }}
-                      />
+                      <li key={searchEntityId(entity)} className="min-w-0">
+                        <SearchEntityCard
+                          entity={entity}
+                          thumbnail={entityPictures[searchEntityId(entity)] ?? null}
+                          onPress={(picked) => { reportOpened('entity', searchEntityId(picked), index + 1); pickEntity(picked); }}
+                        />
+                      </li>
                     ))}
                   </ul>
                 </section>

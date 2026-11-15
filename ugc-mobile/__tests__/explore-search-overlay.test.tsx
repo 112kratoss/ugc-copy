@@ -3675,6 +3675,35 @@ describe('ExploreSearchOverlay search screen, 2026-11-15', () => {
     await act(async () => tree.unmount());
   });
 
+  it('draws a model\'s result on Top with the picture the screen holds for it, and its glyph where nothing named one', async () => {
+    // A search's own answer carries no picture for its models and tools: the row drew a glyph
+    // where the start and the typing list had drawn the model's picture (owner's brief, 2026-11-16).
+    const thumbnail = { postId: 'p9', url: 'https://cdn.example/p9.webp', thumbhash: null, width: 720, height: 960, mediaKind: 'image' as const };
+    searchStarter.mockResolvedValue({
+      entities: [{ kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', postCount: 12, postCountCapped: false, thumbnail, query: 'kling 2.6' }],
+      creators: [],
+      searches: [],
+      periods: { entities: 'all', creators: 'all', searches: 'all' },
+    });
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { posts: [post('p1')] }, {
+      entities: [
+        { kind: 'model', key: 'kling-2.6', label: 'Kling 2.6', postCount: 12, postCountCapped: false },
+        { kind: 'tool', key: 'klingcraft', label: 'Klingcraft', postCount: 2, postCountCapped: false },
+      ],
+    }));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'kling');
+    await advance(300);
+    const frames = hostNodes(tree, 'view').filter((node) => node.props.testID === 'search-entity-picture');
+    expect(frames.map((frame) => frame.findAll((node) => String(node.type) === 'image').map((image) => image.props.source.uri))).toEqual([
+      ['https://cdn.example/p9.webp'],
+      [],
+    ]);
+    // The glyph is in both frames: under the picture, and alone where there is none.
+    expect(frames.map((frame) => frame.findAll((node) => String(node.type) === 'icon').length)).toEqual([1, 1]);
+    await act(async () => tree.unmount());
+  });
+
   it('titles the start\'s lists by the period each is of, draws their pictures, and offers Follow on its creators', async () => {
     const thumbnail = { postId: 'p9', url: 'https://cdn.example/p9.webp', thumbhash: 'abc', width: 720, height: 960, mediaKind: 'image' as const };
     searchStarter.mockResolvedValue({

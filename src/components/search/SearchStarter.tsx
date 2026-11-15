@@ -7,6 +7,8 @@ import {
   searchEntityActionLabel,
   searchEntityCountLabel,
   searchEntityKindLabel,
+  type SearchEntity,
+  type SearchThumbnail,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import { searchTypeaheadRowLabel } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
 import {
@@ -22,7 +24,7 @@ import { CreatorSearchResult } from './CreatorSearchResult';
 import { SearchRowPicture } from './SearchRowPicture';
 
 // The answer's reader, kept beside the starter it feeds (the top bar reads it without this file's cards).
-export { useSearchStarter } from './use-search-starter';
+export { useSearchStarter, useSearchStarterState } from './use-search-starter';
 
 const HEADING_CLASS = 'mb-3 text-base font-semibold text-white';
 
@@ -56,6 +58,42 @@ export function SearchQueryChip({
     >
       <SearchRowPicture thumbnail={thumbnail} icon={Search} className="h-8 w-8 rounded-full" iconClassName="h-4 w-4 text-zinc-400" />
       <span className="truncate">{text}</span>
+    </button>
+  );
+}
+
+/**
+ * A model or tool as a card: its picture (or its glyph, in the same frame),
+ * its name, its kind and count. The start screen's rows and the "Models and
+ * tools" results of a Top search are the same card, so the same model looks
+ * the same wherever search offers it. `thumbnail` stands in where the entity
+ * itself carries none: a search result's entity does not, and the page then
+ * gives the picture it already holds for that model from the start screen or
+ * from a suggestion (SearchClient's `entityPictures`).
+ */
+export function SearchEntityCard<Entity extends SearchEntity>({
+  entity,
+  thumbnail = null,
+  onPress,
+}: {
+  entity: Entity;
+  thumbnail?: SearchThumbnail | null;
+  onPress: (entity: Entity) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={searchEntityActionLabel(entity)}
+      onClick={() => onPress(entity)}
+      className="ui-focus-ring flex min-h-16 w-full items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.035] p-2 pr-4 text-left transition-[background-color,border-color,scale] duration-150 ease-out hover:border-white/15 hover:bg-white/[0.065] motion-safe:active:scale-[0.985]"
+    >
+      <SearchRowPicture thumbnail={entity.thumbnail ?? thumbnail} icon={entity.kind === 'model' ? Box : Wrench} className="h-12 w-12 rounded-lg" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-semibold text-white">{entity.label}</span>
+        <span className="mt-0.5 block truncate text-xs text-zinc-400">
+          {searchEntityKindLabel(entity.kind)} · {searchEntityCountLabel(entity)}
+        </span>
+      </span>
     </button>
   );
 }
@@ -105,20 +143,7 @@ export function SearchStarter({
               <ul aria-labelledby={headingId} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {section.entities.map((entity) => (
                   <li key={`${entity.kind}:${entity.key}`} className="min-w-0">
-                    <button
-                      type="button"
-                      aria-label={searchEntityActionLabel(entity)}
-                      onClick={() => onEntity(entity)}
-                      className="ui-focus-ring flex min-h-16 w-full items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.035] p-2 pr-4 text-left transition-[background-color,border-color,scale] duration-150 ease-out hover:border-white/15 hover:bg-white/[0.065] motion-safe:active:scale-[0.985]"
-                    >
-                      <SearchRowPicture thumbnail={entity.thumbnail} icon={entity.kind === 'model' ? Box : Wrench} className="h-12 w-12 rounded-lg" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-semibold text-white">{entity.label}</span>
-                        <span className="mt-0.5 block truncate text-xs text-zinc-400">
-                          {searchEntityKindLabel(entity.kind)} · {searchEntityCountLabel(entity)}
-                        </span>
-                      </span>
-                    </button>
+                    <SearchEntityCard entity={entity} onPress={onEntity} />
                   </li>
                 ))}
               </ul>
@@ -129,7 +154,10 @@ export function SearchStarter({
           return (
             <div key={section.id}>
               <SectionHeading id={headingId} level={sectionLevel}>{sectionHeading}</SectionHeading>
-              <ul aria-labelledby={headingId} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {/* As many columns as fit cards of 20rem: by the room the list has, not the window's
+                  width. Beside the shell's sidebar a 640px breakpoint gave two columns of 15rem,
+                  where Follow left the name three letters ("Mag…", owner's live check 2026-11-16). */}
+              <ul aria-labelledby={headingId} className="grid grid-cols-[repeat(auto-fill,minmax(min(20rem,100%),1fr))] gap-3">
                 {section.creators.map((item) => {
                   const creator = { ...item, isFollowing: followed?.[item.id] ?? item.isFollowing };
                   return (

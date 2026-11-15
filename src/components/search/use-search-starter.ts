@@ -24,6 +24,13 @@ export const SEARCH_STARTER_KEPT_MS = 10 * 60_000;
 // Search is open, does not ask again each time it comes back.
 let keptAnswer: { viewerId: string | null; answer: SearchStarterResponse; at: number } | null = null;
 
+/**
+ * How long a caller waits for the answer before it draws what it draws
+ * without one (`settled`): a slow starter must not leave the search page
+ * empty under its box for good.
+ */
+export const SEARCH_STARTER_SETTLE_MS = 2500;
+
 /** For tests: a file's cases start with nothing kept. */
 export function forgetKeptSearchStarter(): void {
   keptAnswer = null;
@@ -50,11 +57,30 @@ export function forgetKeptSearchStarter(): void {
  * The search page asks each time it opens, as before: it draws creators with
  * Follow, which a kept answer could show a followed creator among.
  */
-export function useSearchStarter({ enabled = true, kept = false }: { enabled?: boolean; kept?: boolean } = {}): SearchStarterResponse | null {
+export function useSearchStarter(options: { enabled?: boolean; kept?: boolean } = {}): SearchStarterResponse | null {
+  return useSearchStarterState(options).answer;
+}
+
+/**
+ * The starter's answer, and whether the question is settled: true once the
+ * answer is in, once it is known there will be none (a refusal, a failure, an
+ * answer with nothing in it), and in any case after SEARCH_STARTER_SETTLE_MS.
+ * The search page draws its idle invitation only then: drawn before, it stood
+ * for a moment on every opening and was then pushed down by the recent
+ * searches and replaced by the start screen (owner's brief, 2026-11-16:
+ * nothing that flashes or jumps).
+ */
+export function useSearchStarterState({ enabled = true, kept = false }: { enabled?: boolean; kept?: boolean } = {}): {
+  answer: SearchStarterResponse | null;
+  settled: boolean;
+} {
   const [answer, setAnswer] = useState<SearchStarterResponse | null>(null);
+  const [settled, setSettled] = useState(false);
   useEffect(() => {
     if (!enabled) return;
     let disposed = false;
+    const settle = () => { if (!disposed) setSettled(true); };
+    const giveUp = window.setTimeout(settle, SEARCH_STARTER_SETTLE_MS);
     let stopWatching: (() => void) | null = null;
     let request: AbortController | null = null;
     // The account the answer on hand was asked for; undefined while none has been asked.
@@ -70,19 +96,27 @@ export function useSearchStarter({ enabled = true, kept = false }: { enabled?: b
         askedFor = viewerId;
         if (kept && keptAnswer && keptAnswer.viewerId === viewerId && Date.now() - keptAnswer.at < SEARCH_STARTER_KEPT_MS) {
           setAnswer(keptAnswer.answer);
+          settle();
           return;
         }
         const response = await fetch('/api/search/starter', {
           headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
           signal: controller.signal,
         });
-        if (!response.ok) return;
+        if (!response.ok) {
+          settle();
+          return;
+        }
         const parsed = parseSearchStarterResponse(await response.json().catch(() => null));
-        if (controller.signal.aborted || !parsed || isSearchStarterEmpty(parsed)) return;
-        keptAnswer = { viewerId, answer: parsed, at: Date.now() };
-        setAnswer(parsed);
+        if (controller.signal.aborted) return;
+        if (parsed && !isSearchStarterEmpty(parsed)) {
+          keptAnswer = { viewerId, answer: parsed, at: Date.now() };
+          setAnswer(parsed);
+        }
+        settle();
       } catch {
-        // An extra: its failure is drawn as nothing.
+        // An extra: its failure is drawn as nothing. An abort is the next question's to settle.
+        if (!controller.signal.aborted) settle();
       }
     };
     void loadSupabase().then((supabase) => {
@@ -99,12 +133,13 @@ export function useSearchStarter({ enabled = true, kept = false }: { enabled?: b
       });
       stopWatching = () => data.subscription.unsubscribe();
       void ask(supabase);
-    }).catch(() => {});
+    }).catch(settle);
     return () => {
       disposed = true;
+      window.clearTimeout(giveUp);
       stopWatching?.();
       request?.abort();
     };
   }, [enabled, kept]);
-  return answer;
+  return { answer, settled };
 }

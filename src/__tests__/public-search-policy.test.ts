@@ -63,6 +63,7 @@ import {
   searchQueryLength,
   toggleSearchFilterSwitch,
   type SearchFilters,
+  searchEntityPicturesWith,
 } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
 
 // The rules the web's search page and the app's overlay share
@@ -223,6 +224,23 @@ describe('the shared search rules, read by the web (ugc-mobile/lib/public-search
       // An answer from before the reading was reported.
       expect(searchCorrectionNotice(undefined, 'top')).toBeNull();
     });
+  });
+});
+
+describe('the pictures a client holds for models and tools', () => {
+  const picture = (postId: string) => ({ postId, url: `https://cdn.example/${postId}.webp`, thumbhash: null, width: 720, height: 960, mediaKind: 'image' as const });
+  const entity = (key: string, thumbnail?: ReturnType<typeof picture> | null) => ({ kind: 'model' as const, key, label: key, postCount: 1, postCountCapped: false, thumbnail });
+
+  it('adds the pictures an answer names by entity id, and is the same object when nothing is new', () => {
+    const held = searchEntityPicturesWith({}, [entity('kling-2.6', picture('p1')), entity('veo-3', null), entity('sora')]);
+    expect(held).toEqual({ 'model:kling-2.6': picture('p1') });
+    // Nothing new: the same object, so a client that keeps it in state draws nothing again.
+    expect(searchEntityPicturesWith(held, [entity('kling-2.6', picture('p1')), entity('veo-3')])).toBe(held);
+    expect(searchEntityPicturesWith(held, [])).toBe(held);
+    // A newer picture replaces the one held; the rest stay.
+    const next = searchEntityPicturesWith(held, [entity('kling-2.6', picture('p2')), entity('veo-3', picture('p3'))]);
+    expect(next).toEqual({ 'model:kling-2.6': picture('p2'), 'model:veo-3': picture('p3') });
+    expect(held).toEqual({ 'model:kling-2.6': picture('p1') });
   });
 });
 

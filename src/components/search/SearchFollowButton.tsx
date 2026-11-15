@@ -12,6 +12,7 @@ import {
   SEARCH_FOLLOW_LABEL,
   searchFollowButtonLabel,
 } from '../../../ugc-mobile/lib/public-search-policy/search-ui-words';
+import { noteFollowChange } from '@/lib/follow-changes';
 
 export type SearchFollowCreator = {
   id: string;
@@ -86,6 +87,8 @@ export function SearchFollowButton({
         const data = await response.json().catch(() => null) as { following?: unknown } | null;
         const confirmed = typeof data?.following === 'boolean' ? data.following : next;
         setState((current) => ({ ...current, following: confirmed }));
+        // For a page Back restores later (follow-changes.ts), this one included.
+        noteFollowChange(session.user.id, creator.id, confirmed);
         onChange?.(creator.id, confirmed);
       } catch {
         setState((current) => ({ ...current, following: !next }));

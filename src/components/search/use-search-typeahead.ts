@@ -31,6 +31,7 @@ import {
   type SearchTypeaheadRow,
   type SearchTypeaheadSection,
 } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
+import type { SearchEntity } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 
 // The browser's Supabase client, loaded when a request first needs the
 // session, as the shell's other readers load it (AuthProvider,
@@ -60,6 +61,9 @@ const NO_ROWS: readonly string[] = [];
 
 // No recent search: one array, so a box without a list keeps its memo.
 const NO_RECENTS: readonly string[] = [];
+
+// No model or tool named: one array, so a caller's effect on it runs only when an answer names some.
+const NO_ENTITIES: readonly SearchEntity[] = [];
 
 // Nothing offered before typing: one array, so a box without a start panel keeps its memo.
 const NO_START: readonly SearchTypeaheadSection[] = [];
@@ -416,6 +420,11 @@ export function useSearchTypeahead<Row extends SearchTypeaheadRow = SearchTypeah
     settlingRows,
     sections,
     rows,
+    /**
+     * The models and tools the answer on hand names, drawn or not: a box over results that draw
+     * them leaves them out of its list (`offer`), and the page still wants their pictures.
+     */
+    answerEntities: answer?.response?.entities ?? NO_ENTITIES,
     activeIndex,
     activeOptionId: activeIndex === null ? undefined : searchTypeaheadOptionId(listId, activeIndex),
     /** For a polite live region: "5 suggestions" once this text's list has stood for a pause, nothing once it is gone. */

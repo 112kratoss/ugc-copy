@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError, type MagicbookletApiClient } from '@/lib/api-client';
+import type { SearchEntity } from '@/lib/public-search-policy/public-search-policy';
 import { searchTypingAppendedFrom, searchTypingHeldLength, type SearchTypingHeld } from '@/lib/search-typing-mode';
 import {
   SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS,
@@ -51,6 +52,9 @@ const NO_ROWS: readonly string[] = [];
  * drawn otherwise. It is the "Search for" row, the recent searches the text
  * begins (`history`), then the answer's sections (searchTypingSections).
  */
+// No model or tool named: one array, so a screen's effect on it runs only when an answer names some.
+const NO_ENTITIES: readonly SearchEntity[] = [];
+
 export function useSearchTypeahead({ api, text, active, viewerKey, history, runs }: {
   api: MagicbookletApiClient;
   /** What the field holds. */
@@ -277,9 +281,14 @@ export function useSearchTypeahead({ api, text, active, viewerKey, history, runs
     shown,
     /** The panel is changing or has just changed: its rows are the text before's, or one moved a moment ago and takes no press yet. */
     busy: shown && (stale || settling),
-    /** The keys of the rows that moved a moment ago and take no press yet: drawn dimmed. */
+    /** The keys of the rows that moved a moment ago and take no press yet. Drawn as every other row (owner, 2026-11-16). */
     settlingRows,
     sections,
+    /**
+     * The models and tools the answer on hand names: the screen keeps their pictures for the
+     * results it draws once the search is made (searchEntityPicturesWith).
+     */
+    answerEntities: answer?.response?.entities ?? NO_ENTITIES,
     /** For a screen reader: "5 suggestions" once this text's list has stood for a pause, nothing once it is gone. */
     status,
     press,

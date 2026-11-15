@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SearchClient from '@/app/search/SearchClient';
+import { SEARCH_STARTER_SETTLE_MS } from '@/components/search/use-search-starter';
 import { SearchEntryLink } from '@/components/search/SearchEntryLink';
 import type { PublicSearchResponse } from '@/lib/public-search';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
@@ -207,6 +208,37 @@ describe('search starter', () => {
     expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeTruthy();
     expect(screen.queryByRole('region', { name: SEARCH_STARTER_LABEL })).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('draws no invitation while the starter is on its way: nothing stands under the box to be replaced a moment later', async () => {
+    // The page used to open on the invitation, which the recent searches then pushed down and the
+    // start screen replaced (a flash and a jump on every opening; owner's brief, 2026-11-16).
+    let land: (value: unknown) => void = () => {};
+    starterFetchMock.mockReturnValue(new Promise((resolve) => { land = resolve; }));
+    render(<SearchClient initialQuery="" initialType="top" />);
+    await settle();
+    await settle();
+    expect(starterFetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(SEARCH_IDLE_TITLE)).toBeNull();
+    expect(screen.queryByRole('region', { name: SEARCH_STARTER_LABEL })).toBeNull();
+
+    await act(async () => { land(ok(STARTER)); });
+    expect(await screen.findByRole('region', { name: SEARCH_STARTER_LABEL })).toBeTruthy();
+    expect(screen.queryByText(SEARCH_IDLE_TITLE)).toBeNull();
+  });
+
+  it('draws the invitation after all when the starter has not answered in SEARCH_STARTER_SETTLE_MS', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      starterFetchMock.mockReturnValue(new Promise(() => {}));
+      render(<SearchClient initialQuery="" initialType="top" />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(SEARCH_STARTER_SETTLE_MS - 100); });
+      expect(screen.queryByText(SEARCH_IDLE_TITLE)).toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(screen.getByText(SEARCH_IDLE_TITLE)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the idle invitation when the request never reaches the server', async () => {
