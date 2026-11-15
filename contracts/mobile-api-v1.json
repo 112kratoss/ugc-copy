@@ -2876,6 +2876,32 @@
         "catalogRevision": "catalog-rev-1",
         "modelId": "nano-banana"
       },
+      "queued": {
+        "response": {
+          "success": true,
+          "predictionId": "6a0c7f2e-4d1b-4f6a-9c3e-2b8d5e7f9a10",
+          "generationId": "6a0c7f2e-4d1b-4f6a-9c3e-2b8d5e7f9a10",
+          "status": "waiting",
+          "queued": true,
+          "remainingCredits": 112,
+          "cost": 8,
+          "catalogRevision": "catalog-rev-1",
+          "modelId": "nano-banana"
+        },
+        "status": {
+          "status": "waiting",
+          "output": null,
+          "error": null,
+          "retryAfterMs": 3000,
+          "queued": true,
+          "queuePosition": 4,
+          "timing": {
+            "appStatus": "waiting",
+            "phaseLabel": "Queued · 3 ahead of you",
+            "completedAtMs": null
+          }
+        }
+      },
       "errors": {
         "costChanged": {
           "status": 409,

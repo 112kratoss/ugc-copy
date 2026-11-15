@@ -444,6 +444,11 @@ describe('every module that settles a failed render', () => {
     // request to answer, and is held to announcing it by the guard below.
     'src/lib/generation-services.ts':
       'a creation refused at start is answered in the response to its request, or announced by the run worker that started it',
+    // A queued start that waited too long is refunded with nobody to answer.
+    // It is announced through notifyRunStepGenerationFailed, which sends the
+    // generation's own failure notice. One its creator deleted needs no telling.
+    'src/lib/generation-submission-queue.ts':
+      'a queued start that expired or was refused is announced through the run-step notifiers; a deleted one was the creator\'s own act',
   };
   const SETTLES_A_FAILURE = new RegExp([
     String.raw`(?<!function )settleGenerationFailed\(`,

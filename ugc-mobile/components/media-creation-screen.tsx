@@ -171,6 +171,7 @@ import { withCreditCost, formatCreditCost } from '@/lib/generation-action-label'
 import {
   generationWaitCountdownLabel,
   generationWaitDetail,
+  generationQueueAhead,
   generationWaitPhase,
   generationWaitProgressPercent,
   generationWaitTitle,
@@ -3016,6 +3017,9 @@ function IdentityCreationScreen({
       setLastPredictionId(started.predictionId);
       setLastGenerationId(started.generationId ?? null);
       if (typeof started.remainingCredits === 'number') updateCredits(started.remainingCredits);
+      // A start the server queued says so in its answer. The wait says it from
+      // there, not "Queued with the model" until the first status read comes back.
+      if (started.queued === true) setStatus({ status: 'waiting', queued: true });
       const finalStatus = await pollGenerationForTool(attempt.tool, started.predictionId, pollController);
       await finishGenerationPolling(finalStatus, attempt.tool, started.predictionId);
     } catch (error) {
@@ -6847,8 +6851,8 @@ function GenerationWorkspace({
   // message is still showing, so the clock stops for it too.
   const waiting = visible && !succeeded && !failed && !pollingInterrupted && !attemptUnconfirmed;
   const elapsedSeconds = useGenerationElapsedSeconds(waiting ? startedAt : null);
-  const waitPhase = generationWaitPhase(status?.status);
-  const waitTitle = generationWaitTitle(waitPhase, medium);
+  const waitPhase = generationWaitPhase(status?.status, status?.queued);
+  const waitTitle = generationWaitTitle(waitPhase, medium, generationQueueAhead(status?.queuePosition));
   const waitDetail = generationWaitDetail(waitPhase, elapsedSeconds);
   // The time as the clock last read it: the tick that moves the elapsed line
   // moves the estimate too, and render never asks for the time itself.

@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // idempotency, locks, attachment, refund and callback admission use real SQL.
 vi.mock('@/lib/provider-admission', async (original) => ({
   ...(await original<typeof import('@/lib/provider-admission')>()),
-  admitProviderSubmission: vi.fn(),
+  admitProviderSubmission: vi.fn(async () => ({
+    // The gate's answer for a start it has a place for: a start reads it now, to send or to queue.
+    allowed: true, reason: 'admitted', state: 'closed', retryAfterSeconds: 0, inFlight: null, waitersAhead: null,
+  })),
   recordProviderSubmissionOutcome: vi.fn(),
 }));
 const connectionString = process.env.SUPABASE_TEST_DB_URL;
@@ -85,7 +88,8 @@ describe.skipIf(!connectionString)(
       );
       client = {
         from(table: string) {
-          if (!['generations', 'profiles'].includes(table))
+          // The queue of starts is read when a start is replayed: whether the run is waiting there.
+          if (!['generations', 'profiles', 'generation_queued_submissions'].includes(table))
             throw new Error(`Unexpected table ${table}`);
           const filters: string[] = [];
           const values: unknown[] = [];
@@ -93,7 +97,7 @@ describe.skipIf(!connectionString)(
             select: () => query,
             eq(column: string, value: unknown) {
               if (
-                !['id', 'user_id', 'client_request_key_hash'].includes(column)
+                !['id', 'user_id', 'client_request_key_hash', 'generation_id'].includes(column)
               )
                 throw new Error('Unexpected filter');
               values.push(value);

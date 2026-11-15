@@ -17,6 +17,9 @@ export type GenerationStatusResponse = {
   error?: string | null;
   timing?: GenerationTiming | null;
   retryAfterMs?: number | null;
+  /** A run the server has not sent to the provider yet (`waiting`), and its place among those. */
+  queued?: boolean;
+  queuePosition?: number | null;
 };
 
 type FetchGenerationStatusOptions = {

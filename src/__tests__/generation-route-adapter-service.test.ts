@@ -328,9 +328,11 @@ describe('generation route adapter service', () => {
       expect(queuedUnder).toBe('generation-get-deferred-1');
     });
 
-    it('is not offered to a generation start, which has nothing to send', async () => {
+    it('is offered to a generation start too, which goes on asking for a queued run\'s place', async () => {
+      // A start over the provider's limits answers as queued, and the request
+      // that queued it sends the run from behind its answer when its turn comes.
       const postGenerationForRoute = vi.fn(async (input) => {
-        expect(input.runAfterResponse).toBeUndefined();
+        expect(input.runAfterResponse).toBeTypeOf('function');
 
         return {
           ok: true as const,

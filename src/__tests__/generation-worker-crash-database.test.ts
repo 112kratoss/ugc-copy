@@ -36,7 +36,10 @@ vi.mock('@/lib/generation-media-preview', () => ({
 
 vi.mock('@/lib/provider-admission', async (original) => ({
   ...(await original<typeof import('@/lib/provider-admission')>()),
-  admitProviderSubmission: vi.fn(),
+  admitProviderSubmission: vi.fn(async () => ({
+    // The gate's answer for a start it has a place for: a start reads it now, to send or to queue.
+    allowed: true, reason: 'admitted', state: 'closed', retryAfterSeconds: 0, inFlight: null, waitersAhead: null,
+  })),
   recordProviderSubmissionOutcome: vi.fn(),
 }));
 
@@ -86,6 +89,8 @@ async function databaseClient(db: Client): Promise<SupabaseClient> {
           'mobile_notification_preferences',
           'mobile_push_tokens',
           'completed_post_remixes',
+          // Read when a start is replayed: whether the run is waiting in the queue of starts.
+          'generation_queued_submissions',
         ].includes(table)
       )
         throw new Error(`Unexpected table ${table}`);

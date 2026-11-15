@@ -3,8 +3,6 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { PROVIDER_ADMISSION_POLICY } from '@/lib/provider-admission';
-
 // The live body of reserve_provider_submission. The admission it wraps is still
 // the one `provider-admission-sliding-rate-window-migration.test.ts` pins.
 const migration = fs.readFileSync(path.resolve(
@@ -66,7 +64,8 @@ describe('provider submission waiting line migration', () => {
     expect(reserveBody).toContain('p_turn_since timestamptz DEFAULT NULL');
     expect(reserveBody).toContain('p_line_max integer DEFAULT NULL');
     expect(reserveBody).toContain('p_model_line_max integer DEFAULT NULL');
-    expect(reserveBody).toContain(`p_waiter_ttl_seconds integer DEFAULT ${PROVIDER_ADMISSION_POLICY.waiterTtlSeconds}`);
+    // The app no longer sends it: nothing takes a ticket since the queue. The default serves the deployment before that.
+    expect(reserveBody).toContain('p_waiter_ttl_seconds integer DEFAULT 15');
   });
 
   it('reads the line under the lock that serialises every reservation', () => {

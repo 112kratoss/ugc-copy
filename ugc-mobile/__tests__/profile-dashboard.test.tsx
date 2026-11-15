@@ -2269,7 +2269,10 @@ describe('ProfileDashboard media tiles routing', () => {
 
       expect(stripTitles(tree).length).toBeGreaterThan(0);
       expect(tree.root.findByProps({ accessibilityLabel: 'Video, rendering, started 3 min ago' })).toBeTruthy();
-      expect(tree.root.findByProps({ accessibilityLabel: 'Motion, rendering, started just now' })).toBeTruthy();
+      // A run the server has not sent to the model yet has not started, and is not rendering: it is queued.
+      expect(tree.root.findByProps({ accessibilityLabel: 'Motion, queued just now' })).toBeTruthy();
+      expect(tree.root.findAllByProps({ children: 'Queued just now' }).length).toBeGreaterThan(0);
+      expect(tree.root.findAllByProps({ children: 'Started just now' })).toHaveLength(0);
       expect(tree.root.findByProps({ accessibilityLabel: 'Voiceover, rendering, started 2 h ago' })).toBeTruthy();
       // The finished image, the failed run and the archived one are all images:
       // none of them is on the strip.

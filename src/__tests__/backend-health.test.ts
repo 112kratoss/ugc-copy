@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { collectBackendHealth } from '@/lib/backend-health';
+import { collectBackendHealth, isPendingGenerationWaitingInQueue } from '@/lib/backend-health';
 import { BACKEND_ENVIRONMENT_REQUIREMENTS } from '@/lib/backend-environment';
 import { BACKEND_JOB_REGISTRY } from '@/lib/backend-jobs';
 import { MAX_COMPLETION_ATTEMPTS } from '@/lib/generation-completion-job-policy';
@@ -552,7 +552,8 @@ describe('collectBackendHealth', () => {
     expect(db.builders.generations[0].select).toHaveBeenCalledWith('status,created_at,cost', { count: 'exact' });
     expect(db.builders.generations[1].select).toHaveBeenCalledWith('created_at,cost');
     expect(db.builders.generations[1].in).toHaveBeenCalledWith('status', ['pending', 'waiting', 'processing']);
-    expect(db.builders.generations[2].select).toHaveBeenCalledWith('created_at,cost');
+    // With each one's row in the queue of starts, if it has one: waiting there is not a start that died.
+    expect(db.builders.generations[2].select).toHaveBeenCalledWith('created_at,cost,generation_queued_submissions(queued_at)');
     expect(db.builders.generations[2].eq).toHaveBeenCalledWith('status', 'pending');
     expect(db.builders.generations[2].is).toHaveBeenCalledWith('prediction_id', null);
   });
@@ -2039,7 +2040,11 @@ describe('collectBackendHealth', () => {
           error: null,
           data: [
             { created_at: '2026-06-21T09:50:00.000Z', cost: 8 },
-            { created_at: '2026-06-21T09:52:00.000Z', cost: 12 },
+            // Waiting their turn in the queue of starts: no task yet is the
+            // point, in either shape PostgREST gives a one-to-one embed.
+            { created_at: '2026-06-21T09:51:00.000Z', cost: 30, generation_queued_submissions: { queued_at: '2026-06-21T09:51:01.000Z' } },
+            { created_at: '2026-06-21T09:51:30.000Z', cost: 40, generation_queued_submissions: [{ queued_at: '2026-06-21T09:51:31.000Z' }] },
+            { created_at: '2026-06-21T09:52:00.000Z', cost: 12, generation_queued_submissions: null },
           ],
         },
       ],
@@ -2629,5 +2634,31 @@ describe('collectBackendHealth', () => {
       expect(health.postIntegrity).toMatchObject({ status: 'ok', shellPostCount: 0 });
       expect(shellPostIssues(health)).toEqual([]);
     });
+  });
+});
+
+describe('a pending generation waiting in the queue of starts', () => {
+  const now = new Date('2026-06-21T10:00:00.000Z');
+  const queuedAgo = (minutes: number) => ({
+    created_at: null,
+    cost: 8,
+    generation_queued_submissions: { queued_at: new Date(now.getTime() - minutes * 60_000).toISOString() },
+  });
+
+  it('is not a start that died, for as long as a pass could still be coming for it', () => {
+    // Ten minutes in the queue, and the ten between two cron passes that would end an overdue run.
+    expect(isPendingGenerationWaitingInQueue(queuedAgo(1), now)).toBe(true);
+    expect(isPendingGenerationWaitingInQueue(queuedAgo(19), now)).toBe(true);
+  });
+
+  it('counts once it is overdue: a queue nothing is serving is worth an alert', () => {
+    expect(isPendingGenerationWaitingInQueue(queuedAgo(20), now)).toBe(false);
+    expect(isPendingGenerationWaitingInQueue(queuedAgo(44), now)).toBe(false);
+  });
+
+  it('counts with no queue row, or one that cannot be read', () => {
+    for (const embed of [undefined, null, [], { queued_at: null }, { queued_at: 'not a date' }]) {
+      expect(isPendingGenerationWaitingInQueue({ created_at: null, cost: 8, generation_queued_submissions: embed }, now)).toBe(false);
+    }
   });
 });

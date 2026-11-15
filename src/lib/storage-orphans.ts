@@ -170,6 +170,7 @@ const SEARCH_DICTIONARY = 'single words of letters, held to that by a check: nev
 const SEARCH_ENTITIES = 'model and tool names and their keys, at most 80 characters, copied from Made with: never a stored path';
 const SEARCH_DENYLIST = 'single words an operator withdrew from suggestions, each with a note: never a path';
 const COMMENT_REACTIONS = 'a like or a dislike, one of two words held to that by a check: never a path';
+const QUEUED_PROVIDER_REQUEST = 'a queued start: signed links to inputs that are recorded elsewhere, kept only while the start waits';
 const UPLOAD_BOOKKEEPING = 'upload bookkeeping: read for the exclusions, never a reference';
 const RECIPE_SWEEP = "the recipe-copy sweep's own bookkeeping: its folders are excluded";
 const RECIPE_COPY_SOURCES = 'where passed-on recipe copies came from: it names only copies, whose folders are excluded';
@@ -197,6 +198,9 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   feed_user_post_feedback: TELEMETRY,
   feed_viewer_daily: TELEMETRY,
   follows: NO_TEXT,
+  // The provider request of a start waiting in the queue: deleted by the claim that sends, cancels or expires it,
+  // and with its generation leaving `pending` by any other road (a trigger).
+  generation_queued_submissions: QUEUED_PROVIDER_REQUEST,
   generation_share_events: TELEMETRY,
   media_upload_intents: UPLOAD_BOOKKEEPING,
   mobile_notification_preferences: NO_TEXT,
