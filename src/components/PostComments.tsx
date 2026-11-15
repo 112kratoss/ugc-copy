@@ -1677,7 +1677,7 @@ function CommentBody({ text, deleted }: { text: string; deleted: boolean }) {
                     type="button"
                     onClick={() => setUnfolded((current) => !current)}
                     aria-expanded={unfolded}
-                    className="ui-focus-ring -ml-2 min-h-9 rounded-full px-2 text-xs font-bold text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]"
+                    className="ui-focus-ring -ml-2 min-h-7 rounded-full px-2 text-xs font-bold text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]"
                 >
                     {unfolded ? 'Show less' : 'Read more'}
                 </button>

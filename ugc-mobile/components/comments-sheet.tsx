@@ -1656,11 +1656,14 @@ function CommentRowView({
       {authorPress ? (
         // The avatar takes the handle's tap, with room around it for a 44pt
         // target. The handle is the one control a screen reader lists, so this
-        // one stays out of its way.
+        // one stays out of its way. Its reach upward stops at the row's top
+        // edge, as the handle's does, so a press on the bottom of the row above
+        // (another thread's replies toggle) never opens this profile; the
+        // reach below the avatar makes up the height, clear of the actions.
         <Pressable
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
-          hitSlop={10}
+          hitSlop={{ top: COMMENT_ROW_PADDING, bottom: 44 - THREAD_AVATAR_SIZE - COMMENT_ROW_PADDING, left: 10, right: 10 }}
           {...authorPress}
           style={({ pressed }) => ({ alignSelf: 'flex-start', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
@@ -1729,8 +1732,10 @@ function CommentRowView({
           // drawn 32pt tall around its 16pt icon or label and reaches 44pt
           // through `verticalHitSlop`, as one-line controls do across the app
           // (`lib/hit-target.ts`): drawn at 44 and more, the row read as a gap
-          // under every comment.
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: -10 }}>
+          // under every comment. Under Read more the row sits 3pt lower, so
+          // the actions' reach above them (6pt) ends at Read more's edge
+          // instead of taking the bottom of its button.
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: -10, marginTop: foldable ? 3 : 0 }}>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Like ${display.authorLabel}'s comment`}

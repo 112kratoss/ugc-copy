@@ -705,6 +705,8 @@ describe('PostComments', () => {
         expect(within(byOwner).queryByRole('button', { name: 'Read more' })).not.toBeInTheDocument();
         const body = within(longRow).getByText(/^Line 1/);
         expect(body).toHaveClass('line-clamp-4');
+        // As short as the actions under it.
+        expect(within(longRow).getByRole('button', { name: 'Read more' })).toHaveClass('min-h-7');
         fireEvent.click(within(longRow).getByRole('button', { name: 'Read more' }));
         expect(body).not.toHaveClass('line-clamp-4');
         fireEvent.click(within(longRow).getByRole('button', { name: 'Show less' }));
@@ -946,6 +948,8 @@ describe('PostComments', () => {
             expect(screen.queryByRole('button', { name: "Heart @viewer's comment" })).not.toBeInTheDocument();
             const heart = screen.getByRole('button', { name: "Heart @creator's comment" });
             expect(heart).toHaveAttribute('aria-pressed', 'false');
+            // As short as the other actions under a comment.
+            expect(heart).toHaveClass('h-7');
             fireEvent.click(heart);
             expect(heart).toHaveAttribute('aria-pressed', 'true');
             await waitFor(() => expect(sent).toEqual([{ id: 'theirs', change: { hearted: true } }]));

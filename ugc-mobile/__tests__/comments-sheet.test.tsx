@@ -548,6 +548,10 @@ describe('comments sheet', () => {
       expect(action.props.style).toMatchObject({ minHeight: 32 });
       expect(action.props.hitSlop).toEqual({ top: 6, bottom: 6 });
     }
+    // The picture reaches 44pt within its own row: up to the row's top edge
+    // (8pt of padding) and the rest below it, never into the row above.
+    const picture = root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityElementsHidden === true);
+    expect(picture.props.hitSlop).toEqual({ top: 8, bottom: 11, left: 10, right: 10 });
     expect(pressable(root, "Options for @batman's comment").props.style)
       .toMatchObject({ width: 48, height: 48 });
   });
@@ -1529,6 +1533,9 @@ describe('likes, the heart, the pin and edits', () => {
     expect(pressables(owners.root, "Heart @owner's comment")).toHaveLength(0);
     const heart = pressable(owners.root, "Heart @batman's comment");
     expect(heart.props.accessibilityState).toMatchObject({ selected: true });
+    // Drawn as short as the other actions, with their 44pt reach.
+    expect(heart.props.style).toMatchObject({ minHeight: 32 });
+    expect(heart.props.hitSlop).toEqual({ top: 6, bottom: 6 });
     renderer.act(() => {
       heart.props.onPress();
     });
@@ -1543,6 +1550,11 @@ describe('likes, the heart, the pin and edits', () => {
       (node) => String(node.type) === 'text' && String(node.children[0]).startsWith('A long line of thought.')
     );
     expect(body().props.numberOfLines).toBe(4);
+    // The actions sit 3pt lower under Read more: with the column's 3pt gap,
+    // their 6pt reach above them ends at Read more's edge, not inside it.
+    let actionsRow = pressable(tree.root, "Like @batman's comment").parent;
+    while (actionsRow && String(actionsRow.type) !== 'view') actionsRow = actionsRow.parent;
+    expect(actionsRow?.props.style).toMatchObject({ flexDirection: 'row', marginTop: 3 });
     renderer.act(() => {
       pressable(tree.root, 'Read more of this comment').props.onPress();
     });
