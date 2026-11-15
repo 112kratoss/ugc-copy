@@ -114,11 +114,13 @@ import {
   withNamedClips,
   type RefusedRunPrice,
 } from '@/lib/generation-model-draft';
+import { creatorLinkModelStep } from '@/lib/creator-link-model-view-model';
 import { guidedCreationStarter, guidedCreationStarters } from '@/lib/guided-creation-starter';
 import {
   getActiveCatalogInputSlots,
   getCatalogModel,
   getCatalogModels,
+  isUsableCatalogModel,
   catalogConditionsMatch,
   type CatalogControl,
   type CatalogGenerationRequest,
@@ -901,11 +903,12 @@ function motionClipRefusal(picked: { fileName?: string | null; fileSize?: number
  * read again (`RemixSourceRow`). The sign-in screen hands this on exactly as it was built
  * (`app/auth.tsx`), so a prompt or a title with &, # or + comes back whole.
  */
-function creatorReturnPath({ insideTab, tool, guided, initialPrompt, remixSource }: {
+function creatorReturnPath({ insideTab, tool, guided, initialPrompt, initialModel, remixSource }: {
   insideTab: boolean;
   tool: CreatorToolId;
   guided: boolean;
   initialPrompt?: string | null;
+  initialModel?: string | null;
   remixSource?: RemixSourceSeed;
 }) {
   const params: Array<[string, string | null | undefined]> = insideTab
@@ -917,6 +920,7 @@ function creatorReturnPath({ insideTab, tool, guided, initialPrompt, remixSource
         ['sourceCreator', remixSource?.creatorLabel],
         ['sourceThumbnail', remixSource?.thumbnailUrl],
         ['prompt', initialPrompt],
+        ['model', initialModel],
         ['guided', guided ? '1' : null],
       ];
   const query = params
@@ -1014,6 +1018,12 @@ type MediaCreationScreenProps = {
   initialTool?: CreatorToolId;
   insideTab?: boolean;
   initialPrompt?: string | null;
+  /**
+   * The model the screen's link names (`/create/video?model=seedance-2`: search's row for a catalog
+   * model nobody has posted with yet), chosen once as the picker would choose it
+   * (lib/creator-link-model-view-model.ts). Never for a remix or a guided first creation.
+   */
+  initialModel?: string | null;
   remixSource?: RemixSourceSeed;
   /** The Remix tap that opened this creator before its start was answered, as its link names it (`REMIX_LAUNCH_PARAM`). */
   remixLaunchId?: string | null;
@@ -1056,6 +1066,7 @@ function IdentityCreationScreen({
   initialTool = 'image',
   insideTab = false,
   initialPrompt,
+  initialModel = null,
   remixSource,
   remixLaunchId,
   remixOpening,
@@ -1081,6 +1092,10 @@ function IdentityCreationScreen({
   const guidedScreen = guided && !remixSource;
   // A prompt-only entry (a Recreate of a post with no source to restore) puts its words in its tool's draft.
   const linkPrompt = !remixSource && initialPrompt ? initialPrompt : null;
+  // A model-only entry (search's catalog row) chooses its model in its tool's draft once, as the
+  // picker would; a remix restores its source's model and a guided creation names its starter's.
+  const linkModel = !remixSource && !guided && initialModel ? initialModel : null;
+  const [linkModelSettled, setLinkModelSettled] = useState(false);
   // Every starter the guided draft may land on, in order: the catalog may have dropped the first.
   const guidedStarterIds = guidedCreationStarters(initialTool, { guided: guidedScreen, initialTool }).map((starter) => starter.modelId);
   const withGuidedStart = <T extends CreationDraft>(draft: T): T => {
@@ -1256,7 +1271,14 @@ function IdentityCreationScreen({
     kind: activeTool,
     // The model a Remix tap's source was made on loads beside the start, so its name is on the
     // chip while the source loads and the restore finds its details in.
-    selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model, ...pinnedStarterIds, ...(remixLaunch?.modelId ? [remixLaunch.modelId] : [])],
+    selectedIds: [
+      imageDraft.model, videoDraft.model, motionDraft.model, ...pinnedStarterIds,
+      ...(remixLaunch?.modelId ? [remixLaunch.modelId] : []),
+      // The link's model loads with the drafts' until it is chosen or dropped: once settled it is
+      // a draft's model or no longer wanted, and a dropped one would hold the creator
+      // "unavailable" through any catalog error, as a dropped starter would.
+      ...(linkModel && !linkModelSettled ? [linkModel] : []),
+    ],
     pickerOpen: modelPickerVisible,
   });
   const catalog = catalogQuery.catalog;
@@ -1748,7 +1770,7 @@ function IdentityCreationScreen({
   const openAuthForCurrentDraft = () => {
     // The route's own tool, not the one switched to: the tool, remix and prompt are what the
     // route was opened with, and only those find this screen again.
-    openSignUpSheet(router, creatorReturnPath({ insideTab, tool: initialTool, guided, initialPrompt, remixSource }));
+    openSignUpSheet(router, creatorReturnPath({ insideTab, tool: initialTool, guided, initialPrompt, initialModel: linkModel, remixSource }));
   };
 
   /** Answers whether the screen is now on `tool`: a run still going keeps its own, and says why. */
@@ -1867,6 +1889,25 @@ function IdentityCreationScreen({
     if (model.kind !== activeTool && !changeTool(model.kind)) return;
     void pickModel(model.kind, model.id);
   };
+
+  // The link's model (`?model=`), chosen once as the picker chooses one: after the saved drafts are
+  // read and the catalog's revision is confirmed, so neither puts another model over it, and only
+  // when this creator may run it; dropped otherwise, the draft keeping its own
+  // (creatorLinkModelStep).
+  useEffect(() => {
+    if (!linkModel || linkModelSettled) return;
+    const model = catalog ? getCatalogModel(catalog, linkModel) : null;
+    const step = creatorLinkModelStep({
+      ready: draftsHydrated && catalog !== null && !revisionUnconfirmed,
+      loaded: model !== null,
+      missing: catalogQuery.missingIds.includes(linkModel),
+      usable: catalog !== null && isUsableCatalogModel(model, initialTool, catalog),
+    });
+    if (step === 'wait') return;
+    setLinkModelSettled(true);
+    if (step === 'pick') void pickModel(initialTool, linkModel);
+    // `pickModel` is this render's: it reads the drafts through `latestDrafts`, kept current above.
+  }, [catalog, catalogQuery.missingIds, draftsHydrated, initialTool, linkModel, linkModelSettled, revisionUnconfirmed]);
 
   useEffect(() => {
     const generationId = remixSource?.generationId?.trim();

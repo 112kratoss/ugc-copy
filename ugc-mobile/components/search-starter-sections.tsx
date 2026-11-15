@@ -1,6 +1,8 @@
 import { Box, Search, Wrench } from 'lucide-react-native';
 import { Pressable, Text, View } from 'react-native';
 
+import { SearchFollowButton, SearchFollowFailedLine } from '@/components/search-follow-button';
+import { SearchRowPicture } from '@/components/search-row-picture';
 import { CreatorAvatar } from '@/components/ui';
 import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import {
@@ -10,14 +12,19 @@ import {
 } from '@/lib/public-search-policy/public-search-policy';
 import {
   SEARCH_STARTER_LABEL,
-  searchStarterSections,
   type SearchStarterCreator,
   type SearchStarterEntity,
   type SearchStarterResponse,
   type SearchStarterSearch,
 } from '@/lib/public-search-policy/search-starter';
+import { searchStarterShownSections } from '@/lib/search-screen-view-model';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
+import { useSearchCreatorFollow } from '@/lib/use-search-creator-follow';
+
+// A row's leading picture or avatar, and a chip's: a thumb's width beside the words.
+const ROW_MARK_SIZE = 36;
+const CHIP_MARK_SIZE = 28;
 
 function SectionHeading({ children }: { children: string }) {
   const theme = useAppTheme();
@@ -30,7 +37,6 @@ function SectionHeading({ children }: { children: string }) {
 
 function EntityStarterRow({ entity, onPress }: { entity: SearchStarterEntity; onPress: () => void }) {
   const theme = useAppTheme();
-  const Icon = entity.kind === 'model' ? Box : Wrench;
   return (
     <Pressable
       accessibilityRole="button"
@@ -46,18 +52,8 @@ function EntityStarterRow({ entity, onPress }: { entity: SearchStarterEntity; on
         paddingVertical: 6,
       })}
     >
-      <View
-        style={{
-          width: 36,
-          height: 36,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: appTheme.radii.pill,
-          backgroundColor: theme.colors.surfaceStrong,
-        }}
-      >
-        <Icon size={appTheme.icon.sm} color={theme.colors.primary} />
-      </View>
+      {/* A post made with it, where the answer has one; its kind's glyph otherwise. */}
+      <SearchRowPicture thumbnail={entity.thumbnail} size={ROW_MARK_SIZE} Icon={entity.kind === 'model' ? Box : Wrench} />
       <View style={{ minWidth: 0, flex: 1 }}>
         <Text numberOfLines={2} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{entity.label}</Text>
         <Text numberOfLines={1} style={{ marginTop: 1, color: theme.colors.muted, fontSize: 13 }}>
@@ -70,31 +66,43 @@ function EntityStarterRow({ entity, onPress }: { entity: SearchStarterEntity; on
 
 function CreatorStarterRow({ creator, onOpen }: { creator: SearchStarterCreator; onOpen: () => void }) {
   const theme = useAppTheme();
+  const follow = useSearchCreatorFollow(creator);
   const name = creator.displayName.toLowerCase() === creator.username.toLowerCase() ? `@${creator.username}` : `${creator.displayName}, @${creator.username}`;
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${name}, ${creator.publicPostCount} ${creator.publicPostCount === 1 ? 'post' : 'posts'}. Open profile`}
-      testID="search-starter-creator"
-      // Their page is read once the finger has rested here, as on every creator row.
-      {...creatorProfilePress(creator.username, onOpen)}
-      style={({ pressed }) => ({
-        minHeight: 52,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-        paddingVertical: 6,
-      })}
-    >
-      <CreatorAvatar uri={creator.avatarUrl} name={creator.displayName} size={36} />
-      <View style={{ minWidth: 0, flex: 1 }}>
-        <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{creator.displayName}</Text>
-        <Text numberOfLines={1} style={{ marginTop: 1, color: theme.colors.muted, fontSize: 13 }}>
-          {`@${creator.username} · ${creator.publicPostCount} ${creator.publicPostCount === 1 ? 'post' : 'posts'}`}
-        </Text>
+    <View style={{ gap: 4 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${name}${follow.following ? ', following' : ''}, ${creator.publicPostCount} ${creator.publicPostCount === 1 ? 'post' : 'posts'}. Open profile`}
+          testID="search-starter-creator"
+          // Their page is read once the finger has rested here, as on every creator row.
+          {...creatorProfilePress(creator.username, onOpen)}
+          style={({ pressed }) => ({
+            minHeight: 52,
+            minWidth: 0,
+            flex: 1,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+            paddingVertical: 6,
+          })}
+        >
+          <CreatorAvatar uri={creator.avatarUrl} name={creator.displayName} size={ROW_MARK_SIZE} />
+          <View style={{ minWidth: 0, flex: 1 }}>
+            <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{creator.displayName}</Text>
+            <Text numberOfLines={1} style={{ marginTop: 1, color: theme.colors.muted, fontSize: 13 }}>
+              {`@${creator.username} · ${creator.publicPostCount} ${creator.publicPostCount === 1 ? 'post' : 'posts'}`}
+            </Text>
+          </View>
+        </Pressable>
+        {/* Follows in place: beside the row's press, never inside it (search-follow-button.tsx). */}
+        {follow.offered ? (
+          <SearchFollowButton creator={creator} following={follow.following} pending={follow.pending} onPress={follow.press} />
+        ) : null}
       </View>
-    </Pressable>
+      {follow.failed ? <SearchFollowFailedLine /> : null}
+    </View>
   );
 }
 
@@ -108,19 +116,24 @@ function SearchStarterChip({ search, onPress }: { search: SearchStarterSearch; o
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: appTheme.touch.default,
+        maxWidth: '100%',
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: 8,
         borderRadius: appTheme.radii.pill,
         borderWidth: 1,
         borderColor: theme.colors.border,
         backgroundColor: theme.colors.surface,
         opacity: pressed ? appTheme.opacity.pressed : 1,
-        paddingHorizontal: 14,
+        paddingLeft: 10,
+        paddingRight: 14,
+        paddingVertical: 6,
       })}
     >
-      <Search size={appTheme.icon.xs} color={theme.colors.muted} />
-      <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>{search.text}</Text>
+      {/* A post the search finds, round at the capsule's start; the magnifier where there is none. */}
+      <SearchRowPicture thumbnail={search.thumbnail} size={CHIP_MARK_SIZE} shape="circle" Icon={Search} iconSize={appTheme.icon.xs} />
+      {/* A phrase wraps inside its capsule rather than run past the screen at the largest sizes. */}
+      <Text style={{ flexShrink: 1, color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>{search.text}</Text>
     </Pressable>
   );
 }
@@ -130,9 +143,13 @@ function SearchStarterChip({ search, onPress }: { search: SearchStarterSearch; o
  * findings 2 and 8; `GET /api/search/starter`, rules in
  * `lib/public-search-policy/search-starter.ts`): popular models and tools,
  * creators to follow, and searches to try, each under its heading, in that
- * order; a list with nothing in it draws no heading. Drawn under the recent
- * searches before anything is typed, and under "No results" with `heading`
- * ("Try one of these instead") when a search finds nothing.
+ * order; a list with nothing in it draws no heading. A list the answer says is
+ * this week's is titled so ("Popular this week"), any other by its all-time
+ * heading (searchStarterShownSections). Each model, tool and search draws the
+ * picture the answer gives it, its glyph in the same frame where there is
+ * none; each creator has Follow beside them. Drawn under the recent searches
+ * before anything is typed, and under "No results" with `heading` ("Try one
+ * of these instead") when a search finds nothing.
  */
 export function SearchStarterSections({
   answer,
@@ -148,7 +165,7 @@ export function SearchStarterSections({
   onSearch: (search: SearchStarterSearch) => void;
 }) {
   const theme = useAppTheme();
-  const sections = searchStarterSections(answer);
+  const sections = searchStarterShownSections(answer);
   if (sections.length === 0) return null;
   return (
     <View accessibilityLabel={SEARCH_STARTER_LABEL} testID="search-starter" style={{ gap: 22 }}>

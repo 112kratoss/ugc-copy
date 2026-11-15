@@ -105,7 +105,10 @@ export function useSearchTypeahead({ api, text, active, viewerKey, history, runs
     const timer = setTimeout(async () => {
       let response: SearchSuggestResponse | null = null;
       try {
-        response = parseSearchSuggestResponse(await api.suggestSearch({ query }, controller.signal));
+        // Every name the product knows (`catalog=1`): the list opens a creator
+        // for a catalog model nobody has posted with, and searches the `query`
+        // a row carries (lib/search-screen-view-model.ts).
+        response = parseSearchSuggestResponse(await api.suggestSearch({ query, catalog: true }, controller.signal));
       } catch (error) {
         // A suggestion is an extra: its failure is nothing, never a message.
         if (error instanceof ApiError && error.status === 429) {
@@ -149,8 +152,10 @@ export function useSearchTypeahead({ api, text, active, viewerKey, history, runs
   // under the rows that need no answer: "Search for" and the recents it begins.
   // A recent search too short for the picked tab is not offered: pressed, it would search nothing.
   const runningHistory = useMemo(() => history.filter((item) => runs(item)), [history, runs]);
+  // Asked with the catalog, drawn for the app: models and tools from two
+  // characters, none with nothing to open in the app, and a name offered once.
   const drawn = useMemo(
-    () => searchTypeaheadDrawn(answer, query, { recents: runningHistory, offer: SEARCH_TYPEAHEAD_OFFER_ALL }),
+    () => searchTypeaheadDrawn(answer, query, { recents: runningHistory, offer: SEARCH_TYPEAHEAD_OFFER_ALL, catalog: true, platform: 'mobile' }),
     [answer, query, runningHistory],
   );
   const stale = drawn.stale;

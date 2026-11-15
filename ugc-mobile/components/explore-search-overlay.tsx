@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { Reveal } from '@/components/reveal';
 import { useSearchEntrance } from '@/components/search-entrance';
+import { SearchFollowButton, SearchFollowFailedLine } from '@/components/search-follow-button';
 import { SearchPostMasonry } from '@/components/search-post-masonry';
 import { SearchStarterSections } from '@/components/search-starter-sections';
 import { SearchTypeaheadList } from '@/components/search-typeahead-list';
@@ -97,6 +98,7 @@ import {
   toggleSearchFilterSwitch,
   type SearchEntity,
   type SearchFilters,
+  type SearchRelatedSearch,
   type SearchTopSection,
 } from '@/lib/public-search-policy/public-search-policy';
 import {
@@ -108,10 +110,13 @@ import {
   type SearchStarterSearch,
 } from '@/lib/public-search-policy/search-starter';
 import { useSearchStarterState } from '@/lib/use-search-starter';
-import { appendSearchPosts, isSearchPageAllRepeats } from '@/lib/public-search-policy/search-blend';
+import { appendSearchPosts, isSearchAnswerBlended, isSearchPageAllRepeats } from '@/lib/public-search-policy/search-blend';
 import { searchTypeaheadQuery, type SearchTypeaheadRow } from '@/lib/public-search-policy/search-typeahead';
 import { searchEntryForChosenText, type SearchEntry, type SearchOpenKind } from '@/lib/public-search-policy/search-open-log';
+import { SEARCH_RELATED_SEARCHES_HEADING } from '@/lib/public-search-policy/search-ui-words';
 import { reportSearchOpen } from '@/lib/search-open-report';
+import { searchRelatedSearchChips, searchRequestExtras, searchTypeaheadEntityRoute } from '@/lib/search-screen-view-model';
+import { useSearchCreatorFollow } from '@/lib/use-search-creator-follow';
 import {
   clearSearchHistory,
   forgetSearchQuery,
@@ -298,23 +303,52 @@ function SeeAllButton({ section, onPress }: { section: SearchTopSection; onPress
   return <SecondaryButton label={searchSeeAllLabel(section)} onPress={onPress} />;
 }
 
-// A state, not a control: the row opens the profile, where Follow lives. It
-// tells apart two creators with one name, as the web's search card does.
-function FollowingChip() {
+// Searches near this one (`relatedSearches`, 2026-11-15) over a Top or Posts
+// answer: one row of chips that scrolls sideways, as the filters do, each
+// searching its text. Nothing for an answer without them.
+function RelatedSearches({ searches, onSearch }: { searches: readonly SearchRelatedSearch[]; onSearch: (text: string) => void }) {
   const theme = useAppTheme();
-  const tone = theme.semantic.neutral;
+  if (searches.length === 0) return null;
   return (
-    <View
-      style={{
-        borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: tone.border,
-        backgroundColor: tone.background,
-        paddingHorizontal: 8,
-        paddingVertical: 2,
-      }}
-    >
-      <Text style={{ color: tone.foreground, fontSize: 11, fontWeight: '800' }}>Following</Text>
+    <View testID="search-related-searches" style={{ gap: 8 }}>
+      <Text accessibilityRole="header" style={{ color: theme.colors.textSecondary, fontSize: 13, fontWeight: '800' }}>
+        {SEARCH_RELATED_SEARCHES_HEADING}
+      </Text>
+      <ScrollView
+        horizontal
+        keyboardShouldPersistTaps="handled"
+        showsHorizontalScrollIndicator={false}
+        style={{ flexGrow: 0, marginHorizontal: -appTheme.spacing.screen }}
+        contentContainerStyle={{ alignItems: 'center', gap: 8, paddingHorizontal: appTheme.spacing.screen }}
+      >
+        {searches.map((search) => (
+          <Pressable
+            key={search.text}
+            accessibilityRole="button"
+            accessibilityLabel={`Search for ${search.text}`}
+            testID="search-related-search"
+            onPress={() => onSearch(search.text)}
+            style={({ pressed }) => ({
+              minHeight: appTheme.touch.default,
+              maxWidth: 260,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              borderRadius: appTheme.radii.pill,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+              backgroundColor: theme.colors.surface,
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+              paddingHorizontal: 14,
+              paddingVertical: 6,
+            })}
+          >
+            <Search size={appTheme.icon.xs} color={theme.colors.muted} />
+            {/* Two lines at the largest sizes; its name holds the whole search. */}
+            <Text numberOfLines={2} style={{ flexShrink: 1, color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>{search.text}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
     </View>
   );
 }
@@ -462,48 +496,80 @@ function ReadingNotice({ line, actionLabel, onAction }: { line: string; actionLa
   );
 }
 
+// The dot between a creator's handle and their count.
+const META_DOT_SIZE = 3;
+
+// Follow is a control on the row (2026-11-15: follow from the list, as
+// Pinterest, X and Instagram let a person do), no longer a state the row only
+// shows while Follow lives on the profile. It follows in place, beside the
+// row's press: the row still opens the profile, and the button's press neither
+// opens it nor reports an open (components/search-follow-button.tsx). Its
+// state still tells apart two creators with one name, as the web's card does.
 function CreatorRow({ creator, onOpen }: { creator: CreatorSearchResult; onOpen: () => void }) {
   const theme = useAppTheme();
+  const follow = useSearchCreatorFollow(creator);
   // One line, as on the web card, where the browser folds a bio's line breaks
   // into spaces.
   const bio = creator.bio?.replace(/\s+/g, ' ').trim();
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={searchCreatorCardLabel(creator)}
-      // Their page is read once the finger has rested here, never for a scroll
-      // of the results that starts on the row (`creatorProfilePress`).
-      {...creatorProfilePress(creator.username, () => {
-        onOpen();
-        router.push(`/creators/${encodeURIComponent(creator.username)}` as never);
-      })}
-      style={({ pressed }) => ({
-        minHeight: 76,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 13,
+    <View
+      style={{
         borderRadius: appTheme.radii.lg,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: theme.colors.borderSubtle,
         backgroundColor: theme.colors.surface,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-        padding: 13,
-      })}
+      }}
     >
-      <CreatorAvatar uri={creator.avatarUrl} name={creator.displayName} size={48} />
-      <View style={{ flex: 1 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{creator.displayName}</Text>
-          {creator.isFollowing ? <FollowingChip /> : null}
-        </View>
-        <Text numberOfLines={1} style={{ marginTop: 2, color: theme.colors.muted, fontSize: 13 }}>@{creator.username}</Text>
-        {bio ? <Text numberOfLines={1} style={{ marginTop: 2, color: theme.colors.faint, fontSize: 12 }}>{bio}</Text> : null}
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={searchCreatorCardLabel({ ...creator, isFollowing: follow.following })}
+          testID="search-creator-row"
+          // Their page is read once the finger has rested here, never for a scroll
+          // of the results that starts on the row (`creatorProfilePress`).
+          {...creatorProfilePress(creator.username, () => {
+            onOpen();
+            router.push(`/creators/${encodeURIComponent(creator.username)}` as never);
+          })}
+          style={({ pressed }) => ({
+            minHeight: 76,
+            minWidth: 0,
+            flex: 1,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 13,
+            opacity: pressed ? appTheme.opacity.pressed : 1,
+            padding: 13,
+          })}
+        >
+          <CreatorAvatar uri={creator.avatarUrl} name={creator.displayName} size={48} />
+          <View style={{ minWidth: 0, flex: 1 }}>
+            <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800' }}>{creator.displayName}</Text>
+            {/* The count beside the handle, where Follow now stands at the row's end: two texts
+                and a drawn dot, so each reads in the row's label as it is drawn. */}
+            <View style={{ marginTop: 2, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.muted, fontSize: 13 }}>@{creator.username}</Text>
+              <View style={{ width: META_DOT_SIZE, height: META_DOT_SIZE, borderRadius: META_DOT_SIZE / 2, backgroundColor: theme.colors.faint }} />
+              <Text numberOfLines={1} style={{ flexShrink: 0, color: theme.colors.muted, fontSize: 13 }}>
+                {`${creator.publicPostCount} ${creator.publicPostCount === 1 ? 'post' : 'posts'}`}
+              </Text>
+            </View>
+            {bio ? <Text numberOfLines={1} style={{ marginTop: 2, color: theme.colors.faint, fontSize: 12 }}>{bio}</Text> : null}
+          </View>
+        </Pressable>
+        {follow.offered ? (
+          <View style={{ paddingRight: 13 }}>
+            <SearchFollowButton creator={creator} following={follow.following} pending={follow.pending} onPress={follow.press} />
+          </View>
+        ) : null}
       </View>
-      <Text style={{ color: theme.colors.faint, fontSize: 12 }}>
-        {`${creator.publicPostCount} ${creator.publicPostCount === 1 ? 'post' : 'posts'}`}
-      </Text>
-    </Pressable>
+      {follow.failed ? (
+        <View style={{ paddingHorizontal: 13, paddingBottom: 13 }}>
+          <SearchFollowFailedLine />
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -562,6 +628,7 @@ function RecipeRow({ recipe, onOpen }: { recipe: RecipeSearchResult; onOpen: () 
 }
 
 const NO_RELATED_POSTS: readonly ShowcaseFeedItem[] = [];
+const NO_RELATED_SEARCHES: readonly SearchRelatedSearch[] = [];
 
 // Posts that mean what the query says without holding its words: the cards
 // the search's own posts are, under everything the search itself found.
@@ -909,7 +976,14 @@ export function ExploreSearchOverlay({
     if (cursor) setLoadingMore(true);
     if (!relatedFollowUp) setFailure(null);
     try {
-      let next = await api.searchPublicContent({ query: normalizedQuery, type, sort, filters, exact, cursor, related: askRelated, entry: searchEntry.current }, controller.signal);
+      // Related searches with the first page, the blended order with every
+      // page of a search it applies to (searchRequestExtras): the same search
+      // asks for the same order however far down it is read.
+      let next = await api.searchPublicContent({
+        query: normalizedQuery, type, sort, filters, exact, cursor, related: askRelated,
+        ...searchRequestExtras({ query: normalizedQuery, type, sort, exact, cursor }),
+        entry: searchEntry.current,
+      }, controller.signal);
       if (sequence !== requestSequence.current) return;
       // A later page made of nothing but posts already on show, with more to
       // come (a later page may hold a post already shown:
@@ -918,7 +992,12 @@ export function ExploreSearchOverlay({
       // repeats as well the list keeps its cursor and the next press asks:
       // never a loop.
       if (cursor && type === 'posts' && isSearchPageAllRepeats(shownPosts.current, next.posts)) {
-        next = await api.searchPublicContent({ query: normalizedQuery, type, sort, filters, exact, cursor: next.posts.nextCursor, related: false, entry: searchEntry.current }, controller.signal);
+        const after = next.posts.nextCursor;
+        next = await api.searchPublicContent({
+          query: normalizedQuery, type, sort, filters, exact, cursor: after, related: false,
+          ...searchRequestExtras({ query: normalizedQuery, type, sort, exact, cursor: after }),
+          entry: searchEntry.current,
+        }, controller.signal);
         if (sequence !== requestSequence.current) return;
       }
       if (next.filters !== undefined) setFiltersOffered(true);
@@ -937,6 +1016,8 @@ export function ExploreSearchOverlay({
           relatedAsked: current.relatedAsked,
           response: {
             ...next,
+            // Asked with the first page only: kept over the pages after it.
+            relatedSearches: current.response.relatedSearches,
             creators: type === 'creators' ? { ...next.creators, items: [...current.response.creators.items, ...next.creators.items] } : next.creators,
             // Left out by id: the posts this page holds that are already on show.
             posts: type === 'posts' ? { ...next.posts, items: appendSearchPosts(current.response.posts.items, next.posts.items) } : next.posts,
@@ -1066,6 +1147,23 @@ export function ExploreSearchOverlay({
     setPickedFilters({ ...NO_SEARCH_FILTERS, madeWith: searchEntityId(entity) });
     setPickedType('posts');
   };
+  // A model's or tool's row of the typing list or the start: the search it
+  // counted, `text`, on Posts narrowed to it. A text Posts does not search
+  // (under three characters) runs on Top with nothing narrowed: the length is
+  // read before anything changes, so no tab or filter is left picked by a row
+  // that could not run as drawn (review of #794). An answer that offers
+  // entities comes from a server that narrows by them.
+  const searchEntityPosts = (entity: SearchEntity, text: string) => {
+    if (!tabRunsText(text, 'posts')) {
+      setPickedFilters(NO_SEARCH_FILTERS);
+      setPickedType('top');
+      commitSearch(text, 'top', 'entity');
+      return;
+    }
+    setFiltersOffered(true);
+    pickEntity(entity);
+    commitSearch(text, 'posts', 'entity');
+  };
 
   // A row of the typing list. The keyboard stays up for the press (the list
   // is in the scroll view below, which hands a tap to what it lands on), and
@@ -1080,12 +1178,18 @@ export function ExploreSearchOverlay({
       return;
     }
     if (action.type === 'entity') {
-      // As pressing the entity among the results does: what is typed, as
-      // Posts narrowed to it. An answer that offers entities comes from a
-      // server that narrows by them.
-      setFiltersOffered(true);
-      pickEntity(action.entity);
-      commitSearch(query, 'posts', 'entity');
+      const route = searchTypeaheadEntityRoute(action.entity, query);
+      // A catalog model nobody has posted with: its creator, the model
+      // chosen, never an empty Posts page. Pushed over the list, as a
+      // creator's profile is: coming back finds the typing as it was.
+      if (route.type === 'creator') {
+        router.push(route.href as never);
+        return;
+      }
+      // As pressing the entity among the results does: Posts narrowed to it,
+      // for the search the row carries (an alias, a misspelling, two letters:
+      // what is typed would find nothing) or else for what is typed.
+      searchEntityPosts(action.entity, route.query);
       return;
     }
     // "Search for", a recent search or a completion: the field holds its
@@ -1115,10 +1219,17 @@ export function ExploreSearchOverlay({
   // asked with them already: this follow-up is kept for the shared rule (the
   // web's live results reach it) and for an answer that came without them.
   const relatedPosts = shownResponse ? searchRelatedPosts(type, shownResponse) : NO_RELATED_POSTS;
+  // Searches near this one, over a Top or Posts answer (searchRelatedSearchChips).
+  // One pressed is searched as a recent search is, on the picked tab where it
+  // runs there, its filters kept, and says it came from here (`related`).
+  const relatedSearches = shownResponse ? searchRelatedSearchChips(type, shownResponse) : NO_RELATED_SEARCHES;
+  const searchRelated = (text: string) => searchAgain(text, 'related');
   const relatedFollowUpDelay = answer !== null && answer.key === requestKey && visible && showingResults
     ? searchRelatedFollowUpDelay({
       applies: relatedApplies,
-      relatedAsked: answer.relatedAsked,
+      // A blended answer already holds, in its own order, every post the
+      // related group could: the server does not look for them beside it.
+      relatedAsked: answer.relatedAsked || isSearchAnswerBlended(answer.response),
       thin: isSearchAnswerThin(type, answer.response.posts),
       settled: settledQuery === normalizedQuery,
     })
@@ -1179,21 +1290,7 @@ export function ExploreSearchOverlay({
     // The search the starter counted: the entity's own query, on Posts, narrowed to it.
     const action = searchStarterEntityAction(entity);
     if (action.type !== 'entity') return;
-    // A query too short for Posts (Posts from three characters) runs on Top,
-    // the tab that can, with nothing narrowed: the length is read before
-    // anything changes, so no tab or filter is left picked by a row that
-    // could not run as drawn (review of #794).
-    if (!tabRunsText(action.query, 'posts')) {
-      setPickedFilters(NO_SEARCH_FILTERS);
-      setPickedType('top');
-      commitSearch(action.query, 'top', 'entity');
-      return;
-    }
-    setEntityLabels((current) => ({ ...current, [action.madeWith]: entity.label }));
-    setFiltersOffered(true);
-    setPickedFilters({ ...NO_SEARCH_FILTERS, madeWith: action.madeWith });
-    setPickedType('posts');
-    commitSearch(action.query, 'posts', 'entity');
+    searchEntityPosts(entity, action.query);
   };
   const startFromCreator = (creator: SearchStarterCreator) => {
     router.push(`/creators/${encodeURIComponent(creator.username)}` as never);
@@ -1466,6 +1563,7 @@ export function ExploreSearchOverlay({
           )
         ) : shownResponse && resultCount > 0 ? (
           <View style={{ gap: 25 }}>
+            <RelatedSearches searches={relatedSearches} onSearch={searchRelated} />
             {entities.length ? (
               <View style={{ gap: 10 }}>
                 <ResultsHeading title={SEARCH_ENTITIES_HEADING} sort={null} onSortChange={setPickedSort} />
