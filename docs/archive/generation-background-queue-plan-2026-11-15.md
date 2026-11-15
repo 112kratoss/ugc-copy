@@ -1,7 +1,6 @@
 # Generation background queue: plan (2026-11-15)
 
-Status: **PR 1 (server and web) built**; PR 2 (app wording, by OTA) not started. Two things changed while building, both in "As built" at the end. Owner asked on 2026-11-15: "add the background queue with a
-Queued state … we need the most ideal solution for this task".
+Status: **shipped 2026-11-15, archived the same day.** PR 1 (server and web) is #814, live on production as `556bdeab1`; PR 2 (app wording) is #816, `b1ada8d02`, published to iOS and Android by OTA. This file is the record of the design and of what the reviews changed, not a plan still open; "Where we are" below describes the state before the work. Operating it: `docs/model-api-references/kie-account-limits.md` and "Rolling back past the generation queue (#814)" in `docs/production-deployment-runbook.md`. Still open: dropping the unused ticket path (`provider_submission_waiters`) once #810 can no longer be rolled back to. Owner asked on 2026-11-15: "add the background queue with a Queued state … we need the most ideal solution for this task".
 
 ## Where we are
 
@@ -163,6 +162,9 @@ racing for one queued run send it once; the 80-start burst from #810 re-run to s
 are sent, none refused, in order.
 
 ## Decisions for the owner
+
+Both are settled (2026-11-15): the owner said "finish the entire plan", so the queue shipped
+with the proposed 10 minutes, and "Publish the OTA", so the app wording went out by OTA.
 
 1. **How long may a run stay queued before it is refunded?** Proposed: 10 minutes.
 2. **App wording by OTA after PR 1 is live?** Installed apps work without it; the OTA only
