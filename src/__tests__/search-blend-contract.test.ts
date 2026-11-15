@@ -15,8 +15,10 @@ import type { PublicSearchOptions } from '@/lib/public-search-service';
 
 import {
   SEARCH_MATCH_SOURCES,
+  isSearchAnswerBlended,
   readSearchMatchedBy,
   searchBlendApplies,
+  withoutShownSearchPosts,
 } from '../../ugc-mobile/lib/public-search-policy/search-blend';
 
 // The blended Posts order as the web and the app are both held to it
@@ -71,6 +73,9 @@ describe('the blended Posts order in the mobile API contract', () => {
 
     const posts = blendedPosts.response.posts.items;
     expect(posts.map((post) => readSearchMatchedBy(post.matchedBy))).toEqual(['both', 'meaning']);
+    // And the answer says its posts are in the blended order.
+    expect(blendedPosts.response.blended).toBe(true);
+    expect(isSearchAnswerBlended(blendedPosts.response)).toBe(true);
     // A post result is a feed card and one field more.
     const card = endpoint.responseVariants.relatedPosts.response.related.posts[0];
     for (const post of posts) {
@@ -86,8 +91,12 @@ describe('the blended Posts order in the mobile API contract', () => {
       expect(encodePublicSearchCursor(cursor.decoded as PublicSearchCursor), name).toBe(cursor.encoded);
       expect(decodePublicSearchCursor(cursor.encoded, 'posts', 'top'), name).toEqual(cursor.decoded);
     }
-    expect(endpoint.cursors.blendedTopPosts.decoded).toMatchObject({ window: 20, score: 13.18 });
+    // The place, the post shown last, and the floor where there is one.
+    expect(endpoint.cursors.blendedTopPosts.decoded).toMatchObject({
+      window: 20, score: 13.18, last: '22222222-2222-4222-8222-222222222222',
+    });
     expect(endpoint.cursors.blendedTopPostsWithoutFloor.decoded).not.toHaveProperty('id');
+    expect(endpoint.cursors.blendedTopPostsWithoutFloor.decoded).toHaveProperty('last');
 
     const { blendedPosts } = endpoint.responseVariants;
     const { response, options } = await ask({ ...blendedPosts.query, cursor: endpoint.cursors.blendedTopPosts.encoded });
@@ -107,6 +116,14 @@ describe('the blended Posts order in the mobile API contract', () => {
     expect(options).toBeNull();
   });
 
+  it('pins what a later page may hold: a post already shown, which a client leaves out by its id', () => {
+    expect(endpoint.laterPages.mayRepeatPosts).toBe(true);
+    expect(endpoint.laterPages.deduplicateBy).toBe('id');
+    expect(endpoint.laterPages.rule).toMatch(/MUST leave out, by id/);
+    const [first, second] = endpoint.responseVariants.blendedPosts.response.posts.items;
+    expect(withoutShownSearchPosts([first], [first, second, second])).toEqual([second]);
+  });
+
   it('pins no matchedBy on any other answer: a request that did not ask is answered as before', () => {
     const answers: Array<[string, { posts: { items: unknown[] }; related?: { posts: unknown[] } }]> = [
       ['response', endpoint.response],
@@ -118,6 +135,16 @@ describe('the blended Posts order in the mobile API contract', () => {
       for (const post of [...answer.posts.items, ...(answer.related?.posts ?? [])]) {
         expect(post, name).not.toHaveProperty('matchedBy');
       }
+      expect(answer, name).not.toHaveProperty('blended');
     }
+    // The fixture holds such posts: this is not a loop over nothing.
+    expect(answers.flatMap(([, answer]) => [...answer.posts.items, ...(answer.related?.posts ?? [])]).length).toBeGreaterThanOrEqual(3);
+    // The same search without the parameter: the same cards, in the word order, and nothing more said.
+    const { wordOrderPosts, blendedPosts } = endpoint.responseVariants;
+    expect(wordOrderPosts.query).toEqual({ q: blendedPosts.query.q, type: 'posts' });
+    expect(wordOrderPosts.response.posts.items).toEqual(
+      blendedPosts.response.posts.items.map((post) => Object.fromEntries(Object.entries(post).filter(([key]) => key !== 'matchedBy'))),
+    );
+    expect(wordOrderPosts.response.posts.nextCursor).toBe(endpoint.cursors.topPosts.encoded);
   });
 });

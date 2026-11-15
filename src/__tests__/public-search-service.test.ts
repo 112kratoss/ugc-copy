@@ -855,7 +855,8 @@ describe('public search service', () => {
           excludePostIds: [post(1), post(2)],
           limit: 8,
         },
-        { logEvent, runAfterResponse },
+        // The request's one lookup of query vectors, which the blended order shares.
+        { logEvent, runAfterResponse, queryVectors: { lookup: expect.any(Function) } },
       );
       expect(result.related).toEqual({ posts: relatedRows.map((row) => ({ id: row.post_id, isNsfw: false })) });
       expect(getShowcaseFeedItemsByPostIds).toHaveBeenLastCalledWith({

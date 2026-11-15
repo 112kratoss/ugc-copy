@@ -111,10 +111,11 @@ export const SEARCH_QUERY_EMBEDDING_GUEST_NETWORK_DAILY_LIMIT = {
   limit: 120,
   windowSeconds: 86_400,
 } as const;
-/** The whole read, cache to nearest posts: past this the search answers without it. */
+/**
+ * The whole read, the wait for the vector and the nearest posts: past this the
+ * search answers without it. The vector's lookup itself goes on to its end.
+ */
 export const SEARCH_RELATED_TOTAL_TIMEOUT_MS = 2_500;
-/** How long the work behind an answer (a late vector, its write to the cache) is kept alive. */
-const SEARCH_RELATED_KEEP_ALIVE_MS = SEARCH_RELATED_TOTAL_TIMEOUT_MS + SEARCH_QUERY_EMBEDDING_BACKGROUND_TIMEOUT_MS + 2_000;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -407,6 +408,12 @@ export type RelatedPostsDependencies = {
   /** The timers, for tests. */
   queryEmbeddingTimeoutMs?: number;
   totalTimeoutMs?: number;
+  /**
+   * The request's one lookup of query vectors (`createSearchQueryVectors`),
+   * when the caller holds one: everything in a request that needs a query's
+   * vector reads it from here, so a search is counted and embedded once.
+   */
+  queryVectors?: SearchQueryVectors;
 };
 
 /**
@@ -510,11 +517,8 @@ type QueryEmbeddingDependencies = {
   fetchImpl: FetchImpl;
   logEvent: typeof logBackendEvent;
   enforceBackendRateLimit: typeof enforceBackendRateLimit;
-  queryEmbeddingTimeoutMs: number;
-  /** Work that goes on behind the answer; the caller keeps the invocation alive for it. */
+  /** Work that goes on behind the vector (its write to the cache, a place given back); the caller keeps the invocation alive for it. */
   background: Promise<unknown>[];
-  /** Whether the search has stopped waiting for this read. */
-  isAbandoned: () => boolean;
 };
 
 /** Who a new query is counted against, in the order they are asked. */
@@ -536,23 +540,35 @@ async function releaseQueryEmbeddingPlace(client: SupabaseClient, logEvent: type
   }
 }
 
+/** Why a query's vector could not be had; `no_query` is a query with nothing to embed, which nobody is told of. */
+type QueryVectorSkipReason =
+  | Exclude<RelatedPostsSkipReason, 'embedding_timeout' | 'related_failed' | 'timeout'>
+  | 'no_query';
+
+/** What looking a query's vector up came to. */
+export type SearchQueryVectorOutcome =
+  | { ok: true; embedding: number[] }
+  | { ok: false; reason: QueryVectorSkipReason; error?: unknown };
+
 /**
- * The query's vector. In order: the cache, which costs and counts nothing;
- * then, for a query not in it, the viewer's own daily allowance (and, for a
- * guest session, its network's), the day's cap for everyone, and the
- * function, waited on for a short while. A search that stopped waiting is
- * asked about before each step that spends something: past the cache it
- * takes no allowance, reserves nothing and calls nothing (`abandoned`).
+ * The query's vector, start to end. In order: the cache, which costs and
+ * counts nothing; then, for a query not in it, the viewer's own daily
+ * allowance (and, for a guest session, its network's), the day's cap for
+ * everyone, and the function, for as long as the request itself is given
+ * (`SEARCH_QUERY_EMBEDDING_BACKGROUND_TIMEOUT_MS`).
+ *
+ * It does not stop part-way because a search stopped waiting: once an
+ * allowance is taken the request it paid for is made and its vector kept, so
+ * an allowance is never spent for nothing and the next search of the same
+ * words is answered from the cache. How long anybody waits is the caller's
+ * business (`withTimeout` over this promise).
  */
 async function queryEmbedding(
   client: SupabaseClient,
   embeddedQuery: string,
   allowances: readonly QueryEmbeddingAllowance[],
   dependencies: QueryEmbeddingDependencies,
-): Promise<
-  | { ok: true; embedding: number[] }
-  | { ok: false; reason: RelatedPostsSkipReason | 'abandoned'; error?: unknown }
-> {
+): Promise<SearchQueryVectorOutcome> {
   const config = getEmbedPostFunctionConfig(dependencies.env);
   if (!config) return { ok: false, reason: 'not_configured' };
 
@@ -569,7 +585,6 @@ async function queryEmbedding(
   // A new query. The allowances first, the viewer's own before its network's
   // (a viewer past their own never spends the network's): past either nothing
   // is reserved of the day everyone shares, and the function is not called.
-  if (dependencies.isAbandoned()) return { ok: false, reason: 'abandoned' };
   for (const allowance of allowances) {
     try {
       await dependencies.enforceBackendRateLimit(client, { ...allowance.limit, key: allowance.key });
@@ -580,34 +595,101 @@ async function queryEmbedding(
     }
   }
 
-  if (dependencies.isAbandoned()) return { ok: false, reason: 'abandoned' };
   const reservation = await client.rpc('reserve_search_query_embedding', {
     p_daily_cap: SEARCH_QUERY_EMBEDDING_DAILY_CAP,
   });
   if (reservation.error) return { ok: false, reason: 'lookup_failed', error: reservation.error };
   if (reservation.data !== true) return { ok: false, reason: 'daily_cap_reached' };
 
-  // The search gave up while the place was being taken: the function is not
-  // asked for an answer nobody will read, and the place goes back.
-  if (dependencies.isAbandoned()) {
+  // The day's count is one higher: the request is made, and its vector kept.
+  // One that brings no vector (a refusal, the ten seconds passing, a thrown
+  // error, an unreadable body) gives the place back, once.
+  const answer = await requestQueryEmbedding(embeddedQuery, { config, fetchImpl: dependencies.fetchImpl });
+  if (!answer.ok) {
     dependencies.background.push(releaseQueryEmbeddingPlace(client, dependencies.logEvent));
-    return { ok: false, reason: 'abandoned' };
+    return { ok: false, reason: 'embedding_failed', error: answer.error };
   }
-
-  // The day's count is already one higher: this request is made whatever the
-  // search does next, and its vector kept, so the place is not spent for
-  // nothing. The write to the cache waits on nobody's answer. A request that
-  // brings no vector (a refusal, the ten seconds passing, a thrown error, an
-  // unreadable body) gives the place back, once, in the same chain.
-  const request = requestQueryEmbedding(embeddedQuery, { config, fetchImpl: dependencies.fetchImpl });
-  dependencies.background.push(request.then(async (answer) => {
-    if (answer.ok) await storeQueryEmbedding(client, queryHash, answer.embedding, dependencies.logEvent);
-    else await releaseQueryEmbeddingPlace(client, dependencies.logEvent);
-  }));
-  const answer = await withTimeout(request, dependencies.queryEmbeddingTimeoutMs);
-  if (answer === TIMED_OUT) return { ok: false, reason: 'embedding_timeout' };
-  if (!answer.ok) return { ok: false, reason: 'embedding_failed', error: answer.error };
+  // The write to the cache waits on nobody's answer.
+  dependencies.background.push(storeQueryEmbedding(client, queryHash, answer.embedding, dependencies.logEvent));
   return { ok: true, embedding: answer.embedding };
+}
+
+/** How long the work behind an answer (a late vector, its write to the cache) is kept alive. */
+const SEARCH_QUERY_VECTOR_KEEP_ALIVE_MS = SEARCH_QUERY_EMBEDDING_BACKGROUND_TIMEOUT_MS + 4_500;
+
+/**
+ * A request's lookups of query vectors: `lookup(query)` is the vector of a
+ * query, or why there is none, and for one query text it is ONE lookup
+ * however many parts of the request ask (the blended order and related posts
+ * both do). So one search takes one unit of the viewer's allowance, one place
+ * of the day's cap and makes one `embed-post` request, and a part that asks
+ * after another stopped waiting joins the request already on its way.
+ */
+export type SearchQueryVectors = {
+  lookup(query: string): Promise<SearchQueryVectorOutcome>;
+};
+
+/**
+ * The lookups of one request, for one viewer. `viewerKey` is who a new query
+ * is counted against (the key search's own rate limit uses: the account, or
+ * the hashed network of a visitor); `guestNetworkKey`, for a guest session
+ * only, the hashed network it asks from, counted as well. A lookup never
+ * rejects. It is handed to the scheduler when it starts, while the request
+ * is certainly open: a vector that arrives after the answer has gone is
+ * still written to the cache.
+ */
+export function createSearchQueryVectors(
+  client: SupabaseClient,
+  viewer: { viewerKey: string; guestNetworkKey?: string | null },
+  dependencyOverrides: Omit<RelatedPostsDependencies, 'queryVectors'> = {},
+): SearchQueryVectors {
+  const lookups = new Map<string, Promise<SearchQueryVectorOutcome>>();
+  const refused = (reason: QueryVectorSkipReason): Promise<SearchQueryVectorOutcome> => Promise.resolve({ ok: false, reason });
+  return {
+    lookup(query) {
+      const env = dependencyOverrides.env ?? process.env;
+      if (isSearchSemanticDisabled(env)) return refused('disabled');
+      const embeddedQuery = normalizeSearchQueryForEmbedding(query);
+      if (!embeddedQuery) return refused('no_query');
+      const viewerKey = viewer.viewerKey.trim();
+      if (!viewerKey) return refused('no_viewer_key');
+      const allowances: QueryEmbeddingAllowance[] = [
+        { limit: SEARCH_QUERY_EMBEDDING_VIEWER_DAILY_LIMIT, key: viewerKey, reason: 'viewer_cap_reached' },
+      ];
+      if (viewer.guestNetworkKey !== undefined && viewer.guestNetworkKey !== null) {
+        const guestNetworkKey = viewer.guestNetworkKey.trim();
+        // A guest nobody can place on a network is not let past its own key alone.
+        if (!guestNetworkKey) return refused('no_viewer_key');
+        allowances.push({
+          limit: SEARCH_QUERY_EMBEDDING_GUEST_NETWORK_DAILY_LIMIT,
+          key: guestNetworkKey,
+          reason: 'network_cap_reached',
+        });
+      }
+
+      const started = lookups.get(embeddedQuery);
+      if (started) return started;
+      const background: Promise<unknown>[] = [];
+      const lookup = queryEmbedding(client, embeddedQuery, allowances, {
+        env,
+        fetchImpl: dependencyOverrides.fetchImpl ?? fetch,
+        logEvent: dependencyOverrides.logEvent ?? logBackendEvent,
+        enforceBackendRateLimit: dependencyOverrides.enforceBackendRateLimit ?? enforceBackendRateLimit,
+        background,
+      }).catch((error): SearchQueryVectorOutcome => ({ ok: false, reason: 'lookup_failed', error }));
+      lookups.set(embeddedQuery, lookup);
+      // Handed over now, while the request is open: a scheduler such as Next's
+      // `after` takes a task only then. The task waits for the lookup and for
+      // whatever it left running behind it, no longer than their own bounds.
+      runBehindAnswer(dependencyOverrides.runAfterResponse, async () => {
+        await withTimeout((async () => {
+          await lookup;
+          await Promise.allSettled(background);
+        })(), SEARCH_QUERY_VECTOR_KEEP_ALIVE_MS);
+      });
+      return lookup;
+    },
+  };
 }
 
 /**
@@ -654,45 +736,26 @@ export async function findRelatedPostRows(
   };
 
   try {
-    const env = dependencyOverrides.env ?? process.env;
-    if (isSearchSemanticDisabled(env)) return skipped('disabled');
-    const embeddedQuery = normalizeSearchQueryForEmbedding(options.query);
-    if (!embeddedQuery) return null;
-    const viewerKey = options.viewerKey.trim();
-    if (!viewerKey) return skipped('no_viewer_key');
-    const allowances: QueryEmbeddingAllowance[] = [
-      { limit: SEARCH_QUERY_EMBEDDING_VIEWER_DAILY_LIMIT, key: viewerKey, reason: 'viewer_cap_reached' },
-    ];
-    if (options.guestNetworkKey !== undefined && options.guestNetworkKey !== null) {
-      const guestNetworkKey = options.guestNetworkKey.trim();
-      // A guest nobody can place on a network is not let past its own key alone.
-      if (!guestNetworkKey) return skipped('no_viewer_key');
-      allowances.push({
-        limit: SEARCH_QUERY_EMBEDDING_GUEST_NETWORK_DAILY_LIMIT,
-        key: guestNetworkKey,
-        reason: 'network_cap_reached',
-      });
-    }
+    // The request's own lookups where the caller holds them, so the vector
+    // is the one the blended order asked for; otherwise this read's own.
+    const vectors = dependencyOverrides.queryVectors ?? createSearchQueryVectors(
+      client,
+      { viewerKey: options.viewerKey, guestNetworkKey: options.guestNetworkKey },
+      dependencyOverrides,
+    );
 
-    // Set when the search stopped waiting: the step in flight finishes, and
-    // nothing more is started for an answer nobody will read (no allowance
-    // taken, no place of the day reserved, no call to the function, no read
-    // of the posts).
-    let abandoned = false;
-    const background: Promise<unknown>[] = [];
+    // Set when the search stopped waiting for the posts: the vector's lookup
+    // goes on to its end behind the answer, and the posts are not read.
+    let stopped = false;
     const read = (async (): Promise<RelatedPostRow[] | null> => {
-      const vector = await queryEmbedding(client, embeddedQuery, allowances, {
-        env,
-        fetchImpl: dependencyOverrides.fetchImpl ?? fetch,
-        logEvent,
-        enforceBackendRateLimit: dependencyOverrides.enforceBackendRateLimit ?? enforceBackendRateLimit,
-        queryEmbeddingTimeoutMs: dependencyOverrides.queryEmbeddingTimeoutMs ?? SEARCH_QUERY_EMBEDDING_TIMEOUT_MS,
-        background,
-        isAbandoned: () => abandoned,
-      });
+      const vector = await withTimeout(
+        vectors.lookup(options.query),
+        dependencyOverrides.queryEmbeddingTimeoutMs ?? SEARCH_QUERY_EMBEDDING_TIMEOUT_MS,
+      );
       // The timeout below has said why already.
-      if (!vector.ok) return vector.reason === 'abandoned' ? null : skipped(vector.reason, vector.error);
-      if (abandoned) return null;
+      if (stopped) return null;
+      if (vector === TIMED_OUT) return skipped('embedding_timeout');
+      if (!vector.ok) return vector.reason === 'no_query' ? null : skipped(vector.reason, vector.error);
 
       const { data, error } = await client.rpc('search_related_posts', {
         p_query_embedding: toVectorLiteral(vector.embedding),
@@ -701,6 +764,7 @@ export async function findRelatedPostRows(
         p_limit: options.limit ?? SEARCH_RELATED_MAX_POSTS,
         p_embedding_model: SEARCH_EMBEDDING_MODEL,
       });
+      if (stopped) return null;
       if (error) return skipped('related_failed', error);
       return ((data ?? []) as Array<Record<string, unknown>>).flatMap((row) => (
         typeof row.post_id === 'string' && typeof row.creator_user_id === 'string'
@@ -708,25 +772,10 @@ export async function findRelatedPostRows(
           : []
       ));
     })();
-    // The read itself never rejects into nothing.
-    const settled = read.catch(() => null);
-
-    // Handed over now, while the request is open: a scheduler such as Next's
-    // `after` takes a task only then, and one registered once the answer had
-    // gone (after the timeout below) kept nothing alive, so a vector that
-    // arrived late was never written to the cache. The task waits for the
-    // read and for whatever it left running behind it, no longer than their
-    // own bounds.
-    runBehindAnswer(dependencyOverrides.runAfterResponse, async () => {
-      await withTimeout((async () => {
-        await settled;
-        await Promise.allSettled(background);
-      })(), SEARCH_RELATED_KEEP_ALIVE_MS);
-    });
 
     const answer = await withTimeout(read, dependencyOverrides.totalTimeoutMs ?? SEARCH_RELATED_TOTAL_TIMEOUT_MS);
     if (answer === TIMED_OUT) {
-      abandoned = true;
+      stopped = true;
       return skipped('timeout');
     }
     return answer;
@@ -752,22 +801,17 @@ export async function findRelatedPostRows(
  */
 export const SEARCH_BLEND_QUERY_EMBEDDING_TIMEOUT_MS = 400;
 
-/** How long the work behind a blended answer (a late vector, its write to the cache) is kept alive. */
-const SEARCH_BLEND_KEEP_ALIVE_MS = SEARCH_BLEND_QUERY_EMBEDDING_TIMEOUT_MS + SEARCH_QUERY_EMBEDDING_BACKGROUND_TIMEOUT_MS + 2_000;
-
 /** Why a search was not blended for want of a vector; goes to the log, never with the query. */
-export type SearchBlendSkipReason = Exclude<RelatedPostsSkipReason, 'related_failed'> | 'blend_failed';
+export type SearchBlendSkipReason = Exclude<RelatedPostsSkipReason, 'related_failed' | 'timeout'> | 'blend_failed';
 
 /**
  * A query's vector for the blended Posts order, or `null` when there is none
- * to be had in time. The same path as related posts, with the same limits:
- * the cache first, which costs and counts nothing; then, for a query not in
- * it, the viewer's daily allowance (and a guest session's network's), the
- * day's cap for everyone and the function, waited on for
- * `SEARCH_BLEND_QUERY_EMBEDDING_TIMEOUT_MS`. A request it started and stopped
- * waiting for still finishes behind the answer and keeps its vector. Never
- * throws; a skip is one line in the log, with its reason and without the
- * query.
+ * to be had in time. The same lookup as related posts, with the same limits
+ * (the request's own, `queryVectors`, where the caller holds one), waited on
+ * for `SEARCH_BLEND_QUERY_EMBEDDING_TIMEOUT_MS` from the moment it is asked
+ * for. Past the wait the lookup goes on behind the answer and keeps its
+ * vector. Never throws; a skip is one line in the log, with its reason and
+ * without the query.
  */
 export async function findSearchQueryEmbedding(
   client: SupabaseClient,
@@ -791,56 +835,18 @@ export async function findSearchQueryEmbedding(
   };
 
   try {
-    const env = dependencyOverrides.env ?? process.env;
-    if (isSearchSemanticDisabled(env)) return skipped('disabled');
-    const embeddedQuery = normalizeSearchQueryForEmbedding(options.query);
-    if (!embeddedQuery) return null;
-    const viewerKey = options.viewerKey.trim();
-    if (!viewerKey) return skipped('no_viewer_key');
-    const allowances: QueryEmbeddingAllowance[] = [
-      { limit: SEARCH_QUERY_EMBEDDING_VIEWER_DAILY_LIMIT, key: viewerKey, reason: 'viewer_cap_reached' },
-    ];
-    if (options.guestNetworkKey !== undefined && options.guestNetworkKey !== null) {
-      const guestNetworkKey = options.guestNetworkKey.trim();
-      if (!guestNetworkKey) return skipped('no_viewer_key');
-      allowances.push({
-        limit: SEARCH_QUERY_EMBEDDING_GUEST_NETWORK_DAILY_LIMIT,
-        key: guestNetworkKey,
-        reason: 'network_cap_reached',
-      });
-    }
-
-    const waitMs = dependencyOverrides.queryEmbeddingTimeoutMs ?? SEARCH_BLEND_QUERY_EMBEDDING_TIMEOUT_MS;
-    let abandoned = false;
-    const background: Promise<unknown>[] = [];
-    const read = queryEmbedding(client, embeddedQuery, allowances, {
-      env,
-      fetchImpl: dependencyOverrides.fetchImpl ?? fetch,
-      logEvent,
-      enforceBackendRateLimit: dependencyOverrides.enforceBackendRateLimit ?? enforceBackendRateLimit,
-      queryEmbeddingTimeoutMs: waitMs,
-      background,
-      isAbandoned: () => abandoned,
-    });
-    const settled = read.catch(() => null);
-    // Handed over while the request is open, as findRelatedPostRows does and for its reason.
-    runBehindAnswer(dependencyOverrides.runAfterResponse, async () => {
-      await withTimeout((async () => {
-        await settled;
-        await Promise.allSettled(background);
-      })(), SEARCH_BLEND_KEEP_ALIVE_MS);
-    });
-
-    const answer = await withTimeout(read, dependencyOverrides.totalTimeoutMs ?? waitMs);
-    if (answer === TIMED_OUT) {
-      abandoned = true;
-      return skipped('timeout');
-    }
-    if (!answer.ok) {
-      if (answer.reason === 'abandoned') return null;
-      return skipped(answer.reason === 'related_failed' ? 'blend_failed' : answer.reason, answer.error);
-    }
-    return answer.embedding;
+    const vectors = dependencyOverrides.queryVectors ?? createSearchQueryVectors(
+      client,
+      { viewerKey: options.viewerKey, guestNetworkKey: options.guestNetworkKey },
+      dependencyOverrides,
+    );
+    const vector = await withTimeout(
+      vectors.lookup(options.query),
+      dependencyOverrides.queryEmbeddingTimeoutMs ?? SEARCH_BLEND_QUERY_EMBEDDING_TIMEOUT_MS,
+    );
+    if (vector === TIMED_OUT) return skipped('embedding_timeout');
+    if (!vector.ok) return vector.reason === 'no_query' ? null : skipped(vector.reason, vector.error);
+    return vector.embedding;
   } catch (error) {
     return skipped('blend_failed', error);
   }

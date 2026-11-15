@@ -539,31 +539,22 @@ describe('findRelatedPostRows', () => {
       };
     }
 
-    it('takes no allowance, reserves nothing and calls nothing when the cache answered too late', async () => {
-      const run = abandonedAt('search_query_embedding');
-      await run.finish();
-      expect(run.calls.map((call) => call.name)).toEqual(['search_query_embedding']);
-      expect(run.fetchImpl).not.toHaveBeenCalled();
-      // Said once, by the timeout.
-      expect(logCalls(run.logEvent)).toEqual([{ level: 'warn', event: 'public_search_related_skipped', reason: 'timeout' }]);
-    });
-
-    it('reserves nothing and calls nothing when the allowance answered too late', async () => {
-      const run = abandonedAt('check_backend_rate_limit');
-      await run.finish();
-      expect(run.calls.map((call) => call.name)).toEqual(['search_query_embedding', 'check_backend_rate_limit']);
-      expect(run.fetchImpl).not.toHaveBeenCalled();
-      expect(logCalls(run.logEvent)).toEqual([{ level: 'warn', event: 'public_search_related_skipped', reason: 'timeout' }]);
-    });
-
-    it('gives the day’s place back and does not call the function when the reservation answered too late', async () => {
-      const run = abandonedAt('reserve_search_query_embedding');
+    // A search that stopped waiting is answered without related posts. The
+    // lookup it started is not cut short: an allowance once taken is never
+    // left without the request it paid for, and the vector is kept, so the
+    // next search of the same words is answered from the cache.
+    it.each([
+      'search_query_embedding', 'check_backend_rate_limit', 'reserve_search_query_embedding',
+    ] as const)('goes on with the lookup behind the answer when %s answered too late', async (step) => {
+      const run = abandonedAt(step);
       await run.finish();
       expect(run.calls.map((call) => call.name)).toEqual([
-        'search_query_embedding', 'check_backend_rate_limit', 'reserve_search_query_embedding', 'release_search_query_embedding',
+        'search_query_embedding', 'check_backend_rate_limit', 'reserve_search_query_embedding', 'store_search_query_embedding',
       ]);
-      expect(run.calls.at(-1)?.args).toEqual({ p_daily_cap: SEARCH_QUERY_EMBEDDING_DAILY_CAP });
-      expect(run.fetchImpl).not.toHaveBeenCalled();
+      expect(run.fetchImpl).toHaveBeenCalledTimes(1);
+      // Nobody is waiting for the posts any more: they are not read.
+      expect(run.calls.map((call) => call.name)).not.toContain('search_related_posts');
+      // Said once, by the timeout.
       expect(logCalls(run.logEvent)).toEqual([{ level: 'warn', event: 'public_search_related_skipped', reason: 'timeout' }]);
     });
   });
@@ -807,8 +798,14 @@ describe('findRelatedPostRows', () => {
         search_query_embedding: () => ({ data: VECTOR_TEXT }),
         search_related_posts: () => ({ error: { message: 'statement timeout' } }),
       }, ['related_failed']],
+    // The vector's lookup failed, not the read of the posts: it says so.
     ['a client that throws', { env: ENV },
-      { search_query_embedding: () => { throw new Error('socket closed'); } }, ['related_failed']],
+      { search_query_embedding: () => { throw new Error('socket closed'); } }, ['lookup_failed']],
+    ['a client that throws when the posts are read', { env: ENV },
+      {
+        search_query_embedding: () => ({ data: VECTOR_TEXT }),
+        search_related_posts: () => { throw new Error('socket closed'); },
+      }, ['related_failed']],
   ] as Array<[string, Record<string, unknown>, RpcHandlers, string[]]>)('answers null and never throws under %s', async (_label, dependencies, handlers, reasons) => {
     const { client } = clientWith(handlers);
     const logEvent = vi.fn();

@@ -15,6 +15,7 @@ import {
   SEARCH_BLEND_QUERY_EMBEDDING_TIMEOUT_MS,
   SEARCH_QUERY_EMBEDDING_DAILY_CAP,
   SEARCH_QUERY_EMBEDDING_TIMEOUT_MS,
+  createSearchQueryVectors,
   findSearchQueryEmbedding,
   searchQueryEmbeddingHash,
 } from '@/lib/search-embeddings';
@@ -104,6 +105,7 @@ const blendArgs = (overrides: Record<string, unknown> = {}) => ({
   p_has_recipe: true,
   p_followed_only: false,
   p_embedding_model: 'gte-small',
+  p_after_post_id: null,
   ...overrides,
 });
 
@@ -134,7 +136,7 @@ describe('loadBlendedPostRows', () => {
           : [dbRow(1, { matched_by: 'both' }), dbRow(2, { matched_by: 'meaning', search_score: null })],
       }),
     });
-    const find = vi.fn(async () => VECTOR);
+    const find = vi.fn<(...args: unknown[]) => Promise<number[]>>(async () => VECTOR);
     const scheduler = heldScheduler();
     const logEvent = vi.fn();
     const rows = await loadBlendedPostRows(client, input, {
@@ -146,7 +148,17 @@ describe('loadBlendedPostRows', () => {
       { query: 'Ocean  at Dusk', viewerKey: 'viewer-key-1', guestNetworkKey: null },
       { env: ENV, logEvent, runAfterResponse: scheduler.runAfterResponse },
     );
-    expect(calls.map((call) => call.args.p_query_embedding)).toEqual([null, VECTOR_TEXT]);
+    // What the caller hands over for the lookup reaches it: the request's shared lookups.
+    const queryVectors = { lookup: vi.fn() };
+    await loadBlendedPostRows(client, input, {
+      env: ENV, findSearchQueryEmbedding: find as never, logEvent, queryVector: { queryVectors },
+    });
+    expect(find.mock.calls.at(-1)).toEqual([
+      client,
+      { query: 'Ocean  at Dusk', viewerKey: 'viewer-key-1', guestNetworkKey: null },
+      { env: ENV, logEvent, runAfterResponse: undefined, queryVectors },
+    ]);
+    expect(calls.map((call) => call.args.p_query_embedding)).toEqual([null, VECTOR_TEXT, null, VECTOR_TEXT]);
     expect(rows?.map((row) => row.matched_by)).toEqual(['both', 'meaning']);
   });
 
@@ -206,9 +218,10 @@ describe('loadBlendedPostRows', () => {
   it('reads a later page from the cache alone: its place is sent, and nothing is embedded for a page', async () => {
     const { client, calls } = clientWith({ search_blended_posts: () => ({ data: [dbRow(21), dbRow(22)] }) });
     const find = vi.fn();
-    const after = { version: 1 as const, type: 'posts' as const, score: 13.18, id: POST(9), asOf: AS_OF.getTime(), window: 20 };
+    const after = { version: 1 as const, type: 'posts' as const, score: 13.18, id: POST(9), asOf: AS_OF.getTime(), window: 20, last: POST(31) };
     const rows = await loadBlendedPostRows(client, { ...input, after }, { env: ENV, findSearchQueryEmbedding: find as never, logEvent: vi.fn() });
-    expect(calls).toEqual([{ name: 'search_blended_posts', args: blendArgs({ p_after_position: 20 }) }]);
+    // Its place, and the post shown last, by which the database finds the place again if the list moved.
+    expect(calls).toEqual([{ name: 'search_blended_posts', args: blendArgs({ p_after_position: 20, p_after_post_id: POST(31) }) }]);
     expect(rows).toHaveLength(2);
 
     const empty = clientWith({ search_blended_posts: () => ({ data: [] }) });
@@ -244,9 +257,9 @@ describe('loadBlendedPostRows', () => {
 describe('blendedCursorPlace', () => {
   const row = (overrides: Partial<BlendedPostRow>): BlendedPostRow => ({ ...dbRow(4), ...overrides } as BlendedPostRow);
 
-  it('is the floor and the place while the next row is inside the window', () => {
+  it('is the floor, the place and the post shown last while the next row is inside the window', () => {
     expect(blendedCursorPlace(row({ floor_score: 18, floor_post_id: POST(2) }), row({ blend_position: 5 })))
-      .toEqual({ score: 18, id: POST(2), window: 4 });
+      .toEqual({ score: 18, id: POST(2), window: 4, last: POST(4) });
   });
 
   it('is the floor alone once the next row is past the window', () => {
@@ -256,7 +269,7 @@ describe('blendedCursorPlace', () => {
 
   it('names no post where there is no floor, so a cursor is never left a meaning-only post\'s id', () => {
     const place = blendedCursorPlace(row({ floor_score: null, floor_post_id: null }), row({ blend_position: 5 }));
-    expect(place).toEqual({ score: undefined, id: undefined, window: 4 });
+    expect(place).toEqual({ score: undefined, id: undefined, window: 4, last: POST(4) });
     expect({ id: POST(4), ...place }.id).toBeUndefined();
   });
 });
@@ -372,7 +385,7 @@ describe('findSearchQueryEmbedding', () => {
     });
     expect(vector).toBeNull();
     expect(logEvent.mock.calls.map(([, event, fields]) => [event, (fields as { reason: string }).reason]))
-      .toEqual([['public_search_blend_skipped', expect.stringMatching(/timeout/)]]);
+      .toEqual([['public_search_blend_skipped', 'embedding_timeout']]);
     release?.();
     await scheduler.runAll();
     expect(stored).toEqual([searchQueryEmbeddingHash('ocean at dusk')]);
@@ -384,6 +397,60 @@ describe('findSearchQueryEmbedding', () => {
     expect(await findSearchQueryEmbedding(client, ask, { env: { ...ENV, SEARCH_SEMANTIC_DISABLED: '1' }, logEvent })).toBeNull();
     expect(calls).toEqual([]);
     expect(logEvent).not.toHaveBeenCalled();
+  });
+
+  it('goes on with a lookup it stopped waiting for, so an allowance is never spent without its request', async () => {
+    // The wait runs out while the allowance is still being counted: the
+    // lookup goes on, takes the day's place and asks the function, and the
+    // vector is kept. The next search of these words finds it in the cache.
+    let counted: () => void = () => undefined;
+    const order: string[] = [];
+    const { client } = clientWith({
+      search_query_embedding: () => { order.push('cache'); return { data: null }; },
+      reserve_search_query_embedding: () => { order.push('day'); return { data: true }; },
+      store_search_query_embedding: () => { order.push('store'); return { data: null }; },
+    });
+    const enforce = vi.fn(async () => {
+      order.push('viewer');
+      await new Promise<void>((resolve) => { counted = resolve; });
+      return { allowed: true, limit: 40, remaining: 39, retryAfterSeconds: 0, resetAt: '2026-11-16T00:00:00.000Z' };
+    });
+    const fetchImpl = jsonFetch(() => { order.push('function'); return { body: { mode: 'query', model: 'gte-small', dimensions: 384, embedding: VECTOR } }; });
+    const scheduler = heldScheduler();
+    const logEvent = vi.fn();
+    expect(await findSearchQueryEmbedding(client, ask, {
+      env: ENV, fetchImpl, enforceBackendRateLimit: enforce as never, logEvent,
+      runAfterResponse: scheduler.runAfterResponse, queryEmbeddingTimeoutMs: 10,
+    })).toBeNull();
+    expect(order).toEqual(['cache', 'viewer']);
+    expect(logEvent).toHaveBeenCalledExactlyOnceWith('warn', 'public_search_blend_skipped', { reason: 'embedding_timeout' });
+    const kept = scheduler.runAll();
+    counted();
+    await kept;
+    expect(order).toEqual(['cache', 'viewer', 'day', 'function', 'store']);
+  });
+
+  it('shares one lookup between everything that asks through the same request\'s lookups', async () => {
+    const { client, calls } = clientWith({
+      search_query_embedding: () => ({ data: null }),
+      reserve_search_query_embedding: () => ({ data: true }),
+      store_search_query_embedding: () => ({ data: null }),
+    });
+    const enforce = allowed();
+    const fetchImpl = newVector();
+    const queryVectors = createSearchQueryVectors(client, { viewerKey: 'viewer-key-1' }, { env: ENV, fetchImpl, enforceBackendRateLimit: enforce, logEvent: vi.fn() });
+    const [first, second, other] = await Promise.all([
+      findSearchQueryEmbedding(client, ask, { queryVectors, logEvent: vi.fn() }),
+      findSearchQueryEmbedding(client, { ...ask, query: ' ocean at   DUSK ' }, { queryVectors, logEvent: vi.fn() }),
+      findSearchQueryEmbedding(client, { ...ask, query: 'another search' }, { queryVectors, logEvent: vi.fn() }),
+    ]);
+    expect(first).toEqual(VECTOR);
+    expect(second).toEqual(VECTOR);
+    expect(other).toEqual(VECTOR);
+    // Two query texts: two lookups, however many asked.
+    expect(enforce).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(calls.filter((call) => call.name === 'search_query_embedding')).toHaveLength(2);
   });
 
   it('answers null for a request counted against nobody', async () => {

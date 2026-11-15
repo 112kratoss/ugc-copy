@@ -9,6 +9,7 @@ import {
   publicSearchCursorFilterMark,
   type PublicSearchResponse,
 } from '@/lib/public-search';
+import { buildSearchQueryEventRow } from '@/lib/public-search-query-log';
 import { getPublicSearchRouteResponse } from '@/lib/public-search-route-adapter-service';
 import { searchPublicContent, type PublicSearchOptions } from '@/lib/public-search-service';
 import type { BlendedPostRow } from '@/lib/search-blended-posts';
@@ -144,9 +145,22 @@ describe('the blended Posts order: its cursor', () => {
     expect(decodePublicSearchCursor(encodePublicSearchCursor(filtered), 'posts', 'top')).toEqual(filtered);
   });
 
-  it('may have no floor: no post held the words', () => {
+  it('may have no floor: the first row of the word order is still to come, or no post holds the words', () => {
     const cursor = { version: 1 as const, type: 'posts' as const, asOf, window: 8 };
     expect(decodePublicSearchCursor(encodePublicSearchCursor(cursor), 'posts', 'top')).toEqual(cursor);
+  });
+
+  it('carries the post shown last beside the place, with or without a floor', () => {
+    const last = POST(4);
+    for (const cursor of [
+      { version: 1 as const, type: 'posts' as const, score: 13.18, id, asOf, window: 20, last },
+      { version: 1 as const, type: 'posts' as const, asOf, window: 8, last },
+    ]) {
+      expect(decodePublicSearchCursor(encodePublicSearchCursor(cursor), 'posts', 'top')).toEqual(cursor);
+    }
+    // Never without a place: a cursor past the window is an ordinary Top cursor.
+    const plain = encodePublicSearchCursor({ version: 1, type: 'posts', score: 1, id, asOf, last });
+    expect(JSON.parse(Buffer.from(plain, 'base64url').toString('utf8'))).not.toHaveProperty('l');
   });
 
   it('is an ordinary Top cursor to code that knows no place: the floor is where the word order continues', () => {
@@ -164,6 +178,8 @@ describe('the blended Posts order: its cursor', () => {
     ['half a floor: an id and no score', { v: 1, t: 'posts', i: id, a: asOf, w: 5 }],
     ['half a floor: a score and no id', { v: 1, t: 'posts', s: 1, a: asOf, w: 5 }],
     ['a place on a creators cursor', { v: 1, t: 'creators', s: 1, i: id, w: 5 }],
+    ['a last post that is no id', { v: 1, t: 'posts', s: 1, i: id, a: asOf, w: 5, l: 'post-4' }],
+    ['a last post with no place', { v: 1, t: 'posts', s: 1, i: id, a: asOf, l: id }],
   ])('refuses %s', (_name, fields) => {
     const type = fields.t === 'creators' ? 'creators' : 'posts';
     expect(decodePublicSearchCursor(encode(fields), type, 'top')).toBeNull();
@@ -215,8 +231,10 @@ describe('the blended Posts order: the service', () => {
     // The cursor: the floor of the last post shown (the furthest word row so
     // far, not the meaning-only post itself) and its place in the window.
     expect(decodePublicSearchCursor(result.posts.nextCursor, 'posts', 'top')).toEqual({
-      version: 1, type: 'posts', score: 19, id: POST(1), asOf: SEARCH_BEGAN.getTime(), window: 2,
+      version: 1, type: 'posts', score: 19, id: POST(1), asOf: SEARCH_BEGAN.getTime(), window: 2, last: POST(2),
     });
+    // And the answer says its posts are in the blended order.
+    expect(result.blended).toBe(true);
   });
 
   it('hands a later page its cursor, and continues the window from its place', async () => {
@@ -238,7 +256,7 @@ describe('the blended Posts order: the service', () => {
     const { search } = harness({ blended: [meaningOnly(1), meaningOnly(2), meaningOnly(3)] });
     const result = await search();
     expect(decodePublicSearchCursor(result.posts.nextCursor, 'posts', 'top')).toEqual({
-      version: 1, type: 'posts', asOf: SEARCH_BEGAN.getTime(), window: 2,
+      version: 1, type: 'posts', asOf: SEARCH_BEGAN.getTime(), window: 2, last: POST(2),
     });
   });
 
@@ -253,6 +271,8 @@ describe('the blended Posts order: the service', () => {
     });
     const result = await search();
     expect(wordCalls()).toHaveLength(1);
+    // Asked for and not blended: the answer says so.
+    expect(result.blended).toBe(false);
     expect(result.posts.items).toEqual([{ id: POST(1), matchedBy: 'words' }, { id: POST(2), matchedBy: 'words' }]);
     expect(decodePublicSearchCursor(result.posts.nextCursor, 'posts', 'top')).toEqual({
       version: 1, type: 'posts', score: 7, id: POST(2), asOf: SEARCH_BEGAN.getTime(),
@@ -272,14 +292,19 @@ describe('the blended Posts order: the service', () => {
     expect(result.posts.nextCursor).toBeNull();
   });
 
-  it('ends a list that had no word match when its later page cannot be blended: the word order has nothing to continue', async () => {
+  it('reads the word order from its top when a later page cannot be blended and the cursor has no floor', async () => {
+    // The pages so far showed posts from further down the word order (or none
+    // that hold the words): nothing of its top has been shown, so nothing may
+    // be passed over. A post shown twice is the client's to leave out.
     const { search, wordCalls } = harness({
       blended: null,
       wordRows: [{ post_id: POST(7), creator_user_id: 'creator-7', search_score: 3, created_at: '2026-11-10T06:00:00+00:00' }],
     });
-    const result = await search({ cursor: { version: 1, type: 'posts', asOf: SEARCH_BEGAN.getTime(), window: 8 } });
-    expect(wordCalls()).toEqual([]);
-    expect(result.posts.items).toEqual([]);
+    const result = await search({ cursor: { version: 1, type: 'posts', asOf: SEARCH_BEGAN.getTime(), window: 8, last: POST(3) } });
+    expect(wordCalls()).toEqual([expect.objectContaining({
+      p_after_score: null, p_after_id: null, p_sort: 'top', p_as_of: SEARCH_BEGAN.toISOString(),
+    })]);
+    expect(result.posts.items).toEqual([{ id: POST(7), matchedBy: 'words' }]);
     expect(result.posts.nextCursor).toBeNull();
   });
 
@@ -311,6 +336,7 @@ describe('the blended Posts order: the service', () => {
     const result = await search({ blend: false });
     expect(loadBlendedPostRows).not.toHaveBeenCalled();
     expect(result.posts.items).toEqual([{ id: POST(1) }]);
+    expect(result).not.toHaveProperty('blended');
   });
 
   it('blends the Top tab\'s posts too, with no cursor', async () => {
@@ -343,6 +369,7 @@ describe('the blended Posts order: the service', () => {
     const result = await search({ related: true, limit: 20 });
     expect(findRelatedPostRows).toHaveBeenCalledTimes(1);
     expect(result.related).toEqual({ posts: [] });
+    expect(result.blended).toBe(false);
     expect(result.posts.items).toEqual([{ id: POST(1), matchedBy: 'words' }]);
   });
 
@@ -353,6 +380,147 @@ describe('the blended Posts order: the service', () => {
     const result = await search({ query: 'ocen at dusk', normalizedQuery: 'ocen at dusk', limit: 20 });
     expect(result.correctedQuery.posts).toBe('ocean at dusk');
     expect(result.posts.items).toEqual([{ id: POST(1), matchedBy: 'words' }]);
+  });
+});
+
+describe('the blended Posts order and related posts: one query vector per search', () => {
+  const VECTOR = Array.from({ length: 384 }, (_, index) => (index === 0 ? 1 : 0));
+  const ENV = { NEXT_PUBLIC_SUPABASE_URL: 'https://project.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'service-role-key-for-tests' };
+
+  function slowFunctionHarness() {
+    const calls: string[] = [];
+    const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+      calls.push(name);
+      switch (name) {
+        case 'search_public_creators':
+        case 'search_public_entities':
+        case 'search_related_posts':
+          return { data: [], error: null };
+        case 'search_recipes_corrected_query':
+        case 'search_query_embedding':
+        case 'store_search_query_embedding':
+          return { data: null, error: null };
+        case 'reserve_search_query_embedding':
+          return { data: true, error: null };
+        case 'search_blended_posts':
+          // Nothing cached: the word order, two posts, a thin answer.
+          return {
+            data: args.p_query_embedding === null
+              ? [row(1, { blend_state: 'no_vector', in_window: false }), row(2, { blend_state: 'no_vector', in_window: false })]
+              : [row(1, { matched_by: 'both' }), row(2)],
+            error: null,
+          };
+        default:
+          throw new Error(`Unexpected RPC ${name}`);
+      }
+    });
+    let answer: (response: Response) => void = () => undefined;
+    const fetchImpl = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(
+      () => new Promise<Response>((resolve) => { answer = resolve; }),
+    );
+    const enforceBackendRateLimit = vi.fn<(client: unknown, limit: { scope: string; key: string }) => Promise<{
+      allowed: boolean; limit: number; remaining: number; retryAfterSeconds: number; resetAt: string;
+    }>>(async () => ({ allowed: true, limit: 40, remaining: 39, retryAfterSeconds: 0, resetAt: '2026-11-16T00:00:00.000Z' }));
+    const tasks: Array<() => Promise<unknown>> = [];
+    const logEvent = vi.fn();
+    const search = () => searchPublicContent({
+      query: 'ocean at dusk', normalizedQuery: 'ocean at dusk', type: 'posts', cursor: null, limit: 20,
+      viewerUserId: 'viewer-1', viewerKey: 'viewer-1', countryCode: null, blend: true, related: true,
+    }, {
+      createServiceClient: vi.fn(() => ({ rpc }) as unknown as SupabaseClient),
+      getMarketplaceResourceList: vi.fn(async () => ({
+        items: [], pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 6 },
+      })) as never,
+      getShowcaseFeedItemsByPostIds: vi.fn(async ({ postIds }: { postIds: string[] }) => postIds.map((id) => ({ id }))) as never,
+      loadBlockedCreatorIds: vi.fn(async () => new Set()) as never,
+      logEvent,
+      now: () => SEARCH_BEGAN,
+      runAfterResponse: (task) => { tasks.push(task); },
+      // The real lookups, both of them, over a function that does not answer in time.
+      queryVector: { env: ENV, fetchImpl: fetchImpl as never, enforceBackendRateLimit: enforceBackendRateLimit as never, queryEmbeddingTimeoutMs: 15 },
+    });
+    const count = (name: string) => calls.filter((called) => called === name).length;
+    return {
+      search, count, fetchImpl, enforceBackendRateLimit, logEvent, tasks,
+      answerFunction: () => answer(new Response(JSON.stringify({ mode: 'query', model: 'gte-small', dimensions: 384, embedding: VECTOR }))),
+    };
+  }
+
+  it('takes one unit of the allowance, one place of the day and makes one request, though both stopped waiting', async () => {
+    const run = slowFunctionHarness();
+    const result = await run.search();
+
+    // The blend stopped waiting and answered in the word order; the answer is
+    // thin, so related posts asked too, and joined the request on its way.
+    expect(result.blended).toBe(false);
+    expect(result.posts.items).toEqual([{ id: POST(1), matchedBy: 'words' }, { id: POST(2), matchedBy: 'words' }]);
+    expect(result).not.toHaveProperty('related');
+    expect(run.enforceBackendRateLimit).toHaveBeenCalledTimes(1);
+    expect(run.count('reserve_search_query_embedding')).toBe(1);
+    expect(run.fetchImpl).toHaveBeenCalledTimes(1);
+    expect(run.count('search_query_embedding')).toBe(1);
+    // Each says why it went without, by its own name.
+    expect(run.logEvent.mock.calls.map(([, event, fields]) => [event, (fields as { reason?: string }).reason])).toEqual([
+      ['public_search_blend_skipped', 'embedding_timeout'],
+      ['public_search_related_skipped', 'embedding_timeout'],
+    ]);
+
+    // The vector arrives behind the answer and is kept, once, for the next search.
+    const kept = Promise.all(run.tasks.splice(0).map((task) => task()));
+    run.answerFunction();
+    await kept;
+    expect(run.count('store_search_query_embedding')).toBe(1);
+    expect(run.count('release_search_query_embedding')).toBe(0);
+    expect(run.fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the blended Posts order: the search log', () => {
+  const answer = (posts: Array<{ id: string; matchedBy?: 'words' | 'meaning' | 'both' }>, more: Partial<PublicSearchResponse> = {}) => ({
+    query: 'ocean at dusk', normalizedQuery: 'ocean at dusk', type: 'posts' as const, sort: 'top' as const, entities: [],
+    filters: { madeWith: null, mediaKind: null, hasRecipe: false, following: false },
+    correctedQuery: { posts: null, recipes: null }, exact: false,
+    creators: { items: [], nextCursor: null }, posts: { items: posts, nextCursor: null }, recipes: { items: [], nextCursor: null },
+    ...more,
+  }) as unknown as PublicSearchResponse;
+  const row = (response: PublicSearchResponse) => buildSearchQueryEventRow({
+    normalizedQuery: 'ocean at dusk', type: 'posts', sort: 'top', viewerKey: 'network-key', signedIn: false,
+    requestedAt: SEARCH_BEGAN, response,
+  }, 'a'.repeat(64));
+
+  it('counts a blended answer\'s word matches as its posts and its meaning-only posts apart, and says it was blended', () => {
+    expect(row(answer([
+      { id: 'a', matchedBy: 'both' }, { id: 'b', matchedBy: 'meaning' }, { id: 'c', matchedBy: 'words' }, { id: 'd', matchedBy: 'meaning' },
+    ], { blended: true }))).toMatchObject({ post_count: 2, related_count: 2, blended: true });
+  });
+
+  it('logs a blended answer the words found nothing for as a zero-result search, as the word order logs it', () => {
+    // "ocean at dusk": no post holds the words, three mean it.
+    const blendedRow = row(answer([
+      { id: 'a', matchedBy: 'meaning' }, { id: 'b', matchedBy: 'meaning' }, { id: 'c', matchedBy: 'meaning' },
+    ], { blended: true }));
+    const wordRow = row(answer([], { related: { posts: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] as never } }));
+    expect(blendedRow).toMatchObject({ post_count: 0, related_count: 3, blended: true });
+    expect(wordRow).toMatchObject({ post_count: 0, related_count: 3 });
+    expect(wordRow).not.toHaveProperty('blended');
+  });
+
+  it('counts a thin blended answer with nothing found by meaning as 0, never as "not looked for"', () => {
+    expect(row(answer([{ id: 'a', matchedBy: 'words' }], { blended: true, related: { posts: [] } })))
+      .toMatchObject({ post_count: 1, related_count: 0, blended: true });
+    expect(row(answer([{ id: 'a', matchedBy: 'words' }], { blended: true })))
+      .toMatchObject({ post_count: 1, related_count: 0, blended: true });
+  });
+
+  it('writes the row of an answer in the word order as it always was: no flag, every post counted', () => {
+    // Asked for the blend and answered in the word order.
+    const fellBack = row(answer([{ id: 'a', matchedBy: 'words' }, { id: 'b', matchedBy: 'words' }], { blended: false }));
+    expect(fellBack).toMatchObject({ post_count: 2, related_count: null });
+    expect(fellBack).not.toHaveProperty('blended');
+    // Not asked.
+    const plain = row(answer([{ id: 'a' }, { id: 'b' }]));
+    expect(plain).toMatchObject({ post_count: 2, related_count: null });
+    expect(Object.keys(plain ?? {})).not.toContain('blended');
   });
 });
 

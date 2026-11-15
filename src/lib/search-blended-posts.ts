@@ -7,6 +7,7 @@ import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import type { PublicSearchCursor, PublicSearchFilters } from '@/lib/public-search';
 import {
   SEARCH_EMBEDDING_MODEL,
+  type RelatedPostsDependencies,
   findSearchQueryEmbedding,
   isSearchSemanticDisabled,
   normalizeSearchQueryForEmbedding,
@@ -42,7 +43,13 @@ import {
  * A later page is blended only from a cursor that carries a place in the
  * window (`PublicSearchCursor.window`) and only from the cache: nothing is
  * embedded for a page. Without the vector the caller continues in the word
- * order from the cursor's floor, which repeats no post.
+ * order from the cursor's floor (from its top without one), which passes
+ * over no post that holds the words and can repeat posts already shown.
+ *
+ * THE CONTRACT OF A LATER PAGE, blended or not: it may hold a post an earlier
+ * page already showed, and it never skips a post where that can be avoided.
+ * A client leaves out, by id, the posts it has shown
+ * (`withoutShownSearchPosts`, search-blend.ts).
  */
 
 /** A row of `search_blended_posts`: a post search row, and where it stands in the blended list. */
@@ -61,9 +68,11 @@ export type BlendedPostRow = {
   /** Inside the blended window; past it the list is the word order. */
   in_window: boolean;
   /**
-   * The furthest row of the word order shown up to this one: where the word
-   * order continues from if the blend cannot. Null while only meaning-only
-   * posts have been shown and no post holds the words.
+   * The last row of the unbroken run of the word order shown up to this
+   * one: where the word order continues from if the blend cannot, passing
+   * over no post that holds the words (it can repeat ones shown from further
+   * down). Null while the first row of the word order is still to come, or
+   * no post holds the words: the word order then starts from its top.
    */
   floor_score: number | null;
   floor_post_id: string | null;
@@ -76,6 +85,13 @@ export type BlendedPostsDependencies = {
   findSearchQueryEmbedding?: typeof findSearchQueryEmbedding;
   logEvent?: typeof logBackendEvent;
   runAfterResponse?: RunAfterResponse;
+  /**
+   * What the vector's lookup takes: the request's one lookup of query
+   * vectors (`queryVectors`), shared with related posts so a search is
+   * counted and embedded once, and the function, limits and timers a test
+   * replaces.
+   */
+  queryVector?: RelatedPostsDependencies;
 };
 
 export type BlendedPostsInput = {
@@ -160,6 +176,7 @@ export async function loadBlendedPostRows(
         p_has_recipe: input.filters.hasRecipe,
         p_followed_only: input.filters.following,
         p_embedding_model: SEARCH_EMBEDDING_MODEL,
+        p_after_post_id: input.after?.window !== undefined ? input.after.last ?? null : null,
       });
       if (error) throw error;
       return blendedRows(data);
@@ -181,7 +198,7 @@ export async function loadBlendedPostRows(
     const vector = await (dependencyOverrides.findSearchQueryEmbedding ?? findSearchQueryEmbedding)(
       client,
       { query: input.query, viewerKey: input.viewerKey, guestNetworkKey: input.guestNetworkKey },
-      { env, logEvent, runAfterResponse: dependencyOverrides.runAfterResponse },
+      { env, logEvent, runAfterResponse: dependencyOverrides.runAfterResponse, ...dependencyOverrides.queryVector },
     );
     if (!vector) return rows;
     try {
@@ -206,18 +223,20 @@ export function isBlendedPage(rows: readonly BlendedPostRow[] | null): boolean {
  * after it (the one read past the page). Always the floor, where there is
  * one: the word order continues from it whoever reads the cursor (this server
  * without a vector, or one from before the blend, which ignores the rest).
- * And, while the list is still inside the window, the place in it.
+ * And, while the list is still inside the window, the place in it and the
+ * post shown last, by which the next page finds that place again if the
+ * window has moved.
  */
 export function blendedCursorPlace(
   last: BlendedPostRow,
   next: BlendedPostRow | undefined,
-): Pick<PublicSearchCursor, 'score' | 'id' | 'window'> {
+): Pick<PublicSearchCursor, 'score' | 'id' | 'window' | 'last'> {
   return {
     // Both halves or neither, said outright: a cursor is never left the id of
     // a post that has no place in the word order.
     ...(last.floor_score !== null && last.floor_post_id !== null
       ? { score: last.floor_score, id: last.floor_post_id }
       : { score: undefined, id: undefined }),
-    ...(next?.in_window ? { window: last.blend_position } : {}),
+    ...(next?.in_window ? { window: last.blend_position, last: last.post_id } : {}),
   };
 }
