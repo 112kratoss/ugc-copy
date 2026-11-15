@@ -90,9 +90,11 @@ export function searchTypeaheadEntityWords(entity: SearchEntity): { detail: stri
  *   - `relatedSearches`: with the first page of a Top or Posts search
  *     (searchRelatedSearchesApply).
  *   - `blend`: the blended Posts order, with every page of a ranked Top or
- *     Posts search of two words or more, not a handle, not read as typed
- *     (searchBlendApplies). Every search the app sends is one the person
- *     settled on (a commit), so `settled` holds for each.
+ *     Posts search of two words or more, not a handle, not read as typed,
+ *     that the person settled on (searchBlendApplies). `settled` is the
+ *     screen's, by how the search was entered (searchEntrySettles): a link's
+ *     search and a model's or tool's row are asked in the word order until
+ *     the person commits them (review of #828, S6).
  *
  * Neither for a probe: a search the app asks for itself (an empty tab asking
  * Top what the other tabs hold) spends nothing of the viewer's own, and a
@@ -104,12 +106,14 @@ export function searchRequestExtras(search: {
   sort: string;
   exact: boolean;
   cursor: string | null;
+  /** The person settled on this search (searchEntrySettles). */
+  settled: boolean;
   probe?: boolean;
 }): { relatedSearches: boolean; blend: boolean } {
   if (search.probe) return { relatedSearches: false, blend: false };
   return {
     relatedSearches: searchRelatedSearchesApply({ type: search.type, firstPage: search.cursor === null }),
-    blend: searchBlendApplies({ query: search.query, type: search.type, sort: search.sort, exact: search.exact, settled: true }),
+    blend: searchBlendApplies({ query: search.query, type: search.type, sort: search.sort, exact: search.exact, settled: search.settled }),
   };
 }
 

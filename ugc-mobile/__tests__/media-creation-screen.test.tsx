@@ -4341,10 +4341,13 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(modelChip(tree)).toBe('Selected model Orbit Max. Change model');
     });
 
-    it('keeps the draft\'s own model for a link model this creator cannot run', async () => {
+    it('keeps the draft\'s own model for a link model this creator cannot run, and says so (review of #828, N13)', async () => {
       catalogState.catalog = createTestGenerationModelCatalog([orbitMax()]);
       const tree = await open(<MediaCreationScreen initialTool="image" initialModel="orbit-max" />);
       expect(modelChip(tree)).toContain('Nano Banana 2.0');
+      // The creators' own words for a model asked for and not given, as a remix's is.
+      expect(collectText(tree.root)).toContain('Model updated');
+      expect(collectText(tree.root)).toContain('Orbit Max is no longer available. Switched to Nano Banana 2.0.');
       // Dropped, it is no longer asked for: it would hold the creator unavailable through a catalog error.
       expect(catalogHookCalls.selectedIds).not.toContain('orbit-max');
     });

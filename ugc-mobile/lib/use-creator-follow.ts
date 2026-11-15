@@ -92,6 +92,23 @@ export function prefetchCreatorFollowState(
 }
 
 /**
+ * Drops the reads that would land after a Follow's press is written, with the
+ * answer from before it; every Follow (the reel's, search's) calls it before
+ * writing. The creator's follow state, and a creator page read set off before
+ * the press (a finger rested on the creator's handle, then let go), which would
+ * land in the cached pages after the press is written there (review of #679).
+ * That page read is dropped as nobody is waiting on it: the page reads itself
+ * when it opens. A read a page on screen is waiting on is left to land;
+ * dropped, it would leave that page with nothing on its way.
+ */
+export function cancelReadsBeforeFollowWrite(queryClient: Pick<QueryClient, 'cancelQueries'>, creatorId: string | null) {
+  return Promise.all([
+    queryClient.cancelQueries({ queryKey: creatorFollowStateQueryKey(creatorId) }),
+    queryClient.cancelQueries({ queryKey: ['creator-profile'], type: 'inactive' }),
+  ]);
+}
+
+/**
  * Whether the signed-in viewer follows a creator, and a way to flip it.
  *
  * The reel asks this for whichever creator is on screen, so the state is
@@ -130,16 +147,7 @@ export function useCreatorFollow({
   const mutation = useMutation({
     mutationFn: (following: boolean) => api.setCreatorFollowing(creatorId!, following, attribution),
     onMutate: async (following) => {
-      await Promise.all([
-        queryClient.cancelQueries({ queryKey }),
-        // A creator page read set off before the press (a finger rested on the
-        // creator's handle, then let go) would land after the answer below is
-        // written into the cached pages, with the answer from before it (review
-        // of #679). Dropped, as nobody is waiting on it: the page reads itself
-        // when it opens. A read a page on screen is waiting on is left to land;
-        // dropped, it would leave that page with nothing on its way.
-        queryClient.cancelQueries({ queryKey: ['creator-profile'], type: 'inactive' }),
-      ]);
+      await cancelReadsBeforeFollowWrite(queryClient, creatorId);
       const previous = queryClient.getQueryData<{ following: boolean }>(queryKey);
       queryClient.setQueryData<{ following: boolean }>(queryKey, { following });
       setCachedCreatorProfileFollowing(queryClient, creatorId!, following);

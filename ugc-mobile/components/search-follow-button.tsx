@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { AccessibilityInfo, Platform, Text } from 'react-native';
+import { useEffect, useState } from 'react';
+import { AccessibilityInfo, Platform, Text, View, type LayoutChangeEvent } from 'react-native';
 
 import { ToggleButton } from '@/components/ui';
 import {
@@ -21,6 +21,12 @@ const FOLLOW_BUTTON_MIN_WIDTH = 112;
  * neither opens the profile nor counts as a result opened, and a screen reader
  * reaches it as a control of its own. The row's hook
  * (`lib/use-search-creator-follow.ts`) says what it shows and does.
+ *
+ * While a follow is out its width holds, so the name beside it never moves
+ * (review of #828, S9): its spinner stands in its words' place, where the
+ * creator page's draws beside them and grows the button, and it keeps the
+ * width it stood at when pressed ("Following" outgrows the floor from the
+ * larger text sizes). Its fill has already changed with the press.
  */
 export function SearchFollowButton({
   creator,
@@ -33,16 +39,24 @@ export function SearchFollowButton({
   pending: boolean;
   onPress: () => void;
 }) {
+  // How wide it stood while no follow was out.
+  const [restingWidth, setRestingWidth] = useState(FOLLOW_BUTTON_MIN_WIDTH);
+  const measure = (event: LayoutChangeEvent) => {
+    if (!pending) setRestingWidth(event.nativeEvent.layout.width);
+  };
   return (
-    <ToggleButton
-      on={following}
-      label={following ? SEARCH_FOLLOWING_LABEL : SEARCH_FOLLOW_LABEL}
-      accessibilityLabel={searchFollowButtonLabel(creator, following)}
-      loading={pending}
-      onPress={onPress}
-      style={{ flexShrink: 0, minWidth: FOLLOW_BUTTON_MIN_WIDTH }}
-      testID="search-follow-button"
-    />
+    <View onLayout={measure} style={{ flexShrink: 0 }}>
+      <ToggleButton
+        on={following}
+        label={following ? SEARCH_FOLLOWING_LABEL : SEARCH_FOLLOW_LABEL}
+        accessibilityLabel={searchFollowButtonLabel(creator, following)}
+        loading={pending}
+        loadingLabel=""
+        onPress={onPress}
+        style={{ flexShrink: 0, minWidth: pending ? Math.max(FOLLOW_BUTTON_MIN_WIDTH, restingWidth) : FOLLOW_BUTTON_MIN_WIDTH }}
+        testID="search-follow-button"
+      />
+    </View>
   );
 }
 

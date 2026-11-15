@@ -87,7 +87,7 @@ describe('a model\'s or tool\'s row in the typing list', () => {
 });
 
 describe('what a search request asks for besides the search', () => {
-  const search = { query: 'neon city', type: 'top' as const, sort: 'top' as const, exact: false, cursor: null };
+  const search = { query: 'neon city', type: 'top' as const, sort: 'top' as const, exact: false, cursor: null, settled: true };
 
   it('asks for related searches with the first page of Top or Posts only', () => {
     expect(searchRequestExtras(search).relatedSearches).toBe(true);
@@ -106,6 +106,11 @@ describe('what a search request asks for besides the search', () => {
     expect(searchRequestExtras({ ...search, exact: true }).blend).toBe(false);
     expect(searchRequestExtras({ ...search, query: '@neon city' }).blend).toBe(false);
     expect(searchRequestExtras({ ...search, type: 'creators' }).blend).toBe(false);
+  });
+
+  it('asks for the blended order only for a search the person settled on: not a link\'s, not a model\'s or tool\'s row (review of #828, S6)', () => {
+    expect(searchRequestExtras({ ...search, settled: false })).toEqual({ relatedSearches: true, blend: false });
+    expect(searchRequestExtras({ ...search, type: 'posts', cursor: 'next', settled: false }).blend).toBe(false);
   });
 
   it('asks for neither with a probe: a search the person never ran spends nothing of theirs', () => {

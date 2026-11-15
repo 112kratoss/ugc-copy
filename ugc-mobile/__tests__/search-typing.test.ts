@@ -179,11 +179,42 @@ describe('the search screen\'s address', () => {
   it('opens on a link\'s q and type, an empty field without q, Top for an unknown type', async () => {
     const { searchScreenParams, SEARCH_SCREEN_HREF } = await import('../lib/search-screen-route');
     expect(SEARCH_SCREEN_HREF).toBe('/search');
-    expect(searchScreenParams({ q: 'nano  banana ', type: 'posts' })).toEqual({ query: 'nano banana', type: 'posts' });
-    expect(searchScreenParams({ q: ['portrait', 'x'], type: 'reels' })).toEqual({ query: 'portrait', type: null });
-    expect(searchScreenParams({})).toEqual({ query: null, type: null });
-    expect(searchScreenParams({ q: '   ', type: 'posts' })).toEqual({ query: null, type: null });
+    const nothingElse = { sort: null, filters: null, exact: false };
+    expect(searchScreenParams({ q: 'nano  banana ', type: 'posts' })).toEqual({ query: 'nano banana', type: 'posts', ...nothingElse });
+    expect(searchScreenParams({ q: ['portrait', 'x'], type: 'reels' })).toEqual({ query: 'portrait', type: null, ...nothingElse });
+    expect(searchScreenParams({})).toEqual({ query: null, type: null, ...nothingElse });
+    expect(searchScreenParams({ q: '   ', type: 'posts' })).toEqual({ query: null, type: null, ...nothingElse });
     // Clamped to what the server reads before anything is sent (review of #795).
     expect(searchScreenParams({ q: 'n'.repeat(300) }).query).toHaveLength(100);
+  });
+
+  it('writes a search as the web\'s address does and reads it back: words, tab, order, filters, exact reading (review of #828, S5)', async () => {
+    const { searchScreenHref, searchScreenParams } = await import('../lib/search-screen-route');
+    const NONE = { madeWith: null, mediaKind: null, hasRecipe: false, following: false };
+    // Nothing typed is the start; Top and its order are never written.
+    expect(searchScreenHref({ query: ' ', type: 'posts', sort: 'latest', filters: NONE, exact: false })).toBe('/search');
+    expect(searchScreenHref({ query: 'harbour  lights ', type: 'top', sort: 'top', filters: NONE, exact: false })).toBe('/search?q=harbour%20lights');
+
+    const search = {
+      query: 'neon & city',
+      type: 'posts' as const,
+      sort: 'latest' as const,
+      filters: { madeWith: 'model:kling-2.6', mediaKind: 'video' as const, hasRecipe: true, following: true },
+      exact: true,
+    };
+    const href = searchScreenHref(search);
+    expect(href).toBe('/search?q=neon%20%26%20city&type=posts&sort=latest&madeWith=model%3Akling-2.6&kind=video&recipe=1&following=1&exact=1');
+    // Read back as the screen reads the params of its address.
+    const params = Object.fromEntries(new URLSearchParams(href.slice(href.indexOf('?') + 1)));
+    expect(searchScreenParams(params)).toEqual(search);
+  });
+
+  it('opens a link that names an order or a filter it cannot read on its words, unordered and unnarrowed', async () => {
+    const { searchScreenParams } = await import('../lib/search-screen-route');
+    expect(searchScreenParams({ q: 'neon', type: 'posts', sort: 'oldest', kind: 'gif', exact: '1' }))
+      .toEqual({ query: 'neon', type: 'posts', sort: null, filters: null, exact: false });
+    // And none of them without words to search.
+    expect(searchScreenParams({ type: 'posts', sort: 'latest', kind: 'video', exact: '1' }))
+      .toEqual({ query: null, type: null, sort: null, filters: null, exact: false });
   });
 });

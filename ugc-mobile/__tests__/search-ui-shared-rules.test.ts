@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import type { SearchEntity } from '../lib/public-search-policy/public-search-policy';
+import { searchEntrySettles } from '../lib/public-search-policy/search-blend';
+import { SEARCH_ENTRIES } from '../lib/public-search-policy/search-open-log';
 import {
   SEARCH_TYPEAHEAD_MIN_CATALOG_ENTITY_QUERY_LENGTH,
   searchTypeaheadDrawn,
@@ -22,8 +24,9 @@ import {
 } from '../lib/public-search-policy/search-ui-words';
 
 // The search screens' additions of 2026-11-15 that both clients draw by: the
-// typeahead asked with the catalog (`catalog=1`), and the new words. The web
-// reads the same module by relative import once the two branches are merged.
+// typeahead asked with the catalog (`catalog=1`), which ways into a search
+// settle it, and the new words. The web reads the same modules by relative
+// import.
 
 const seedance: SearchEntity = {
   kind: 'model',
@@ -126,8 +129,19 @@ describe('the typeahead asked with the catalog', () => {
   });
 });
 
+describe('which ways into a search settle it (review of #828, S6)', () => {
+  it('settles one typed, a suggestion, a recent, a starter or a related search; not a link or a model\'s or tool\'s row', () => {
+    expect(SEARCH_ENTRIES.filter((entry) => searchEntrySettles(entry))).toEqual(['typed', 'suggestion', 'recent', 'starter', 'related']);
+    // Not until the person commits them.
+    expect(SEARCH_ENTRIES.filter((entry) => !searchEntrySettles(entry))).toEqual(['entity', 'link']);
+    // A search that says nothing of how it was entered is not one the person settled on.
+    expect(searchEntrySettles(null)).toBe(false);
+    expect(searchEntrySettles(undefined)).toBe(false);
+  });
+});
+
 describe('the words of the search screens\' new parts', () => {
-  it('are the ones the shared notes chose, byte for byte', () => {
+  it('are the words both clients draw, byte for byte', () => {
     expect(SEARCH_RELATED_SEARCHES_HEADING).toBe('Related searches');
     expect(SEARCH_FOLLOW_LABEL).toBe('Follow');
     expect(SEARCH_FOLLOWING_LABEL).toBe('Following');
