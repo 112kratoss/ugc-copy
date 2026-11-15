@@ -90,6 +90,7 @@ export function SearchPostCard({ item, returnTo, viewerId = null }: { item: Show
     <Link
       href={buildShowcaseDetailPath(item.id, { from: 'search', returnTo })}
       data-search-result="post"
+      data-search-result-id={item.id}
       aria-label={searchPostCardLabel({
         title: item.title,
         creatorName,

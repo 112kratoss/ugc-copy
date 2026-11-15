@@ -14,7 +14,7 @@ import { SearchResultsPlaceholder } from '@/components/search/SearchResultsPlace
 import { SearchStarter, useSearchStarter } from '@/components/search/SearchStarter';
 import { SearchStateBlock } from '@/components/search/SearchStateBlock';
 import { SearchTypeaheadList } from '@/components/search/SearchTypeaheadList';
-import { clearSearchFieldHandoff, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
+import { clearSearchFieldHandoff, searchFieldHandoffEntry, searchFieldHandoffPending } from '@/components/search/search-field-handoff';
 import {
   SEARCH_ENTRANCE,
   clearSearchEntrance,
@@ -128,7 +128,13 @@ import {
   writeSearchPageAddress,
   type SearchPageOpening,
 } from './search-address';
+import {
+  searchEntryForChosenText,
+  searchEntryParams,
+  type SearchEntry,
+} from '../../../ugc-mobile/lib/public-search-policy/search-open-log';
 import { clearSearchHistory, forgetSearchQuery, readSearchHistory, rememberSearchQuery } from '@/components/search/search-history';
+import { pressedSearchResult, reportSearchOpen } from '@/components/search/search-open-report';
 import { forgetKeptSearchPages, keepSearchPage, readKeptSearchPage, type KeptSearchPage } from '@/lib/search-kept-pages';
 import type { Session } from '@supabase/supabase-js';
 
@@ -358,6 +364,7 @@ function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; re
     <Link
       href={buildShowcaseDetailPath(recipe.postId, { from: 'search', returnTo, section: 'resources' })}
       data-search-result="recipe"
+      data-search-result-id={recipe.id}
       aria-label={searchRecipeCardLabel({ title: recipe.title, sellerName: recipe.seller.name, price, summary: recipe.summary || recipe.previewText })}
       className="ui-focus-ring group flex min-h-32 overflow-hidden rounded-2xl border border-white/8 bg-white/[0.035] transition hover:border-white/15 hover:bg-white/[0.06]"
     >
@@ -490,6 +497,19 @@ export default function SearchClient({
   // page's field, with the typeahead closed for the text it brought
   // (search-field-handoff.ts). Read without taking it, as a render may run twice.
   const [handedOff] = useState(() => typeof window !== 'undefined' && searchFieldHandoffPending());
+  // How the query in the box was entered, for the search log (search-open-log.ts): sent with
+  // every search of it and with every result opened from it. It belongs to the query, so a tab,
+  // an order or a filter leaves it alone; whatever changes the query says how. The page opens on
+  // an address (`link`) unless the top bar's field handed its search over, which says how that
+  // one was entered (search-field-handoff.ts).
+  const [openingEntry] = useState<SearchEntry | null>(() => (
+    opening.query ? (handedOff ? searchFieldHandoffEntry() : 'link') : null
+  ));
+  const searchEntry = useRef<SearchEntry | null>(openingEntry);
+  const typeQuery = (text: string) => {
+    searchEntry.current = 'typed';
+    setQuery(text);
+  };
   // The control the page opens from, when one was pressed for it
   // (search-entrance.ts): the field grows out of it, and goes back into it as
   // the page closes. Read once, as the page mounts in that navigation.
@@ -606,6 +626,7 @@ export default function SearchClient({
       // A cursor pages the filters and the reading it was issued under, so a later page names them too.
       for (const [name, value] of Object.entries(publicSearchFilterParams(activeFilters, activeExact))) params.set(name, value);
       if (cursor) params.set('cursor', cursor);
+      for (const [name, value] of Object.entries(searchEntryParams(searchEntry.current))) params.set(name, value);
       const { data: { session } } = await supabase.auth.getSession();
       const registered = Boolean(session?.user) && session?.user?.is_anonymous !== true;
       setCanFollow(registered);
@@ -989,11 +1010,27 @@ export default function SearchClient({
     }
     rememberOnAnswer.current = `${activeType}:${activeSort}:${narrowing}:${normalizedQuery}`;
   };
+  // What the search log is told of a result opened from the search in front: never awaited, never
+  // in the way of the press (search-open-report.ts).
+  const reportOpened = (kind: 'creator' | 'post' | 'recipe' | 'entity', id: string | null, position: number) => {
+    if (!id || !currentAnswer) return;
+    reportSearchOpen({
+      query: normalizedQuery,
+      type: activeType,
+      sort: activeSort,
+      entry: searchEntry.current,
+      kind,
+      id,
+      position,
+    });
+  };
   const rememberOpenedResult = (event: React.MouseEvent<HTMLDivElement>) => {
     const link = event.target instanceof Element ? event.target.closest('a[href]') : null;
     if (!link) return;
     const kind = link.getAttribute('data-search-result');
     const opened = kind === 'creator' || kind === 'post' || kind === 'recipe' ? kind : null;
+    const pressed = pressedSearchResult(event.currentTarget, event.target);
+    if (pressed) reportOpened(pressed.kind, pressed.id, pressed.position);
     if (currentAnswer && resultCount > 0) rememberCurrentSearch(currentAnswer, opened);
   };
   // Recent searches show whenever the box is empty, focused or not, above the
@@ -1036,6 +1073,7 @@ export default function SearchClient({
     }
     if (action.type === 'entity') {
       // As pressing the entity among the results does: Posts for what is typed, narrowed to it.
+      searchEntry.current = 'entity';
       pickEntity(action.entity);
       return;
     }
@@ -1047,6 +1085,7 @@ export default function SearchClient({
     const nextSort: PublicSearchSort = publicSearchTypeHasSorts(pickedType) ? pickedSort : 'top';
     scheduledQuery.current = next;
     rememberOnAnswer.current = `${pickedType}:${nextSort}:${publicSearchFilterKey(nextFilters, false)}:${next}`;
+    searchEntry.current = searchEntryForChosenText(action.query, query, history);
     settleOn(next);
     setQuery(action.query);
   };
@@ -1065,6 +1104,7 @@ export default function SearchClient({
     setPickedFilters({ ...NO_PUBLIC_SEARCH_FILTERS, madeWith: action.madeWith });
     setPickedType('posts');
     scheduledQuery.current = next;
+    searchEntry.current = 'entity';
     setQuery(next);
   };
   const pickStarterSearch = (search: SearchStarterSearch) => {
@@ -1075,6 +1115,7 @@ export default function SearchClient({
     setPickedType('top');
     scheduledQuery.current = next;
     rememberOnAnswer.current = `top:top:${publicSearchFilterKey(NO_PUBLIC_SEARCH_FILTERS, false)}:${next}`;
+    searchEntry.current = 'starter';
     settleOn(next);
     setQuery(action.query);
   };
@@ -1192,7 +1233,7 @@ export default function SearchClient({
             <button
               type="button"
               aria-label={searchRecentAgainLabel(item)}
-              onClick={() => { settleOn(normalizePublicSearchQuery(item)); setQuery(item); }}
+              onClick={() => { searchEntry.current = 'recent'; settleOn(normalizePublicSearchQuery(item)); setQuery(item); }}
               className="ui-focus-ring flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-xl px-2 text-left text-sm text-zinc-200 hover:bg-white/[0.06]"
             >
               <Clock3 className="h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />
@@ -1241,7 +1282,7 @@ export default function SearchClient({
           >
             <SearchField
               value={query}
-              onChange={setQuery}
+              onChange={typeQuery}
               onClear={() => setQuery('')}
               autoFocus={!opening.query && !focusAfterGrowth}
               entrance={entrance}
@@ -1325,7 +1366,7 @@ export default function SearchClient({
               <span>{correctionNotice}</span>
               <button
                 type="button"
-                onClick={() => setExactQuery(normalizedQuery)}
+                onClick={() => { searchEntry.current = 'correction'; setExactQuery(normalizedQuery); }}
                 className="ui-focus-ring inline-flex min-h-11 items-center rounded-full px-2 text-sm font-semibold text-[var(--ui-primary)] hover:underline"
               >
                 {searchInsteadLabel(normalizedQuery)}
@@ -1417,7 +1458,13 @@ export default function SearchClient({
                 <section aria-labelledby="search-entities-heading">
                   <h2 id="search-entities-heading" className="mb-4 text-xl font-semibold text-white">{SEARCH_ENTITIES_HEADING}</h2>
                   <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    {entities.map((entity) => <EntityResult key={searchEntityId(entity)} entity={entity} onPick={pickEntity} />)}
+                    {entities.map((entity, index) => (
+                      <EntityResult
+                        key={searchEntityId(entity)}
+                        entity={entity}
+                        onPick={(picked) => { reportOpened('entity', searchEntityId(picked), index + 1); pickEntity(picked); }}
+                      />
+                    ))}
                   </ul>
                 </section>
               ) : null}

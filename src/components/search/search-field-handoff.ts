@@ -12,13 +12,27 @@
  *
  * A mark lives in this tab's memory only (a client navigation keeps it), and
  * for a few seconds: a leave the person cancels does not focus a later visit.
+ *
+ * The mark also says how the bar's search was entered (typed and sent with
+ * Enter, a completion, a recent search, a model or tool row), which the search
+ * page tells the search log with the search it opens on (search-open-log.ts):
+ * without it every search from the bar would read as an address opened.
  */
+import type { SearchEntry } from '../../../ugc-mobile/lib/public-search-policy/search-open-log';
+
 const HANDOFF_MS = 10_000;
 
 let markedAt: number | null = null;
+let markedEntry: SearchEntry = 'typed';
 
-export function markSearchFieldHandoff(now: number = Date.now()): void {
+export function markSearchFieldHandoff(now: number = Date.now(), entry: SearchEntry = 'typed'): void {
   markedAt = now;
+  markedEntry = entry;
+}
+
+/** How the search the bar handed over was entered; read while a hand-off is pending. */
+export function searchFieldHandoffEntry(): SearchEntry {
+  return markedEntry;
 }
 
 /** Whether a hand-off is waiting, without taking it: safe to call twice in one render. */

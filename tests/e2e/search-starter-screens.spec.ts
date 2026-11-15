@@ -172,7 +172,8 @@ test.describe('search starting and ending screens', () => {
     await expect(page.getByText('12+ posts match')).toBeVisible();
     await shot(page, 'desktop-03-empty-tab');
     // Read from Top's answer on hand: nothing more was asked.
-    expect(searches).toEqual(['?q=nano&type=top', '?q=nano&type=recipes']);
+    // (`entry=link`: the page was opened on an address, said to the search log.)
+    expect(searches).toEqual(['?q=nano&type=top&entry=link', '?q=nano&type=recipes&entry=link']);
     await page.getByRole('button', { name: 'See posts' }).click();
     await expect(page.getByRole('tab', { name: 'Posts' })).toHaveAttribute('aria-selected', 'true');
     await expect(page).toHaveURL(/[?&]type=posts/);

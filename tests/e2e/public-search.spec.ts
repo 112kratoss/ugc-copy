@@ -816,14 +816,15 @@ test.describe('public search', () => {
     await box.fill('ocean at dusk');
     await page.clock.runFor(300);
     await expect(page.getByRole('link', { name: /Ocean at dusk, long exposure/ })).toBeVisible();
-    expect(requests).toEqual(['?q=ocean+at+dusk&type=top']);
+    // (`entry`: how the query was entered, for the search log. It is the last parameter.)
+    expect(requests).toEqual(['?q=ocean+at+dusk&type=top&entry=typed']);
     await expect(related).toHaveCount(0);
     // Not while the answer has stood for less than the settle time.
     await page.clock.runFor(1_499);
     expect(requests).toHaveLength(1);
     await page.clock.runFor(1);
     await expect(related.getByRole('link')).toHaveText([/Sea after sunset/, /Cliffs in mist/]);
-    expect(requests).toEqual(['?q=ocean+at+dusk&type=top', '?q=ocean+at+dusk&type=top&related=1']);
+    expect(requests).toEqual(['?q=ocean+at+dusk&type=top&entry=typed', '?q=ocean+at+dusk&type=top&related=1&entry=typed']);
     // Under the search's own posts, with the same cards, which come back to this search.
     await expect(page.getByRole('heading', { level: 2 })).toHaveText(['Posts', 'Related posts']);
     const href = await related.getByRole('link').first().getAttribute('href');
@@ -841,14 +842,14 @@ test.describe('public search', () => {
     await page.clock.runFor(300);
     await expect(related.getByRole('link')).toHaveCount(2);
     await expect(page.getByText('No results for “quiet harbour”')).toBeVisible();
-    expect(requests.slice(2)).toEqual(['?q=quiet+harbour&type=top&related=1']);
+    expect(requests.slice(2)).toEqual(['?q=quiet+harbour&type=top&related=1&entry=typed']);
     await page.clock.runFor(10_000);
     expect(requests).toHaveLength(3);
 
     // Recipes bring none: the parameter is not sent there, settled or not.
     await page.getByRole('tab', { name: 'Recipes' }).click();
     await page.clock.runFor(10_000);
-    expect(requests.slice(3)).toEqual(['?q=quiet+harbour&type=recipes']);
+    expect(requests.slice(3)).toEqual(['?q=quiet+harbour&type=recipes&entry=typed']);
     await expect(related).toHaveCount(0);
     await page.clock.resume();
   });
