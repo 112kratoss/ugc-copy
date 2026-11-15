@@ -18,7 +18,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(229);
+select plan(261);
 
 create function pg_temp.uid(p_suffix text)
 returns uuid
@@ -222,8 +222,9 @@ from (
     ('2e', '01', 'Result one', '53'), ('2f', '02', 'Result two', '54')
 ) as post(suffix, owner, title, generation);
 
--- Covers. …12 is the most saved of the amberglow posts, then …13, then …11;
--- of the Lumen Forge posts …28, then …27.
+-- Covers. Readers saved …12 most of the amberglow posts, then …13, then …11
+-- not at all; of the Lumen Forge posts …28 most, then …27. The save_count a
+-- post carries says otherwise for none of them, and decides nothing.
 insert into public.post_media (post_id, storage_path, media_kind, content_type, width, height, sort_order,
   preview_storage_path, preview_thumbhash, preview_status)
 select pg_temp.uid(cover.suffix), 'c5e6/' || cover.suffix || '/source.png', cover.kind, 'image/png', 800, 1200, 0,
@@ -238,7 +239,13 @@ from (
 insert into public.post_saves (user_id, post_id, created_at) values
   (pg_temp.uid('07'), pg_temp.uid('28'), now() - interval '1 day'),
   (pg_temp.uid('02'), pg_temp.uid('28'), now() - interval '1 day'),
-  (pg_temp.uid('07'), pg_temp.uid('29'), now() - interval '20 days');
+  (pg_temp.uid('07'), pg_temp.uid('29'), now() - interval '20 days'),
+  -- Ten days ago, so no week count moves: what orders the pictures.
+  (pg_temp.uid('08'), pg_temp.uid('28'), now() - interval '10 days'),
+  (pg_temp.uid('04'), pg_temp.uid('28'), now() - interval '10 days'),
+  (pg_temp.uid('07'), pg_temp.uid('12'), now() - interval '10 days'),
+  (pg_temp.uid('08'), pg_temp.uid('12'), now() - interval '10 days'),
+  (pg_temp.uid('07'), pg_temp.uid('13'), now() - interval '10 days');
 insert into public.post_comments (post_id, user_id, body, status, created_at) values
   (pg_temp.uid('27'), pg_temp.uid('07'), 'Lovely', 'active', now() - interval '2 days'),
   (pg_temp.uid('27'), pg_temp.uid('07'), 'Again', 'active', now() - interval '1 day'),
@@ -303,7 +310,7 @@ select ok(
 select is(
   (select picture_post_ids from public.search_phrases where phrase = 'amberglow lanterns'),
   array[pg_temp.uid('12'), pg_temp.uid('13'), pg_temp.uid('11')],
-  'the pictured posts are kept, the most saved first'
+  'the pictured posts are kept, the one other accounts saved and commented on most first'
 );
 select is(
   (select picture_post_ids from public.search_phrases where phrase = 'copper meadow'),
@@ -428,9 +435,14 @@ select is(
   'the typeahead''s entity row carries its picture'
 );
 select is(
-  public.search_suggestions('lumen', pg_temp.uid('05')) -> 'entities' -> 0 -> 'thumbnail' ->> 'post_id',
-  pg_temp.uid('27')::text,
-  'the viewer''s row carries a picture of a post they may see'
+  public.search_suggestions('lumen', pg_temp.uid('05')) -> 'entities',
+  '[]'::jsonb,
+  'the viewer is not offered a tool whose second creator they blocked: for them one creator posts with it'
+);
+select is(
+  public.search_suggestions('midj', pg_temp.uid('05')) -> 'entities' -> 0 -> 'thumbnail' ->> 'post_id',
+  pg_temp.uid('13')::text,
+  'a row the viewer is offered carries a picture of a post they may see'
 );
 
 -- A labelled post: its media moves to the private bucket with the label.
@@ -462,10 +474,10 @@ select results_eq(
   'a creator''s week for a tool: a new post and two commenters (their own comment, a removed one and a second comment by the same reader count for nothing); the weeks before: a post and a save, over three'
 );
 select results_eq(
-  $$ select post_count, week_activity, base_activity, picture_post_id
+  $$ select post_count, week_activity, round(base_activity::numeric, 2), picture_post_id
      from public.search_popularity where subject = 'tool' and key = 'lumen-forge' and creator_user_id = pg_temp.uid('02') $$,
-  $$ values (1, 2::real, 0::real, pg_temp.uid('28')) $$,
-  'another''s: a new post and a save by someone else (their own save counts for nothing)'
+  $$ values (1, 2::real, 0.67, pg_temp.uid('28')) $$,
+  'another''s: a new post and a save by someone else (their own save counts for nothing); the weeks before: two saves, over three'
 );
 select results_eq(
   $$ select post_count from public.search_popularity where subject = 'creator' and key = '*' and creator_user_id = pg_temp.uid('02') $$,
@@ -594,6 +606,13 @@ select is(
   pg_temp.uid('2a')::text,
   'a hand-picked term carries the picture of a post that holds its words'
 );
+select is(
+  (select array_agg(search ->> 'text' order by position)
+   from jsonb_array_elements(public.search_starter(null, array['Workshop', 'Hearts queen', 'Runway'], 0, 0, 8) -> 'searches')
+     with ordinality as offered(search, position)),
+  array['workshop bench', 'copper meadow', 'queen of hearts', 'recipe post', 'velvet harbor', 'Runway'],
+  'a hand-picked term that shares a word with a phrase already offered is the same subject again, and is not offered'
+);
 delete from public.search_suggestion_denylist where term = 'amberglow';
 
 -- No two searches share a word.
@@ -682,6 +701,158 @@ select is(pg_temp.related('amberglow', array['11', '12', '13']), array['midjourn
   'a phrase that holds a withdrawn word is not related');
 delete from public.search_suggestion_denylist where term = 'lanterns';
 
+-- ─── Review of PR #826 ───────────────────────────────────────────────────────
+
+-- 1. A three-word phrase longer than the table holds (60 characters) is not
+-- read at all: before, the rebuild raised the table's check and every later
+-- rebuild with it.
+insert into public.posts (
+  id, user_id, visibility, category, source_kind, post_format, review_status, is_nsfw,
+  title, showcase_asset_path, source_tool, source_tool_slug, save_count, comment_count, created_at, updated_at
+)
+select pg_temp.uid(post.suffix), pg_temp.uid(post.owner), 'public', 'image', 'external', 'media', 'visible', false,
+       post.title, 'showcase/c5e6-' || post.suffix || '.png', post.tool, lower(post.tool), post.counted, post.counted,
+       now() - post.age, now() - post.age
+from (
+  values
+    ('65', '01', 'Abcdefghijklmnopqrstuv bcdefghijklmnopqrstuvw cdefghijklmnopqrstuvwx', 'Midjourney', 0, interval '1 hour'),
+    ('66', '02', 'Abcdefghijklmnopqrstuv bcdefghijklmnopqrstuvw cdefghijklmnopqrstuvwx', 'Midjourney', 0, interval '1 hour'),
+    -- 10. Twelve posts of one creator this week, and one of another's two months ago.
+    ('a0', '01', 'Saffron canyon', 'Canyonkit', 50, interval '0 hours'),
+    ('a1', '01', 'Saffron canyon', 'Canyonkit', 0, interval '1 hour'),
+    ('a2', '01', 'Saffron canyon', 'Canyonkit', 0, interval '2 hours'),
+    ('a3', '01', 'Saffron canyon', 'Canyonkit', 0, interval '2 hours'),
+    ('a4', '01', 'Saffron canyon', 'Canyonkit', 0, interval '2 hours'),
+    ('a5', '01', 'Saffron canyon', 'Canyonkit', 0, interval '2 hours'),
+    ('a6', '01', 'Saffron canyon', 'Canyonkit', 0, interval '2 hours'),
+    ('a7', '01', 'Saffron canyon', 'Canyonkit', 0, interval '2 hours'),
+    ('a8', '01', 'Saffron canyon', 'Canyonkit', 0, interval '2 hours'),
+    ('a9', '01', 'Saffron canyon', 'Canyonkit', 0, interval '2 hours'),
+    ('aa', '01', 'Saffron canyon', 'Canyonkit', 0, interval '2 hours'),
+    ('ab', '01', 'Saffron canyon', 'Canyonkit', 0, interval '2 hours'),
+    ('ac', '03', 'Saffron canyon', 'Canyonkit', 0, interval '60 days'),
+    -- 12. Two posts of one creator and one of a creator the viewer blocked.
+    ('b0', '01', 'Tidal ledger', 'Midjourney', 0, interval '1 hour'),
+    ('b1', '01', 'Tidal ledger', 'Midjourney', 0, interval '1 hour'),
+    ('b2', '02', 'Tidal ledger', 'Midjourney', 0, interval '1 hour')
+) as post(suffix, owner, title, tool, counted, age);
+insert into public.post_media (post_id, storage_path, media_kind, content_type, width, height, sort_order,
+  preview_storage_path, preview_thumbhash, preview_status)
+select pg_temp.uid(cover.suffix), 'c5e6/' || cover.suffix || '/source.png', 'image', 'image/png', 800, 1200, 0,
+       'c5e6/' || cover.suffix || '/preview.webp', 'hash-' || cover.suffix, 'ready'
+from (values ('a0'), ('a1'), ('ac')) as cover(suffix);
+-- 6. …a0 carries a save_count and a comment_count of 50, and five comments
+-- of its own creator: counters and comments a creator can raise alone. One
+-- reader saved …ac.
+insert into public.post_comments (post_id, user_id, body, status, created_at)
+select pg_temp.uid('a0'), pg_temp.uid('01'), 'Mine ' || n, 'active', now() from generate_series(1, 5) as n;
+insert into public.post_saves (user_id, post_id, created_at) values
+  (pg_temp.uid('07'), pg_temp.uid('ac'), now() - interval '3 days');
+
+select lives_ok(
+  $$ select * from public.rebuild_search_phrases() $$,
+  'a rebuild survives posts of two creators that share three words too long to keep as a phrase'
+);
+select is(
+  (select count(*) from public.search_phrases where char_length(phrase) > 60 or char_length(core) > 60),
+  0::bigint,
+  'and keeps no phrase over 60 characters'
+);
+select is(
+  pg_temp.phrases('Abcdefghijklmnopqrstuv bcdefghijklmnopqrstuvw cdefghijklmnopqrstuvwx'),
+  array['abcdefghijklmnopqrstuv bcdefghijklmnopqrstuvw', 'bcdefghijklmnopqrstuvw cdefghijklmnopqrstuvwx'],
+  'three long words are read as their two-word halves: the three together are dropped where they are read'
+);
+select ok(
+  exists (select 1 from public.search_phrases where phrase = 'abcdefghijklmnopqrstuv bcdefghijklmnopqrstuvw'),
+  'and those are kept'
+);
+
+-- 10. One creator's volume.
+select is(
+  (select week_activity from public.search_phrases where phrase = 'saffron canyon'),
+  11::real,
+  'a creator''s new posts count toward a phrase''s week up to ten, as they do toward a model''s: twelve posts and one reader''s save count 11'
+);
+
+-- 6. Pictures are ordered by what other accounts gave, never by a counter or
+-- a comment the creator can add alone; ties by the newest.
+select is(
+  (select picture_post_ids from public.search_phrases where phrase = 'saffron canyon'),
+  array[pg_temp.uid('ac'), pg_temp.uid('a0'), pg_temp.uid('a1')],
+  'a phrase''s pictures: the post a reader saved first, then the newest; a creator''s own comments and the counters they raise lift nothing'
+);
+select is(public.search_entity_picture('tool', 'canyonkit') ->> 'post_id', pg_temp.uid('ac')::text,
+  'a tool''s picture too');
+select is(
+  (select picture_post_id from public.search_popularity
+   where subject = 'tool' and key = 'canyonkit' and creator_user_id = pg_temp.uid('01')),
+  pg_temp.uid('a0'),
+  'and of one creator''s equally unsaved posts, the newest'
+);
+select is(public.search_query_picture('saffron', null, true) ->> 'post_id', pg_temp.uid('ac')::text,
+  'a hand-picked search''s picture, read from the posts as they are, is the one other accounts saved most');
+
+-- 12. A creator on either side of a block with the viewer is not the second
+-- creator of anything the viewer is offered.
+select is(pg_temp.completions('tida'), array['tidal ledger'],
+  'fixture: a visitor is offered a phrase two creators write');
+select is(pg_temp.completions('tida', pg_temp.uid('05')), '{}'::text[],
+  'the viewer is not, though two posts they may see hold it: both are one creator''s, the other creator they blocked');
+select is(pg_temp.completions('amb', pg_temp.uid('05')), array['amberglow', 'amberglow lanterns'],
+  'what two creators they may see write is still offered');
+select ok(
+  not exists (
+    select 1 from jsonb_array_elements(public.search_starter(pg_temp.uid('05'), '{}', 0, 0, 8) -> 'searches') as search
+    where search ->> 'text' = 'tidal ledger'
+  )
+  and exists (
+    select 1 from jsonb_array_elements(public.search_starter(null, '{}', 0, 0, 8) -> 'searches') as search
+    where search ->> 'text' = 'tidal ledger'
+  ),
+  'nor is it a search on their start screen, as it is on a visitor''s'
+);
+
+-- 7. Both tables are as old as their last rebuild. Past three hours (a job
+-- that stopped, code rolled back without the migration, the hours between
+-- the migration and the first run of the new job) nothing reads them, and
+-- every answer is what it was before them.
+select is(public.search_phrases_are_fresh(), true, 'a rebuild stamps the tables: they are fresh');
+select is((select rebuilt_at from public.search_phrases_state), now(), 'with the time of the rebuild');
+update public.search_phrases_state set rebuilt_at = now() - interval '2 hours 59 minutes';
+select is(public.search_phrases_are_fresh(), true, 'for three hours');
+update public.search_phrases_state set rebuilt_at = now() - interval '3 hours 1 minute';
+select is(public.search_phrases_are_fresh(), false, 'and no longer');
+select is(pg_temp.completions('amb'), array['amberglow'],
+  'stale: a completion is a word of the dictionary, as before the phrases');
+select is(pg_temp.completions('amberglow la'), array['amberglow lanterns'],
+  'and the word that continues what was typed, read from the posts themselves');
+select is(pg_temp.completions('lum'), '{}'::text[], 'no name, which only the phrases held');
+select is(
+  public.search_starter(null, array['Runway'], 8, 6, 8) -> 'periods',
+  '{"entities": "all", "creators": "all", "searches": "all"}'::jsonb,
+  'stale: every list of the start screen is the all-time one'
+);
+select is(
+  (select array_agg(search ->> 'text' order by position)
+   from jsonb_array_elements(public.search_starter(null, array['Runway', 'Workshop'], 0, 0, 8) -> 'searches') with ordinality as offered(search, position)),
+  array['Runway', 'Workshop'],
+  'its searches are the hand-picked terms alone'
+);
+select is(
+  (select count(*) from jsonb_array_elements(public.search_starter(null, '{}', 8, 0, 0) -> 'entities') as entity
+   where entity -> 'thumbnail' <> 'null'::jsonb),
+  0::bigint,
+  'no model or tool carries a picture picked at a rebuild that old'
+);
+select is(public.search_suggestions('lumen') -> 'entities' -> 0 -> 'thumbnail', 'null'::jsonb,
+  'nor does a typeahead row, which is still offered');
+select is(public.search_query_picture('amberglow lanterns'), null, 'nor a phrase');
+select is(pg_temp.related('amberglow', array['11', '12', '13']), '{}'::text[], 'and no related search is offered');
+select ok((select phrases > 0 from public.rebuild_search_phrases()), 'the next rebuild');
+select is(pg_temp.completions('amb'), array['amberglow', 'amberglow lanterns'], 'makes them read again');
+select is(public.search_starter(null, '{}') -> 'periods' ->> 'searches', 'week', 'the start screen too');
+
 -- ─── Catalog models in the typeahead ─────────────────────────────────────────
 --
 -- The product's own catalog, as a release of this test's: the release live
@@ -695,6 +866,8 @@ delete from public.search_suggestion_denylist where term = 'lanterns';
 --   zephyrmodel-old   "Zephyr Old"        of no live release; a creation of …01
 --   Zephyrtool        an outside tool one creator, …03, names
 --   quillprime-1      "Quill Prime"       no post (for the known names below)
+--   zephyrmodel-next  "Zephyr Next"       needs a newer catalog transport than the
+--                                         one served: no client has it yet
 
 create function pg_temp.entity_rows(p_query text, p_catalog boolean default false, p_viewer uuid default null)
 returns text[]
@@ -707,7 +880,7 @@ $$;
 
 insert into public.generation_models (model_id, kind) values
   ('zephyrmodel-2', 'video'), ('zephyrmodel-lite', 'image'), ('zephyrmodel-web', 'image'),
-  ('zephyrmodel-off', 'image'), ('zephyrmodel-old', 'image'), ('quillprime-1', 'image');
+  ('zephyrmodel-off', 'image'), ('zephyrmodel-old', 'image'), ('quillprime-1', 'image'), ('zephyrmodel-next', 'image');
 insert into public.generation_model_catalog_releases (revision, schema_version, status, defaults, created_by)
 values ('c5e6-typeahead-catalog', 2, 'draft',
   '{"web":{"image":null,"video":null,"motion":null},"mobile":{"image":null,"video":null,"motion":null}}', 'database-test');
@@ -717,18 +890,20 @@ insert into public.generation_model_catalog_entries (
 )
 select releases.id, model.id,
   jsonb_build_object('id', model.id, 'kind', model.kind, 'displayName', model.name, 'description', 'A model',
-                     'badge', null, 'recommended', false, 'sortOrder', 1, 'minClientSchemaVersion', 1),
+                     'badge', null, 'recommended', false, 'sortOrder', 1, 'minClientSchemaVersion', model.min_version),
   model.kind || '-v1', '{"private":"zephyr-provider-secret"}', model.kind || '-v1', '{"private":"zephyr-price-secret"}',
   model.kind || '-v1', model.web, model.mobile
 from public.generation_model_catalog_releases as releases
 cross join (
   values
-    ('zephyrmodel-2', 'video', 'Zephyr Motion 2', true, true),
-    ('zephyrmodel-lite', 'image', 'Zephyr Lite', true, true),
-    ('zephyrmodel-web', 'image', 'Lumen Zephyr Web', true, false),
-    ('zephyrmodel-off', 'image', 'Zephyr Off', false, false),
-    ('quillprime-1', 'image', 'Quill Prime', true, true)
-) as model(id, kind, name, web, mobile)
+    ('zephyrmodel-2', 'video', 'Zephyr Motion 2', true, true, 1),
+    ('zephyrmodel-lite', 'image', 'Zephyr Lite', true, true, 2),
+    ('zephyrmodel-web', 'image', 'Lumen Zephyr Web', true, false, 3),
+    ('zephyrmodel-off', 'image', 'Zephyr Off', false, false, 1),
+    ('quillprime-1', 'image', 'Quill Prime', true, true, 1),
+    -- For a transport newer than the one the catalog reads serve (3).
+    ('zephyrmodel-next', 'image', 'Zephyr Next', true, true, 4)
+) as model(id, kind, name, web, mobile, min_version)
 where releases.revision = 'c5e6-typeahead-catalog';
 update public.generation_model_catalog_releases set status = 'retired', retired_at = now() where status = 'active';
 update public.generation_model_catalog_releases set status = 'active', activated_at = now() where revision = 'c5e6-typeahead-catalog';
@@ -774,6 +949,8 @@ $$;
 select is(pg_temp.named_models('zeph'), array['zephyrmodel-2', 'zephyrmodel-lite', 'zephyrmodel-web'],
   'the catalog''s models a text names are those of the live release that are on the web or in the app: never one switched off on both, never one of no live release');
 select is(pg_temp.named_models('lite'), array['zephyrmodel-lite'], 'by any word of the name or the id');
+select is(pg_temp.named_models('zephyr next'), '{}'::text[],
+  'a model whose descriptor needs a newer transport than the catalog reads serve is not known: no client could open it');
 select is(pg_temp.named_models('motion 2'), array['zephyrmodel-2'], 'every typed word, the last a prefix');
 select is(pg_temp.named_models('z'), '{}'::text[], 'not from one character');
 select results_eq(

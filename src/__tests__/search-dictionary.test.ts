@@ -19,9 +19,28 @@ describe('rebuildSearchDictionary', () => {
   it('calls rebuild_search_terms, then rebuild_search_phrases, and returns the counts of each one’s row', async () => {
     const { client, rpc } = clientAnswering({ data: [{ added: 12, removed: 3 }], error: null });
 
-    await expect(rebuildSearchDictionary(client)).resolves.toEqual({ added: 12, removed: 3, phrases: 3854, subjects: 6535 });
+    await expect(rebuildSearchDictionary(client, {})).resolves.toEqual({ added: 12, removed: 3, phrases: 3854, subjects: 6535, phrasesRebuilt: true });
     // Two calls, in this order: each has the statement timeout to itself.
     expect(rpc.mock.calls.map(([name]) => name)).toEqual(['rebuild_search_terms', 'rebuild_search_phrases']);
+  });
+
+  it.each(['1', 'true', ' TRUE '])('with SEARCH_PHRASES_REBUILD_DISABLED=%s rebuilds the dictionary alone, and says so', async (value) => {
+    const { client, rpc } = clientAnswering({ data: [{ added: 12, removed: 3 }], error: null });
+
+    await expect(rebuildSearchDictionary(client, { SEARCH_PHRASES_REBUILD_DISABLED: value })).resolves.toEqual({
+      added: 12, removed: 3, phrases: 0, subjects: 0, phrasesRebuilt: false,
+    });
+    // The phrases' function is not called at all: the switch is for a rebuild that runs too long.
+    expect(rpc.mock.calls.map(([name]) => name)).toEqual(['rebuild_search_terms']);
+  });
+
+  it.each([undefined, '', '0', 'false', 'yes'])('with SEARCH_PHRASES_REBUILD_DISABLED=%s rebuilds both', async (value) => {
+    const { client, rpc } = clientAnswering({ data: [{ added: 1, removed: 0 }], error: null });
+
+    await expect(rebuildSearchDictionary(client, { SEARCH_PHRASES_REBUILD_DISABLED: value })).resolves.toMatchObject({
+      phrases: 3854, subjects: 6535, phrasesRebuilt: true,
+    });
+    expect(rpc).toHaveBeenCalledTimes(2);
   });
 
   it('accepts zero counts', async () => {
@@ -30,7 +49,7 @@ describe('rebuildSearchDictionary', () => {
       { data: [{ phrases: 0, subjects: 0 }], error: null },
     );
 
-    await expect(rebuildSearchDictionary(client)).resolves.toEqual({ added: 0, removed: 0, phrases: 0, subjects: 0 });
+    await expect(rebuildSearchDictionary(client, {})).resolves.toEqual({ added: 0, removed: 0, phrases: 0, subjects: 0, phrasesRebuilt: true });
   });
 
   it('reads a single row answered as an object, as PostgREST may', async () => {
@@ -39,7 +58,7 @@ describe('rebuildSearchDictionary', () => {
       { data: { phrases: 3, subjects: 4 }, error: null },
     );
 
-    await expect(rebuildSearchDictionary(client)).resolves.toEqual({ added: 1, removed: 2, phrases: 3, subjects: 4 });
+    await expect(rebuildSearchDictionary(client, {})).resolves.toEqual({ added: 1, removed: 2, phrases: 3, subjects: 4, phrasesRebuilt: true });
   });
 
   it('throws the dictionary’s RPC error, and does not go on to the phrases', async () => {
