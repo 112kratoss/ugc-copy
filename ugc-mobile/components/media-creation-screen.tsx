@@ -103,6 +103,7 @@ import {
   getCatalogDraftSettings,
   hasCreatorEditedPromptDuringRemix,
   hydrateCatalogCreationDraftFromRemixSource,
+  modelNoLongerAvailableNotice,
   MOTION_INPUT_LABELS,
   multiShotTotalDuration,
   normalizeCreationDraftForCatalog,
@@ -1893,7 +1894,7 @@ function IdentityCreationScreen({
   // The link's model (`?model=`), chosen once as the picker chooses one: after the saved drafts are
   // read and the catalog's revision is confirmed, so neither puts another model over it, and only
   // when this creator may run it; dropped otherwise, the draft keeping its own
-  // (creatorLinkModelStep).
+  // (creatorLinkModelStep), and said as a remix's model not given is said (review of #828, N13).
   useEffect(() => {
     if (!linkModel || linkModelSettled) return;
     const model = catalog ? getCatalogModel(catalog, linkModel) : null;
@@ -1905,7 +1906,12 @@ function IdentityCreationScreen({
     });
     if (step === 'wait') return;
     setLinkModelSettled(true);
-    if (step === 'pick') void pickModel(initialTool, linkModel);
+    if (step === 'pick') {
+      void pickModel(initialTool, linkModel);
+      return;
+    }
+    const opened = catalog ? getCatalogModel(catalog, latestDrafts.current[initialTool].model) : null;
+    if (opened && opened.id !== linkModel) setCatalogNotice(modelNoLongerAvailableNotice(model?.displayName ?? linkModel, opened));
     // `pickModel` is this render's: it reads the drafts through `latestDrafts`, kept current above.
   }, [catalog, catalogQuery.missingIds, draftsHydrated, initialTool, linkModel, linkModelSettled, revisionUnconfirmed]);
 

@@ -6,9 +6,7 @@
  * revision is confirmed, so neither puts another model over it afterwards.
  */
 
-// A catalog id (`seedance-2`, `kling-2.6`, `gpt-image-2.6`): letters, digits,
-// dots, underscores and hyphens. Anything else no catalog names, and is not looked up.
-const CATALOG_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+import { MODEL_CATALOG_ID_PATTERN } from './model-catalog/protocol';
 
 /**
  * The model a creator link names, or null: none named, or text no catalog id
@@ -22,7 +20,9 @@ export function creatorLinkModel({ model, remix = false, guided = false }: {
 }): string | null {
   if (remix || guided) return null;
   const value = (Array.isArray(model) ? model[0] : model)?.trim() ?? '';
-  return CATALOG_MODEL_ID.test(value) ? value : null;
+  // A catalog id as every route and client reads one (`seedance-2`, `kling-2.6`):
+  // anything else no catalog names, and is not looked up.
+  return MODEL_CATALOG_ID_PATTERN.test(value) ? value : null;
 }
 
 /**

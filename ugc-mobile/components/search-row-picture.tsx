@@ -24,6 +24,7 @@ export function SearchRowPicture({
   shape = 'square',
   Icon,
   iconSize = appTheme.icon.sm,
+  iconTone = 'accent',
   testID,
 }: {
   thumbnail: SearchThumbnail | null | undefined;
@@ -32,6 +33,11 @@ export function SearchRowPicture({
   /** The row's glyph (a Lucide icon the caller imports, one module per icon: bundle-shaping.test.ts). */
   Icon: ComponentType<{ size?: number; color?: string }>;
   iconSize?: number;
+  /**
+   * The glyph's colour: the accent for a model's or tool's row, muted for a
+   * search to try, as a related search's chip and a recent search draw theirs.
+   */
+  iconTone?: 'accent' | 'muted';
   testID?: string;
 }) {
   const theme = useAppTheme();
@@ -49,7 +55,7 @@ export function SearchRowPicture({
         backgroundColor: theme.colors.surfaceStrong,
       }}
     >
-      <Icon size={iconSize} color={theme.colors.primary} />
+      <Icon size={iconSize} color={iconTone === 'muted' ? theme.colors.muted : theme.colors.primary} />
       {thumbnail ? (
         <Image
           source={{ uri: thumbnail.url }}

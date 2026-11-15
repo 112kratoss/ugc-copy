@@ -2,7 +2,7 @@
  * The words of the search screens' new parts (2026-11-15): related searches,
  * Follow on a creator row, and a catalog model nobody has posted with yet. Both
  * search clients draw them from here, the app's screen and the web's page, by
- * relative import (chosen in the sessions' shared `search-ui-wording.md`).
+ * relative import.
  * The starter's headings, the typeahead's and the rest of search's words are
  * already shared (`public-search-policy.ts`, `search-starter.ts`,
  * `search-typeahead.ts`).

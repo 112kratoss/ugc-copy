@@ -84,6 +84,19 @@ describe('the search route', () => {
     await act(async () => tree.unmount());
   });
 
+  it('opens on a link\'s order, filters and exact reading too, so a visitor\'s Follow comes back to them (review of #828, S5)', async () => {
+    mocks.params.value = { q: 'neon city', type: 'posts', sort: 'latest', kind: 'video', exact: '1' };
+    const tree = await render();
+    expect(props()).toMatchObject({
+      initialQuery: 'neon city',
+      initialType: 'posts',
+      initialSort: 'latest',
+      initialFilters: { madeWith: null, mediaKind: 'video', hasRecipe: false, following: false },
+      initialExact: true,
+    });
+    await act(async () => tree.unmount());
+  });
+
   it('grows out of the control the opener was pressed from, and out of nothing for a link', async () => {
     searchScreenOpener.reset();
     const from = { x: 233, y: 57, width: 48, height: 48, kind: 'button' as const };

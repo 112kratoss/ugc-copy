@@ -19,6 +19,12 @@ describe('the model a creator link names', () => {
     expect(creatorLinkModel({ model: 'seedance-2', guided: true })).toBeNull();
   });
 
+  it('reads an id as every catalog route and client does (MODEL_CATALOG_ID_PATTERN; review of #828, N11)', () => {
+    expect(creatorLinkModel({ model: 'm'.repeat(120) })).toBe('m'.repeat(120));
+    expect(creatorLinkModel({ model: 'm'.repeat(121) })).toBeNull();
+    expect(creatorLinkModel({ model: 'gpt-image-2.6_hd' })).toBe('gpt-image-2.6_hd');
+  });
+
   it('is none for text no catalog id could be', () => {
     expect(creatorLinkModel({ model: 'x'.repeat(200) })).toBeNull();
     expect(creatorLinkModel({ model: 'two words' })).toBeNull();

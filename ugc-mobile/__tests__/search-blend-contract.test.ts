@@ -18,9 +18,9 @@ import {
 
 // The blended Posts order as the app is held to it
 // (contracts/mobile-api-v1.json, searchPublicContent). The server's half is
-// src/__tests__/search-blend-contract.test.ts. No screen sends the parameter
-// yet: this pins the rules a screen will read, and that the answer reaches it
-// whole.
+// src/__tests__/search-blend-contract.test.ts. Both search screens send the
+// parameter (the app's through searchRequestExtras): this pins the rules they
+// read, and that the answer reaches them whole.
 
 const search = mobileApiContract.endpoints.searchPublicContent;
 

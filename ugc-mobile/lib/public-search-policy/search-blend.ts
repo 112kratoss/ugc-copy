@@ -16,6 +16,8 @@
  * this folder: no React Native, Expo or Node imports.
  */
 
+import type { SearchEntry } from './search-open-log';
+
 /** The request parameter: `blend=1`. Any other value is refused (400), as `related`'s is. */
 export const SEARCH_BLEND_PARAM = 'blend';
 
@@ -38,8 +40,9 @@ export function searchQueryWordCount(query: string): number {
  * - Not a handle search (a query that begins with "@"): that is a look for a
  *   creator.
  * - Not read as typed (`exact`): "Search instead for …" asks for the words.
- * - The person settled on it (`settled`): the Search key or Enter, a
- *   suggestion, a recent or a starter search pressed, never a step of typing.
+ * - The person settled on it (`settled`, searchEntrySettles): the Search key
+ *   or Enter, a suggestion, a recent, a starter or a related search pressed,
+ *   never a step of typing, nor a search the person did not choose as words.
  *   A new query costs an embedding, counted against the viewer's forty a day,
  *   and a list that reorders under the fingers while typing is worse than
  *   either order. The server cannot see this and reads every request that
@@ -66,6 +69,21 @@ export function searchBlendApplies(search: {
     && search.sort === 'top'
     && !query.startsWith('@')
     && searchQueryWordCount(query) >= SEARCH_BLEND_MIN_WORDS;
+}
+
+/**
+ * Whether a search entered this way (`entry`, search-open-log.ts) is one the
+ * person settled on, for the blended order here and for related posts asked
+ * at once (`settled` in public-search-policy.ts): typed and committed, a
+ * suggestion, a recent, a starter or a related search pressed. Not an address
+ * opened as it was (`link`), nor a model's or tool's row (`entity`), whose
+ * words the person did not choose: those are settled once the person commits
+ * them, as any search typed (review of #828, S6). A search that says nothing
+ * of how it was entered is not settled on. Both clients read it, so one
+ * search is ordered alike on both.
+ */
+export function searchEntrySettles(entry: SearchEntry | null | undefined): boolean {
+  return entry === 'typed' || entry === 'suggestion' || entry === 'recent' || entry === 'starter' || entry === 'related';
 }
 
 /** The parameter as a request carries it, or nothing. */
