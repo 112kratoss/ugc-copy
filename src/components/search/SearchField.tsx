@@ -18,6 +18,14 @@ import {
 export const HIDE_NATIVE_SEARCH_CLEAR_CLASS = '[&::-webkit-search-cancel-button]:hidden';
 
 /**
+ * The search page's capsule, under the field's parts. `group-focus-within`
+ * reads the label around it (`group`): the hairline is `--ui-focus` while the
+ * field has the focus, the page's only sign of it besides the caret.
+ */
+export const SEARCH_FIELD_SKIN_CLASS =
+  'pointer-events-none absolute -inset-px -z-10 rounded-full border border-white/10 bg-white/[0.055] shadow-[0_18px_60px_-32px_rgba(0,0,0,0.9)] backdrop-blur-xl transition-colors duration-150 group-focus-within:border-[var(--ui-focus)]';
+
+/**
  * The typeahead a field controls: the field is then a combobox (the WAI-ARIA
  * pattern), whose list is drawn by the page (SearchTypeaheadList) under the
  * id it names.
@@ -70,10 +78,14 @@ export function SearchField({
     // The capsule's skin is an element of its own, under the rest: the parts
     // that travel with search's entrance (magnifier, words, clear button) are
     // its siblings, so each pairs or fades by itself and only the plain skin
-    // is ever stretched (search-entrance.ts).
-    <label className="ui-focus-within-ring relative isolate flex min-h-14 items-center gap-3 rounded-full border border-transparent px-5">
+    // is ever stretched (search-entrance.ts). The skin shows the focus too: its
+    // hairline turns the focus colour while the field (or its clear button) has
+    // it, as the sign-in field's does. Drawn on the skin, not around the label:
+    // the label stays in the page's cross-fade on leaving, and a ring there would
+    // fade out where the field was while the capsule shrinks away.
+    <label className="group relative isolate flex min-h-14 items-center gap-3 rounded-full border border-transparent px-5">
       <SearchEntrancePart origin={entrance} part="capsule" side="field">
-        <span aria-hidden="true" className="pointer-events-none absolute -inset-px -z-10 rounded-full border border-white/10 bg-white/[0.055] shadow-[0_18px_60px_-32px_rgba(0,0,0,0.9)] backdrop-blur-xl" />
+        <span aria-hidden="true" data-search-field-skin="" className={SEARCH_FIELD_SKIN_CLASS} />
       </SearchEntrancePart>
       {busy ? (
         <LoaderCircle data-search-field-busy="" className="h-5 w-5 shrink-0 text-zinc-400 motion-safe:animate-spin" aria-hidden="true" />

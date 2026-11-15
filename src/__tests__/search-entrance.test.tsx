@@ -122,6 +122,18 @@ describe('the parts each end of the motion draws', () => {
     expect(clear).toHaveAccessibleName('Clear search');
   });
 
+  it('shows the field\'s focus on its skin, which travels, not around the label, which fades (review of #817)', () => {
+    // The label named `ui-focus-within-ring`, a class no sheet defines: the
+    // field showed no focus but the caret.
+    const { container } = render(<SearchField value="" onChange={() => {}} onClear={() => {}} entrance="entry" />);
+    const label = container.querySelector('label');
+    const skin = container.querySelector('[data-search-field-skin]');
+    expect(label?.classList.contains('group')).toBe(true);
+    expect(label?.className).not.toMatch(/focus/);
+    expect(skin?.classList.contains('group-focus-within:border-[var(--ui-focus)]')).toBe(true);
+    expect(boundaries(container)[0].element).toBe(skin);
+  });
+
   it('draws the field at rest, named for nothing, when no control was pressed: still boundaries, so the screen cross-fades', () => {
     const { container } = render(<SearchField value="" onChange={() => {}} onClear={() => {}} />);
     const parts = boundaries(container);
