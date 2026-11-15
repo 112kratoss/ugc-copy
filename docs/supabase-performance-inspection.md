@@ -94,8 +94,9 @@ entity id such as `model:kling-2.6`; `media_kind`, `image` or `video`;
 whether the answer's posts or recipes were found on a corrected reading of the
 query (`corrected`; empty for a Creators search), how the search was entered as
 the client says it (`entry`: `typed`, `suggestion`, `entity`, `recent`,
-`starter`, `related`, `correction` or `link`; empty from a client that sends
-none, which is every app installed before 2026-11-15), when the request arrived, and
+`starter`, `related` or `link`; empty from a client that sends none, which is
+every app installed before 2026-11-15; "search instead for" is no entry, it
+keeps the one its query has), when the request arrived, and
 `visitor_day`. A search asked to read the query as typed ("search instead for",
 `exact=1`) writes no row: it re-asks a search already counted and by its nature
 finds no post or recipe. `visitor_day` is an HMAC of the
@@ -145,10 +146,18 @@ pressed in (500 means 500 or later), when the request arrived, and the same
 no account id, no address, no signed-in flag. The route stores the id as sent
 and never looks it up, so it answers every well-formed report 204 with no body
 whether the id names a public post, a private one or nothing; the report is
-where an id is checked. It has its own rate limit (`public-search:opened`, 120
-per 10 minutes per account, or per network for a visitor), is admitted as
-`/api/search` is, shares the switch (`SEARCH_QUERY_LOG_DISABLED=1` stops both
-tables) and the 90 days (`search_result_opens_deleted` in the sweep's summary).
+where an id is checked. One report is answered 204 and not stored: a `creator`
+whose id is the token's own account, which would put an account id beside that
+day's visitor code (compared with the verified token, no lookup). It reads a
+request only when its `Content-Type` is `application/json` (anything else is a
+400): another site's page can post a text or a form from a visitor's browser
+without asking, and JSON makes the browser ask first. It has its own rate limit
+(`public-search:opened`, 120 per 10 minutes per account, or per network for a
+visitor), and a guest session is counted against its network as well
+(`public-search:opened-guest-network`, 360 per 10 minutes), since a guest's id
+is new with every anonymous sign-in. It is admitted as `/api/search` is, shares
+the switch (`SEARCH_QUERY_LOG_DISABLED=1` stops both tables) and the 90 days
+(`search_result_opens_deleted` in the sweep's summary).
 
 ```bash
 npm run ops:search-report -- --days 7 [--limit 50] [--json]
@@ -156,10 +165,16 @@ npm run ops:search-report -- --days 7 [--limit 50] [--json]
 
 Read-only, service role. It prints, per final query, how many distinct
 visitor-days searched it, how many of those found nothing in any kind, how many
-opened a result, how many found something and opened nothing, the mean place of
-the results opened and how the searches were entered, under three lines with
-the window's totals; then the same columns again for the queries most often left
-without an open (`search_query_report(7, 50, 'unopened')`). An open counts only
+could report an open (`reports`), how many of those opened a result, how many of
+those found something and opened nothing, the mean place of the results opened
+and how the searches were entered, under four lines with the window's totals;
+then the same columns again for the queries most often left without an open
+(`search_query_report(7, 50, 'unopened')`). Only a client that says how a search
+was entered also reports what was opened from it, so opened and unopened are
+counted over the searches with an `entry` alone, and the second line of the
+totals says how many searches came from clients that cannot report (an app
+before its update, a tab loaded before the release): those are searches, and
+neither opened nor unopened. An open counts only
 while its id is something search shows the public (a post with a search
 document and no NSFW label, a creator with one, a listable recipe, an entity
 such a post has), a result pressed several times from one search is one open at
@@ -173,4 +188,8 @@ is `select * from public.search_query_report(7, 50)`.
 
 Caveats: a search typed across UTC midnight counts twice; the first-page
 requests of a person who never stops typing are still one per pause, so the
-counts are searches, not people.
+counts are searches, not people. Known limits of the opened results:
+
+- An open that arrives after UTC midnight does not join a search made before it: the visitor code is the arrival day's, so that search reads as unopened and the open counts for nothing (UTC midnight is 05:30 in India).
+- A web search page that Back or Forward restores says `entry=link` on its later requests and opens, though its query did not change: the kept page holds no entry. The report reads a search's first entry of the day, so the entry mix is unaffected.
+- The report does not read `search_result_opens.search_type`, `sort` or `entry` yet (it joins an open to its search by visitor code and query, and takes the entry from the search row); they are kept for the ranking work.

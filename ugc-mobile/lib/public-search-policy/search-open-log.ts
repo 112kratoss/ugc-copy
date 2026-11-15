@@ -34,16 +34,18 @@ import { parseSearchEntityId, searchEntityId, type SearchTabId } from './public-
  *   recent      a recent search;
  *   starter     a start-screen row or chip that is not a model or tool;
  *   related     a related-search chip;
- *   correction  "Search instead for …" (and back to the suggested spelling);
  *   link        an address or a deep link the screen was opened on.
  *
  * An entry belongs to the query, not to the request: it stays the same while
  * the person changes tab, order or filters or pages on, and is replaced only
  * when the query changes by another road. A query edited by hand is `typed`
- * again, whatever it started as.
+ * again, whatever it started as. "Search instead for …" is the same query
+ * read another way, so it keeps the entry the query has: it was a value of
+ * its own (`correction`) until the review of #826 found that no search row
+ * could ever hold it, since a search read as typed writes none.
  */
 export const SEARCH_ENTRIES = [
-  'typed', 'suggestion', 'entity', 'recent', 'starter', 'related', 'correction', 'link',
+  'typed', 'suggestion', 'entity', 'recent', 'starter', 'related', 'link',
 ] as const;
 export type SearchEntry = (typeof SEARCH_ENTRIES)[number];
 
@@ -70,14 +72,17 @@ export function searchEntryParams(entry: SearchEntry | null | undefined): Record
 /**
  * The entry of a search started by choosing a text from the typeahead: `typed`
  * when it is the text already in the box (the "Search for …" row), `recent`
- * when this device's recent searches hold it, else `suggestion`.
+ * when this device's recent searches hold it, else `suggestion`. The texts are
+ * compared as the server reads a query (NFKC, one space between words) and
+ * without case: a row's text is normalized that way, the box holds what was
+ * typed, and a full-width "ｎｅｏｎ" is the same search as its row's "neon".
  */
 export function searchEntryForChosenText(
   chosen: string,
   typed: string,
   recents: readonly string[],
 ): SearchEntry {
-  const fold = (text: string) => text.trim().replace(/\s+/g, ' ').toLowerCase();
+  const fold = (text: string) => text.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
   const text = fold(chosen);
   if (text === fold(typed)) return 'typed';
   return recents.some((recent) => fold(recent) === text) ? 'recent' : 'suggestion';

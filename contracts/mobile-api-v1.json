@@ -1038,7 +1038,6 @@
         "recent",
         "starter",
         "related",
-        "correction",
         "link"
       ],
       "response": {
@@ -1857,6 +1856,7 @@
       "path": "/api/search/opened",
       "auth": "optional",
       "cacheControl": "private, no-store",
+      "contentType": "application/json",
       "maxBodyBytes": 2048,
       "kinds": [
         "post",
@@ -1868,6 +1868,11 @@
       "rateLimit": {
         "scope": "public-search:opened",
         "limit": 120,
+        "windowSeconds": 600
+      },
+      "guestNetworkRateLimit": {
+        "scope": "public-search:opened-guest-network",
+        "limit": 360,
         "windowSeconds": 600
       },
       "request": {

@@ -5,9 +5,10 @@
 --
 -- 1. search_query_events.entry: how the search was started, as the client
 --    says it: typed, a completion row, a model or tool row, a recent search, a
---    start-screen row, a related-search chip, "search instead for", or an
---    address or deep link. NULL for a client that sends none (every installed
---    one) and for every row written before this file.
+--    start-screen row, a related-search chip, or an address or deep link.
+--    NULL for a client that sends none (every installed one) and for every
+--    row written before this file. "Search instead for" is no entry: it reads
+--    the same query another way, and a search read as typed writes no row.
 --
 -- 2. search_result_opens: one row per result a person pressed, written by the
 --    service role behind POST /api/search/opened
@@ -55,10 +56,10 @@
 -- ─── 1. How a search was entered ────────────────────────────────────────────
 
 ALTER TABLE public.search_query_events
-  ADD COLUMN entry text CHECK (entry IS NULL OR entry IN ('typed', 'suggestion', 'entity', 'recent', 'starter', 'related', 'correction', 'link'));
+  ADD COLUMN entry text CHECK (entry IS NULL OR entry IN ('typed', 'suggestion', 'entity', 'recent', 'starter', 'related', 'link'));
 
 COMMENT ON COLUMN public.search_query_events.entry IS
-  'How the search was started, as the client says it: typed, suggestion (a completion row), entity (a model or tool row), recent, starter (a start-screen row), related (a related-search chip), correction ("search instead for") or link (an address or deep link). NULL when the client sent none.';
+  'How the search was started, as the client says it: typed, suggestion (a completion row), entity (a model or tool row), recent, starter (a start-screen row), related (a related-search chip) or link (an address or deep link). NULL when the client sent none.';
 
 -- ─── 2. The opened results ──────────────────────────────────────────────────
 
@@ -68,7 +69,7 @@ CREATE TABLE public.search_result_opens (
   query text NOT NULL CHECK (char_length(query) BETWEEN 1 AND 100),
   search_type text NOT NULL CHECK (search_type IN ('top', 'creators', 'posts', 'recipes')),
   sort text CHECK (sort IS NULL OR sort IN ('top', 'latest')),
-  entry text CHECK (entry IS NULL OR entry IN ('typed', 'suggestion', 'entity', 'recent', 'starter', 'related', 'correction', 'link')),
+  entry text CHECK (entry IS NULL OR entry IN ('typed', 'suggestion', 'entity', 'recent', 'starter', 'related', 'link')),
   visitor_day text NOT NULL CHECK (visitor_day ~ '^[0-9a-f]{64}$'),
   result_kind text NOT NULL CHECK (result_kind IN ('post', 'creator', 'recipe', 'entity')),
   result_id text NOT NULL,
@@ -113,10 +114,17 @@ GRANT SELECT, INSERT ON TABLE public.search_result_opens TO service_role;
 --     private or labelled id counts for nothing, here or in any total;
 --   * one result opened several times from one search is one open, at the
 --     first place it was pressed in;
---   * opened_searches: searches with at least one such open.
---     unopened_searches: searches that found something and had none (a search
---     that found nothing has nothing to open, and is counted as zero-result);
---   * mean_open_position: the mean 1-based place of the opens, two decimals,
+--   * only a client that says how a search was entered also reports what was
+--     opened from it (both arrived together), so a search with no entry, from
+--     an app before its update or a tab loaded before the release, is neither
+--     opened nor unopened: counting it unopened would fill the table of
+--     queries left without an open with whatever old clients search most.
+--     reporting_searches: searches with an entry, the ones that could report;
+--   * opened_searches: reporting searches with at least one such open.
+--     unopened_searches: reporting searches that found something and had none
+--     (a search that found nothing has nothing to open, and is counted as
+--     zero-result);
+--   * mean_open_position: the mean 1-based place of those opens, two decimals,
 --     NULL without one;
 --   * entry_mix: searches by how they were entered, {"typed": 4, "recent": 1},
 --     "unknown" for a client that said nothing. A search asked several times
@@ -146,7 +154,9 @@ RETURNS TABLE (
   total_opened_searches bigint,
   total_unopened_searches bigint,
   total_mean_open_position numeric,
-  total_entry_mix jsonb
+  total_entry_mix jsonb,
+  reporting_searches bigint,
+  total_reporting_searches bigint
 )
 LANGUAGE plpgsql
 STABLE
@@ -283,10 +293,11 @@ BEGIN
     SELECT p.query,
            count(*) AS searches,
            count(*) FILTER (WHERE p.is_zero) AS zero_result_searches,
-           count(*) FILTER (WHERE p.opens IS NOT NULL) AS opened_searches,
-           count(*) FILTER (WHERE p.opens IS NULL AND NOT p.is_zero) AS unopened_searches,
-           coalesce(sum(p.opens), 0) AS opens,
-           coalesce(sum(p.position_sum), 0) AS position_sum
+           count(*) FILTER (WHERE p.entry <> 'unknown') AS reporting_searches,
+           count(*) FILTER (WHERE p.entry <> 'unknown' AND p.opens IS NOT NULL) AS opened_searches,
+           count(*) FILTER (WHERE p.entry <> 'unknown' AND p.opens IS NULL AND NOT p.is_zero) AS unopened_searches,
+           coalesce(sum(p.opens) FILTER (WHERE p.entry <> 'unknown'), 0) AS opens,
+           coalesce(sum(p.position_sum) FILTER (WHERE p.entry <> 'unknown'), 0) AS position_sum
     FROM per_visitor AS p
     GROUP BY p.query
   )
@@ -302,7 +313,9 @@ BEGIN
          sum(q.opened_searches) OVER ()::bigint,
          sum(q.unopened_searches) OVER ()::bigint,
          round(sum(q.position_sum) OVER () / nullif(sum(q.opens) OVER (), 0), 2),
-         (SELECT t.entry_mix FROM entry_totals AS t)
+         (SELECT t.entry_mix FROM entry_totals AS t),
+         q.reporting_searches,
+         sum(q.reporting_searches) OVER ()::bigint
   FROM per_query AS q
   JOIN entry_mixes AS m ON m.query = q.query
   ORDER BY
@@ -318,7 +331,7 @@ REVOKE ALL ON FUNCTION public.search_query_report(integer, integer, text)
 GRANT EXECUTE ON FUNCTION public.search_query_report(integer, integer, text) TO service_role;
 
 COMMENT ON FUNCTION public.search_query_report(integer, integer, text) IS
-  'Per final query over the last p_days: distinct visitor-days that searched it, how many got zero results in every kind and every tab, how many opened a result search still shows the public, how many found something and opened nothing, the mean place opened and how the searches were entered, with the window totals on every row; zero-result searches first, or with p_order = unopened the queries most often left without an open. Service role only.';
+  'Per final query over the last p_days: distinct visitor-days that searched it, how many got zero results in every kind and every tab, how many came from a client that reports opens (it said how the search was entered), how many of those opened a result search still shows the public, how many of those found something and opened nothing, the mean place opened and how the searches were entered, with the window totals on every row; zero-result searches first, or with p_order = unopened the queries most often left without an open. Service role only.';
 
 -- ─── 4. Retention: the sweep gains one phase ────────────────────────────────
 --

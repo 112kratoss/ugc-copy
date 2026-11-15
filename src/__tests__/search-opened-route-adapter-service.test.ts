@@ -3,7 +3,12 @@ import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { POST } from '@/app/api/search/opened/route';
-import { BackendRateLimitError, PUBLIC_SEARCH_READ_RATE_LIMIT, SEARCH_OPENED_RATE_LIMIT } from '@/lib/backend-rate-limit';
+import {
+  BackendRateLimitError,
+  PUBLIC_SEARCH_READ_RATE_LIMIT,
+  SEARCH_OPENED_GUEST_NETWORK_RATE_LIMIT,
+  SEARCH_OPENED_RATE_LIMIT,
+} from '@/lib/backend-rate-limit';
 import { routeIdentityPolicy, routeIdentityPolicyForRequest } from '@/lib/route-identity-policy';
 import { usesRouteOwnedIdentityAdmission } from '@/lib/route-owned-identity-admission';
 import { SEARCH_RESULT_OPENS_TABLE } from '@/lib/search-open-log';
@@ -27,6 +32,8 @@ const contract = mobileApiContract.endpoints.recordSearchOpen;
 const URL_OPENED = `https://magicbooklet.test${SEARCH_OPENED_PATH}`;
 const POST_ID = contract.request.id;
 
+type RateLimitOptions = { scope: string; limit: number; windowSeconds: number; key: string };
+
 const allowedRateLimit = () => Promise.resolve({
   allowed: true,
   limit: 120,
@@ -38,7 +45,7 @@ const allowedRateLimit = () => Promise.resolve({
 function harness(options: {
   insert?: () => Promise<{ error: unknown }>;
   env?: Record<string, string | undefined>;
-  enforce?: () => Promise<unknown>;
+  enforce?: (client: unknown, options: RateLimitOptions) => Promise<unknown>;
   user?: { id: string; is_anonymous?: boolean } | null;
   runAfterResponse?: (task: () => Promise<unknown>) => void;
 } = {}) {
@@ -51,15 +58,21 @@ function harness(options: {
   const tasks: Array<() => Promise<unknown>> = [];
   const logEvent = vi.fn();
   const logError = vi.fn();
-  const enforceBackendRateLimit = vi.fn(options.enforce ?? allowedRateLimit);
+  const enforceBackendRateLimit = vi.fn<(client: unknown, options: RateLimitOptions) => Promise<unknown>>(
+    options.enforce ?? (() => allowedRateLimit()),
+  );
   const createServiceClient = vi.fn(() => ({ from, rpc }) as unknown as SupabaseClient);
   const getUser = vi.fn(async () => (options.user === null
     ? { data: { user: null }, error: { message: 'invalid JWT' } }
     : { data: { user: options.user ?? { id: 'viewer-1' } }, error: null }));
-  const send = (body: unknown, headers: Record<string, string> = {}) => postSearchOpenedRouteResponse({
+  // `Content-Type: null` sends the body as a browser's no-cors fetch does: text/plain.
+  const send = (body: unknown, headers: Record<string, string | null> = {}) => postSearchOpenedRouteResponse({
     request: new Request(URL_OPENED, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...headers },
+      headers: Object.fromEntries(
+        Object.entries({ 'Content-Type': 'application/json', ...headers })
+          .map(([name, value]) => [name, value ?? 'text/plain;charset=UTF-8']),
+      ),
       body: typeof body === 'string' ? body : JSON.stringify(body),
     }),
     dependencies: {
@@ -129,6 +142,141 @@ describe('POST /api/search/opened', () => {
     await expectAccepted(await send(contract.request, { Authorization: 'Bearer guest-token' }));
     expect(enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ key: 'guest-1' }));
     expect(tasks).toHaveLength(1);
+  });
+
+  // A guest's id is new with every anonymous sign-in, so its own key alone is no limit
+  // (review of #826, finding 9): the write is counted against its network too, as the
+  // search's embedding and the feed's events are.
+  describe('a guest session is counted against its network as well', () => {
+    it('counts a guest twice, on its id and on its network; an account and a visitor once', async () => {
+      const guest = harness({ user: { id: 'guest-1', is_anonymous: true } });
+      await expectAccepted(await guest.send(contract.request, { Authorization: 'Bearer guest-token' }));
+      expect(guest.enforceBackendRateLimit.mock.calls.map(([, options]) => options)).toEqual([
+        { ...SEARCH_OPENED_RATE_LIMIT, key: 'guest-1' },
+        { ...SEARCH_OPENED_GUEST_NETWORK_RATE_LIMIT, key: 'network-key' },
+      ]);
+
+      const account = harness({ user: { id: 'viewer-1' } });
+      await expectAccepted(await account.send(contract.request, { Authorization: 'Bearer session-token' }));
+      expect(account.enforceBackendRateLimit.mock.calls.map(([, options]) => options)).toEqual([
+        { ...SEARCH_OPENED_RATE_LIMIT, key: 'viewer-1' },
+      ]);
+
+      const visitor = harness();
+      await expectAccepted(await visitor.send(contract.request));
+      expect(visitor.enforceBackendRateLimit.mock.calls.map(([, options]) => options)).toEqual([
+        { ...SEARCH_OPENED_RATE_LIMIT, key: 'network-key' },
+      ]);
+    });
+
+    it('answers 429 and writes nothing once the network has had its share, whatever fresh guest id asks', async () => {
+      const { send, tasks } = harness({
+        user: { id: 'guest-2', is_anonymous: true },
+        enforce: async (_client, options) => {
+          if (options.scope !== SEARCH_OPENED_GUEST_NETWORK_RATE_LIMIT.scope) return allowedRateLimit();
+          throw new BackendRateLimitError({
+            allowed: false, limit: 360, remaining: 0, retryAfterSeconds: 30, resetAt: '2026-11-15T12:00:00.000Z',
+          });
+        },
+      });
+      const response = await send(contract.request, { Authorization: 'Bearer guest-token' });
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('30');
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('has a scope of its own, a few guests’ worth, pinned in the contract', () => {
+      expect(SEARCH_OPENED_GUEST_NETWORK_RATE_LIMIT).toEqual({
+        scope: contract.guestNetworkRateLimit.scope,
+        limit: contract.guestNetworkRateLimit.limit,
+        windowSeconds: contract.guestNetworkRateLimit.windowSeconds,
+      });
+      expect(SEARCH_OPENED_GUEST_NETWORK_RATE_LIMIT.scope).not.toBe(SEARCH_OPENED_RATE_LIMIT.scope);
+      expect(SEARCH_OPENED_GUEST_NETWORK_RATE_LIMIT.limit).toBe(3 * SEARCH_OPENED_RATE_LIMIT.limit);
+      expect(SEARCH_OPENED_GUEST_NETWORK_RATE_LIMIT.windowSeconds).toBe(SEARCH_OPENED_RATE_LIMIT.windowSeconds);
+    });
+  });
+
+  // A page of another site can post to this route from a visitor's browser. With a JSON
+  // content type the browser asks first (a preflight this site does not grant); a "simple"
+  // request, text/plain or a form, is sent without asking, so it is refused here
+  // (review of #826, finding 9).
+  describe('only a JSON request reaches the write', () => {
+    it.each([
+      ['text/plain, as a no-cors fetch sends a string', 'text/plain;charset=UTF-8'],
+      ['a form', 'application/x-www-form-urlencoded'],
+      ['multipart', 'multipart/form-data; boundary=x'],
+      ['a type that only starts like JSON', 'application/jsonp'],
+      ['an empty type', ''],
+    ])('answers 400 to %s, with a well-formed report in it, before a token is read or anything counted', async (_name, contentType) => {
+      const { send, tasks, enforceBackendRateLimit, getUser } = harness();
+      const response = await send(contract.request, { 'Content-Type': contentType, Authorization: 'Bearer session-token' });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: 'Content-Type must be application/json.' });
+      expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+      expect(getUser).not.toHaveBeenCalled();
+      expect(enforceBackendRateLimit).not.toHaveBeenCalled();
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('answers 400 to a request with no content type at all', async () => {
+      const { tasks } = harness();
+      const response = await postSearchOpenedRouteResponse({
+        request: new Request(URL_OPENED, { method: 'POST', body: new Blob([JSON.stringify(contract.request)]) }),
+        dependencies: { env: {} },
+      });
+      expect(response.status).toBe(400);
+      expect(tasks).toHaveLength(0);
+    });
+
+    it.each(['application/json', 'application/json; charset=utf-8', 'Application/JSON'])('takes %s', async (contentType) => {
+      const { send, tasks } = harness();
+      await expectAccepted(await send(contract.request, { 'Content-Type': contentType }));
+      expect(tasks).toHaveLength(1);
+      expect(contract.contentType).toBe('application/json');
+    });
+  });
+
+  // Opening one's own profile would store one's own account id beside the day's visitor
+  // code, which names the account behind every search of that code (review of #826,
+  // finding 13). Such a report is dropped, with no lookup: the id is the token's own.
+  describe('a report of the viewer’s own profile is dropped', () => {
+    const OWN_ID = '0b9e0000-0000-4000-8000-000000000002';
+    const ownProfile = { ...contract.request, kind: 'creator', id: OWN_ID };
+
+    it('answers 204, counts the request and writes nothing, for an account and for a guest', async () => {
+      for (const user of [{ id: OWN_ID }, { id: OWN_ID, is_anonymous: true }]) {
+        const { send, tasks, enforceBackendRateLimit, rpc, from } = harness({ user });
+        await expectAccepted(await send(ownProfile, { Authorization: 'Bearer session-token' }));
+        expect(enforceBackendRateLimit).toHaveBeenCalled();
+        expect(tasks).toHaveLength(0);
+        // Nothing was looked up to decide it.
+        expect(rpc).not.toHaveBeenCalled();
+        expect(from).not.toHaveBeenCalled();
+      }
+    });
+
+    it('is the same for an id sent in capitals', async () => {
+      const { send, tasks } = harness({ user: { id: OWN_ID } });
+      await expectAccepted(await send({ ...ownProfile, id: OWN_ID.toUpperCase() }, { Authorization: 'Bearer session-token' }));
+      expect(tasks).toHaveLength(0);
+    });
+
+    it('still writes another creator’s profile, the viewer’s own post, and a visitor’s report of that id', async () => {
+      const other = harness({ user: { id: OWN_ID } });
+      await expectAccepted(await other.send({ ...ownProfile, id: POST_ID }, { Authorization: 'Bearer session-token' }));
+      expect(other.tasks).toHaveLength(1);
+
+      // A post's id is not an account's: kept, whoever made the post.
+      const post = harness({ user: { id: OWN_ID } });
+      await expectAccepted(await post.send({ ...ownProfile, kind: 'post' }, { Authorization: 'Bearer session-token' }));
+      expect(post.tasks).toHaveLength(1);
+
+      // No token, no viewer to compare with: stored as sent, as every id is.
+      const visitor = harness();
+      await expectAccepted(await visitor.send(ownProfile));
+      expect(visitor.tasks).toHaveLength(1);
+    });
   });
 
   it('has a limit of its own, apart from the search read limit', () => {

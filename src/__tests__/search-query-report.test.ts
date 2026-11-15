@@ -14,12 +14,15 @@ const rows = [
     opened_searches: '1', unopened_searches: '0', mean_open_position: '2.50', entry_mix: { typed: 2, recent: 1 },
     total_opened_searches: '2', total_unopened_searches: '1', total_mean_open_position: '3.00',
     total_entry_mix: { typed: 5, recent: 2, suggestion: 1, unknown: 1 },
+    reporting_searches: '3', total_reporting_searches: '8',
   },
   {
-    query: 'cat', searches: 2, zero_result_searches: 0, total_searches: 9, total_zero_result_searches: 6,
-    opened_searches: 1, unopened_searches: 1, mean_open_position: 4, entry_mix: { suggestion: 1, unknown: 1 },
+    // Three searches, one from a client that says no entry and so cannot report an open.
+    query: 'cat', searches: 3, zero_result_searches: 0, total_searches: 9, total_zero_result_searches: 6,
+    opened_searches: 1, unopened_searches: 1, mean_open_position: 4, entry_mix: { suggestion: 2, unknown: 1 },
     total_opened_searches: 2, total_unopened_searches: 1, total_mean_open_position: 3,
     total_entry_mix: { typed: 5, recent: 2, suggestion: 1, unknown: 1 },
+    reporting_searches: 2, total_reporting_searches: 8,
   },
 ];
 const totals = {
@@ -29,18 +32,19 @@ const totals = {
   totalUnopenedSearches: 1,
   totalMeanOpenPosition: 3,
   totalEntryMix: { typed: 5, recent: 2, suggestion: 1, unknown: 1 },
+  totalReportingSearches: 8,
 };
 
 describe('search report', () => {
   it('reads bigint and numeric strings, the entry mix, and skips malformed rows', () => {
     expect(normalizeSearchQueryReportRows([...rows, null, { searches: 1 }])).toEqual([
       {
-        query: 'port', searches: 3, zeroResultSearches: 2, openedSearches: 1, unopenedSearches: 0,
+        query: 'port', searches: 3, zeroResultSearches: 2, reportingSearches: 3, openedSearches: 1, unopenedSearches: 0,
         meanOpenPosition: 2.5, entryMix: { typed: 2, recent: 1 }, ...totals,
       },
       {
-        query: 'cat', searches: 2, zeroResultSearches: 0, openedSearches: 1, unopenedSearches: 1,
-        meanOpenPosition: 4, entryMix: { suggestion: 1, unknown: 1 }, ...totals,
+        query: 'cat', searches: 3, zeroResultSearches: 0, reportingSearches: 2, openedSearches: 1, unopenedSearches: 1,
+        meanOpenPosition: 4, entryMix: { suggestion: 2, unknown: 1 }, ...totals,
       },
     ]);
     expect(normalizeSearchQueryReportRows(null)).toEqual([]);
@@ -55,6 +59,7 @@ describe('search report', () => {
     expect(older).toMatchObject({
       query: 'port', searches: 3, openedSearches: 0, unopenedSearches: 0, meanOpenPosition: null, entryMix: {},
       totalOpenedSearches: 0, totalMeanOpenPosition: null, totalEntryMix: {},
+      reportingSearches: 0, totalReportingSearches: 0,
     });
   });
 
@@ -72,14 +77,26 @@ describe('search report', () => {
     const text = formatSearchQueryReport(normalizeSearchQueryReportRows(rows), { days: 7 });
     expect(text).toContain('9 searches');
     expect(text).toContain('6 with no results in any kind (66.7%)');
-    expect(text).toContain('Opened a result: 2 searches (22.2%)');
-    // Of the three searches that found something, one opened nothing.
-    expect(text).toContain('found something and opened nothing: 1 (33.3% of the 3 that found something)');
+    // Opens are counted over the searches whose client could report one (review of #826, S1):
+    // 8 of the 9 said how they were entered; the ninth is counted as a search and nothing more.
+    expect(text).toContain('Could report an open: 8 searches; 1 could not');
+    expect(text).toContain('Opened a result: 2 (25.0% of the 8)');
+    expect(text).toContain('found something and opened nothing: 1 (12.5%)');
     expect(text).toContain('mean place opened: 3.00');
     expect(text).toContain('Entered by: typed 55.6%, recent 22.2%, suggestion 11.1%, unknown 11.1%.');
-    // zero, searches, opened, unopened, place, query, its entry mix.
-    expect(text).toMatch(/\n\s+2\s+3\s+1\s+0\s+2\.50 {2}port {2}\[typed 66\.7%, recent 33\.3%\]/u);
-    expect(text).toMatch(/\n\s+0\s+2\s+1\s+1\s+4\.00 {2}cat {2}\[suggestion 50\.0%, unknown 50\.0%\]$/u);
+    // zero, searches, could report, opened, unopened, place, query, its entry mix.
+    expect(text).toMatch(/\n\s+2\s+3\s+3\s+1\s+0\s+2\.50 {2}port {2}\[typed 66\.7%, recent 33\.3%\]/u);
+    expect(text).toMatch(/\n\s+0\s+3\s+2\s+1\s+1\s+4\.00 {2}cat {2}\[suggestion 66\.7%, unknown 33\.3%\]$/u);
+  });
+
+  it('says so when no search in the window could report an open, and gives no rate over nothing', () => {
+    const older = normalizeSearchQueryReportRows([
+      { query: 'port', searches: 4, zero_result_searches: 1, total_searches: 4, total_zero_result_searches: 1, entry_mix: { unknown: 4 }, total_entry_mix: { unknown: 4 } },
+    ]);
+    const text = formatSearchQueryReport(older, { days: 7, unopenedRows: older });
+    expect(text).toContain('Could report an open: 0 searches; 4 could not');
+    expect(text).toContain('Opened a result: 0 (0.0% of the 0)');
+    expect(text).toMatch(/opened nothing\):\n {2}none$/u);
     expect(formatSearchQueryReport([], { days: 7 })).toBe('No searches logged in the last 7 day(s).');
   });
 
@@ -90,7 +107,7 @@ describe('search report', () => {
     const [, second] = text.split('Most often left without an open (found something, opened nothing):');
     expect(second).toMatch(/cat/u);
     // "port" was never left unopened: it is not in the second table.
-    expect(second).not.toMatch(/port/u);
+    expect(second).not.toMatch(/ {2}port {2}/u);
     expect(formatSearchQueryReport(zeroResult, { days: 7, unopenedRows: [zeroResult[0]] })).toMatch(/opened nothing\):\n {2}none$/u);
   });
 

@@ -17,10 +17,11 @@ Usage:
 Reads public.search_query_events and public.search_result_opens through
 search_query_report: per final query (typing steps within 15 seconds collapse
 into the query they led to) and overall, how many distinct visitor-days
-searched it, how many of those found nothing in any kind, how many opened a
-result, how many found something and opened nothing, the mean place of the
-results opened and how the searches were entered (typed, a suggestion, a
-recent search...). Two tables: zero-result searches first, then the queries
+searched it, how many of those found nothing in any kind, how many came from
+a client that reports opens (it says how the search was entered; an app before
+its update does not), how many of those opened a result, how many of those
+found something and opened nothing, the mean place of the results opened and
+how the searches were entered (typed, a suggestion, a recent search...). Two tables: zero-result searches first, then the queries
 most often left without an open. An opened result counts only while search
 still shows it to the public. The log is anonymous and kept 90 days.
 

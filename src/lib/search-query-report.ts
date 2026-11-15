@@ -11,9 +11,16 @@ export type SearchQueryReportRow = {
   query: string;
   searches: number;
   zeroResultSearches: number;
-  /** Searches a result was opened from: one that search still shows the public. */
+  /**
+   * Searches from a client that reports what was opened: it said how the search was entered
+   * (`entry`), which arrived with the open report. Opened and unopened are counted over these
+   * alone: an app before its update or a tab loaded before the release cannot report an open,
+   * and its searches would otherwise all read as left unopened.
+   */
+  reportingSearches: number;
+  /** Reporting searches a result was opened from: one that search still shows the public. */
   openedSearches: number;
-  /** Searches that found something and had no result opened. */
+  /** Reporting searches that found something and had no result opened. */
   unopenedSearches: number;
   /** The mean 1-based place of the results opened; null without one. */
   meanOpenPosition: number | null;
@@ -25,6 +32,7 @@ export type SearchQueryReportRow = {
   totalUnopenedSearches: number;
   totalMeanOpenPosition: number | null;
   totalEntryMix: Record<string, number>;
+  totalReportingSearches: number;
 };
 
 type ReportClient = {
@@ -64,6 +72,7 @@ export function normalizeSearchQueryReportRows(data: unknown): SearchQueryReport
       query: record.query,
       searches: count(record.searches),
       zeroResultSearches: count(record.zero_result_searches),
+      reportingSearches: count(record.reporting_searches),
       openedSearches: count(record.opened_searches),
       unopenedSearches: count(record.unopened_searches),
       meanOpenPosition: mean(record.mean_open_position),
@@ -74,6 +83,7 @@ export function normalizeSearchQueryReportRows(data: unknown): SearchQueryReport
       totalUnopenedSearches: count(record.total_unopened_searches),
       totalMeanOpenPosition: mean(record.total_mean_open_position),
       totalEntryMix: mix(record.total_entry_mix),
+      totalReportingSearches: count(record.total_reporting_searches),
     }];
   });
 }
@@ -114,13 +124,15 @@ function position(value: number | null): string {
 /** The lines above either table: the window's totals. */
 function formatSearchQueryReportSummary(rows: SearchQueryReportRow[], days: number): string[] {
   const totals = rows[0];
-  const found = totals.totalSearches - totals.totalZeroResultSearches;
+  const reporting = totals.totalReportingSearches;
   return [
     `Last ${days} day(s): ${totals.totalSearches} searches (a typed query counts once per visitor-day), `
       + `${totals.totalZeroResultSearches} with no results in any kind (${percent(totals.totalZeroResultSearches, totals.totalSearches)}%).`,
-    `Opened a result: ${totals.totalOpenedSearches} searches (${percent(totals.totalOpenedSearches, totals.totalSearches)}%); `
-      + `found something and opened nothing: ${totals.totalUnopenedSearches} `
-      + `(${percent(totals.totalUnopenedSearches, found)}% of the ${found} that found something); `
+    // Only a client that says how a search was entered also reports what was opened from it.
+    `Could report an open: ${reporting} searches; ${totals.totalSearches - reporting} could not `
+      + '(their client says no entry: an app before its update, a tab from before the release) and are left out of the next line.',
+    `Opened a result: ${totals.totalOpenedSearches} (${percent(totals.totalOpenedSearches, reporting)}% of the ${reporting}); `
+      + `found something and opened nothing: ${totals.totalUnopenedSearches} (${percent(totals.totalUnopenedSearches, reporting)}%); `
       + `mean place opened: ${position(totals.totalMeanOpenPosition)}.`,
     `Entered by: ${formatSearchEntryMix(totals.totalEntryMix)}.`,
   ];
@@ -128,9 +140,9 @@ function formatSearchQueryReportSummary(rows: SearchQueryReportRow[], days: numb
 
 function formatSearchQueryReportTable(rows: SearchQueryReportRow[]): string[] {
   return [
-    `${'zero'.padStart(6)} ${'searches'.padStart(9)} ${'opened'.padStart(7)} ${'unopened'.padStart(9)} ${'place'.padStart(6)}  query  [entered by]`,
+    `${'zero'.padStart(6)} ${'searches'.padStart(9)} ${'reports'.padStart(8)} ${'opened'.padStart(7)} ${'unopened'.padStart(9)} ${'place'.padStart(6)}  query  [entered by]`,
     ...rows.map((row) => (
-      `${String(row.zeroResultSearches).padStart(6)} ${String(row.searches).padStart(9)} `
+      `${String(row.zeroResultSearches).padStart(6)} ${String(row.searches).padStart(9)} ${String(row.reportingSearches).padStart(8)} `
         + `${String(row.openedSearches).padStart(7)} ${String(row.unopenedSearches).padStart(9)} `
         + `${position(row.meanOpenPosition).padStart(6)}  ${escapeForTerminal(row.query)}  [${formatSearchEntryMix(row.entryMix)}]`
     )),
@@ -140,7 +152,8 @@ function formatSearchQueryReportTable(rows: SearchQueryReportRow[]): string[] {
 /**
  * What the CLI prints: the window's totals, the queries with the most zero-result searches, and,
  * when `unopenedRows` is given (the same report in its other order), the queries most often left
- * without an open. An open counts only while the result opened is something search still shows.
+ * without an open. An open counts only while the result opened is something search still shows,
+ * and opened and unopened only over the searches whose client could report one (`reports`).
  */
 export function formatSearchQueryReport(
   rows: SearchQueryReportRow[],
