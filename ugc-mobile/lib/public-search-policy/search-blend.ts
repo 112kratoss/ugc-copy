@@ -100,3 +100,45 @@ export function searchPostMatchedBy(post: { matchedBy?: unknown }): SearchMatchS
 export function isSearchMeaningOnlyMatch(post: { matchedBy?: unknown }): boolean {
   return searchPostMatchedBy(post) === 'meaning';
 }
+
+/**
+ * Whether an answer's posts are in the blended order. An answer to a request
+ * that sent `blend=1` says so (`blended`): true, or false when the server
+ * answered in the word order after all. An answer without the field (the
+ * parameter was not sent, or the server is from before it) is not blended.
+ */
+export function isSearchAnswerBlended(answer: { blended?: unknown }): boolean {
+  return answer.blended === true;
+}
+
+/**
+ * The posts of a later page that are not on show yet.
+ *
+ * A LATER PAGE MAY HOLD A POST AN EARLIER PAGE SHOWED, and a client must
+ * leave those out by id before it appends the page. That is the server's
+ * contract for a Posts list, blended or not: the list is rebuilt from the
+ * posts as they are at each request, so a post published, saved or removed
+ * between two pages can move another across the line between them; and a
+ * blended list that has to continue in the word order (no vector for the
+ * query any more) starts again from the last word match it is sure was
+ * shown, which repeats posts and never passes one over. The server chooses a
+ * repeat over a skip wherever it has the choice: a repeat is removed here, a
+ * skipped post is never seen.
+ *
+ * Order is kept, and a post that is twice in the page itself is kept once. A
+ * page that comes back empty after this is not the end of the list: the end
+ * is `nextCursor` being null.
+ */
+export function withoutShownSearchPosts<Post extends { id: string }>(
+  shown: readonly Post[],
+  page: readonly Post[],
+): Post[] {
+  const seen = new Set(shown.map((post) => post.id));
+  const fresh: Post[] = [];
+  for (const post of page) {
+    if (seen.has(post.id)) continue;
+    seen.add(post.id);
+    fresh.push(post);
+  }
+  return fresh;
+}

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "recordedAt": "2026-11-15T13:08:23.039Z",
+  "recordedAt": "2026-11-15T14:49:53.732Z",
   "embeddingModel": "gte-small",
   "constants": {"rrfK":50,"wordWeight":1,"meaningWeight":0.9,"wordWindow":50,"meaningWindow":30,"minSimilarity":0.82,"exactTitleScore":30},
   "queries": [

@@ -252,6 +252,15 @@ export interface PublicSearchResponse {
    * out everywhere else and by a server from before them.
    */
   relatedSearches?: SearchRelatedSearch[];
+  /**
+   * For a Top or Posts search that asked for the blended order (`blend=1`):
+   * true when `posts` is in it, false when the answer is the word order
+   * after all (one word, Latest, a query read corrected, no vector in time,
+   * the lookup switched off, a later page continued by its floor). Left out
+   * for a request that did not ask. A later page may hold a post an earlier
+   * page showed, blended or not: a client leaves those out by id.
+   */
+  blended?: boolean;
 }
 
 export interface PublicSearchRelated {
@@ -286,9 +295,16 @@ export type PublicSearchCursor = {
    * the furthest row of the word order shown so far, which the word order
    * continues from when the blend cannot (no vector, the lookup switched off,
    * a server from before the blend, which ignores this field). They are left
-   * out only while no post holds the query's words. Always with `asOf`.
+   * out only while the first row of the word order is still to come (the
+   * word order then continues from its top). Always with `asOf`.
    */
   window?: number;
+  /**
+   * Top posts, blended: the post shown last, beside `window`. The window is
+   * rebuilt at every request, so the next page starts after this post where
+   * the window still holds it, and at `window` only when it is gone.
+   */
+  last?: string;
 };
 
 /**
@@ -310,6 +326,8 @@ export function publicSearchCursorFilterMark(filters: SearchFilters, exact: bool
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+// A post id as a cursor carries one.
+const CURSOR_POST_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // A timestamptz as PostgREST writes one: 2026-11-12T10:35:47.123456+00:00.
 const CURSOR_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-](\d{2}):(\d{2}))$/;
 // The years a cursor's time may name. Nothing here was made before 2020, and
@@ -414,6 +432,7 @@ export function encodePublicSearchCursor(cursor: PublicSearchCursor): string {
     ...(cursor.createdAt ? { c: cursor.createdAt } : {}),
     ...(cursor.filters ? { f: cursor.filters } : {}),
     ...(cursor.window !== undefined ? { w: cursor.window } : {}),
+    ...(cursor.window !== undefined && cursor.last ? { l: cursor.last } : {}),
   }), 'utf8').toString('base64url');
 }
 
@@ -456,7 +475,11 @@ export function decodePublicSearchCursor(
     }
     // A place in the blended window: only a Top posts cursor has one, with the
     // instant its search began. Its floor is optional, both halves or neither.
-    let windowField: { window?: number } = {};
+    let windowField: { window?: number; last?: string } = {};
+    // The post shown last travels only with a place, and is an id.
+    if (parsed.l !== undefined && (parsed.w === undefined || typeof parsed.l !== 'string' || !CURSOR_POST_ID_PATTERN.test(parsed.l))) {
+      return null;
+    }
     if (parsed.w !== undefined) {
       if (
         expectedType !== 'posts' || sort !== 'top'
@@ -465,7 +488,7 @@ export function decodePublicSearchCursor(
       ) {
         return null;
       }
-      windowField = { window: Number(parsed.w) };
+      windowField = { window: Number(parsed.w), ...(typeof parsed.l === 'string' ? { last: parsed.l } : {}) };
       if (parsed.i === undefined && parsed.s === undefined) {
         return { version: 1, type: expectedType, asOf: Number(parsed.a), ...filtersField, ...windowField };
       }

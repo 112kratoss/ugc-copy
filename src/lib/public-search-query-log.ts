@@ -75,10 +75,19 @@ export type SearchQueryEventRow = {
   followed_only: true | null;
   /** Whether the answer's posts or recipes were found on a corrected reading; null for Creators. */
   corrected: boolean | null;
-  /** How many related posts the answer held beside its own; null when none were looked for. */
+  /**
+   * How many posts the answer held for what they mean and not for their words: the related
+   * posts beside its own and, on a blended answer, the meaning-only posts among its own.
+   * Null when none were looked for.
+   */
   related_count: number | null;
   /** How the search was entered, as the client says it; null when it said nothing. */
   entry: SearchEntry | null;
+  /**
+   * Set, and true, only on a blended answer (the column's default is false): its posts are
+   * word matches and meaning matches in one order, and the two are counted apart above.
+   */
+  blended?: true;
 };
 
 export type SearchAnswerLogInput = {
@@ -154,6 +163,10 @@ export function buildSearchQueryEventRow(
   const filters = publicSearchTypeHasFilters(input.type) ? input.filters : undefined;
   // An answer from before the reading was reported says nothing of it.
   const corrected = input.response.correctedQuery;
+  const blended = input.response.blended === true ? true as const : undefined;
+  const meaningOnlyPosts = blended
+    ? input.response.posts.items.filter((post) => post.matchedBy === 'meaning').length
+    : 0;
   return {
     created_at: input.requestedAt.toISOString(),
     query,
@@ -161,7 +174,10 @@ export function buildSearchQueryEventRow(
     signed_in: input.signedIn,
     visitor_day: searchVisitorDay(dayKey, input.viewerKey),
     creator_count: input.response.creators.items.length,
-    post_count: input.response.posts.items.length,
+    // The posts that hold the words. On a blended answer the posts found by meaning alone are
+    // counted with the related ones, so "the words found nothing" reads post_count 0 whichever
+    // way the answer was ordered, and the report's zero-result test keeps its meaning.
+    post_count: input.response.posts.items.length - meaningOnlyPosts,
     recipe_count: input.response.recipes.items.length,
     sort: publicSearchTypeHasSorts(input.type) ? input.sort : null,
     made_with: filters?.madeWith ?? null,
@@ -171,7 +187,10 @@ export function buildSearchQueryEventRow(
     corrected: input.type === 'creators' || !corrected
       ? null
       : corrected.posts !== null || corrected.recipes !== null,
-    related_count: input.response.related ? input.response.related.posts.length : null,
+    related_count: input.response.related || blended
+      ? (input.response.related?.posts.length ?? 0) + meaningOnlyPosts
+      : null,
+    ...(blended ? { blended } : {}),
     entry: input.entry ?? null,
   };
 }

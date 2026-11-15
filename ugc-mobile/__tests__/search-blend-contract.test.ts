@@ -6,12 +6,14 @@ import {
   SEARCH_BLEND_MIN_WORDS,
   SEARCH_BLEND_PARAM,
   SEARCH_MATCH_SOURCES,
+  isSearchAnswerBlended,
   isSearchMeaningOnlyMatch,
   readSearchMatchedBy,
   searchBlendApplies,
   searchBlendParams,
   searchPostMatchedBy,
   searchQueryWordCount,
+  withoutShownSearchPosts,
 } from '../lib/public-search-policy/search-blend';
 
 // The blended Posts order as the app is held to it
@@ -66,15 +68,43 @@ describe('the blended Posts order in the mobile API contract', () => {
   });
 
   it('reads a post of an answer without the field as a word match: a server from before the blend, or a request that did not ask', () => {
-    for (const [name, variant] of Object.entries(search.responseVariants)) {
-      if (name === 'blendedPosts') continue;
-      for (const post of variant.response.posts.items as Array<Record<string, unknown>>) {
-        expect(post, name).not.toHaveProperty('matchedBy');
-        expect(searchPostMatchedBy(post), name).toBe('words');
-      }
+    // Every post the contract pins outside the blended answer: the search's own and the related ones.
+    const posts: Array<[string, Record<string, unknown>]> = [];
+    for (const [name, answer] of [
+      ['response', search.response] as const,
+      ...Object.entries(search.responseVariants).filter(([variant]) => variant !== 'blendedPosts').map(([variant, pinned]) => [variant, pinned.response] as const),
+    ]) {
+      const held = answer as { blended?: unknown; posts: { items: Array<Record<string, unknown>> }; related?: { posts: Array<Record<string, unknown>> } };
+      for (const post of [...held.posts.items, ...(held.related?.posts ?? [])]) posts.push([name, post]);
+      expect(isSearchAnswerBlended(held), name).toBe(false);
+    }
+    // The fixture holds such posts: this is not a loop over nothing.
+    expect(posts.length).toBeGreaterThanOrEqual(3);
+    for (const [name, post] of posts) {
+      expect(post, name).not.toHaveProperty('matchedBy');
+      expect(searchPostMatchedBy(post), name).toBe('words');
+      expect(isSearchMeaningOnlyMatch(post), name).toBe(false);
     }
     expect(readSearchMatchedBy('vector')).toBeNull();
     expect(searchPostMatchedBy({ matchedBy: 'vector' })).toBe('words');
+  });
+
+  it('reads the pinned blended answer as blended', () => {
+    expect(search.responseVariants.blendedPosts.response.blended).toBe(true);
+    expect(isSearchAnswerBlended(search.responseVariants.blendedPosts.response)).toBe(true);
+    expect(isSearchAnswerBlended({ blended: false })).toBe(false);
+    expect(isSearchAnswerBlended({ blended: 'true' })).toBe(false);
+  });
+
+  it('leaves out, by id, the posts of a later page that are already on show', () => {
+    expect(search.laterPages).toMatchObject({ mayRepeatPosts: true, deduplicateBy: 'id' });
+    const [first, second] = search.responseVariants.blendedPosts.response.posts.items;
+    const third = { ...second, id: 'post-12' };
+    // A page that repeats a post shown, and holds one post twice.
+    expect(withoutShownSearchPosts([first, second], [second, third, first, third])).toEqual([third]);
+    expect(withoutShownSearchPosts([], [first, second])).toEqual([first, second]);
+    // A page of nothing but repeats is an empty page, not the end of the list.
+    expect(withoutShownSearchPosts([first, second], [second, first])).toEqual([]);
   });
 
   it('hands a blended answer to the screen whole, its cursor included', async () => {

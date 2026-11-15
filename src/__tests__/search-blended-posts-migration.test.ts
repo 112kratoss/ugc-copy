@@ -23,7 +23,7 @@ const withoutComments = (sql: string) => sql.replace(/--.*$/gm, '');
 const migration = readFileSync(join(migrationsDirectory, MIGRATION), 'utf8');
 const statements = withoutComments(migration);
 
-const SIGNATURE = 'public.search_blended_posts(text, text, extensions.vector, uuid, timestamptz, integer, integer, text, text, boolean, boolean, text)';
+const SIGNATURE = 'public.search_blended_posts(text, text, extensions.vector, uuid, timestamptz, integer, integer, text, text, boolean, boolean, text, uuid)';
 
 /** The definition of `public.<name>` in one migration, comments left out. */
 function definitionIn(file: string, name: string): string {
@@ -50,10 +50,15 @@ const blended = definitionIn(MIGRATION, 'search_blended_posts');
 const collapse = (sql: string) => sql.replace(/\s+/g, ' ').trim();
 
 describe('search blended posts migration', () => {
-  it('adds one function and changes nothing else', () => {
+  it('adds one function and one column of the search log, and changes nothing else', () => {
     expect(statements.match(/\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b/gi)).toHaveLength(1);
-    expect(statements).not.toMatch(/\b(?:CREATE|ALTER|DROP)\s+(?:TABLE|INDEX|TRIGGER|POLICY|EXTENSION)\b/i);
+    // The one table statement: the log's blended flag, false unless a row says otherwise,
+    // so the rows the app live during the release writes need not name it.
+    expect(statements.match(/\b(?:CREATE|ALTER|DROP)\s+(?:TABLE|INDEX|TRIGGER|POLICY|EXTENSION)\b/gi)).toEqual(['ALTER TABLE']);
+    expect(collapse(statements)).toContain('ALTER TABLE public.search_query_events ADD COLUMN blended boolean NOT NULL DEFAULT false;');
     expect(statements).not.toMatch(/\bDROP\s+FUNCTION\b/i);
+    // The report and the opened-result log are another migration's: neither is named here.
+    expect(statements).not.toMatch(/search_query_report|search_result_opens/);
     expect(statements).toMatch(/^BEGIN;/m);
     expect(statements).toMatch(/^COMMIT;/m);
   });
@@ -159,8 +164,6 @@ describe('search blended posts migration', () => {
       minSimilarity: 0.82,
       exactTitleScore: 30,
     });
-    // The furthest place a cursor may name is the two lists together.
-    expect(constants.wordWindow + constants.meaningWindow).toBe(PUBLIC_SEARCH_BLEND_MAX_PLACE);
     expect(blended).toContain('v_after > c_word_window + c_meaning_window');
     // A word match at rank r outranks the nearest meaning-only post while
     // 1 / (k + r) > weight / (k + 1): the first six do, the number under
@@ -173,6 +176,40 @@ describe('search blended posts migration', () => {
     const related = definitionIn(newestDefiner('search_related_posts'), 'search_related_posts');
     expect(Number(/c_min_similarity CONSTANT double precision := ([0-9.]+);/.exec(related)?.[1])).toBeGreaterThan(constants.minSimilarity);
     expect(blended).toContain(`p_embedding_model text DEFAULT '${SEARCH_EMBEDDING_MODEL}'`);
+  });
+
+  it('holds the furthest place a cursor may name to the window of the NEWEST search_blended_posts', () => {
+    // Read from whichever migration defines the function last, not from this
+    // file: a later migration that widens the window must move the server's
+    // bound with it, or the server refuses cursors it issued itself.
+    const newest = readFileSync(join(migrationsDirectory, newestDefiner('search_blended_posts')), 'utf8');
+    const constants = parseSearchBlendConstants(newest);
+    expect(constants.wordWindow + constants.meaningWindow).toBe(PUBLIC_SEARCH_BLEND_MAX_PLACE);
+    expect(definitionIn(newestDefiner('search_blended_posts'), 'search_blended_posts'))
+      .toContain('v_after > c_word_window + c_meaning_window');
+  });
+
+  it('names as a row\'s floor the end of the unbroken run of the word order shown, never the furthest row', () => {
+    // For each word row, the place by which it and every row before it are shown;
+    // the floor of a place is the last word row reached by then.
+    expect(collapse(blended)).toContain(collapse(`
+      reached AS (
+        SELECT
+          placed.word_rank,
+          max(placed.place) OVER (ORDER BY placed.word_rank ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS by_place
+        FROM placed
+        WHERE placed.word_rank IS NOT NULL
+      )`));
+    expect(blended).toContain('(SELECT max(reached.word_rank) FROM reached WHERE reached.by_place <= placed.place) AS floor_rank');
+    // The furthest word row shown so far would let the word order pass posts over.
+    expect(blended).not.toMatch(/max\(placed\.word_rank\)\s+OVER/);
+  });
+
+  it('starts a later page after the last post shown where the window still holds it', () => {
+    expect(blended).toContain('p_after_post_id uuid DEFAULT NULL');
+    expect(blended).toContain('v_after := coalesce(array_position(v_window_ids, p_after_post_id), v_after);');
+    // Its last parameter, with a default: a call that names no post pages by place alone.
+    expect(collapse(blended)).toMatch(/p_embedding_model text DEFAULT 'gte-small', p_after_post_id uuid DEFAULT NULL \) RETURNS TABLE/);
   });
 
   it('pins a title match by the score tier search_post_score gives it, and reads pages of the size search_public_posts allows', () => {
