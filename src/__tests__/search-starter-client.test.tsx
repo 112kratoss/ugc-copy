@@ -274,6 +274,69 @@ describe('search starter', () => {
     expect(await screen.findByRole('region', { name: SEARCH_STARTER_LABEL })).toBeTruthy();
   });
 
+  it('asks for no starter on a page opened on a search that finds something, and asks once the box is emptied', async () => {
+    // Every opening asked for it, so a page opened on a search (a shared link, a reload, Back)
+    // made the starter's request beside the search's own and drew none of it (2.7 s on production,
+    // signed in, 2026-11-17).
+    searchFetchMock.mockImplementation(async (url: string) => {
+      const params = new URL(url, 'http://localhost').searchParams;
+      return ok(answer(params.get('q') ?? '', params.get('type') ?? 'top', { posts: { items: [post('p1')], nextCursor: null } }));
+    });
+    render(<SearchClient initialQuery="portrait" initialType="top" />);
+    expect(await screen.findByText('Post p1')).toBeTruthy();
+    await settle();
+    await settle();
+    expect(starterFetchMock).not.toHaveBeenCalled();
+    // A tab, and a search that finds something on it: still nothing to draw it in.
+    fireEvent.click(screen.getByRole('tab', { name: 'Posts' }));
+    expect(await screen.findByText('Post p1')).toBeTruthy();
+    await settle();
+    expect(starterFetchMock).not.toHaveBeenCalled();
+    // The box emptied: the page draws the starter now, asked for once.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '' } });
+    expect(await screen.findByRole('region', { name: SEARCH_STARTER_LABEL })).toBeTruthy();
+    expect(starterFetchMock).toHaveBeenCalledTimes(1);
+    // A search again, then the box emptied again: drawn from the answer it has.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'portrait' } });
+    expect(await screen.findByText('Post p1')).toBeTruthy();
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '' } });
+    expect(await screen.findByRole('region', { name: SEARCH_STARTER_LABEL })).toBeTruthy();
+    expect(starterFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks for the starter after a search’s answer that shows a model it holds no picture for, and not for one it has a picture of', async () => {
+    // A search's own answer carries no picture for its models and tools; the starter's are lent to
+    // their cards (search-ui-web-client.test.tsx). Asked once the answer is in, never beside it.
+    const nano = { kind: 'model' as const, key: 'nano-banana-pro', label: 'Nano Banana Pro', postCount: 200, postCountCapped: true };
+    searchFetchMock.mockImplementation(async (url: string) => {
+      const params = new URL(url, 'http://localhost').searchParams;
+      return ok(answer(params.get('q') ?? '', params.get('type') ?? 'top', {
+        entities: [nano],
+        posts: { items: [post('p1')], nextCursor: null },
+      }));
+    });
+    render(<SearchClient initialQuery="nano" initialType="top" />);
+    expect(await screen.findByText('Post p1')).toBeTruthy();
+    await waitFor(() => expect(starterFetchMock).toHaveBeenCalledTimes(1));
+    expect(searchFetchMock.mock.invocationCallOrder[0]).toBeLessThan(starterFetchMock.mock.invocationCallOrder[0]);
+
+    // An answer whose model says it has no picture (null): the card draws its glyph, nothing is asked.
+    cleanup();
+    starterFetchMock.mockClear();
+    searchFetchMock.mockImplementation(async (url: string) => {
+      const params = new URL(url, 'http://localhost').searchParams;
+      return ok(answer(params.get('q') ?? '', params.get('type') ?? 'top', {
+        entities: [{ ...nano, thumbnail: null }],
+        posts: { items: [post('p1')], nextCursor: null },
+      }));
+    });
+    render(<SearchClient initialQuery="nano" initialType="top" />);
+    expect(await screen.findByText('Post p1')).toBeTruthy();
+    await settle();
+    await settle();
+    expect(starterFetchMock).not.toHaveBeenCalled();
+  });
+
   it('draws "No results", then the starter under its own heading, for a search that found nothing', async () => {
     render(<SearchClient initialQuery="zzzznope" initialType="top" />);
     expect(await screen.findByText('No results for “zzzznope”')).toBeTruthy();

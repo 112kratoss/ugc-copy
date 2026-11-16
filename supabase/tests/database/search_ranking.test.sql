@@ -588,9 +588,10 @@ select ok(
   and has_function_privilege('service_role', 'public.search_public_creators(text,uuid,double precision,uuid,integer)', 'EXECUTE'),
   'creator search is the service role''s alone'
 );
+-- The score's eleventh argument, whole words, is 20261116200234's.
 select ok(
-  not has_function_privilege('anon', 'public.search_post_score(boolean,boolean,boolean,double precision,double precision,integer,integer,integer,double precision,boolean)', 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public.search_post_score(boolean,boolean,boolean,double precision,double precision,integer,integer,integer,double precision,boolean)', 'EXECUTE')
+  not has_function_privilege('anon', 'public.search_post_score(boolean,boolean,boolean,double precision,double precision,integer,integer,integer,double precision,boolean,boolean)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.search_post_score(boolean,boolean,boolean,double precision,double precision,integer,integer,integer,double precision,boolean,boolean)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.search_creator_score(boolean,boolean,boolean,boolean,double precision,double precision,integer,integer,boolean)', 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.search_creator_score(boolean,boolean,boolean,boolean,double precision,double precision,integer,integer,boolean)', 'EXECUTE'),
   'client roles cannot call the score functions'

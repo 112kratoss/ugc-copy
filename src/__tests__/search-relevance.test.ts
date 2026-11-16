@@ -277,8 +277,11 @@ describe('the recorded run', () => {
     const verdict = judgeSearchRelevance(set, recordedSearchRuns(recorded));
     expect(verdict.failures).toEqual([]);
     expect(verdict.queries).toBe(set.queries.length);
-    // The numbers of the recording (2026-11-15, real gte-small vectors). A
-    // re-recording changes them here, in the same change that changed the ranking.
+    // The numbers of the recording (2026-11-17, real gte-small vectors: whole words first,
+    // 20261116200234, on the set with "cat", "car" and their traps). A re-recording changes them
+    // here, in the same change that changed the ranking. "studio light" is listed because its word
+    // order got better than its blend (0.3358 to 0.5293 by words, 0.4316 to 0.4887 blended): no
+    // query of either order scored lower than in the recording before (docs/search-ranking-operations.md).
     expect({
       judged: verdict.judged,
       words: {
@@ -293,11 +296,27 @@ describe('the recorded run', () => {
       },
       worse: verdict.worse.map((entry) => entry.id),
     }).toEqual({
-      judged: 70,
-      words: { ndcg: 0.541, topHitRate: 0.7286, relevantInTop: 1.2143, wrongInDepth: 0.3, offCorpusPosts: 0 },
-      blended: { ndcg: 0.7837, topHitRate: 0.9714, relevantInTop: 2.1429, wrongInDepth: 1.9, offCorpusPosts: 0 },
-      worse: [],
+      judged: 72,
+      words: { ndcg: 0.5449, topHitRate: 0.75, relevantInTop: 1.2778, wrongInDepth: 0.4306, offCorpusPosts: 0 },
+      blended: { ndcg: 0.7793, topHitRate: 0.9722, relevantInTop: 2.1806, wrongInDepth: 2, offCorpusPosts: 0 },
+      worse: ['q55'],
     });
+  });
+
+  it('puts the posts that hold a one-word query whole before those that hold it only inside longer words (20261116200234)', () => {
+    // The defect of 2026-11-17: "cat" put posts about no cat among its first four. Here
+    // "Category winners", "Catching the bus", "Gothic cathedral" and two captions that say
+    // "delicate", "intricate" or "scattered" hold its letters, not the word; for "car" a caption
+    // says "cargo", a title "supercar", others "skincare", "headscarf" and "scarlet".
+    const wordsOf = (id: string) => recorded.queries.find((entry) => entry.id === id)?.words ?? [];
+    const cat = wordsOf('q76');
+    expect(cat.map(([key]) => key)).toEqual(['fas-07', 'pet-03', 'ani-05', 'mis-11', 'pet-08', 'trp-03', 'trp-04', 'arc-09', 'trp-01', 'trp-02']);
+    // Every whole match scores 0 or more, every partial one under 0.
+    expect(cat.slice(0, 5).every(([, score]) => score >= 0)).toBe(true);
+    expect(cat.slice(5).every(([, score]) => score < 0)).toBe(true);
+    const car = wordsOf('q77');
+    expect(car.slice(0, 2).map(([key]) => key)).toEqual(['car-03', 'car-05']);
+    expect(car.slice(2).every(([, score]) => score < 0)).toBe(true);
   });
 
   it('keeps first place for every title match, each of them found by both lists or pinned', () => {

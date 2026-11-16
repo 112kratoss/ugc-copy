@@ -154,7 +154,9 @@ describe('search content suggestions migration', () => {
       expect(/SECURITY DEFINER/.test(definition), name).toBe(definer);
       expect(statements, name).toContain(`REVOKE ALL ON FUNCTION ${signature} FROM PUBLIC, anon, authenticated;`);
       expect(statements, name).toContain(`GRANT EXECUTE ON FUNCTION ${signature} TO service_role;`);
-      expect(newestDefiner(name), name).toBe(MIGRATION);
+      // Related searches were re-created since to read only the posts about the
+      // search (20261116200234), whose test holds this file's rules to that definition.
+      expect(newestDefiner(name), name).toBe(name === 'search_related_searches' ? '20261116200234_search_whole_words_first.sql' : MIGRATION);
     }
     // Every function that reads a post runs with its owner's rights; the
     // six that do not read a table need none, and the one call is the

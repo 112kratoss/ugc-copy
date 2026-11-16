@@ -593,14 +593,11 @@ export default function SearchClient({
       return next;
     });
   }, []);
-  // What to start a search from, asked once as the page opens (SearchStarter.tsx), and whether
-  // that question is settled: until it is, the idle page draws no invitation in its place.
-  const { answer: starter, settled: starterSettled } = useSearchStarterState();
   // The pictures the page holds for models and tools, by id: a search's own answer carries none
   // for its "Models and tools" (the start screen's rows and the typeahead's do), so a card there
   // drew a glyph where the same model had a picture a moment before in the list over it. Filled
-  // from the starter and from every suggestion answer the box receives; a model neither has named
-  // keeps its glyph.
+  // from the starter, once it has been asked for, and from every suggestion answer the box
+  // receives; a model neither has named keeps its glyph.
   const [entityPictures, setEntityPictures] = useState<Readonly<Record<string, SearchThumbnail>>>({});
   // They are one viewer's: the server picks a picture this viewer may see, so another account
   // starts over (review of #830). Not the session's first read, which names the viewer the
@@ -613,9 +610,6 @@ export default function SearchClient({
   const noteEntityPictures = useCallback((found: readonly SearchEntity[]) => {
     setEntityPictures((current) => searchEntityPicturesWith(current, found));
   }, []);
-  useEffect(() => {
-    if (starter) noteEntityPictures(starter.entities);
-  }, [noteEntityPictures, starter]);
   // The request the restored answer is, while the page still asks it: the
   // search it would make on mount is not made. Forgotten once the search
   // changes, so coming back to the same text later asks as any search does.
@@ -1394,6 +1388,34 @@ export default function SearchClient({
     };
   }, [emptyKindTab, keepTopAnswer, normalizedQuery, readExact, topForEmptyTab]);
   const emptyTabPointer = emptyKindTab ? searchEmptyTabPointer(emptyKindTab, topForEmptyTab) : null;
+
+  // Where the page draws the starter (SearchStarter.tsx): before a search (the box empty, or half
+  // a word that found no creator) and under a search that found nothing anywhere. And whose
+  // pictures it lends: a model's or tool's card among the results that no answer has given one
+  // (entityPictures), since a search's own answer carries none. It is asked for when the page
+  // first comes to one of those, and kept for the page's life (useSearchStarterState asks once per
+  // account), so a page opened on a search the address names asks for it only after that search's
+  // answer, and only if the answer has a card it pictures, finds nothing, or the box is emptied.
+  // Until 2026-11-17 every opening asked for it, beside the search's own request (2.7 s on
+  // production, signed in), and on most searches its answer went nowhere.
+  const settledOnNothing = canSearch && !pending && !(currentFailure && !currentAnswer) && (!shownAnswer || resultCount === 0);
+  // As SearchEntityCard reads it: an entity that carries a picture, or says it has none (null), is
+  // drawn by its own word.
+  const unpicturedEntity = canSearch && !pending && entities.some((entity) => (
+    entity.thumbnail === undefined && !entityPictures[searchEntityId(entity)]
+  ));
+  const starterWanted = !canSearch || unpicturedEntity || (settledOnNothing && (
+    !searchSaysNoResults(gatedQueryLength)
+    || (!emptyTabPointer && !hasPublicSearchFilters(activeFilters) && (activeType === 'top' || topForEmptyTab !== null))
+  ));
+  const [starterAsked, setStarterAsked] = useState(starterWanted);
+  if (starterWanted && !starterAsked) setStarterAsked(true);
+  // What to start a search from, and whether that question is settled: until it is, the idle page
+  // draws no invitation in its place.
+  const { answer: starter, settled: starterSettled } = useSearchStarterState({ enabled: starterAsked });
+  useEffect(() => {
+    if (starter) noteEntityPictures(starter.entities);
+  }, [noteEntityPictures, starter]);
 
   const nextCursor = !currentAnswer
     ? null
