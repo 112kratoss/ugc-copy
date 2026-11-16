@@ -1,11 +1,12 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { renderToString } from 'react-dom/server';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import FeedbackViewport from '@/components/FeedbackViewport';
 import PostComments from '@/components/PostComments';
 import type { PostComment, PostCommentsPage } from '@/lib/post-comments-client';
 import { forgetPostCommentSortsForTests, readPostCommentSort, rememberPostCommentSort } from '@/lib/post-comment-sort-memory';
+import { SESSION_CHECK_DEADLINE_MS, SESSION_CHECK_START_DEADLINE_MS } from '@/lib/viewer-session-check';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
@@ -17,6 +18,10 @@ const { authState } = vi.hoisted(() => ({
             email: string;
             user_metadata: Record<string, unknown>;
         } | null,
+        /** The provider is still checking a session cookie. */
+        isLoading: false,
+        /** When the provider began that check (`performance.now()`), or null before it has. */
+        sessionCheckStartedAt: null as number | null,
     },
 }));
 
@@ -152,6 +157,8 @@ describe('PostComments', () => {
     beforeEach(() => {
         authState.session = null;
         authState.user = null;
+        authState.isLoading = false;
+        authState.sessionCheckStartedAt = null;
         // The order chosen for a post's comments is kept for the tab: one case's must not reach the next.
         window.sessionStorage.clear();
         forgetPostCommentSortsForTests();
@@ -211,6 +218,171 @@ describe('PostComments', () => {
                     '/login?returnUrl=%2Ffeed%3Fchip%3Drecent'
                 );
         });
+    });
+
+    // Owner's recording, 2026-11-16: a signed-in reader who opened a post from another page was
+    // told "Sign in to join the conversation" for as long as the page's provider took to check their
+    // session cookie, and their thread was read as a visitor's, then taken away and read again.
+    describe('while a session cookie is checked', () => {
+        const SUPABASE_URL = 'https://project-ref.supabase.co';
+        const AUTH_COOKIE = 'sb-project-ref-auth-token';
+        const view = () => <PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />;
+
+        beforeEach(() => {
+            vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPABASE_URL);
+            document.cookie = `${AUTH_COOKIE}=session; Path=/`;
+            authState.isLoading = true;
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+            document.cookie = `${AUTH_COOKIE}=; Max-Age=0; Path=/`;
+            vi.unstubAllEnvs();
+        });
+
+        it("holds the composer's place, and reads the thread once, for the reader the check names", async () => {
+            const server = serveThread([comment()]);
+            vi.stubGlobal('fetch', server.fetchMock);
+
+            const { rerender } = render(view());
+            await act(async () => {
+                await Promise.resolve();
+            });
+            expect(screen.queryByRole('link', { name: /Sign in to join/i })).not.toBeInTheDocument();
+            expect(screen.getByText('Add a comment…')).toBeInTheDocument();
+            expect(screen.queryByRole('textbox', { name: 'Write a comment' })).not.toBeInTheDocument();
+            expect(screen.getByText('Loading comments…')).toBeInTheDocument();
+            expect(server.reads).toEqual([]);
+
+            signIn('token-1');
+            authState.isLoading = false;
+            rerender(view());
+
+            expect(await screen.findByText('A thoughtful comment')).toBeInTheDocument();
+            expect(screen.getByRole('textbox', { name: 'Write a comment' })).toBeInTheDocument();
+            expect(screen.queryByText('Add a comment…')).not.toBeInTheDocument();
+            expect(server.reads).toEqual([{ offset: 0, limit: 20, authorization: 'Bearer token-1' }]);
+        });
+
+        // Review of #833: Supabase's check has no deadline of its own, and a stalled one held the
+        // thread unread and the composer's place inert for as long as it stalled.
+        it('reads the thread as a visitor\'s once the check outlasts its deadline, and again for the reader a late answer names', async () => {
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+            const server = serveThread([comment()]);
+            vi.stubGlobal('fetch', server.fetchMock);
+            authState.sessionCheckStartedAt = performance.now();
+
+            const { rerender } = render(view());
+            act(() => {
+                vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS - 100);
+            });
+            expect(screen.getByText('Add a comment…')).toBeInTheDocument();
+            expect(server.reads).toEqual([]);
+
+            act(() => {
+                vi.advanceTimersByTime(100);
+            });
+            // Testing Library's waits drain on a real timer.
+            vi.useRealTimers();
+            expect(await screen.findByText('A thoughtful comment')).toBeInTheDocument();
+            expect(screen.getByRole('link', { name: /Sign in to join/i })).toBeInTheDocument();
+            expect(screen.queryByText('Add a comment…')).not.toBeInTheDocument();
+            expect(server.reads).toEqual([{ offset: 0, limit: 20, authorization: null }]);
+
+            signIn('token-1');
+            authState.isLoading = false;
+            rerender(view());
+            expect(await screen.findByRole('textbox', { name: 'Write a comment' })).toBeInTheDocument();
+            await waitFor(() => expect(server.reads).toEqual([
+                { offset: 0, limit: 20, authorization: null },
+                { offset: 0, limit: 20, authorization: 'Bearer token-1' },
+            ]));
+        });
+
+        // Re-review of #833: the deadline ran from the thread's first draw, so loading supabase-js
+        // on a slow phone spent it before the check was even sent. It runs from the check now, for
+        // a thread drawn after the check began as well.
+        it('times the deadline from when the check began, not from when the thread was drawn', () => {
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+            vi.stubGlobal('fetch', serveThread([comment()]).fetchMock);
+            authState.sessionCheckStartedAt = performance.now() - (SESSION_CHECK_DEADLINE_MS - 500);
+
+            render(view());
+            act(() => {
+                vi.advanceTimersByTime(400);
+            });
+            expect(screen.getByText('Add a comment…')).toBeInTheDocument();
+            act(() => {
+                vi.advanceTimersByTime(200);
+            });
+            expect(screen.getByRole('link', { name: /Sign in to join/i })).toBeInTheDocument();
+        });
+
+        it('waits longer for a check that has not begun, and not for ever', () => {
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+            vi.stubGlobal('fetch', serveThread([comment()]).fetchMock);
+
+            const { rerender } = render(view());
+            act(() => {
+                vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS + 1_000);
+            });
+            expect(screen.getByText('Add a comment…')).toBeInTheDocument();
+
+            // Begun now: the deadline runs from here.
+            authState.sessionCheckStartedAt = performance.now();
+            rerender(view());
+            act(() => {
+                vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS - 100);
+            });
+            expect(screen.getByText('Add a comment…')).toBeInTheDocument();
+            act(() => {
+                vi.advanceTimersByTime(100);
+            });
+            expect(screen.getByRole('link', { name: /Sign in to join/i })).toBeInTheDocument();
+            cleanup();
+
+            // Never begun: the start's own deadline.
+            authState.sessionCheckStartedAt = null;
+            render(view());
+            act(() => {
+                vi.advanceTimersByTime(SESSION_CHECK_START_DEADLINE_MS - 100);
+            });
+            expect(screen.getByText('Add a comment…')).toBeInTheDocument();
+            act(() => {
+                vi.advanceTimersByTime(100);
+            });
+            expect(screen.getByRole('link', { name: /Sign in to join/i })).toBeInTheDocument();
+        });
+
+        it('offers sign-in, and reads the thread as a visitor, once the check finds no session', async () => {
+            const server = serveThread([comment()]);
+            vi.stubGlobal('fetch', server.fetchMock);
+
+            const { rerender } = render(view());
+            authState.isLoading = false;
+            rerender(view());
+
+            expect(await screen.findByText('A thoughtful comment')).toBeInTheDocument();
+            expect(screen.getByRole('link', { name: /Sign in to join/i })).toBeInTheDocument();
+            expect(screen.queryByText('Add a comment…')).not.toBeInTheDocument();
+            expect(server.reads).toEqual([{ offset: 0, limit: 20, authorization: null }]);
+        });
+    });
+
+    // A page drawn ahead of time is drawn for every reader, and no cookie can be read on the server.
+    it("draws both of the composer's places in the server's HTML, for the root element's mark to choose", () => {
+        const container = document.createElement('div');
+        container.innerHTML = renderToString(
+            <PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />
+        );
+        document.body.appendChild(container);
+        onTestFinished(() => container.remove());
+
+        expect(within(container).getByRole('link', { name: /Sign in to join/i }))
+            .toHaveClass('app-shell-when-signed-out');
+        expect(within(container).getByText('Add a comment…').closest('.app-shell-when-signed-in'))
+            .not.toBeNull();
+        expect(within(container).getByText('Loading comments…')).toBeInTheDocument();
     });
 
     // Owner, 2026-11-15: the order chosen came back as Top after a refresh or Back to the post.

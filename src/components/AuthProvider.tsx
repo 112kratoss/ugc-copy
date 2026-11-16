@@ -70,6 +70,15 @@ interface AuthContextValue {
     /** Whether that sign-out was made in this tab, which goes on to the login page of its own accord. */
     signedOutHere: boolean;
     isLoading: boolean;
+    /**
+     * When this provider, with no session from the server, began checking the browser's session
+     * cookie with Supabase (`performance.now()`): once supabase-js has loaded, as it asks for the
+     * session, a token refresh and `getUser` included. Null before then, and where no such check is
+     * made (a session the server read, the E2E session, no cookie, no provider). A part of the page
+     * waiting on the check times it from here (`useViewerSessionCheck`): loading supabase-js before
+     * it is not the check's, and on a slow phone it is most of the wait.
+     */
+    sessionCheckStartedAt: number | null;
     updateCredits: (nextCredits: number | null, options?: CreditUpdateOptions) => void;
     refreshSessionState: () => Promise<void>;
 }
@@ -96,6 +105,7 @@ const anonymousAuthContext: AuthContextValue = {
     signedOut: false,
     signedOutHere: false,
     isLoading: false,
+    sessionCheckStartedAt: null,
     // Outside a provider (the root layout's own components, a page drawn
     // without one) a balance still has to reach the header: a no-op here left
     // it at 0 after the welcome claim, made on a page with no provider, until
@@ -210,6 +220,7 @@ export function AuthProvider({
         marketplaceSpendableCredits: initialMarketplaceSpendableCredits ?? clientE2EAuth?.credits ?? null,
     }));
     const [isLoading, setIsLoading] = useState(!hasResolvedInitialState && !clientE2EAuth);
+    const [sessionCheckStartedAt, setSessionCheckStartedAt] = useState<number | null>(null);
     // The record the page was drawn with, kept as one object for as long as
     // the page is open, and the latest one read in the browser since.
     const [pageSaverNoticeRecord] = useState<SaverNoticeRecord | null>(() => (
@@ -424,6 +435,10 @@ export function AuthProvider({
                 return;
             }
 
+            // The check of a cookie the server did not read starts here, the first time only.
+            if (!hasResolvedInitialState) {
+                setSessionCheckStartedAt((startedAt) => startedAt ?? performance.now());
+            }
             const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
                 handleAuthChange(event, nextSession);
             });
@@ -607,6 +622,7 @@ export function AuthProvider({
                 signedOut,
                 signedOutHere: signedOut && wasSessionSignedOutInThisTab(heldSessionId),
                 isLoading: resolvedIsLoading,
+                sessionCheckStartedAt,
                 updateCredits,
                 refreshSessionState,
             }}

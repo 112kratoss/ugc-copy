@@ -1,11 +1,14 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderToString } from 'react-dom/server';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import * as pageModule from '@/app/showcase/[id]/page';
+import ReportPostButton from '@/app/showcase/[id]/ReportPostButton';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import { coverNsfwContent } from '@/lib/nsfw-content';
 import { clearOwnerPageEditsForTests, rememberOwnerPostVisibility } from '@/lib/owner-page-edits';
 import { PUBLIC_PAGE_REVALIDATE_SECONDS } from '@/lib/public-page-cache';
+import { SESSION_CHECK_DEADLINE_MS } from '@/lib/viewer-session-check';
 
 const { default: ShowcaseDetailPage, generateMetadata } = pageModule;
 
@@ -48,6 +51,10 @@ const clientAuth = vi.hoisted(() => ({
   current: { session: null, user: null } as {
     session: { access_token: string } | null;
     user: { id: string; is_anonymous?: boolean } | null;
+    /** The provider is still checking a session cookie. */
+    isLoading?: boolean;
+    /** When the provider began that check (`performance.now()`). */
+    sessionCheckStartedAt?: number | null;
   },
 }));
 // The address the page was opened at, as the browser's router reads it: the
@@ -874,6 +881,131 @@ describe('Showcase detail page', () => {
       await waitFor(() => expect(screen.getByRole('button', { name: 'Block user' })).toBeEnabled());
       expect(requestTo('/api/moderation/blocks/user-1')).toBeUndefined();
       expect(routerMock.refresh).not.toHaveBeenCalled();
+    });
+
+    // Owner's recording, 2026-11-16: the row came in when the browser's check of the session
+    // cookie ended, a client navigation included, and pushed Comments down.
+    describe('while a session cookie is checked', () => {
+      const AUTH_COOKIE = 'sb-project-ref-auth-token';
+      /** A session cookie as @supabase/ssr writes it, naming its account. */
+      function holdSessionCookieOf(userId: string) {
+        const session = Buffer.from(JSON.stringify({ access_token: 'cookie-token', user: { id: userId } }))
+          .toString('base64url');
+        document.cookie = `${AUTH_COOKIE}=base64-${session}; Path=/`;
+      }
+
+      beforeEach(() => {
+        vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project-ref.supabase.co');
+        clientAuth.current = { session: null, user: null, isLoading: true };
+      });
+
+      afterEach(() => {
+        vi.useRealTimers();
+        document.cookie = `${AUTH_COOKIE}=; Max-Age=0; Path=/`;
+        vi.unstubAllEnvs();
+      });
+
+      it('draws both in their place from the first paint, inert until the check names the viewer', async () => {
+        holdSessionCookieOf('user-2');
+        const { rerender } = render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+        const rail = screen.getByTestId('canonical-post-actions');
+        expect(within(rail).getByRole('button', { name: 'Report user' })).toBeDisabled();
+        expect(within(rail).getByRole('button', { name: 'Block user' })).toBeDisabled();
+
+        signInAs('user-2');
+        rerender(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+        expect(within(rail).getByRole('button', { name: 'Report user' })).toBeEnabled();
+        expect(within(rail).getByRole('button', { name: 'Block user' })).toBeEnabled();
+      });
+
+      // Review of #833: a stalled check left the row drawn and doing nothing for as long as it stalled.
+      it('draws none once the check outlasts its deadline, as for a visitor, and both once a late answer names the viewer', async () => {
+        holdSessionCookieOf('user-2');
+        const page = await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: performance.now() };
+        const { rerender } = render(page);
+        const rail = screen.getByTestId('canonical-post-actions');
+        act(() => {
+          vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS - 100);
+        });
+        expect(within(rail).getByRole('button', { name: 'Report user' })).toBeDisabled();
+
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+        expect(within(rail).queryByRole('button', { name: 'Report user' })).not.toBeInTheDocument();
+        expect(within(rail).queryByRole('button', { name: 'Block user' })).not.toBeInTheDocument();
+
+        vi.useRealTimers();
+        signInAs('user-2');
+        rerender(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+        expect(within(rail).getByRole('button', { name: 'Report user' })).toBeEnabled();
+        expect(within(rail).getByRole('button', { name: 'Block user' })).toBeEnabled();
+      });
+
+      it("leaves them out while a cookie naming the post's creator is checked, and once a check finds no session", async () => {
+        holdSessionCookieOf('user-1');
+        const { unmount } = render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+        expect(screen.queryByRole('button', { name: 'Report user' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Block user' })).not.toBeInTheDocument();
+        unmount();
+
+        holdSessionCookieOf('user-2');
+        clientAuth.current = { session: null, user: null, isLoading: false };
+        render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+        expect(screen.queryByRole('button', { name: 'Report user' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Block user' })).not.toBeInTheDocument();
+      });
+    });
+
+    // The page is drawn ahead of time for every viewer, and no cookie can be read on the server.
+    it("draws both in the server's HTML, inert, for the root element's marks to show to a browser with a session", () => {
+      const container = document.createElement('div');
+      container.innerHTML = renderToString(
+        <ReportPostButton postId={POST_ID} creator={{ id: 'user-1', name: 'Creator Name' }} />,
+      );
+      document.body.appendChild(container);
+      onTestFinished(() => container.remove());
+
+      const reportUser = within(container).getByRole('button', { name: 'Report user' });
+      expect(reportUser).toBeDisabled();
+      expect(reportUser.closest('.app-shell-when-signed-in')).not.toBeNull();
+      expect(within(container).getByRole('button', { name: 'Block user' })).toBeDisabled();
+    });
+
+    // Review of #833: the server's row showed on the creator's own post until the page's script
+    // ran, then went, and Comments jumped up. The root element names the account the session
+    // cookie holds before the first paint (app-shell-account-restore.ts).
+    it("hides them from the post's creator before the first paint, and hydrates as drawn", () => {
+      const root = document.documentElement;
+      onTestFinished(() => root.removeAttribute('data-auth-user'));
+      const button = <ReportPostButton postId={POST_ID} creator={{ id: 'user-1', name: 'Creator Name' }} />;
+      const container = document.createElement('div');
+      container.innerHTML = renderToString(button);
+      document.body.appendChild(container);
+      onTestFinished(() => container.remove());
+      const row = container.querySelector('[data-post-creator-rows]') as HTMLElement;
+
+      expect(container.querySelector('style')?.textContent)
+        .toBe('html[data-auth-user="user-1"] [data-post-creator-rows="user-1"]{display:none}');
+      root.setAttribute('data-auth-user', 'user-2');
+      expect(window.getComputedStyle(row).display).not.toBe('none');
+      root.setAttribute('data-auth-user', 'user-1');
+      expect(window.getComputedStyle(row).display).toBe('none');
+
+      const consoleError = vi.spyOn(console, 'error');
+      render(button, { container, hydrate: true });
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    it("draws none in the server's HTML for a creator whose id a style rule cannot name as it stands", () => {
+      const html = renderToString(
+        <ReportPostButton postId={POST_ID} creator={{ id: 'user"] *{display:none} [x="', name: 'Creator Name' }} />,
+      );
+      expect(html).not.toContain('Report user');
+      expect(html).not.toContain('<style');
     });
   });
 
