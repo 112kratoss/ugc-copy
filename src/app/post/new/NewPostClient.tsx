@@ -154,6 +154,7 @@ import ResourceCardEditorDialog from './ResourceCardEditorDialog';
 import RecipeAccessCards from './RecipeAccessCards';
 import ResourceCardsSection, { RECIPE_PREVIEW_MAX_LENGTH } from './ResourceCardsSection';
 import CreatableCombobox, { type CreatableComboboxOption } from './CreatableCombobox';
+import { composerHeading } from './composer-heading';
 import type { EditablePostDraft } from './post-editor-types';
 
 const LEAVE_WITH_UNSAVED_CHANGES: ConfirmationRequest = {
@@ -3568,14 +3569,14 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         <div className="mt-10 grid gap-8 xl:grid-cols-[minmax(0,1fr)_280px]">
           <section className="rounded-3xl border border-white/8 bg-zinc-950/70 p-5 shadow-[0_28px_80px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:p-6">
             <div className="mb-6">
+              {/* The page's tab says the same (`composer-heading.ts`). */}
               <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                {isRecipeAddIntent
-                  ? 'Add a recipe to this post'
-                  : isCreationPaywallManagementIntent
-                    ? 'Manage the recipe behind this post'
-                    : isEditMode
-                      ? 'Update post'
-                      : 'Create post'}
+                {composerHeading({
+                  editing: isEditMode,
+                  recipe: searchParams.get('recipe'),
+                  from: entrySurface,
+                  focus: requestedFocusTarget,
+                })}
               </h1>
               <p className="mt-2 text-sm text-zinc-400">
                 {isRecipeAddIntent

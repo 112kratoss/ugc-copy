@@ -7,6 +7,11 @@ import { siteConfig } from '@/lib/seo';
 // The pages' own modules are not under test, only what their files name the tab.
 vi.mock('@/app/post/new/NewPostClient', () => ({ default: () => null }));
 vi.mock('@/app/profile/DeferredCreatorProfileCard', () => ({ default: () => null }));
+vi.mock('@/app/profile/blocked/BlockedCreatorsList', () => ({ default: () => null }));
+vi.mock('@/components/AuthProvider', () => ({
+  AuthProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+vi.mock('@/lib/owner-posts', () => ({ getOwnerPostDetail: async () => null }));
 vi.mock('@/app/profile/edit/ConnectedApps', () => ({ default: () => null }));
 vi.mock('@/app/profile/load-owner-profile', () => ({
   loadOwnerProfile: async () => ({ initialProfile: null, loadError: null }),
@@ -34,7 +39,8 @@ function tabTitle(title: Metadata['title'] | undefined): string {
  * Every page heads its tab "<its heading> | Magic Booklet", as Recipe Marketplace and Credit
  * history do. The web sweep of 2026-11-17 found four that did not: Alerts and Create post were
  * the bare "Magic Booklet", Edit profile was its layout's "Profile | Magic Booklet", and two of
- * the four blog posts were their title alone.
+ * the four blog posts were their title alone. Two more were found with them: the post editor
+ * was the bare "Magic Booklet" and Blocked users was "Profile | Magic Booklet".
  */
 describe('the tab titles', () => {
   it('names Alerts by its heading, kept out of search as the other inboxes are', async () => {
@@ -56,6 +62,28 @@ describe('the tab titles', () => {
 
     expect(tabTitle(metadata.title)).toBe('Edit profile | Magic Booklet');
     expect(metadata.robots).toMatchObject({ index: false, googleBot: { index: false } });
+  });
+
+  it('names the blocked users page by its heading, not its layout\'s "Profile"', async () => {
+    const { metadata } = await import('@/app/profile/blocked/page');
+
+    expect(tabTitle(metadata.title)).toBe('Blocked users | Magic Booklet');
+    expect(metadata.robots).toMatchObject({ index: false, googleBot: { index: false } });
+  });
+
+  // The editor is the composer's own page (NewPostClient), headed by what it was opened to do.
+  it('names the post editor by the heading the composer draws for each way in', async () => {
+    const { generateMetadata } = await import('@/app/post/[id]/edit/page');
+    const metadataFor = (searchParams: Record<string, string>) => generateMetadata({
+      params: Promise.resolve({ id: 'post-1' }),
+      searchParams: Promise.resolve(searchParams),
+    });
+
+    expect(tabTitle((await metadataFor({})).title)).toBe('Update post | Magic Booklet');
+    expect(tabTitle((await metadataFor({ recipe: 'add' })).title)).toBe('Add a recipe to this post | Magic Booklet');
+    expect(tabTitle((await metadataFor({ from: 'creations', focus: 'price' })).title))
+      .toBe('Manage the recipe behind this post | Magic Booklet');
+    expect((await metadataFor({})).robots).toMatchObject({ index: false, googleBot: { index: false } });
   });
 
   // A post's `seoTitle` chooses the words search shows, as #151 used it; it does not take the

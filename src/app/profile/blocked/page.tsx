@@ -1,7 +1,16 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, ShieldCheck } from 'lucide-react';
 
+import { createNoIndexMetadata } from '@/lib/seo';
+
 import BlockedCreatorsList from './BlockedCreatorsList';
+
+/** The tab says what the page's heading says, not its layout's "Profile". */
+export const metadata: Metadata = createNoIndexMetadata(
+  'Blocked users',
+  'The creators you have blocked on Magic Booklet, each with a way to unblock them.'
+);
 
 /**
  * Whom the signed-in viewer has blocked, with a way to take each block back.

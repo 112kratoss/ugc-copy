@@ -4,11 +4,12 @@ import { RequireAuth } from '@/components/RouteAuthBoundary';
 import { createNoIndexMetadata } from '@/lib/seo';
 import { getServerAuthState, getServerPublicIdentity } from '@/lib/supabase-server';
 
+import { composerHeading } from './composer-heading';
 import NewPostClient from './NewPostClient';
 
 /** The tab says what the page's heading says; it named nothing and read "Magic Booklet". */
 export const metadata: Metadata = createNoIndexMetadata(
-  'Create post',
+  composerHeading({ editing: false }),
   'Share a creation, media made elsewhere or a text post with the Magic Booklet community.'
 );
 

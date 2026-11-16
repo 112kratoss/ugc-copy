@@ -1,9 +1,12 @@
+import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import { notFound, redirect } from 'next/navigation';
 
 import { getOwnerPostDetail } from '@/lib/owner-posts';
+import { createNoIndexMetadata } from '@/lib/seo';
 import { getServerAuthState, getServerPublicIdentity } from '@/lib/supabase-server';
 import { AuthProvider } from '@/components/AuthProvider';
+import { composerHeading } from '@/app/post/new/composer-heading';
 import type { EditablePostDraft } from '@/app/post/new/post-editor-types';
 import NewPostClient from '@/app/post/new/NewPostClient';
 
@@ -11,6 +14,28 @@ type EditPostPageProps = {
   params: Promise<{ id: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
+
+function firstValue(value: string | string[] | undefined): string | null {
+  return (Array.isArray(value) ? value[0] : value) ?? null;
+}
+
+/**
+ * The tab says what the composer's heading says for the way it was opened ("Update post",
+ * or adding or pricing the post's recipe); it named nothing and read "Magic Booklet". The
+ * address alone decides it, so the post is not read for it.
+ */
+export async function generateMetadata({ searchParams }: EditPostPageProps): Promise<Metadata> {
+  const query = await searchParams;
+  return createNoIndexMetadata(
+    composerHeading({
+      editing: true,
+      recipe: firstValue(query.recipe),
+      from: firstValue(query.from),
+      focus: firstValue(query.focus),
+    }),
+    'Edit your Magic Booklet post: its words, media, visibility and recipe.'
+  );
+}
 
 function toEditablePostDraft(post: NonNullable<Awaited<ReturnType<typeof getOwnerPostDetail>>>): EditablePostDraft {
   return {

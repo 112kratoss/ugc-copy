@@ -4,11 +4,15 @@ import { ArrowRight, Clapperboard, LayoutTemplate, Plus } from 'lucide-react';
 import { CreatorToolPreview } from '@/components/CreatorToolPreview';
 import { CreatorToolCard, SectionHeading } from '@/components/CreatorStudio';
 import { Kicker, Text } from '@/components/DesignSystem';
+import { loadTemplatesLive } from '@/lib/creator-page-server';
 import { CREATOR_STARTER_RECIPES, CREATOR_TOOLS } from '@/lib/creator-tools';
 import { loadCreatorToolPreviewMap } from '@/lib/creator-tool-previews';
 
 export default async function CreateHubPage() {
-  const previewByTool = await loadCreatorToolPreviewMap();
+  const [previewByTool, templatesLive] = await Promise.all([
+    loadCreatorToolPreviewMap(),
+    loadTemplatesLive(),
+  ]);
 
   return (
     <div className="ui-page ui-page-ambient relative overflow-hidden pb-20 font-[family-name:var(--font-geist-sans)]">
@@ -49,41 +53,48 @@ export default async function CreateHubPage() {
           })}
         </section>
 
+        {/* The catalog's card, and the sentence that offers it, only while /templates lists a
+            template: it led to "No templates are live yet" (web sweep, 2026-11-17), as the
+            creators' Templates tile did. Publishing one is always offered. */}
         <section className="mt-10">
           <SectionHeading
             eyebrow="Viral templates"
             title="Bring your photo. Keep the format."
-            description="Use a published format with your own media and review its checkpoints along the way. Or package your own workflow for everyone to reuse."
+            description={templatesLive
+              ? 'Use a published format with your own media and review its checkpoints along the way. Or package your own workflow for everyone to reuse.'
+              : 'Package your own workflow for everyone to reuse.'}
           />
 
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.55fr)_minmax(260px,0.75fr)]">
-            <Link
-              href="/templates"
-              className="ui-card ui-card-interactive ui-focus-ring group relative min-h-64 overflow-hidden p-5 sm:p-7"
-            >
-              <div className="absolute inset-0 bg-[radial-gradient(circle_at_82%_18%,rgba(251,113,133,0.2),transparent_34%),radial-gradient(circle_at_20%_100%,rgba(56,189,248,0.14),transparent_42%)]" />
-              <div className="absolute right-6 top-6 hidden items-center gap-2 text-white/25 sm:flex" aria-hidden>
-                <div className="h-24 w-16 -rotate-6 rounded-2xl border border-white/10 bg-white/[0.04]" />
-                <ArrowRight className="h-5 w-5" />
-                <div className="h-24 w-16 rotate-6 rounded-2xl border border-rose-300/20 bg-rose-400/10" />
-              </div>
-              <div className="relative flex h-full max-w-xl flex-col">
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-rose-300/20 bg-rose-400/10 text-rose-100">
-                  <Clapperboard className="h-5 w-5" aria-hidden />
+          <div className={templatesLive ? 'grid gap-4 lg:grid-cols-[minmax(0,1.55fr)_minmax(260px,0.75fr)]' : 'grid gap-4 lg:grid-cols-2'}>
+            {templatesLive ? (
+              <Link
+                href="/templates"
+                className="ui-card ui-card-interactive ui-focus-ring group relative min-h-64 overflow-hidden p-5 sm:p-7"
+              >
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_82%_18%,rgba(251,113,133,0.2),transparent_34%),radial-gradient(circle_at_20%_100%,rgba(56,189,248,0.14),transparent_42%)]" />
+                <div className="absolute right-6 top-6 hidden items-center gap-2 text-white/25 sm:flex" aria-hidden>
+                  <div className="h-24 w-16 -rotate-6 rounded-2xl border border-white/10 bg-white/[0.04]" />
+                  <ArrowRight className="h-5 w-5" />
+                  <div className="h-24 w-16 rotate-6 rounded-2xl border border-rose-300/20 bg-rose-400/10" />
                 </div>
-                <Kicker className="mt-8 text-rose-200/80">Community formats</Kicker>
-                <Text as="h3" variant="sectionTitle" className="mt-3 max-w-[18ch]">
-                  Turn your inputs into a finished scene.
-                </Text>
-                <Text variant="bodySm" className="mt-3 max-w-lg sm:text-base">
-                  Pick a format, add the requested images or clips, then review its checkpoints as the workflow creates your result.
-                </Text>
-                <div className="mt-auto inline-flex items-center gap-2 pt-6 text-sm font-semibold text-white">
-                  Explore templates
-                  <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" aria-hidden />
+                <div className="relative flex h-full max-w-xl flex-col">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-rose-300/20 bg-rose-400/10 text-rose-100">
+                    <Clapperboard className="h-5 w-5" aria-hidden />
+                  </div>
+                  <Kicker className="mt-8 text-rose-200/80">Community formats</Kicker>
+                  <Text as="h3" variant="sectionTitle" className="mt-3 max-w-[18ch]">
+                    Turn your inputs into a finished scene.
+                  </Text>
+                  <Text variant="bodySm" className="mt-3 max-w-lg sm:text-base">
+                    Pick a format, add the requested images or clips, then review its checkpoints as the workflow creates your result.
+                  </Text>
+                  <div className="mt-auto inline-flex items-center gap-2 pt-6 text-sm font-semibold text-white">
+                    Explore templates
+                    <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" aria-hidden />
+                  </div>
                 </div>
-              </div>
-            </Link>
+              </Link>
+            ) : null}
 
             <Link
               href="/templates/new"

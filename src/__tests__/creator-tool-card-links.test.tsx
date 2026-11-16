@@ -6,6 +6,12 @@ import CreateHubPage from '@/app/create/page';
 
 const getServerAuthStateMock = vi.fn();
 const getShowcaseFeedPageMock = vi.fn();
+/** Whether /templates lists a template, as the launchpad's read answers. */
+const catalog = vi.hoisted(() => ({ templatesLive: true }));
+
+vi.mock('@/lib/creator-page-server', () => ({
+  loadTemplatesLive: async () => catalog.templatesLive,
+}));
 
 vi.mock('@/components/AuthProvider', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -117,6 +123,7 @@ describe('creator tool card links', () => {
       session: { user: { id: 'user-1' } },
       credits: 12,
     });
+    catalog.templatesLive = true;
 
     getShowcaseFeedPageMock.mockImplementation(async (options?: { category?: string }) => {
       const category = options?.category ?? 'all';
@@ -185,6 +192,26 @@ describe('creator tool card links', () => {
     expect(screen.queryByText('Try a setup and move.')).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Go to Explore/ })).not.toBeInTheDocument();
     expect(screen.getAllByRole('link').filter((link) => link.getAttribute('href') === '/templates')).toHaveLength(1);
+  });
+
+  // "Explore templates" led to "No templates are live yet" (web sweep, 2026-11-17), as the
+  // creators' Templates tile did: it is offered while the catalog lists a template, and the way
+  // to publish one stays.
+  it('offers the templates only while one is live, and publishing one always', async () => {
+    const templatesLinks = () => screen.queryAllByRole('link').filter((link) => link.getAttribute('href') === '/templates');
+
+    const live = render(await CreateHubPage());
+    expect(templatesLinks()).toHaveLength(1);
+    expect(templatesLinks()[0]).toHaveTextContent('Explore templates');
+    live.unmount();
+
+    catalog.templatesLive = false;
+    render(await CreateHubPage());
+    expect(templatesLinks()).toHaveLength(0);
+    expect(screen.queryByText('Explore templates')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Use a published format/)).not.toBeInTheDocument();
+    expect(screen.getByText('Create a template').closest('a')).toHaveAttribute('href', '/templates/new');
+    expect(screen.getByText('Package your own workflow for everyone to reuse.')).toBeInTheDocument();
   });
 
   it('prefetches neither the video nor the workflow page from its card', async () => {
