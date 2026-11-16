@@ -25,6 +25,10 @@ import { useAuth } from '@/components/AuthProvider';
 import StudioOverflowMenu, { type StudioOverflowMenuItem } from '@/components/StudioOverflowMenu';
 import { useConfirmation } from '@/components/useConfirmation';
 import {
+    useHasHydratedSupabaseAuthCookieHint,
+    useSupabaseAuthCookieHint,
+} from '@/components/useSupabaseAuthCookieHint';
+import {
     POST_COMMENT_MAX_LENGTH,
     POST_COMMENTS_MAX_PAGE_SIZE,
     POST_COMMENTS_PAGE_SIZE,
@@ -68,6 +72,9 @@ const SORT_OPTIONS: Array<{ value: PostCommentSort; label: string; description: 
 
 /** The composer grows with its draft up to this height, then scrolls. */
 const COMPOSER_MAX_HEIGHT_PX = 160;
+
+/** The reader once the page knows no one is signed in (`readerKey`). */
+const VISITOR = 'visitor';
 
 const REPORT_REASONS = [
     { value: 'spam', label: 'Spam' },
@@ -163,9 +170,20 @@ export default function PostComments({
     layout = 'flow',
     onClose,
 }: PostCommentsProps) {
-    const { session, user } = useAuth();
+    const { session, user, isLoading } = useAuth();
     const accessToken = session?.access_token ?? null;
     const viewerId = user?.id ?? null;
+    // Who is reading, once that is known: their id, VISITOR when no one is signed in, and null on
+    // the server, in the render that hydrates it (no cookie can be read there) and while a session
+    // cookie is being checked. The pages that check the session in the browser (the post page, the
+    // reels) start a provider of their own on every page, a client navigation included, and until
+    // its check named the reader the thread drew them as a visitor: "Sign in to join the
+    // conversation" where their composer goes, and a visitor's thread, taken away and drawn again
+    // once they were named (owner's recording, 2026-11-16). The post page's own reads wait the same
+    // way (`useShowcasePostViewer`).
+    const hasAuthCookie = useSupabaseAuthCookieHint();
+    const hydrated = useHasHydratedSupabaseAuthCookieHint();
+    const readerKey = viewerId ?? (!hydrated || (hasAuthCookie && isLoading) ? null : VISITOR);
     const askToConfirm = useConfirmation();
 
     // The order chosen for this post's comments, kept for the tab: a refresh or Back keeps it.
@@ -428,9 +446,11 @@ export default function PostComments({
 
     // A different viewer (sign-in, sign-out, another account) or another sort
     // needs a clean first page: which comments a viewer may see depends on
-    // their blocks. Aborting the previous request keeps an older sort from
+    // their blocks, so nothing is read before the reader is known
+    // (`readerKey`). Aborting the previous request keeps an older sort from
     // overwriting the current selection.
     useEffect(() => {
+        if (readerKey === null) return;
         // The render that hydrates draws Top, the server's order; the order kept for the post is
         // drawn a render later, and only its first page is asked for (review of #821).
         if (sort !== readPostCommentSort(postId)) return;
@@ -456,7 +476,7 @@ export default function PostComments({
                 replyRequestIds[parentId] += 1;
             }
         };
-    }, [postCreatorId, postId, readTopLevel, sort, viewerId]);
+    }, [postCreatorId, postId, readTopLevel, readerKey, sort]);
 
     useEffect(() => {
         setTotalCount(commentCount);
@@ -1038,14 +1058,19 @@ export default function PostComments({
                         </div>
                     </div>
                 </div>
+            ) : !hydrated ? (
+                // The server's HTML and the render that hydrates it, where no cookie can be read: both
+                // are drawn, and the root element's mark, set from this browser's session cookie
+                // before the page draws (`app-shell-account-restore.ts`), shows the one it keeps, as
+                // the top bar's account slot does (`DeferredAppShellAccount`).
+                <>
+                    <SignInToJoinLink href={loginHref} className="app-shell-when-signed-out" />
+                    <ComposerWhileChecking className="app-shell-when-signed-in" />
+                </>
+            ) : readerKey === null ? (
+                <ComposerWhileChecking />
             ) : (
-                <Link
-                    href={loginHref}
-                    className="ui-focus-ring flex min-h-12 items-center gap-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-strong)]"
-                >
-                    <MessageSquare className="h-4 w-4" aria-hidden="true" />
-                    Sign in to join the conversation
-                </Link>
+                <SignInToJoinLink href={loginHref} />
             )}
         </div>
     );
@@ -1642,6 +1667,34 @@ function SignInLink({ href }: { href: string }) {
         >
             Sign in
         </Link>
+    );
+}
+
+/** The composer's place for a reader the page knows is signed out. */
+function SignInToJoinLink({ href, className = '' }: { href: string; className?: string }) {
+    return (
+        <Link
+            href={href}
+            className={`ui-focus-ring flex min-h-12 items-center gap-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-strong)] ${className}`.trim()}
+        >
+            <MessageSquare className="h-4 w-4" aria-hidden="true" />
+            Sign in to join the conversation
+        </Link>
+    );
+}
+
+/**
+ * The composer's place while the reader's session is checked: the composer at rest, inert, its
+ * avatar blank, so the composer the check brings takes its place without a move.
+ */
+function ComposerWhileChecking({ className = '' }: { className?: string }) {
+    return (
+        <div aria-hidden="true" className={`flex items-start gap-3 ${className}`.trim()}>
+            <span className="h-8 w-8 shrink-0 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)]" />
+            <span className="block min-h-9 min-w-0 flex-1 rounded-lg border-b border-[var(--ui-border-default)] px-1 py-1.5 text-sm leading-6 text-[var(--ui-text-faint)]">
+                Add a comment…
+            </span>
+        </div>
     );
 }
 

@@ -6,12 +6,17 @@ import { useRouter } from 'next/navigation';
 
 import { useAuth } from '@/components/AuthProvider';
 import {
+  useHasHydratedSupabaseAuthCookieHint,
+  useSupabaseAuthCookieHint,
+} from '@/components/useSupabaseAuthCookieHint';
+import {
   blockCreatorAfterConfirmation,
   reportCreatorAfterConfirmation,
   toastSafetyOutcome,
 } from '@/lib/feed-safety-actions';
 import type { ShowcaseCreator } from '@/lib/showcase';
 import { getCurrentInternalPath } from '@/lib/share';
+import { readSupabaseAuthCookieUserId } from '@/lib/supabase-auth-cookie';
 
 /** The reasons a post can be reported for. The Terms (section 8) name "Stolen content". */
 export const REPORT_REASONS = [
@@ -32,7 +37,8 @@ interface ReportPostButtonProps {
   /**
    * Whose post it is, for Report user and Block user. Those rows are drawn
    * for a signed-in viewer who is not the creator: the server takes both from
-   * registered accounts only.
+   * registered accounts only. A viewer whose session is still being checked
+   * has them from the first paint, inert (`creatorRows`).
    */
   creator?: Pick<ShowcaseCreator, 'id' | 'name'> | null;
   /**
@@ -63,7 +69,9 @@ export default function ReportPostButton({
   // The live session, as the engagement row reads it. The token the page was
   // rendered with expires (an hour at Supabase's default), and a report sent
   // with it after that failed as "Unauthorized".
-  const { session, user } = useAuth();
+  const { session, user, isLoading } = useAuth();
+  const hasAuthCookie = useSupabaseAuthCookieHint();
+  const hydrated = useHasHydratedSupabaseAuthCookieHint();
   const accessToken = session?.access_token ?? null;
   const [isOpen, setIsOpen] = useState(false);
   // No reason until the viewer picks one: a preselected "Misleading recipe"
@@ -79,7 +87,23 @@ export default function ReportPostButton({
     ? REPORT_REASONS
     : REPORT_REASONS.filter((option) => !RECIPE_REPORT_REASONS.has(option.value));
   const creatorId = creator?.id ?? null;
-  const showCreatorRows = Boolean(user && creatorId && creatorId !== user.id);
+  // Report user and Block user, for a signed-in viewer who is not the creator. The page checks the
+  // session in the browser after it has drawn, and a client navigation starts that check again; the
+  // row came in when it ended and pushed Comments down (owner's recording, 2026-11-16). So it is
+  // drawn from the first paint for a viewer whose session cookie is being checked, inert until
+  // then: 'ready' once the viewer is known; 'checking' while the cookie, which names someone other
+  // than the creator, is checked; 'unread' in the server's HTML and the render that hydrates it,
+  // where no cookie can be read, shown by the root element's mark only to a browser that holds a
+  // session cookie (`.app-shell-when-signed-in`, as the composer's place is in `PostComments`).
+  const creatorRows = !creatorId
+    ? null
+    : user
+      ? creatorId !== user.id ? 'ready' : null
+      : !hydrated
+        ? 'unread'
+        : hasAuthCookie && isLoading && readSupabaseAuthCookieUserId() !== creatorId
+          ? 'checking'
+          : null;
   const loginHref = () => `/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}`))}`;
 
   const submitReport = async () => {
@@ -218,13 +242,20 @@ export default function ReportPostButton({
         {error ? <p className="mt-3 text-sm text-rose-200">{error}</p> : null}
       </div>
 
-      {showCreatorRows ? (
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-white/8 px-5 py-3.5 sm:px-6">
+      {creatorRows ? (
+        <div
+          className={`flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-white/8 px-5 py-3.5 sm:px-6${
+            creatorRows === 'unread' ? ' app-shell-when-signed-in' : ''
+          }`}
+        >
+          {/* Dimmed only while an action is on its way: one waiting for the session looks as it will. */}
           <button
             type="button"
             onClick={() => void handleReportUser()}
-            disabled={isCreatorActionPending}
-            className="inline-flex items-center gap-2 text-sm font-medium text-zinc-400 transition hover:text-white disabled:opacity-60"
+            disabled={creatorRows !== 'ready' || isCreatorActionPending}
+            className={`inline-flex items-center gap-2 text-sm font-medium text-zinc-400 transition hover:text-white${
+              isCreatorActionPending ? ' opacity-60' : ''
+            }`}
           >
             <ShieldAlert className="h-4 w-4" aria-hidden="true" />
             Report user
@@ -232,8 +263,10 @@ export default function ReportPostButton({
           <button
             type="button"
             onClick={() => void handleBlockUser()}
-            disabled={isCreatorActionPending}
-            className="inline-flex items-center gap-2 text-sm font-medium text-zinc-400 transition hover:text-white disabled:opacity-60"
+            disabled={creatorRows !== 'ready' || isCreatorActionPending}
+            className={`inline-flex items-center gap-2 text-sm font-medium text-zinc-400 transition hover:text-white${
+              isCreatorActionPending ? ' opacity-60' : ''
+            }`}
           >
             <Ban className="h-4 w-4" aria-hidden="true" />
             Block user

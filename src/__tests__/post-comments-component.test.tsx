@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { renderToString } from 'react-dom/server';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import FeedbackViewport from '@/components/FeedbackViewport';
 import PostComments from '@/components/PostComments';
@@ -17,6 +17,8 @@ const { authState } = vi.hoisted(() => ({
             email: string;
             user_metadata: Record<string, unknown>;
         } | null,
+        /** The provider is still checking a session cookie. */
+        isLoading: false,
     },
 }));
 
@@ -152,6 +154,7 @@ describe('PostComments', () => {
     beforeEach(() => {
         authState.session = null;
         authState.user = null;
+        authState.isLoading = false;
         // The order chosen for a post's comments is kept for the tab: one case's must not reach the next.
         window.sessionStorage.clear();
         forgetPostCommentSortsForTests();
@@ -211,6 +214,80 @@ describe('PostComments', () => {
                     '/login?returnUrl=%2Ffeed%3Fchip%3Drecent'
                 );
         });
+    });
+
+    // Owner's recording, 2026-11-16: a signed-in reader who opened a post from another page was
+    // told "Sign in to join the conversation" for as long as the page's provider took to check their
+    // session cookie, and their thread was read as a visitor's, then taken away and read again.
+    describe('while a session cookie is checked', () => {
+        const SUPABASE_URL = 'https://project-ref.supabase.co';
+        const AUTH_COOKIE = 'sb-project-ref-auth-token';
+        const view = () => <PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />;
+
+        beforeEach(() => {
+            vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPABASE_URL);
+            document.cookie = `${AUTH_COOKIE}=session; Path=/`;
+            authState.isLoading = true;
+        });
+
+        afterEach(() => {
+            document.cookie = `${AUTH_COOKIE}=; Max-Age=0; Path=/`;
+            vi.unstubAllEnvs();
+        });
+
+        it("holds the composer's place, and reads the thread once, for the reader the check names", async () => {
+            const server = serveThread([comment()]);
+            vi.stubGlobal('fetch', server.fetchMock);
+
+            const { rerender } = render(view());
+            await act(async () => {
+                await Promise.resolve();
+            });
+            expect(screen.queryByRole('link', { name: /Sign in to join/i })).not.toBeInTheDocument();
+            expect(screen.getByText('Add a comment…')).toBeInTheDocument();
+            expect(screen.queryByRole('textbox', { name: 'Write a comment' })).not.toBeInTheDocument();
+            expect(screen.getByText('Loading comments…')).toBeInTheDocument();
+            expect(server.reads).toEqual([]);
+
+            signIn('token-1');
+            authState.isLoading = false;
+            rerender(view());
+
+            expect(await screen.findByText('A thoughtful comment')).toBeInTheDocument();
+            expect(screen.getByRole('textbox', { name: 'Write a comment' })).toBeInTheDocument();
+            expect(screen.queryByText('Add a comment…')).not.toBeInTheDocument();
+            expect(server.reads).toEqual([{ offset: 0, limit: 20, authorization: 'Bearer token-1' }]);
+        });
+
+        it('offers sign-in, and reads the thread as a visitor, once the check finds no session', async () => {
+            const server = serveThread([comment()]);
+            vi.stubGlobal('fetch', server.fetchMock);
+
+            const { rerender } = render(view());
+            authState.isLoading = false;
+            rerender(view());
+
+            expect(await screen.findByText('A thoughtful comment')).toBeInTheDocument();
+            expect(screen.getByRole('link', { name: /Sign in to join/i })).toBeInTheDocument();
+            expect(screen.queryByText('Add a comment…')).not.toBeInTheDocument();
+            expect(server.reads).toEqual([{ offset: 0, limit: 20, authorization: null }]);
+        });
+    });
+
+    // A page drawn ahead of time is drawn for every reader, and no cookie can be read on the server.
+    it("draws both of the composer's places in the server's HTML, for the root element's mark to choose", () => {
+        const container = document.createElement('div');
+        container.innerHTML = renderToString(
+            <PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />
+        );
+        document.body.appendChild(container);
+        onTestFinished(() => container.remove());
+
+        expect(within(container).getByRole('link', { name: /Sign in to join/i }))
+            .toHaveClass('app-shell-when-signed-out');
+        expect(within(container).getByText('Add a comment…').closest('.app-shell-when-signed-in'))
+            .not.toBeNull();
+        expect(within(container).getByText('Loading comments…')).toBeInTheDocument();
     });
 
     // Owner, 2026-11-15: the order chosen came back as Top after a refresh or Back to the post.
