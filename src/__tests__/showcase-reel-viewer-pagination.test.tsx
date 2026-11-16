@@ -1,6 +1,6 @@
 import type { AnchorHTMLAttributes, ComponentProps, HTMLAttributes, ReactNode } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseReelViewer from '@/app/showcase/ShowcaseReelViewer';
 import {
@@ -10,6 +10,7 @@ import {
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { dismissToast, pushToast, requestConfirmation, resetFeedbackState } from '@/components/feedback-state';
 import { REEL_OPENING_ATTRIBUTE } from '@/lib/reel-opening-restore';
+import { holdTilePicture, releaseTilePicture } from '@/app/showcase/tile-pictures';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 
 vi.mock('next/link', () => ({
@@ -1189,6 +1190,109 @@ describe('ShowcaseReelViewer pagination', () => {
     });
   });
 
+  describe("a grid tile's picture in place of the reel's own copy", () => {
+    const held: Array<[string, HTMLImageElement]> = [];
+
+    /** A grid tile drawing `mediaItemId`'s picture, loaded (`tile-pictures.ts`). */
+    function holdLoadedTilePicture(mediaItemId: string) {
+      const image = document.createElement('img');
+      Object.defineProperty(image, 'complete', { value: true });
+      Object.defineProperty(image, 'naturalWidth', { value: 720 });
+      Object.defineProperty(image, 'naturalHeight', { value: 900 });
+      holdTilePicture(mediaItemId, image);
+      held.push([mediaItemId, image]);
+    }
+
+    function pictureItem(postId: string, mediaItemId: string) {
+      return createShowcaseItem({
+        id: postId,
+        title: `Frame ${postId}`,
+        mediaUrl: `https://example.com/${mediaItemId}.jpg`,
+        mediaItems: [{
+          id: mediaItemId,
+          url: `https://example.com/${mediaItemId}.jpg`,
+          previewUrl: null,
+          mediaKind: 'image',
+          contentType: 'image/jpeg',
+          originalName: `${mediaItemId}.jpg`,
+          width: 1080,
+          height: 1350,
+          durationSeconds: null,
+          sortOrder: 0,
+        }],
+      });
+    }
+
+    const standIn = (container: HTMLElement) => container.querySelector('canvas[data-tile-picture-stand-in]');
+
+    beforeEach(() => {
+      // jsdom draws no canvas: the copy is taken as drawn.
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    });
+
+    afterEach(() => {
+      held.splice(0).forEach(([mediaItemId, image]) => releaseTilePicture(mediaItemId, image));
+      vi.restoreAllMocks();
+    });
+
+    it("draws a held tile's picture while the reel's copy loads, with no black cover, and only for the post on screen", async () => {
+      holdLoadedTilePicture('picture-1');
+      const props = reelProps({ items: [pictureItem('post-1', 'picture-1'), pictureItem('post-2', 'picture-2'), pictureItem('post-3', 'picture-3')] });
+      const { container, rerender } = render(<ShowcaseReelViewer {...props} />);
+
+      expect(standIn(container)).toHaveAttribute('data-drawn', 'true');
+      expect(getMediaLoadingOverlay(container)).toBeNull();
+
+      // On to the next post, which no tile holds a picture of: the reel covers its loading as before.
+      fireEvent.keyDown(window, { key: 'ArrowDown' });
+      expect(props.onSelectItemId).toHaveBeenCalledWith('post-2');
+      rerender(<ShowcaseReelViewer {...props} selectedItemId="post-2" />);
+      expect(standIn(container)).toBeNull();
+      expect(getMediaLoadingOverlay(container)).not.toBeNull();
+
+      // And to one whose tile is drawn: its own picture, until the reel's copy has loaded.
+      holdLoadedTilePicture('picture-3');
+      rerender(<ShowcaseReelViewer {...props} selectedItemId="post-3" />);
+      expect(standIn(container)).toHaveAttribute('data-drawn', 'true');
+      expect(getMediaLoadingOverlay(container)).toBeNull();
+      fireEvent.load(screen.getByRole('img', { name: 'Frame post-3' }));
+      await waitFor(() => {
+        expect(standIn(container)).toBeNull();
+      });
+      expect(getMediaLoadingOverlay(container)).toBeNull();
+    });
+
+    it("gives way to a failed load's message, and stands in again while Retry asks again", async () => {
+      holdLoadedTilePicture('picture-1');
+      const { container } = render(<ShowcaseReelViewer {...reelProps({ items: [pictureItem('post-1', 'picture-1')] })} />);
+      expect(standIn(container)).not.toBeNull();
+
+      fireEvent.error(screen.getByRole('img', { name: 'Frame post-1' }));
+      const retry = await screen.findByRole('button', { name: 'Retry image' });
+      expect(standIn(container)).toBeNull();
+
+      fireEvent.click(retry);
+      await waitFor(() => {
+        expect(standIn(container)).toHaveAttribute('data-drawn', 'true');
+      });
+      expect(getMediaLoadingOverlay(container)).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Retry image' })).toBeNull();
+
+      fireEvent.load(screen.getByRole('img', { name: 'Frame post-1' }));
+      await waitFor(() => {
+        expect(standIn(container)).toBeNull();
+      });
+    });
+
+    it('draws no tile picture for a clip, which keeps its loading cover', () => {
+      holdLoadedTilePicture('video-1');
+      const { container } = renderVideoReel([createVideoMedia()]);
+
+      expect(standIn(container)).toBeNull();
+      expect(getMediaLoadingOverlay(container)).not.toBeNull();
+    });
+  });
+
   it('opens a compact cash or token choice inside the reel viewer', () => {
     authState.session = { access_token: 'token-1' };
     authState.credits = 1200;
@@ -1886,6 +1990,46 @@ describe('ShowcaseReelViewer pagination', () => {
       } finally {
         window.history.replaceState(null, '', '/');
       }
+    });
+
+    it("holds Follow's place, Follow's box with both its words, while the reel asks whom the viewer follows", async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.user = { id: 'viewer-1' };
+      let answer: ((response: Response) => void) | null = null;
+      stubRequests({
+        '/api/profile/follow?followingId=creator-1': () => new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+      });
+      const { container } = render(<ShowcaseReelViewer {...reelProps()} />);
+
+      const place = container.querySelector('[data-reel-follow="pending"]');
+      expect(place).toHaveAttribute('aria-hidden', 'true');
+      // Both words in one cell, so the place is as wide as the wider answer.
+      expect(place).toHaveTextContent('FollowFollowing');
+      expect(screen.queryByRole('button', { name: /^Follow(ing)? Creator Name$/ })).toBeNull();
+
+      await waitFor(() => expect(answer).not.toBeNull());
+      answer!(new Response(JSON.stringify({ following: true })));
+
+      const following = await screen.findByRole('button', { name: 'Following Creator Name' });
+      expect(following).toHaveTextContent('FollowingFollow');
+      expect(container.querySelector('[data-reel-follow="pending"]')).toBeNull();
+    });
+
+    it('holds no place for Follow once the read of whom the viewer follows has failed', async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.user = { id: 'viewer-1' };
+      stubRequests({
+        '/api/profile/follow?followingId=creator-1': () => new Response(JSON.stringify({ error: 'Failed' }), { status: 500 }),
+      });
+      const { container } = render(<ShowcaseReelViewer {...reelProps()} />);
+
+      expect(container.querySelector('[data-reel-follow="pending"]')).not.toBeNull();
+      await waitFor(() => {
+        expect(container.querySelector('[data-reel-follow="pending"]')).toBeNull();
+      });
+      expect(screen.queryByRole('button', { name: /^Follow(ing)? Creator Name$/ })).toBeNull();
     });
 
     it("has no Follow on the viewer's own post, and asks nothing", () => {

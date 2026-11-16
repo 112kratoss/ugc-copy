@@ -25,10 +25,12 @@
 // POST /api/search/opened's three (its rate limit, by its scope: allowed, but for one network
 // address that has had its share; the day's visitor key; the insert of the opened result). And the
 // E2E user's recipe sales page, /marketplace/sell: two free recipes on text posts of theirs
-// (fixtures/seller-recipes.json), with no unlock orders and no deleted posts. And the storefront,
-// /marketplace: its first page, four free recipes on picture posts by a creator of their own and a
-// fifth the page reads to know there are more (fixtures/marketplace-recipes.json); its Tool filter
-// reads the tools catalog, answered with no rows (below), which the page draws as the app's own list.
+// (fixtures/seller-recipes.json), with no unlock orders and no deleted posts. And Explore's Recent
+// lane for one tool of its own (/showcase?sort=recent&tool=e2e-explore-reel): three pictures by a
+// creator of their own (fixtures/explore-reel.json). And the storefront, /marketplace: its first
+// page, four free recipes on picture posts by a creator of their own and a fifth the page reads to
+// know there are more (fixtures/marketplace-recipes.json). Both read the source tools catalog,
+// answered with no rows (below), which they draw as the app's own list.
 // A page added here brings each of its reads, matched by method, path and the filters that name
 // its own rows: a whole table answered with no rows would change what every other page draws.
 //
@@ -73,6 +75,11 @@ const searchSuggestions = require('../fixtures/search-suggestions.json');
 // the real proxy and the real /api/search/starter and read the headers of its 200.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const searchStarter = require('../fixtures/search-starter.json');
+// Explore's Recent lane for one tool of its own, three pictures by a creator of their own: the grid,
+// its reel and the way back to the grid (explore-reel-open.spec.ts). The lane is the one address
+// whose posts read names the fixture (`source_tool_slug`), so no other page's read is answered.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const exploreReel = require('../fixtures/explore-reel.json');
 // The storefront's first page, newest first: four free recipes on picture posts and the fifth that
 // says more follow, by one creator. /marketplace reads them in getMarketplaceResourceList
 // (src/lib/post-resource-bundles-server.ts); marketplace-keeps-place.spec.ts draws it.
@@ -82,6 +89,8 @@ const marketplaceRecipes = require('../fixtures/marketplace-recipes.json');
 // first, and the posts' covers as that read answers (the fixture's posts are in the same order).
 const sellerPostIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.post_id).join(',')})`;
 const sellerBundleIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.id).join(',')})`;
+// The lane's posts as the hydration names them, in the order its read answered them.
+const exploreReelPostIds = `in.(${exploreReel.posts.map(({ id }) => id).join(',')})`;
 const marketplacePostIds = `in.(${marketplaceRecipes.posts.map((post) => post.id).join(',')})`;
 const marketplaceBundleIds = `in.(${marketplaceRecipes.bundles.map((bundle) => bundle.id).join(',')})`;
 
@@ -407,6 +416,57 @@ const READS = [
     answer: () => json([], { 'content-range': '*/0' }),
   },
   {
+    // Explore's Recent lane for the fixture's tool (fetchPostRows, src/lib/showcase-feed.ts): its
+    // three posts, newest first, in the filtered scan's one batch.
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { source_tool_slug: `eq.${exploreReel.toolSlug}`, offset: '0' },
+    answer: () => json(exploreReel.posts, { 'content-range': `0-${exploreReel.posts.length - 1}/${exploreReel.posts.length}` }),
+  },
+  {
+    // resolvePostRowsToFeedItems: their pictures (loadPostMediaItemsMap), one each, in the public
+    // bucket with a grid preview and a display copy, as the media workers leave them...
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: exploreReelPostIds },
+    answer: () => json(exploreReel.media, { 'content-range': `0-${exploreReel.media.length - 1}/${exploreReel.media.length}` }),
+  },
+  {
+    // ...their creator...
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `in.(${exploreReel.creator.id})` },
+    answer: () => json([exploreReel.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // ...no Made with rows...
+    methods: ['GET'],
+    path: '/rest/v1/post_source_tools',
+    filters: { post_id: exploreReelPostIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // ...none marked NSFW (loadNsfwPostIds)...
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: exploreReelPostIds, select: 'id,is_nsfw' },
+    answer: () => json(exploreReel.posts.map(({ id }) => ({ id, is_nsfw: false })), { 'content-range': `0-${exploreReel.posts.length - 1}/${exploreReel.posts.length}` }),
+  },
+  {
+    // ...and no recipe, in the public summaries (getMarketplaceAssetSummaryHydration)...
+    methods: ['POST'],
+    path: '/rest/v1/rpc/get_public_post_resource_bundle_summaries',
+    body: { p_post_ids: exploreReel.posts.map(({ id }) => id) },
+    answer: () => json([]),
+  },
+  {
+    // ...nor in which of them has a published recipe at all.
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { post_id: exploreReelPostIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
     // getMarketplaceResourceListBase: the storefront's first page (four, and one more to know more
     // follow), as the page and the list API ask for it.
     methods: ['POST'],
@@ -458,10 +518,14 @@ const READS = [
     answer: () => json([], { 'content-range': '*/0' }),
   },
   {
-    // listSourceToolsCatalog (src/lib/source-tools-server.ts), which the storefront's render reads
-    // beside its first page: no rows, so the catalog is the app's own fallback list, as it is where
-    // the table is missing. The same entry as web/explore-reel-open's (Explore's render waits for
-    // it too): one of the two goes when both branches land.
+    // listSourceToolsCatalog (src/lib/source-tools-server.ts), which Explore's server render waits
+    // for beside the feed and the storefront's render reads beside its first page: no rows, so the
+    // catalog is the app's own fallback list, as it is where the table is missing. Answered without
+    // a fixture row, as the welcome grant and the referral terms are, because the other pages the
+    // specs draw that read it draw the same as its failure did: Explore's other lanes fail on their
+    // own feed reads first ("Could not load Explore"), and the post composer, which asks for it
+    // through /api/source-tools, is answered that call by its specs, but for the media reorder's and
+    // bottom-nav-overlays' signed-in /post/new, which never open the list (2026-11-16).
     methods: ['GET'],
     path: '/rest/v1/source_tools',
     filters: { is_active: 'eq.true' },
