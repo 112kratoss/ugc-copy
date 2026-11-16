@@ -72,6 +72,7 @@ import { getCurrentInternalPath } from '@/lib/share';
 import { displaySourceToolLabel } from '@/lib/source-tools';
 import { type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
 import { noteFollowChange } from '@/lib/follow-changes';
+import { loadedTilePicture } from '@/app/showcase/tile-pictures';
 
 declare global {
   interface Window {
@@ -82,7 +83,7 @@ declare global {
   }
 }
 
-interface ShowcaseReelViewerProps {
+export interface ShowcaseReelViewerProps {
   isOpen: boolean;
   items: ShowcaseFeedItem[];
   selectedItemId: string | null;
@@ -327,6 +328,9 @@ export default function ShowcaseReelViewer({
   const [followStates, setFollowStates] = useState<Record<string, boolean>>({});
   const [followPendingKey, setFollowPendingKey] = useState<string | null>(null);
   const [followError, setFollowError] = useState<{ key: string; message: string } | null>(null);
+  // The follow reads that failed, by key: no place is held for a Follow that may not come (a read
+  // asked again later draws Follow when it answers, as before).
+  const [unreadFollowKeys, setUnreadFollowKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [copiedPromptItemId, setCopiedPromptItemId] = useState<string | null>(null);
   const followRequestsRef = useRef(new Set<string>());
   const commentsSectionRef = useRef<HTMLDivElement | null>(null);
@@ -700,7 +704,9 @@ export default function ShowcaseReelViewer({
         const data = await response.json() as { following?: unknown };
         setFollowStates((current) => key in current ? current : { ...current, [key]: data.following === true });
       })
-      .catch(() => undefined)
+      .catch(() => {
+        setUnreadFollowKeys((current) => new Set(current).add(key));
+      })
       .finally(() => {
         followRequestsRef.current.delete(key);
       });
@@ -956,6 +962,14 @@ export default function ShowcaseReelViewer({
   const isFollowingCreator = followKey !== null && followStates[followKey] === true;
   // Signed out, Follow leads to sign-in; signed in, it waits for the answer.
   const showFollow = Boolean(item.creator.id) && !isOwnPost && (!user || isFollowStateKnown);
+  // Meanwhile its place is held, from the reel's first frame, so neither it nor what is under it
+  // pops in when the answer arrives (owner's recording, 2026-11-16). A failed read holds none.
+  const followAwaitsAnswer = !showFollow
+    && Boolean(item.creator.id)
+    && !isOwnPost
+    && hasSessionToken
+    && followKey !== null
+    && !unreadFollowKeys.has(followKey);
   const followIsPending = followKey !== null && followPendingKey === followKey;
   const followErrorMessage = followError && followError.key === followKey ? followError.message : null;
   // The body and the prompt have boxes of their own below; the lede is for a
@@ -965,6 +979,12 @@ export default function ShowcaseReelViewer({
   const currentMediaKey = activeMediaItem ? getReelMediaLifecycleKey(item.id, activeMediaItem) : null;
   const currentMediaLoadState = currentMediaKey ? mediaLoadStates[currentMediaKey] ?? null : 'ready';
   const showMediaLoading = shouldWaitForMedia && currentMediaLoadState === null;
+  // The picture the tile drew stands in for the reel's own copy while it loads
+  // (ShowcaseMediaCarousel): the loading cover would hide it behind black.
+  const mediaHasTilePicture = showMediaLoading
+    && activeMediaItem?.mediaKind === 'image'
+    && !activeMediaItem.sourceUnavailableAt
+    && loadedTilePicture(activeMediaItem.id) !== null;
   const transition = prefersReducedMotion
     ? { duration: 0.16, ease: 'easeOut' as const }
     : { duration: 0.34, ease: [0.22, 1, 0.36, 1] as const };
@@ -1691,7 +1711,9 @@ export default function ShowcaseReelViewer({
             className="relative h-full w-full overflow-hidden"
             aria-busy={showMediaLoading}
           >
-            <AnimatePresence mode="wait" custom={transitionDirection}>
+            {/* The post the reel opens on is drawn at once, picture and all, in the
+                reel's first frame; moving to another post animates. */}
+            <AnimatePresence mode="wait" custom={transitionDirection} initial={false}>
               <motion.div
                 key={item.id}
                 custom={transitionDirection}
@@ -1707,7 +1729,7 @@ export default function ShowcaseReelViewer({
             </AnimatePresence>
 
             <AnimatePresence>
-              {showMediaLoading ? (
+              {showMediaLoading && !mediaHasTilePicture ? (
                 <motion.div
                   key={`${item.id}:media-loading`}
                   initial={{ opacity: 0 }}
@@ -1730,6 +1752,9 @@ export default function ShowcaseReelViewer({
                 </motion.div>
               ) : null}
             </AnimatePresence>
+            {mediaHasTilePicture ? (
+              <span role="status" aria-live="polite" className="sr-only">Loading media</span>
+            ) : null}
           </div>
 
           {item.postFormat !== 'text' ? (
@@ -1966,7 +1991,7 @@ export default function ShowcaseReelViewer({
                 {remixError}
               </div>
             ) : null}
-            <AnimatePresence mode="wait" custom={transitionDirection}>
+            <AnimatePresence mode="wait" custom={transitionDirection} initial={false}>
               <motion.div
                 key={item.id}
                 custom={transitionDirection}
@@ -1983,6 +2008,7 @@ export default function ShowcaseReelViewer({
                   {showFollow ? (
                     <button
                       type="button"
+                      data-reel-follow=""
                       onClick={() => void toggleFollow()}
                       disabled={followIsPending}
                       aria-label={`${isFollowingCreator ? 'Following' : 'Follow'} ${item.creator.name}`}
@@ -1997,6 +2023,16 @@ export default function ShowcaseReelViewer({
                       {followIsPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
                       {isFollowingCreator ? 'Following' : 'Follow'}
                     </button>
+                  ) : followAwaitsAnswer ? (
+                    // Follow's own box, the button's classes and word, held while the
+                    // answer is on its way.
+                    <span
+                      aria-hidden="true"
+                      data-reel-follow="pending"
+                      className="inline-flex min-h-10 shrink-0 select-none items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-bold text-transparent"
+                    >
+                      Follow
+                    </span>
                   ) : null}
                 </div>
                 {followErrorMessage ? (

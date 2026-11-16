@@ -25,7 +25,10 @@
 // POST /api/search/opened's three (its rate limit, by its scope: allowed, but for one network
 // address that has had its share; the day's visitor key; the insert of the opened result). And the
 // E2E user's recipe sales page, /marketplace/sell: two free recipes on text posts of theirs
-// (fixtures/seller-recipes.json), with no unlock orders and no deleted posts.
+// (fixtures/seller-recipes.json), with no unlock orders and no deleted posts. And Explore's Recent
+// lane for one tool of its own (/showcase?sort=recent&tool=e2e-explore-reel): three pictures by a
+// creator of their own (fixtures/explore-reel.json), and the source tools catalog Explore reads
+// beside it, answered with no rows.
 // A page added here brings each of its reads, matched by method, path and the filters that name
 // its own rows: a whole table answered with no rows would change what every other page draws.
 //
@@ -70,10 +73,17 @@ const searchSuggestions = require('../fixtures/search-suggestions.json');
 // the real proxy and the real /api/search/starter and read the headers of its 200.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const searchStarter = require('../fixtures/search-starter.json');
+// Explore's Recent lane for one tool of its own, three pictures by a creator of their own: the grid,
+// its reel and the way back to the grid (explore-reel-open.spec.ts). The lane is the one address
+// whose posts read names the fixture (`source_tool_slug`), so no other page's read is answered.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const exploreReel = require('../fixtures/explore-reel.json');
 // In the order the page asks for them: its recipes' posts as its read lists the recipes, newest
 // first, and the posts' covers as that read answers (the fixture's posts are in the same order).
 const sellerPostIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.post_id).join(',')})`;
 const sellerBundleIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.id).join(',')})`;
+// The lane's posts as the hydration names them, in the order its read answered them.
+const exploreReelPostIds = `in.(${exploreReel.posts.map(({ id }) => id).join(',')})`;
 
 const HOST = 'example.supabase.co';
 
@@ -394,6 +404,71 @@ const READS = [
     methods: ['GET'],
     path: '/rest/v1/post_deletion_audits',
     filters: { owner_user_id: `eq.${sellerRecipes.bundles[0].owner_user_id}`, bundle_access_mode: 'not.is.null' },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // Explore's Recent lane for the fixture's tool (fetchPostRows, src/lib/showcase-feed.ts): its
+    // three posts, newest first, in the filtered scan's one batch.
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { source_tool_slug: `eq.${exploreReel.toolSlug}`, offset: '0' },
+    answer: () => json(exploreReel.posts, { 'content-range': `0-${exploreReel.posts.length - 1}/${exploreReel.posts.length}` }),
+  },
+  {
+    // resolvePostRowsToFeedItems: their pictures (loadPostMediaItemsMap), one each, in the public
+    // bucket with a grid preview and a display copy, as the media workers leave them...
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: exploreReelPostIds },
+    answer: () => json(exploreReel.media, { 'content-range': `0-${exploreReel.media.length - 1}/${exploreReel.media.length}` }),
+  },
+  {
+    // ...their creator...
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `in.(${exploreReel.creator.id})` },
+    answer: () => json([exploreReel.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // ...no Made with rows...
+    methods: ['GET'],
+    path: '/rest/v1/post_source_tools',
+    filters: { post_id: exploreReelPostIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // ...none marked NSFW (loadNsfwPostIds)...
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: exploreReelPostIds, select: 'id,is_nsfw' },
+    answer: () => json(exploreReel.posts.map(({ id }) => ({ id, is_nsfw: false })), { 'content-range': `0-${exploreReel.posts.length - 1}/${exploreReel.posts.length}` }),
+  },
+  {
+    // ...and no recipe, in the public summaries (getMarketplaceAssetSummaryHydration)...
+    methods: ['POST'],
+    path: '/rest/v1/rpc/get_public_post_resource_bundle_summaries',
+    body: { p_post_ids: exploreReel.posts.map(({ id }) => id) },
+    answer: () => json([]),
+  },
+  {
+    // ...nor in which of them has a published recipe at all.
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { post_id: exploreReelPostIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // listSourceToolsCatalog (src/lib/source-tools-server.ts), which Explore's server render waits
+    // for beside the feed: no rows, so the catalog is the app's own fallback list, as it is where
+    // the table is missing. Answered without a fixture row, as the welcome grant and the referral
+    // terms are, because the other pages the specs draw that read it draw the same as its failure
+    // did: Explore's other lanes and Marketplace fail on their own feed reads first ("Could not load
+    // Explore", "Could not load the marketplace"), and the post composer, which asks for it through
+    // /api/source-tools, is answered that call by its specs, but for the media reorder's, which
+    // never opens the list (2026-11-16).
+    methods: ['GET'],
+    path: '/rest/v1/source_tools',
+    filters: { is_active: 'eq.true' },
     answer: () => json([], { 'content-range': '*/0' }),
   },
 ];

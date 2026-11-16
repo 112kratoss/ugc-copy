@@ -1771,9 +1771,33 @@ html:not([data-auth-hint='signed-in']) .app-shell-when-signed-in {
     opacity: 0;
   }
 
-  .group:hover .showcase-card-actions,
-  .group:focus-within .showcase-card-actions {
+  .group:hover .showcase-card-actions {
     opacity: 1;
+  }
+
+  /* Keyboard focus in a tile shows them too, and a pointer's does not: focus
+     goes back to the tile a reel was opened from when the reel closes, and
+     with :focus-within a tile opened and closed with the mouse kept its
+     controls once the pointer had gone (owner's recording, 2026-11-16). A
+     Marketplace tile is itself the link. Each in @supports of its own, for the
+     reason the menu's rule below gives. */
+  @supports selector(:focus-visible) {
+    .group:focus-visible .showcase-card-actions {
+      opacity: 1;
+    }
+  }
+
+  @supports selector(:has(*)) {
+    .group:has(:focus-visible) .showcase-card-actions {
+      opacity: 1;
+    }
+  }
+
+  /* A browser without :has() shows them for any focus in the tile, as before. */
+  @supports not selector(:has(*)) {
+    .group:focus-within .showcase-card-actions {
+      opacity: 1;
+    }
   }
 
   /* A tile's menu is drawn in the page body, so the pointer leaves the tile to

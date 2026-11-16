@@ -1,6 +1,5 @@
 'use client';
 
-import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -16,10 +15,8 @@ import SkeletonLoader from '@/components/SkeletonLoader';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
-import {
-    loadShowcaseReelViewer,
-    warmShowcaseReelViewer,
-} from '@/app/showcase/showcase-reel-loader';
+import ShowcaseReel from '@/app/showcase/ShowcaseReel';
+import { warmShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
 import {
     FEED_REMOVAL_UNDO_MS,
     FEED_UNDO_FAILED_MESSAGE,
@@ -93,29 +90,6 @@ import {
 import { scheduleIdleWork } from '@/lib/schedule-idle-work';
 import { useMediaQuery } from '@/lib/use-media-query';
 import ReelHostMark from '@/components/ReelHostMark';
-
-function ShowcaseReelLoadingFallback() {
-    return (
-        <div
-            role="status"
-            aria-live="polite"
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 text-sm font-bold text-white backdrop-blur-sm"
-        >
-            <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-zinc-950 px-5 py-3 shadow-2xl">
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                Opening preview
-            </span>
-        </div>
-    );
-}
-
-const ShowcaseReelViewer = dynamic(
-    () => loadShowcaseReelViewer(),
-    {
-        ssr: false,
-        loading: ShowcaseReelLoadingFallback,
-    }
-);
 
 const CATEGORIES: Array<{
     id: ShowcaseCategory;
@@ -513,7 +487,7 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
             className="flex min-w-0 flex-col [content-visibility:auto] [contain-intrinsic-size:auto_520px]"
         >
             {/* Pinterest Style Card Frame */}
-            <div className="group relative overflow-hidden rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] focus-within:border-[rgba(255,122,89,0.34)]">
+            <div className="group relative overflow-hidden rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] has-[:focus-visible]:border-[rgba(255,122,89,0.34)]">
                 <div ref={measureVideoFrame} className="relative overflow-hidden bg-black">
                     {mediaItems.length > 0 ? (
                         <ShowcaseMediaCarousel
@@ -2412,6 +2386,7 @@ export default function ShowcaseClient({
                         className={SHOWCASE_FEED_GRID_CLASS}
                         onPointerEnter={warmShowcaseReelViewer}
                         onTouchStart={warmShowcaseReelViewer}
+                        onFocusCapture={warmShowcaseReelViewer}
                     >
                             {withRemovalRow(renderedItems.map((item, itemIndex) => (
                                 <ShowcaseGridCard
@@ -2544,7 +2519,7 @@ export default function ShowcaseClient({
             ) : null}
 
             {selectedItemId ? (
-                <ShowcaseReelViewer
+                <ShowcaseReel
                     isOpen
                     items={items}
                     selectedItemId={selectedItemId}
