@@ -1,4 +1,4 @@
-import { useCallback, useState, type ComponentType, type ReactNode } from 'react';
+import { useCallback, useState, useSyncExternalStore, type ComponentType, type ReactNode } from 'react';
 import { Play, ShoppingBag } from 'lucide-react';
 
 import {
@@ -166,13 +166,25 @@ function noteDrawnCover(src: string) {
  */
 type CoverState = 'shown' | 'waiting' | 'arrived' | 'failed';
 
+const subscribeToNothing = () => () => undefined;
+
+/** False in the server's render and while React hydrates it; true for whatever mounts after. */
+function useIsPastHydration() {
+  return useSyncExternalStore(subscribeToNothing, () => true, () => false);
+}
+
 /**
  * A picture cover. Only one that is still loading once the tile is on the page waits behind the
  * shimmer and fades in when it lands (200 ms; reduced motion shows it at once). One the browser
- * already has, complete at mount or drawn before in this document, never fades in again.
+ * already has, complete at mount or drawn before in this document, never fades in again; nor does
+ * one the server's HTML drew, which shows as it loads, the page's script or not (review of #835:
+ * hidden at hydration, a cover half drawn went blank, and the first screen's waited).
  */
 function RecipeTileImage({ previewSrc, fallbackSrc, alt }: { previewSrc: string; fallbackSrc: string; alt: string }) {
   const [state, setState] = useState<CoverState>('shown');
+  const pastHydration = useIsPastHydration();
+  // Read as the tile mounts, never again: the render that follows hydration is not a mount.
+  const [mountedAfterHydration] = useState(pastHydration);
   const drawnBefore = drawnCovers.has(previewSrc);
   const imageRef = useCallback((image: HTMLImageElement | null) => {
     if (!image) return;
@@ -182,8 +194,10 @@ function RecipeTileImage({ previewSrc, fallbackSrc, alt }: { previewSrc: string;
       if (image.naturalWidth > 0) noteDrawnCover(previewSrc);
       return;
     }
-    if (!drawnCovers.has(previewSrc)) setState((current) => (current === 'shown' ? 'waiting' : current));
-  }, [previewSrc]);
+    if (mountedAfterHydration && !drawnCovers.has(previewSrc)) {
+      setState((current) => (current === 'shown' ? 'waiting' : current));
+    }
+  }, [mountedAfterHydration, previewSrc]);
 
   return (
     <>

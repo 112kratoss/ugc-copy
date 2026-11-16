@@ -19,6 +19,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type FocusEvent,
+  type PointerEvent,
 } from 'react';
 
 import {
@@ -175,24 +177,39 @@ function hashHasTarget(hash: string) {
     || document.getElementsByName(fragment).length > 0;
 }
 
-// The side navigation's places this page load has prefetched, each once.
-const navIntentPrefetched = new Set<string>();
+/** Focus the keyboard gave, which a press of a mouse or a finger does not (`:focus-visible`). */
+function isKeyboardFocus(element: Element) {
+  try {
+    return element.matches(':focus-visible');
+  } catch {
+    // An engine without the selector: any focus counts.
+    return true;
+  }
+}
 
 /**
- * A place of the side navigation, prefetched when the reader shows they may go there: the pointer
- * on it, or the keyboard's focus. The links draw with `prefetch={false}`, so nothing is fetched as
- * the page paints (#7, "defer nonessential route prefetches": every place in view, on every page,
- * on every load); with nothing prefetched, a press waited on the server with only the progress bar
- * to show for it (owner's recording, 2026-11-16: about a second to Marketplace). Once per place per
- * page load, and never for the place already open.
+ * A place of the side navigation, prefetched when the reader shows they may go there: a mouse
+ * pointer resting on it, or the keyboard's focus. The links draw with `prefetch={false}`, so nothing
+ * is fetched as the page paints (#7, "defer nonessential route prefetches": every place in view, on
+ * every page, on every load); with nothing prefetched, a press waited on the server with only the
+ * progress bar to show for it (owner's recording, 2026-11-16: about a second to Marketplace).
+ *
+ * Each intent just asks: Next keeps a prefetched route a few minutes and its scheduler skips one it
+ * holds fresh or is still fetching, so a place is fetched again only once its copy has gone stale.
+ * Never the place already open. Not on a finger: its pointer arrives with the press itself, about
+ * 100 ms before the click, and a navigation that starts while the prefetch's first request is out
+ * waits about 300 ms longer than one with no prefetch at all (production-build probe, 2026-11-16);
+ * a tap's focus, which comes just before its click, is passed over the same way.
  */
 function useNavIntentPrefetch(href: string, active: boolean) {
   const router = useRouter();
-  return useCallback(() => {
-    if (active || navIntentPrefetched.has(href)) return;
-    navIntentPrefetched.add(href);
-    router.prefetch(href);
+  const onPointerEnter = useCallback((event: PointerEvent<HTMLAnchorElement>) => {
+    if (!active && event.pointerType === 'mouse') router.prefetch(href);
   }, [active, href, router]);
+  const onFocus = useCallback((event: FocusEvent<HTMLAnchorElement>) => {
+    if (!active && isKeyboardFocus(event.currentTarget)) router.prefetch(href);
+  }, [active, href, router]);
+  return { onPointerEnter, onFocus };
 }
 
 function DesktopNavItem({
@@ -211,8 +228,8 @@ function DesktopNavItem({
     <Link
       href={item.href}
       prefetch={false}
-      onPointerEnter={prefetchOnIntent}
-      onFocus={prefetchOnIntent}
+      onPointerEnter={prefetchOnIntent.onPointerEnter}
+      onFocus={prefetchOnIntent.onFocus}
       aria-current={active ? 'page' : undefined}
       // Every control of a tab names it, for a page's leave guard: pressed
       // while the tab is open, it goes nowhere (getReselectableTabId).

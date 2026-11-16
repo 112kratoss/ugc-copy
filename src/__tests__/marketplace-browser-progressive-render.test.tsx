@@ -20,10 +20,12 @@ vi.mock('next/navigation', () => ({
 const authState = vi.hoisted(() => ({
   session: null as { access_token: string } | null,
   user: null as { id: string } | null,
+  // Whether the page's auth provider is still asking who is signed in.
+  isLoading: false,
 }));
 
 vi.mock('@/components/AuthProvider', () => ({
-  useAuth: () => ({ session: authState.session, user: authState.user }),
+  useAuth: () => ({ session: authState.session, user: authState.user, isLoading: authState.isLoading }),
 }));
 
 vi.mock('next/link', () => ({
@@ -607,6 +609,95 @@ describe('MarketplaceBrowser drawn again after a recipe', () => {
 
     expect(await screen.findByText('Unlock 16')).toBeInTheDocument();
     expect(search).toHaveValue('cats');
+  });
+
+  // Back to a listing a signed-in reader left: the page's auth provider, mounted again, asks who is
+  // signed in, and meanwhile draws what was kept for the account the session cookie names (owner's
+  // recording, 2026-11-16). Review of #835: what may happen before the answer comes.
+  describe('for the reader the session cookie names, while the page asks who is signed in', () => {
+    const SESSION_COOKIE = 'sb-project-auth-token';
+    const signedIn = { session: { access_token: 'token-1' }, user: { id: 'viewer-1' } };
+
+    beforeEach(() => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+      const cookieSession = btoa(JSON.stringify({ access_token: 'token-1', user: { id: 'viewer-1' } }))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      document.cookie = `${SESSION_COOKIE}=base64-${cookieSession}; Path=/`;
+    });
+
+    afterEach(() => {
+      document.cookie = `${SESSION_COOKIE}=; Max-Age=0; Path=/`;
+      vi.unstubAllEnvs();
+      authState.isLoading = false;
+    });
+
+    /** Signed in, Load more brought a second page, with more after it; then the reader left. */
+    async function leftSignedIn() {
+      Object.assign(authState, signedIn, { isLoading: false });
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(createPage(12, true, 4, 12)))));
+      const listing = renderMarketplace(createPage(4, true, 0, 4));
+      fireEvent.click(screen.getByRole('button', { name: 'Load more recipes' }));
+      expect(await screen.findByText('Unlock 16')).toBeInTheDocument();
+      listing.unmount();
+      // Back: nobody is known yet, the cookie names the reader.
+      Object.assign(authState, { session: null, user: null, isLoading: true });
+    }
+
+    it('holds Load more until the session comes, then asks for the next page as theirs and keeps it', async () => {
+      await leftSignedIn();
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify(createPage(12, false, 16, 12))));
+      vi.stubGlobal('fetch', fetchMock);
+      const view = renderMarketplace(createPage(4, true, 0, 4));
+
+      expect(drawnTitles()).toHaveLength(16);
+      const loadMore = screen.getByRole('button', { name: 'Load more recipes' });
+      expect(loadMore).toBeDisabled();
+      fireEvent.click(loadMore);
+      await act(async () => Promise.resolve());
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      // The session comes, then the reader's own first page.
+      Object.assign(authState, signedIn, { isLoading: false });
+      view.rerender(
+        <MarketplaceBrowser initialPage={createPage(4, true, 0, 4)} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />
+      );
+      expect(drawnTitles()).toHaveLength(16);
+      fireEvent.click(screen.getByRole('button', { name: 'Load more recipes' }));
+      expect(await screen.findByText('Unlock 28')).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/marketplace/resources?offset=16&limit=12',
+        expect.objectContaining({ headers: { Accept: 'application/json', Authorization: 'Bearer token-1' } }),
+      );
+
+      // Kept as theirs: Back again draws all of it.
+      view.unmount();
+      renderMarketplace(createPage(4, true, 0, 4));
+      expect(drawnTitles()).toHaveLength(28);
+    });
+
+    it('draws the listing again as a visitor\'s when nobody turns out to be signed in', async () => {
+      await leftSignedIn();
+      // What a visitor's Load more brings: two recipes the reader's blocks had left out.
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(createPage(2, false, 100, 12)))));
+      const page = createPage(4, true, 0, 4);
+      const view = renderMarketplace(page);
+      expect(drawnTitles()).toHaveLength(16);
+
+      // The session had ended elsewhere: nobody is signed in, and the visitor's first page has not
+      // come (or could not be read).
+      Object.assign(authState, { session: null, user: null, isLoading: false });
+      view.rerender(<MarketplaceBrowser initialPage={page} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />);
+
+      expect(drawnTitles()).toEqual(['Unlock 1', 'Unlock 2', 'Unlock 3', 'Unlock 4']);
+      // Load more goes on as the visitor's, and keeps nothing of the reader's under the visitor.
+      fireEvent.click(screen.getByRole('button', { name: 'Load more recipes' }));
+      expect(await screen.findByText('Unlock 102')).toBeInTheDocument();
+      const visitorsListing = ['Unlock 1', 'Unlock 2', 'Unlock 3', 'Unlock 4', 'Unlock 101', 'Unlock 102'];
+      expect(drawnTitles()).toEqual(visitorsListing);
+      view.unmount();
+      renderMarketplace(createPage(4, true, 0, 4));
+      expect(drawnTitles()).toEqual(visitorsListing);
+    });
   });
 });
 

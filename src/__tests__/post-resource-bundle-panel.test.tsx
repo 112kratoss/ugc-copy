@@ -411,6 +411,25 @@ describe('PostResourceBundlePanel', () => {
     expect(screen.queryByRole('button', { name: /^pay /i })).toBeNull();
   });
 
+  // A Marketplace tile opens the post at its top now, not at #recipe, whose address the sign-in's
+  // way back used to copy (review of #835): the way back names the recipe itself.
+  it.each([
+    ['opened at its top', '/showcase/post-1?from=unlocks&returnTo=%2Fmarketplace%3Fsort%3Drecent'],
+    ['opened at another section', '/showcase/post-1?from=unlocks&returnTo=%2Fmarketplace%3Fsort%3Drecent#comments'],
+  ])('sends a signed-out visitor to sign in and back to the recipe, on a post %s', (_, address) => {
+    window.history.pushState({}, '', address);
+    try {
+      renderPanel();
+      fireEvent.click(screen.getByRole('button', { name: /get free recipe/i }));
+
+      expect(mockPush).toHaveBeenCalledWith(`/login?returnUrl=${encodeURIComponent(
+        '/showcase/post-1?from=unlocks&returnTo=%2Fmarketplace%3Fsort%3Drecent#recipe',
+      )}`);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
   it('shows owner prompt access with buyer-facing context', () => {
     renderPanel({
       viewerIsOwner: true,

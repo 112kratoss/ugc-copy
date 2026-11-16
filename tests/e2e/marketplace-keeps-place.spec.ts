@@ -312,11 +312,14 @@ test.describe('a recipe tile while its picture loads', () => {
     const frame = waiting.locator('xpath=./div[1]');
     const look = await frame.evaluate((element) => ({
       background: getComputedStyle(element).backgroundColor,
+      surface: getComputedStyle(document.documentElement).getPropertyValue('--ui-surface-1').trim(),
       pictureLoaded: Boolean(element.querySelector('img')?.complete),
     }));
     await frame.screenshot({ path: test.info().outputPath('cover-on-its-way.png') });
     expect(look.pictureLoaded, 'the picture is still on its way').toBe(false);
-    expect(look.background).not.toBe('rgb(0, 0, 0)');
+    // The card surface (`--ui-surface-1`, #19191c), drawn: not black, nor see-through to the page.
+    expect(look.surface).toBe('#19191c');
+    expect(look.background).toBe('rgb(25, 25, 28)');
 
     // Then the picture comes, and shows.
     const picture = frame.locator('img');

@@ -52,6 +52,7 @@ import {
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
 import { getCurrentInternalPath } from '@/lib/share';
+import { RECIPE_RETURN_ANCHOR } from '@/lib/pricing-return';
 import { trackProductEvent } from '@/lib/product-analytics';
 import {
   UNLOCKED_RECIPES_PATH,
@@ -632,7 +633,12 @@ export default function PostResourceBundlePanel({
       return true;
     }
 
-    router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}#recipe`))}`);
+    // Back to the recipe after signing in, whatever section the address named (as the top-up's
+    // way back, buildRecipeTopUpHref): a Marketplace tile no longer opens the post at #recipe.
+    const here = getCurrentInternalPath(`/showcase/${postId}`);
+    const hashIndex = here.indexOf('#');
+    const recipe = `${hashIndex >= 0 ? here.slice(0, hashIndex) : here}${RECIPE_RETURN_ANCHOR}`;
+    router.push(`/login?returnUrl=${encodeURIComponent(recipe)}`);
     return false;
   };
 
