@@ -192,7 +192,8 @@ describe('showcase client cache', () => {
 
       expect(readShowcaseClientSnapshotToRestore(cacheKey)).toBeNull();
       expect(hasFreshShowcaseClientSnapshot(cacheKey)).toBe(false);
-      // The home feed reads the same copies, and keeps its own rule.
+      // The plain read still returns it (the expiry and block rules are its own); Home and
+      // Explore both open with the read above (feed-client-snapshot-restore.test.tsx).
       expect(readShowcaseClientSnapshot(cacheKey)).not.toBeNull();
     });
 
