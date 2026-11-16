@@ -10,6 +10,20 @@ const state = vi.hoisted(() => ({
   hasAuthHint: false,
   clientProps: {} as Record<string, Record<string, unknown>>,
   mounts: {} as Record<string, number>,
+  /** What the catalog read answers: a template live, none, or no answer. */
+  templates: 'none' as 'live' | 'none' | 'failed',
+}));
+
+vi.mock('@/lib/live-media-templates', () => ({
+  hasLiveMediaTemplates: async () => {
+    if (state.templates === 'failed') throw new Error('connection refused');
+    return state.templates === 'live';
+  },
+}));
+
+vi.mock('@/lib/server-helpers', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/server-helpers')>()),
+  createServiceClient: () => ({}),
 }));
 
 vi.mock('@/components/RouteAuthBoundary', () => ({
@@ -79,6 +93,24 @@ describe('creator auth return paths', () => {
     state.hasAuthHint = false;
     state.clientProps = {};
     state.mounts = {};
+    state.templates = 'none';
+  });
+
+  // The creators' ways into /templates led to "No templates are live yet" (web sweep, 2026-11-17).
+  it('tells each creator whether a template is live, a remix too, and no when the read fails', async () => {
+    const pages = [['image', CreateImagePage], ['video', CreateVideoPage], ['motion', CreateMotionPage]] as const;
+    const addresses = [{}, { remix: 'gen-1', remixPost: 'post-1' }];
+    for (const [templates, templatesLive] of [['live', true], ['none', false], ['failed', false]] as const) {
+      state.templates = templates;
+      for (const [kind, Page] of pages) {
+        for (const params of addresses) {
+          state.clientProps = {};
+          render(await Page({ searchParams: Promise.resolve(params) }));
+          expect(state.clientProps[kind], `${kind} ${JSON.stringify(params)} with ${templates}`).toMatchObject({ templatesLive });
+          cleanup();
+        }
+      }
+    }
   });
 
   it('carries the remix pair through sign-in on every media tool', async () => {

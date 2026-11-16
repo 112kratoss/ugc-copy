@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateImageClient from '@/app/create-image/CreateImageClient';
+import { CreatorTemplatesTile } from '@/components/CreatorColumn';
 import type { CreatorOpening } from '@/lib/creator-opening';
 import { clearGenerationsOnPage, GenerationStatusRequestError, subscribeToGenerationOnPage } from '@/lib/generation-status-client';
 import type { PersistedImageElementRecord } from '@/lib/persisted-media';
@@ -113,7 +114,13 @@ vi.mock('@/components/AuthProvider', () => ({
 
 // What the Enhance button was last given, which a button answering through what it had when pressed
 // calls, and the newest callbacks of the mounted button, which one keeping them in a ref calls.
-type EnhanceAnswerProps = { onEnhanced: (text: string) => void; onCreditsUpdate: (credits: number) => void; account?: string | null };
+type EnhanceAnswerProps = {
+  onEnhanced: (text: string) => void;
+  onCreditsUpdate: (credits: number) => void;
+  account?: string | null;
+  /** What sits beside Enhance in its row: the Templates tile, or nothing. */
+  leading?: React.ReactNode;
+};
 const enhanceButton = vi.hoisted(() => ({
   props: null as EnhanceAnswerProps | null,
   mounted: null as { current: EnhanceAnswerProps } | null,
@@ -820,6 +827,31 @@ function chooseModel(container: HTMLElement, displayName: string) {
 }
 
 const modelChip = (container: HTMLElement) => container.querySelector('button[aria-haspopup="listbox"]');
+
+describe('CreateImageClient templates', () => {
+  beforeEach(() => {
+    getPersistedImageElementRecordsMock.mockReset();
+    getPersistedImageElementRecordsMock.mockResolvedValue([]);
+    modelCatalogState.missingIds = [];
+    modelCatalogState.error = null;
+    modelCatalogState.summaries = [];
+    window.scrollTo = vi.fn();
+    enhanceButton.props = null;
+  });
+
+  // The tile led to "No templates are live yet" (web sweep, 2026-11-17): Enhance takes its row alone then.
+  it('puts the Templates tile beside Enhance only while a template is live', async () => {
+    const view = render(<CreateImageClient prefill={{}} />);
+    await waitFor(() => expect(enhanceButton.props).not.toBeNull());
+    expect(enhanceButton.props!.leading ?? null).toBeNull();
+    view.unmount();
+
+    enhanceButton.props = null;
+    render(<CreateImageClient prefill={{}} templatesLive />);
+    await waitFor(() => expect(enhanceButton.props).not.toBeNull());
+    expect((enhanceButton.props!.leading as React.ReactElement | undefined)?.type).toBe(CreatorTemplatesTile);
+  });
+});
 
 describe('CreateImageClient model notices', () => {
   beforeEach(() => {

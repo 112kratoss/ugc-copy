@@ -433,7 +433,12 @@ describe('ShowcaseClient save actions', () => {
     // Explore's way into search where the top bar has only a magnifier (search UX audit 2026-11-13, finding 11).
     const entry = screen.getByRole('link', { name: 'Search' });
     expect(entry.getAttribute('href')).toBe('/search');
-    expect(entry.className).toContain('lg:hidden');
+    // Its row is drawn below 1024px, and below 640px holds Browse recipes too (web sweep, 2026-11-17).
+    const row = entry.parentElement!;
+    expect(row.className).toContain('lg:hidden');
+    const phoneBrowse = within(row).getByRole('link', { name: 'Browse recipes' });
+    expect(phoneBrowse.getAttribute('href')).toBe('/marketplace');
+    expect(phoneBrowse.className).toContain('sm:hidden');
     const heading = screen.getByRole('heading', { level: 1, name: 'Explore' });
     expect(entry.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
