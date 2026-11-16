@@ -178,6 +178,11 @@ test('a tile opened in the reel with the pointer and closed with Escape shows no
   await page.keyboard.press('Escape');
   await expect(reel(page)).toBeHidden();
   await expect(openButton(page)).toBeFocused();
+  // Chromium takes focus({ focusVisible: false }): the tile holds focus without the browser's own
+  // keyboard focus (where the option is unknown it would match: the last of these cases),
+  // and it is marked for the tile's rules, as in every browser.
+  expect(await openButton(page).evaluate((element) => element.matches(':focus-visible'))).toBe(false);
+  await expect(openButton(page)).toHaveAttribute('data-quiet-focus', '');
 
   await pointerAway(page);
   await expect.poll(() => controlsOpacity(page), { timeout: 3_000 }).toBe('0');
@@ -200,6 +205,28 @@ test('a tile opened in the reel with the pointer shows its controls again once t
   await expect.poll(() => frameBorderColor(page), { timeout: 3_000 }).toBe(TILE_FOCUS_BORDER);
 });
 
+// Review of #834: a key pressed later with focus still on the tile (Escape again, End) must not bring
+// its controls back, wherever a browser would draw that focus as keyboard focus again: the mark
+// holds until the reader moves on.
+test('a tile given focus back quietly keeps its controls hidden through later keys that do not move focus', async ({ page, context }) => {
+  await openLane(page, context);
+  await openButton(page).click();
+  await expect(reel(page)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(reel(page)).toBeHidden();
+  await expect(openButton(page)).toBeFocused();
+
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('End');
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+  await expect(openButton(page)).toBeFocused();
+  await expect(openButton(page)).toHaveAttribute('data-quiet-focus', '');
+
+  await pointerAway(page);
+  await expect.poll(() => controlsOpacity(page), { timeout: 3_000 }).toBe('0');
+  await expect.poll(() => frameBorderColor(page), { timeout: 3_000 }).not.toBe(TILE_FOCUS_BORDER);
+});
+
 // A browser whose focus() takes no `focusVisible` option (src/app/showcase/reel-focus-return.ts):
 // the tile focus goes back to is marked instead, until the reader moves on by keyboard.
 test('where focus() takes no focusVisible option, a tile closed with Escape is marked quiet until the reader tabs on', async ({ page, context }) => {
@@ -215,6 +242,9 @@ test('where focus() takes no focusVisible option, a tile closed with Escape is m
   await page.keyboard.press('Escape');
   await expect(reel(page)).toBeHidden();
   await expect(openButton(page)).toBeFocused();
+  // Without the option the browser draws the focus given back after a key as keyboard focus...
+  expect(await openButton(page).evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+  // ...and the mark is what keeps the tile's controls and frame quiet.
   await expect(openButton(page)).toHaveAttribute('data-quiet-focus', '');
 
   await pointerAway(page);

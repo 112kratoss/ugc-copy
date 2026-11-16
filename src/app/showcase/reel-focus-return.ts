@@ -7,11 +7,14 @@
  * which browsers draw as keyboard focus: the tile kept its controls once the pointer had left it
  * (review of #834). So a reel opened from an element that did not show keyboard focus gives focus
  * back without showing it: `focus({ focusVisible: false })` where the browser takes that option
- * (Chromium 145 does), and elsewhere the element is marked (`data-quiet-focus`), which the
- * controls and the frame skip until the reader moves on by keyboard or focus leaves it.
+ * (Chromium 145 does), for the browser's own ring, and in every browser the element is marked
+ * (`data-quiet-focus`), which the controls and the frame skip until the reader moves on: a Tab or
+ * an arrow key, a press of the pointer, or focus moving elsewhere in the page. A key that moves
+ * nothing (Escape again, End) leaves it marked, wherever a browser would draw it as keyboard focus
+ * again.
  */
 
-/** On an element given focus back quietly where focus() cannot be told to: the tile's rules skip it. */
+/** On an element given focus back quietly: the tile's rules skip it. */
 export const QUIET_FOCUS_ATTRIBUTE = 'data-quiet-focus';
 
 type FocusOptionsWithVisibility = FocusOptions & { focusVisible?: boolean };
@@ -50,29 +53,39 @@ function markQuietFocus(element: HTMLElement): void {
   element.setAttribute(QUIET_FOCUS_ATTRIBUTE, '');
   const release = () => {
     element.removeAttribute(QUIET_FOCUS_ATTRIBUTE);
-    element.removeEventListener('blur', release);
+    element.removeEventListener('blur', releaseOnFocusMove);
     window.removeEventListener('keydown', releaseOnNavigation, true);
+    window.removeEventListener('pointerdown', release, true);
     quietFocusReleases.delete(element);
   };
-  const releaseOnNavigation = (event: KeyboardEvent) => {
-    if (event.key === 'Tab' || event.key.startsWith('Arrow')) release();
+  // Focus moving elsewhere in the page. The window losing focus (another app) blurs the element
+  // too, and gives it back on return: that keeps the mark.
+  const releaseOnFocusMove = () => {
+    if (element.ownerDocument.hasFocus()) release();
   };
-  element.addEventListener('blur', release);
+  const releaseOnNavigation = (event: KeyboardEvent) => {
+    // An element taken out of the page is let go at the next key, whatever it is. Autofill can
+    // send a keydown with no key.
+    if (!element.isConnected || event.key === 'Tab' || event.key?.startsWith('Arrow')) release();
+  };
+  element.addEventListener('blur', releaseOnFocusMove);
   window.addEventListener('keydown', releaseOnNavigation, true);
+  window.addEventListener('pointerdown', release, true);
   quietFocusReleases.set(element, release);
 }
 
 /** Gives focus back to `element`, showing it only when `showFocus` (the reel was opened from the keyboard). */
 export function returnFocus(element: HTMLElement, { showFocus }: { showFocus: boolean }): void {
-  if (!element.isConnected) return;
+  // The page itself held no focus to give back (nothing was focused, or a browser that does not
+  // focus a pressed button).
+  if (!element.isConnected || element === element.ownerDocument.body) return;
   if (showFocus) {
     element.focus();
     return;
   }
-  if (honoursFocusVisibleOption()) {
-    element.focus({ preventScroll: true, focusVisible: false } as FocusOptionsWithVisibility);
-    return;
-  }
-  markQuietFocus(element);
-  element.focus({ preventScroll: true });
+  element.focus(honoursFocusVisibleOption()
+    ? { preventScroll: true, focusVisible: false } as FocusOptionsWithVisibility
+    : { preventScroll: true });
+  // Marked only once it holds focus: an element that cannot take it has nothing to keep quiet.
+  if (element.ownerDocument.activeElement === element) markQuietFocus(element);
 }
