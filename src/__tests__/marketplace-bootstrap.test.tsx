@@ -19,6 +19,20 @@ vi.mock('next/navigation', async (importOriginal) => ({
   useSearchParams: () => (addressBar.search === null ? null : new URLSearchParams(addressBar.search)),
 }));
 
+// Who the page's auth provider says is looking: the provider's own answer (nobody, outside one)
+// unless a case sets it.
+const viewerState = vi.hoisted(() => ({
+  value: null as null | { session: null; user: { id: string } | null; isLoading: boolean },
+}));
+
+vi.mock('@/components/AuthProvider', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/AuthProvider')>();
+  return {
+    ...actual,
+    useAuth: () => (viewerState.value ? { ...actual.useAuth(), ...viewerState.value } : actual.useAuth()),
+  };
+});
+
 vi.mock('@/app/marketplace/MarketplaceBrowser', () => {
   browserModuleLoaded();
 
@@ -296,7 +310,8 @@ describe('MarketplaceBootstrap', () => {
     );
     expect(screen.getByRole('link', { name: 'View free recipe: Unlock 1' })).toHaveAttribute(
       'href',
-      '/showcase/post-1?from=unlocks&returnTo=%2Fmarketplace%3Fsort%3Drecent#recipe'
+      // At the post's top: no `#recipe` (owner, 2026-11-16).
+      '/showcase/post-1?from=unlocks&returnTo=%2Fmarketplace%3Fsort%3Drecent'
     );
 
     await act(async () => Promise.resolve());
@@ -455,6 +470,57 @@ describe('MarketplaceBootstrap', () => {
 
       expect(screen.queryByTestId('interactive-marketplace-browser')).not.toBeInTheDocument();
       expect(screen.getByText('Unlock 1')).toBeInTheDocument();
+    });
+
+    // Owner's recording, 2026-11-16: signed in, Back drew the first page alone, because the page's
+    // auth provider, mounted again, was still asking who was signed in, and the kept listing was
+    // looked for as a visitor's. The session cookie names the reader meanwhile.
+    describe('for a signed-in reader the page is still asking about', () => {
+      const SESSION_COOKIE = 'sb-project-auth-token';
+
+      afterEach(() => {
+        viewerState.value = null;
+        document.cookie = `${SESSION_COOKIE}=; Max-Age=0; Path=/`;
+        vi.unstubAllEnvs();
+      });
+
+      it('hands the reader\'s kept listing to the browser in the first frame', async () => {
+        await browserCameInThisDocument();
+        rememberMarketplacePages(
+          buildMarketplacePagesKey(marketplaceFiltersKey(INITIAL_FILTERS), 'viewer-1'),
+          4,
+          createPage(16, true),
+        );
+        vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+        const cookieSession = btoa(JSON.stringify({ access_token: 'token', user: { id: 'viewer-1' } }))
+          .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        document.cookie = `${SESSION_COOKIE}=base64-${cookieSession}; Path=/`;
+        viewerState.value = { session: null, user: null, isLoading: true };
+
+        backToListing();
+
+        expect(screen.getByTestId('interactive-marketplace-browser')).toBeInTheDocument();
+        expect(screen.queryByText('Unlock 1')).not.toBeInTheDocument();
+      });
+
+      it('never hands another account\'s kept listing over', async () => {
+        await browserCameInThisDocument();
+        rememberMarketplacePages(
+          buildMarketplacePagesKey(marketplaceFiltersKey(INITIAL_FILTERS), 'someone-else'),
+          4,
+          createPage(16, true),
+        );
+        vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+        const cookieSession = btoa(JSON.stringify({ access_token: 'token', user: { id: 'viewer-1' } }))
+          .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        document.cookie = `${SESSION_COOKIE}=base64-${cookieSession}; Path=/`;
+        viewerState.value = { session: null, user: null, isLoading: true };
+
+        backToListing();
+
+        expect(screen.queryByTestId('interactive-marketplace-browser')).not.toBeInTheDocument();
+        expect(screen.getByText('Unlock 1')).toBeInTheDocument();
+      });
     });
   });
 });

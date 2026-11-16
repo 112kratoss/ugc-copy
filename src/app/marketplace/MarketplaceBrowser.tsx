@@ -34,6 +34,7 @@ import { MARKETPLACE_COMPACT_PAGE_SIZE } from '@/lib/marketplace-resource-list-c
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
 import {
   buildMarketplacePagesKey,
+  marketplacePagesViewer,
   recallMarketplacePages,
   rememberMarketplacePages,
   withRememberedPages,
@@ -125,15 +126,19 @@ export default function MarketplaceBrowser({
   onRetry,
 }: MarketplaceBrowserProps) {
   const router = useRouter();
-  const { session, user } = useAuth();
+  const { session, user, isLoading: isViewerLoading } = useAuth();
   // The signed-in viewer's own recipes, read apart from the cached catalog.
   const viewer = useViewerRecipeState();
   // What "Load more" brought to this listing, kept for the tab: Back from a recipe draws it again
   // in the first render, and the page's height with it, so the reader lands where they were
   // (marketplace-pages-memory; never anything kept before this document loaded, so a page the
-  // server drew hydrates on its first page alone).
+  // server drew hydrates on its first page alone). Read for the viewer the session cookie names
+  // while this page's auth provider is still asking, as the shell's hand-over reads it.
   const listingKey = marketplaceFiltersKey(initialFilters);
-  const pagesKey = buildMarketplacePagesKey(listingKey, user?.id ?? null);
+  const pagesKey = buildMarketplacePagesKey(
+    listingKey,
+    marketplacePagesViewer({ userId: user?.id ?? null, isLoading: isViewerLoading }),
+  );
   const [listing, setListing] = useState(() => openListing(listingKey, initialPage, recallMarketplacePages(pagesKey)));
   const { items, pageInfo } = listing;
   // While the listing's own first page is on its way, what was kept of it stands in for it.
@@ -251,7 +256,13 @@ export default function MarketplaceBrowser({
       }
       const nextListing = { ...listing, items: nextItems, pageInfo: payload.pageInfo ?? pageInfo };
       setListing(nextListing);
-      rememberMarketplacePages(pagesKey, initialPage.items.length, nextListing);
+      // Kept under the account the page was asked for: a page asked without a session is a
+      // visitor's, never drawn for the account the cookie names.
+      rememberMarketplacePages(
+        buildMarketplacePagesKey(listingKey, accessToken ? user?.id ?? null : null),
+        initialPage.items.length,
+        nextListing,
+      );
     } catch (error) {
       if (!controller.signal.aborted && loadMoreAbortControllerRef.current === controller) {
         setLoadError(error instanceof Error ? error.message : 'Could not load more recipes.');
@@ -420,10 +431,12 @@ export default function MarketplaceBrowser({
                 key={asset.id}
                 asset={asset}
                 viewer={viewer}
+                // The post at its top, as every other way in opens it: named after its recipe's
+                // section (#recipe), a post shorter than that opened at its foot, the picture under
+                // the top bar and the title and the way back above the window (owner, 2026-11-16).
                 href={buildShowcaseDetailPath(asset.postId, {
                   from: 'unlocks',
                   returnTo: marketplaceReturnPath,
-                  section: 'resources',
                 })}
                 linkComponent={RecipeTileLink}
               />

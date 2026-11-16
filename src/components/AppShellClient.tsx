@@ -10,7 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname, useSelectedLayoutSegment } from 'next/navigation';
+import { usePathname, useRouter, useSelectedLayoutSegment } from 'next/navigation';
 import {
   memo,
   useCallback,
@@ -175,6 +175,26 @@ function hashHasTarget(hash: string) {
     || document.getElementsByName(fragment).length > 0;
 }
 
+// The side navigation's places this page load has prefetched, each once.
+const navIntentPrefetched = new Set<string>();
+
+/**
+ * A place of the side navigation, prefetched when the reader shows they may go there: the pointer
+ * on it, or the keyboard's focus. The links draw with `prefetch={false}`, so nothing is fetched as
+ * the page paints (#7, "defer nonessential route prefetches": every place in view, on every page,
+ * on every load); with nothing prefetched, a press waited on the server with only the progress bar
+ * to show for it (owner's recording, 2026-11-16: about a second to Marketplace). Once per place per
+ * page load, and never for the place already open.
+ */
+function useNavIntentPrefetch(href: string, active: boolean) {
+  const router = useRouter();
+  return useCallback(() => {
+    if (active || navIntentPrefetched.has(href)) return;
+    navIntentPrefetched.add(href);
+    router.prefetch(href);
+  }, [active, href, router]);
+}
+
 function DesktopNavItem({
   item,
   active,
@@ -185,11 +205,14 @@ function DesktopNavItem({
   onNavigate: AppNavClickHandler;
 }) {
   const Icon = item.icon;
+  const prefetchOnIntent = useNavIntentPrefetch(item.href, active);
 
   return (
     <Link
       href={item.href}
       prefetch={false}
+      onPointerEnter={prefetchOnIntent}
+      onFocus={prefetchOnIntent}
       aria-current={active ? 'page' : undefined}
       // Every control of a tab names it, for a page's leave guard: pressed
       // while the tab is open, it goes nowhere (getReselectableTabId).

@@ -1,4 +1,4 @@
-import type { ComponentType, ReactNode } from 'react';
+import { useCallback, useState, type ComponentType, type ReactNode } from 'react';
 import { Play, ShoppingBag } from 'lucide-react';
 
 import {
@@ -52,7 +52,11 @@ interface MarketplaceRecipeTileProps {
  * cover in a 4:5 frame, and under it the title and date, the creator, and the
  * recipe's price and kinds. The shell and the interactive list both draw this,
  * so nothing moves when the list takes over. The whole tile is one link to the
- * post's recipe, which is why the creator row has no link of its own here.
+ * post, which is why the creator row has no link of its own here.
+ *
+ * The frame is a surface of its own, not black, while its picture is on its
+ * way (owner's recording, 2026-11-16: a recipe "Load more" brought stayed solid
+ * black until its picture came).
  */
 export function MarketplaceRecipeTile({
   asset,
@@ -78,7 +82,7 @@ export function MarketplaceRecipeTile({
       aria-label={`${unlockLabel}: ${postTitle}`}
       className="group ui-focus-ring flex min-w-0 flex-col rounded-ui-2xl"
     >
-      <div className="relative aspect-[4/5] overflow-hidden rounded-ui-2xl border border-[var(--ui-border-subtle)] bg-black transition duration-200 group-hover:border-[rgba(255,122,89,0.28)] group-hover:shadow-[var(--ui-shadow-card-hover)]">
+      <div className="relative aspect-[4/5] overflow-hidden rounded-ui-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 group-hover:border-[rgba(255,122,89,0.28)] group-hover:shadow-[var(--ui-shadow-card-hover)]">
         <RecipeTileCover asset={asset} />
 
         {isClip ? (
@@ -141,17 +145,90 @@ export function MarketplaceRecipeTile({
   );
 }
 
+// The covers this document has drawn, by address. Drawn again (Back to the listing, the list taking
+// over from the shell), they are pictures the browser already has: shown at once, with no
+// placeholder and no fade. Bounded, oldest out first.
+const drawnCovers = new Set<string>();
+const DRAWN_COVERS_LIMIT = 500;
+
+function noteDrawnCover(src: string) {
+  drawnCovers.delete(src);
+  drawnCovers.add(src);
+  if (drawnCovers.size > DRAWN_COVERS_LIMIT) {
+    drawnCovers.delete(drawnCovers.values().next().value!);
+  }
+}
+
+/**
+ * `shown`: drawn as it comes, as the server's HTML draws it, and as a picture the browser had at
+ * mount is drawn; `waiting`: on its way, with the frame's surface and a shimmer in its place;
+ * `arrived`: came after the tile was drawn, and fades in; `failed`: no source loaded.
+ */
+type CoverState = 'shown' | 'waiting' | 'arrived' | 'failed';
+
+/**
+ * A picture cover. Only one that is still loading once the tile is on the page waits behind the
+ * shimmer and fades in when it lands (200 ms; reduced motion shows it at once). One the browser
+ * already has, complete at mount or drawn before in this document, never fades in again.
+ */
+function RecipeTileImage({ previewSrc, fallbackSrc, alt }: { previewSrc: string; fallbackSrc: string; alt: string }) {
+  const [state, setState] = useState<CoverState>('shown');
+  const drawnBefore = drawnCovers.has(previewSrc);
+  const imageRef = useCallback((image: HTMLImageElement | null) => {
+    if (!image) return;
+    // Complete as the page hydrates or the tile mounts: the browser had it (it may have loaded
+    // before the page's script ran, with no load event left for React to hear), or it failed.
+    if (image.complete) {
+      if (image.naturalWidth > 0) noteDrawnCover(previewSrc);
+      return;
+    }
+    if (!drawnCovers.has(previewSrc)) setState((current) => (current === 'shown' ? 'waiting' : current));
+  }, [previewSrc]);
+
+  return (
+    <>
+      {state === 'waiting' ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 -translate-x-full animate-[skeleton-shimmer_1.5s_linear_infinite] bg-gradient-to-r from-transparent via-white/5 to-transparent motion-reduce:animate-none"
+        />
+      ) : null}
+      <OptimizedPreviewImage
+        previewSrc={previewSrc}
+        fallbackSrc={fallbackSrc}
+        alt={alt}
+        sizes={TILE_IMAGE_SIZES}
+        // Already in the browser: no wait for the lazy loader to find it on screen.
+        loading={drawnBefore ? 'eager' : 'lazy'}
+        imageRef={imageRef}
+        onLoad={() => {
+          noteDrawnCover(previewSrc);
+          setState((current) => (current === 'waiting' ? 'arrived' : current));
+        }}
+        onError={() => setState('failed')}
+        className={`object-cover ${
+          state === 'waiting'
+            ? 'opacity-0'
+            : state === 'arrived'
+              ? 'opacity-100 transition-opacity duration-200 ease-out motion-reduce:transition-none'
+              : ''
+        }`}
+      />
+    </>
+  );
+}
+
 function RecipeTileCover({ asset }: { asset: MarketplaceResourceListItem }) {
   const post = asset.post;
 
   if (post?.mediaUrl && post.mediaKind === 'image') {
     return (
-      <OptimizedPreviewImage
+      <RecipeTileImage
+        // A cover of its own for each picture: what one was waiting for is no other's.
+        key={post.mediaPreviewUrl ?? post.mediaUrl}
         previewSrc={post.mediaPreviewUrl ?? post.mediaUrl}
         fallbackSrc={post.mediaUrl}
         alt={post.title}
-        sizes={TILE_IMAGE_SIZES}
-        className="object-cover"
       />
     );
   }

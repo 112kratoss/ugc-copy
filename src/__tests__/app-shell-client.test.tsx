@@ -29,7 +29,7 @@ const scrollToMock = vi.fn((options: ScrollToOptions | number) => {
   mockedScrollY = typeof options === 'number' ? options : options.top ?? 0;
 });
 
-const routerMocks = vi.hoisted(() => ({ push: vi.fn() }));
+const routerMocks = vi.hoisted(() => ({ push: vi.fn(), prefetch: vi.fn() }));
 
 vi.mock('next/navigation', () => ({
   usePathname: () => mockedPathname,
@@ -605,6 +605,40 @@ describe('AppShellClient', () => {
     ]) {
       expect(link).toHaveAttribute('data-prefetch', 'false');
     }
+  });
+
+  // Owner's recording, 2026-11-16: the side navigation's Marketplace took about a second, all of it
+  // waiting on the server, since nothing is prefetched as the page paints. The place the reader points
+  // at or focuses is prefetched then, once per page load.
+  it('prefetches a side-navigation place once, when the reader points at it or focuses it', async () => {
+    // A fresh module: the places prefetched are counted per page load, in the module.
+    vi.resetModules();
+    const { default: FreshAppShellClient } = await import('@/components/AppShellClient');
+    mockedPathname = '/showcase';
+    routerMocks.prefetch.mockClear();
+    render(
+      <FreshAppShellClient>
+        <div>Page content</div>
+      </FreshAppShellClient>
+    );
+    expect(routerMocks.prefetch).not.toHaveBeenCalled();
+
+    const sidebar = screen.getByRole('complementary', { name: 'Primary navigation' });
+    const marketplace = within(sidebar).getByRole('link', { name: 'Marketplace' });
+    fireEvent.pointerEnter(marketplace);
+    fireEvent.focus(marketplace);
+    fireEvent.pointerEnter(marketplace);
+    expect(routerMocks.prefetch.mock.calls).toEqual([['/marketplace']]);
+
+    fireEvent.focus(within(sidebar).getByRole('link', { name: 'Studio' }));
+    expect(routerMocks.prefetch.mock.calls).toEqual([['/marketplace'], ['/creations']]);
+
+    // The place already open is not fetched again.
+    fireEvent.pointerEnter(within(sidebar).getByRole('link', { name: 'Explore' }));
+    expect(routerMocks.prefetch).toHaveBeenCalledTimes(2);
+    // Nor is anything prefetched for the bottom navigation, which keeps its links as they were.
+    fireEvent.pointerEnter(within(screen.getByRole('navigation', { name: 'Primary mobile navigation' })).getByRole('link', { name: 'You' }));
+    expect(routerMocks.prefetch).toHaveBeenCalledTimes(2);
   });
 
   it('leaves a tab opened from another page to Next and scrolls an active tab to the top', () => {

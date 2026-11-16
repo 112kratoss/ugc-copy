@@ -5,6 +5,7 @@ import {
   MARKETPLACE_PAGES_MEMORY_MAX_ITEMS,
   MARKETPLACE_PAGES_MEMORY_MAX_LISTINGS,
   MARKETPLACE_PAGES_MEMORY_TTL_MS,
+  marketplacePagesViewer,
   recallMarketplacePages,
   rememberMarketplacePages,
   takeBlockedCreatorOffMarketplacePages,
@@ -65,6 +66,45 @@ describe('a Marketplace listing kept for the tab', () => {
 
     expect(recallMarketplacePages(buildMarketplacePagesKey('free/all//recent/', null))).toBeNull();
     expect(recallMarketplacePages(buildMarketplacePagesKey('all/all//recent/', 'viewer-1'))).toBeNull();
+  });
+
+  // Owner's recording, 2026-11-16: signed in, Back drew the first page alone, as the page's auth
+  // provider was still asking who was signed in and the listing was looked for as a visitor's.
+  describe('for the viewer the page can name', () => {
+    const SESSION_COOKIE = 'sb-project-auth-token';
+    const session = (userId: string) => `base64-${btoa(JSON.stringify({ access_token: 'token', user: { id: userId } }))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
+
+    afterEach(() => {
+      document.cookie = `${SESSION_COOKIE}=; Max-Age=0; Path=/`;
+      vi.unstubAllEnvs();
+    });
+
+    it('is the signed-in viewer, once the page knows them', () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+      document.cookie = `${SESSION_COOKIE}=${session('cookie-viewer')}; Path=/`;
+
+      expect(marketplacePagesViewer({ userId: 'viewer-1', isLoading: false })).toBe('viewer-1');
+      expect(marketplacePagesViewer({ userId: 'viewer-1', isLoading: true })).toBe('viewer-1');
+    });
+
+    it('is the account the session cookie names while the page is still asking', () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+      document.cookie = `${SESSION_COOKIE}=${session('viewer-1')}; Path=/`;
+      rememberMarketplacePages(buildMarketplacePagesKey('all/all//recent/', 'viewer-1'), 2, pages(['a', 'b', 'c'], false));
+
+      const viewer = marketplacePagesViewer({ userId: null, isLoading: true });
+      expect(viewer).toBe('viewer-1');
+      expect(ids(recallMarketplacePages(buildMarketplacePagesKey('all/all//recent/', viewer)))).toEqual(['a', 'b', 'c']);
+    });
+
+    it('is a visitor once the page has found nobody signed in, whatever the cookie says, or with no cookie', () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+      expect(marketplacePagesViewer({ userId: null, isLoading: true })).toBeNull();
+
+      document.cookie = `${SESSION_COOKIE}=${session('viewer-1')}; Path=/`;
+      expect(marketplacePagesViewer({ userId: null, isLoading: false })).toBeNull();
+    });
   });
 
   it('passes over a listing kept longer than ten minutes ago', () => {

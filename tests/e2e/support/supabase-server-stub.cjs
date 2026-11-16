@@ -25,7 +25,10 @@
 // POST /api/search/opened's three (its rate limit, by its scope: allowed, but for one network
 // address that has had its share; the day's visitor key; the insert of the opened result). And the
 // E2E user's recipe sales page, /marketplace/sell: two free recipes on text posts of theirs
-// (fixtures/seller-recipes.json), with no unlock orders and no deleted posts.
+// (fixtures/seller-recipes.json), with no unlock orders and no deleted posts. And the storefront,
+// /marketplace: its first page, four free recipes on picture posts by a creator of their own and a
+// fifth the page reads to know there are more (fixtures/marketplace-recipes.json); its Tool filter
+// reads the tools catalog, answered with no rows (below), which the page draws as the app's own list.
 // A page added here brings each of its reads, matched by method, path and the filters that name
 // its own rows: a whole table answered with no rows would change what every other page draws.
 //
@@ -70,10 +73,17 @@ const searchSuggestions = require('../fixtures/search-suggestions.json');
 // the real proxy and the real /api/search/starter and read the headers of its 200.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const searchStarter = require('../fixtures/search-starter.json');
+// The storefront's first page, newest first: four free recipes on picture posts and the fifth that
+// says more follow, by one creator. /marketplace reads them in getMarketplaceResourceList
+// (src/lib/post-resource-bundles-server.ts); marketplace-keeps-place.spec.ts draws it.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const marketplaceRecipes = require('../fixtures/marketplace-recipes.json');
 // In the order the page asks for them: its recipes' posts as its read lists the recipes, newest
 // first, and the posts' covers as that read answers (the fixture's posts are in the same order).
 const sellerPostIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.post_id).join(',')})`;
 const sellerBundleIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.id).join(',')})`;
+const marketplacePostIds = `in.(${marketplaceRecipes.posts.map((post) => post.id).join(',')})`;
+const marketplaceBundleIds = `in.(${marketplaceRecipes.bundles.map((bundle) => bundle.id).join(',')})`;
 
 const HOST = 'example.supabase.co';
 
@@ -394,6 +404,57 @@ const READS = [
     methods: ['GET'],
     path: '/rest/v1/post_deletion_audits',
     filters: { owner_user_id: `eq.${sellerRecipes.bundles[0].owner_user_id}`, bundle_access_mode: 'not.is.null' },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // getMarketplaceResourceListBase: the storefront's first page (four, and one more to know more
+    // follow), as the page and the list API ask for it.
+    methods: ['POST'],
+    path: '/rest/v1/rpc/list_marketplace_resource_bundles',
+    body: {
+      p_access_filter: 'all',
+      p_resource_filter: 'all',
+      p_tool_slug: null,
+      p_query: null,
+      p_sort: 'recent',
+      p_offset: 0,
+      p_limit: marketplaceRecipes.bundles.length,
+    },
+    answer: () => json(marketplaceRecipes.bundles),
+  },
+  {
+    // hydrateRecipes: none of their posts is marked NSFW (loadNsfwPostIds)...
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { select: 'id,is_nsfw', id: marketplacePostIds },
+    answer: () => json(marketplaceRecipes.posts.map((post) => ({ id: post.id, is_nsfw: false }))),
+  },
+  {
+    // ...their seller (loadProfileMap)...
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `in.(${marketplaceRecipes.creator.id})` },
+    answer: () => json([marketplaceRecipes.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // ...their posts (loadLinkedPostMap)...
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: marketplacePostIds, review_status: 'eq.visible' },
+    answer: () => json(marketplaceRecipes.posts, { 'content-range': `0-${marketplaceRecipes.posts.length - 1}/${marketplaceRecipes.posts.length}` }),
+  },
+  {
+    // ...whose covers are one picture each, with its preview (loadPostMediaItemsMap)...
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: marketplacePostIds },
+    answer: () => json(marketplaceRecipes.media, { 'content-range': `0-${marketplaceRecipes.media.length - 1}/${marketplaceRecipes.media.length}` }),
+  },
+  {
+    // ...and no revision since the recipes went up (loadLatestContentRevisionTimes).
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundle_revisions',
+    filters: { bundle_id: marketplaceBundleIds },
     answer: () => json([], { 'content-range': '*/0' }),
   },
 ];
