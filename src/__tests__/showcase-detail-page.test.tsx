@@ -108,10 +108,16 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 vi.mock('@/app/showcase/[id]/ShowcaseDetailActions', () => ({
-  default: (props: { postId: string; viewerIsOwner: boolean }) => {
+  default: (props: { postId: string; ownerTools: string | null }) => {
     showcaseDetailActionsPropsMock(props);
     return (
-      <div data-testid="showcase-detail-actions" data-owner-tools={String(props.viewerIsOwner)}>{props.postId}</div>
+      <div
+        data-testid="showcase-detail-actions"
+        data-owner-tools={String(props.ownerTools === 'ready')}
+        data-owner-tools-state={props.ownerTools ?? 'none'}
+      >
+        {props.postId}
+      </div>
     );
   },
 }));
@@ -1005,6 +1011,125 @@ describe('Showcase detail page', () => {
         <ReportPostButton postId={POST_ID} creator={{ id: 'user"] *{display:none} [x="', name: 'Creator Name' }} />,
       );
       expect(html).not.toContain('Report user');
+      expect(html).not.toContain('<style');
+    });
+  });
+
+  // Sweep of 2026-11-17 (build 941e2a55b): on their own post, opened by a client navigation, the
+  // creator saw "Report post or recipe" where their tools go for about 16 frames, until the session
+  // check named them; on a load, until the page's script had run and the check had ended.
+  describe("the creator's own rail", () => {
+    const AUTH_COOKIE = 'sb-project-ref-auth-token';
+    const openPost = () => ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) });
+    const reportRow = () => screen.queryByRole('button', { name: 'Report post or recipe' });
+    const ownerTools = () => screen.getByTestId('showcase-detail-actions').getAttribute('data-owner-tools-state');
+    /** A session cookie as @supabase/ssr writes it, naming its account. */
+    function holdSessionCookieOf(userId: string) {
+      const session = Buffer.from(JSON.stringify({ access_token: 'cookie-token', user: { id: userId } }))
+        .toString('base64url');
+      document.cookie = `${AUTH_COOKIE}=base64-${session}; Path=/`;
+    }
+
+    beforeEach(() => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project-ref.supabase.co');
+      clientAuth.current = { session: null, user: null, isLoading: true };
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      document.cookie = `${AUTH_COOKIE}=; Max-Age=0; Path=/`;
+      vi.unstubAllEnvs();
+    });
+
+    it('draws the creator their tools, inert, and no report row while a cookie naming them is checked', async () => {
+      holdSessionCookieOf('user-1');
+      const { rerender } = render(await openPost());
+      expect(ownerTools()).toBe('checking');
+      expect(reportRow()).not.toBeInTheDocument();
+
+      signInAs('user-1');
+      rerender(await openPost());
+      expect(ownerTools()).toBe('ready');
+      expect(reportRow()).not.toBeInTheDocument();
+    });
+
+    it('keeps the report row, and no Owner tools, for anyone else while their cookie is checked', async () => {
+      holdSessionCookieOf('user-2');
+      const { rerender } = render(await openPost());
+      expect(ownerTools()).toBe('none');
+      expect(reportRow()).toBeInTheDocument();
+
+      signInAs('user-2');
+      rerender(await openPost());
+      expect(ownerTools()).toBe('none');
+      expect(reportRow()).toBeInTheDocument();
+    });
+
+    it("draws a check that outlasts its deadline as a visitor's rail, and the tools once a late answer names the creator", async () => {
+      holdSessionCookieOf('user-1');
+      const page = await openPost();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: performance.now() };
+      const { rerender } = render(page);
+      expect(ownerTools()).toBe('checking');
+
+      act(() => {
+        vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS);
+      });
+      expect(ownerTools()).toBe('none');
+      expect(reportRow()).toBeInTheDocument();
+
+      vi.useRealTimers();
+      signInAs('user-1');
+      rerender(await openPost());
+      expect(ownerTools()).toBe('ready');
+      expect(reportRow()).not.toBeInTheDocument();
+    });
+
+    // The page is drawn ahead of time for every viewer, and no cookie can be read on the server.
+    it("draws both in the server's HTML: the root element's mark shows the creator their tools and anyone else the row, before the first paint", async () => {
+      const root = document.documentElement;
+      onTestFinished(() => root.removeAttribute('data-auth-user'));
+      const page = await openPost();
+      const container = document.createElement('div');
+      container.innerHTML = renderToString(page);
+      document.body.appendChild(container);
+      onTestFinished(() => container.remove());
+
+      expect(within(container).getByTestId('showcase-detail-actions')).toHaveAttribute('data-owner-tools-state', 'unread');
+      const reportRows = container.querySelector('[data-post-report-rows="user-1"]') as HTMLElement;
+      expect(within(reportRows).getByRole('button', { name: 'Report post or recipe' })).toBeInTheDocument();
+      // Owner tools as ShowcaseDetailActions marks them in that HTML (showcase-detail-actions.test.tsx).
+      const tools = document.createElement('details');
+      tools.setAttribute('data-post-owner-tools', 'user-1');
+      reportRows.before(tools);
+      const shown = (element: HTMLElement) => window.getComputedStyle(element).display !== 'none';
+
+      // A visitor, and another account.
+      expect([shown(tools), shown(reportRows)]).toEqual([false, true]);
+      root.setAttribute('data-auth-user', 'user-2');
+      expect([shown(tools), shown(reportRows)]).toEqual([false, true]);
+      // The creator.
+      root.setAttribute('data-auth-user', 'user-1');
+      expect([shown(tools), shown(reportRows)]).toEqual([true, false]);
+
+      tools.remove();
+      const consoleError = vi.spyOn(console, 'error');
+      render(page, { container, hydrate: true });
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    it("draws the report row and no Owner tools in the server's HTML for a creator a style rule cannot name", async () => {
+      const detail = await getPublicPostDetailMock(POST_ID);
+      getPublicPostDetailMock.mockResolvedValueOnce({
+        ...detail,
+        creator: { id: 'user"] *{display:none} [x="', username: 'creator-name', name: 'Creator Name', avatar: null },
+      });
+      const html = renderToString(await openPost());
+
+      expect(html).toContain('Report post or recipe');
+      expect(html).toContain('data-owner-tools-state="none"');
+      expect(html).not.toContain('data-post-report-rows=');
       expect(html).not.toContain('<style');
     });
   });

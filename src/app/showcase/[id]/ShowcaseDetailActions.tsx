@@ -17,13 +17,25 @@ import { rememberOwnerPostVisibility } from '@/lib/owner-page-edits';
 import type { PostVisibility } from '@/lib/post-lifecycle-client';
 import { getCurrentInternalPath } from '@/lib/share';
 
+/**
+ * The creator's Owner tools, by what the page knows of who is looking (`ownership` in
+ * `useShowcasePostViewer`): `ready` once the session check names the creator; `checking` while the
+ * browser's session cookie names them and the check has not ended; `unread` in the server's HTML
+ * and the render that hydrates it, shown only where the root element names the creator (the
+ * page's rule for `data-post-owner-tools`). Inert until `ready`, as they act with the session.
+ */
+export type ShowcaseOwnerTools = 'ready' | 'checking' | 'unread';
+
 interface ShowcaseDetailActionsProps {
   postId: string;
   generationId: string | null;
   title: string;
   creatorUsername: string | null;
   visibility: 'public' | 'unlisted';
-  viewerIsOwner: boolean;
+  /** Null for anyone but the post's creator. */
+  ownerTools: ShowcaseOwnerTools | null;
+  /** The creator's account, which marks `unread` tools for the page's rule. */
+  ownerToolsMark?: string | null;
   hasResourceBundle: boolean;
   /** The owner's bundle, so lifecycle policy can see what a change affects. */
   bundle?: PostLifecycleTarget['bundle'];
@@ -35,7 +47,8 @@ export default function ShowcaseDetailActions({
   title,
   creatorUsername,
   visibility,
-  viewerIsOwner,
+  ownerTools,
+  ownerToolsMark = null,
   hasResourceBundle,
   bundle = null,
 }: ShowcaseDetailActionsProps) {
@@ -101,7 +114,7 @@ export default function ShowcaseDetailActions({
   const lifecyclePending = postLifecycle.pendingAction(postId);
 
   return (
-    <div className="space-y-4">
+    <div>
       <div className="grid gap-2 sm:grid-cols-2">
         {creatorUsername ? (
           <Link
@@ -121,10 +134,19 @@ export default function ShowcaseDetailActions({
         </Link>
       </div>
 
-      {viewerIsOwner ? (
+      {ownerTools ? (
         // Chrome-less: the rail card already draws the border, so a nested
-        // card here would inset this row from every other one.
-        <details className="group -mx-5 -mb-5 border-t border-white/8 sm:-mx-6 sm:-mb-6">
+        // card here would inset this row from every other one. Drawn as they
+        // stay from the first frame, and inert while the session is checked:
+        // closed, they cannot be opened, nor act without it. Their gap is their
+        // own (`mt-4`): hidden in the server's HTML from anyone but the creator,
+        // they must leave the buttons above as they are (a `space-y` parent
+        // spaced the buttons from them even then).
+        <details
+          className="group -mx-5 -mb-5 mt-4 border-t border-white/8 sm:-mx-6 sm:-mb-6"
+          inert={ownerTools !== 'ready'}
+          data-post-owner-tools={ownerTools === 'unread' && ownerToolsMark ? ownerToolsMark : undefined}
+        >
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-3.5 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.03] sm:px-6 [&::-webkit-details-marker]:hidden">
             <span>Owner tools</span>
             <span className="text-xs font-medium text-zinc-500 group-open:hidden">Edit, visibility, archive</span>

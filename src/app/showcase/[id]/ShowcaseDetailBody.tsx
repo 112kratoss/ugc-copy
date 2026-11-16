@@ -7,6 +7,7 @@ import { BookText, ShoppingBag } from 'lucide-react';
 
 import { InviteHandoffBar } from '@/components/InviteHandoffBar';
 import PostCommentAvatar from '@/components/PostCommentAvatar';
+import { APP_SHELL_AUTH_USER_ATTRIBUTE } from '@/lib/app-shell-account-restore';
 import {
   getPostFeedTitle,
   getPostMadeWithLabel,
@@ -60,6 +61,22 @@ function formatResourceKinds(kinds: PostResourceKind[]): string {
 
 function normalizeComparableText(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * The rail in the server's HTML draws both the creator's Owner tools and everyone else's report
+ * rows. The root element names the account the session cookie holds before the first paint
+ * (`data-auth-user`, app-shell-account-restore.ts), and these rules show the creator their tools
+ * and everyone else the rows. `creatorId` is one a style rule can name as it stands
+ * (`canStyleRuleNameAuthUser`).
+ */
+function ownerRailRules(creatorId: string): string {
+  const creatorsBrowser = `html[${APP_SHELL_AUTH_USER_ATTRIBUTE}="${creatorId}"]`;
+  return [
+    `[data-post-owner-tools="${creatorId}"]{display:none}`,
+    `${creatorsBrowser} [data-post-owner-tools="${creatorId}"]{display:block}`,
+    `${creatorsBrowser} [data-post-report-rows="${creatorId}"]{display:none}`,
+  ].join('');
 }
 
 function getPostTypeLabel({
@@ -127,7 +144,17 @@ export default function ShowcaseDetailBody({
     pageRemixCredit: detail.remixCredit ?? null,
   });
   // For the owner, the visibility they just saved here: the cached page may not have caught up.
-  const { bundle, lockedViewer, viewerIsOwner, deliveryId, returnContext, visibility } = viewer;
+  const { bundle, lockedViewer, ownership, deliveryId, returnContext, visibility } = viewer;
+  // The creator's rail from the first frame, whatever the session check has said so far: their
+  // tools, and no report of their own post, which other readers get (`ShowcasePostOwnership`).
+  const ownerTools = ownership === 'owner'
+    ? 'ready'
+    : ownership === 'owner-checking'
+      ? 'checking'
+      : ownership === 'unread'
+        ? 'unread'
+        : null;
+  const drawsReportRows = ownership === 'unread' || ownership === 'other';
   // The rail ends inside the window: it is told where its top is.
   usePostRailTop(layoutRef, `${detail.id}:${viewer.blocked ? 'blocked' : 'drawn'}`);
   const previewKinds = bundle?.lockedPreview?.resourceKinds ?? bundle?.resourceKinds ?? [];
@@ -452,6 +479,8 @@ export default function ShowcaseDetailBody({
             className="canonical-post-actions flex min-w-0 flex-col gap-4"
           >
             <div className="overflow-hidden rounded-3xl border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.86),rgba(10,10,12,0.9))] shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+              {/* Ahead of the rows it picks between, so none is painted before it applies. */}
+              {ownership === 'unread' && detail.creator.id ? <style>{ownerRailRules(detail.creator.id)}</style> : null}
               {/*
                 * A pointer, not a pitch: the recipe is presented once, in the
                 * document column, under the post — this sticky one-liner keeps
@@ -488,7 +517,8 @@ export default function ShowcaseDetailBody({
                   title={displayTitle}
                   creatorUsername={detail.creator.username}
                   visibility={visibility}
-                  viewerIsOwner={viewerIsOwner}
+                  ownerTools={ownerTools}
+                  ownerToolsMark={detail.creator.id}
                   hasResourceBundle={Boolean(bundle)}
                   bundle={bundle
                     ? {
@@ -504,16 +534,19 @@ export default function ShowcaseDetailBody({
               </div>
 
               {/* Not on the creator's own post: the feed card's menu and the app
-                  leave it out there too, and the server refuses the report. */}
-              {viewerIsOwner ? null : (
-                <ReportPostButton
-                  postId={detail.id}
-                  bundleId={bundle?.id ?? null}
-                  creator={detail.creator}
-                  deliveryId={deliveryId}
-                  onCreatorBlocked={viewer.markCreatorBlocked}
-                />
-              )}
+                  leave it out there too, and the server refuses the report. In the
+                  server's HTML the creator's browser hides it (`ownerRailRules`). */}
+              {drawsReportRows ? (
+                <div data-post-report-rows={ownership === 'unread' ? detail.creator.id ?? undefined : undefined}>
+                  <ReportPostButton
+                    postId={detail.id}
+                    bundleId={bundle?.id ?? null}
+                    creator={detail.creator}
+                    deliveryId={deliveryId}
+                    onCreatorBlocked={viewer.markCreatorBlocked}
+                  />
+                </div>
+              ) : null}
             </div>
 
             {commentsAreOpen && !isNsfwCovered ? (

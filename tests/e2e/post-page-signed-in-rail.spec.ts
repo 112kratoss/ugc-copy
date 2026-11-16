@@ -24,6 +24,11 @@ const POST_PATH = `/showcase/${POST_ID}`;
 const TITLE = freeRecipePost.post.title;
 const COMMENT = 'The light on the water is perfect.';
 
+/** A post the page draws: its id, address, title and creator. */
+type DrawnPost = { id: string; path: string; title: string; creatorId: string };
+/** The post with a free recipe, which the recording's posts were. */
+const RECIPE_POST: DrawnPost = { id: POST_ID, path: POST_PATH, title: TITLE, creatorId: freeRecipePost.creator.id };
+
 test.describe.configure({ timeout: 180_000 });
 
 function base64Url(text: string) {
@@ -77,11 +82,19 @@ const postCreator = {
   user_metadata: { name: freeRecipePost.creator.display_name },
 };
 
+/** The account's profile row, which the top bar reads its name, picture and balance from. */
+type ProfileRow = { display_name: string | null; avatar_url: string | null; credits: number; promotional_credits: number };
+const WORKFLOW_PROFILE: ProfileRow = { display_name: 'Workflow User', avatar_url: null, credits: 22, promotional_credits: 0 };
+
 /**
  * Signed in as a browser is: a session cookie for the placeholder project, sent with every request,
  * and no E2E bypass, which would hand the page's provider its session at once.
  */
-async function signIn(context: BrowserContext, account: typeof user = user) {
+async function signIn(
+  context: BrowserContext,
+  account: Omit<typeof user, 'user_metadata'> & { user_metadata: Record<string, unknown> } = user,
+  profile: ProfileRow = WORKFLOW_PROFILE,
+) {
   const checks = sessionChecks();
   const header = base64Url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = base64Url(JSON.stringify({
@@ -107,8 +120,7 @@ async function signIn(context: BrowserContext, account: typeof user = user) {
     if (pathname === '/auth/v1/token') return route.fulfill({ json: session });
     const single = (route.request().headers().accept ?? '').includes('vnd.pgrst.object');
     if (pathname === '/rest/v1/profiles') {
-      const row = { display_name: 'Workflow User', avatar_url: null, credits: 22, promotional_credits: 0 };
-      return route.fulfill({ json: single ? row : [row] });
+      return route.fulfill({ json: single ? profile : [profile] });
     }
     if (pathname.startsWith('/rest/v1/')) return route.fulfill(single ? { status: 406, json: {} } : { json: [] });
     return route.fulfill({ status: 404, json: {} });
@@ -120,14 +132,14 @@ async function signIn(context: BrowserContext, account: typeof user = user) {
  * Every API call unanswered but the post's thread: one comment by someone else. `reads` gets the
  * Authorization of each read of the thread, null for a visitor's.
  */
-async function answerApi(page: Page, reads: Array<string | null> = []) {
+async function answerApi(page: Page, reads: Array<string | null> = [], post: DrawnPost = RECIPE_POST) {
   await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { error: 'Not answered offline' } }));
-  await page.route(`**/api/showcase/posts/${POST_ID}/comments**`, (route) => {
+  await page.route(`**/api/showcase/posts/${post.id}/comments**`, (route) => {
     reads.push(route.request().headers().authorization ?? null);
     return route.fulfill({
       json: {
-        postId: POST_ID,
-        postCreatorId: freeRecipePost.creator.id,
+        postId: post.id,
+        postCreatorId: post.creatorId,
         commentCount: 1,
         comments: [{
           id: 'c-1',
@@ -155,7 +167,13 @@ type Frame = {
   commentsOffset: number | null;
   signInShown: boolean;
   reportUserShown: boolean;
+  /** "Report post or recipe", which is everyone's but the post's creator's. */
+  reportPostShown: boolean;
+  /** The creator's own row, "Owner tools", or its place. */
+  ownerToolsShown: boolean;
   composerShown: boolean;
+  /** The initials on the composer's avatar, "" for none; null while there is no composer. */
+  composerInitials: string | null;
   /** The thread's comments drawn. */
   comments: number;
 };
@@ -178,6 +196,13 @@ const RECORDER = `(() => {
         .find((link) => link.textContent.includes('Sign in to join the conversation'));
       const reportUser = Array.from(rail.querySelectorAll('button'))
         .find((button) => button.textContent.trim() === 'Report user');
+      const reportPost = Array.from(rail.querySelectorAll('button'))
+        .find((button) => button.textContent.trim() === 'Report post or recipe');
+      const ownerTools = Array.from(rail.querySelectorAll('span'))
+        .filter((span) => span.textContent.trim() === 'Owner tools');
+      const composerField = rail.querySelector('textarea[aria-label="Write a comment"]');
+      // The composer's row: its avatar, then the field.
+      const composerRow = composerField ? composerField.closest('.flex.items-start') : null;
       const frame = {
         path: location.pathname,
         commentsOffset: comments
@@ -185,7 +210,12 @@ const RECORDER = `(() => {
           : null,
         signInShown: shown(signIn),
         reportUserShown: shown(reportUser),
-        composerShown: shown(rail.querySelector('textarea[aria-label="Write a comment"]')),
+        reportPostShown: shown(reportPost),
+        ownerToolsShown: ownerTools.some(shown),
+        composerShown: shown(composerField),
+        composerInitials: shown(composerField) && composerRow && composerRow.firstElementChild
+          ? composerRow.firstElementChild.textContent.trim()
+          : null,
         comments: rail.querySelectorAll('ol[aria-label="Comment thread"] > li').length,
       };
       const key = JSON.stringify(frame);
@@ -203,14 +233,14 @@ const RECORDER = `(() => {
  * The frames recorded so far, read once two more have passed, so the last change committed before
  * the call has been sampled. `stop: false` leaves the recorder running.
  */
-async function recordedFrames(page: Page, { stop = true } = {}): Promise<Frame[]> {
+async function recordedFrames(page: Page, { stop = true, path = POST_PATH } = {}): Promise<Frame[]> {
   const frames = await page.evaluate(async (stopRecording) => {
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const record = window as unknown as { __railFrames: Frame[]; __railFramesDone?: boolean };
     if (stopRecording) record.__railFramesDone = true;
     return record.__railFrames;
   }, stop);
-  return frames.filter((frame) => frame.path === POST_PATH);
+  return frames.filter((frame) => frame.path === path);
 }
 
 /** Lets two frames pass, so what the page has committed has been drawn, and recorded. */
@@ -232,6 +262,8 @@ function expectSteadyRail(frames: Frame[], reader: 'signed in' | 'signed out') {
   expect(frames.filter((frame) => frame.signInShown !== (reader === 'signed out')), all).toEqual([]);
   // Report user and Block user are a signed-in reader's who is not the post's creator.
   expect(frames.filter((frame) => frame.reportUserShown !== (reader === 'signed in')), all).toEqual([]);
+  // Anyone but the creator may report the post, and only the creator has Owner tools.
+  expect(frames.filter((frame) => !frame.reportPostShown || frame.ownerToolsShown), all).toEqual([]);
   // Nothing drawn late above Comments moved it.
   const offsets = new Set(frames.map((frame) => frame.commentsOffset).filter((offset) => offset !== null));
   expect([...offsets], all).toHaveLength(1);
@@ -239,6 +271,20 @@ function expectSteadyRail(frames: Frame[], reader: 'signed in' | 'signed out') {
   const firstDrawn = frames.findIndex((frame) => frame.comments > 0);
   expect(firstDrawn, all).toBeGreaterThanOrEqual(0);
   expect(frames.slice(firstDrawn).filter((frame) => frame.comments === 0), all).toEqual([]);
+}
+
+/**
+ * The rail as the post's creator keeps it on their own post: Owner tools, or their place, in every
+ * frame, and never a report of their own post or of themselves; Comments where it stays.
+ */
+function expectOwnerRail(frames: Frame[]) {
+  const all = JSON.stringify(frames);
+  expect(frames.length, 'frames of the rail').toBeGreaterThan(0);
+  expect(frames.filter((frame) => frame.reportPostShown || frame.reportUserShown), all).toEqual([]);
+  expect(frames.filter((frame) => !frame.ownerToolsShown), all).toEqual([]);
+  expect(frames.filter((frame) => frame.signInShown), all).toEqual([]);
+  const offsets = new Set(frames.map((frame) => frame.commentsOffset).filter((offset) => offset !== null));
+  expect([...offsets], all).toHaveLength(1);
 }
 
 const rail = (page: Page) => page.getByTestId('canonical-post-actions');
@@ -270,12 +316,12 @@ const PUSH_TAKEN_WITHIN_MS = 2_000;
  * offline. The address is read every 100 ms, so a held session check's deadline is not spent
  * waiting to see the navigation land.
  */
-async function openPostByClientNavigation(page: Page) {
+async function openPostByClientNavigation(page: Page, path = POST_PATH) {
   await expect.poll(() => hydrationCommitted(page), COLD_PAGE).toBe(true);
   let taken = false;
   const onRequest = (request: Request) => {
     const url = new URL(request.url());
-    if (url.pathname === POST_PATH && (url.searchParams.has('_rsc') || request.headers().rsc === '1')) taken = true;
+    if (url.pathname === path && (url.searchParams.has('_rsc') || request.headers().rsc === '1')) taken = true;
   };
   page.on('request', onRequest);
   try {
@@ -288,8 +334,8 @@ async function openPostByClientNavigation(page: Page) {
           (window as unknown as { next: { router: { push: (target: string) => void } } }).next.router.push(href);
         }
         return window.location.pathname;
-      }, { href: POST_PATH, pushNow: push });
-    }, { ...COLD_PAGE, intervals: [100] }).toBe(POST_PATH);
+      }, { href: path, pushNow: push });
+    }, { ...COLD_PAGE, intervals: [100] }).toBe(path);
   } finally {
     page.off('request', onRequest);
   }
@@ -382,10 +428,18 @@ test('a signed-out reader is offered sign-in where the composer goes, and no Rep
   expectSteadyRail(await recordedFrames(page), 'signed out');
 });
 
+/** Opens Owner tools, which only the real row does once the session has named its creator. */
+async function expectOwnerToolsOpen(page: Page) {
+  await rail(page).getByText('Owner tools').click();
+  await expect(rail(page).getByRole('link', { name: 'Edit post' })).toBeVisible();
+}
+
 // Review of #833: the server draws Report user and Block user for any browser with a session
 // cookie, and on the creator's own post the row showed until the page's script found whose cookie it
 // was, then went, and Comments jumped up. Before #833 the creator never saw it.
-test("the post's creator, loading their own post, never sees Report user, and Comments holds still while the session is checked", async ({ page, context }) => {
+// Sweep of 2026-11-17 (build 941e2a55b): the same post drew "Report post or recipe" in Owner tools'
+// place until the check named the creator, about 16 frames on a client navigation.
+test("the post's creator, loading their own post, has Owner tools from the first frame and never a report row", async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const { checks } = await signIn(context, postCreator);
   checks.hold();
@@ -395,15 +449,41 @@ test("the post's creator, loading their own post, never sees Report user, and Co
   await page.goto(POST_PATH);
   await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
   await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
-  const whileChecked = await recordedFrames(page, { stop: false });
+  await twoFrames(page);
 
   checks.release();
-  // The check names the creator: their own tools, which come with it as before.
-  await expect(rail(page).getByText('Owner tools')).toBeVisible(COLD_PAGE);
+  // The check names the creator, and their tools work from here on (opened after the frames are
+  // read: an open row moves Comments down, as the reader asked).
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect(rail(page).getByText(COMMENT)).toBeVisible();
   const frames = await recordedFrames(page);
-  expect(frames.filter((frame) => frame.reportUserShown), JSON.stringify(frames)).toEqual([]);
-  const offsets = new Set(whileChecked.map((frame) => frame.commentsOffset).filter((offset) => offset !== null));
-  expect([...offsets], JSON.stringify(whileChecked)).toHaveLength(1);
+  await expectOwnerToolsOpen(page);
+  expectOwnerRail(frames);
+});
+
+test("the post's creator, opening their own post from the Marketplace, has Owner tools from the first frame and never a report row", async ({ page, context }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const { checks } = await signIn(context, postCreator);
+  await answerApi(page);
+  await page.addInitScript(RECORDER);
+
+  await page.goto('/marketplace');
+  await expect(page.getByRole('link', { name: /^22 credits/ })).toBeVisible(COLD_PAGE);
+
+  checks.hold();
+  await openPostByClientNavigation(page);
+  await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  await twoFrames(page);
+  await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
+  await rail(page).screenshot({ path: testInfo.outputPath('owner-rail-while-session-checked.png') });
+
+  checks.release();
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect(rail(page).getByText(COMMENT)).toBeVisible();
+  const frames = await recordedFrames(page);
+  await expectOwnerToolsOpen(page);
+  expectOwnerRail(frames);
 });
 
 // Review of #833: Supabase's check has no deadline of its own, and a stalled one held the thread
@@ -433,4 +513,46 @@ test('a session check that outlasts its deadline draws the reader as a visitor u
   await expect(rail(page).getByRole('button', { name: 'Report user' })).toBeEnabled();
   await expect.poll(() => reads).toEqual([null, `Bearer ${accessToken}`]);
   await expect(rail(page).getByText(COMMENT)).toBeVisible();
+});
+
+// Sweep of 2026-11-17 (build 941e2a55b), signed in as @magicbooklet: the composer's avatar read "I",
+// the first letter of the sign-in email (the account has no name in Supabase's user_metadata), where
+// the top bar read "MB", from the profile's name, "Magic Booklet".
+const namelessReader = { ...user, email: 'ivy.reader@example.com', user_metadata: {} };
+const MAGIC_BOOKLET_PROFILE: ProfileRow = { display_name: 'Magic Booklet', avatar_url: null, credits: 22, promotional_credits: 0 };
+
+/** The composer's avatar as the last recorded frame drew it. */
+async function composerInitials(page: Page) {
+  return (await recordedFrames(page, { stop: false })).at(-1)?.composerInitials ?? null;
+}
+
+/** Blank while the profile is read, then the profile's name: never a name it is not. */
+function expectComposerNamedByProfile(frames: Frame[], initials: string) {
+  const all = JSON.stringify(frames);
+  expect(frames.filter((frame) => frame.composerInitials !== null
+    && frame.composerInitials !== ''
+    && frame.composerInitials !== initials), all).toEqual([]);
+  expect(frames.at(-1)?.composerInitials, all).toBe(initials);
+}
+
+test("the composer's avatar names the reader as the top bar does, from their profile, never by the sign-in email", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signIn(context, namelessReader, MAGIC_BOOKLET_PROFILE);
+  await answerApi(page);
+  await page.addInitScript(RECORDER);
+
+  // Loaded...
+  await page.goto(POST_PATH);
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect(page.getByRole('button', { name: 'Open account menu for Magic Booklet' })).toBeVisible();
+  await expect.poll(() => composerInitials(page)).toBe('MB');
+  expectComposerNamedByProfile(await recordedFrames(page), 'MB');
+
+  // ...and opened from another page, by a client navigation.
+  await page.goto('/marketplace');
+  await expect(page.getByRole('button', { name: 'Open account menu for Magic Booklet' })).toBeVisible(COLD_PAGE);
+  await openPostByClientNavigation(page);
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect.poll(() => composerInitials(page)).toBe('MB');
+  expectComposerNamedByProfile(await recordedFrames(page), 'MB');
 });

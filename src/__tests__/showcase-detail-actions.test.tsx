@@ -50,7 +50,7 @@ function renderOwnerTools(overrides: Partial<React.ComponentProps<typeof Showcas
         title="Sunset study"
         creatorUsername="creator"
         visibility="public"
-        viewerIsOwner
+        ownerTools="ready"
         hasResourceBundle
         bundle={{ accessMode: 'paid', status: 'published', salesCount: 0 }}
         {...overrides}
@@ -198,8 +198,43 @@ describe('ShowcaseDetailActions owner tools', () => {
   });
 
   it('hides the owner tools from other viewers', () => {
-    renderOwnerTools({ viewerIsOwner: false });
+    renderOwnerTools({ ownerTools: null });
     expect(screen.queryByText('Owner tools')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /visibility of/i })).not.toBeInTheDocument();
+  });
+
+  // Sweep of 2026-11-17: the creator's tools are drawn from the first frame of their own post, while
+  // the session is still checked, and do nothing until it ends: closed, and they act with it.
+  it('draws the tools inert while the session is checked, and alive once it names the creator', () => {
+    const tools = (ownerTools: 'checking' | 'ready') => (
+      <ShowcaseDetailActions
+        postId="post-1"
+        generationId="gen-1"
+        title="Sunset study"
+        creatorUsername="creator"
+        visibility="public"
+        ownerTools={ownerTools}
+        ownerToolsMark="owner-1"
+        hasResourceBundle
+        bundle={{ accessMode: 'paid', status: 'published', salesCount: 0 }}
+      />
+    );
+    const { container, rerender } = render(tools('checking'));
+    const details = container.querySelector('details') as HTMLDetailsElement;
+    expect(within(details).getByText('Owner tools')).toBeInTheDocument();
+    expect(details).toHaveAttribute('inert');
+    // Only the server's HTML is marked for the page's rule.
+    expect(details).not.toHaveAttribute('data-post-owner-tools');
+
+    rerender(tools('ready'));
+    expect(container.querySelector('details')).toBe(details);
+    expect(details).not.toHaveAttribute('inert');
+  });
+
+  it("marks the server's HTML for the page's rule, which shows the tools to the creator only, inert", () => {
+    const { container } = renderOwnerTools({ ownerTools: 'unread', ownerToolsMark: 'owner-1' });
+    const tools = container.querySelector('details') as HTMLDetailsElement;
+    expect(tools).toHaveAttribute('data-post-owner-tools', 'owner-1');
+    expect(tools).toHaveAttribute('inert');
   });
 });
