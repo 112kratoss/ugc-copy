@@ -6,6 +6,7 @@ import FeedbackViewport from '@/components/FeedbackViewport';
 import PostComments from '@/components/PostComments';
 import type { PostComment, PostCommentsPage } from '@/lib/post-comments-client';
 import { forgetPostCommentSortsForTests, readPostCommentSort, rememberPostCommentSort } from '@/lib/post-comment-sort-memory';
+import { SESSION_CHECK_DEADLINE_MS } from '@/lib/viewer-session-check';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
@@ -231,6 +232,7 @@ describe('PostComments', () => {
         });
 
         afterEach(() => {
+            vi.useRealTimers();
             document.cookie = `${AUTH_COOKIE}=; Max-Age=0; Path=/`;
             vi.unstubAllEnvs();
         });
@@ -257,6 +259,40 @@ describe('PostComments', () => {
             expect(screen.getByRole('textbox', { name: 'Write a comment' })).toBeInTheDocument();
             expect(screen.queryByText('Add a comment…')).not.toBeInTheDocument();
             expect(server.reads).toEqual([{ offset: 0, limit: 20, authorization: 'Bearer token-1' }]);
+        });
+
+        // Review of #833: Supabase's check has no deadline of its own, and a stalled one held the
+        // thread unread and the composer's place inert for as long as it stalled.
+        it('reads the thread as a visitor\'s once the check outlasts its deadline, and again for the reader a late answer names', async () => {
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+            const server = serveThread([comment()]);
+            vi.stubGlobal('fetch', server.fetchMock);
+
+            const { rerender } = render(view());
+            act(() => {
+                vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS - 1);
+            });
+            expect(screen.getByText('Add a comment…')).toBeInTheDocument();
+            expect(server.reads).toEqual([]);
+
+            act(() => {
+                vi.advanceTimersByTime(1);
+            });
+            // Testing Library's waits drain on a real timer.
+            vi.useRealTimers();
+            expect(await screen.findByText('A thoughtful comment')).toBeInTheDocument();
+            expect(screen.getByRole('link', { name: /Sign in to join/i })).toBeInTheDocument();
+            expect(screen.queryByText('Add a comment…')).not.toBeInTheDocument();
+            expect(server.reads).toEqual([{ offset: 0, limit: 20, authorization: null }]);
+
+            signIn('token-1');
+            authState.isLoading = false;
+            rerender(view());
+            expect(await screen.findByRole('textbox', { name: 'Write a comment' })).toBeInTheDocument();
+            await waitFor(() => expect(server.reads).toEqual([
+                { offset: 0, limit: 20, authorization: null },
+                { offset: 0, limit: 20, authorization: 'Bearer token-1' },
+            ]));
         });
 
         it('offers sign-in, and reads the thread as a visitor, once the check finds no session', async () => {

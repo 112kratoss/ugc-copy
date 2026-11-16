@@ -25,10 +25,6 @@ import { useAuth } from '@/components/AuthProvider';
 import StudioOverflowMenu, { type StudioOverflowMenuItem } from '@/components/StudioOverflowMenu';
 import { useConfirmation } from '@/components/useConfirmation';
 import {
-    useHasHydratedSupabaseAuthCookieHint,
-    useSupabaseAuthCookieHint,
-} from '@/components/useSupabaseAuthCookieHint';
-import {
     POST_COMMENT_MAX_LENGTH,
     POST_COMMENTS_MAX_PAGE_SIZE,
     POST_COMMENTS_PAGE_SIZE,
@@ -63,6 +59,7 @@ import {
 import { formatCompactCount, formatRelativeTime } from '@/lib/post-feed-presentation';
 import { getCurrentInternalPath } from '@/lib/share';
 import { readPostCommentSort, usePostCommentSort } from '@/lib/post-comment-sort-memory';
+import { useViewerSessionCheck } from '@/lib/viewer-session-check';
 
 const SORT_OPTIONS: Array<{ value: PostCommentSort; label: string; description: string }> = [
     // Top is the server's order: the most liked first, then the most replied to.
@@ -73,7 +70,7 @@ const SORT_OPTIONS: Array<{ value: PostCommentSort; label: string; description: 
 /** The composer grows with its draft up to this height, then scrolls. */
 const COMPOSER_MAX_HEIGHT_PX = 160;
 
-/** The reader once the page knows no one is signed in (`readerKey`). */
+/** The reader once the page has found no one signed in, or stopped waiting for its check (`readerKey`). */
 const VISITOR = 'visitor';
 
 const REPORT_REASONS = [
@@ -170,20 +167,17 @@ export default function PostComments({
     layout = 'flow',
     onClose,
 }: PostCommentsProps) {
-    const { session, user, isLoading } = useAuth();
+    const { session, user } = useAuth();
     const accessToken = session?.access_token ?? null;
     const viewerId = user?.id ?? null;
-    // Who is reading, once that is known: their id, VISITOR when no one is signed in, and null on
-    // the server, in the render that hydrates it (no cookie can be read there) and while a session
-    // cookie is being checked. The pages that check the session in the browser (the post page, the
-    // reels) start a provider of their own on every page, a client navigation included, and until
-    // its check named the reader the thread drew them as a visitor: "Sign in to join the
-    // conversation" where their composer goes, and a visitor's thread, taken away and drawn again
-    // once they were named (owner's recording, 2026-11-16). The post page's own reads wait the same
-    // way (`useShowcasePostViewer`).
-    const hasAuthCookie = useSupabaseAuthCookieHint();
-    const hydrated = useHasHydratedSupabaseAuthCookieHint();
-    const readerKey = viewerId ?? (!hydrated || (hasAuthCookie && isLoading) ? null : VISITOR);
+    // Who is reading, once that is known: their id, VISITOR when no one is signed in (or the session
+    // check outlasted its deadline), and null on the server, in the render that hydrates it and
+    // while a session cookie is being checked (`useViewerSessionCheck`). Until a check named the
+    // reader the thread drew them as a visitor: "Sign in to join the conversation" where their
+    // composer goes, and a visitor's thread, taken away and drawn again once they were named
+    // (owner's recording, 2026-11-16).
+    const viewerCheck = useViewerSessionCheck();
+    const readerKey = viewerId ?? (viewerCheck === 'visitor' ? VISITOR : null);
     const askToConfirm = useConfirmation();
 
     // The order chosen for this post's comments, kept for the tab: a refresh or Back keeps it.
@@ -1058,7 +1052,7 @@ export default function PostComments({
                         </div>
                     </div>
                 </div>
-            ) : !hydrated ? (
+            ) : viewerCheck === 'unread' ? (
                 // The server's HTML and the render that hydrates it, where no cookie can be read: both
                 // are drawn, and the root element's mark, set from this browser's session cookie
                 // before the page draws (`app-shell-account-restore.ts`), shows the one it keeps, as
@@ -1067,7 +1061,7 @@ export default function PostComments({
                     <SignInToJoinLink href={loginHref} className="app-shell-when-signed-out" />
                     <ComposerWhileChecking className="app-shell-when-signed-in" />
                 </>
-            ) : readerKey === null ? (
+            ) : viewerCheck === 'checking' ? (
                 <ComposerWhileChecking />
             ) : (
                 <SignInToJoinLink href={loginHref} />

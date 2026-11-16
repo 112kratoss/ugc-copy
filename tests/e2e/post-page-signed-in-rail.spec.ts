@@ -69,15 +69,23 @@ function sessionChecks() {
   };
 }
 
+/** The post's own creator, as Supabase's auth describes them. */
+const postCreator = {
+  ...user,
+  id: freeRecipePost.creator.id,
+  email: 'free-remix-creator@example.com',
+  user_metadata: { name: freeRecipePost.creator.display_name },
+};
+
 /**
  * Signed in as a browser is: a session cookie for the placeholder project, sent with every request,
  * and no E2E bypass, which would hand the page's provider its session at once.
  */
-async function signIn(context: BrowserContext) {
+async function signIn(context: BrowserContext, account: typeof user = user) {
   const checks = sessionChecks();
   const header = base64Url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
   const payload = base64Url(JSON.stringify({
-    sub: user.id, aud: 'authenticated', role: 'authenticated', exp: 4_102_444_800, session_id: 'e2e-session',
+    sub: account.id, aud: 'authenticated', role: 'authenticated', exp: 4_102_444_800, session_id: 'e2e-session',
   }));
   const session = {
     access_token: `${header}.${payload}.c2lnbmF0dXJl`,
@@ -85,7 +93,7 @@ async function signIn(context: BrowserContext) {
     token_type: 'bearer',
     expires_in: 3600,
     expires_at: 4_102_444_800,
-    user,
+    user: account,
   };
   await context.addCookies([
     { name: 'sb-example-auth-token', value: `base64-${base64Url(JSON.stringify(session))}`, url: ORIGIN },
@@ -94,7 +102,7 @@ async function signIn(context: BrowserContext) {
     const { pathname } = new URL(route.request().url());
     if (pathname === '/auth/v1/user') {
       await checks.answer();
-      return route.fulfill({ json: user }).catch(() => undefined);
+      return route.fulfill({ json: account }).catch(() => undefined);
     }
     if (pathname === '/auth/v1/token') return route.fulfill({ json: session });
     const single = (route.request().headers().accept ?? '').includes('vnd.pgrst.object');
@@ -105,34 +113,40 @@ async function signIn(context: BrowserContext) {
     if (pathname.startsWith('/rest/v1/')) return route.fulfill(single ? { status: 406, json: {} } : { json: [] });
     return route.fulfill({ status: 404, json: {} });
   });
-  return checks;
+  return { checks, accessToken: session.access_token };
 }
 
-/** Every API call unanswered but the post's thread: one comment by someone else. */
-async function answerApi(page: Page) {
+/**
+ * Every API call unanswered but the post's thread: one comment by someone else. `reads` gets the
+ * Authorization of each read of the thread, null for a visitor's.
+ */
+async function answerApi(page: Page, reads: Array<string | null> = []) {
   await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { error: 'Not answered offline' } }));
-  await page.route(`**/api/showcase/posts/${POST_ID}/comments**`, (route) => route.fulfill({
-    json: {
-      postId: POST_ID,
-      postCreatorId: freeRecipePost.creator.id,
-      commentCount: 1,
-      comments: [{
-        id: 'c-1',
-        parentId: null,
-        body: COMMENT,
-        status: 'active',
-        createdAt: '2026-11-10T08:00:00.000Z',
-        replyCount: 0,
-        author: { id: 'someone-else', username: 'lena', displayName: 'Lena', avatarUrl: null },
-        likeCount: 2,
-        viewerReaction: null,
-        editedAt: null,
-        hearted: false,
-        pinned: false,
-      }],
-      pageInfo: { hasMore: false, nextOffset: null, limit: 20, offset: 0 },
-    },
-  }));
+  await page.route(`**/api/showcase/posts/${POST_ID}/comments**`, (route) => {
+    reads.push(route.request().headers().authorization ?? null);
+    return route.fulfill({
+      json: {
+        postId: POST_ID,
+        postCreatorId: freeRecipePost.creator.id,
+        commentCount: 1,
+        comments: [{
+          id: 'c-1',
+          parentId: null,
+          body: COMMENT,
+          status: 'active',
+          createdAt: '2026-11-10T08:00:00.000Z',
+          replyCount: 0,
+          author: { id: 'someone-else', username: 'lena', displayName: 'Lena', avatarUrl: null },
+          likeCount: 2,
+          viewerReaction: null,
+          editedAt: null,
+          hearted: false,
+          pinned: false,
+        }],
+        pageInfo: { hasMore: false, nextOffset: null, limit: 20, offset: 0 },
+      },
+    });
+  });
 }
 
 type Frame = {
@@ -185,12 +199,17 @@ const RECORDER = `(() => {
   requestAnimationFrame(sample);
 })();`;
 
-async function recordedFrames(page: Page): Promise<Frame[]> {
-  const frames = await page.evaluate(() => {
+/**
+ * The frames recorded so far, read once two more have passed, so the last change committed before
+ * the call has been sampled. `stop: false` leaves the recorder running.
+ */
+async function recordedFrames(page: Page, { stop = true } = {}): Promise<Frame[]> {
+  const frames = await page.evaluate(async (stopRecording) => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const record = window as unknown as { __railFrames: Frame[]; __railFramesDone?: boolean };
-    record.__railFramesDone = true;
+    if (stopRecording) record.__railFramesDone = true;
     return record.__railFrames;
-  });
+  }, stop);
   return frames.filter((frame) => frame.path === POST_PATH);
 }
 
@@ -220,7 +239,7 @@ test.afterEach(async ({ page }) => {
 
 test('a post opened from the Marketplace draws a signed-in reader\'s composer and rail from its first frame, while the session is checked', async ({ page, context }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const checks = await signIn(context);
+  const { checks } = await signIn(context);
   await answerApi(page);
   await page.addInitScript(RECORDER);
 
@@ -260,7 +279,7 @@ test('a post opened from the Marketplace draws a signed-in reader\'s composer an
 
 test('a signed-in reader who loads a post draws its composer and rail from the first frame, while the session is checked', async ({ page, context }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const checks = await signIn(context);
+  const { checks } = await signIn(context);
   checks.hold();
   await answerApi(page);
   await page.addInitScript(RECORDER);
@@ -303,4 +322,55 @@ test('a signed-out reader is offered sign-in where the composer goes, and no Rep
   await expect(rail(page).getByText(COMMENT)).toBeVisible(COLD_PAGE);
   await expect(rail(page).getByRole('link', { name: 'Sign in to join the conversation' })).toBeVisible();
   expectSteadyRail(await recordedFrames(page), 'signed out');
+});
+
+// Review of #833: the server draws Report user and Block user for any browser with a session
+// cookie, and on the creator's own post the row showed until the page's script found whose cookie it
+// was, then went, and Comments jumped up. Before #833 the creator never saw it.
+test("the post's creator, loading their own post, never sees Report user, and Comments holds still while the session is checked", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const { checks } = await signIn(context, postCreator);
+  checks.hold();
+  await answerApi(page);
+  await page.addInitScript(RECORDER);
+
+  await page.goto(POST_PATH);
+  await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
+  await expect.poll(checks.held, COLD_PAGE).toBeGreaterThan(0);
+  const whileChecked = await recordedFrames(page, { stop: false });
+
+  checks.release();
+  // The check names the creator: their own tools, which come with it as before.
+  await expect(rail(page).getByText('Owner tools')).toBeVisible(COLD_PAGE);
+  const frames = await recordedFrames(page);
+  expect(frames.filter((frame) => frame.reportUserShown), JSON.stringify(frames)).toEqual([]);
+  const offsets = new Set(whileChecked.map((frame) => frame.commentsOffset).filter((offset) => offset !== null));
+  expect([...offsets], JSON.stringify(whileChecked)).toHaveLength(1);
+});
+
+// Review of #833: Supabase's check has no deadline of its own, and a stalled one held the thread
+// unread, the composer's place inert and Report user doing nothing for as long as it stalled.
+test('a session check that outlasts its deadline draws the reader as a visitor until a late answer names them', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const { checks, accessToken } = await signIn(context);
+  checks.hold();
+  const reads: Array<string | null> = [];
+  await answerApi(page, reads);
+
+  await page.goto(POST_PATH);
+  await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
+  await expect.poll(checks.held, COLD_PAGE).toBeGreaterThan(0);
+  // Past the deadline (SESSION_CHECK_DEADLINE_MS, 4.5 s): the visitor's page, as before the check
+  // was waited for.
+  await expect(rail(page).getByRole('link', { name: 'Sign in to join the conversation' })).toBeVisible({ timeout: 15_000 });
+  await expect(rail(page).getByText(COMMENT)).toBeVisible();
+  await expect(rail(page).getByRole('button', { name: 'Report user' })).toHaveCount(0);
+  expect(reads).toEqual([null]);
+
+  // The answer comes at last: the reader's composer and row, and the thread read again for them.
+  checks.release();
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect(rail(page).getByRole('button', { name: 'Report user' })).toBeEnabled();
+  await expect.poll(() => reads).toEqual([null, `Bearer ${accessToken}`]);
+  await expect(rail(page).getByText(COMMENT)).toBeVisible();
 });

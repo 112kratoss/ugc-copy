@@ -5,12 +5,17 @@ import postcss, { type Rule } from 'postcss';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  APP_SHELL_AUTH_USER_ATTRIBUTE,
   APP_SHELL_CREDITS_DIGITS_STORAGE_KEY,
   buildAppShellAccountRestore,
   countCreditDigits,
   rememberAppShellCreditDigits,
 } from '@/lib/app-shell-account-restore';
-import { getSupabaseAuthCookiePrefix, hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
+import {
+  getSupabaseAuthCookiePrefix,
+  hasSupabaseAuthCookie,
+  readSupabaseAuthCookieUserId,
+} from '@/lib/supabase-auth-cookie';
 
 // A signed-in refresh drew the top bar's account three ways ("Sign in", then "Credits" and the
 // avatar, then "617 credits"), and each moved the bell, Create and the search field sideways
@@ -42,10 +47,16 @@ function clearCookies() {
 afterEach(() => {
   clearCookies();
   delete root.dataset.authHint;
+  root.removeAttribute(APP_SHELL_AUTH_USER_ATTRIBUTE);
   root.style.removeProperty('--app-shell-credits-digits');
   window.localStorage.clear();
   vi.restoreAllMocks();
 });
+
+/** A session as @supabase/ssr writes it: `base64-` + base64url(JSON). */
+function sessionCookie(session: unknown) {
+  return `base64-${Buffer.from(JSON.stringify(session), 'utf8').toString('base64url')}`;
+}
 
 describe('the account slot marked before the page draws', () => {
   it.each([
@@ -66,6 +77,53 @@ describe('the account slot marked before the page draws', () => {
     setCookies([PREFIX]);
     restore(null);
     expect(root.dataset.authHint).toBeUndefined();
+    expect(root.getAttribute(APP_SHELL_AUTH_USER_ATTRIBUTE)).toBeNull();
+  });
+
+  // Report user and Block user are drawn by the server for a browser with a session cookie, and
+  // must never show on the post of the account the cookie names (review of #833): the root element
+  // names that account before the post page draws.
+  const whole = sessionCookie({ access_token: 'a.b.c', user: { id: 'user-a', user_metadata: { name: 'Zoë Ångström' } } });
+  it.each([
+    ['the whole cookie', [[PREFIX, whole]]],
+    ['its chunks, out of order', [[`${PREFIX}.1`, whole.slice(40)], [`${PREFIX}.0`, whole.slice(0, 40)]]],
+    ['a cookie of JSON', [[PREFIX, encodeURIComponent(JSON.stringify({ user: { id: 'user-b' } }))]]],
+    ['a session with no user', [[PREFIX, sessionCookie({ access_token: 'a.b.c' })]]],
+    ['a cookie that is not a session', [[PREFIX, 'base64-%%%']]],
+    ['another project\'s cookie', [['sb-another-auth-token', whole]]],
+    ['no cookie', []],
+  ])('names the account as readSupabaseAuthCookieUserId does: %s', (_case, cookies) => {
+    for (const [name, value] of cookies) document.cookie = `${name}=${value}; path=/`;
+    restore();
+    expect(root.getAttribute(APP_SHELL_AUTH_USER_ATTRIBUTE))
+      .toBe(readSupabaseAuthCookieUserId(document.cookie, PROJECT_URL));
+  });
+
+  it('names the account of a whole session cookie, and of one in chunks', () => {
+    document.cookie = `${PREFIX}=${whole}; path=/`;
+    restore();
+    expect(root.getAttribute(APP_SHELL_AUTH_USER_ATTRIBUTE)).toBe('user-a');
+    clearCookies();
+    root.removeAttribute(APP_SHELL_AUTH_USER_ATTRIBUTE);
+
+    document.cookie = `${PREFIX}.0=${whole.slice(0, 40)}; path=/`;
+    document.cookie = `${PREFIX}.1=${whole.slice(40)}; path=/`;
+    restore();
+    expect(root.getAttribute(APP_SHELL_AUTH_USER_ATTRIBUTE)).toBe('user-a');
+  });
+
+  it('leaves no variable of its own on the page', () => {
+    document.cookie = `${PREFIX}=${whole}; path=/`;
+    const before = new Set(Object.keys(window));
+    // As the page runs it: a classic script's top-level names would be the window's.
+    const script = document.createElement('script');
+    script.textContent = buildAppShellAccountRestore(PREFIX);
+    document.head.appendChild(script);
+    script.remove();
+    // It ran.
+    expect(root.getAttribute(APP_SHELL_AUTH_USER_ATTRIBUTE)).toBe('user-a');
+    expect(Object.keys(window).filter((name) => !before.has(name) && ['q', 'w', 'k', 'r', 't', 'b', 'u'].includes(name)))
+      .toEqual([]);
   });
 
   it('gives the placeholder the width of the last balance this browser showed', () => {

@@ -5,10 +5,7 @@ import { Ban, Flag, Loader2, ShieldAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 import { useAuth } from '@/components/AuthProvider';
-import {
-  useHasHydratedSupabaseAuthCookieHint,
-  useSupabaseAuthCookieHint,
-} from '@/components/useSupabaseAuthCookieHint';
+import { APP_SHELL_AUTH_USER_ATTRIBUTE } from '@/lib/app-shell-account-restore';
 import {
   blockCreatorAfterConfirmation,
   reportCreatorAfterConfirmation,
@@ -17,6 +14,7 @@ import {
 import type { ShowcaseCreator } from '@/lib/showcase';
 import { getCurrentInternalPath } from '@/lib/share';
 import { readSupabaseAuthCookieUserId } from '@/lib/supabase-auth-cookie';
+import { useViewerSessionCheck } from '@/lib/viewer-session-check';
 
 /** The reasons a post can be reported for. The Terms (section 8) name "Stolen content". */
 export const REPORT_REASONS = [
@@ -30,6 +28,9 @@ export const REPORT_REASONS = [
 
 /** About a recipe and its purchase: offered only on a post that carries one. */
 const RECIPE_REPORT_REASONS = new Set(['misleading_unlock', 'payment_issue']);
+
+/** An account id the server's HTML can name in a style rule as it stands (a UUID is one). */
+const PLAIN_ACCOUNT_ID = /^[A-Za-z0-9_-]+$/;
 
 interface ReportPostButtonProps {
   postId: string;
@@ -69,9 +70,8 @@ export default function ReportPostButton({
   // The live session, as the engagement row reads it. The token the page was
   // rendered with expires (an hour at Supabase's default), and a report sent
   // with it after that failed as "Unauthorized".
-  const { session, user, isLoading } = useAuth();
-  const hasAuthCookie = useSupabaseAuthCookieHint();
-  const hydrated = useHasHydratedSupabaseAuthCookieHint();
+  const { session, user } = useAuth();
+  const viewerCheck = useViewerSessionCheck();
   const accessToken = session?.access_token ?? null;
   const [isOpen, setIsOpen] = useState(false);
   // No reason until the viewer picks one: a preselected "Misleading recipe"
@@ -91,17 +91,19 @@ export default function ReportPostButton({
   // session in the browser after it has drawn, and a client navigation starts that check again; the
   // row came in when it ended and pushed Comments down (owner's recording, 2026-11-16). So it is
   // drawn from the first paint for a viewer whose session cookie is being checked, inert until
-  // then: 'ready' once the viewer is known; 'checking' while the cookie, which names someone other
-  // than the creator, is checked; 'unread' in the server's HTML and the render that hydrates it,
-  // where no cookie can be read, shown by the root element's mark only to a browser that holds a
-  // session cookie (`.app-shell-when-signed-in`, as the composer's place is in `PostComments`).
+  // then (`useViewerSessionCheck`): 'ready' once the viewer is known; 'checking' while the cookie,
+  // which names someone other than the creator, is checked; 'unread' in the server's HTML and the
+  // render that hydrates it, where no cookie can be read, shown by the root element's marks only to
+  // a browser whose session cookie names someone other than the creator (`.app-shell-when-signed-in`,
+  // as the composer's place is in `PostComments`, and the rule drawn with it below). A check that
+  // outlasts its deadline draws none, as for a visitor, until it names the viewer.
   const creatorRows = !creatorId
     ? null
     : user
       ? creatorId !== user.id ? 'ready' : null
-      : !hydrated
-        ? 'unread'
-        : hasAuthCookie && isLoading && readSupabaseAuthCookieUserId() !== creatorId
+      : viewerCheck === 'unread'
+        ? PLAIN_ACCOUNT_ID.test(creatorId) ? 'unread' : null
+        : viewerCheck === 'checking' && readSupabaseAuthCookieUserId() !== creatorId
           ? 'checking'
           : null;
   const loginHref = () => `/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}`))}`;
@@ -244,10 +246,19 @@ export default function ReportPostButton({
 
       {creatorRows ? (
         <div
+          data-post-creator-rows={creatorId ?? undefined}
           className={`flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-white/8 px-5 py-3.5 sm:px-6${
             creatorRows === 'unread' ? ' app-shell-when-signed-in' : ''
           }`}
         >
+          {creatorRows === 'unread' ? (
+            // Never the creator's: the root element names the account the session cookie holds
+            // (`data-auth-user`, app-shell-account-restore.ts), and on their own post this hides
+            // the row before the first paint, as it is never drawn for them after.
+            <style>
+              {`html[${APP_SHELL_AUTH_USER_ATTRIBUTE}="${creatorId}"] [data-post-creator-rows="${creatorId}"]{display:none}`}
+            </style>
+          ) : null}
           {/* Dimmed only while an action is on its way: one waiting for the session looks as it will. */}
           <button
             type="button"

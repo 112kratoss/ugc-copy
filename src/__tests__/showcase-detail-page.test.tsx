@@ -8,6 +8,7 @@ import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-
 import { coverNsfwContent } from '@/lib/nsfw-content';
 import { clearOwnerPageEditsForTests, rememberOwnerPostVisibility } from '@/lib/owner-page-edits';
 import { PUBLIC_PAGE_REVALIDATE_SECONDS } from '@/lib/public-page-cache';
+import { SESSION_CHECK_DEADLINE_MS } from '@/lib/viewer-session-check';
 
 const { default: ShowcaseDetailPage, generateMetadata } = pageModule;
 
@@ -897,6 +898,7 @@ describe('Showcase detail page', () => {
       });
 
       afterEach(() => {
+        vi.useRealTimers();
         document.cookie = `${AUTH_COOKIE}=; Max-Age=0; Path=/`;
         vi.unstubAllEnvs();
       });
@@ -909,6 +911,31 @@ describe('Showcase detail page', () => {
         expect(within(rail).getByRole('button', { name: 'Report user' })).toBeDisabled();
         expect(within(rail).getByRole('button', { name: 'Block user' })).toBeDisabled();
 
+        signInAs('user-2');
+        rerender(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+        expect(within(rail).getByRole('button', { name: 'Report user' })).toBeEnabled();
+        expect(within(rail).getByRole('button', { name: 'Block user' })).toBeEnabled();
+      });
+
+      // Review of #833: a stalled check left the row drawn and doing nothing for as long as it stalled.
+      it('draws none once the check outlasts its deadline, as for a visitor, and both once a late answer names the viewer', async () => {
+        holdSessionCookieOf('user-2');
+        const page = await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const { rerender } = render(page);
+        const rail = screen.getByTestId('canonical-post-actions');
+        act(() => {
+          vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS - 1);
+        });
+        expect(within(rail).getByRole('button', { name: 'Report user' })).toBeDisabled();
+
+        act(() => {
+          vi.advanceTimersByTime(1);
+        });
+        expect(within(rail).queryByRole('button', { name: 'Report user' })).not.toBeInTheDocument();
+        expect(within(rail).queryByRole('button', { name: 'Block user' })).not.toBeInTheDocument();
+
+        vi.useRealTimers();
         signInAs('user-2');
         rerender(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
         expect(within(rail).getByRole('button', { name: 'Report user' })).toBeEnabled();
@@ -931,7 +958,7 @@ describe('Showcase detail page', () => {
     });
 
     // The page is drawn ahead of time for every viewer, and no cookie can be read on the server.
-    it("draws both in the server's HTML, inert, for the root element's mark to show to a browser with a session", () => {
+    it("draws both in the server's HTML, inert, for the root element's marks to show to a browser with a session", () => {
       const container = document.createElement('div');
       container.innerHTML = renderToString(
         <ReportPostButton postId={POST_ID} creator={{ id: 'user-1', name: 'Creator Name' }} />,
@@ -943,6 +970,39 @@ describe('Showcase detail page', () => {
       expect(reportUser).toBeDisabled();
       expect(reportUser.closest('.app-shell-when-signed-in')).not.toBeNull();
       expect(within(container).getByRole('button', { name: 'Block user' })).toBeDisabled();
+    });
+
+    // Review of #833: the server's row showed on the creator's own post until the page's script
+    // ran, then went, and Comments jumped up. The root element names the account the session
+    // cookie holds before the first paint (app-shell-account-restore.ts).
+    it("hides them from the post's creator before the first paint, and hydrates as drawn", () => {
+      const root = document.documentElement;
+      onTestFinished(() => root.removeAttribute('data-auth-user'));
+      const button = <ReportPostButton postId={POST_ID} creator={{ id: 'user-1', name: 'Creator Name' }} />;
+      const container = document.createElement('div');
+      container.innerHTML = renderToString(button);
+      document.body.appendChild(container);
+      onTestFinished(() => container.remove());
+      const row = container.querySelector('[data-post-creator-rows]') as HTMLElement;
+
+      expect(container.querySelector('style')?.textContent)
+        .toBe('html[data-auth-user="user-1"] [data-post-creator-rows="user-1"]{display:none}');
+      root.setAttribute('data-auth-user', 'user-2');
+      expect(window.getComputedStyle(row).display).not.toBe('none');
+      root.setAttribute('data-auth-user', 'user-1');
+      expect(window.getComputedStyle(row).display).toBe('none');
+
+      const consoleError = vi.spyOn(console, 'error');
+      render(button, { container, hydrate: true });
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    it("draws none in the server's HTML for a creator whose id a style rule cannot name as it stands", () => {
+      const html = renderToString(
+        <ReportPostButton postId={POST_ID} creator={{ id: 'user"] *{display:none} [x="', name: 'Creator Name' }} />,
+      );
+      expect(html).not.toContain('Report user');
+      expect(html).not.toContain('<style');
     });
   });
 

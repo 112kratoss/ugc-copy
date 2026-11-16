@@ -20,6 +20,14 @@ import { getSupabaseAuthCookiePrefix } from '@/lib/supabase-auth-cookie';
 export const APP_SHELL_AUTH_HINT_SIGNED_IN = 'signed-in';
 
 /**
+ * The root element's attribute naming the account the session cookie holds, read as
+ * `readSupabaseAuthCookieUserId` reads it, so a part of a page drawn ahead of time for everyone can
+ * be hidden from that one account before the first paint (Report user and Block user, on the post
+ * page of the account's own post: `ReportPostButton`). A hint, as `data-auth-hint` is.
+ */
+export const APP_SHELL_AUTH_USER_ATTRIBUTE = 'data-auth-user';
+
+/**
  * Where the browser keeps how many digits the last balance it showed had, so the placeholder is
  * as wide as the balance that replaces it (`--app-shell-credits-digits` in globals.css).
  */
@@ -42,14 +50,20 @@ export function rememberAppShellCreditDigits(credits: number): void {
 /**
  * Inline in the server's HTML, ahead of the shell. The cookie test is `hasSupabaseAuthCookie`'s,
  * written out for a page whose own code has not loaded yet: a cookie named for the project, or one
- * of its chunks (`<name>.0`, `<name>.1`, …).
+ * of its chunks (`<name>.0`, `<name>.1`, …). The account is `readSupabaseAuthCookieUserId`'s: the
+ * whole cookie or its chunks in order, `base64-` + base64url(JSON) or the JSON itself, and the
+ * session's `user.id`. The id is ASCII, so the decoded bytes are parsed as they are.
  */
 export function buildAppShellAccountRestore(
   cookiePrefix: string | null = getSupabaseAuthCookiePrefix()
 ): string {
+  const prefix = JSON.stringify(cookiePrefix);
   const markSignedIn = cookiePrefix
-    ? `try{var p=${JSON.stringify(cookiePrefix)};document.cookie.split(";").some(function(c){var n=c.trim().split("=",1)[0];return n===p||n.indexOf(p+".")===0})&&(document.documentElement.dataset.authHint=${JSON.stringify(APP_SHELL_AUTH_HINT_SIGNED_IN)})}catch(e){}`
+    ? `try{var p=${prefix};document.cookie.split(";").some(function(c){var n=c.trim().split("=",1)[0];return n===p||n.indexOf(p+".")===0})&&(document.documentElement.dataset.authHint=${JSON.stringify(APP_SHELL_AUTH_HINT_SIGNED_IN)})}catch(e){}`
+    : '';
+  const markUser = cookiePrefix
+    ? `(function(){try{var q=${prefix},w=null,k=[];document.cookie.split(";").forEach(function(c){var i=c.indexOf("=");if(i<0)return;var n=c.slice(0,i).trim(),v=c.slice(i+1).trim();if(n===q)w=v;else if(n.indexOf(q+".")===0){var x=Number(n.slice(q.length+1));x>=0&&x%1===0&&k.push([x,v])}});var r=w!==null?w:k.sort(function(a,b){return a[0]-b[0]}).map(function(e){return e[1]}).join("");if(r){var t=decodeURIComponent(r);if(t.indexOf("base64-")===0){var b=t.slice(7).replace(/-/g,"+").replace(/_/g,"/");t=atob(b+"===".slice((b.length+3)%4))}var u=JSON.parse(t);u=u&&u.user&&u.user.id;typeof u==="string"&&u&&document.documentElement.setAttribute(${JSON.stringify(APP_SHELL_AUTH_USER_ATTRIBUTE)},u)}}catch(e){}})();`
     : '';
   const restoreDigits = `try{var d=Number(localStorage.getItem(${JSON.stringify(APP_SHELL_CREDITS_DIGITS_STORAGE_KEY)}));d>=1&&d<=9&&d===Math.floor(d)&&document.documentElement.style.setProperty("--app-shell-credits-digits",String(d))}catch(e){}`;
-  return markSignedIn + restoreDigits;
+  return markSignedIn + markUser + restoreDigits;
 }
