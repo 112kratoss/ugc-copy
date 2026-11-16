@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test';
 
 import freeRecipePost from './fixtures/creation-post-free-recipe.json';
 
@@ -244,6 +244,57 @@ function expectSteadyRail(frames: Frame[], reader: 'signed in' | 'signed out') {
 const rail = (page: Page) => page.getByTestId('canonical-post-actions');
 const composer = (page: Page) => rail(page).getByRole('textbox', { name: 'Write a comment' });
 
+/**
+ * Whether the document's React root has committed its hydration, which only the page's script
+ * does: its router then takes a navigation (login-typed-before-script.spec.ts says why the root's
+ * record, and not a `__reactFiber$` key, is the sign).
+ */
+function hydrationCommitted(page: Page) {
+  return page.evaluate(() => {
+    type HostRoot = { stateNode?: { current?: { memoizedState?: { isDehydrated?: boolean } } } };
+    const key = Object.keys(document).find((name) => name.startsWith('__reactContainer$'));
+    const root = key ? (document as unknown as Record<string, HostRoot>)[key] : undefined;
+    return root?.stateNode?.current?.memoizedState?.isDehydrated === false;
+  });
+}
+
+/** How long a push is given to ask the server for the post before it is taken for dropped. */
+const PUSH_TAKEN_WITHIN_MS = 2_000;
+
+/**
+ * Opens the post by a client navigation, as a link of the page makes. A push made before the
+ * page's script has taken the document over is dropped (the fifth gotcha in .claude/rules/e2e.md:
+ * CI's run of 2026-11-16 stayed on /marketplace), so it is made after the root's commit, and made
+ * again only while the router has not asked the server for the post's page: a push it has taken is
+ * never repeated, since each one starts the navigation over and the post's render takes seconds
+ * offline. The address is read every 100 ms, so a held session check's deadline is not spent
+ * waiting to see the navigation land.
+ */
+async function openPostByClientNavigation(page: Page) {
+  await expect.poll(() => hydrationCommitted(page), COLD_PAGE).toBe(true);
+  let taken = false;
+  const onRequest = (request: Request) => {
+    const url = new URL(request.url());
+    if (url.pathname === POST_PATH && (url.searchParams.has('_rsc') || request.headers().rsc === '1')) taken = true;
+  };
+  page.on('request', onRequest);
+  try {
+    let lastPush = -Infinity;
+    await expect.poll(async () => {
+      const push = !taken && Date.now() - lastPush >= PUSH_TAKEN_WITHIN_MS;
+      if (push) lastPush = Date.now();
+      return page.evaluate(({ href, pushNow }) => {
+        if (pushNow && window.location.pathname !== href) {
+          (window as unknown as { next: { router: { push: (target: string) => void } } }).next.router.push(href);
+        }
+        return window.location.pathname;
+      }, { href: POST_PATH, pushNow: push });
+    }, { ...COLD_PAGE, intervals: [100] }).toBe(POST_PATH);
+  } finally {
+    page.off('request', onRequest);
+  }
+}
+
 test.afterEach(async ({ page }) => {
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
@@ -261,9 +312,7 @@ test('a post opened from the Marketplace draws a signed-in reader\'s composer an
   await expect(page.getByRole('link', { name: /^22 credits/ })).toBeVisible(COLD_PAGE);
 
   checks.hold();
-  await page.evaluate((href) => (
-    window as unknown as { next: { router: { push: (target: string) => void } } }
-  ).next.router.push(href), POST_PATH);
+  await openPostByClientNavigation(page);
   await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
   // The post page's provider is checking the session: held only while the rail drawn meanwhile is
   // seen, well inside the check's deadline (SESSION_CHECK_DEADLINE_MS from when it began).
@@ -327,9 +376,7 @@ test('a signed-out reader is offered sign-in where the composer goes, and no Rep
   expectSteadyRail(await recordedFrames(page), 'signed out');
 
   await page.goto('/marketplace');
-  await page.evaluate((href) => (
-    window as unknown as { next: { router: { push: (target: string) => void } } }
-  ).next.router.push(href), POST_PATH);
+  await openPostByClientNavigation(page);
   await expect(rail(page).getByText(COMMENT)).toBeVisible(COLD_PAGE);
   await expect(rail(page).getByRole('link', { name: 'Sign in to join the conversation' })).toBeVisible();
   expectSteadyRail(await recordedFrames(page), 'signed out');
