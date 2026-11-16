@@ -11,7 +11,7 @@ import { APP_SHELL_SIDEBAR_RESTORE } from "@/lib/app-shell-sidebar-restore";
 import { WELCOME_PROMISE_RESTORE } from "@/lib/welcome-promise-restore";
 import { REEL_OPENING_RESTORE } from "@/lib/reel-opening-restore";
 import { ADDRESS_FIRST_PAINT_RESTORE } from "@/lib/address-first-paint";
-import { HOME_RELOAD_AT_TOP } from "@/lib/home-reload-at-top";
+import { RELOAD_OPENS_AT_TOP } from "@/lib/reload-opens-at-top";
 
 import "./globals.css";
 import AppShell from "@/components/AppShell";
@@ -126,9 +126,9 @@ export default function RootLayout({
             paint (src/lib/address-first-paint.ts). */}
         <script dangerouslySetInnerHTML={{ __html: ADDRESS_FIRST_PAINT_RESTORE }} />
         <AddressFirstPaintRelease />
-        {/* A refresh of Home opens at its top, not at the old offset on a feed ranked afresh;
-            the browser's restore is given back once the load is done (src/lib/home-reload-at-top.ts). */}
-        <script dangerouslySetInnerHTML={{ __html: HOME_RELOAD_AT_TOP }} />
+        {/* A refresh of Home, Explore or Marketplace opens at the top, not at the old offset on a page
+            drawn afresh; the browser's restore is given back afterwards (src/lib/reload-opens-at-top.ts). */}
+        <script dangerouslySetInnerHTML={{ __html: RELOAD_OPENS_AT_TOP }} />
         <a
           href="#main-content"
           className="ui-focus-ring fixed left-4 top-3 z-[120] -translate-y-24 rounded-full bg-[var(--ui-primary)] px-4 py-3 text-sm font-bold text-[var(--ui-primary-on)] transition focus:translate-y-0"

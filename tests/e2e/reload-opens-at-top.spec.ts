@@ -1,18 +1,20 @@
 import { expect, test, type Page } from '@playwright/test';
 
-// A reload of Home opens at its top (owner's recording, 2026-11-16). Home's feed is
-// ranked afresh on every load, so the browser's own restore of the old scroll offset
-// put the reader in the middle of a different feed: the skeleton and the first rows
-// drew at the top, then the page jumped down onto a post they had never scrolled to.
-// The root layout's inline script marks Home's history entry for no restore as the
-// document goes, and the reloaded document gives the browser its restore back once its
-// load is done (src/lib/home-reload-at-top.ts), so Back and Forward inside the app
-// still land where they were left, and every other page's reload still keeps its place.
+// A reload of Home, Explore or Marketplace opens at the page's top (owner's recording,
+// 2026-11-16). Each starts afresh on a reload, Home and Explore with a newly ranked feed and
+// Marketplace with its first page alone, so the browser's own restore of the old offset put the
+// reader somewhere they had never been: on Home the first rows drew at the top, then the page
+// jumped down onto another post. The root layout's inline script marks those pages' history
+// entry for no restore as the document goes, and the next document gives the restore back
+// (src/lib/reload-opens-at-top.ts): after a reload once its load is done, after a Back from
+// another document at once. So Back and Forward still land where a page was left, and every other
+// page's reload still keeps its place.
 //
-// Signed out, as home-logo-top-and-refresh.spec.ts draws Home: the same shell and the
-// same feed as signed in, and the bare E2E cookie loops `/` through the proxy's
-// rewrite. The page is made tall from the first layout of every load, the hardest
-// case: the browser can restore the offset before any of the page's own code runs.
+// Signed out, as home-logo-top-and-refresh.spec.ts draws Home: the same shell and the same feed
+// as signed in, and the bare E2E cookie loops `/` through the proxy's rewrite. Offline, Explore
+// and Marketplace draw their error states inside the shell, which is all the scroll needs. Every
+// page is made tall from the first layout of every load, the hardest case: the browser can restore
+// the offset before any of the page's own code runs.
 
 test.use({ viewport: { width: 1440, height: 900 } });
 
@@ -20,7 +22,8 @@ test.afterEach(async ({ page }) => {
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
-const SLOW_PAGE = { timeout: 30_000 };
+// Offline, Explore's error state arrives after its server read gives up (about 14 seconds).
+const SLOW_PAGE = { timeout: 45_000 };
 
 const EMPTY_FEED_PAGE = {
   items: [],
@@ -90,6 +93,10 @@ async function settledScrollY(page: Page) {
   throw new Error(`the scroll position never settled (last read ${last})`);
 }
 
+async function scrollRestoration(page: Page) {
+  await expect.poll(() => page.evaluate(() => history.scrollRestoration), SLOW_PAGE).toBe('auto');
+}
+
 test('a reload of a scrolled Home opens at its top', async ({ page }) => {
   test.slow();
   await answerFeed(page);
@@ -103,10 +110,26 @@ test('a reload of a scrolled Home opens at its top', async ({ page }) => {
 
   expect(await settledScrollY(page)).toBe(0);
   // The browser's restore is back on once the load is done.
-  await expect.poll(() => page.evaluate(() => history.scrollRestoration)).toBe('auto');
+  await scrollRestoration(page);
 });
 
-test('after a reload of Home, Back to Home still lands where it was left', async ({ page }) => {
+for (const address of ['/showcase', '/marketplace']) {
+  test(`a reload of a scrolled ${address} opens at its top`, async ({ page }) => {
+    test.slow();
+    await tallFromFirstLayout(page);
+    await page.goto(address, { waitUntil: 'load', timeout: 60_000 });
+    await hydrated(page);
+
+    await scrollTo(page, 2400);
+    await page.reload({ waitUntil: 'load', timeout: 60_000 });
+    await hydrated(page);
+
+    expect(await settledScrollY(page)).toBe(0);
+    await scrollRestoration(page);
+  });
+}
+
+test('after a reload of Home, Back to Home inside the app still lands where it was left', async ({ page }) => {
   test.slow();
   await answerFeed(page);
   await tallFromFirstLayout(page);
@@ -114,7 +137,7 @@ test('after a reload of Home, Back to Home still lands where it was left', async
   await homeDrawn(page);
   await page.reload({ waitUntil: 'load' });
   await homeDrawn(page);
-  await expect.poll(() => page.evaluate(() => history.scrollRestoration)).toBe('auto');
+  await scrollRestoration(page);
 
   await scrollTo(page, 1800);
   await sidebarLink(page, 'AI agents').click();
@@ -125,6 +148,24 @@ test('after a reload of Home, Back to Home still lands where it was left', async
   await page.goBack();
   await expect(page).toHaveURL(/\/$/);
   expect(await settledScrollY(page)).toBe(1800);
+});
+
+test('Back to Home from another document still lands where it was left', async ({ page }) => {
+  test.slow();
+  await answerFeed(page);
+  await tallFromFirstLayout(page);
+  await page.goto('/');
+  await homeDrawn(page);
+
+  await scrollTo(page, 1800);
+  // A full load of another page: Home's document goes, and comes back as a new one.
+  await page.goto('/developers/mcp');
+  await hydrated(page);
+  await page.goBack({ waitUntil: 'load' });
+  await homeDrawn(page);
+
+  expect(await settledScrollY(page)).toBe(1800);
+  await scrollRestoration(page);
 });
 
 test('a reload of another page keeps its place', async ({ page }) => {
