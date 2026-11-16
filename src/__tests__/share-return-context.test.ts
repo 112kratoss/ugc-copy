@@ -50,3 +50,49 @@ describe('the way back from a post page opened from the unlock library', () => {
     });
   });
 });
+
+// Owner, 2026-11-15: "Back to Community" named a page the site no longer has (the menu calls it
+// Explore), and links that never said where the post was opened from were given that name too.
+describe('the way back names the page it goes back to', () => {
+  it('calls Explore by its name, for its links and for its own address', () => {
+    expect(getShowcaseReturnContext({ from: 'community', returnTo: '/showcase?category=video' })).toEqual({
+      source: 'community',
+      href: '/showcase?category=video',
+      label: 'Back to Explore',
+    });
+    expect(getShowcaseReturnContext({ from: 'community' })).toEqual({
+      source: 'community',
+      href: '/showcase',
+      label: 'Back to Explore',
+    });
+    expect(getShowcaseReturnContext({ returnTo: '/showcase?sort=new' })).toMatchObject({ label: 'Back to Explore' });
+  });
+
+  it('says only Back when the link named no page', () => {
+    expect(getShowcaseReturnContext({})).toEqual({ source: 'unnamed', href: '/showcase', label: 'Back' });
+    expect(getShowcaseReturnContext({ from: 'nowhere-we-know' })).toMatchObject({ source: 'unnamed', label: 'Back' });
+  });
+
+  it('says only Back for a page it cannot name, and still goes back there', () => {
+    expect(getShowcaseReturnContext({ returnTo: '/notifications' })).toEqual({
+      source: 'unnamed',
+      href: '/notifications',
+      label: 'Back',
+    });
+    // Another post is not Explore, though its address starts like it.
+    expect(getShowcaseReturnContext({ returnTo: '/showcase/post-1?from=home&returnTo=%2F' })).toEqual({
+      source: 'unnamed',
+      href: '/showcase/post-1?from=home&returnTo=%2F',
+      label: 'Back',
+    });
+  });
+
+  it("names Home for Home's lanes as for Home itself", () => {
+    expect(getShowcaseReturnContext({ returnTo: '/' })).toMatchObject({ source: 'home', label: 'Back to Home' });
+    expect(getShowcaseReturnContext({ returnTo: '/?chip=notes' })).toEqual({
+      source: 'home',
+      href: '/?chip=notes',
+      label: 'Back to Home',
+    });
+  });
+});

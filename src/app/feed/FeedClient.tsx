@@ -824,8 +824,9 @@ export default function FeedClient({
         // be told the click happened. Client-side navigation keeps the shell
         // alive; a full document load here made every post click pay for a
         // cold reload out and another one back.
-        publishNavigationStart();
-        router.push(buildPostPath(postId));
+        const postPath = buildPostPath(postId);
+        publishNavigationStart(postPath);
+        router.push(postPath);
     }, [buildPostPath, recordOpen, router]);
     const handlePrefetchPost = useCallback((postId: string) => {
         const href = buildPostPath(postId);
@@ -978,7 +979,7 @@ export default function FeedClient({
                     metadata: { redirectTo },
                 }).catch(() => undefined);
             }
-            publishNavigationStart();
+            publishNavigationStart(redirectTo);
             router.push(redirectTo);
         } catch (error) {
             if (error instanceof ShowcaseRemixRequestError
@@ -993,8 +994,9 @@ export default function FeedClient({
                         fallbackPosition: cardIndex,
                     });
                 }
-                publishNavigationStart();
-                router.push(buildPostPath(postId, 'resources'));
+                const resourcesPath = buildPostPath(postId, 'resources');
+                publishNavigationStart(resourcesPath);
+                router.push(resourcesPath);
                 return;
             }
             setFeedbackNotice({

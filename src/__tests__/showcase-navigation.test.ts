@@ -45,9 +45,9 @@ describe('showcase navigation', () => {
 
   it('rejects external return destinations', () => {
     expect(getShowcaseReturnContext({ returnTo: '//evil.example/path' })).toEqual({
-      source: 'community',
+      source: 'unnamed',
       href: '/showcase',
-      label: 'Back to Community',
+      label: 'Back',
     });
   });
 

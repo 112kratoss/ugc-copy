@@ -21,14 +21,14 @@ const COMPLETE_HOLD_MS = 220;
 const FAILSAFE_MS = 12_000;
 
 /**
- * True for a click that will actually take the viewer to another page. Anything
- * the browser handles itself — new tab, download, cross-origin, a bare hash on
- * the current page — must not raise the bar.
+ * Where a click will actually take the viewer, for one that leaves the page;
+ * null otherwise. Anything the browser handles itself — new tab, download,
+ * cross-origin, a bare hash on the current page — must not raise the bar.
  */
-function isNavigatingClick(event: MouseEvent): boolean {
+function readNavigatingClick(event: MouseEvent): URL | null {
   const url = readInAppLinkClick(event);
   // Same path means a hash jump or a no-op, not a page change.
-  return url !== null && url.pathname !== window.location.pathname;
+  return url !== null && url.pathname !== window.location.pathname ? url : null;
 }
 
 const readQuestionOpen = () => readFeedbackSnapshot().confirmation !== null;
@@ -70,8 +70,9 @@ export default function NavigationProgress() {
   // callers announce themselves through the store instead.
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
-      if (isNavigatingClick(event)) {
-        publishNavigationStart();
+      const destination = readNavigatingClick(event);
+      if (destination) {
+        publishNavigationStart(destination.href);
       }
     };
     // Capture phase, and this is load-bearing: `next/link` calls
