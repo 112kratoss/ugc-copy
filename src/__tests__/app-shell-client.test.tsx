@@ -29,7 +29,7 @@ const scrollToMock = vi.fn((options: ScrollToOptions | number) => {
   mockedScrollY = typeof options === 'number' ? options : options.top ?? 0;
 });
 
-const routerMocks = vi.hoisted(() => ({ push: vi.fn() }));
+const routerMocks = vi.hoisted(() => ({ push: vi.fn(), prefetch: vi.fn() }));
 
 vi.mock('next/navigation', () => ({
   usePathname: () => mockedPathname,
@@ -605,6 +605,82 @@ describe('AppShellClient', () => {
     ]) {
       expect(link).toHaveAttribute('data-prefetch', 'false');
     }
+  });
+
+  // Owner's recording, 2026-11-16: the side navigation's Marketplace took about a second, all of it
+  // waiting on the server, since nothing is prefetched as the page paints. The place a mouse points at,
+  // or the keyboard focuses, is prefetched then; each intent asks Next, which keeps a prefetched route
+  // a few minutes and skips one it holds (review of #835: a page-load-long memory here stopped the
+  // prefetch for the rest of the visit once Next's copy had expired).
+  describe('the side navigation, on a reader\'s intent', () => {
+    beforeEach(() => {
+      mockedPathname = '/showcase';
+      routerMocks.prefetch.mockClear();
+    });
+
+    function sidebarLink(name: string) {
+      return within(screen.getByRole('complementary', { name: 'Primary navigation' })).getByRole('link', { name });
+    }
+
+    it('prefetches nothing as the page paints, and a place each time a mouse rests on it', () => {
+      render(
+        <AppShellClient>
+          <div>Page content</div>
+        </AppShellClient>
+      );
+      expect(routerMocks.prefetch).not.toHaveBeenCalled();
+
+      fireEvent.pointerEnter(sidebarLink('Marketplace'), { pointerType: 'mouse' });
+      fireEvent.pointerEnter(sidebarLink('Marketplace'), { pointerType: 'mouse' });
+      expect(routerMocks.prefetch.mock.calls).toEqual([['/marketplace'], ['/marketplace']]);
+
+      // The place already open is not fetched; nor anything for the bottom navigation.
+      fireEvent.pointerEnter(sidebarLink('Explore'), { pointerType: 'mouse' });
+      fireEvent.pointerEnter(
+        within(screen.getByRole('navigation', { name: 'Primary mobile navigation' })).getByRole('link', { name: 'You' }),
+        { pointerType: 'mouse' },
+      );
+      expect(routerMocks.prefetch).toHaveBeenCalledTimes(2);
+    });
+
+    // A finger's pointer arrives with the press itself, and a prefetch started then makes the press
+    // wait on it (review of #835, from the production-build probe); a tap's focus comes just before
+    // its click.
+    it('prefetches nothing for a finger or a pen, nor for the focus a press gives', () => {
+      render(
+        <AppShellClient>
+          <div>Page content</div>
+        </AppShellClient>
+      );
+
+      fireEvent.pointerEnter(sidebarLink('Marketplace'), { pointerType: 'touch' });
+      fireEvent.pointerEnter(sidebarLink('Marketplace'), { pointerType: 'pen' });
+      // jsdom's focus never matches :focus-visible, as a press's focus does not.
+      act(() => sidebarLink('Studio').focus());
+      expect(routerMocks.prefetch).not.toHaveBeenCalled();
+    });
+
+    it('prefetches a place the keyboard focuses', () => {
+      render(
+        <AppShellClient>
+          <div>Page content</div>
+        </AppShellClient>
+      );
+      // The focus a key gives matches :focus-visible, which jsdom never says.
+      const matches = HTMLElement.prototype.matches;
+      const keyboardFocus = vi.spyOn(HTMLElement.prototype, 'matches').mockImplementation(function (this: HTMLElement, selector: string) {
+        return selector === ':focus-visible' ? this === document.activeElement : matches.call(this, selector);
+      });
+      try {
+        act(() => sidebarLink('Studio').focus());
+        expect(routerMocks.prefetch.mock.calls).toEqual([['/creations']]);
+        // Not the place already open.
+        act(() => sidebarLink('Explore').focus());
+        expect(routerMocks.prefetch).toHaveBeenCalledTimes(1);
+      } finally {
+        keyboardFocus.mockRestore();
+      }
+    });
   });
 
   it('leaves a tab opened from another page to Next and scrolls an active tab to the top', () => {

@@ -1,4 +1,5 @@
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
+import { readSupabaseAuthCookieUserId } from '@/lib/supabase-auth-cookie';
 
 /**
  * The recipes "Load more recipes" brought to a Marketplace listing, kept for this tab (owner's
@@ -43,6 +44,21 @@ const STORAGE_PREFIX = 'marketplace-pages:';
  */
 export function buildMarketplacePagesKey(listingKey: string, viewerId: string | null): string {
   return `${STORAGE_PREFIX}${viewerId ?? 'visitor'}:${encodeURIComponent(listingKey)}`;
+}
+
+/**
+ * Whose kept listing a page may draw: the signed-in viewer's once the page's auth provider knows
+ * them, and while it is still asking, the account this browser's session cookie names (a hint,
+ * never proof, as search's kept pages read it). Every mount of the Marketplace's optional-auth
+ * provider asks Supabase again who is signed in, about 0.3 s, Back's mount included; read as
+ * nobody meanwhile, Back looked for a visitor's listing, drew the first page alone, and the browser
+ * put the reader back on that short page (owner's recording, 2026-11-16). A listing is kept under
+ * the account its pages were asked for (the session that sent them, or none), so a page asked as
+ * a visitor is never drawn as a signed-in viewer's.
+ */
+export function marketplacePagesViewer({ userId, isLoading }: { userId: string | null; isLoading: boolean }): string | null {
+  if (userId) return userId;
+  return isLoading ? readSupabaseAuthCookieUserId() : null;
 }
 
 function sessionStore(): Storage | null {

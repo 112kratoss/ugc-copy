@@ -27,8 +27,10 @@
 // E2E user's recipe sales page, /marketplace/sell: two free recipes on text posts of theirs
 // (fixtures/seller-recipes.json), with no unlock orders and no deleted posts. And Explore's Recent
 // lane for one tool of its own (/showcase?sort=recent&tool=e2e-explore-reel): three pictures by a
-// creator of their own (fixtures/explore-reel.json), and the source tools catalog Explore reads
-// beside it, answered with no rows.
+// creator of their own (fixtures/explore-reel.json). And the storefront, /marketplace: its first
+// page, four free recipes on picture posts by a creator of their own and a fifth the page reads to
+// know there are more (fixtures/marketplace-recipes.json). Both read the source tools catalog,
+// answered with no rows (below), which they draw as the app's own list.
 // A page added here brings each of its reads, matched by method, path and the filters that name
 // its own rows: a whole table answered with no rows would change what every other page draws.
 //
@@ -78,12 +80,19 @@ const searchStarter = require('../fixtures/search-starter.json');
 // whose posts read names the fixture (`source_tool_slug`), so no other page's read is answered.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const exploreReel = require('../fixtures/explore-reel.json');
+// The storefront's first page, newest first: four free recipes on picture posts and the fifth that
+// says more follow, by one creator. /marketplace reads them in getMarketplaceResourceList
+// (src/lib/post-resource-bundles-server.ts); marketplace-keeps-place.spec.ts draws it.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const marketplaceRecipes = require('../fixtures/marketplace-recipes.json');
 // In the order the page asks for them: its recipes' posts as its read lists the recipes, newest
 // first, and the posts' covers as that read answers (the fixture's posts are in the same order).
 const sellerPostIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.post_id).join(',')})`;
 const sellerBundleIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.id).join(',')})`;
 // The lane's posts as the hydration names them, in the order its read answered them.
 const exploreReelPostIds = `in.(${exploreReel.posts.map(({ id }) => id).join(',')})`;
+const marketplacePostIds = `in.(${marketplaceRecipes.posts.map((post) => post.id).join(',')})`;
+const marketplaceBundleIds = `in.(${marketplaceRecipes.bundles.map((bundle) => bundle.id).join(',')})`;
 
 const HOST = 'example.supabase.co';
 
@@ -458,14 +467,65 @@ const READS = [
     answer: () => json([], { 'content-range': '*/0' }),
   },
   {
+    // getMarketplaceResourceListBase: the storefront's first page (four, and one more to know more
+    // follow), as the page and the list API ask for it.
+    methods: ['POST'],
+    path: '/rest/v1/rpc/list_marketplace_resource_bundles',
+    body: {
+      p_access_filter: 'all',
+      p_resource_filter: 'all',
+      p_tool_slug: null,
+      p_query: null,
+      p_sort: 'recent',
+      p_offset: 0,
+      p_limit: marketplaceRecipes.bundles.length,
+    },
+    answer: () => json(marketplaceRecipes.bundles),
+  },
+  {
+    // hydrateRecipes: none of their posts is marked NSFW (loadNsfwPostIds)...
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { select: 'id,is_nsfw', id: marketplacePostIds },
+    answer: () => json(marketplaceRecipes.posts.map((post) => ({ id: post.id, is_nsfw: false }))),
+  },
+  {
+    // ...their seller (loadProfileMap)...
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `in.(${marketplaceRecipes.creator.id})` },
+    answer: () => json([marketplaceRecipes.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // ...their posts (loadLinkedPostMap)...
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: marketplacePostIds, review_status: 'eq.visible' },
+    answer: () => json(marketplaceRecipes.posts, { 'content-range': `0-${marketplaceRecipes.posts.length - 1}/${marketplaceRecipes.posts.length}` }),
+  },
+  {
+    // ...whose covers are one picture each, with its preview (loadPostMediaItemsMap)...
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: marketplacePostIds },
+    answer: () => json(marketplaceRecipes.media, { 'content-range': `0-${marketplaceRecipes.media.length - 1}/${marketplaceRecipes.media.length}` }),
+  },
+  {
+    // ...and no revision since the recipes went up (loadLatestContentRevisionTimes).
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundle_revisions',
+    filters: { bundle_id: marketplaceBundleIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
     // listSourceToolsCatalog (src/lib/source-tools-server.ts), which Explore's server render waits
-    // for beside the feed: no rows, so the catalog is the app's own fallback list, as it is where
-    // the table is missing. Answered without a fixture row, as the welcome grant and the referral
-    // terms are, because the other pages the specs draw that read it draw the same as its failure
-    // did: Explore's other lanes and Marketplace fail on their own feed reads first ("Could not load
-    // Explore", "Could not load the marketplace"), and the post composer, which asks for it through
-    // /api/source-tools, is answered that call by its specs, but for the media reorder's, which
-    // never opens the list (2026-11-16).
+    // for beside the feed and the storefront's render reads beside its first page: no rows, so the
+    // catalog is the app's own fallback list, as it is where the table is missing. Answered without
+    // a fixture row, as the welcome grant and the referral terms are, because the other pages the
+    // specs draw that read it draw the same as its failure did: Explore's other lanes fail on their
+    // own feed reads first ("Could not load Explore"), and the post composer, which asks for it
+    // through /api/source-tools, is answered that call by its specs, but for the media reorder's and
+    // bottom-nav-overlays' signed-in /post/new, which never open the list (2026-11-16).
     methods: ['GET'],
     path: '/rest/v1/source_tools',
     filters: { is_active: 'eq.true' },

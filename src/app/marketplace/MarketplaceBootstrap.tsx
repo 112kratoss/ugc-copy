@@ -19,7 +19,11 @@ import {
 } from '@/app/marketplace/MarketplaceRecipeTile';
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
 import { useAuth } from '@/components/AuthProvider';
-import { buildMarketplacePagesKey, recallMarketplacePages } from '@/lib/marketplace-pages-memory';
+import {
+  buildMarketplacePagesKey,
+  marketplacePagesViewer,
+  recallMarketplacePages,
+} from '@/lib/marketplace-pages-memory';
 import { MARKETPLACE_INITIAL_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
 import type { SourceToolFilterOption } from '@/lib/source-tools';
@@ -108,16 +112,21 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
   const { filters: initialFilters, shortQuery, navigate } = listing;
   const initialPage = listing.page ?? EMPTY_PAGE;
   const [InteractiveBrowser, setInteractiveBrowser] = useState<MarketplaceBrowserComponent | null>(null);
-  const { user } = useAuth();
+  const { user, isLoading: isViewerLoading } = useAuth();
   // Back from a recipe to a listing whose Load more had brought more recipes: the interactive
   // browser draws them in the first frame, so the page is as long as when the reader left it and
   // the browser puts them back where they were (owner's report, 2026-11-15). This shell would
-  // draw the first page alone. Decided once the address bar's listing is known, before the paint.
+  // draw the first page alone. Decided once the address bar's listing is known, before the paint,
+  // for the viewer the session cookie names while this page's auth provider asks who it is: a
+  // signed-in reader read as nobody came back to the first page alone (owner's recording, 2026-11-16).
   if (
     InteractiveBrowser === null
     && loadedMarketplaceBrowser !== null
     && listing.addressKnown
-    && recallMarketplacePages(buildMarketplacePagesKey(marketplaceFiltersKey(initialFilters), user?.id ?? null)) !== null
+    && recallMarketplacePages(buildMarketplacePagesKey(
+      marketplaceFiltersKey(initialFilters),
+      marketplacePagesViewer({ userId: user?.id ?? null, isLoading: isViewerLoading }),
+    )) !== null
   ) {
     setInteractiveBrowser(() => loadedMarketplaceBrowser);
   }
@@ -572,11 +581,12 @@ function buildMarketplacePath(filters: MarketplaceFilters): string {
   return `/marketplace?${params.toString()}`;
 }
 
+/** The post at its top, as the interactive list's tiles open it (no `#recipe`: owner, 2026-11-16). */
 function buildMarketplaceDetailPath(postId: string, marketplaceReturnPath: string) {
   const params = new URLSearchParams({
     from: 'unlocks',
     returnTo: marketplaceReturnPath,
   });
 
-  return `/showcase/${encodeURIComponent(postId)}?${params.toString()}#recipe`;
+  return `/showcase/${encodeURIComponent(postId)}?${params.toString()}`;
 }
