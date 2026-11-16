@@ -344,18 +344,68 @@ export function resolveCreationWorkspaceCardState(
 
 export type CreationMediaFilter = 'all' | 'images' | 'videos' | 'audio';
 
+/** The number each media filter shows: its total, or null where Studio does not know it. */
+export type CreationMediaTotals = Record<CreationMediaFilter, number | null>;
+
 /**
- * Studio's media filters, with their counts. A kind with nothing in it is no
- * filter ("Audio (0)" could only ever show nothing), except the one chosen:
- * when its last item goes, it stays, at 0, over its empty state, so the
- * choice does not vanish from under the reader.
+ * Studio's media filters, with their numbers. Which filters there are follows
+ * `counts`, what the loaded pages hold: a kind with nothing in it is no filter
+ * ("Audio (0)" could only ever show nothing), except the one chosen: when its
+ * last item goes, it stays, at 0, over its empty state, so the choice does not
+ * vanish from under the reader. The number each shows is its total from
+ * `totals` (`getStudioCreationCounts`), and none where the total is unknown.
  */
 export function getCreationMediaFilters(
   counts: Record<CreationMediaFilter, number>,
   chosen: CreationMediaFilter,
+  totals: CreationMediaTotals = counts,
 ): Array<{ key: CreationMediaFilter; label: string }> {
   const names: Record<CreationMediaFilter, string> = { all: 'All', images: 'Images', videos: 'Videos', audio: 'Audio' };
   return (Object.keys(names) as CreationMediaFilter[])
     .filter((key) => key === 'all' || counts[key] > 0 || key === chosen)
-    .map((key) => ({ key, label: `${names[key]} (${counts[key]})` }));
+    .map((key) => {
+      const total = totals[key];
+      return { key, label: total === null ? names[key] : `${names[key]} (${total})` };
+    });
+}
+
+/**
+ * Studio's creation counts, for its header and its media filters together, so
+ * the two agree. Studio loads its creations 36 at a time, and its filters
+ * counted the loaded pages: "All (29)" under "54 CREATIONS TOTAL" (live sweep,
+ * 2026-11-17). A number is drawn only where it is a total:
+ * - every page loaded: the loaded creations are the library, so each count is
+ *   its total (fresher than the server's, read beside the first page);
+ * - pages still to load: the server's total (`owner_profile_counts`, which
+ *   counts by the grid's own rule) is the header's and All's, and a kind, which
+ *   the server does not count, shows no number;
+ * - neither: the header says what is loaded with a "+", and no filter a number.
+ */
+export function getStudioCreationCounts({
+  loaded,
+  listComplete,
+  serverTotal,
+}: {
+  /** The finished creations the loaded pages hold, by filter. */
+  loaded: Record<CreationMediaFilter, number>;
+  /** Whether the list's last page is loaded: the server said no page follows it. */
+  listComplete: boolean;
+  /** The library's total from `/api/profile` (`stats.creations`), or null when unread. */
+  serverTotal: number | null;
+}): { total: number; totalIsAtLeast: boolean; filterTotals: CreationMediaTotals } {
+  if (listComplete) {
+    return { total: loaded.all, totalIsAtLeast: false, filterTotals: { ...loaded } };
+  }
+  if (serverTotal !== null) {
+    return {
+      total: serverTotal,
+      totalIsAtLeast: false,
+      filterTotals: { all: serverTotal, images: null, videos: null, audio: null },
+    };
+  }
+  return {
+    total: loaded.all,
+    totalIsAtLeast: true,
+    filterTotals: { all: null, images: null, videos: null, audio: null },
+  };
 }

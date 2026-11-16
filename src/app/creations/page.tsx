@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Archive, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Flag, Globe, ImageIcon, Loader2, PencilLine, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
+import { Archive, CheckCircle2, ChevronDown, ChevronUp, Clock, Copy, Download, ExternalLink, Eye, Film, Flag, Globe, ImageIcon, Loader2, PencilLine, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
 import { useAuth } from '@/components/AuthProvider';
+import { Button } from '@/components/DesignSystem';
 import MediaDetailsPreviewModal, {
     type MediaDetailsStatusNote,
     type MediaDetailsType,
@@ -32,6 +33,7 @@ import {
     buildCreationComposerPath,
     buildPostRecipeManagementPath,
     getCreationMediaFilters,
+    getStudioCreationCounts,
     resolveCreationWorkspaceCardState,
     type CreationMediaFilter,
     type CreationWorkspaceCardState,
@@ -192,6 +194,11 @@ const CREATIONS_GENERATIONS_PAGE_SIZE = 36;
 const CREATIONS_POSTS_PAGE_SIZE = 36;
 const SIGNED_MEDIA_URL_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const GENERATION_HIGHLIGHT_MS = 4000;
+// The portfolio setup card's parts that Steps shows and hides on a phone.
+const PORTFOLIO_SETUP_LABEL_ID = 'studio-portfolio-setup-label';
+const PORTFOLIO_SETUP_DETAIL_ID = 'studio-portfolio-setup-detail';
+const PORTFOLIO_SETUP_PORTFOLIO_ID = 'studio-portfolio-setup-portfolio';
+const PORTFOLIO_SETUP_STEPS_ID = 'studio-portfolio-setup-steps';
 
 function getGenerationCardAnchorId(generationId: string): string {
     return `studio-generation-${generationId}`;
@@ -609,6 +616,12 @@ export default function CreationsPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [generationsNextCursor, setGenerationsNextCursor] = useState<string | null>(null);
+    // Whether the server has answered for the list since this page opened: only then does a
+    // missing next cursor mean the whole library is loaded. The snapshot of an earlier visit,
+    // drawn first, does not say whether more pages wait.
+    const [generationsPageLoaded, setGenerationsPageLoaded] = useState(false);
+    // The setup card's Steps, on a phone (it shows them all from 640px).
+    const [setupStepsShown, setSetupStepsShown] = useState(false);
     const [isLoadingMoreGenerations, setIsLoadingMoreGenerations] = useState(false);
     const [generationsLoadMoreError, setGenerationsLoadMoreError] = useState<string | null>(null);
     const [postsNextOffset, setPostsNextOffset] = useState<number | null>(null);
@@ -842,6 +855,7 @@ export default function CreationsPage() {
                     loadedGenerationPagesRef.current = 1;
                     setGenerationsNextCursor(freshCursor);
                 }
+                setGenerationsPageLoaded(true);
                 setGenerationsLoadMoreError(null);
             } else {
                 setLoadError('Could not load your creations. Check your connection and try again.');
@@ -1830,9 +1844,18 @@ export default function CreationsPage() {
         return true;
     });
 
-    const imageCount = successfulGenerations.filter(g => getMediaKind(g) === 'image').length;
-    const videoCount = successfulGenerations.filter(g => getMediaKind(g) === 'video').length;
-    const audioCount = successfulGenerations.filter(g => getMediaKind(g) === 'audio').length;
+    const loadedCreationCounts = {
+        all: successfulGenerations.length,
+        images: successfulGenerations.filter(g => getMediaKind(g) === 'image').length,
+        videos: successfulGenerations.filter(g => getMediaKind(g) === 'video').length,
+        audio: successfulGenerations.filter(g => getMediaKind(g) === 'audio').length,
+    };
+    // The header's total and the filters' numbers, by one rule so they agree (creation-workspace.ts).
+    const creationCounts = getStudioCreationCounts({
+        loaded: loadedCreationCounts,
+        listComplete: generationsPageLoaded && generationsNextCursor === null,
+        serverTotal: profile?.stats?.creations ?? null,
+    });
     const visiblePosts = useMemo(() => {
         if (postVisibilityFilter === 'archived') {
             return posts.filter((post) => Boolean(post.archivedAt));
@@ -1919,33 +1942,42 @@ export default function CreationsPage() {
                 className="hidden"
                 onChange={(event) => void handlePreviewRestoreFile(event)}
             />
-            <div className="studio-shell relative z-10 py-8">
+            {/* Below 640px (sm) everything above the grid is drawn tighter, so the first creations
+                show in a phone's first screen: the header, the section tabs and the setup card used to
+                fill it (live sweep, 2026-11-17, 375 × 812). From 640px it is as it was. */}
+            <div className="studio-shell relative z-10 py-6 sm:py-8">
                 {/* Header. Generate and Post are the top bar's Create menu, and
                     Profile is in the navigation. */}
-                <div className="mb-8">
+                <div className="mb-5 sm:mb-8">
                     <h1 className="text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)]">
                         Studio
                     </h1>
                     <p className="text-sm text-zinc-500 font-medium tracking-wide">
                         {activeView === 'creations'
-                            ? `${profile?.stats?.creations ?? `${successfulGenerations.length}${generationsNextCursor ? '+' : ''}`} CREATION${(profile?.stats?.creations ?? successfulGenerations.length) !== 1 ? 'S' : ''} TOTAL`
+                            ? `${creationCounts.total}${creationCounts.totalIsAtLeast ? '+' : ''} CREATION${creationCounts.total !== 1 ? 'S' : ''} TOTAL`
                             : activeView === 'posts'
                                 ? `${activePostCount} POST${activePostCount !== 1 ? 'S' : ''}${archivedPostCount > 0 ? ` · ${archivedPostCount} ARCHIVED` : ''}`
                                 : 'UNLOCKED RECIPES'}
                     </p>
                 </div>
 
-                <div className="mb-6 flex flex-wrap items-center gap-3">
+                <div className="mb-5 sm:mb-6 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
                     {/* Links, not buttons: each section has its own URL, so the
-                        browser's history and a shared link both know which one. */}
-                    <nav aria-label="Studio sections" className="flex flex-wrap items-center gap-3">
+                        browser's history and a shared link both know which one.
+                        On a phone they keep to one row, which scrolls to the screen's
+                        edges where it is too narrow, with room kept for the focus ring
+                        (as `.home-shelf-track`); they wrapped onto two lines. */}
+                    <nav
+                        aria-label="Studio sections"
+                        className="hide-scrollbar -mx-4 -my-1 flex items-center gap-2 overflow-x-auto px-4 py-1 sm:mx-0 sm:my-0 sm:flex-wrap sm:gap-3 sm:overflow-visible sm:px-0 sm:py-0"
+                    >
                         {WORKSPACE_TABS.map((tab) => (
                             <Link
                                 key={tab.key}
                                 href={buildWorkspacePath(tab.key, postVisibilityFilter, filter)}
                                 scroll={false}
                                 aria-current={activeView === tab.key ? 'page' : undefined}
-                                className={`ui-focus-ring rounded-full border px-4 py-2.5 text-sm font-semibold transition ${
+                                className={`ui-focus-ring shrink-0 whitespace-nowrap rounded-full border px-4 py-2.5 text-sm font-semibold transition ${
                                     activeView === tab.key
                                         ? 'border-white/20 bg-white/10 text-white'
                                         : 'border-white/8 bg-zinc-900/50 text-zinc-400 hover:border-white/14 hover:bg-zinc-800 hover:text-zinc-200'
@@ -1955,7 +1987,8 @@ export default function CreationsPage() {
                             </Link>
                         ))}
                     </nav>
-                    <div className="text-sm text-zinc-500">
+                    {/* What the open section holds: the tabs say enough on a phone. */}
+                    <div className="hidden text-sm text-zinc-500 sm:block">
                         {WORKSPACE_TABS.find((tab) => tab.key === activeView)?.lede}
                     </div>
                 </div>
@@ -1969,42 +2002,66 @@ export default function CreationsPage() {
                 {activeView === 'unlocks' ? <UnlockLibrary /> : null}
 
                 {shouldShowPortfolioStarter ? (
-                    <section className="mb-8 rounded-3xl border border-[rgba(255,122,89,0.2)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
-                        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                    // On a phone the card is its title and its first step, with the rest behind
+                    // Steps; from 640px it shows everything, with no disclosure, as it did.
+                    <section
+                        aria-labelledby={PORTFOLIO_SETUP_LABEL_ID}
+                        className="mb-5 rounded-3xl border border-[rgba(255,122,89,0.2)] bg-[var(--ui-surface-1)] p-4 shadow-[var(--ui-shadow-panel)] sm:mb-8 sm:p-6"
+                    >
+                        <div className="flex flex-col gap-4 sm:gap-5 lg:flex-row lg:items-center lg:justify-between">
                             <div>
-                                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-300">
+                                <div id={PORTFOLIO_SETUP_LABEL_ID} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-300">
                                     <UserRound className="h-3.5 w-3.5 text-[var(--ui-primary)]" />
                                     Portfolio setup
                                 </div>
-                                <h2 className="mt-4 max-w-2xl text-2xl font-semibold tracking-tight text-white">
+                                <h2 className="mt-3 max-w-2xl text-lg font-semibold tracking-tight text-white sm:mt-4 sm:text-2xl">
                                     {hasPortfolioProof
                                         ? 'Finish the profile behind your published work.'
                                         : 'Turn the first output into a profile-ready portfolio piece.'}
                                 </h2>
-                                <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-300">
+                                <p
+                                    id={PORTFOLIO_SETUP_DETAIL_ID}
+                                    className={`mt-3 max-w-3xl text-sm leading-6 text-zinc-300 ${setupStepsShown ? '' : 'max-sm:hidden'}`}
+                                >
                                     {hasPortfolioProof
                                         ? 'Your creation and public proof are in place. Add the remaining identity details so visitors and buyers know who is behind the work.'
                                         : 'New creators have three jobs here: shape the profile, create proof, then publish the strongest result with an optional recipe.'}
                                 </p>
                             </div>
-                            <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
+                            <div className="flex flex-wrap gap-2 sm:flex-nowrap lg:justify-end">
                                 <Link
                                     href={profileSetupHref}
-                                    className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200"
+                                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 sm:flex-initial"
                                 >
                                     <UserRound className="h-4 w-4" />
                                     {profileReadiness.publicPublishReady ? 'Complete profile' : 'Set up profile'}
                                 </Link>
+                                {/* A wrapper hides it from 640px: `.ui-button`'s display is unlayered, and outranks `sm:hidden`. */}
+                                <div className="sm:hidden">
+                                    <Button
+                                        variant="secondary"
+                                        icon={setupStepsShown ? ChevronUp : ChevronDown}
+                                        ariaExpanded={setupStepsShown}
+                                        ariaControls={`${PORTFOLIO_SETUP_DETAIL_ID} ${PORTFOLIO_SETUP_PORTFOLIO_ID} ${PORTFOLIO_SETUP_STEPS_ID}`}
+                                        onClick={() => setSetupStepsShown((shown) => !shown)}
+                                    >
+                                        Steps
+                                    </Button>
+                                </div>
                                 <Link
+                                    id={PORTFOLIO_SETUP_PORTFOLIO_ID}
                                     href={publicProfileUsername ? `/creators/${publicProfileUsername}` : '/profile'}
-                                    className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
+                                    className={`inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08] max-sm:basis-full ${setupStepsShown ? '' : 'max-sm:hidden'}`}
                                 >
                                     <ExternalLink className="h-4 w-4" />
                                     {publicProfileUsername ? 'View portfolio' : 'Preview profile setup'}
                                 </Link>
                             </div>
                         </div>
-                        <div className="mt-5 grid gap-3 md:grid-cols-3">
+                        <div
+                            id={PORTFOLIO_SETUP_STEPS_ID}
+                            className={`mt-5 grid gap-3 md:grid-cols-3 ${setupStepsShown ? '' : 'max-sm:hidden'}`}
+                        >
                             {[
                                 {
                                     title: profileReadiness.profileComplete
@@ -2053,11 +2110,8 @@ export default function CreationsPage() {
 
                 {/* Filter Tabs */}
                 {activeView === 'creations' && !isLoading && successfulGenerations.length > 0 && (
-                    <div className="mb-8 flex gap-2 overflow-x-auto pb-1">
-                        {getCreationMediaFilters(
-                            { all: successfulGenerations.length, images: imageCount, videos: videoCount, audio: audioCount },
-                            filter,
-                        ).map(tab => (
+                    <div className="mb-5 flex gap-2 overflow-x-auto pb-1 sm:mb-8">
+                        {getCreationMediaFilters(loadedCreationCounts, filter, creationCounts.filterTotals).map(tab => (
                             // As the post filters below: a refinement of the section, so it
                             // replaces the history entry, and Back and a refresh keep it.
                             <Link
@@ -2206,19 +2260,21 @@ export default function CreationsPage() {
                 {/* Processing */}
                 {activeView === 'creations' && processingGenerations.length > 0 && (
                     <div className="mb-10">
-                        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                        {/* On a phone one row, the heading and Refresh now, so the runs come into
+                            the first screen; each card says when it started. */}
+                        <div className="mb-4 flex items-center justify-between gap-2 sm:items-end">
                             <div>
                                 <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-yellow-400/80">
                                     <Loader2 className="h-4 w-4 animate-spin" /> Processing ({processingGenerations.length})
                                 </h2>
-                                <p className="mt-2 max-w-2xl text-sm text-zinc-500">
+                                <p className="mt-2 hidden max-w-2xl text-sm text-zinc-500 sm:block">
                                     Longer provider queues keep running in the background. Each card shows when the run started, and finished outputs move into Completed automatically.
                                 </p>
                             </div>
                             <button
                                 type="button"
                                 onClick={() => void fetchCreations()}
-                                className="inline-flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200 transition hover:bg-white/[0.08] hover:text-white sm:self-start"
                             >
                                 <Loader2 className="h-3.5 w-3.5" />
                                 Refresh now

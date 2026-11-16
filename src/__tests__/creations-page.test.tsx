@@ -545,6 +545,63 @@ describe('CreationsPage', () => {
     });
   });
 
+  // Live sweep of 2026-11-17: "54 CREATIONS TOTAL" over "All (29)" and "Images (29)", the filters
+  // counting the one page of 36 loaded. The rule is getStudioCreationCounts (creation-workspace.ts);
+  // studio-counts-and-first-screen.spec.ts draws the sweep's own numbers in a browser.
+  it('says the same totals in the header and the media filters, and a number only where it is a total', async () => {
+    stubStudioFetch((url) => {
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [
+            makeGeneration({ id: 'gen-picture-1', title: 'Picture one' }),
+            makeGeneration({ id: 'gen-picture-2', title: 'Picture two' }),
+          ],
+          pagination: { limit: 36, hasMore: true, nextCursor: '36' },
+        }));
+      }
+      if (url === NEXT_GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [
+            makeGeneration({
+              id: 'gen-clip-1',
+              title: 'Clip one',
+              category: 'video',
+              model: 'veo3_fast',
+              output_url: 'https://example.com/clip.mp4',
+              created_at: '2026-05-31T10:00:00.000Z',
+            }),
+          ],
+          pagination: { limit: 36, hasMore: false, nextCursor: null },
+        }));
+      }
+      if (url === '/api/profile') {
+        // owner_profile_counts: the library holds three finished creations.
+        return Promise.resolve(jsonResponse({
+          username: 'creator-user1',
+          stats: { creations: 3, posts: 0, archivedPosts: 0, saved: 0 },
+        }));
+      }
+      return null;
+    });
+    const filters = () => within(screen.getByRole('link', { name: /^All\b/ }).parentElement!)
+      .getAllByRole('link')
+      .map((link) => link.textContent);
+
+    render(<CreationsPage />);
+
+    expect(await screen.findByText('Picture one')).toBeInTheDocument();
+    expect(await screen.findByText('3 CREATIONS TOTAL')).toBeInTheDocument();
+    // The page loaded holds two pictures of the three: All says the library's three, Images no number.
+    expect(filters()).toEqual(['All (3)', 'Images']);
+
+    fireEvent.click(screen.getByRole('button', { name: /load more creations/i }));
+    expect(await screen.findByText('Clip one')).toBeInTheDocument();
+
+    // Every page loaded: each number is a total.
+    expect(screen.getByText('3 CREATIONS TOTAL')).toBeInTheDocument();
+    expect(filters()).toEqual(['All (3)', 'Images (2)', 'Videos (1)']);
+  });
+
   it('loads the next creations page without refetching the whole history', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);

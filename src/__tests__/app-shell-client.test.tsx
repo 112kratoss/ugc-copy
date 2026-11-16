@@ -7,7 +7,7 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppShellClient from '@/components/AppShellClient';
-import type { AppNavClickHandler } from '@/components/app-shell-nav';
+import { APP_NAV_ITEMS, type AppNavClickHandler } from '@/components/app-shell-nav';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import type { ConfirmationRequest } from '@/components/feedback-state';
 import { publishUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
@@ -450,6 +450,72 @@ describe('AppShellClient', () => {
       within(screen.getByRole('navigation', { name: 'Primary mobile navigation' }))
         .queryByRole('link', { name: /invite/i })
     ).not.toBeInTheDocument();
+  });
+
+  // Live sweep of 2026-11-17: an inspection tool read the side navigation's links by their
+  // descriptions ("Reusable post recipes and creator assets" for Marketplace), the `title` each
+  // carries for a pointer's tooltip. A link is named by its own words before its title (accname
+  // 1.2, which Chrome's accessibility tree follows: a CDP read gave "Marketplace", the line its
+  // description), so a screen reader says the label and voice control finds the link by what it
+  // shows (WCAG 2.5.3, Label in Name). This holds every place there: an `aria-label` of the
+  // description, or of anything but the words shown, would fail it.
+  it('names each navigation link by the words it shows, with its line as the description', () => {
+    render(
+      <AppShellClient>
+        <div>Page content</div>
+      </AppShellClient>
+    );
+
+    const sideNavigation = screen.getByRole('complementary', { name: 'Primary navigation' });
+    const places = within(sideNavigation).getAllByRole('link').filter((link) => link.hasAttribute('data-app-nav-tab'));
+    expect(places.map((link) => link.textContent)).toEqual([
+      'Magic BookletCreator studio',
+      'Home',
+      'Explore',
+      'Marketplace',
+      'Studio',
+      'Workflow Canvas',
+      'AI agents',
+      'Profile',
+    ]);
+    for (const link of places.slice(1)) {
+      const item = APP_NAV_ITEMS.find((candidate) => candidate.label === link.textContent)!;
+      expect(link).toHaveAccessibleName(item.label);
+      expect(link).toHaveAccessibleDescription(item.description);
+    }
+    expect(within(sideNavigation).getByRole('link', { name: 'Marketplace' })).toHaveAttribute('href', '/marketplace');
+
+    // The phone's bottom bar and drawer, with a count on Alerts: its words stay in the name.
+    act(() => publishUnreadAlertsCount(3));
+    try {
+      const bottomNavigation = screen.getByRole('navigation', { name: 'Primary mobile navigation' });
+      const bottomControls = [
+        ...within(bottomNavigation).getAllByRole('link'),
+        ...within(bottomNavigation).getAllByRole('button'),
+      ];
+      expect(bottomControls).toHaveLength(5);
+      const shown = ['Home', 'Explore', 'Alerts', 'You', 'Create'];
+      bottomControls.forEach((control, index) => {
+        expect(control).toHaveAccessibleName(index === 2 ? /^3 unread alerts ?Alerts$/ : shown[index]);
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+      const drawerLinks = within(screen.getByRole('dialog', { name: 'Navigation' })).getAllByRole('link');
+      expect(drawerLinks.map((link) => link.textContent)).toEqual([
+        'Magic Booklet',
+        'Home',
+        'Explore',
+        'Marketplace',
+        'Studio',
+        'Workflow Canvas',
+        'AI agents',
+        'Profile',
+        'Help & feedback',
+      ]);
+      for (const link of drawerLinks) expect(link).toHaveAccessibleName(link.textContent!);
+    } finally {
+      act(() => publishUnreadAlertsCount(0));
+    }
   });
 
   describe('the Create menu', () => {
