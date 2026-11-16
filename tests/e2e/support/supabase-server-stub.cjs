@@ -457,6 +457,16 @@ const READS = [
     filters: { bundle_id: marketplaceBundleIds },
     answer: () => json([], { 'content-range': '*/0' }),
   },
+  {
+    // listSourceToolsCatalog (src/lib/source-tools-server.ts), which the storefront's render reads
+    // beside its first page: no rows, so the catalog is the app's own fallback list, as it is where
+    // the table is missing. The same entry as web/explore-reel-open's (Explore's render waits for
+    // it too): one of the two goes when both branches land.
+    methods: ['GET'],
+    path: '/rest/v1/source_tools',
+    filters: { is_active: 'eq.true' },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
 ];
 
 // A JSON body as supabase-js sends it (a string in init), or null for one this cannot read
