@@ -33,11 +33,17 @@ vi.mock('@/components/AuthProvider', async (importOriginal) => {
   };
 });
 
+// What the shell handed the interactive list when it last drew it.
+const browserProps = vi.hoisted(() => ({ last: null as null | Record<string, unknown> }));
+
 vi.mock('@/app/marketplace/MarketplaceBrowser', () => {
   browserModuleLoaded();
 
   return {
-    default: () => <div data-testid="interactive-marketplace-browser">Interactive marketplace browser</div>,
+    default: (props: Record<string, unknown>) => {
+      browserProps.last = props;
+      return <div data-testid="interactive-marketplace-browser">Interactive marketplace browser</div>;
+    },
   };
 });
 
@@ -71,6 +77,7 @@ describe('MarketplaceBootstrap', () => {
 
   beforeEach(() => {
     browserModuleLoaded.mockClear();
+    browserProps.last = null;
     Object.defineProperty(window, 'scrollY', {
       configurable: true,
       value: 0,
@@ -372,6 +379,61 @@ describe('MarketplaceBootstrap', () => {
     expect(screen.queryByText('Unlock 1')).not.toBeInTheDocument();
   });
 
+  // Live sweep, 2026-11-17: the first press only brought the interactive list in, which drew the
+  // same four recipes, and the reader had to press again. The press goes with the list it brings,
+  // which asks for the next page itself (marketplace-browser-progressive-render's cases).
+  it('hands the list a press of Load more, which reads as loading until the list comes', async () => {
+    render(
+      <MarketplaceBootstrap
+        initialPage={createPage(4, true)}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
+    expect(screen.getByRole('button', { name: 'Loading' })).toBeDisabled();
+
+    expect(await screen.findByTestId('interactive-marketplace-browser')).toBeInTheDocument();
+    expect(browserProps.last).toMatchObject({
+      loadMoreOnOpen: marketplaceFiltersKey(INITIAL_FILTERS),
+      // Outside Next's router no read of the address's own first page is coming.
+      listingSettled: true,
+      initialFiltersOpen: false,
+    });
+  });
+
+  // Below 1024px the filters wait behind Filters (live sweep, 2026-11-17: on a phone they and the
+  // hero filled the first screen); the list that takes over keeps them as the reader left them.
+  it('keeps the filters behind Filters, and hands them over open or folded as the reader left them', async () => {
+    render(
+      <MarketplaceBootstrap
+        initialPage={createPage(4, true)}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+      />
+    );
+
+    const filters = screen.getByRole('button', { name: 'Filters' });
+    const panel = document.getElementById(filters.getAttribute('aria-controls') ?? '');
+    expect(filters).toHaveAttribute('aria-expanded', 'false');
+    expect(filters).toHaveClass('lg:hidden');
+    expect(panel).toHaveClass('hidden', 'lg:block');
+    expect(within(panel!).getByRole('link', { name: 'Paid' })).toBeInTheDocument();
+    expect(within(panel!).getByRole('link', { name: 'Top sales' })).toBeInTheDocument();
+    // The search is never folded away.
+    expect(panel).not.toContainElement(screen.getByRole('searchbox', { name: /search marketplace recipes/i }));
+
+    fireEvent.click(filters);
+    expect(filters).toHaveAttribute('aria-expanded', 'true');
+    expect(panel).toHaveClass('block');
+    expect(panel).not.toHaveClass('hidden');
+
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
+    expect(await screen.findByTestId('interactive-marketplace-browser')).toBeInTheDocument();
+    expect(browserProps.last).toMatchObject({ initialFiltersOpen: true });
+  });
+
   it('activates near the continuation sentinel only after scroll intent', async () => {
     let intersectionCallback: IntersectionObserverCallback | null = null;
 
@@ -419,6 +481,8 @@ describe('MarketplaceBootstrap', () => {
     });
 
     expect(await screen.findByTestId('interactive-marketplace-browser')).toBeInTheDocument();
+    // A scroll brings the list in with no press to carry out.
+    expect(browserProps.last).toMatchObject({ loadMoreOnOpen: null });
   });
 
   // Back from a recipe drew this shell, the first page alone, though Load more had brought more

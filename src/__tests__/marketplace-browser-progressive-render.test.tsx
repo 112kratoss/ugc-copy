@@ -1,10 +1,11 @@
-import type { AnchorHTMLAttributes, ReactNode } from 'react';
+import { StrictMode, type AnchorHTMLAttributes, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
 import MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
+import { marketplaceFiltersKey } from '@/app/marketplace/marketplace-address';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 // One router for every render, so the browser's effects never see a new one.
@@ -698,6 +699,211 @@ describe('MarketplaceBrowser drawn again after a recipe', () => {
       renderMarketplace(createPage(4, true, 0, 4));
       expect(drawnTitles()).toEqual(visitorsListing);
     });
+  });
+});
+
+// Live sweep, 2026-11-17: the first-paint shell's "Load more recipes" only brought this list in,
+// which drew the same four recipes, so a second press was needed. The shell now hands its press over
+// (`loadMoreOnOpen`, the listing it was pressed on), and the list asks for the next page itself: once,
+// as soon as it can read on (marketplace-bootstrap's cases hand it; marketplace-keeps-place.spec.ts
+// presses it in a browser).
+describe('MarketplaceBrowser opened by the shell\'s Load more', () => {
+  const pressedOn = marketplaceFiltersKey(INITIAL_FILTERS);
+
+  beforeEach(() => {
+    authState.session = null;
+    authState.user = null;
+    authState.isLoading = false;
+    window.sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.sessionStorage.clear();
+  });
+
+  const listRequests = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls
+    .map(([input]) => String(input))
+    .filter((url) => url.startsWith('/api/marketplace/resources'));
+
+  it('asks for the next page once, in the development double render too, and reads as loading meanwhile', async () => {
+    let answer: (response: Response) => void = () => undefined;
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => {
+      answer = resolve;
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <StrictMode>
+        <MarketplaceBrowser
+          initialPage={createPage(4, true, 0, 4)}
+          initialFilters={INITIAL_FILTERS}
+          sourceToolOptions={[]}
+          loadMoreOnOpen={pressedOn}
+        />
+      </StrictMode>
+    );
+
+    expect(screen.getByRole('button', { name: 'Loading' })).toBeDisabled();
+    await waitFor(() => expect(listRequests(fetchMock)).toEqual(['/api/marketplace/resources?offset=4&limit=12']));
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.signal?.aborted).toBe(false);
+
+    await act(async () => {
+      answer(new Response(JSON.stringify(createPage(12, true, 4, 12))));
+    });
+
+    expect(await screen.findByText('Unlock 16')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: /: Unlock \d+$/ })).toHaveLength(16);
+    // The press is spent: the button asks for the page after, and only when pressed.
+    expect(screen.getByRole('button', { name: 'Load more recipes' })).toBeEnabled();
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    expect(listRequests(fetchMock)).toHaveLength(1);
+  });
+
+  // Signed in, the page reads the listing's first page again for the reader. That read landing
+  // starts this list again, which cut a page asked for before it short: the press waits for it.
+  it("waits for the listing's own first page, then asks once from where it ends", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(createPage(12, false, 4, 12))));
+    vi.stubGlobal('fetch', fetchMock);
+    const view = render(
+      <MarketplaceBrowser
+        initialPage={createPage(4, true, 0, 4)}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+        listingSettled={false}
+        loadMoreOnOpen={pressedOn}
+      />
+    );
+
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    expect(listRequests(fetchMock)).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Loading' })).toBeDisabled();
+
+    // The reader's own first page lands.
+    view.rerender(
+      <MarketplaceBrowser
+        initialPage={createPage(4, true, 0, 4)}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+        listingSettled
+        loadMoreOnOpen={pressedOn}
+      />
+    );
+
+    expect(await screen.findByText('Unlock 16')).toBeInTheDocument();
+    expect(listRequests(fetchMock)).toEqual(['/api/marketplace/resources?offset=4&limit=12']);
+    expect(screen.queryByRole('button', { name: /Load more recipes|Loading/ })).not.toBeInTheDocument();
+  });
+
+  it("holds the press for a signed-in reader until their session comes, and asks with it", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(createPage(12, false, 4, 12))));
+    vi.stubGlobal('fetch', fetchMock);
+    const SESSION_COOKIE = 'sb-project-auth-token';
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+    const cookieSession = btoa(JSON.stringify({ access_token: 'token-1', user: { id: 'viewer-1' } }))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    document.cookie = `${SESSION_COOKIE}=base64-${cookieSession}; Path=/`;
+    try {
+      Object.assign(authState, { session: null, user: null, isLoading: true });
+      const page = createPage(4, true, 0, 4);
+      const view = render(
+        <MarketplaceBrowser initialPage={page} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} loadMoreOnOpen={pressedOn} />
+      );
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+      expect(listRequests(fetchMock)).toEqual([]);
+
+      Object.assign(authState, { session: { access_token: 'token-1' }, user: { id: 'viewer-1' }, isLoading: false });
+      view.rerender(
+        <MarketplaceBrowser initialPage={page} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} loadMoreOnOpen={pressedOn} />
+      );
+
+      expect(await screen.findByText('Unlock 16')).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/marketplace/resources?offset=4&limit=12',
+        expect.objectContaining({ headers: { Accept: 'application/json', Authorization: 'Bearer token-1' } }),
+      );
+    } finally {
+      document.cookie = `${SESSION_COOKIE}=; Max-Age=0; Path=/`;
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('carries out a press for this listing only', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(createPage(12, false, 4, 12))));
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <MarketplaceBrowser
+        initialPage={createPage(4, true, 0, 4)}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+        loadMoreOnOpen={marketplaceFiltersKey({ ...INITIAL_FILTERS, access: 'paid' })}
+      />
+    );
+
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Load more recipes' })).toBeEnabled();
+  });
+
+  it('says a failed page, and offers the button again', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'Could not load more recipes.' }), { status: 503 })));
+    render(
+      <MarketplaceBrowser
+        initialPage={createPage(4, true, 0, 4)}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+        loadMoreOnOpen={pressedOn}
+      />
+    );
+
+    expect(await screen.findByText('Could not load more recipes.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load more recipes' })).toBeEnabled();
+  });
+
+  // The shell keeps the filters behind Filters below 1024px; the list keeps them as the reader left
+  // them there, and as they have them when the listing's own first page lands, until a filter is picked.
+  it('keeps the filters as handed over, until another listing is picked', () => {
+    const onNavigate = vi.fn();
+    const view = render(
+      <MarketplaceBrowser
+        initialPage={createPage(4, true, 0, 4)}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+        initialFiltersOpen
+        onNavigate={onNavigate}
+      />
+    );
+    const filters = screen.getByRole('button', { name: 'Filters' });
+    const panel = document.getElementById(filters.getAttribute('aria-controls') ?? '');
+    expect(filters).toHaveAttribute('aria-expanded', 'true');
+    expect(panel).toHaveClass('block');
+
+    // The same listing read again: left open.
+    view.rerender(
+      <MarketplaceBrowser
+        initialPage={createPage(4, true, 0, 4)}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+        initialFiltersOpen
+        onNavigate={onNavigate}
+      />
+    );
+    expect(filters).toHaveAttribute('aria-expanded', 'true');
+
+    // Another listing: folded.
+    view.rerender(
+      <MarketplaceBrowser
+        initialPage={createPage(2, false, 0, 4)}
+        initialFilters={{ ...INITIAL_FILTERS, access: 'paid' }}
+        sourceToolOptions={[]}
+        initialFiltersOpen
+        onNavigate={onNavigate}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Filters' })).toHaveAttribute('aria-expanded', 'false');
+    expect(panel).toHaveClass('hidden');
   });
 });
 

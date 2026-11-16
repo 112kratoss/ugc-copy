@@ -22,7 +22,11 @@ import {
   MARKETPLACE_SEARCH_MIN_LENGTH,
   normalizeMarketplaceSearchQuery,
 } from '@/lib/marketplace-search-policy';
-import { filterMarketplaceItemsForViewer } from '@/lib/marketplace-viewer-filter';
+import { IDENTITY_PROXY_TIMING_HEADER } from '@/lib/identity-admission-assertion';
+import {
+  filterMarketplaceItemsForViewer,
+  readMarketplaceViewerBlocks,
+} from '@/lib/marketplace-viewer-filter';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { createUserClient } from '@/lib/server-helpers';
 import { slugifySourceTool } from '@/lib/source-tools';
@@ -31,6 +35,7 @@ type MarketplaceResourceListRouteDependencies = {
   createUserClient?: typeof createUserClient;
   filterMarketplaceItemsForViewer?: typeof filterMarketplaceItemsForViewer;
   getMarketplaceResourceList?: typeof getMarketplaceResourceList;
+  readMarketplaceViewerBlocks?: (viewerUserId: string) => ReturnType<typeof readMarketplaceViewerBlocks>;
   logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
@@ -43,8 +48,47 @@ function resolveDependencies(dependencies: MarketplaceResourceListRouteDependenc
     filterMarketplaceItemsForViewer:
       dependencies?.filterMarketplaceItemsForViewer ?? filterMarketplaceItemsForViewer,
     getMarketplaceResourceList: dependencies?.getMarketplaceResourceList ?? getMarketplaceResourceList,
+    readMarketplaceViewerBlocks: dependencies?.readMarketplaceViewerBlocks
+      ?? ((viewerUserId: string) => readMarketplaceViewerBlocks(viewerUserId)),
     logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
+  };
+}
+
+/**
+ * Where a signed-in list read spends its time, for the production monitor and a scaling run only,
+ * as the feed reports it: the proxy's identity admission (`proxy-identity`, `-verify`,
+ * `-lifecycle`, which the proxy forwards under the same condition) and this route's own reads. A
+ * signed-in read took about 1.5 s live while a signed-out one the edge did not answer took 0.2 to
+ * 0.5 s (live sweep, 2026-11-17); this says which part. Never sent on an ordinary read.
+ */
+function createPhaseTimings(request: Request, hasAuthorizationHeader: boolean) {
+  const monitorMode = request.headers.get('x-performance-monitor');
+  const enabled = process.env.SCALING_CERTIFICATION_TIMINGS === '1'
+    || hasAuthorizationHeader && (monitorMode === 'warmup' || monitorMode === 'load');
+  const phases = new Map<string, number>();
+  if (enabled) {
+    for (const entry of request.headers.get(IDENTITY_PROXY_TIMING_HEADER)?.split(',') ?? []) {
+      const proxyTiming = entry.trim().match(/^(proxy-[a-z]+);dur=(\d+(?:\.\d+)?)$/u);
+      if (proxyTiming) phases.set(proxyTiming[1], Number(proxyTiming[2]));
+    }
+  }
+
+  return {
+    /** Times one read under `phase`, when timings are asked for. */
+    measure<T>(phase: string, read: Promise<T>): Promise<T> {
+      if (!enabled) return read;
+      const startedAt = performance.now();
+      return read.finally(() => phases.set(phase, performance.now() - startedAt));
+    },
+    apply(response: NextResponse): NextResponse {
+      if (!enabled) return response;
+      const rendered = [...phases].map(([phase, durationMs]) => `${phase};dur=${durationMs.toFixed(2)}`).join(', ');
+      response.headers.set('Server-Timing', rendered);
+      // Kept beside it, as the feed keeps it: Vercel's preview protection may strip Server-Timing.
+      response.headers.set('x-scaling-certification-timing', rendered);
+      return response;
+    },
   };
 }
 
@@ -96,8 +140,16 @@ async function handleMarketplaceResourceListGET(
     }
 
     const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
-    const [cachedPage, viewerUserId] = await Promise.all([
-      dependencies.getMarketplaceResourceList({
+    const timings = createPhaseTimings(request, hasAuthorizationHeader);
+    const viewerUserIdRead = timings.measure('route-viewer', getViewerUserId(request, hasAuthorizationHeader, dependencies));
+    // A signed-in viewer's blocks are theirs, not the page's, so they are read beside the page
+    // rather than after it, where they cost every signed-in read a round trip of their own (live
+    // sweep, 2026-11-17). The viewer comes from the proxy's admission at once.
+    const viewerBlocksRead = viewerUserIdRead.then((viewerUserId) => (
+      viewerUserId ? timings.measure('route-blocks', dependencies.readMarketplaceViewerBlocks(viewerUserId)) : null
+    ));
+    const [cachedPage, viewerUserId, viewerBlocks] = await Promise.all([
+      timings.measure('route-list', dependencies.getMarketplaceResourceList({
         filter: normalizeMarketplaceResourceFilter(searchParams.get('access')),
         resource: normalizeMarketplaceResourceKindFilter(searchParams.get('resource')),
         tool: slugifySourceTool(searchParams.get('tool') ?? undefined),
@@ -109,14 +161,18 @@ async function handleMarketplaceResourceListGET(
           MARKETPLACE_DEFAULT_PAGE_SIZE,
         ))),
         countryCode: request.headers.get('x-vercel-ip-country'),
-      }),
-      getViewerUserId(request, hasAuthorizationHeader, dependencies),
+      })),
+      viewerUserIdRead,
+      viewerBlocksRead,
     ]);
     // pageInfo still counts the unfiltered list, so the next page starts where
     // this one ended even when blocked creators' recipes were taken out of it.
     const page = {
       ...cachedPage,
-      items: await dependencies.filterMarketplaceItemsForViewer(cachedPage.items, viewerUserId),
+      items: await timings.measure(
+        'route-filter',
+        dependencies.filterMarketplaceItemsForViewer(cachedPage.items, viewerUserId, {}, { viewerBlocks }),
+      ),
     };
 
     const boundedPage = page.pageInfo.nextOffset !== null
@@ -133,11 +189,11 @@ async function handleMarketplaceResourceListGET(
 
     // A signed-in page is filtered for its viewer, so it must never be served
     // from the shared edge copy, nor stored there.
-    return NextResponse.json(boundedPage, {
+    return timings.apply(NextResponse.json(boundedPage, {
       headers: createApiResponseHeaders(request, getViewerAwareApiCacheControl(hasAuthorizationHeader), {
         vary: ['Authorization', 'x-vercel-ip-country'],
       }),
-    });
+    }));
   } catch (error) {
     dependencies.logError('Failed to load marketplace resources:', error);
     return NextResponse.json({ error: 'Failed to load marketplace unlocks.' }, { status: 500 });

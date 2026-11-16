@@ -639,3 +639,17 @@ describe('MarketplaceSellClient', () => {
     }
   });
 });
+
+// Live sweep, 2026-11-17: the Recipe sales tab read "Magic Booklet" alone, where every other page's
+// reads "<Page> | Magic Booklet" (the root layout's template): the storefront's title is its page's,
+// so nothing named this one.
+describe('Recipe sales route', () => {
+  it('names the tab after its page, and is kept out of search results', async () => {
+    const { metadata } = await import('@/app/marketplace/sell/layout');
+    const { metadata: rootMetadata } = await import('@/app/layout');
+
+    expect(metadata.title).toBe('Recipe sales');
+    expect(rootMetadata.title).toMatchObject({ template: '%s | Magic Booklet' });
+    expect(metadata.robots).toMatchObject({ index: false, googleBot: { index: false } });
+  });
+});

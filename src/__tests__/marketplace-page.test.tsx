@@ -257,9 +257,8 @@ describe('MarketplacePage', () => {
       view = render(await MarketplacePage());
     });
     await waitFor(() => expect(firstPageReads()).toHaveLength(1));
-    // The first press opens the buyer tools; theirs reads the next page.
-    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
-    await waitFor(() => expect(screen.queryByText('Opening buyer tools…')).not.toBeInTheDocument());
+    // One press opens the interactive list and reads the next page (live sweep, 2026-11-17: the
+    // first press only opened it, and a second was needed).
     fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
     expect(await screen.findByText('Second recipe')).toBeInTheDocument();
 

@@ -43,6 +43,14 @@ export interface MarketplaceListing {
   /** The first page for the address; null while one the page does not hold is read. */
   page: MarketplaceListingPage | null;
   status: MarketplaceListingStatus;
+  /**
+   * Whether `page` is the listing's own for this address and viewer: the list API's answer, the
+   * server's page standing in once that read has failed, or the page drawn where no read is coming
+   * (a query under the minimum; outside Next's router). False while the read is out, or waits on
+   * who is looking: its answer starts the interactive list again, so a "Load more recipes" pressed
+   * meanwhile waits for it rather than ask for a page the new start would cut short.
+   */
+  settled: boolean;
   retry: () => void;
   /** For `MarketplaceSearchParamsReporter`. */
   reportSearch: (search: string) => void;
@@ -164,6 +172,7 @@ export function useMarketplaceListing({
     addressKnown: search !== null,
     page: address.shortQuery ? null : page,
     status: address.shortQuery ? 'ready' : status,
+    settled: Boolean(address.shortQuery) || search === null || landed !== null,
     retry,
     reportSearch: setSearch,
     navigate,

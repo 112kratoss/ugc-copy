@@ -11,8 +11,10 @@ import {
   type FormEvent,
   type MouseEvent,
 } from 'react';
+import { ArrowRight, Loader2, X } from 'lucide-react';
 
 import type MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
+import MarketplaceFiltersButton, { MARKETPLACE_FILTERS_ID } from '@/app/marketplace/MarketplaceFiltersButton';
 import {
   MARKETPLACE_RECIPE_GRID_CLASS,
   MarketplaceRecipeTile,
@@ -132,8 +134,13 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
   }
   // The signed-in viewer's own recipes, read apart from the cached catalog.
   const viewer = useViewerRecipeState();
-  const [isActivating, setIsActivating] = useState(false);
   const [activationError, setActivationError] = useState(false);
+  // The listing whose "Load more recipes" was pressed here: the interactive list it brings in asks
+  // for the next page itself, so one press opens the list and loads more (live sweep, 2026-11-17:
+  // the press only opened the list, which drew the same four recipes, and a second press was needed).
+  const [loadMorePressedFor, setLoadMorePressedFor] = useState<string | null>(null);
+  // Phones and tablets keep the filters behind Filters; the interactive list takes them over as left.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const activationPendingRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
@@ -149,7 +156,6 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
     }
 
     activationPendingRef.current = true;
-    setIsActivating(true);
     setActivationError(false);
 
     void loadMarketplaceBrowser()
@@ -158,10 +164,18 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
       })
       .catch(() => {
         activationPendingRef.current = false;
-        setIsActivating(false);
         setActivationError(true);
+        // Said below the button, which is offered again.
+        setLoadMorePressedFor(null);
       });
   }, []);
+
+  // Also while the list is already on its way after a scroll towards the end: the press is kept for it.
+  const pressLoadMore = () => {
+    setLoadMorePressedFor(marketplaceFiltersKey(initialFilters));
+    activateInteractiveBrowser();
+  };
+  const loadMorePressed = loadMorePressedFor !== null && loadMorePressedFor === marketplaceFiltersKey(initialFilters);
 
   useEffect(() => {
     if (
@@ -219,6 +233,9 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
           shortQuery={shortQuery}
           sourceToolOptions={sourceToolOptions}
           listingStatus={listing.status}
+          listingSettled={listing.settled}
+          loadMoreOnOpen={loadMorePressedFor}
+          initialFiltersOpen={filtersOpen}
           onNavigate={navigate}
           onRetry={listing.retry}
         />
@@ -251,118 +268,152 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
         aria-labelledby="marketplace-filter-heading"
         // `relative z-20`: backdrop-blur makes this a stacking context, so the
         // tool dropdown would paint under the card grid without it.
-        className="relative z-20 mt-8 rounded-3xl border border-white/8 bg-zinc-950/70 p-4 backdrop-blur-sm sm:p-5"
+        // Below 1024px the filters wait behind Filters, and below 640px the panel is compact, so a
+        // phone's first screen reaches the first recipe (live sweep, 2026-11-17); drawn as
+        // MarketplaceBrowser draws it there, so the hand-over moves no recipe.
+        className="relative z-20 mt-4 rounded-3xl border border-white/8 bg-zinc-950/70 p-4 backdrop-blur-sm sm:mt-8 sm:p-5"
       >
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h2
-              id="marketplace-filter-heading"
-              className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500"
-            >
-              Buyer filters
-            </h2>
-            <p className="mt-1 text-sm text-zinc-400">
-              {activeFilterLabels.length > 0
-                ? `Showing ${activeFilterLabels.join(' + ')}`
-                : 'All quality-checked public recipes from community posts.'}
-            </p>
+        <div className="flex flex-col gap-3 sm:gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h2
+                id="marketplace-filter-heading"
+                className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500"
+              >
+                Buyer filters
+              </h2>
+              {activeFilterLabels.length > 0 ? (
+                <p className="mt-1 text-sm text-zinc-400">{`Showing ${activeFilterLabels.join(' + ')}`}</p>
+              ) : (
+                <p className="mt-1 hidden text-sm text-zinc-400 sm:block">
+                  All quality-checked public recipes from community posts.
+                </p>
+              )}
+            </div>
+            <MarketplaceFiltersButton
+              open={filtersOpen}
+              onToggle={() => setFiltersOpen((value) => !value)}
+              controls={MARKETPLACE_FILTERS_ID}
+            />
           </div>
 
-          <form
-            action="/marketplace"
-            method="get"
-            role="search"
-            className="flex min-w-0 rounded-full border border-white/10 bg-black/35 p-1"
-            onSubmit={submitSearch}
-          >
-            <PreservedFilterInputs filters={initialFilters} />
-            <label className="min-w-0 flex-1 px-3">
-              <span className="sr-only">Search marketplace recipes</span>
-              <input
-                // A new address's query, once it is read, stands in the box.
-                key={initialFilters.q || shortQuery}
-                type="search"
-                name="q"
-                defaultValue={initialFilters.q || shortQuery}
-                onFocus={warmInteractiveBrowser}
-                onInput={warmInteractiveBrowser}
-                placeholder="Search prompts, tools, creators"
-                className="w-full min-w-0 bg-transparent py-2 text-sm text-white outline-none placeholder:text-zinc-600"
-              />
-            </label>
-            <button
-              type="submit"
-              onPointerDown={warmInteractiveBrowser}
-              className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200"
+          {/* From 1024px the form stands beside the heading alone, as it always has. */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center lg:contents">
+            <form
+              action="/marketplace"
+              method="get"
+              role="search"
+              className="flex min-w-0 rounded-full border border-white/10 bg-black/35 p-1"
+              onSubmit={submitSearch}
             >
-              Search
-            </button>
-          </form>
+              <PreservedFilterInputs filters={initialFilters} />
+              <label className="min-w-0 flex-1 px-3">
+                <span className="sr-only">Search marketplace recipes</span>
+                <input
+                  // A new address's query, once it is read, stands in the box.
+                  key={initialFilters.q || shortQuery}
+                  type="search"
+                  name="q"
+                  defaultValue={initialFilters.q || shortQuery}
+                  onFocus={warmInteractiveBrowser}
+                  onInput={warmInteractiveBrowser}
+                  placeholder="Search prompts, tools, creators"
+                  className="w-full min-w-0 bg-transparent py-2 text-sm text-white outline-none placeholder:text-zinc-600"
+                />
+              </label>
+              <button
+                type="submit"
+                onPointerDown={warmInteractiveBrowser}
+                className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-zinc-200"
+              >
+                Search
+              </button>
+            </form>
+            {/* Out of the folded filters, as MarketplaceBrowser's Clear stands; from 1024px the
+                filters' own "Clear filters" is in view. */}
+            {hasActiveFilters ? (
+              <a
+                href="/marketplace"
+                onClick={navigateOnPlainClick('/marketplace')}
+                onFocus={warmInteractiveBrowser}
+                onPointerDown={warmInteractiveBrowser}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08] lg:hidden"
+              >
+                <X className="h-4 w-4" />
+                Clear
+              </a>
+            ) : null}
+          </div>
         </div>
 
-        <div className="mt-5 grid gap-4 lg:grid-cols-[auto_1fr_15rem]">
-          <BootstrapFilterGroup
-            label="Access"
-            links={ACCESS_FILTERS.map((item) => ({
-              label: item.label,
-              href: buildMarketplacePath({ ...initialFilters, access: item.value }),
-              active: initialFilters.access === item.value,
-            }))}
-            onIntent={warmInteractiveBrowser}
-            onNavigate={navigateOnPlainClick}
-          />
-          <BootstrapFilterGroup
-            label="Kind"
-            links={RESOURCE_FILTERS.map((item) => ({
-              label: item.label,
-              href: buildMarketplacePath({ ...initialFilters, resource: item.value }),
-              active: initialFilters.resource === item.value,
-            }))}
-            onIntent={warmInteractiveBrowser}
-            onNavigate={navigateOnPlainClick}
-          />
-          {/* Shares the hydrated browser's control so the strip does not swap
-              shape under the viewer when the real browser takes over. */}
-          <MarketplaceToolFilter
-            onNavigate={navigate}
-            options={[
-              {
-                label: 'All tools',
-                href: buildMarketplacePath({ ...initialFilters, tool: '' }),
-                active: !initialFilters.tool,
-              },
-              ...sourceToolOptions.map((tool) => ({
-                label: tool.label,
-                href: buildMarketplacePath({ ...initialFilters, tool: tool.slug }),
-                active: initialFilters.tool === tool.slug,
-              })),
-            ]}
-          />
-        </div>
-
-        <div className="mt-4 flex flex-wrap items-center gap-2" aria-label="Sort recipes">
-          {SORT_FILTERS.map((item) => (
-            <BootstrapFilterLink
-              key={item.value}
-              label={item.label}
-              href={buildMarketplacePath({ ...initialFilters, sort: item.value })}
-              active={initialFilters.sort === item.value}
+        <div id={MARKETPLACE_FILTERS_ID} className={`${filtersOpen ? 'block' : 'hidden'} lg:block`}>
+          <div className="mt-5 grid gap-4 lg:grid-cols-[auto_1fr_15rem]">
+            <BootstrapFilterGroup
+              label="Access"
+              links={ACCESS_FILTERS.map((item) => ({
+                label: item.label,
+                href: buildMarketplacePath({ ...initialFilters, access: item.value }),
+                active: initialFilters.access === item.value,
+              }))}
               onIntent={warmInteractiveBrowser}
               onNavigate={navigateOnPlainClick}
-              activeClassName="border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] font-semibold text-[var(--ui-text-primary)]"
             />
-          ))}
-          {hasActiveFilters ? (
-            <a
-              href="/marketplace"
-              onClick={navigateOnPlainClick('/marketplace')}
-              onFocus={warmInteractiveBrowser}
-              onPointerDown={warmInteractiveBrowser}
-              className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
-            >
-              Clear filters
-            </a>
-          ) : null}
+            <BootstrapFilterGroup
+              label="Kind"
+              links={RESOURCE_FILTERS.map((item) => ({
+                label: item.label,
+                href: buildMarketplacePath({ ...initialFilters, resource: item.value }),
+                active: initialFilters.resource === item.value,
+              }))}
+              onIntent={warmInteractiveBrowser}
+              onNavigate={navigateOnPlainClick}
+            />
+            {/* Shares the hydrated browser's control so the strip does not swap
+                shape under the viewer when the real browser takes over. */}
+            <MarketplaceToolFilter
+              onNavigate={navigate}
+              options={[
+                {
+                  label: 'All tools',
+                  href: buildMarketplacePath({ ...initialFilters, tool: '' }),
+                  active: !initialFilters.tool,
+                },
+                ...sourceToolOptions.map((tool) => ({
+                  label: tool.label,
+                  href: buildMarketplacePath({ ...initialFilters, tool: tool.slug }),
+                  active: initialFilters.tool === tool.slug,
+                })),
+              ]}
+            />
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2" aria-label="Sort recipes">
+            {SORT_FILTERS.map((item) => (
+              <BootstrapFilterLink
+                key={item.value}
+                label={item.label}
+                href={buildMarketplacePath({ ...initialFilters, sort: item.value })}
+                active={initialFilters.sort === item.value}
+                onIntent={warmInteractiveBrowser}
+                onNavigate={navigateOnPlainClick}
+                // MarketplaceBrowser's order chips' size below 1024px, where they open from Filters,
+                // so an open panel keeps its height when that list takes over; above, as it was.
+                sizeClassName="px-4 py-2 lg:px-3 lg:py-1.5"
+                activeClassName="border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] font-semibold text-[var(--ui-text-primary)]"
+              />
+            ))}
+            {hasActiveFilters ? (
+              <a
+                href="/marketplace"
+                onClick={navigateOnPlainClick('/marketplace')}
+                onFocus={warmInteractiveBrowser}
+                onPointerDown={warmInteractiveBrowser}
+                className="hidden rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-300 transition hover:bg-white/[0.06] hover:text-white lg:block"
+              >
+                Clear filters
+              </a>
+            ) : null}
+          </div>
         </div>
       </section>
 
@@ -418,13 +469,16 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
               data-marketplace-bootstrap-sentinel
               className="mt-8 flex flex-col items-center gap-3"
             >
+              {/* The press opens the interactive list and asks it for the next page, so it reads as
+                  that list's own button does, from the press until the recipes come. */}
               <button
                 type="button"
-                onClick={activateInteractiveBrowser}
-                disabled={isActivating}
-                className="rounded-full border border-white/10 bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:cursor-wait disabled:opacity-60"
+                onClick={pressLoadMore}
+                disabled={loadMorePressed}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isActivating ? 'Opening buyer tools…' : 'Load more recipes'}
+                {loadMorePressed ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+                {loadMorePressed ? 'Loading' : 'Load more recipes'}
               </button>
               {activationError ? (
                 <p role="status" className="text-sm text-rose-200">
@@ -513,6 +567,7 @@ function BootstrapFilterLink({
   // Must stay in step with MarketplaceBrowser's active pill, or hydration
   // swaps one selected style for another in front of the viewer.
   activeClassName = 'border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] font-semibold text-[var(--ui-text-primary)]',
+  sizeClassName = 'px-3 py-1.5',
 }: {
   label: string;
   href: string;
@@ -520,6 +575,7 @@ function BootstrapFilterLink({
   onIntent: () => void;
   onNavigate?: (href: string) => (event: MouseEvent<HTMLAnchorElement>) => void;
   activeClassName?: string;
+  sizeClassName?: string;
 }) {
   return (
     <a
@@ -528,7 +584,7 @@ function BootstrapFilterLink({
       onClick={onNavigate?.(href)}
       onFocus={onIntent}
       onPointerDown={onIntent}
-      className={`shrink-0 rounded-full border px-3 py-1.5 text-sm transition ${
+      className={`shrink-0 rounded-full border ${sizeClassName} text-sm transition ${
         active
           ? activeClassName
           : 'border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.06] hover:text-white'
