@@ -2,6 +2,9 @@ import { useSyncExternalStore } from 'react';
 
 type ShowcaseReelViewerModule = typeof import('@/app/showcase/ShowcaseReelViewer');
 
+/** How long a host's idle-time load of the reel's code waits for the page to fall idle. */
+export const SHOWCASE_REEL_WARM_IDLE_TIMEOUT_MS = 2_000;
+
 let showcaseReelViewerPromise: Promise<ShowcaseReelViewerModule> | null = null;
 // The module once it has arrived in this document (`useLoadedShowcaseReelViewer`).
 let loadedShowcaseReelViewer: ShowcaseReelViewerModule | null = null;

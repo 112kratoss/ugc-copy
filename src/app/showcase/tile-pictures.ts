@@ -30,3 +30,26 @@ export function loadedTilePicture(mediaItemId: string | null | undefined): HTMLI
   const image = mediaItemId ? tilePictures.get(mediaItemId) : undefined;
   return image && image.complete && image.naturalWidth > 0 ? image : null;
 }
+
+/** A tile's picture standing in for a media item of the reel. */
+export interface TilePictureStandIn {
+  mediaItemId: string;
+  image: HTMLImageElement;
+}
+
+/**
+ * Whether the reel draws a tile's picture in place of its media item, the one place that decides
+ * it: the reel's own copy neither loaded nor failed yet, a picture (a clip has its poster), its
+ * source still there, and a tile holding that picture loaded. The reel leaves its black loading
+ * cover off exactly when this answers one, and the carousel draws what it answers.
+ */
+export function tilePictureStandIn(
+  mediaItem: { id: string; mediaKind: string; sourceUnavailableAt?: string | null } | null | undefined,
+  reelCopyLoading: boolean,
+): TilePictureStandIn | null {
+  if (!reelCopyLoading || !mediaItem || mediaItem.mediaKind !== 'image' || mediaItem.sourceUnavailableAt) {
+    return null;
+  }
+  const image = loadedTilePicture(mediaItem.id);
+  return image ? { mediaItemId: mediaItem.id, image } : null;
+}

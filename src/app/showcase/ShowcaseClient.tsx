@@ -16,7 +16,7 @@ import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import ShowcaseReel from '@/app/showcase/ShowcaseReel';
-import { warmShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
+import { SHOWCASE_REEL_WARM_IDLE_TIMEOUT_MS, warmShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
 import {
     FEED_REMOVAL_UNDO_MS,
     FEED_UNDO_FAILED_MESSAGE,
@@ -114,7 +114,6 @@ const DEFAULT_SHOWCASE_SORT: ShowcaseSort = 'for-you';
 // the grid faster than anyone scrolls. Reveals ride transitions, so input
 // stays responsive; the cadence only paces mounting, never data fetching.
 const SHOWCASE_DEFERRED_REVEAL_TICK_MS = 160;
-const SHOWCASE_REEL_WARM_IDLE_TIMEOUT_MS = 2_000;
 const SHOWCASE_SNAPSHOT_IDLE_TIMEOUT_MS = 1_000;
 const SHOWCASE_ANONYMOUS_REFRESH_IDLE_TIMEOUT_MS = 3_000;
 const SHOWCASE_REFRESH_RETRY_BASE_MS = 2_000;
@@ -487,7 +486,7 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
             className="flex min-w-0 flex-col [content-visibility:auto] [contain-intrinsic-size:auto_520px]"
         >
             {/* Pinterest Style Card Frame */}
-            <div className="group relative overflow-hidden rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] has-[:focus-visible]:border-[rgba(255,122,89,0.34)]">
+            <div className="group relative overflow-hidden rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] has-[:focus-visible:not([data-quiet-focus])]:border-[rgba(255,122,89,0.34)]">
                 <div ref={measureVideoFrame} className="relative overflow-hidden bg-black">
                     {mediaItems.length > 0 ? (
                         <ShowcaseMediaCarousel

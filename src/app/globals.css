@@ -1778,17 +1778,19 @@ html:not([data-auth-hint='signed-in']) .app-shell-when-signed-in {
   /* Keyboard focus in a tile shows them too, and a pointer's does not: focus
      goes back to the tile a reel was opened from when the reel closes, and
      with :focus-within a tile opened and closed with the mouse kept its
-     controls once the pointer had gone (owner's recording, 2026-11-16). A
+     controls once the pointer had gone (owner's recording, 2026-11-16). Focus
+     given back quietly where focus() cannot be told so is marked
+     [data-quiet-focus] and skipped (src/app/showcase/reel-focus-return.ts). A
      Marketplace tile is itself the link. Each in @supports of its own, for the
      reason the menu's rule below gives. */
   @supports selector(:focus-visible) {
-    .group:focus-visible .showcase-card-actions {
+    .group:focus-visible:not([data-quiet-focus]) .showcase-card-actions {
       opacity: 1;
     }
   }
 
   @supports selector(:has(*)) {
-    .group:has(:focus-visible) .showcase-card-actions {
+    .group:has(:focus-visible:not([data-quiet-focus])) .showcase-card-actions {
       opacity: 1;
     }
   }

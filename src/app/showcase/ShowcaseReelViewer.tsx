@@ -72,7 +72,8 @@ import { getCurrentInternalPath } from '@/lib/share';
 import { displaySourceToolLabel } from '@/lib/source-tools';
 import { type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
 import { noteFollowChange } from '@/lib/follow-changes';
-import { loadedTilePicture } from '@/app/showcase/tile-pictures';
+import { tilePictureStandIn } from '@/app/showcase/tile-pictures';
+import { returnFocus, showsKeyboardFocus } from '@/app/showcase/reel-focus-return';
 
 declare global {
   interface Window {
@@ -242,6 +243,20 @@ function getMediaTypeLabel(item: ShowcaseFeedItem): string {
   return 'Image';
 }
 
+
+/**
+ * Follow's word, in a box as wide as the wider of its two words: the button keeps one width whether
+ * it says Follow or Following, and the place held for it before the answer is that width too
+ * (review of #834: a reader who follows the creator saw it grow when "Following" landed).
+ */
+function FollowWord({ following }: { following: boolean }) {
+  return (
+    <span className="grid justify-items-center">
+      <span className="[grid-area:1/1]">{following ? 'Following' : 'Follow'}</span>
+      <span aria-hidden="true" className="invisible [grid-area:1/1]">{following ? 'Follow' : 'Following'}</span>
+    </span>
+  );
+}
 
 function getReelMediaLifecycleKey(postId: string, mediaItem: ShowcaseMediaItem): string {
   return JSON.stringify([postId, mediaItem.id, mediaItem.url]);
@@ -550,6 +565,11 @@ export default function ShowcaseReelViewer({
     previousFocusRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
+    // Opened from the keyboard, focus goes back showing; opened with the pointer, it goes back
+    // without, however the reel was closed (an Escape is a key: `reel-focus-return.ts`).
+    const openedFromKeyboard = previousFocusRef.current
+      ? showsKeyboardFocus(previousFocusRef.current)
+      : false;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const focusFrame = window.requestAnimationFrame(() => reelCloseButtonRef.current?.focus());
@@ -557,8 +577,9 @@ export default function ShowcaseReelViewer({
     return () => {
       window.cancelAnimationFrame(focusFrame);
       document.body.style.overflow = previousOverflow;
-      previousFocusRef.current?.focus();
+      const previousFocus = previousFocusRef.current;
       previousFocusRef.current = null;
+      if (previousFocus) returnFocus(previousFocus, { showFocus: openedFromKeyboard });
     };
   }, [isOpen]);
 
@@ -979,12 +1000,9 @@ export default function ShowcaseReelViewer({
   const currentMediaKey = activeMediaItem ? getReelMediaLifecycleKey(item.id, activeMediaItem) : null;
   const currentMediaLoadState = currentMediaKey ? mediaLoadStates[currentMediaKey] ?? null : 'ready';
   const showMediaLoading = shouldWaitForMedia && currentMediaLoadState === null;
-  // The picture the tile drew stands in for the reel's own copy while it loads
-  // (ShowcaseMediaCarousel): the loading cover would hide it behind black.
-  const mediaHasTilePicture = showMediaLoading
-    && activeMediaItem?.mediaKind === 'image'
-    && !activeMediaItem.sourceUnavailableAt
-    && loadedTilePicture(activeMediaItem.id) !== null;
+  // The tile's picture in place of the reel's own copy while that loads (`tile-pictures.ts`): the
+  // carousel draws it, and the black loading cover stays off it.
+  const mediaStandIn = tilePictureStandIn(activeMediaItem, showMediaLoading);
   const transition = prefersReducedMotion
     ? { duration: 0.16, ease: 'easeOut' as const }
     : { duration: 0.34, ease: [0.22, 1, 0.36, 1] as const };
@@ -1595,6 +1613,7 @@ export default function ShowcaseReelViewer({
           mediaItems={mediaItems}
           title={item.title}
           mode="reel"
+          standIn={mediaStandIn}
           autoPlayVideo={currentMediaLoadState !== 'error'}
           initialIndex={activeMediaIndex}
           className="h-full"
@@ -1729,7 +1748,7 @@ export default function ShowcaseReelViewer({
             </AnimatePresence>
 
             <AnimatePresence>
-              {showMediaLoading && !mediaHasTilePicture ? (
+              {showMediaLoading && !mediaStandIn ? (
                 <motion.div
                   key={`${item.id}:media-loading`}
                   initial={{ opacity: 0 }}
@@ -1752,7 +1771,7 @@ export default function ShowcaseReelViewer({
                 </motion.div>
               ) : null}
             </AnimatePresence>
-            {mediaHasTilePicture ? (
+            {mediaStandIn ? (
               <span role="status" aria-live="polite" className="sr-only">Loading media</span>
             ) : null}
           </div>
@@ -2014,24 +2033,24 @@ export default function ShowcaseReelViewer({
                       aria-label={`${isFollowingCreator ? 'Following' : 'Follow'} ${item.creator.name}`}
                       aria-pressed={isFollowingCreator}
                       aria-busy={followIsPending}
-                      className={`ui-focus-ring inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full px-4 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-70 ${
+                      className={`ui-focus-ring inline-flex min-h-10 shrink-0 items-center gap-1.5 rounded-full border px-4 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-70 ${
                         isFollowingCreator
-                          ? 'border border-white/15 bg-white/10 text-white hover:bg-white/15'
-                          : 'bg-white text-black hover:bg-zinc-200'
+                          ? 'border-white/15 bg-white/10 text-white hover:bg-white/15'
+                          : 'border-transparent bg-white text-black hover:bg-zinc-200'
                       }`}
                     >
                       {followIsPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
-                      {isFollowingCreator ? 'Following' : 'Follow'}
+                      <FollowWord following={isFollowingCreator} />
                     </button>
                   ) : followAwaitsAnswer ? (
-                    // Follow's own box, the button's classes and word, held while the
+                    // Follow's own box, the button's classes and words, held while the
                     // answer is on its way.
                     <span
                       aria-hidden="true"
                       data-reel-follow="pending"
-                      className="inline-flex min-h-10 shrink-0 select-none items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-bold text-transparent"
+                      className="inline-flex min-h-10 shrink-0 select-none items-center gap-1.5 rounded-full border border-transparent bg-white/10 px-4 text-sm font-bold text-transparent"
                     >
-                      Follow
+                      <FollowWord following={false} />
                     </span>
                   ) : null}
                 </div>

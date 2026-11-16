@@ -5,6 +5,8 @@ import { useEffect, type ReactNode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { QUIET_FOCUS_ATTRIBUTE } from '@/app/showcase/reel-focus-return';
+
 import {
   createFeedCardAttention,
   FEED_DWELL_MAX_MS,
@@ -471,16 +473,19 @@ describe('showcase feed interactions', () => {
   // a tile opened and closed with the mouse kept its controls once the pointer had gone (owner's
   // recording, 2026-11-16; tests/e2e/explore-reel-open.spec.ts): keyboard focus shows them, a
   // pointer's does not. Each rule stands alone in its own @supports, for the menu rule's reason.
+  // Focus given back quietly where focus() cannot be told to hide it is marked, and skipped
+  // (src/app/showcase/reel-focus-return.ts; review of #834).
   it("shows a tile's controls for keyboard focus in it, not for any focus", () => {
     const css = readFileSync(path.resolve(__dirname, '../app/globals.css'), 'utf8');
+    const notQuiet = `:not\\(\\[${QUIET_FOCUS_ATTRIBUTE}\\]\\)`;
 
-    expect(css).toMatch(
-      /@supports selector\(:has\(\*\)\) \{\s*\.group:has\(:focus-visible\) \.showcase-card-actions \{\s*opacity: 1;\s*\}\s*\}/,
-    );
+    expect(css).toMatch(new RegExp(
+      `@supports selector\\(:has\\(\\*\\)\\) \\{\\s*\\.group:has\\(:focus-visible${notQuiet}\\) \\.showcase-card-actions \\{\\s*opacity: 1;\\s*\\}\\s*\\}`,
+    ));
     // A Marketplace tile is itself the link.
-    expect(css).toMatch(
-      /@supports selector\(:focus-visible\) \{\s*\.group:focus-visible \.showcase-card-actions \{\s*opacity: 1;\s*\}\s*\}/,
-    );
+    expect(css).toMatch(new RegExp(
+      `@supports selector\\(:focus-visible\\) \\{\\s*\\.group:focus-visible${notQuiet} \\.showcase-card-actions \\{\\s*opacity: 1;\\s*\\}\\s*\\}`,
+    ));
     // Any focus, only where :has() is unknown.
     expect(css).toMatch(
       /@supports not selector\(:has\(\*\)\) \{\s*\.group:focus-within \.showcase-card-actions \{\s*opacity: 1;\s*\}\s*\}/,

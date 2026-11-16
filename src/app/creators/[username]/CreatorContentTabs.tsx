@@ -21,7 +21,8 @@ import { SegmentedControl } from '@/components/DesignSystem';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import ShowcaseReel from '@/app/showcase/ShowcaseReel';
-import { warmShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
+import { SHOWCASE_REEL_WARM_IDLE_TIMEOUT_MS, warmShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
+import { scheduleIdleWork } from '@/lib/schedule-idle-work';
 import type { CreatorProfilePage, CreatorProfilePageData } from '@/lib/creator-profile';
 import {
   blockCreatorAfterConfirmation,
@@ -224,6 +225,12 @@ function CreatorContentTabsView({
   useLayoutEffect(() => {
     setActiveTab(getTabFromHash(window.location.hash));
   }, []);
+
+  // The reel's code once the page is idle, as Explore loads it, so a press opens the reel at once
+  // (`ShowcaseReel`); the grid's pointer and focus load it sooner.
+  useEffect(() => (
+    scheduleIdleWork(warmShowcaseReelViewer, SHOWCASE_REEL_WARM_IDLE_TIMEOUT_MS)
+  ), []);
 
   useEffect(() => {
     const handleHashChange = () => setActiveTab(getTabFromHash(window.location.hash));
@@ -643,7 +650,7 @@ function CreatorCard({
     <article
       data-creator-card
       data-creator-recipe={item.asset ? '' : undefined}
-      className="group min-w-0 overflow-hidden rounded-ui-xl border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] has-[:focus-visible]:border-white/24"
+      className="group min-w-0 overflow-hidden rounded-ui-xl border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] has-[:focus-visible:not([data-quiet-focus])]:border-white/24"
     >
       <div className="relative aspect-[4/5] overflow-hidden bg-black">
         {isText ? (

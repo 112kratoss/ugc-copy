@@ -11,7 +11,7 @@ import { thumbHashToDataURL } from 'thumbhash';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
 import UnavailableMediaNote from '@/components/UnavailableMediaNote';
-import { holdTilePicture, loadedTilePicture, releaseTilePicture } from '@/app/showcase/tile-pictures';
+import { holdTilePicture, releaseTilePicture, type TilePictureStandIn } from '@/app/showcase/tile-pictures';
 
 interface ShowcaseMediaCarouselProps {
   mediaItems: ShowcaseMediaItem[];
@@ -47,6 +47,11 @@ interface ShowcaseMediaCarouselProps {
    * source (`sourceVideoProgress`).
    */
   onVideoProgress?: (progress: number, durationMs: number) => void;
+  /**
+   * The reel's: a grid tile's picture to draw under this media item's own copy while that loads
+   * (`tilePictureStandIn` decides it, in the reel).
+   */
+  standIn?: TilePictureStandIn | null;
 }
 
 const MEDIA_LOAD_TIMEOUT_MS = 15_000;
@@ -111,7 +116,7 @@ function clampIndex(index: number, itemCount: number) {
  * so the reel opens on the picture the reader pressed rather than on black, whatever the network
  * and the cache do; the reel's copy, drawn over it in the same contained box, takes its place.
  */
-function TilePictureStandIn({ image }: { image: HTMLImageElement }) {
+function TilePictureCanvas({ image }: { image: HTMLImageElement }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useLayoutEffect(() => {
@@ -120,7 +125,9 @@ function TilePictureStandIn({ image }: { image: HTMLImageElement }) {
     canvas.width = image.naturalWidth;
     canvas.height = image.naturalHeight;
     try {
-      canvas.getContext('2d')?.drawImage(image, 0, 0);
+      const context = canvas.getContext('2d');
+      if (!context) return;
+      context.drawImage(image, 0, 0);
       canvas.dataset.drawn = 'true';
     } catch {
       // A picture that cannot be copied leaves the frame as it was, until the reel's copy loads.
@@ -157,6 +164,7 @@ export default function ShowcaseMediaCarousel({
   onMediaError,
   onMediaRetry,
   onVideoProgress,
+  standIn = null,
 }: ShowcaseMediaCarouselProps) {
   const items = useMemo(
     () => mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder),
@@ -175,8 +183,6 @@ export default function ShowcaseMediaCarousel({
   const activeVideoRef = useRef<HTMLVideoElement | null>(null);
   const attachVideo = useInlineMediaPlayback(activeVideoRef);
   const lifecycleStatusRef = useRef<Map<string, 'ready' | 'error'>>(new Map());
-  // The reel's last source to have loaded: its tile's picture stands in until then.
-  const [readyLoadKey, setReadyLoadKey] = useState<string | null>(null);
   const [failedLoadKeys, setFailedLoadKeys] = useState<Set<string>>(new Set());
   const [loadAttempts, setLoadAttempts] = useState<Record<string, number>>({});
   const { prefersReducedMotion, saveData } = useMediaLoadingPreferences();
@@ -247,11 +253,8 @@ export default function ShowcaseMediaCarousel({
       nextKeys.delete(loadKey);
       return nextKeys;
     });
-    if (mode === 'reel') {
-      setReadyLoadKey(loadKey);
-    }
     onMediaReady?.(mediaItem);
-  }, [mode, onMediaReady]);
+  }, [onMediaReady]);
 
   const reportActiveVideoReady = useCallback((video: HTMLVideoElement) => {
     if (!activeItem || activeItem.mediaKind !== 'video' || !activeLoadKey) {
@@ -498,14 +501,8 @@ export default function ShowcaseMediaCarousel({
     || isNearViewport
     || isInViewport
     || isInteracting;
-  // The reel opened from a tile draws the tile's picture until its own copy has loaded.
-  const tileStandIn = isReel
-    && renderedActiveItem.mediaKind === 'image'
-    && !renderedActiveItem.sourceUnavailableAt
-    && !hasActiveMediaError
-    && readyLoadKey !== activeLoadKey
-    ? loadedTilePicture(renderedActiveItem.id)
-    : null;
+  // The tile's picture the reel hands down, for the media item drawn here only.
+  const tileStandIn = isReel && standIn?.mediaItemId === renderedActiveItem.id ? standIn.image : null;
 
   return (
     <div ref={carouselRef} className={className}>
@@ -641,7 +638,7 @@ export default function ShowcaseMediaCarousel({
             // existed): it is read straight from storage, and the source stays
             // the fallback when there is none or it fails to load.
             <>
-              {tileStandIn ? <TilePictureStandIn key={`tile:${activeLoadKey}`} image={tileStandIn} /> : null}
+              {tileStandIn ? <TilePictureCanvas key={`tile:${activeLoadKey}`} image={tileStandIn} /> : null}
               <OptimizedPreviewImage
                 key={activeLoadKey}
                 previewSrc={renderedActiveItem.displayUrl || renderedActiveItem.url}

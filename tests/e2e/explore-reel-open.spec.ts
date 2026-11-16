@@ -33,11 +33,16 @@ test.use({ viewport: { width: 1440, height: 900 } });
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+type Answers = {
+  /** What the Follow read answers, after `FOLLOW_READ_DELAY_MS`. */
+  following?: boolean;
+};
+
 /**
  * Signed in as the E2E user, every API call refused but the Follow read, and the lane's pictures
  * served: each grid preview at once, each display copy only after `DISPLAY_COPY_DELAY_MS`.
  */
-async function answerOffline(page: Page, context: BrowserContext) {
+async function answerOffline(page: Page, context: BrowserContext, { following = false }: Answers = {}) {
   await context.addCookies([{ name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' }]);
   await context.route('https://example.supabase.co/**', async (route) => {
     const { pathname } = new URL(route.request().url());
@@ -57,13 +62,13 @@ async function answerOffline(page: Page, context: BrowserContext) {
   await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { error: 'Not answered offline' } }));
   await page.route('**/api/profile/follow?**', async (route) => {
     await delay(FOLLOW_READ_DELAY_MS);
-    return route.fulfill({ json: { following: false } }).catch(() => undefined);
+    return route.fulfill({ json: { following } }).catch(() => undefined);
   });
 }
 
 /** The lane's grid, drawn by the full client (each tile with its controls). */
-async function openLane(page: Page, context: BrowserContext) {
-  await answerOffline(page, context);
+async function openLane(page: Page, context: BrowserContext, answers: Answers = {}) {
+  await answerOffline(page, context, answers);
   // The reel's code (Explore loads it ahead, on idle and when the pointer comes over the grid): its
   // chunk asked for, and no chunk still on its way.
   let reelChunkAsked = false;
@@ -92,13 +97,29 @@ function openButton(page: Page): Locator {
   return page.getByRole('button', { name: OPENED.title, exact: true });
 }
 
+/** The opened tile's frame, which takes the focus colour for keyboard focus in it. */
+function tileFrame(page: Page): Locator {
+  return page.locator('div.group:has(.showcase-card-actions)', { has: openButton(page) });
+}
+
 /** The opened tile's controls: its kind, ⋯, share and save, shown on hover. */
 function tileControls(page: Page): Locator {
-  return page.locator('div.group:has(.showcase-card-actions)', { has: openButton(page) }).locator('.showcase-card-actions');
+  return tileFrame(page).locator('.showcase-card-actions');
+}
+
+function tileMenuButton(page: Page): Locator {
+  return page.getByRole('button', { name: `More actions for ${OPENED.title}` });
 }
 
 function controlsOpacity(page: Page) {
   return tileControls(page).evaluate((element) => getComputedStyle(element).opacity);
+}
+
+// The frame's border for keyboard focus in the tile (ShowcaseClient.tsx).
+const TILE_FOCUS_BORDER = 'rgba(255, 122, 89, 0.34)';
+
+function frameBorderColor(page: Page) {
+  return tileFrame(page).evaluate((element) => getComputedStyle(element).borderTopColor);
 }
 
 function reel(page: Page): Locator {
@@ -144,6 +165,65 @@ test('a tile opened in the reel and closed from the keyboard keeps its controls 
   await expect(openButton(page)).toBeFocused();
 
   await pointerAway(page);
+  await expect.poll(() => controlsOpacity(page), { timeout: 3_000 }).toBe('1');
+});
+
+// Review of #834: Escape is a key, and a browser draws focus given back by script just after a key
+// as keyboard focus. A reel opened with the pointer and closed with Escape left the tile its
+// controls and its frame's focus colour once the pointer had gone.
+test('a tile opened in the reel with the pointer and closed with Escape shows no controls once the pointer has left it', async ({ page, context }) => {
+  await openLane(page, context);
+  await openButton(page).click();
+  await expect(reel(page)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(reel(page)).toBeHidden();
+  await expect(openButton(page)).toBeFocused();
+
+  await pointerAway(page);
+  await expect.poll(() => controlsOpacity(page), { timeout: 3_000 }).toBe('0');
+  await expect.poll(() => frameBorderColor(page), { timeout: 3_000 }).not.toBe(TILE_FOCUS_BORDER);
+});
+
+test('a tile opened in the reel with the pointer shows its controls again once the reader tabs on after the close', async ({ page, context }) => {
+  await openLane(page, context);
+  await openButton(page).click();
+  await expect(reel(page)).toBeVisible();
+  await reel(page).getByRole('button', { name: 'Explore', exact: true }).click();
+  await expect(openButton(page)).toBeFocused();
+  await pointerAway(page);
+  await expect.poll(() => controlsOpacity(page), { timeout: 3_000 }).toBe('0');
+
+  // By keyboard now: focus moves to the tile's own ⋯, and shows.
+  await page.keyboard.press('Tab');
+  await expect(tileMenuButton(page)).toBeFocused();
+  await expect.poll(() => controlsOpacity(page), { timeout: 3_000 }).toBe('1');
+  await expect.poll(() => frameBorderColor(page), { timeout: 3_000 }).toBe(TILE_FOCUS_BORDER);
+});
+
+// A browser whose focus() takes no `focusVisible` option (src/app/showcase/reel-focus-return.ts):
+// the tile focus goes back to is marked instead, until the reader moves on by keyboard.
+test('where focus() takes no focusVisible option, a tile closed with Escape is marked quiet until the reader tabs on', async ({ page, context }) => {
+  await page.addInitScript(() => {
+    const focus = HTMLElement.prototype.focus;
+    HTMLElement.prototype.focus = function focusWithoutVisibilityOption(this: HTMLElement, options?: FocusOptions) {
+      return focus.call(this, options ? { preventScroll: options.preventScroll } : undefined);
+    };
+  });
+  await openLane(page, context);
+  await openButton(page).click();
+  await expect(reel(page)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(reel(page)).toBeHidden();
+  await expect(openButton(page)).toBeFocused();
+  await expect(openButton(page)).toHaveAttribute('data-quiet-focus', '');
+
+  await pointerAway(page);
+  await expect.poll(() => controlsOpacity(page), { timeout: 3_000 }).toBe('0');
+  await expect.poll(() => frameBorderColor(page), { timeout: 3_000 }).not.toBe(TILE_FOCUS_BORDER);
+
+  await page.keyboard.press('Tab');
+  await expect(tileMenuButton(page)).toBeFocused();
+  await expect(openButton(page)).not.toHaveAttribute('data-quiet-focus');
   await expect.poll(() => controlsOpacity(page), { timeout: 3_000 }).toBe('1');
 });
 
@@ -262,6 +342,7 @@ test('a tile opens its reel in one step: no "Opening preview", the tile\'s pictu
   expect(followBox).not.toBeNull();
   expect(Math.round(followBox!.x)).toBe(first.follow!.x);
   expect(Math.round(followBox!.y)).toBe(first.follow!.y);
+  expect(Math.round(followBox!.width)).toBe(first.follow!.width);
   expect(Math.round(followBox!.height)).toBe(first.follow!.height);
   const title = reel(page).getByRole('heading', { level: 2, name: OPENED.title });
   expect(Math.round((await title.boundingBox())!.y)).toBe(first.titleTop);
@@ -305,4 +386,29 @@ test("Explore loaded on a post's reel address covers the page with the reel's st
     .filter((image) => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0)
     .map((image) => (image as HTMLImageElement).currentSrc)), { timeout: 10_000 })
     .toEqual([expect.stringMatching(/\.display\.[a-f0-9]+\.webp$/)]);
+});
+
+// Review of #834: the place held for Follow was Follow's own width, and a reader who already follows
+// the creator gets "Following", with a border: the button grew leftwards when the answer landed.
+test('Follow\'s place is held at the width the answer takes, "Following" for a creator the reader follows', async ({ page, context }) => {
+  const { reelCodeLoaded } = await openLane(page, context, { following: true });
+  await openButton(page).hover();
+  await reelCodeLoaded();
+  await openButton(page).click();
+
+  const held = reel(page).locator('[data-reel-follow="pending"]');
+  await expect(held).toBeVisible();
+  const heldBox = await held.boundingBox();
+  const title = reel(page).getByRole('heading', { level: 2, name: OPENED.title });
+  const titleTop = (await title.boundingBox())!.y;
+
+  const following = reel(page).getByRole('button', { name: `Following ${exploreReel.creator.display_name}` });
+  await expect(following).toBeVisible();
+  await expect(held).toHaveCount(0);
+  const followingBox = await following.boundingBox();
+  const rounded = (box: { x: number; y: number; width: number; height: number } | null) => box && {
+    x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height),
+  };
+  expect(rounded(followingBox)).toEqual(rounded(heldBox));
+  expect((await title.boundingBox())!.y).toBe(titleTop);
 });
