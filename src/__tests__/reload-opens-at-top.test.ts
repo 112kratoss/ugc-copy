@@ -157,13 +157,35 @@ describe('a document reached by Back or Forward from another document', () => {
   });
 });
 
-it('a document that came in with the restore on leaves it on', () => {
+describe('a reload that no pagehide came before (a tab the browser discarded)', () => {
+  it.each(['/', '/showcase?category=video', '/marketplace'])('on %s turns the restore off itself until its load is done', (address) => {
+    readyState = 'loading';
+    navigationType = 'reload';
+    runAt(address);
+
+    expect(mode).toBe('manual');
+    finishLoad();
+    vi.runAllTimers();
+    expect(mode).toBe('auto');
+  });
+
+  it.each(['/showcase/p1', '/creators/someone', '/marketplace/sell'])('on another page (%s) leaves it on', (address) => {
+    readyState = 'loading';
+    navigationType = 'reload';
+    runAt(address);
+
+    expect(mode).toBe('auto');
+  });
+});
+
+it.each(['navigate', 'back_forward'])('a %s load that came in with the restore on leaves it on', (type) => {
   readyState = 'loading';
-  navigationType = 'reload';
+  navigationType = type;
   runAt('/');
+
+  expect(mode).toBe('auto');
   finishLoad();
   vi.runAllTimers();
-
   expect(mode).toBe('auto');
 });
 

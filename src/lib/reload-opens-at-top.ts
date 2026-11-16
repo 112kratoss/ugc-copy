@@ -17,6 +17,11 @@
  * - after a Back or Forward from another document, at once: Home and Explore draw the grid they
  *   kept from that visit, and the browser still puts the reader back where it was left.
  *
+ * A reloaded document on one of these pages also turns the restore off itself as it starts, for a
+ * reload no `pagehide` came before: a tab the browser discarded in the background and reloads when
+ * it is shown again (review of #832). That alone stops a restore only for content that comes after
+ * the first layout, as a streamed feed does, which is why it is the backstop and not the rule.
+ *
  * Given back, because a mode left `manual` would spread: every entry the app pushes takes the
  * current entry's mode, and Back inside the app would stop returning to where a page was left.
  * Entries pushed before a reload's load ended took `manual` with them, so a Back or Forward after
@@ -34,4 +39,4 @@
 export const RELOAD_OPENS_AT_TOP_PATHNAMES = ['/', '/showcase', '/marketplace'] as const;
 
 /** Inline in the server's HTML, ahead of the page. */
-export const RELOAD_OPENS_AT_TOP = `try{if("scrollRestoration"in history){var g=function(){history.scrollRestoration==="manual"&&(history.scrollRestoration="auto")},l=function(){return document.readyState==="complete"},n=performance.getEntriesByType&&performance.getEntriesByType("navigation")[0];if(history.scrollRestoration==="manual"){if(n&&n.type==="back_forward")g();else l()?setTimeout(g,0):addEventListener("load",function(){setTimeout(g,0)},{once:true})}addEventListener("pagehide",function(){${JSON.stringify(RELOAD_OPENS_AT_TOP_PATHNAMES)}.indexOf(location.pathname)>-1&&(history.scrollRestoration="manual")});addEventListener("pageshow",function(e){e.persisted&&g()});addEventListener("popstate",function(){l()&&g()})}}catch(e){}`;
+export const RELOAD_OPENS_AT_TOP = `try{if("scrollRestoration"in history){var p=${JSON.stringify(RELOAD_OPENS_AT_TOP_PATHNAMES)},g=function(){history.scrollRestoration==="manual"&&(history.scrollRestoration="auto")},l=function(){return document.readyState==="complete"},n=performance.getEntriesByType&&performance.getEntriesByType("navigation")[0];n&&n.type==="reload"&&p.indexOf(location.pathname)>-1&&(history.scrollRestoration="manual");if(history.scrollRestoration==="manual"){if(n&&n.type==="back_forward")g();else l()?setTimeout(g,0):addEventListener("load",function(){setTimeout(g,0)},{once:true})}addEventListener("pagehide",function(){p.indexOf(location.pathname)>-1&&(history.scrollRestoration="manual")});addEventListener("pageshow",function(e){e.persisted&&g()});addEventListener("popstate",function(){l()&&g()})}}catch(e){}`;
