@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CircleAlert, ChevronLeft, ChevronRight, Images, Maximize2, Play, RotateCcw } from 'lucide-react';
 
 import { useInlineMediaPlayback } from '@/components/useInlineMediaPlayback';
@@ -11,6 +11,7 @@ import { thumbHashToDataURL } from 'thumbhash';
 import { buildOptimizedPreviewImageUrl } from '@/lib/preview-images';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
 import UnavailableMediaNote from '@/components/UnavailableMediaNote';
+import { holdTilePicture, releaseTilePicture, type TilePictureStandIn } from '@/app/showcase/tile-pictures';
 
 interface ShowcaseMediaCarouselProps {
   mediaItems: ShowcaseMediaItem[];
@@ -46,6 +47,11 @@ interface ShowcaseMediaCarouselProps {
    * source (`sourceVideoProgress`).
    */
   onVideoProgress?: (progress: number, durationMs: number) => void;
+  /**
+   * The reel's: a grid tile's picture to draw under this media item's own copy while that loads
+   * (`tilePictureStandIn` decides it, in the reel).
+   */
+  standIn?: TilePictureStandIn | null;
 }
 
 const MEDIA_LOAD_TIMEOUT_MS = 15_000;
@@ -104,6 +110,40 @@ function clampIndex(index: number, itemCount: number) {
   return Math.min(Math.max(index, 0), Math.max(0, itemCount - 1));
 }
 
+/**
+ * The picture the grid's tile drew for this media item, under the reel's own copy until that has
+ * loaded (`tile-pictures.ts`). Copied from the tile's decoded element before the reel's first paint,
+ * so the reel opens on the picture the reader pressed rather than on black, whatever the network
+ * and the cache do; the reel's copy, drawn over it in the same contained box, takes its place.
+ */
+function TilePictureCanvas({ image }: { image: HTMLImageElement }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    try {
+      const context = canvas.getContext('2d');
+      if (!context) return;
+      context.drawImage(image, 0, 0);
+      canvas.dataset.drawn = 'true';
+    } catch {
+      // A picture that cannot be copied leaves the frame as it was, until the reel's copy loads.
+    }
+  }, [image]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      aria-hidden="true"
+      data-tile-picture-stand-in=""
+      className="absolute inset-0 h-full w-full object-contain"
+    />
+  );
+}
+
 export default function ShowcaseMediaCarousel({
   mediaItems,
   title,
@@ -124,6 +164,7 @@ export default function ShowcaseMediaCarousel({
   onMediaError,
   onMediaRetry,
   onVideoProgress,
+  standIn = null,
 }: ShowcaseMediaCarouselProps) {
   const items = useMemo(
     () => mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder),
@@ -272,6 +313,21 @@ export default function ShowcaseMediaCarousel({
     }));
     onMediaRetry?.(activeItem);
   }, [activeItem, activeLoadKey, activeSourceKey, onMediaRetry]);
+
+  // A feed tile holds the picture it draws for the reel opened from it (`tile-pictures.ts`).
+  const tileMediaItemId = mode === 'feed' ? activeItem?.id ?? null : null;
+  const heldTilePictureRef = useRef<{ mediaItemId: string; image: HTMLImageElement } | null>(null);
+  const holdFeedTilePicture = useCallback((image: HTMLImageElement | null) => {
+    const held = heldTilePictureRef.current;
+    if (held) {
+      releaseTilePicture(held.mediaItemId, held.image);
+      heldTilePictureRef.current = null;
+    }
+    if (image && tileMediaItemId) {
+      holdTilePicture(tileMediaItemId, image);
+      heldTilePictureRef.current = { mediaItemId: tileMediaItemId, image };
+    }
+  }, [tileMediaItemId]);
 
   useEffect(() => {
     const carousel = carouselRef.current;
@@ -445,6 +501,8 @@ export default function ShowcaseMediaCarousel({
     || isNearViewport
     || isInViewport
     || isInteracting;
+  // The tile's picture the reel hands down, for the media item drawn here only.
+  const tileStandIn = isReel && standIn?.mediaItemId === renderedActiveItem.id ? standIn.image : null;
 
   return (
     <div ref={carouselRef} className={className}>
@@ -560,6 +618,7 @@ export default function ShowcaseMediaCarousel({
               alt={title}
               sizes={sizes ?? '(min-width: 1280px) 25vw, (min-width: 768px) 33vw, (min-width: 640px) 50vw, 100vw'}
               priority={priority}
+              imageRef={holdFeedTilePicture}
               onLoad={(event) => {
                 // Only the cover defines the frame, and only when the server did
                 // not already record dimensions.
@@ -578,31 +637,35 @@ export default function ShowcaseMediaCarousel({
             // display rendition is the frame's own size (the app's slide since it
             // existed): it is read straight from storage, and the source stays
             // the fallback when there is none or it fails to load.
-            <OptimizedPreviewImage
-              key={activeLoadKey}
-              previewSrc={renderedActiveItem.displayUrl || renderedActiveItem.url}
-              fallbackSrc={renderedActiveItem.url}
-              alt={title}
-              sizes={sizes ?? '(min-width: 1280px) 60vw, 100vw'}
-              loading={isDetail ? 'eager' : 'lazy'}
-              // A cached image can finish before React attaches `onLoad`, which
-              // would strand the frame on its fallback ratio and letterbox the
-              // media in black. `complete` is the only signal for that case.
-              imageRef={(image) => {
-                if (!image?.complete || activeIndex !== 0) return;
-                if (image.naturalWidth && image.naturalHeight) {
-                  setCoverAspectRatio(image.naturalWidth / image.naturalHeight);
-                }
-              }}
-              onLoad={(event) => {
-                if (activeIndex === 0 && event.currentTarget.naturalWidth && event.currentTarget.naturalHeight) {
-                  setCoverAspectRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight);
-                }
-                reportMediaReady(renderedActiveItem, activeLoadKey);
-              }}
-              onError={reportActiveMediaError}
-              className="object-contain"
-            />
+            <>
+              {tileStandIn ? <TilePictureCanvas key={`tile:${activeLoadKey}`} image={tileStandIn} /> : null}
+              <OptimizedPreviewImage
+                key={activeLoadKey}
+                previewSrc={renderedActiveItem.displayUrl || renderedActiveItem.url}
+                fallbackSrc={renderedActiveItem.url}
+                alt={title}
+                sizes={sizes ?? '(min-width: 1280px) 60vw, 100vw'}
+                // The reel draws one picture, the one in view: asked for at once.
+                loading={isDetail || isReel ? 'eager' : 'lazy'}
+                // A cached image can finish before React attaches `onLoad`, which
+                // would strand the frame on its fallback ratio and letterbox the
+                // media in black. `complete` is the only signal for that case.
+                imageRef={(image) => {
+                  if (!image?.complete || activeIndex !== 0) return;
+                  if (image.naturalWidth && image.naturalHeight) {
+                    setCoverAspectRatio(image.naturalWidth / image.naturalHeight);
+                  }
+                }}
+                onLoad={(event) => {
+                  if (activeIndex === 0 && event.currentTarget.naturalWidth && event.currentTarget.naturalHeight) {
+                    setCoverAspectRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight);
+                  }
+                  reportMediaReady(renderedActiveItem, activeLoadKey);
+                }}
+                onError={reportActiveMediaError}
+                className="object-contain"
+              />
+            </>
           )}
         </div>
 

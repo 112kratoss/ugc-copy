@@ -5,6 +5,8 @@ import { useEffect, type ReactNode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { QUIET_FOCUS_ATTRIBUTE } from '@/app/showcase/reel-focus-return';
+
 import {
   createFeedCardAttention,
   FEED_DWELL_MAX_MS,
@@ -462,9 +464,35 @@ describe('showcase feed interactions', () => {
     expect(css).toMatch(
       /@supports selector\(:has\(\*\)\) \{\s*\.group:has\(\[aria-haspopup="menu"\]\[aria-expanded="true"\]\) \.showcase-card-actions \{\s*opacity: 1;\s*\}\s*\}/,
     );
-    // Nowhere else, and never beside another selector.
-    expect(css.match(/\.group:has\(/g)).toHaveLength(1);
+    // Only there and in the keyboard focus rule below, and never beside another selector.
+    expect(css.match(/\.group:has\(/g)).toHaveLength(2);
     expect(css).not.toMatch(/,\s*\.group:has\(|\.group:has\([^{]*,/);
+  });
+
+  // Focus goes back to the tile a reel was opened from when the reel closes. With :focus-within
+  // a tile opened and closed with the mouse kept its controls once the pointer had gone (owner's
+  // recording, 2026-11-16; tests/e2e/explore-reel-open.spec.ts): keyboard focus shows them, a
+  // pointer's does not. Each rule stands alone in its own @supports, for the menu rule's reason.
+  // Focus given back quietly where focus() cannot be told to hide it is marked, and skipped
+  // (src/app/showcase/reel-focus-return.ts; review of #834).
+  it("shows a tile's controls for keyboard focus in it, not for any focus", () => {
+    const css = readFileSync(path.resolve(__dirname, '../app/globals.css'), 'utf8');
+    const notQuiet = `:not\\(\\[${QUIET_FOCUS_ATTRIBUTE}\\]\\)`;
+
+    expect(css).toMatch(new RegExp(
+      `@supports selector\\(:has\\(\\*\\)\\) \\{\\s*\\.group:has\\(:focus-visible${notQuiet}\\) \\.showcase-card-actions \\{\\s*opacity: 1;\\s*\\}\\s*\\}`,
+    ));
+    // A Marketplace tile is itself the link.
+    expect(css).toMatch(new RegExp(
+      `@supports selector\\(:focus-visible\\) \\{\\s*\\.group:focus-visible${notQuiet} \\.showcase-card-actions \\{\\s*opacity: 1;\\s*\\}\\s*\\}`,
+    ));
+    // Any focus, only where :has() is unknown.
+    expect(css).toMatch(
+      /@supports not selector\(:has\(\*\)\) \{\s*\.group:focus-within \.showcase-card-actions \{\s*opacity: 1;\s*\}\s*\}/,
+    );
+    expect(css.match(/\.group:focus-within \.showcase-card-actions/g)).toHaveLength(1);
+    expect(css).toMatch(/\.group:hover \.showcase-card-actions \{\s*opacity: 1;\s*\}/);
+    expect(css).not.toMatch(/,\s*\.group:focus-(?:visible|within)|\.group:focus-(?:visible|within)[^{]*,/);
   });
 
   it('leaves out the rows about the creator when there is no creator to act on', () => {

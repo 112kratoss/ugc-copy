@@ -1,6 +1,5 @@
 'use client';
 
-import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { MouseEvent, ReactNode } from 'react';
@@ -21,7 +20,9 @@ import { useAuth } from '@/components/AuthProvider';
 import { SegmentedControl } from '@/components/DesignSystem';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
-import { loadShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
+import ShowcaseReel from '@/app/showcase/ShowcaseReel';
+import { SHOWCASE_REEL_WARM_IDLE_TIMEOUT_MS, warmShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
+import { scheduleIdleWork } from '@/lib/schedule-idle-work';
 import type { CreatorProfilePage, CreatorProfilePageData } from '@/lib/creator-profile';
 import {
   blockCreatorAfterConfirmation,
@@ -47,29 +48,6 @@ import ReelHostMark from '@/components/ReelHostMark';
 import { CREATOR_TAB_HASHES, CREATOR_TAB_MARK, type CreatorTab } from '@/lib/address-first-paint';
 import { useFirstPaintMark } from '@/lib/use-first-paint-mark';
 import { itemsWithoutBlockedRemixCredits } from '../../../../ugc-mobile/lib/remix-credit/remix-credit';
-
-function ShowcaseReelLoadingFallback() {
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 text-sm font-bold text-white backdrop-blur-sm"
-    >
-      <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-zinc-950 px-5 py-3 shadow-2xl">
-        <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-        Opening preview
-      </span>
-    </div>
-  );
-}
-
-const ShowcaseReelViewer = dynamic(
-  () => loadShowcaseReelViewer(),
-  {
-    ssr: false,
-    loading: ShowcaseReelLoadingFallback,
-  }
-);
 
 const PAGE_SIZE = 24;
 const tabHashes: Record<CreatorTab, string> = CREATOR_TAB_HASHES;
@@ -247,6 +225,12 @@ function CreatorContentTabsView({
   useLayoutEffect(() => {
     setActiveTab(getTabFromHash(window.location.hash));
   }, []);
+
+  // The reel's code once the page is idle, as Explore loads it, so a press opens the reel at once
+  // (`ShowcaseReel`); the grid's pointer and focus load it sooner.
+  useEffect(() => (
+    scheduleIdleWork(warmShowcaseReelViewer, SHOWCASE_REEL_WARM_IDLE_TIMEOUT_MS)
+  ), []);
 
   useEffect(() => {
     const handleHashChange = () => setActiveTab(getTabFromHash(window.location.hash));
@@ -558,7 +542,14 @@ function CreatorContentTabsView({
         {activeTab === 'tools' ? (
           <ToolsGrid tools={initialData.stats.toolsUsed} />
         ) : visibleItems.length > 0 ? (
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4" data-creator-grid>
+          <div
+            className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 xl:grid-cols-4"
+            data-creator-grid
+            // The reel's code, on the way to a press (`ShowcaseReel`).
+            onPointerEnter={warmShowcaseReelViewer}
+            onTouchStart={warmShowcaseReelViewer}
+            onFocusCapture={warmShowcaseReelViewer}
+          >
             {visibleItems.map((item) => (
               <CreatorCard
                 key={item.id}
@@ -604,7 +595,7 @@ function CreatorContentTabsView({
       ) : null}
 
       {selectedItemId ? (
-        <ShowcaseReelViewer
+        <ShowcaseReel
           isOpen
           items={viewerItems}
           selectedItemId={selectedItemId}
@@ -659,7 +650,7 @@ function CreatorCard({
     <article
       data-creator-card
       data-creator-recipe={item.asset ? '' : undefined}
-      className="group min-w-0 overflow-hidden rounded-ui-xl border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] focus-within:border-white/24"
+      className="group min-w-0 overflow-hidden rounded-ui-xl border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] has-[:focus-visible:not([data-quiet-focus])]:border-white/24"
     >
       <div className="relative aspect-[4/5] overflow-hidden bg-black">
         {isText ? (
