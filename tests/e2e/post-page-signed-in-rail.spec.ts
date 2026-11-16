@@ -213,6 +213,17 @@ async function recordedFrames(page: Page, { stop = true } = {}): Promise<Frame[]
   return frames.filter((frame) => frame.path === POST_PATH);
 }
 
+/** Lets two frames pass, so what the page has committed has been drawn, and recorded. */
+async function twoFrames(page: Page) {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+}
+
+/**
+ * Waiting for the page to ask for its session check, polled often: the time a check is held for
+ * comes out of its deadline (SESSION_CHECK_DEADLINE_MS, 4.5 s from when the check began).
+ */
+const CHECK_ASKED = { ...COLD_PAGE, intervals: [50] };
+
 /** The rail as the reader keeps it: the same in every frame it was drawn in. */
 function expectSteadyRail(frames: Frame[], reader: 'signed in' | 'signed out') {
   const all = JSON.stringify(frames);
@@ -254,20 +265,20 @@ test('a post opened from the Marketplace draws a signed-in reader\'s composer an
     window as unknown as { next: { router: { push: (target: string) => void } } }
   ).next.router.push(href), POST_PATH);
   await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
-  // The post page's provider is checking the session: the rail as it is drawn meanwhile.
-  await expect.poll(checks.held, COLD_PAGE).toBeGreaterThan(0);
-  await expect(composer(page)).toHaveCount(0);
-  await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
-  await rail(page).screenshot({ path: testInfo.outputPath('rail-while-session-checked.png') });
+  // The post page's provider is checking the session: held only while the rail drawn meanwhile is
+  // seen, well inside the check's deadline (SESSION_CHECK_DEADLINE_MS from when it began).
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  await twoFrames(page);
   // Report user and Block user hold their place, and wait for the session to act. Soft, so a rail
   // without them still reaches the frames below, which say what was drawn instead.
-  await expect.soft(rail(page).getByRole('button', { name: 'Report user' })).toBeDisabled({ timeout: 2_000 });
+  await expect.soft(rail(page).getByRole('button', { name: 'Report user' })).toBeDisabled({ timeout: 1_000 });
 
   checks.release();
   await expect(composer(page)).toBeVisible(COLD_PAGE);
   await expect(rail(page).getByRole('button', { name: 'Report user' })).toBeEnabled();
   await expect(rail(page).getByRole('button', { name: 'Block user' })).toBeEnabled();
   await expect(rail(page).getByText(COMMENT)).toBeVisible();
+  await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
   await rail(page).screenshot({ path: testInfo.outputPath('rail-settled.png') });
 
   const frames = await recordedFrames(page);
@@ -277,7 +288,7 @@ test('a post opened from the Marketplace draws a signed-in reader\'s composer an
   expectSteadyRail(frames, 'signed in');
 });
 
-test('a signed-in reader who loads a post draws its composer and rail from the first frame, while the session is checked', async ({ page, context }, testInfo) => {
+test('a signed-in reader who loads a post draws its composer and rail from the first frame, while the session is checked', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const { checks } = await signIn(context);
   checks.hold();
@@ -286,10 +297,10 @@ test('a signed-in reader who loads a post draws its composer and rail from the f
 
   await page.goto(POST_PATH);
   await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
-  // A check is asked for once the page's script has run.
-  await expect.poll(checks.held, COLD_PAGE).toBeGreaterThan(0);
-  await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
-  await rail(page).screenshot({ path: testInfo.outputPath('rail-loaded-while-session-checked.png') });
+  // A check is asked for once the page's script has run: held only while the rail drawn meanwhile
+  // is seen, well inside the check's deadline.
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  await twoFrames(page);
 
   checks.release();
   await expect(composer(page)).toBeVisible(COLD_PAGE);
@@ -336,7 +347,7 @@ test("the post's creator, loading their own post, never sees Report user, and Co
 
   await page.goto(POST_PATH);
   await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
-  await expect.poll(checks.held, COLD_PAGE).toBeGreaterThan(0);
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
   const whileChecked = await recordedFrames(page, { stop: false });
 
   checks.release();
@@ -359,9 +370,11 @@ test('a session check that outlasts its deadline draws the reader as a visitor u
 
   await page.goto(POST_PATH);
   await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
-  await expect.poll(checks.held, COLD_PAGE).toBeGreaterThan(0);
-  // Past the deadline (SESSION_CHECK_DEADLINE_MS, 4.5 s): the visitor's page, as before the check
-  // was waited for.
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  // The check has been asked for and is still within its deadline: the composer's place is held.
+  await expect(rail(page).getByText('Add a comment…')).toBeVisible();
+  // Past the deadline (SESSION_CHECK_DEADLINE_MS, 4.5 s from when the check began): the visitor's
+  // page, as before the check was waited for.
   await expect(rail(page).getByRole('link', { name: 'Sign in to join the conversation' })).toBeVisible({ timeout: 15_000 });
   await expect(rail(page).getByText(COMMENT)).toBeVisible();
   await expect(rail(page).getByRole('button', { name: 'Report user' })).toHaveCount(0);

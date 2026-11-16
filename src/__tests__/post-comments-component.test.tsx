@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
@@ -6,7 +6,7 @@ import FeedbackViewport from '@/components/FeedbackViewport';
 import PostComments from '@/components/PostComments';
 import type { PostComment, PostCommentsPage } from '@/lib/post-comments-client';
 import { forgetPostCommentSortsForTests, readPostCommentSort, rememberPostCommentSort } from '@/lib/post-comment-sort-memory';
-import { SESSION_CHECK_DEADLINE_MS } from '@/lib/viewer-session-check';
+import { SESSION_CHECK_DEADLINE_MS, SESSION_CHECK_START_DEADLINE_MS } from '@/lib/viewer-session-check';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
@@ -20,6 +20,8 @@ const { authState } = vi.hoisted(() => ({
         } | null,
         /** The provider is still checking a session cookie. */
         isLoading: false,
+        /** When the provider began that check (`performance.now()`), or null before it has. */
+        sessionCheckStartedAt: null as number | null,
     },
 }));
 
@@ -156,6 +158,7 @@ describe('PostComments', () => {
         authState.session = null;
         authState.user = null;
         authState.isLoading = false;
+        authState.sessionCheckStartedAt = null;
         // The order chosen for a post's comments is kept for the tab: one case's must not reach the next.
         window.sessionStorage.clear();
         forgetPostCommentSortsForTests();
@@ -267,16 +270,17 @@ describe('PostComments', () => {
             vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
             const server = serveThread([comment()]);
             vi.stubGlobal('fetch', server.fetchMock);
+            authState.sessionCheckStartedAt = performance.now();
 
             const { rerender } = render(view());
             act(() => {
-                vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS - 1);
+                vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS - 100);
             });
             expect(screen.getByText('Add a comment…')).toBeInTheDocument();
             expect(server.reads).toEqual([]);
 
             act(() => {
-                vi.advanceTimersByTime(1);
+                vi.advanceTimersByTime(100);
             });
             // Testing Library's waits drain on a real timer.
             vi.useRealTimers();
@@ -293,6 +297,61 @@ describe('PostComments', () => {
                 { offset: 0, limit: 20, authorization: null },
                 { offset: 0, limit: 20, authorization: 'Bearer token-1' },
             ]));
+        });
+
+        // Re-review of #833: the deadline ran from the thread's first draw, so loading supabase-js
+        // on a slow phone spent it before the check was even sent. It runs from the check now, for
+        // a thread drawn after the check began as well.
+        it('times the deadline from when the check began, not from when the thread was drawn', () => {
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+            vi.stubGlobal('fetch', serveThread([comment()]).fetchMock);
+            authState.sessionCheckStartedAt = performance.now() - (SESSION_CHECK_DEADLINE_MS - 500);
+
+            render(view());
+            act(() => {
+                vi.advanceTimersByTime(400);
+            });
+            expect(screen.getByText('Add a comment…')).toBeInTheDocument();
+            act(() => {
+                vi.advanceTimersByTime(200);
+            });
+            expect(screen.getByRole('link', { name: /Sign in to join/i })).toBeInTheDocument();
+        });
+
+        it('waits longer for a check that has not begun, and not for ever', () => {
+            vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+            vi.stubGlobal('fetch', serveThread([comment()]).fetchMock);
+
+            const { rerender } = render(view());
+            act(() => {
+                vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS + 1_000);
+            });
+            expect(screen.getByText('Add a comment…')).toBeInTheDocument();
+
+            // Begun now: the deadline runs from here.
+            authState.sessionCheckStartedAt = performance.now();
+            rerender(view());
+            act(() => {
+                vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS - 100);
+            });
+            expect(screen.getByText('Add a comment…')).toBeInTheDocument();
+            act(() => {
+                vi.advanceTimersByTime(100);
+            });
+            expect(screen.getByRole('link', { name: /Sign in to join/i })).toBeInTheDocument();
+            cleanup();
+
+            // Never begun: the start's own deadline.
+            authState.sessionCheckStartedAt = null;
+            render(view());
+            act(() => {
+                vi.advanceTimersByTime(SESSION_CHECK_START_DEADLINE_MS - 100);
+            });
+            expect(screen.getByText('Add a comment…')).toBeInTheDocument();
+            act(() => {
+                vi.advanceTimersByTime(100);
+            });
+            expect(screen.getByRole('link', { name: /Sign in to join/i })).toBeInTheDocument();
         });
 
         it('offers sign-in, and reads the thread as a visitor, once the check finds no session', async () => {

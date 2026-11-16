@@ -53,6 +53,8 @@ const clientAuth = vi.hoisted(() => ({
     user: { id: string; is_anonymous?: boolean } | null;
     /** The provider is still checking a session cookie. */
     isLoading?: boolean;
+    /** When the provider began that check (`performance.now()`). */
+    sessionCheckStartedAt?: number | null;
   },
 }));
 // The address the page was opened at, as the browser's router reads it: the
@@ -922,15 +924,16 @@ describe('Showcase detail page', () => {
         holdSessionCookieOf('user-2');
         const page = await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) });
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: performance.now() };
         const { rerender } = render(page);
         const rail = screen.getByTestId('canonical-post-actions');
         act(() => {
-          vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS - 1);
+          vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS - 100);
         });
         expect(within(rail).getByRole('button', { name: 'Report user' })).toBeDisabled();
 
         act(() => {
-          vi.advanceTimersByTime(1);
+          vi.advanceTimersByTime(100);
         });
         expect(within(rail).queryByRole('button', { name: 'Report user' })).not.toBeInTheDocument();
         expect(within(rail).queryByRole('button', { name: 'Block user' })).not.toBeInTheDocument();

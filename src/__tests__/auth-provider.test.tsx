@@ -153,6 +153,44 @@ describe('AuthProvider', () => {
     expect(authProviderMocks.from).not.toHaveBeenCalled();
   });
 
+  // Re-review of #833: a page waiting on the check of a cookie the server did not read times it
+  // from when the check began (`useViewerSessionCheck`), not from its own first draw, which on a
+  // slow phone came seconds earlier, while supabase-js loaded.
+  it('marks when it began checking a cookie the server did not read, and only such a check', async () => {
+    function CheckProbe() {
+      const { sessionCheckStartedAt } = useAuth();
+      return <span data-testid="check-started">{typeof sessionCheckStartedAt === 'number' ? 'begun' : 'none'}</span>;
+    }
+    vi.stubGlobal('requestIdleCallback', (callback: IdleRequestCallback) => {
+      queueMicrotask(() => callback({ didTimeout: false, timeRemaining: () => 50 }));
+      return 1;
+    });
+    vi.stubGlobal('cancelIdleCallback', vi.fn());
+
+    // No cookie: no check.
+    const visitor = render(<AuthProvider><CheckProbe /></AuthProvider>);
+    expect(screen.getByTestId('check-started')).toHaveTextContent('none');
+    visitor.unmount();
+
+    // A session the server read: the browser's events are followed, and nothing is checked.
+    const resolved = render(
+      <AuthProvider initialSession={authenticatedSession} initialCredits={1295} hasResolvedInitialState>
+        <CheckProbe />
+      </AuthProvider>
+    );
+    await waitFor(() => expect(authProviderMocks.onAuthStateChange).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('check-started')).toHaveTextContent('none');
+    resolved.unmount();
+
+    // A cookie the server did not read: marked as the check begins, and kept once it has ended.
+    authCookieState.hasHint = true;
+    render(<AuthProvider><CheckProbe /></AuthProvider>);
+    expect(screen.getByTestId('check-started')).toHaveTextContent('none');
+    await waitFor(() => expect(screen.getByTestId('check-started')).toHaveTextContent('begun'));
+    await waitFor(() => expect(authProviderMocks.getUser).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('check-started')).toHaveTextContent('begun');
+  });
+
   it('preserves verified server auth and deduplicates the matching initial browser events', async () => {
     vi.stubGlobal('requestIdleCallback', (callback: IdleRequestCallback) => {
       queueMicrotask(() => callback({ didTimeout: false, timeRemaining: () => 50 }));
