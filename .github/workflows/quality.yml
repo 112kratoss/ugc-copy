@@ -91,11 +91,14 @@ jobs:
   e2e:
     name: E2E smoke
     runs-on: ubuntu-latest
-    # The suite takes 26 to 28 minutes. At a 30-minute limit the run on main
-    # for #776 was cancelled at the limit and its production release skipped
-    # (2026-11-12), as two pull-request runs were that day; 45 leaves room
-    # without hiding a real hang for long.
-    timeout-minutes: 45
+    # The suite grows with every spec and runs on one worker: 26 to 28
+    # minutes on 2026-11-12 (248 tests took 41 on main's f21e71def), then 274
+    # tests took 44 on #830's own run and passed the 45-minute limit on main's
+    # run for it (50f261151, run 43775988388, 2026-11-16), which was cancelled
+    # there and its production release skipped, as #776's was at a 30-minute
+    # limit on 2026-11-12. 70 leaves room for the suite as it is; the lasting
+    # answer is fewer minutes (shards or a second worker), not a higher limit.
+    timeout-minutes: 70
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -124,7 +127,7 @@ jobs:
       # The browser download is the slow, stall-prone half; the system deps are
       # apt packages that are largely preinstalled on the runner. On a cache hit
       # skip the download entirely. The timeout keeps a hung CDN fetch from
-      # eating the whole 30-minute job budget before any test runs.
+      # eating the job's time budget before any test runs.
       - name: Install Playwright Chromium
         timeout-minutes: 6
         run: |
