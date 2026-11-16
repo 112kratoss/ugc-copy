@@ -144,6 +144,65 @@ describe('FeedClient snapshot restore', () => {
         expect(screen.queryByText('card:old-1')).toBeNull();
     });
 
+    // A refresh asks Home afresh, as it asks Explore (owner's recording, 2026-11-16): the pages
+    // kept from before the reload drew the old posts again, now at the top
+    // (src/lib/reload-opens-at-top.ts), neither a new feed nor the reader's place.
+    describe('after the browser reloads Home', () => {
+        function navigationIs(type: string) {
+            vi.spyOn(performance, 'getEntriesByType').mockImplementation((entryType: string) => (
+                entryType === 'navigation'
+                    ? [{ type, name: window.location.href } as unknown as PerformanceEntry]
+                    : []
+            ));
+        }
+        const keptBeforeTheReload = performance.timeOrigin - 60_000;
+        const keptPages = page([item('post-1'), item('post-2'), item('post-3'), item('post-4')], null);
+
+        afterEach(() => {
+            vi.restoreAllMocks();
+        });
+
+        it('draws the server page, not the pages kept before the reload', () => {
+            writeShowcaseClientSnapshot(homeFeedCacheKey(), {
+                feed: keptPages,
+                renderedItemCount: 4,
+                savedItemIds: [],
+            }, keptBeforeTheReload);
+            navigationIs('reload');
+
+            render(<FeedClient initialFeed={serverPage} initialChipId="for-you" />);
+
+            expect(screen.getAllByText(/^card:/)).toHaveLength(2);
+            expect(screen.queryByText('card:post-4')).toBeNull();
+        });
+
+        it('still restores pages kept since the reload, as on any return to Home', () => {
+            writeShowcaseClientSnapshot(homeFeedCacheKey(), {
+                feed: keptPages,
+                renderedItemCount: 4,
+                savedItemIds: [],
+            });
+            navigationIs('reload');
+
+            render(<FeedClient initialFeed={serverPage} initialChipId="for-you" />);
+
+            expect(screen.getByText('card:post-4')).toBeTruthy();
+        });
+
+        it('restores the kept pages after a Back from another page', () => {
+            writeShowcaseClientSnapshot(homeFeedCacheKey(), {
+                feed: keptPages,
+                renderedItemCount: 4,
+                savedItemIds: [],
+            }, keptBeforeTheReload);
+            navigationIs('back_forward');
+
+            render(<FeedClient initialFeed={serverPage} initialChipId="for-you" />);
+
+            expect(screen.getByText('card:post-4')).toBeTruthy();
+        });
+    });
+
     it('keeps the home feed and the showcase grid in separate cache slots', () => {
         // Their filter tuples overlap, so only `surface` stops one restoring into
         // the other.

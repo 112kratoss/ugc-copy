@@ -50,7 +50,7 @@ import { useMediaQuery } from '@/lib/use-media-query';
 import type { ShowcaseFeedItem, ShowcaseFeedPage, ShowcaseMediaItem } from '@/lib/showcase';
 import {
     buildShowcaseClientCacheKey,
-    readShowcaseClientSnapshot,
+    readShowcaseClientSnapshotToRestore,
     writeShowcaseClientSnapshot,
     type ShowcaseClientSnapshot,
 } from '@/lib/showcase-client-cache';
@@ -257,7 +257,7 @@ export default function FeedClient({
     // Read once: a later read could pick up a snapshot this component just wrote
     // and clobber live state with a stale copy of itself.
     const [restoredSnapshot] = useState(() => {
-        const snapshot = readShowcaseClientSnapshot(buildLaneCacheKey(initialChipId));
+        const snapshot = readShowcaseClientSnapshotToRestore(buildLaneCacheKey(initialChipId));
         if (!snapshot || snapshot.feed.items.length <= (initialFeed?.items.length ?? 0)) return null;
         return { feed: feedFromSnapshot(snapshot), cachedAt: snapshot.cachedAt };
     });
@@ -697,7 +697,7 @@ export default function FeedClient({
         const urlLaneId = readLaneFromUrl();
         if (urlLaneId === initialChipId) return;
 
-        const snapshot = readShowcaseClientSnapshot(buildLaneCacheKey(urlLaneId));
+        const snapshot = readShowcaseClientSnapshotToRestore(buildLaneCacheKey(urlLaneId));
         if (!snapshot || snapshot.feed.items.length === 0) {
             selectChip(urlLaneId);
             return;
