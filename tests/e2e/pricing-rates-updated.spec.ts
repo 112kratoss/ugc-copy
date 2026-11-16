@@ -41,7 +41,8 @@ for (const reader of READERS) {
       });
       await page.route('**/api/fx', (route) => route.fulfill({ json: FX }));
 
-      await page.goto('/pricing', COLD_PAGE);
+      // No timeout of its own: the run's first request for the route waits for its compile.
+      await page.goto('/pricing');
 
       await expect(page.getByText(reader.line, { exact: true })).toBeVisible(COLD_PAGE);
       await expect(page.getByText(/\+0000|00:02:31/)).toHaveCount(0);

@@ -170,7 +170,8 @@ test.describe('Studio with more creations than its first page', () => {
 
   test('the header and the media filters say the same totals, and a filter shows a number only when it is a total', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto('/creations', COLD_PAGE);
+    // No timeout of its own: the run's first request for the route waits for its compile.
+    await page.goto('/creations');
     await expect(page.getByText('Studio image 2', { exact: true })).toBeVisible(COLD_PAGE);
 
     await expect(header(page)).toHaveText('54 CREATIONS TOTAL');
@@ -188,8 +189,13 @@ test.describe('Studio with more creations than its first page', () => {
 
   test('on a phone, a creation shows in the first screen', async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 });
-    await page.goto('/creations', COLD_PAGE);
-    await expect(firstTile(page)).toBeVisible(COLD_PAGE);
+    await page.goto('/creations');
+    // Loaded, not loading: a run in progress draws its card while the posts and the profile are
+    // still being read, before the setup card above it, which only a loaded page draws.
+    const setup = page.getByRole('region', { name: 'Portfolio setup' });
+    await expect(setup).toBeVisible(COLD_PAGE);
+    await expect(page.getByRole('link', { name: 'All (54)' })).toBeVisible();
+    await expect(firstTile(page)).toBeVisible();
 
     // The section tabs keep to one row.
     const tabTops = await Promise.all((await sectionTabs(page).all()).map(async (tab) => (await box(tab)).y));
@@ -205,27 +211,47 @@ test.describe('Studio with more creations than its first page', () => {
     // Nothing widens the page.
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(375);
 
-    // The setup card still asks, and its steps open from it.
-    const setup = page.getByRole('region', { name: 'Portfolio setup' });
+    // The setup card still asks, and its steps open from it, below it: the button stays under
+    // the finger, and what it opens comes after it, where a screen reader goes next (review of
+    // #836: the line under the title opened above the button and pushed it down).
     const steps = setup.getByRole('button', { name: 'Steps' });
+    // The card holds the line twice, under the title from 640px and under Steps on a phone: the
+    // one drawn at this width.
+    const detail = setup.getByText('Your creation and public proof are in place.', { exact: false }).filter({ visible: true });
     await expect(setup.getByRole('link', { name: 'Complete profile' })).toBeVisible();
     await expect(steps).toHaveAttribute('aria-expanded', 'false');
+    await expect(detail).toBeHidden();
     await expect(setup.getByText('Strengthen creator profile')).toBeHidden();
     await expect(setup.getByRole('link', { name: 'View portfolio' })).toBeHidden();
+    const closedButton = await box(steps);
     await steps.click();
     await expect(steps).toHaveAttribute('aria-expanded', 'true');
+    await expect(detail).toBeVisible();
     await expect(setup.getByText('Strengthen creator profile')).toBeVisible();
     await expect(setup.getByRole('link', { name: 'View portfolio' })).toBeVisible();
+    // Where it was, but for the 1px a hovered button lifts by (`.ui-button:hover`).
+    expect(Math.abs((await box(steps)).y - closedButton.y)).toBeLessThanOrEqual(1);
+    for (const opened of [detail, setup.getByRole('link', { name: 'View portfolio' }), setup.getByText('Strengthen creator profile')]) {
+      expect(await steps.evaluate(
+        (button, element) => Boolean(button.compareDocumentPosition(element!) & Node.DOCUMENT_POSITION_FOLLOWING),
+        await opened.elementHandle(),
+      )).toBe(true);
+    }
+    for (const id of (await steps.getAttribute('aria-controls'))!.split(' ')) {
+      await expect(page.locator(`#${id}`)).toBeVisible();
+    }
     await steps.click();
+    await expect(detail).toBeHidden();
     await expect(setup.getByText('Strengthen creator profile')).toBeHidden();
   });
 
   test('on a laptop, the setup card shows its steps with no disclosure', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto('/creations', COLD_PAGE);
+    await page.goto('/creations');
 
     const setup = page.getByRole('region', { name: 'Portfolio setup' });
     await expect(setup.getByText('Strengthen creator profile')).toBeVisible(COLD_PAGE);
+    await expect(setup.getByText('Your creation and public proof are in place.', { exact: false }).filter({ visible: true })).toBeVisible();
     await expect(setup.getByRole('link', { name: 'View portfolio' })).toBeVisible();
     await expect(setup.getByRole('button', { name: 'Steps' })).toBeHidden();
     // The section tabs and the line that says what the open one holds, as before.

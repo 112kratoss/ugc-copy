@@ -278,32 +278,55 @@ describe('getCreationMediaFilters', () => {
 // counting the finished creations of the one page of 36 loaded.
 describe('getStudioCreationCounts', () => {
   const firstPage = { all: 29, images: 29, videos: 0, audio: 0 };
+  const unknown = { all: null, images: null, videos: null, audio: null };
 
   it("says the server's total in the header and on All while pages wait, and no number for a kind", () => {
-    expect(getStudioCreationCounts({ loaded: firstPage, listComplete: false, serverTotal: 54 })).toEqual({
+    expect(getStudioCreationCounts({ loaded: firstPage, listAnswered: true, listComplete: false, serverTotal: 54 })).toEqual({
       total: 54,
       totalIsAtLeast: false,
-      filterTotals: { all: 54, images: null, videos: null, audio: null },
+      filterTotals: { ...unknown, all: 54 },
     });
   });
 
-  it('counts what is loaded once every page is, the whole library', () => {
+  it('counts what is loaded once every page is and the server counts as many, the whole library', () => {
     const everyPage = { all: 54, images: 47, videos: 7, audio: 0 };
-    expect(getStudioCreationCounts({ loaded: everyPage, listComplete: true, serverTotal: 54 })).toEqual({
+    expect(getStudioCreationCounts({ loaded: everyPage, listAnswered: true, listComplete: true, serverTotal: 54 })).toEqual({
       total: 54,
       totalIsAtLeast: false,
       filterTotals: everyPage,
     });
-    // The list is fresher than the profile read beside it: a creation archived here since.
-    expect(getStudioCreationCounts({ loaded: { ...everyPage, all: 53, images: 46 }, listComplete: true, serverTotal: 54 }))
-      .toMatchObject({ total: 53, filterTotals: { all: 53, images: 46 } });
+    // The server could not count: nothing says the list is behind.
+    expect(getStudioCreationCounts({ loaded: everyPage, listAnswered: true, listComplete: true, serverTotal: null }))
+      .toMatchObject({ total: 54, filterTotals: everyPage });
+  });
+
+  // Review of #836: with every page loaded, a creation of the second page archived since stayed
+  // active in the list, as a reread of the first page keeps a later page's rows as they were, and
+  // the header said 54 where the server, read in the same refresh, said 53.
+  it("believes the server over a loaded list it disagrees with, and then says no kind's number", () => {
+    const everyPage = { all: 54, images: 47, videos: 7, audio: 0 };
+    expect(getStudioCreationCounts({ loaded: everyPage, listAnswered: true, listComplete: true, serverTotal: 53 })).toEqual({
+      total: 53,
+      totalIsAtLeast: false,
+      filterTotals: { ...unknown, all: 53 },
+    });
   });
 
   it('says what is loaded with a "+" when the server could not count, and no filter number', () => {
-    expect(getStudioCreationCounts({ loaded: firstPage, listComplete: false, serverTotal: null })).toEqual({
+    expect(getStudioCreationCounts({ loaded: firstPage, listAnswered: true, listComplete: false, serverTotal: null })).toEqual({
       total: 29,
       totalIsAtLeast: true,
-      filterTotals: { all: null, images: null, videos: null, audio: null },
+      filterTotals: unknown,
     });
+  });
+
+  // Review of #836: "0+ CREATIONS TOTAL" in the server's HTML and until the list answered.
+  it('says no number at all before anything has answered', () => {
+    expect(getStudioCreationCounts({
+      loaded: { all: 0, images: 0, videos: 0, audio: 0 },
+      listAnswered: false,
+      listComplete: false,
+      serverTotal: null,
+    })).toEqual({ total: null, totalIsAtLeast: false, filterTotals: unknown });
   });
 });

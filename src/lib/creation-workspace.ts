@@ -374,38 +374,41 @@ export function getCreationMediaFilters(
  * the two agree. Studio loads its creations 36 at a time, and its filters
  * counted the loaded pages: "All (29)" under "54 CREATIONS TOTAL" (live sweep,
  * 2026-11-17). A number is drawn only where it is a total:
- * - every page loaded: the loaded creations are the library, so each count is
- *   its total (fresher than the server's, read beside the first page);
- * - pages still to load: the server's total (`owner_profile_counts`, which
- *   counts by the grid's own rule) is the header's and All's, and a kind, which
- *   the server does not count, shows no number;
- * - neither: the header says what is loaded with a "+", and no filter a number.
+ * - every page loaded, and the server, read with the list, counting as many:
+ *   the loaded creations are the library, so each count is its total;
+ * - otherwise, the server's total (`owner_profile_counts`, which counts by the
+ *   grid's own rule) is the header's and All's, and a kind, which the server
+ *   does not count, shows no number. A loaded list the server disagrees with
+ *   is behind it: a later page's rows are kept as they were when the first is
+ *   reread, so one archived elsewhere still counts;
+ * - no server total (it could not count) once the list has answered: the
+ *   header says what is loaded with a "+", and no filter a number;
+ * - before anything has answered, no number at all (`total` null), never 0.
  */
 export function getStudioCreationCounts({
   loaded,
+  listAnswered,
   listComplete,
   serverTotal,
 }: {
   /** The finished creations the loaded pages hold, by filter. */
   loaded: Record<CreationMediaFilter, number>;
+  /** Whether the list has answered, from the server or from a snapshot of an earlier visit. */
+  listAnswered: boolean;
   /** Whether the list's last page is loaded: the server said no page follows it. */
   listComplete: boolean;
   /** The library's total from `/api/profile` (`stats.creations`), or null when unread. */
   serverTotal: number | null;
-}): { total: number; totalIsAtLeast: boolean; filterTotals: CreationMediaTotals } {
-  if (listComplete) {
+}): { total: number | null; totalIsAtLeast: boolean; filterTotals: CreationMediaTotals } {
+  const unknown: CreationMediaTotals = { all: null, images: null, videos: null, audio: null };
+  if (listComplete && (serverTotal === null || serverTotal === loaded.all)) {
     return { total: loaded.all, totalIsAtLeast: false, filterTotals: { ...loaded } };
   }
   if (serverTotal !== null) {
-    return {
-      total: serverTotal,
-      totalIsAtLeast: false,
-      filterTotals: { all: serverTotal, images: null, videos: null, audio: null },
-    };
+    return { total: serverTotal, totalIsAtLeast: false, filterTotals: { ...unknown, all: serverTotal } };
   }
-  return {
-    total: loaded.all,
-    totalIsAtLeast: true,
-    filterTotals: { all: null, images: null, videos: null, audio: null },
-  };
+  if (listAnswered) {
+    return { total: loaded.all, totalIsAtLeast: true, filterTotals: unknown };
+  }
+  return { total: null, totalIsAtLeast: false, filterTotals: unknown };
 }
