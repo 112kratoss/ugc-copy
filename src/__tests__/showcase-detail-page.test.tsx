@@ -7,6 +7,7 @@ import ReportPostButton from '@/app/showcase/[id]/ReportPostButton';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import { coverNsfwContent } from '@/lib/nsfw-content';
 import { clearOwnerPageEditsForTests, rememberOwnerPostVisibility } from '@/lib/owner-page-edits';
+import { asksAbsentRecipeAsNone, postRecipeReadPath } from '@/lib/post-recipe-read';
 import { PUBLIC_PAGE_REVALIDATE_SECONDS } from '@/lib/public-page-cache';
 import { SESSION_CHECK_DEADLINE_MS } from '@/lib/viewer-session-check';
 
@@ -18,6 +19,8 @@ const POST_ID = '5a1e0000-0000-4000-8000-000000000001';
 const GENERATION_ID = '6e0e0000-0000-4000-8000-000000000001';
 const TEXT_POST_ID = '5a1e0000-0000-4000-8000-0000000000aa';
 const MISSING_POST_ID = '5a1e0000-0000-4000-8000-00000000dead';
+// The page's read of the viewer's recipe: one that is not there for them is answered as none.
+const RECIPE_READ = postRecipeReadPath(POST_ID);
 
 // The page is one cached render for everyone (ISR): a read of the request's
 // headers, its cookies or the server's session would make it render per request
@@ -177,10 +180,13 @@ function stubPageFetch(revealedDetail: Record<string, unknown> = {}, {
     if (url === '/api/showcase/viewer-exclusions') {
       return reply({ blockedCreatorIds, hiddenCreatorIds: [], hiddenPostIds: [] });
     }
-    if (url === `/api/posts/${POST_ID}/resource-bundle` && viewerBundle !== undefined) {
+    if (url.split('?')[0] === `/api/posts/${POST_ID}/resource-bundle` && viewerBundle !== undefined) {
+      // As the route answers: none for one asked with absent=none, else not found.
       return viewerBundle
         ? reply({ success: true, bundle: viewerBundle })
-        : reply({ error: 'Resource bundle not found.' }, 404);
+        : asksAbsentRecipeAsNone(url)
+          ? reply({ success: true, bundle: null })
+          : reply({ error: 'Resource bundle not found.' }, 404);
     }
     return reply({ success: true });
   }));
@@ -2231,7 +2237,7 @@ describe('Showcase detail page', () => {
 
       expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Unlock');
       // A visitor's read carries no session.
-      const [, init] = requestTo(`/api/posts/${POST_ID}/resource-bundle`) ?? [];
+      const [, init] = requestTo(RECIPE_READ) ?? [];
       expect(init?.headers).toBeUndefined();
       await waitFor(() => expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('₹750.00 · 900 credits'));
       expect(screen.getByText('Unlock recipe for ₹750.00 · 900 credits')).toBeInTheDocument();
@@ -2239,7 +2245,7 @@ describe('Showcase detail page', () => {
 
     it("asks nothing for a visitor's free recipe or a post with none", async () => {
       render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
-      expect(requestTo(`/api/posts/${POST_ID}/resource-bundle`)).toBeUndefined();
+      expect(requestsTo(RECIPE_READ)).toEqual([]);
     });
 
     it("opens the recipe, Remix and the rail for a buyer once the browser has read it as theirs", async () => {
@@ -2251,7 +2257,7 @@ describe('Showcase detail page', () => {
       render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
 
       await waitFor(() => expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Unlocked'));
-      const [, init] = requestTo(`/api/posts/${POST_ID}/resource-bundle`) ?? [];
+      const [, init] = requestTo(RECIPE_READ) ?? [];
       expect(init?.headers).toMatchObject({ Authorization: 'Bearer live-token' });
       expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({
         viewerCanAccess: true,
@@ -2288,17 +2294,59 @@ describe('Showcase detail page', () => {
       expect(screen.queryByTestId('recipe-jump-link')).not.toBeInTheDocument();
     });
 
+    // Sweep of 2026-11-17: every post a signed-in reader opened that had no recipe asked for theirs,
+    // which the route answered 404, and the browser logged a failed load on every such post.
+    it("asks a signed-in reader's recipe with one that is not there answered as none, and draws none", async () => {
+      stubPageFetch({}, { viewerBundle: null });
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+      await waitFor(() => expect(requestsTo(RECIPE_READ)).toHaveLength(1));
+      expect(RECIPE_READ).toBe(`/api/posts/${POST_ID}/resource-bundle?absent=none`);
+      const [, init] = requestTo(RECIPE_READ) ?? [];
+      expect(init?.headers).toMatchObject({ Authorization: 'Bearer live-token' });
+      expect(screen.queryByTestId('canonical-post-recipe')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('recipe-jump-link')).not.toBeInTheDocument();
+    });
+
+    it('takes the recipe off the page for a 404 too, from a server that predates absent=none', async () => {
+      await serveLockedRecipe();
+      vi.mocked(fetch).mockImplementation(async (input) => (
+        String(input) === RECIPE_READ
+          ? { ok: false, status: 404, json: async () => ({ error: 'Resource bundle not found.' }) } as Response
+          : { ok: true, status: 200, json: async () => ({ success: true }) } as Response
+      ));
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+      await waitFor(() => expect(screen.queryByTestId('canonical-post-recipe')).not.toBeInTheDocument());
+      expect(screen.queryByTestId('recipe-jump-link')).not.toBeInTheDocument();
+    });
+
+    it("keeps the page's recipe for an answer that names no recipe and no none", async () => {
+      await serveLockedRecipe();
+      vi.mocked(fetch).mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({ success: true }) } as Response));
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+      await waitFor(() => expect(requestTo(RECIPE_READ)).toBeDefined());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByTestId('canonical-post-recipe')).toBeInTheDocument();
+    });
+
     it('keeps the page\'s recipe when the read fails', async () => {
       await serveLockedRecipe();
       vi.mocked(fetch).mockImplementation(async (input) => (
-        String(input) === `/api/posts/${POST_ID}/resource-bundle`
+        String(input) === RECIPE_READ
           ? { ok: false, status: 503, json: async () => ({ error: 'Down' }) } as Response
           : { ok: true, status: 200, json: async () => ({ success: true }) } as Response
       ));
       signInAs('user-2');
       render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
 
-      await waitFor(() => expect(requestTo(`/api/posts/${POST_ID}/resource-bundle`)).toBeDefined());
+      await waitFor(() => expect(requestTo(RECIPE_READ)).toBeDefined());
       expect(screen.getByTestId('canonical-post-recipe')).toBeInTheDocument();
       expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Unlock');
     });
@@ -2362,7 +2410,7 @@ describe('Showcase detail page', () => {
       render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
 
       expect(screen.getByRole('button', { name: 'Reveal post' })).toBeInTheDocument();
-      expect(requestTo(`/api/posts/${POST_ID}/resource-bundle`)).toBeUndefined();
+      expect(requestsTo(RECIPE_READ)).toEqual([]);
     });
   });
 });

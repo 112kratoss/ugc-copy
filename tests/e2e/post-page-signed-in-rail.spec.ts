@@ -1,6 +1,7 @@
 import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test';
 
 import freeRecipePost from './fixtures/creation-post-free-recipe.json';
+import plainCreationPost from './fixtures/creation-post.json';
 
 // The owner's screen recording of the live site, 2026-11-16 (build 24ac32b80, signed in, Chrome on a
 // laptop): every post opened from the Marketplace drew its Comments card with "Sign in to join the
@@ -28,6 +29,13 @@ const COMMENT = 'The light on the water is perfect.';
 type DrawnPost = { id: string; path: string; title: string; creatorId: string };
 /** The post with a free recipe, which the recording's posts were. */
 const RECIPE_POST: DrawnPost = { id: POST_ID, path: POST_PATH, title: TITLE, creatorId: freeRecipePost.creator.id };
+/** A picture post with no recipe at all (fixtures/creation-post.json), by a creator of its own. */
+const PLAIN_POST: DrawnPost = {
+  id: plainCreationPost.post.id,
+  path: `/showcase/${plainCreationPost.post.id}`,
+  title: plainCreationPost.post.title,
+  creatorId: plainCreationPost.creator.id,
+};
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -555,4 +563,47 @@ test("the composer's avatar names the reader as the top bar does, from their pro
   await expect(composer(page)).toBeVisible(COLD_PAGE);
   await expect.poll(() => composerInitials(page)).toBe('MB');
   expectComposerNamedByProfile(await recordedFrames(page), 'MB');
+});
+
+// Sweep of 2026-11-17 (build 941e2a55b): every post a signed-in reader opened that had no recipe
+// asked for theirs, which the server answered 404, and Chrome logged "Failed to load resource" for
+// it on every such post.
+test('a signed-in reader of a post with no recipe logs no failed recipe read, loaded or opened from another page', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signIn(context);
+  await answerApi(page, [], PLAIN_POST);
+  const recipeReads: string[] = [];
+  await page.route(`**/api/posts/${PLAIN_POST.id}/resource-bundle**`, (route) => {
+    const url = new URL(route.request().url());
+    recipeReads.push(`${url.pathname}${url.search}`);
+    // As the route answers for a post with no recipe (post-resource-bundle-route-adapter-service.ts):
+    // 404, or none when it is asked to answer an absent recipe as none.
+    return url.searchParams.get('absent') === 'none'
+      ? route.fulfill({ json: { success: true, bundle: null } })
+      : route.fulfill({ status: 404, json: { error: 'Resource bundle not found.' } });
+  });
+  const failedRecipeLoads: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error' && message.location().url.includes('/resource-bundle')) {
+      failedRecipeLoads.push(`${message.location().url}: ${message.text()}`);
+    }
+  });
+  /** Waits for the reader's own recipe read of this page, if it makes one, to be answered. */
+  async function readAnswered(count: number) {
+    await expect(composer(page)).toBeVisible(COLD_PAGE);
+    await expect.poll(() => recipeReads.length).toBeGreaterThanOrEqual(count);
+    await twoFrames(page);
+    await page.waitForTimeout(250);
+  }
+
+  await page.goto(PLAIN_POST.path);
+  await expect(page.getByRole('heading', { level: 1, name: PLAIN_POST.title })).toBeVisible(COLD_PAGE);
+  await readAnswered(1);
+  expect(failedRecipeLoads, JSON.stringify(recipeReads)).toEqual([]);
+
+  await page.goto('/marketplace');
+  await openPostByClientNavigation(page, PLAIN_POST.path);
+  await expect(page.getByRole('heading', { level: 1, name: PLAIN_POST.title })).toBeVisible(COLD_PAGE);
+  await readAnswered(2);
+  expect(failedRecipeLoads, JSON.stringify(recipeReads)).toEqual([]);
 });

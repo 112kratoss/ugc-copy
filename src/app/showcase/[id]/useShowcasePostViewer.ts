@@ -14,6 +14,7 @@ import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-serve
 import type { StoredInviteHandoff } from '@/lib/invite-handoff';
 import { useInviteVisitFromSharedLink } from '@/lib/invite-share-landing';
 import { useOwnerPostVisibility } from '@/lib/owner-page-edits';
+import { postRecipeReadPath } from '@/lib/post-recipe-read';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import {
   SHARE_SOURCE_QUERY_PARAM,
@@ -43,7 +44,8 @@ import type { BundleRefreshPayload } from './PostResourceBundlePanel';
  *   from the session cookie while the provider checks it (`ownership`);
  * - the recipe as this viewer may read it (`GET /api/posts/{id}/resource-bundle`):
  *   unlocked for its buyers and its owner, a delisted or retired one for the
- *   people who bought it, priced in the viewer's currency;
+ *   people who bought it, priced in the viewer's currency; none for everyone
+ *   else, answered as none rather than not found (`post-recipe-read.ts`);
  * - whether a block stands between the viewer and the creator either way
  *   (`POST /api/showcase/viewer-exclusions`), which hides the post as the
  *   app's by-id read does;
@@ -234,17 +236,22 @@ export function useShowcasePostViewer({
   useEffect(() => {
     if (!readsBundle || viewerKey === null) return;
     const controller = new AbortController();
-    void fetch(`/api/posts/${encodeURIComponent(postId)}/resource-bundle`, {
+    // Asked on every post a signed-in reader opens, recipe or not: the cached page cannot say
+    // whether one is held back for them. None for them is answered as none, not as a 404 the
+    // browser logs as a failed load on every such post (`postRecipeReadPath`).
+    void fetch(postRecipeReadPath(postId), {
       headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
       signal: controller.signal,
     }).then(async (response) => {
       // Gone for this viewer: never published to them, taken off sale since
-      // the page was cached, or a block. Any other failure keeps the page's.
+      // the page was cached, or a block; answered as none, or as a 404 by a
+      // server from before `absent=none`. Any other failure keeps the page's.
       if (response.status !== 404 && !response.ok) return;
       const body = response.ok
-        ? await response.json().catch(() => null) as { bundle?: PostResourceBundleDetail } | null
+        ? await response.json().catch(() => null) as { bundle?: PostResourceBundleDetail | null } | null
         : null;
-      if (controller.signal.aborted || (response.ok && !body?.bundle)) return;
+      // An answer that says neither keeps the page's too.
+      if (controller.signal.aborted || (response.ok && body?.bundle === undefined)) return;
       const read = response.ok ? body?.bundle ?? null : null;
       // What the panel reported after an unlock is newer than a read sent before it.
       setViewerBundle((current) => (

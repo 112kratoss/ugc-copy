@@ -8,6 +8,7 @@ import {
 } from '@/lib/post-resource-bundle-route-adapter-service';
 import * as bundleRouteAdapter from '@/lib/post-resource-bundle-route-adapter-service';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
+import { postRecipeReadPath } from '@/lib/post-recipe-read';
 
 function createUserClient(userId: string | null = 'user-1') {
   return {
@@ -219,6 +220,108 @@ describe('post resource bundle route adapter service', () => {
       expect(response.headers.get('Cache-Control')).toBe('private, no-store');
       expect(response.headers.get('Vary')).toBe('Authorization, x-vercel-ip-country');
     }
+  });
+
+  // Sweep of 2026-11-17: the post page asks this on every post a signed-in reader opens, and each
+  // post with no recipe for them logged the 404 as a failed load. The page asks with absent=none.
+  describe('asked to answer an absent recipe as none', () => {
+    const notFound = () => vi.fn(async () => ({
+      ok: false as const,
+      status: 404 as const,
+      body: { error: 'Resource bundle not found.' },
+    }));
+
+    it('answers a recipe that is not there for the viewer as none, never kept anywhere', async () => {
+      for (const authorization of ['Bearer viewer-token', null]) {
+        const response = await getPostResourceBundleRouteResponse({
+          request: new Request(`http://localhost${postRecipeReadPath('post-1')}`, {
+            headers: authorization ? { Authorization: authorization, 'x-vercel-ip-country': 'IN' } : { 'x-vercel-ip-country': 'IN' },
+          }),
+          context: createContext(),
+          dependencies: {
+            createUserClient: () => createUserClient('viewer-1'),
+            getPostResourceBundleForRoute: notFound(),
+          },
+        });
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ success: true, bundle: null });
+        // A recipe missing now may be listed in a minute, for a visitor too: only a found one is kept.
+        expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+        expect(response.headers.get('Vary')).toBe('Authorization, x-vercel-ip-country');
+      }
+    });
+
+    it('answers across a block as none too', async () => {
+      const response = await getPostResourceBundleRouteResponse({
+        request: new Request(`http://localhost${postRecipeReadPath('post-1')}`, {
+          headers: { Authorization: 'Bearer viewer-token' },
+        }),
+        context: createContext(),
+        dependencies: {
+          createUserClient: () => createUserClient('viewer-1'),
+          getPostResourceBundleDetailByPostId: vi.fn(async () => bundleDetail()),
+          isMarketplaceCreatorBlockedForViewer: vi.fn(async () => true),
+        },
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ success: true, bundle: null });
+    });
+
+    it('answers a recipe that is there as it always does', async () => {
+      const response = await getPostResourceBundleRouteResponse({
+        request: new Request(`http://localhost${postRecipeReadPath('post-1')}`, {
+          headers: { 'x-vercel-ip-country': 'IN' },
+        }),
+        context: createContext(),
+        dependencies: {
+          createUserClient: () => createUserClient(null),
+          getPostResourceBundleForRoute: vi.fn(async () => ({
+            ok: true as const,
+            body: { success: true, bundle: { id: 'bundle-1', accessMode: 'paid' } },
+          })),
+        },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Cache-Control')).toBe('public, s-maxage=60, stale-while-revalidate=300');
+      await expect(response.json()).resolves.toMatchObject({ success: true, bundle: { id: 'bundle-1' } });
+    });
+
+    // The app's Details, the reel, the recipe panel and checkout read a 404 as "not found".
+    it('keeps the 404 for every caller that does not ask, and for any other value', async () => {
+      for (const path of ['/api/posts/post-1/resource-bundle', '/api/posts/post-1/resource-bundle?absent=null']) {
+        const response = await getPostResourceBundleRouteResponse({
+          request: new Request(`http://localhost${path}`, { headers: { Authorization: 'Bearer viewer-token' } }),
+          context: createContext(),
+          dependencies: {
+            createUserClient: () => createUserClient('viewer-1'),
+            getPostResourceBundleForRoute: notFound(),
+          },
+        });
+
+        expect(response.status).toBe(404);
+        await expect(response.json()).resolves.toEqual({ error: 'Resource bundle not found.' });
+      }
+    });
+
+    it('still answers a limit or a failure as one', async () => {
+      const response = await getPostResourceBundleRouteResponse({
+        request: new Request(`http://localhost${postRecipeReadPath('post-1')}`),
+        context: createContext(),
+        dependencies: {
+          createUserClient: () => createUserClient(null),
+          getPostResourceBundleForRoute: vi.fn(async () => ({
+            ok: false as const,
+            status: 500 as const,
+            body: { error: 'Failed to load resource bundle.' },
+          })),
+        },
+      });
+
+      expect(response.status).toBe(500);
+    });
   });
 
   it('maps rate-limit service results with standard headers', async () => {
