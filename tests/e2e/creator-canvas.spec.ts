@@ -210,6 +210,11 @@ test('a failed run names its cause on the canvas, says the credits are back and 
 // Under the column the canvas can be out of view: a creator at the next prompt hears of the failure from the bar.
 test('a failed run is said in the bar on a phone, and See why brings the canvas into view with the focus', async ({ page, context }) => {
   await page.setViewportSize(PHONE);
+  // Once the start is answered, the page brings the canvas into view (`revealKey`), smoothly
+  // unless motion is reduced. A scroll to the top while that smooth scroll ran was carried on by
+  // it, and the canvas ended in view: main's run at 8eb1f3dac failed so (2026-11-17), its reveal
+  // starting just before this test's scroll. With motion reduced the reveal is one jump.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await signIn(context);
   let release: (() => void) | null = null;
   const held = new Promise<void>((resolve) => { release = resolve; });
@@ -220,6 +225,15 @@ test('a failed run is said in the bar on a phone, and See why brings the canvas 
 
   await startRun(page);
   await expect(canvas(page).getByRole('heading', { name: 'Making your video' })).toBeVisible();
+  // "Making your video" is drawn from the press. The canvas says the credits are held only once the
+  // start is answered, in the commit that asks for the reveal, and the reveal is done, or was not
+  // needed, once the canvas's top is in the window's top 40%, where the reveal leaves it. Only then
+  // is the scroll below the last.
+  await expect(canvas(page).getByText(/^19 credits are held for this run\./)).toBeVisible();
+  await expect.poll(() => canvas(page).evaluate((section) => {
+    const { top } = section.getBoundingClientRect();
+    return top >= 0 && top <= window.innerHeight * 0.4;
+  })).toBe(true);
   // Back at the prompt, typing the next run, while this one works.
   const prompt = page.getByRole('textbox', { name: 'Prompt' });
   await prompt.focus();
