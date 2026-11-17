@@ -195,6 +195,17 @@ function scheduleIdle(callback: () => void, timeout = 1500) {
     return () => idleWindow.clearTimeout(timeoutId);
 }
 
+function subscribeToNothing() {
+    return () => {};
+}
+
+// One object per page load, so useSyncExternalStore sees a stable snapshot.
+let clientE2EAuthSnapshot: ReturnType<typeof getClientE2EAuthState> = null;
+function readClientE2EAuth() {
+    clientE2EAuthSnapshot ??= getClientE2EAuthState();
+    return clientE2EAuthSnapshot;
+}
+
 export function AuthProvider({
     children,
     initialSession = null,
@@ -210,7 +221,10 @@ export function AuthProvider({
     initialSaverNoticeSeen?: boolean | null;
     hasResolvedInitialState?: boolean;
 }) {
-    const [clientE2EAuth] = useState(() => getClientE2EAuthState());
+    // The E2E bypass session is read after hydration, never in it: the server drew this page with
+    // `initialSession` alone (a cached page has none), so the hydration render must too, or React
+    // throws the server's HTML away. The server snapshot is null; the browser's is the bypass.
+    const clientE2EAuth = useSyncExternalStore(subscribeToNothing, readClientE2EAuth, () => null);
     const hasAuthCookieHint = useSupabaseAuthCookieHint();
     const hasHydratedAuthCookieHint = useHasHydratedSupabaseAuthCookieHint();
     const [session, setSession] = useState<Session | null>(initialSession ?? clientE2EAuth?.session ?? null);
@@ -219,7 +233,19 @@ export function AuthProvider({
         // The E2E identity holds no promotional credits.
         marketplaceSpendableCredits: initialMarketplaceSpendableCredits ?? clientE2EAuth?.credits ?? null,
     }));
-    const [isLoading, setIsLoading] = useState(!hasResolvedInitialState && !clientE2EAuth);
+    const [isLoading, setIsLoading] = useState(!hasResolvedInitialState);
+    // The bypass applied to the state above, once, in the render that first sees it (after
+    // hydration), as a session the server drew does and the real check never touches.
+    const [appliedE2EAuth, setAppliedE2EAuth] = useState<typeof clientE2EAuth>(null);
+    if (clientE2EAuth && appliedE2EAuth !== clientE2EAuth) {
+        setAppliedE2EAuth(clientE2EAuth);
+        setSession((current) => current ?? clientE2EAuth.session);
+        setBalance((current) => ({
+            credits: current.credits ?? clientE2EAuth.credits,
+            marketplaceSpendableCredits: current.marketplaceSpendableCredits ?? clientE2EAuth.credits,
+        }));
+        setIsLoading(false);
+    }
     const [sessionCheckStartedAt, setSessionCheckStartedAt] = useState<number | null>(null);
     // The record the page was drawn with, kept as one object for as long as
     // the page is open, and the latest one read in the browser since.
@@ -241,7 +267,9 @@ export function AuthProvider({
     const tokenEpochRef = useRef(0);
 
     useEffect(() => {
-        if (clientE2EAuth) {
+        // Read here, not from the render's snapshot: the effect of the hydration render runs
+        // before the snapshot has switched to the bypass.
+        if (readClientE2EAuth()) {
             return;
         }
 
