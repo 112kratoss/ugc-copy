@@ -340,7 +340,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
                   defaultValue={initialFilters.q || shortQuery}
                   onFocus={warmInteractiveBrowser}
                   onInput={warmInteractiveBrowser}
-                  placeholder="Search prompts, tools, creators"
+                  placeholder="Search recipes"
                   className="w-full min-w-0 bg-transparent py-2 text-sm text-white outline-none placeholder:text-zinc-600"
                 />
               </label>

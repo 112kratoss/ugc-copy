@@ -277,8 +277,8 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
       fireEvent.click(screen.getByRole('link', { name: 'Top sales' }));
       fireEvent.click(screen.getByRole('link', { name: 'Runway' }));
       fireEvent.click(screen.getByRole('link', { name: 'Clear' }));
-      fireEvent.change(screen.getByPlaceholderText('Search prompts, tools, creators'), { target: { value: 'neon' } });
-      fireEvent.submit(screen.getByPlaceholderText('Search prompts, tools, creators').closest('form')!);
+      fireEvent.change(screen.getByPlaceholderText('Search recipes'), { target: { value: 'neon' } });
+      fireEvent.submit(screen.getByPlaceholderText('Search recipes').closest('form')!);
 
       expect(onNavigate.mock.calls.map(([href]) => href)).toEqual([
         '/marketplace?access=free&sort=recent',
@@ -353,7 +353,7 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'Type at least 3 characters' })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Search prompts, tools, creators')).toHaveValue('ai');
+    expect(screen.getByPlaceholderText('Search recipes')).toHaveValue('ai');
     expect(screen.getByRole('link', { name: 'Clear search' })).toHaveAttribute('href', '/marketplace?sort=recent');
   });
 
@@ -597,7 +597,7 @@ describe('MarketplaceBrowser drawn again after a recipe', () => {
     const page = createPage(4, true, 0, 4);
     const view = renderMarketplace(page);
     fireEvent.click(screen.getByRole('button', { name: 'Load more recipes' }));
-    const search = screen.getByPlaceholderText('Search prompts, tools, creators');
+    const search = screen.getByPlaceholderText('Search recipes');
     fireEvent.change(search, { target: { value: 'cats' } });
 
     authState.session = { access_token: 'token-1' };
