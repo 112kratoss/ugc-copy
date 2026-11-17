@@ -76,6 +76,14 @@ export type PublicPostPageChange = {
    * dropped at once rather than served stale.
    */
   arrived: boolean;
+  /**
+   * The change deleted media the post's page drew (a picture or clip replaced
+   * or taken out, its files removed at once): the page is drawn again at once,
+   * through the same tag as an arrival, rather than served once with media
+   * that is gone. The cards on its creator's page and the storefront are
+   * still refreshed in the background, so they may show the old cover once.
+   */
+  mediaRemoved?: boolean;
   /** Made by this change: no post can credit it as the one it remixed yet. */
   isNew?: boolean;
 };
@@ -119,8 +127,9 @@ async function loadRemixesCrediting(
  * its creator's page, the storefront (which lists a recipe with its post),
  * and the pages that draw the post in a remix credit: each remix's page and
  * its creator's. A post that has just come into view also has its not-found
- * page dropped at once. When the remixes cannot be named, every public page
- * is refreshed in the background instead.
+ * page dropped at once, as has a post whose edit deleted media its page drew.
+ * When the remixes cannot be named, every public page is refreshed in the
+ * background instead.
  *
  * Never throws for the remix lookup: a failed one refreshes every page.
  */
@@ -133,7 +142,7 @@ export async function invalidateShowcaseFeedAndRefreshPostPages(
   const pageIds = [change.postId, change.generationId]
     .filter((id): id is string => typeof id === 'string' && id.length > 0);
   for (const id of pageIds) revalidateTag(publicPostPageTag(id), 'max');
-  if (change.arrived) {
+  if (change.arrived || change.mediaRemoved) {
     for (const id of pageIds) revalidateTag(publicPostArrivalTag(id), { expire: 0 });
   }
   revalidateTag(publicCreatorPageTag(change.creatorId), 'max');

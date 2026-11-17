@@ -50,6 +50,19 @@ type ShowcaseDetailPageProps = {
  * `revalidate` is the backstop for what moves without one: counts, and a
  * take-down made with the moderation CLI (PUBLIC_PAGE_REVALIDATE_SECONDS says
  * why five minutes; kept equal to it).
+ *
+ * A visit the cache cannot answer (a miss: the first after a deploy, the first
+ * after a removal, after the post comes into view or after an edit that
+ * deleted its media, each of which expires the page at once, or the first
+ * after an hour unvisited) gets the page only once all of it is drawn; after
+ * any other change, the next visit is answered from the cache in its previous
+ * version while the page is drawn again behind it. On a miss, Next renders an
+ * ISR page whole into its response cache before
+ * it sends a byte (`fromResponseCacheEntry` in next/dist/server/response-cache),
+ * so a Suspense boundary here would bring no part of a cold visit forward
+ * (measured on a production build, 2026-11-17). What a cold visit waits for is
+ * every read below and the render. `next dev` streams every render, so an E2E
+ * spec cannot show a miss's timing.
  */
 export const revalidate = 300;
 

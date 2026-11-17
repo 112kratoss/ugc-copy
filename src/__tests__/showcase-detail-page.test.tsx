@@ -140,14 +140,19 @@ vi.mock('@/components/PostComments', () => ({
 }));
 
 vi.mock('@/app/showcase/[id]/ShowcaseDetailEngagementRow', () => ({
-  default: ({ postId, canRemix, recipeRemix }: {
+  default: ({ postId, canRemix, recipeRemix, creatorRemixMark, creatorCanRemix, remixHeld }: {
     postId: string;
     canRemix: boolean;
     recipeRemix?: { access: string; priceLabel: string } | null;
+    creatorRemixMark?: string;
+    creatorCanRemix?: boolean;
+    remixHeld?: boolean;
   }) => (
     <div
       data-testid="showcase-detail-engagement-row"
       data-recipe-remix={recipeRemix ? `${recipeRemix.access}:${recipeRemix.priceLabel}` : ''}
+      data-creator-remix={creatorRemixMark ? `${creatorRemixMark}:${creatorCanRemix ? 'open' : 'none'}` : ''}
+      data-remix-held={String(Boolean(remixHeld))}
     >
       {`${postId}:${canRemix}`}
     </div>
@@ -1123,6 +1128,199 @@ describe('Showcase detail page', () => {
       const consoleError = vi.spyOn(console, 'error');
       render(page, { container, hydrate: true });
       expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    // Sweep of 2026-11-17: on their own post the creator was offered their own recipe, "Free recipe ·
+    // View" in the rail and "View free recipe" along the bottom edge, until their own read landed.
+    describe('their recipe', () => {
+      const freeRecipe = {
+        id: 'bundle-1',
+        postId: POST_ID,
+        accessMode: 'free',
+        priceQuote: { formatted: 'Free', note: null },
+        resourceKinds: ['prompt'],
+        lockedPreview: null,
+        viewerCanAccess: false,
+        viewerIsOwner: false,
+        viewerHasPurchased: false,
+        salesCount: 0,
+        freeUnlockCount: 2,
+        resources: null,
+        purchasedRevision: null,
+        title: 'Recipe',
+        summary: '',
+        previewText: '',
+        priceUsdCents: 0,
+        allowRemix: false,
+        status: 'published',
+        seller: { id: 'user-1' },
+      };
+      const recipeLink = () => screen.getByTestId('recipe-jump-link');
+      const recipeBar = () => screen.queryByText('View free recipe');
+      /** The page's room for the bar along the bottom edge. */
+      const barRoom = () => document.querySelector('.canonical-post-cta-room');
+
+      beforeEach(async () => {
+        const detail = await getPublicPostDetailMock(POST_ID);
+        getPublicPostDetailMock.mockResolvedValue({ ...detail, resourceBundle: freeRecipe });
+      });
+
+      it("reads as theirs, with no bar offering it, while a cookie naming them is checked and before their read lands", async () => {
+        // Their own read of the recipe is never answered here: the page's words do not wait for it.
+        vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+        holdSessionCookieOf('user-1');
+        const { rerender } = render(await openPost());
+        expect(recipeLink()).toHaveTextContent(/^Your recipeView$/);
+        expect(recipeBar()).not.toBeInTheDocument();
+        expect(barRoom()).toBeNull();
+
+        signInAs('user-1');
+        rerender(await openPost());
+        expect(recipeLink()).toHaveTextContent(/^Your recipeView$/);
+        expect(recipeBar()).not.toBeInTheDocument();
+      });
+
+      it('is offered to anyone else while their cookie is checked, with its bar', async () => {
+        holdSessionCookieOf('user-2');
+        render(await openPost());
+        expect(recipeLink()).toHaveTextContent(/^Free recipeView$/);
+        expect(recipeBar()).toBeInTheDocument();
+        expect(barRoom()).not.toBeNull();
+      });
+
+      it("reads as theirs once their read lands, and as a buyer's once a buyer's does", async () => {
+        stubPageFetch({}, { viewerBundle: { ...freeRecipe, viewerIsOwner: true, viewerCanAccess: true } });
+        signInAs('user-1');
+        const { unmount } = render(await openPost());
+        await waitFor(() => expect(requestsTo(RECIPE_READ)).toHaveLength(1));
+        expect(recipeLink()).toHaveTextContent(/^Your recipeView$/);
+        expect(recipeBar()).not.toBeInTheDocument();
+        unmount();
+
+        stubPageFetch({}, { viewerBundle: { ...freeRecipe, viewerCanAccess: true, viewerHasPurchased: true } });
+        signInAs('user-2');
+        render(await openPost());
+        // A buyer's "Unlocked" is their read's alone: the page offers the recipe until it lands.
+        expect(recipeLink()).toHaveTextContent(/^Free recipeView$/);
+        await waitFor(() => expect(recipeLink()).toHaveTextContent(/^UnlockedView$/));
+        expect(recipeBar()).not.toBeInTheDocument();
+      });
+
+      // Review of #847: a creation post whose Remix the recipe brings offered its creator their own
+      // creation's Remix to claim ("Remix · Free") until their own read of the recipe landed.
+      it("opens the creator's own Remix from the first frame they are known, and hands the server's HTML both", async () => {
+        const detail = await getPublicPostDetailMock(POST_ID);
+        getPublicPostDetailMock.mockResolvedValue({
+          ...detail,
+          canRemix: false,
+          remixCapability: 'unlock_required',
+          remixTarget: 'image',
+          resourceBundle: { ...freeRecipe, allowRemix: true },
+        });
+        const row = () => screen.getByTestId('showcase-detail-engagement-row');
+        // Their own read of the recipe is never answered here.
+        vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+
+        holdSessionCookieOf('user-1');
+        const { rerender, unmount } = render(await openPost());
+        expect(row()).toHaveTextContent(`${POST_ID}:true`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        // Inert until the check names them, as their Owner tools are.
+        expect(row()).toHaveAttribute('data-remix-held', 'true');
+        signInAs('user-1');
+        rerender(await openPost());
+        expect(row()).toHaveTextContent(`${POST_ID}:true`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        expect(row()).toHaveAttribute('data-remix-held', 'false');
+        unmount();
+
+        // Anyone else is offered it with the free recipe.
+        holdSessionCookieOf('user-2');
+        clientAuth.current = { session: null, user: null, isLoading: true };
+        const other = render(await openPost());
+        expect(row()).toHaveTextContent(`${POST_ID}:false`);
+        expect(row()).toHaveAttribute('data-recipe-remix', 'free:Free');
+        expect(row()).toHaveAttribute('data-creator-remix', '');
+        expect(row()).toHaveAttribute('data-remix-held', 'false');
+        other.unmount();
+
+        // The server's HTML: everyone else's, with the creator's own open Remix for the page's rule.
+        const html = renderToString(await openPost());
+        expect(html).toContain('data-recipe-remix="free:Free"');
+        expect(html).toContain('data-creator-remix="user-1:open"');
+      });
+
+      // Review of #847's third round: the Remix of a post with no creation (a picture made elsewhere)
+      // is a dead end, "Only generation-backed posts can be remixed", so its creator gets none, never
+      // the page's, which offers anyone else the recipe to take.
+      it("gives the creator of a post with no creation no Remix, while their cookie is checked and once named", async () => {
+        const detail = await getPublicPostDetailMock(POST_ID);
+        getPublicPostDetailMock.mockResolvedValue({
+          ...detail,
+          generationId: null,
+          canRemix: false,
+          remixCapability: 'unlock_required',
+          remixTarget: 'image',
+          resourceBundle: { ...freeRecipe, allowRemix: true },
+        });
+        const row = () => screen.getByTestId('showcase-detail-engagement-row');
+        vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+
+        holdSessionCookieOf('user-1');
+        const { rerender, unmount } = render(await openPost());
+        expect(row()).toHaveTextContent(`${POST_ID}:false`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        signInAs('user-1');
+        rerender(await openPost());
+        expect(row()).toHaveTextContent(`${POST_ID}:false`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        // Their recipe still says what it gives anyone who takes it, as it does in the server's HTML.
+        expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({ remixIncluded: true }));
+        unmount();
+
+        // Anyone else is still offered it, as before (a separate fix): the server's HTML hands the
+        // row the creator's none beside it, for the page's rule.
+        holdSessionCookieOf('user-2');
+        clientAuth.current = { session: null, user: null, isLoading: true };
+        const other = render(await openPost());
+        expect(row()).toHaveAttribute('data-recipe-remix', 'free:Free');
+        other.unmount();
+        const html = renderToString(await openPost());
+        expect(html).toContain('data-recipe-remix="free:Free"');
+        expect(html).toContain('data-creator-remix="user-1:none"');
+      });
+
+      // The page is drawn ahead of time for every viewer, and no cookie can be read on the server.
+      it("draws both in the server's HTML: the root element's mark shows the creator theirs and anyone else the pitch, before the first paint", async () => {
+        const root = document.documentElement;
+        onTestFinished(() => root.removeAttribute('data-auth-user'));
+        const page = await openPost();
+        const container = document.createElement('div');
+        container.innerHTML = renderToString(page);
+        document.body.appendChild(container);
+        onTestFinished(() => container.remove());
+        const link = within(container).getByTestId('recipe-jump-link');
+        const bar = within(container).getByText('View free recipe').closest('a') as HTMLElement;
+        const room = container.querySelector('.canonical-post-cta-room') as HTMLElement;
+        // What is shown of each: the words the pointer reads, and whether the bar and its room are drawn.
+        const reads = () => Array.from(link.querySelectorAll('span'))
+          .filter((span) => span.children.length === 0 && window.getComputedStyle(span).display !== 'none')
+          .map((span) => span.textContent)
+          .join(' · ');
+        const pitched = () => [bar, room].map((element) => window.getComputedStyle(element).display !== 'none');
+
+        // A visitor, and another account.
+        expect([reads(), pitched()]).toEqual(['Free recipe · View', [true, true]]);
+        root.setAttribute('data-auth-user', 'user-2');
+        expect([reads(), pitched()]).toEqual(['Free recipe · View', [true, true]]);
+        // The creator.
+        root.setAttribute('data-auth-user', 'user-1');
+        expect([reads(), pitched()]).toEqual(['Your recipe · View', [false, false]]);
+
+        const consoleError = vi.spyOn(console, 'error');
+        render(page, { container, hydrate: true });
+        expect(consoleError).not.toHaveBeenCalled();
+      });
     });
 
     it("draws the report row and no Owner tools in the server's HTML for a creator a style rule cannot name", async () => {

@@ -1167,7 +1167,17 @@ export async function publishGenerationToShowcaseForRoute({
     slug: 'magicbooklet',
   });
   const postPayload = {
-    is_nsfw: isNsfw,
+    // The mature mark is written only when sent (the RPC sets it only when the
+    // key is here): a post already there keeps its own as it stands at the
+    // write, not as read above, so one covered since then stays covered, and a
+    // new post takes the column's default. The exception is a post read
+    // covered first and gone by the later read, which this publish makes
+    // again: it keeps its mark.
+    ...(typeof requestBody.isNsfw === 'boolean'
+      ? { is_nsfw: requestBody.isNsfw }
+      : !existingRating.data && isNsfw
+        ? { is_nsfw: true }
+        : {}),
     // The caller's post, whichever of its identities made the creation.
     user_id: userId,
     visibility: effectiveVisibility,

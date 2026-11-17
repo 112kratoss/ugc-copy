@@ -32,20 +32,20 @@ beforeEach(() => {
 it('refreshes the feed for a finished teaser, whose repair does not say which post it served', async () => {
   teasers.repair.mockResolvedValue({ attempted: 1, completed: 1, failed: 0 });
   const client = idleClient();
-  const invalidateFeedCache = vi.fn();
+  const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
-  await repairMediaPreviews(client as never, { invalidateFeedCache });
+  await repairMediaPreviews(client as never, { invalidateShowcaseFeedAndRefreshEveryPage });
 
-  expect(invalidateFeedCache).toHaveBeenCalledOnce();
+  expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledOnce();
   // Nothing to look up: a teaser counts without a read.
   expect(client.from).not.toHaveBeenCalledWith('posts');
 });
 
 it('leaves the feed alone when the teaser pass finishes nothing', async () => {
   teasers.repair.mockResolvedValue({ attempted: 1, completed: 0, failed: 1 });
-  const invalidateFeedCache = vi.fn();
+  const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
-  await repairMediaPreviews(idleClient() as never, { invalidateFeedCache });
+  await repairMediaPreviews(idleClient() as never, { invalidateShowcaseFeedAndRefreshEveryPage });
 
-  expect(invalidateFeedCache).not.toHaveBeenCalled();
+  expect(invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
 });

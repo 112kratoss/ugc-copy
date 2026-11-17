@@ -8,6 +8,7 @@ import { insertAdminSession } from '@/lib/admin-session-store';
 import { postAdminPostReportDecision, postAdminSubjectReportDecision, postAdminPostModeration } from '@/lib/admin-moderation-route-adapter-service';
 import { postAdminGenerationModeration, postAdminContactTriage } from '@/lib/admin-content-moderation-route-adapter-service';
 import { postAdminUserSanction } from '@/lib/admin-user-sanction-route-adapter-service';
+import { invalidateShowcaseFeedAndRefreshEveryPage } from '@/lib/showcase-feed-cache';
 
 vi.mock('@/lib/showcase-feed-cache', () => ({
   invalidateShowcaseFeedCache: vi.fn(),
@@ -171,7 +172,9 @@ describe.skipIf(!configPath || !connectionString)('admin moderation through actu
       } else {
         expectedActions.posts=2; const body={postId:id,action:'hide',reason:'Fixture moderation',idempotencyKey:randomUUID()};
         await invoke(body); await invoke(body); expect((await db.query('select review_status,reviewed_by from public.posts where id=$1', [id])).rows[0]).toEqual({review_status:'hidden',reviewed_by:reviewerId});
+        const refreshes = vi.mocked(invalidateShowcaseFeedAndRefreshEveryPage).mock.calls.length;
         await invoke({...body,action:'restore',idempotencyKey:randomUUID()}); expect((await db.query('select review_status from public.posts where id=$1', [id])).rows[0].review_status).toBe('visible');
+        expect(vi.mocked(invalidateShowcaseFeedAndRefreshEveryPage).mock.calls.slice(refreshes)).toEqual([[{postIds:[id]}]]);
       }
     }
   });

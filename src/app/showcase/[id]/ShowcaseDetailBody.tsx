@@ -7,7 +7,6 @@ import { BookText, ShoppingBag } from 'lucide-react';
 
 import { InviteHandoffBar } from '@/components/InviteHandoffBar';
 import PostCommentAvatar from '@/components/PostCommentAvatar';
-import { APP_SHELL_AUTH_USER_ATTRIBUTE } from '@/lib/app-shell-account-restore';
 import {
   getPostFeedTitle,
   getPostMadeWithLabel,
@@ -19,6 +18,7 @@ import {
   getPostResourceKindLabel,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
+import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import type { PublicPostDetail } from '@/lib/public-posts';
 
 import RemixCreditLine from '@/app/showcase/RemixCreditLine';
@@ -26,6 +26,7 @@ import RemixCreditLine from '@/app/showcase/RemixCreditLine';
 import PostGenerationSetupLine from './PostGenerationSetupLine';
 import PostRelativeTime from './PostRelativeTime';
 import PostResourceBundlePanel from './PostResourceBundlePanel';
+import { ownerFirstPaintRules } from './owner-first-paint';
 import { showRecipeJump } from './recipe-jump';
 import { buildRecipePanelProps, getRecipeRemixOffer } from './recipe-panel-props';
 import ReportPostButton from './ReportPostButton';
@@ -63,20 +64,50 @@ function normalizeComparableText(value: string): string {
   return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+/** The rail's pointer to the recipe, as one viewer reads it. */
+type RecipeLinkWords = { label: string; action: string };
+
+/** The creator's words for their own recipe, whatever it costs anyone else. */
+const OWN_RECIPE_WORDS: RecipeLinkWords = { label: 'Your recipe', action: 'View' };
+
 /**
- * The rail in the server's HTML draws both the creator's Owner tools and everyone else's report
- * rows. The root element names the account the session cookie holds before the first paint
- * (`data-auth-user`, app-shell-account-restore.ts), and these rules show the creator their tools
- * and everyone else the rows. `creatorId` is one a style rule can name as it stands
- * (`canStyleRuleNameAuthUser`).
+ * The pointer's words for a viewer whose recipe it is not: "Unlocked" once they have it, else
+ * its price (or "Free recipe") and what the click does.
  */
-function ownerRailRules(creatorId: string): string {
-  const creatorsBrowser = `html[${APP_SHELL_AUTH_USER_ATTRIBUTE}="${creatorId}"]`;
-  return [
-    `[data-post-owner-tools="${creatorId}"]{display:none}`,
-    `${creatorsBrowser} [data-post-owner-tools="${creatorId}"]{display:block}`,
-    `${creatorsBrowser} [data-post-report-rows="${creatorId}"]{display:none}`,
-  ].join('');
+function recipeLinkWords(bundle: PostResourceBundleDetail, lockedViewer: boolean): RecipeLinkWords {
+  if (bundle.viewerIsOwner) return OWN_RECIPE_WORDS;
+  return {
+    label: !lockedViewer
+      ? 'Unlocked'
+      : bundle.accessMode !== 'free'
+        ? formatPostResourcePriceLabel(bundle.priceUsdCents, bundle.priceQuote.formatted)
+        : 'Free recipe',
+    action: lockedViewer && bundle.accessMode !== 'free' ? 'Unlock' : 'View',
+  };
+}
+
+/**
+ * The words this render knows the viewer reads. The server's HTML, and the render that hydrates
+ * it, know no viewer: there they are everyone else's, drawn beside the creator's, and the page's
+ * rule shows one (`ownerFirstPaintRules`).
+ */
+function RecipeWords({
+  words,
+  creators,
+  mark,
+}: {
+  words: string;
+  creators: string;
+  /** The creator's account, in the server's HTML and the render that hydrates it only. */
+  mark: string | undefined;
+}) {
+  if (!mark || words === creators) return words;
+  return (
+    <>
+      <span data-post-recipe-pitch={mark}>{words}</span>
+      <span data-post-recipe-owner={mark}>{creators}</span>
+    </>
+  );
 }
 
 function getPostTypeLabel({
@@ -130,18 +161,20 @@ export default function ShowcaseDetailBody({
   // Block, Owner tools) and the engagement row stay, as the app keeps them.
   const isNsfwCovered = Boolean(detail.isNsfw && !detail.nsfwRevealed);
   const layoutRef = useRef<HTMLDivElement | null>(null);
+  const pageRemix = {
+    canRemix: detail.canRemix,
+    remixCapability: detail.remixCapability,
+    remixTarget: detail.remixTarget,
+  };
   const viewer = useShowcasePostViewer({
     postId: detail.id,
     creatorId: detail.creator.id,
     visibility: detail.visibility,
     isNsfwCovered,
     pageBundle: detail.resourceBundle,
-    pageRemix: {
-      canRemix: detail.canRemix,
-      remixCapability: detail.remixCapability,
-      remixTarget: detail.remixTarget,
-    },
+    pageRemix,
     pageRemixCredit: detail.remixCredit ?? null,
+    hasCreation: Boolean(detail.generationId),
   });
   // For the owner, the visibility they just saved here: the cached page may not have caught up.
   const { bundle, lockedViewer, ownership, deliveryId, returnContext, visibility } = viewer;
@@ -155,6 +188,17 @@ export default function ShowcaseDetailBody({
         ? 'unread'
         : null;
   const drawsReportRows = ownership === 'unread' || ownership === 'other';
+  // The creator's recipe is theirs from the first frame, decided as their tools are: "Your recipe"
+  // in the rail, and no bar along the bottom edge pitching it to them. It waited for their own read
+  // of the recipe, which the cached page cannot hold, and until it landed they were offered their
+  // own recipe (sweep of 2026-11-17). A buyer's "Unlocked" is their read's alone, and comes with it.
+  const viewerIsCreator = ownership === 'owner' || ownership === 'owner-checking';
+  // In the server's HTML and the render that hydrates it, the creator's words are drawn beside
+  // everyone else's, and the page's rule shows the creator theirs (`ownerFirstPaintRules`).
+  const recipeMark = ownership === 'unread' && detail.creator.id ? detail.creator.id : undefined;
+  const recipeWords = !bundle ? null : viewerIsCreator ? OWN_RECIPE_WORDS : recipeLinkWords(bundle, lockedViewer);
+  // The unlock bar and the room kept for it under the post, for a viewer who has not got the recipe.
+  const pitchesRecipe = Boolean(bundle && lockedViewer && !viewerIsCreator);
   // The rail ends inside the window: it is told where its top is.
   usePostRailTop(layoutRef, `${detail.id}:${viewer.blocked ? 'blocked' : 'drawn'}`);
   const previewKinds = bundle?.lockedPreview?.resourceKinds ?? bundle?.resourceKinds ?? [];
@@ -224,6 +268,10 @@ export default function ShowcaseDetailBody({
     ...viewer.remix,
     bundle,
   });
+  // Whether the recipe includes the Remix is the recipe's to say, whoever is looking: read from the
+  // page's own offer, it reads the same for the creator of a post with no creation, who has no Remix
+  // of their own, and the same as before for everyone else.
+  const recipeIncludesRemix = getRecipeRemixOffer({ ...pageRemix, bundle }).remixIncluded;
   const resourceBundlePanel = bundle ? (
     <PostResourceBundlePanel
       // Starts again from the viewer's own read of the recipe when it lands;
@@ -233,7 +281,7 @@ export default function ShowcaseDetailBody({
         postId: detail.id,
         mediaItems: detailMediaItems,
         displayTitle,
-        remixIncluded: remixOffer.remixIncluded,
+        remixIncluded: recipeIncludesRemix,
       })}
       onAccessChange={viewer.applyBundleAccess}
     />
@@ -305,6 +353,9 @@ export default function ShowcaseDetailBody({
       shareVisitCount={detail.shareVisitCount}
       showComments={commentsAreOpen}
       recipeRemix={remixOffer.recipeRemix}
+      creatorRemixMark={recipeMark}
+      creatorCanRemix={viewer.creatorRemix.canRemix}
+      remixHeld={ownership === 'owner-checking'}
     />
   );
 
@@ -313,7 +364,10 @@ export default function ShowcaseDetailBody({
   }
 
   return (
-    <div className={`min-h-screen overflow-x-clip bg-[#050506] py-6 text-white${lockedViewer ? ' canonical-post-cta-room' : ''}`}>
+    <div className="min-h-screen overflow-x-clip bg-[#050506] py-6 text-white">
+      {/* Ahead of everything it picks between (the engagement row's Remix, the rail's rows and the
+          recipe's bar), so none is painted before it applies. */}
+      {ownership === 'unread' && detail.creator.id ? <style>{ownerFirstPaintRules(detail.creator.id)}</style> : null}
       {/* The page's query, read once it is live: the cached render has none. */}
       <Suspense fallback={null}>
         <ShowcaseSearchParamsReporter onSearch={viewer.reportSearch} />
@@ -479,14 +533,12 @@ export default function ShowcaseDetailBody({
             className="canonical-post-actions flex min-w-0 flex-col gap-4"
           >
             <div className="overflow-hidden rounded-3xl border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.86),rgba(10,10,12,0.9))] shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
-              {/* Ahead of the rows it picks between, so none is painted before it applies. */}
-              {ownership === 'unread' && detail.creator.id ? <style>{ownerRailRules(detail.creator.id)}</style> : null}
               {/*
                 * A pointer, not a pitch: the recipe is presented once, in the
                 * document column, under the post — this sticky one-liner keeps
                 * it reachable at any scroll depth.
                 */}
-              {bundle ? (
+              {recipeWords ? (
                 <Link
                   data-testid="recipe-jump-link"
                   href="#recipe"
@@ -496,17 +548,11 @@ export default function ShowcaseDetailBody({
                   <span className="inline-flex min-w-0 items-center gap-2">
                     <ShoppingBag className="h-4 w-4 shrink-0" aria-hidden="true" />
                     <span className="truncate">
-                      {bundle.viewerIsOwner
-                        ? 'Your recipe'
-                        : !lockedViewer
-                          ? 'Unlocked'
-                          : bundle.accessMode !== 'free'
-                            ? formatPostResourcePriceLabel(bundle.priceUsdCents, bundle.priceQuote.formatted)
-                            : 'Free recipe'}
+                      <RecipeWords words={recipeWords.label} creators={OWN_RECIPE_WORDS.label} mark={recipeMark} />
                     </span>
                   </span>
                   <span className="shrink-0 text-xs font-medium text-emerald-200/70">
-                    {lockedViewer && bundle.accessMode !== 'free' ? 'Unlock' : 'View'}
+                    <RecipeWords words={recipeWords.action} creators={OWN_RECIPE_WORDS.action} mark={recipeMark} />
                   </span>
                 </Link>
               ) : null}
@@ -535,7 +581,7 @@ export default function ShowcaseDetailBody({
 
               {/* Not on the creator's own post: the feed card's menu and the app
                   leave it out there too, and the server refuses the report. In the
-                  server's HTML the creator's browser hides it (`ownerRailRules`). */}
+                  server's HTML the creator's browser hides it (`ownerFirstPaintRules`). */}
               {drawsReportRows ? (
                 <div data-post-report-rows={ownership === 'unread' ? detail.creator.id ?? undefined : undefined}>
                   <ReportPostButton
@@ -562,24 +608,30 @@ export default function ShowcaseDetailBody({
         </ShowcaseDetailCommentCountProvider>
       </div>
 
-      {bundle && lockedViewer ? (
-        // Above the app shell's bottom navigation, which floats over the page's
-        // bottom edge below 768px (z-60) and was drawn over the whole CTA there.
-        <Link
-          href="#recipe"
-          onClick={() => showRecipeJump()}
-          className="canonical-post-mobile-cta fixed inset-x-3 bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)] z-40 flex items-center justify-between gap-3 rounded-full border border-emerald-300/25 bg-emerald-300 px-4 py-3 text-slate-950 shadow-[0_18px_60px_rgba(0,0,0,0.45)]"
-        >
-          <span>
-            <span className="block text-sm font-bold">
-              {bundle.accessMode === 'free'
-                ? 'View free recipe'
-                : `Unlock recipe for ${formatPostResourcePriceLabel(bundle.priceUsdCents, bundle.priceQuote.formatted)}`}
+      {bundle && pitchesRecipe ? (
+        <>
+          {/* The room the bar takes along the bottom edge (below 1180px), so the post's end scrolls clear of it. */}
+          <div aria-hidden="true" className="canonical-post-cta-room" data-post-recipe-pitch={recipeMark} />
+          {/* Above the app shell's bottom navigation, which floats over the page's
+              bottom edge below 768px (z-60) and was drawn over the whole CTA there. */}
+          <Link
+            href="#recipe"
+            onClick={() => showRecipeJump()}
+            data-testid="recipe-bar"
+            data-post-recipe-pitch={recipeMark}
+            className="canonical-post-mobile-cta fixed inset-x-3 bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)] z-40 flex items-center justify-between gap-3 rounded-full border border-emerald-300/25 bg-emerald-300 px-4 py-3 text-slate-950 shadow-[0_18px_60px_rgba(0,0,0,0.45)]"
+          >
+            <span>
+              <span className="block text-sm font-bold">
+                {bundle.accessMode === 'free'
+                  ? 'View free recipe'
+                  : `Unlock recipe for ${formatPostResourcePriceLabel(bundle.priceUsdCents, bundle.priceQuote.formatted)}`}
+              </span>
+              <span className="block text-xs font-medium text-slate-800">{previewKindSummary}</span>
             </span>
-            <span className="block text-xs font-medium text-slate-800">{previewKindSummary}</span>
-          </span>
-          <ShoppingBag className="h-5 w-5" />
-        </Link>
+            <ShoppingBag className="h-5 w-5" />
+          </Link>
+        </>
       ) : null}
     </div>
   );

@@ -400,11 +400,11 @@ describe('media preview repair retries', () => {
       })),
       storage: { from: storageFrom },
     };
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
     const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, {
       batchSize: 10,
-      invalidateFeedCache,
+      invalidateShowcaseFeedAndRefreshEveryPage,
     });
 
     expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
@@ -420,7 +420,7 @@ describe('media preview repair retries', () => {
         payload: expect.objectContaining({ preview_status: 'ready' }),
       }),
     ]));
-    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledOnce();
   });
 
   it('lets a poster retry leave a video size alone, and still records an image size', async () => {
@@ -484,7 +484,7 @@ describe('media preview repair retries', () => {
 
     const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, {
       batchSize: 10,
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     });
 
     expect(summary.failed).toBe(0);
@@ -541,11 +541,11 @@ describe('media preview repair retries', () => {
       })),
       storage: { from: vi.fn() },
     };
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
     const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, {
       batchSize: 10,
-      invalidateFeedCache,
+      invalidateShowcaseFeedAndRefreshEveryPage,
     });
 
     expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
@@ -560,7 +560,7 @@ describe('media preview repair retries', () => {
         payload: expect.objectContaining({ preview_status: 'ready' }),
       }),
     ]));
-    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -585,7 +585,7 @@ describe('media preview repair retries', () => {
       storage: { from: vi.fn() },
     };
     const summary = await repairMediaPreviews(withAdmissionFallback(client) as never, {
-      batchSize: 1, invalidateFeedCache: vi.fn(),
+      batchSize: 1, invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     });
     expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
     expect(createGenerationOutputPreview).not.toHaveBeenCalled();
@@ -620,7 +620,7 @@ describe('media preview repair retries', () => {
       };
       const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, {
         batchSize: 10,
-        invalidateFeedCache: vi.fn(),
+        invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
       });
       expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
       return updates.filter((update) => update.table === 'generations' && update.payload.preview_status === 'failed');
@@ -846,14 +846,14 @@ describe('media preview repair retries', () => {
         select: vi.fn(() => createSelectChain({ data: [], error: null })),
       })),
     };
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
     await expect(repairMediaPreviews(withAdmissionFallback(supabase) as never, {
       batchSize: 10,
-      invalidateFeedCache,
+      invalidateShowcaseFeedAndRefreshEveryPage,
     })).resolves.toEqual({ attempted: 0, completed: 0, failed: 0 });
 
-    expect(invalidateFeedCache).not.toHaveBeenCalled();
+    expect(invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
   });
 
   // Every invalidation rebuilds the signed-out home page at its next visit, so
@@ -897,23 +897,23 @@ describe('media preview repair retries', () => {
     ])('refreshes it as it should for a finished preview of %s post', async (_case, post, refreshes) => {
       const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
       const { supabase } = previewClient({ data: [{ id: 'post-1', ...post }], error: null });
-      const invalidateFeedCache = vi.fn();
+      const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
-      const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, { batchSize: 10, invalidateFeedCache });
+      const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, { batchSize: 10, invalidateShowcaseFeedAndRefreshEveryPage });
 
       expect(summary.completed).toBe(1);
-      expect(invalidateFeedCache).toHaveBeenCalledTimes(refreshes);
+      expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledTimes(refreshes);
     });
 
     it('refreshes it when it cannot tell whether the post is public', async () => {
       const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
       const { supabase } = previewClient({ data: null, error: new Error('statement timeout') });
-      const invalidateFeedCache = vi.fn();
+      const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
-      await repairMediaPreviews(withAdmissionFallback(supabase) as never, { batchSize: 10, invalidateFeedCache });
+      await repairMediaPreviews(withAdmissionFallback(supabase) as never, { batchSize: 10, invalidateShowcaseFeedAndRefreshEveryPage });
 
       // One rebuild too many beats a public post kept without its poster.
-      expect(invalidateFeedCache).toHaveBeenCalledOnce();
+      expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledOnce();
     });
 
     it("leaves it alone for a creation's preview that no public post shows", async () => {
@@ -939,12 +939,12 @@ describe('media preview repair retries', () => {
         })),
         storage: { from: vi.fn() },
       };
-      const invalidateFeedCache = vi.fn();
+      const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
-      const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, { batchSize: 10, invalidateFeedCache });
+      const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, { batchSize: 10, invalidateShowcaseFeedAndRefreshEveryPage });
 
       expect(summary.completed).toBe(1);
-      expect(invalidateFeedCache).not.toHaveBeenCalled();
+      expect(invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
     });
 
     it('names each rendition it finishes, for the sweep to check', async () => {
@@ -1383,9 +1383,9 @@ describe('per-post media repair', () => {
       pendingVideoRow,
       { ...pendingVideoRow, id: 'media-other', post_id: 'post-2' },
     ]);
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
-    const summary = await repairMediaForPost(withAdmissionFallback(supabase) as never, 'post-1', { invalidateFeedCache });
+    const summary = await repairMediaForPost(withAdmissionFallback(supabase) as never, 'post-1', { invalidateShowcaseFeedAndRefreshEveryPage });
 
     // Two rows exist, but only post-1's is in scope for both passes.
     expect(summary).toEqual({ attempted: 2, completed: 2, failed: 0 });
@@ -1396,7 +1396,7 @@ describe('per-post media repair', () => {
       expect.objectContaining({ preview_status: 'ready' }),
       expect.objectContaining({ rendition_status: 'ready' }),
     ]));
-    expect(invalidateFeedCache).toHaveBeenCalledTimes(1);
+    expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledTimes(1);
   });
 
   // A repaired preview removes nothing: by default the feed is expired at
@@ -1422,12 +1422,12 @@ describe('per-post media repair', () => {
   it('leaves the feed cache alone when nothing was repaired', async () => {
     const { repairMediaForPost } = await import('@/lib/media-preview-repair');
     const { supabase } = createPostRepairClient([]);
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
-    const summary = await repairMediaForPost(withAdmissionFallback(supabase) as never, 'post-1', { invalidateFeedCache });
+    const summary = await repairMediaForPost(withAdmissionFallback(supabase) as never, 'post-1', { invalidateShowcaseFeedAndRefreshEveryPage });
 
     expect(summary).toEqual({ attempted: 0, completed: 0, failed: 0 });
-    expect(invalidateFeedCache).not.toHaveBeenCalled();
+    expect(invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
   });
 
   it('still repairs previews when the rendition columns are absent', async () => {
@@ -1465,9 +1465,9 @@ describe('per-post media repair', () => {
         })),
       },
     };
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
-    const summary = await repairMediaForPost(withAdmissionFallback(supabase) as never, 'post-1', { invalidateFeedCache });
+    const summary = await repairMediaForPost(withAdmissionFallback(supabase) as never, 'post-1', { invalidateShowcaseFeedAndRefreshEveryPage });
 
     expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
     expect(updates).toEqual(expect.arrayContaining([
@@ -1565,14 +1565,14 @@ describe('a sweep whose update does not record what it uploaded', () => {
       const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
       previewMocks.createPostMediaPreview.mockImplementationOnce(uploading(both));
       const { supabase, queued } = createPreviewClient([coverRow], rowGone);
-      const invalidateFeedCache = vi.fn();
+      const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
-      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateFeedCache });
+      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateShowcaseFeedAndRefreshEveryPage });
 
       expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
       expect(queued).toHaveLength(1);
       expect(queuedPaths(queued)).toEqual([...both].sort());
-      expect(invalidateFeedCache).not.toHaveBeenCalled();
+      expect(invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
     });
 
     it('queues them when another worker holds the row now, and the update carried this run\'s lease', async () => {
@@ -1590,7 +1590,7 @@ describe('a sweep whose update does not record what it uploaded', () => {
         },
       );
 
-      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, lockedBy: 'sweep-a', invalidateFeedCache: vi.fn() });
+      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, lockedBy: 'sweep-a', invalidateShowcaseFeedAndRefreshEveryPage: vi.fn() });
 
       expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
       const ready = updates.find((update) => update.payload.preview_status === 'ready');
@@ -1605,7 +1605,7 @@ describe('a sweep whose update does not record what it uploaded', () => {
       }));
       const { supabase, queued, updates } = createPreviewClient([coverRow], () => [{ id: 'media-1' }]);
 
-      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateFeedCache: vi.fn() });
+      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateShowcaseFeedAndRefreshEveryPage: vi.fn() });
 
       expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
       expect(updates.at(-1)?.payload).toMatchObject({ preview_status: 'failed' });
@@ -1620,7 +1620,7 @@ describe('a sweep whose update does not record what it uploaded', () => {
         (payload) => (payload.preview_status === 'ready' ? new Error('fetch failed') : [{ id: 'media-1' }]),
       );
 
-      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateFeedCache: vi.fn() });
+      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateShowcaseFeedAndRefreshEveryPage: vi.fn() });
 
       expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
       expect(queuedPaths(queued)).toEqual([...both].sort());
@@ -1631,7 +1631,7 @@ describe('a sweep whose update does not record what it uploaded', () => {
       previewMocks.createPostMediaPreview.mockImplementationOnce(uploading(both));
       const { supabase, queued } = createPreviewClient([coverRow], () => [{ id: 'media-1' }]);
 
-      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateFeedCache: vi.fn() });
+      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateShowcaseFeedAndRefreshEveryPage: vi.fn() });
 
       expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
       expect(queued).toEqual([]);
@@ -1648,7 +1648,7 @@ describe('a sweep whose update does not record what it uploaded', () => {
         rowGone,
       );
 
-      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateFeedCache: vi.fn() });
+      const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateShowcaseFeedAndRefreshEveryPage: vi.fn() });
 
       expect(summary).toEqual({ attempted: 1, completed: 0, failed: 1 });
       expect(queued).toEqual([]);

@@ -20,7 +20,7 @@ describe.skipIf(!configPath || !connectionString)('profile and contact services 
   let email: string;
   const body = () => ({ username, displayName: 'Audit creator', bio: 'Fixture biography' });
   const update = (userId = owner, value: unknown = body(), client = admin) => updateProfileForRoute({
-    userId, body: value, client, invalidateFeedCache: () => {},
+    userId, body: value, client, invalidateShowcaseFeedAndRefreshEveryPage: () => {},
   });
   const contact = (value: unknown = { name: ' Audit ', email: email.toUpperCase(), message: ' Test message ' }) => submitContactMessageForRoute({
     createAdminSupabase: () => admin, rateLimitKey: owner, readBody: async () => ({ ok: true, value }),

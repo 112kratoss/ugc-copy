@@ -71,10 +71,11 @@ export function publicPostPageTag(postId: string): string {
 }
 
 /**
- * One post page, for its post coming into view (`{ expire: 0 }` only): while
- * the post was private, archived or hidden its page could only hold a
- * not-found, which is dropped at once instead of being served stale to the
- * first visitor of a post just published or brought back.
+ * One post page, drawn again at once (`{ expire: 0 }` only) when its cached
+ * copy cannot be served even once: for its post coming into view (while the
+ * post was private, archived or hidden its page could only hold a not-found,
+ * which would tell the first visitor of a post just published or brought back
+ * that it does not exist), and for an edit that deleted media the page drew.
  */
 export function publicPostArrivalTag(postId: string): string {
   return `public-page:post-arrival:${postId.trim().toLowerCase()}`;

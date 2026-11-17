@@ -65,12 +65,12 @@ describe('maintainFeedPersonalization', () => {
       },
     });
     const now = new Date('2026-07-11T07:20:00.000Z');
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedCacheOnly = vi.fn();
     const refreshAccountLabels = labelPass();
 
     await expect(maintainFeedPersonalization(db.client as never, {
       now,
-      invalidateFeedCache,
+      invalidateShowcaseFeedCacheOnly,
       refreshAccountLabels,
     })).resolves.toEqual({
       asOf: '2026-07-11T07:20:00.000Z',
@@ -147,7 +147,7 @@ describe('maintainFeedPersonalization', () => {
         p_fact_retention_days: 30,
       }],
     ]);
-    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    expect(invalidateShowcaseFeedCacheOnly).toHaveBeenCalledOnce();
     expect(refreshAccountLabels).toHaveBeenCalledOnce();
     expect(refreshAccountLabels).toHaveBeenCalledWith(db.client, { now });
   });
@@ -174,7 +174,7 @@ describe('maintainFeedPersonalization', () => {
 
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-07-11T07:20:00.000Z'),
-      invalidateFeedCache: () => calls.push('invalidate-feed-cache'),
+      invalidateShowcaseFeedCacheOnly: () => calls.push('invalidate-feed-cache'),
       refreshAccountLabels: labelPass(async () => {
         calls.push('account-labels');
         return LABELS_SUMMARY;
@@ -216,7 +216,7 @@ describe('maintainFeedPersonalization', () => {
 
     await expect(maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-07-11T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels,
     })).rejects.toThrow(failing === 'labels'
       ? 'Feed maintenance RPC upsert_account_labels failed: boom'
@@ -243,18 +243,18 @@ describe('maintainFeedPersonalization', () => {
       },
       prune_feed_personalization_data: { data: { skipped: false }, error: null },
     });
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedCacheOnly = vi.fn();
 
     await expect(maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-07-11T07:20:00.000Z'),
-      invalidateFeedCache,
+      invalidateShowcaseFeedCacheOnly,
       refreshAccountLabels: labelPass(),
     })).rejects.toThrow(
       'Feed maintenance RPC refresh_user_interest_weights failed: statement timeout',
     );
     expect(db.rpc).toHaveBeenCalledTimes(4);
     expect(db.rpc).not.toHaveBeenCalledWith('prune_feed_personalization_data', expect.anything());
-    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    expect(invalidateShowcaseFeedCacheOnly).toHaveBeenCalledOnce();
   });
 
   // Its totals and account labels are read by the feeds' ranking alone: no
@@ -321,7 +321,7 @@ describe('maintainFeedPersonalization', () => {
 
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-08-09T15:00:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     });
 
@@ -365,7 +365,7 @@ describe('maintainFeedPersonalization', () => {
 
     await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-08-09T15:00:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     });
 
@@ -401,7 +401,7 @@ describe('maintainFeedPersonalization prune batches', () => {
 
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-11-04T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     });
 
@@ -422,7 +422,7 @@ describe('maintainFeedPersonalization prune batches', () => {
 
     await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-11-04T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     });
 
@@ -442,7 +442,7 @@ describe('maintainFeedPersonalization prune batches', () => {
 
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-11-04T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
       clock: () => clockMs,
     });
@@ -457,7 +457,7 @@ describe('maintainFeedPersonalization prune batches', () => {
 
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-11-04T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     });
 
@@ -470,7 +470,7 @@ describe('maintainFeedPersonalization prune batches', () => {
 
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-11-04T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     });
 
@@ -483,7 +483,7 @@ describe('maintainFeedPersonalization prune batches', () => {
 
     await expect(maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-11-04T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     })).rejects.toThrow('prune_feed_personalization_data failed: canceling statement due to lock timeout');
   });

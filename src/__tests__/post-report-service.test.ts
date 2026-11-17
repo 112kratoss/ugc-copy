@@ -175,7 +175,7 @@ describe('submitPostReportForRoute', () => {
   it('normalizes optional details and records post-only reports', async () => {
     const admin = createAdminSupabaseMock();
     const longDetails = `  ${'a'.repeat(1100)}  `;
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedCacheOnly = vi.fn();
 
     const result = await submitPostReportForRoute({
       postId: 'post-1',
@@ -185,7 +185,7 @@ describe('submitPostReportForRoute', () => {
         details: longDetails,
       })),
       createAdminSupabase: vi.fn(() => admin.client),
-      invalidateFeedCache,
+      invalidateShowcaseFeedCacheOnly,
     });
 
     expect(result).toEqual({
@@ -207,7 +207,7 @@ describe('submitPostReportForRoute', () => {
       'set_feed_post_feedback',
     ]);
     expect(admin.calls.rpc[1]).toEqual(FEED_FEEDBACK_CALL);
-    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    expect(invalidateShowcaseFeedCacheOnly).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -215,14 +215,14 @@ describe('submitPostReportForRoute', () => {
     { name: 'rejects', options: { feedbackRejects: true } },
   ])('keeps a stored report when hiding it from the feed $name', async ({ options }) => {
     const admin = createAdminSupabaseMock(options);
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedCacheOnly = vi.fn();
 
     const result = await submitPostReportForRoute({
       postId: 'post-1',
       reporterUserId: 'reporter-1',
       readBody: vi.fn(async () => ({ reason: 'unsafe_content' })),
       createAdminSupabase: vi.fn(() => admin.client),
-      invalidateFeedCache,
+      invalidateShowcaseFeedCacheOnly,
     });
 
     expect(result).toEqual({ ok: true, body: { success: true } });
@@ -232,7 +232,7 @@ describe('submitPostReportForRoute', () => {
       'failed_to_hide_reported_post_from_feed',
       { error: expect.anything() },
     );
-    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    expect(invalidateShowcaseFeedCacheOnly).toHaveBeenCalledOnce();
   });
 
   it('returns not found when the post is missing or archived', async () => {
@@ -259,14 +259,14 @@ describe('submitPostReportForRoute', () => {
   // the subject-report route answers a report on your own profile or comment.
   it("refuses a report on the reporter's own post", async () => {
     const admin = createAdminSupabaseMock({ post: { id: 'post-1', user_id: 'reporter-1' } });
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedCacheOnly = vi.fn();
 
     const result = await submitPostReportForRoute({
       postId: 'post-1',
       reporterUserId: 'reporter-1',
       readBody: vi.fn(async () => ({ reason: 'unsafe_content', details: 'Reported from the mobile home feed.' })),
       createAdminSupabase: vi.fn(() => admin.client),
-      invalidateFeedCache,
+      invalidateShowcaseFeedCacheOnly,
     });
 
     expect(result).toEqual({
@@ -277,7 +277,7 @@ describe('submitPostReportForRoute', () => {
     expect(admin.calls.selects).toEqual([{ table: 'posts', columns: 'id, user_id' }]);
     expect(admin.calls.inserts).toEqual([]);
     expect(admin.calls.rpc).not.toContainEqual(FEED_FEEDBACK_CALL);
-    expect(invalidateFeedCache).not.toHaveBeenCalled();
+    expect(invalidateShowcaseFeedCacheOnly).not.toHaveBeenCalled();
   });
 
   it("refuses a report on the reporter's own recipe before looking the recipe up", async () => {
@@ -322,7 +322,7 @@ describe('submitPostReportForRoute', () => {
 
   it('records unlock reports only after validating the bundle belongs to the post', async () => {
     const admin = createAdminSupabaseMock();
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedCacheOnly = vi.fn();
 
     const result = await submitPostReportForRoute({
       postId: 'post-1',
@@ -332,7 +332,7 @@ describe('submitPostReportForRoute', () => {
         bundleId: 'bundle-1',
       })),
       createAdminSupabase: vi.fn(() => admin.client),
-      invalidateFeedCache,
+      invalidateShowcaseFeedCacheOnly,
     });
 
     expect(result).toEqual({
@@ -349,7 +349,7 @@ describe('submitPostReportForRoute', () => {
       },
     ]);
     expect(admin.calls.rpc).toContainEqual(FEED_FEEDBACK_CALL);
-    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    expect(invalidateShowcaseFeedCacheOnly).toHaveBeenCalledOnce();
   });
 
   it('maps bundle validation errors without inserting a report', async () => {
@@ -391,7 +391,7 @@ describe('submitPostReportForRoute', () => {
           reporterUserId: 'reporter-1',
           readBody: vi.fn(async () => ({ reason: 'unsafe_content', deliveryId: '812' })),
           createAdminSupabase: vi.fn(() => admin.client),
-          invalidateFeedCache: vi.fn(),
+          invalidateShowcaseFeedCacheOnly: vi.fn(),
           runAfterResponse,
           scheduleFeedEvent,
         });
@@ -431,7 +431,7 @@ describe('submitPostReportForRoute', () => {
         reporterUserId: 'reporter-1',
         readBody: vi.fn(async () => ({ reason: 'spam', ...extra })),
         createAdminSupabase: vi.fn(() => admin.client),
-        invalidateFeedCache: vi.fn(),
+        invalidateShowcaseFeedCacheOnly: vi.fn(),
         scheduleFeedEvent,
       });
 
@@ -461,7 +461,7 @@ describe('submitPostReportForRoute', () => {
           reporterUserId: 'reporter-1',
           readBody: vi.fn(async () => ({ ...body, deliveryId: '812' })),
           createAdminSupabase: vi.fn(() => admin.client),
-          invalidateFeedCache: vi.fn(),
+          invalidateShowcaseFeedCacheOnly: vi.fn(),
           scheduleFeedEvent,
         });
         expect(result.ok).toBe(false);
@@ -482,7 +482,7 @@ describe('submitPostReportForRoute', () => {
         reporterUserId: '10000000-0000-4000-8000-000000000001',
         readBody: vi.fn(async () => ({ reason: 'spam', deliveryId: '812' })),
         createAdminSupabase: vi.fn(() => admin.client),
-        invalidateFeedCache: vi.fn(),
+        invalidateShowcaseFeedCacheOnly: vi.fn(),
       });
 
       expect(result).toEqual({ ok: true, body: { success: true } });
@@ -498,14 +498,14 @@ describe('submitPostReportForRoute', () => {
     const admin = createAdminSupabaseMock({
       insertError: { message: 'insert failed' },
     });
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedCacheOnly = vi.fn();
 
     const result = await submitPostReportForRoute({
       postId: 'post-1',
       reporterUserId: 'reporter-1',
       readBody: vi.fn(async () => ({ reason: 'spam' })),
       createAdminSupabase: vi.fn(() => admin.client),
-      invalidateFeedCache,
+      invalidateShowcaseFeedCacheOnly,
     });
 
     expect(result).toEqual({
@@ -515,6 +515,6 @@ describe('submitPostReportForRoute', () => {
     });
     // Nothing is hidden from the feed for a report that was never stored.
     expect(admin.calls.rpc).not.toContainEqual(FEED_FEEDBACK_CALL);
-    expect(invalidateFeedCache).not.toHaveBeenCalled();
+    expect(invalidateShowcaseFeedCacheOnly).not.toHaveBeenCalled();
   });
 });

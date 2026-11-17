@@ -125,6 +125,21 @@ describe('showcase feed cache', () => {
       expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(publicPostPageTag('post-1'), IN_THE_BACKGROUND);
     });
 
+    // The replaced files are deleted with the edit: one stale serve of the
+    // post's own page would draw them broken. Its cards elsewhere still wait
+    // for the background refresh.
+    it('draws the post\'s own page again at once when the change deleted media it drew', async () => {
+      const { client } = remixesClient({ data: [] });
+
+      await invalidateShowcaseFeedAndRefreshPostPages(client, { ...post, arrived: false, mediaRemoved: true });
+
+      expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(publicPostArrivalTag('post-1'), AT_ONCE);
+      expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(publicPostArrivalTag('gen-1'), AT_ONCE);
+      expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(publicCreatorPageTag('creator-1'), IN_THE_BACKGROUND);
+      expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(MARKETPLACE_RESOURCE_LIST_CACHE_TAG, IN_THE_BACKGROUND);
+      expect(cacheMocks.revalidateTag).not.toHaveBeenCalledWith(PUBLIC_PAGE_CACHE_TAG, expect.anything());
+    });
+
     it('refreshes the pages of the remixes that credit the post, and their creators', async () => {
       const { client } = remixesClient({ data: [
         { id: 'remix-1', user_id: 'remixer-1' },
@@ -207,6 +222,7 @@ describe('showcase feed cache', () => {
     invalidateShowcaseFeedCache();
     invalidateShowcaseFeedCacheOnly();
     await invalidateShowcaseFeedAndRefreshPostPages(client, { ...post, arrived: true });
+    await invalidateShowcaseFeedAndRefreshPostPages(client, { ...post, arrived: false, mediaRemoved: true });
     await invalidateShowcaseFeedAndRefreshPostPages(remixesClient({ error: { message: 'boom' } }).client, { ...post, arrived: false });
     invalidateShowcaseFeedAndRefreshEveryPage({ postIds: ['post-1'], handles: ['someone'] });
 

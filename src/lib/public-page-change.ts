@@ -1,8 +1,9 @@
 /**
- * Whether a write to one post removes something from the cached public pages
- * (which then expire at once, `invalidateShowcaseFeedCache`) or only changes
- * them (refreshed in the background, `invalidateShowcaseFeedAndRefreshPostPages`).
- * Pure, so both the services that save a post and their tests ask it.
+ * Whether a write to one post may remove something from the cached public
+ * pages (which then expire at once, `invalidateShowcaseFeedCache`) or only
+ * changes them (refreshed in the background,
+ * `invalidateShowcaseFeedAndRefreshPostPages`). Pure, so both the services
+ * that save a post and their tests ask it.
  */
 
 /** A post as the public pages see it, before or after a write. */
@@ -54,17 +55,18 @@ export type PostPageChange =
  * What a write did to a post's public pages, from the post before it (null
  * for a post the write made) and after it.
  *
- * A removal is anything that takes what was shown out of view: the post off
- * its page (private, archived, held), off the lists (public to unlisted), or
- * behind the mature cover (its media are moved out of public storage too).
- * Everything else is a change, and `arrived` says the post came onto its page
- * with it: the page could only hold a not-found until now.
+ * Judged by where the write leaves the post, whatever the read before it said:
+ * a service reads the post at its start and writes it later, and another
+ * request may have shown the post in between (review, 2026-11-17). So a write
+ * that leaves the post anywhere but public, visible and uncovered is a
+ * removal: private, unlisted (off the lists), archived, held by moderation,
+ * or behind the mature cover (its media leave public storage then too). It
+ * expires every cached page at once, as before background refreshes, even
+ * when the read said nothing was shown: an edit of a private or covered post
+ * wipes. Everything else is a change, and `arrived` says the post came onto
+ * its page with it: the page could only hold a not-found until now.
  */
 export function classifyPostPageChange(before: PostPageState | null, after: PostPageState): PostPageChange {
-  const drawnBefore = isPostPageDrawn(before);
-  const drawnAfter = isPostPageDrawn(after);
-  if (drawnBefore && !drawnAfter) return { kind: 'removal' };
-  if (isPostListed(before) && !isPostListed(after)) return { kind: 'removal' };
-  if (drawnBefore && !before?.isNsfw && after.isNsfw) return { kind: 'removal' };
-  return { kind: 'change', arrived: drawnAfter && !drawnBefore };
+  if (!isPostListed(after) || after.isNsfw) return { kind: 'removal' };
+  return { kind: 'change', arrived: !isPostPageDrawn(before) };
 }

@@ -824,7 +824,7 @@ export async function repairPostMediaRenditions(
 export async function repairMediaForPost(
   supabase: SupabaseClient,
   postId: string,
-  options: { invalidateFeedCache?: typeof invalidateShowcaseFeedAndRefreshEveryPage } = {},
+  options: { invalidateShowcaseFeedAndRefreshEveryPage?: typeof invalidateShowcaseFeedAndRefreshEveryPage } = {},
 ): Promise<RepairSummary> {
   const previewResult = await supabase
     .from('post_media')
@@ -879,7 +879,7 @@ export async function repairMediaForPost(
   // pages that draw it (the post's, its creator's, the storefront's) in the
   // background, all of them, as this knows the post and not its creator.
   if (completed > 0) {
-    (options.invalidateFeedCache ?? invalidateShowcaseFeedAndRefreshEveryPage)();
+    (options.invalidateShowcaseFeedAndRefreshEveryPage ?? invalidateShowcaseFeedAndRefreshEveryPage)();
   }
 
   return { attempted, completed, failed: attempted - completed };
@@ -1057,7 +1057,7 @@ export async function repairMediaPreviews(
   options: {
     batchSize?: number;
     renditionBatchSize?: number;
-    invalidateFeedCache?: typeof invalidateShowcaseFeedAndRefreshEveryPage;
+    invalidateShowcaseFeedAndRefreshEveryPage?: typeof invalidateShowcaseFeedAndRefreshEveryPage;
     lockedBy?: string;
   } = {}
 ): Promise<RepairSummary> {
@@ -1136,7 +1136,7 @@ export async function repairMediaPreviews(
     postMediaIds: finishedPostMediaIds,
     teasers: teasers.completed,
   })) {
-    (options.invalidateFeedCache ?? invalidateShowcaseFeedAndRefreshEveryPage)();
+    (options.invalidateShowcaseFeedAndRefreshEveryPage ?? invalidateShowcaseFeedAndRefreshEveryPage)();
   }
 
   return { attempted, completed, failed: attempted - completed };

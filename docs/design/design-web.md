@@ -44,7 +44,7 @@ Principles, distilled from Pinterest Gestalt, Shopify Polaris, Material 3, Apple
 
 ## Typography
 
-**Geist Sans**, from `next/font` in `src/app/layout.tsx`, carries everything but the screens the web shares with the app's onboarding.
+**Geist Sans**, from `next/font/local` in `src/lib/geist-font.ts` (committed files in `src/fonts/`, so the build never fetches it), is the face of the pages that ask for it through `--font-geist-sans`: Create, the image, video and motion creators, and Explore. The other pages use Tailwind's system stack.
 - It loads with `display: "optional"`, so a slow first visit keeps the metric-compatible fallback instead of repainting when the font arrives.
 - Code, IDs and technical values use `font-mono`, the system monospace stack.
 - **The display face (owner, 2026-11-09: the app's onboarding on the web).** The app's own faces come in through two modules: **Bricolage Grotesque** 700 and 800 (`displayFont` in `src/lib/display-font.ts`, the app's `DISPLAY_FONT`) for the onboarding screens' headlines and the wordmark (`BrandWordmark`: the app's lockup, a coral sparkle and "Magic Booklet" in the text colour), and **Caveat Bold** (`handwritingFont` in `src/lib/handwriting-font.ts`) for the first sign-up intro's handwriting. Only the components that draw them import them, never the root layout, so a page that shows neither downloads neither: Next preloads a font on the routes whose files call its loader. Both load with `display: "swap"`, as they are the brand's look where they appear; with two weights loaded, a headline names its own (`font-extrabold`). Use them nowhere else: a page heading elsewhere stays on `Text`.

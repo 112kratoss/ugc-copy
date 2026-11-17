@@ -1365,6 +1365,8 @@ export async function updateOwnerPostForRoute({
   // whose id is the post page's legacy address: decided once the save commits.
   let pageChange: PostPageChange | null = null;
   let pageGenerationId: string | null = null;
+  // The save deleted media files the post's page drew (a picture replaced or taken out).
+  let pageMediaRemoved = false;
 
   try {
     const post = await loadOwnedPost(adminSupabase, postId, ownerUserId);
@@ -1623,7 +1625,8 @@ export async function updateOwnerPostForRoute({
       };
     }
 
-    const nextVisibility = normalizeVisibility(body.visibility) ?? normalizeVisibility(post.visibility) ?? 'private';
+    const requestedVisibility = normalizeVisibility(body.visibility);
+    const nextVisibility = requestedVisibility ?? normalizeVisibility(post.visibility) ?? 'private';
 
     const nextCategory =
       post.post_format === 'text'
@@ -1767,8 +1770,13 @@ export async function updateOwnerPostForRoute({
     }
     const nextIsNsfw = typeof body.isNsfw === 'boolean' ? body.isNsfw : post.is_nsfw === true;
     const updatePayload: Record<string, unknown> = {
-      is_nsfw: nextIsNsfw,
-      visibility: nextVisibility,
+      // Each written only when the save names it (review, 2026-11-17): the update keeps the stored
+      // value of a key left out, so a save that names neither never puts back what another device
+      // changed since this request read the post (a post made private again made public, a covered
+      // one uncovered). Both composers send both; a visibility toggle sends its visibility alone.
+      // A post still stored unlisted is moved to private by any save (product decision 12).
+      ...(typeof body.isNsfw === 'boolean' ? { is_nsfw: body.isNsfw } : {}),
+      ...(requestedVisibility !== null || nextVisibility !== post.visibility ? { visibility: nextVisibility } : {}),
       category: nextCategory,
       // Written only when sent (remix plan, phase 2): an older composer's save keeps the post's own.
       ...(typeof body.allowRemixes === 'boolean' ? { remixes_allowed: body.allowRemixes } : {}),
@@ -2108,6 +2116,7 @@ export async function updateOwnerPostForRoute({
         isNsfw: nextIsNsfw,
       });
       pageGenerationId = post.generation_id ?? null;
+      pageMediaRemoved = (preparedMedia?.removedStoragePaths.length ?? 0) > 0;
     } catch (error) {
       if (error instanceof DefinitiveSupabaseMutationRejection) {
         await Promise.all(resourceConsumptionClaims.map((claim) => (
@@ -2307,6 +2316,9 @@ export async function updateOwnerPostForRoute({
           generationId: pageGenerationId,
           creatorId: ownerUserId,
           arrived: pageChange.arrived,
+          // Its old files are deleted with this save (`finalizePreparedEditedPostMedia`): a stale
+          // copy of its own page would show them broken.
+          ...(pageMediaRemoved ? { mediaRemoved: true } : {}),
         });
       }
     }

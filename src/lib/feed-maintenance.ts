@@ -225,7 +225,7 @@ export async function maintainFeedPersonalization(
   client: SupabaseClient,
   options: {
     now?: Date;
-    invalidateFeedCache?: typeof invalidateShowcaseFeedCacheOnly;
+    invalidateShowcaseFeedCacheOnly?: typeof invalidateShowcaseFeedCacheOnly;
     refreshAccountLabels?: typeof refreshAccountSafetyLabels;
     /** Wall clock in ms, for the prune's time budget. */
     clock?: () => number;
@@ -273,7 +273,7 @@ export async function maintainFeedPersonalization(
   // account_labels). No cached public page draws them: a post page's and a
   // creator page's counts are the posts' own columns, which move with no event
   // and wait for the pages' five-minute backstop as before.
-  (options.invalidateFeedCache ?? invalidateShowcaseFeedCacheOnly)();
+  (options.invalidateShowcaseFeedCacheOnly ?? invalidateShowcaseFeedCacheOnly)();
 
   const deferredFailures: string[] = [];
   let accountLabels: AccountSafetyLabelSummary = {

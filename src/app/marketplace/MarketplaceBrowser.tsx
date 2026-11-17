@@ -438,7 +438,7 @@ export default function MarketplaceBrowser({
                 <input
                   value={searchInput}
                   onChange={(event) => setSearchInput(event.target.value)}
-                  placeholder="Search prompts, tools, creators"
+                  placeholder="Search recipes"
                   className="w-full min-w-[190px] bg-transparent py-2 text-sm text-white outline-none placeholder:text-zinc-600"
                 />
               </label>

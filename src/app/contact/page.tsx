@@ -143,9 +143,9 @@ export default function Contact() {
                 <div className="mt-16 pt-8 border-t border-zinc-800 text-center text-zinc-500 text-sm">
                     <p>© 2026 {siteConfig.name}. All rights reserved.</p>
                     <div className="flex justify-center gap-6 mt-4">
-                        <Link href="/terms" className="hover:text-white transition-colors">Terms of Service</Link>
-                        <Link href="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link>
-                        <Link href="/pricing" className="hover:text-white transition-colors">Pricing</Link>
+                        <Link href="/terms" className="-my-0.5 py-0.5 hover:text-white transition-colors">Terms of Service</Link>
+                        <Link href="/privacy" className="-my-0.5 py-0.5 hover:text-white transition-colors">Privacy Policy</Link>
+                        <Link href="/pricing" className="-my-0.5 py-0.5 hover:text-white transition-colors">Pricing</Link>
                     </div>
                 </div>
             </div>

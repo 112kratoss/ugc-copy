@@ -480,15 +480,10 @@ describe('updateOwnerPostForRoute', () => {
       }),
       hasBundlePayload: true,
     }));
-    // A private draft edited and kept private removes nothing from view: the
-    // feed at once and the post's pages in the background, never a wipe.
-    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mock.calls).toEqual([[client, {
-      postId: 'post-1',
-      generationId: null,
-      creatorId: 'user-1',
-      arrived: false,
-    }]]);
-    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    // A save that leaves the post private is a removal, whatever the read said:
+    // another device may have made it public, its pages drawn, since then.
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   // Product decision 12 (2026-10-17): a post is public or private. An installed
@@ -654,6 +649,71 @@ describe('updateOwnerPostForRoute', () => {
 
       expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
       expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
+    });
+  });
+
+  // Found in review (2026-11-17): every edit wrote the post's visibility and
+  // mature flag back as the request had read them, so a save that named
+  // neither put back what another device changed while it ran: it made public
+  // again a post its owner had just made private, or uncovered one just
+  // covered. The update RPC keeps the stored value of a key left out.
+  describe('a save racing a change made on another device', () => {
+    it('keeps a visibility and a mature flag changed since its read when it names neither', async () => {
+      const { client } = createSupabaseMock({
+        post: {
+          id: 'post-1',
+          user_id: 'user-1',
+          generation_id: null,
+          visibility: 'public',
+          title: 'Lighting notes',
+          description: null,
+          prompt: null,
+          body: 'Soft key light from the left.',
+          category: 'text',
+          post_format: 'text',
+          source_tool: null,
+          source_tool_slug: null,
+          source_kind: 'manual',
+          archived_at: null,
+          showcase_asset_path: null,
+          output_url: null,
+          review_status: 'visible',
+          is_nsfw: false,
+        },
+        bundle: null,
+      });
+      // The row as the database holds it when this save writes: made private
+      // and covered on another device since the save read it.
+      const stored = { visibility: 'private', is_nsfw: true };
+      const updatePostWithResourceBundleAtomically = vi.fn(async ({ patch }: { patch: Record<string, unknown> }) => {
+        if ('visibility' in patch) stored.visibility = patch.visibility as string;
+        if ('is_nsfw' in patch) stored.is_nsfw = patch.is_nsfw as boolean;
+        return { postId: 'post-1', visibility: stored.visibility as 'public' | 'private', bundleId: null, bundleStatus: null };
+      });
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { title: 'Lighting notes, revised' },
+        dependencies: {
+          listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+          getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+          updatePostWithResourceBundleAtomically,
+          replacePostSourceTools: vi.fn(async () => undefined),
+          replacePostMediaItems: vi.fn(async () => undefined),
+          createPostMediaPreview: vi.fn(async () => null),
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { visibility: 'private' } });
+      expect(stored).toEqual({ visibility: 'private', is_nsfw: true });
+      // Judged by the visibility the write left, not the one it read: a removal.
+      expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+      expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
+      expect(updatePostWithResourceBundleAtomically.mock.calls[0][0].patch).toEqual(expect.objectContaining({
+        title: 'Lighting notes, revised',
+      }));
     });
   });
 
@@ -2744,9 +2804,9 @@ describe('updateOwnerPostForRoute', () => {
       },
     });
     expect(updatePostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
-    // Committed before the failure: the save's pages are refreshed all the same.
-    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).toHaveBeenCalledTimes(1);
-    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    // Committed before the failure, and left private: every cached page at once.
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   it('maps unavailable profile verification to a server failure', async () => {
@@ -3295,6 +3355,91 @@ describe('updateOwnerPostForRoute', () => {
       'posts/post-1/a/clip.preview.webp',
       'posts/post-1/a/clip.feed.mp4',
     ]);
+  });
+
+  // Review, 2026-11-17: the replaced files are deleted with the save, so the
+  // one stale serve a background refresh allows would draw the post's page
+  // with broken media. Its own page is drawn again at once instead.
+  it('draws a public post\'s own page again at once when an edit deletes media it drew', async () => {
+    const { client, removals } = createSupabaseMock({
+      bundle: null,
+      stagedInfo: { size: 13 * 1024 * 1024, contentType: 'video/mp4' },
+      postMedia: [{
+        id: 'media-old',
+        media_key: 'proof-old',
+        storage_path: 'posts/post-1/a/clip.mp4',
+        preview_storage_path: 'posts/post-1/a/clip.preview.webp',
+        rendition_storage_path: 'posts/post-1/a/clip.feed.mp4',
+        external_url: null,
+        media_kind: 'video',
+        content_type: 'video/mp4',
+        original_name: 'clip.mp4',
+        width: null,
+        height: null,
+        duration_seconds: null,
+        sort_order: 0,
+      }],
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'public',
+        title: 'Proof post',
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'video',
+        post_format: 'media',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'external',
+        archived_at: null,
+        showcase_asset_path: 'posts/post-1/a/clip.mp4',
+        output_url: null,
+        review_status: 'visible',
+        is_nsfw: false,
+      },
+    });
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        visibility: 'public',
+        mediaItems: [{
+          mediaKey: 'proof-new',
+          storagePath: 'uploads/user-1/new.mp4',
+          contentType: 'video/mp4',
+          originalName: 'new.mp4',
+        }],
+        resourceBundle: { accessMode: 'none' },
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'public' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(removals).toContainEqual(expect.arrayContaining(['posts/post-1/a/clip.mp4']));
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mock.calls).toEqual([[client, {
+      postId: 'post-1',
+      generationId: null,
+      creatorId: 'user-1',
+      arrived: false,
+      mediaRemoved: true,
+    }]]);
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
   it('never passes foreign or encoded post media paths to service-role removal', async () => {

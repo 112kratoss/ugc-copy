@@ -411,14 +411,14 @@ describe('moderation service', () => {
 
   it('blocks idempotently, removes follows in both directions, and invalidates feeds', async () => {
     const client = createClient();
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedCacheOnly = vi.fn();
 
     const result = await setUserBlockForRoute({
       actorUserId: REPORTER_ID,
       adminSupabase: client.client,
       blockedUserId: CREATOR_ID,
       shouldBlock: true,
-      invalidateFeedCache,
+      invalidateShowcaseFeedCacheOnly,
     });
 
     expect(result).toEqual({ ok: true, body: { success: true, blocked: true } });
@@ -432,7 +432,7 @@ describe('moderation service', () => {
     // the route asks for nothing beyond its rate limit.
     expect(client.rpc).toHaveBeenCalledTimes(1);
     expect(client.rpc).toHaveBeenCalledWith('check_backend_rate_limit', expect.anything());
-    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    expect(invalidateShowcaseFeedCacheOnly).toHaveBeenCalledOnce();
   });
 
   // The cached public pages are drawn for no one and apply a block in the

@@ -256,13 +256,32 @@ export async function applyAdminPostModeration(
 
   if (result.status === 'applied' || result.status === 'already_applied') {
     if (options.action === 'restore') {
-      invalidateShowcaseFeedAndRefreshEveryPage({ postIds: [result.postId] });
+      // The post's page and its legacy address (its creation's id) may each
+      // hold a not-found since the hide.
+      const creationId = await loadPostCreationId(client, result.postId);
+      invalidateShowcaseFeedAndRefreshEveryPage({ postIds: creationId ? [result.postId, creationId] : [result.postId] });
     } else {
       invalidateShowcaseFeedCache();
     }
   }
 
   return result;
+}
+
+/**
+ * The creation a post was made from, whose id is a legacy address of the
+ * post's page. Null for a post made from none, and when it cannot be read: the
+ * legacy address then waits for the background refresh every page gets.
+ */
+async function loadPostCreationId(client: SupabaseClient, postId: string): Promise<string | null> {
+  try {
+    const { data, error } = await client.from('posts').select('generation_id').eq('id', postId).maybeSingle();
+    if (error) return null;
+    const generationId = (data as { generation_id?: unknown } | null)?.generation_id;
+    return typeof generationId === 'string' && generationId ? generationId : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Invalidates after a moderation call threw, never hiding that call's error behind its own. */
