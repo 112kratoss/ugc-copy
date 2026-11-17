@@ -91,9 +91,19 @@
         "saverNoticeSeen": false,
         "stats": {
           "creations": 27,
+          "creationsByKind": {
+            "images": 20,
+            "videos": 6,
+            "audio": 1
+          },
           "failedCreations": 7,
           "archivedCreations": 2,
           "posts": 20,
+          "postsByVisibility": {
+            "public": 14,
+            "unlisted": 0,
+            "private": 6
+          },
           "archivedPosts": 0,
           "saved": 3
         }

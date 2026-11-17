@@ -73,14 +73,30 @@ export interface ProfileApiResponse {
 
 export interface OwnerProfileStats {
   creations: number;
+  /**
+   * Studio's media filters: the Active creations (`creations`) under the
+   * filter each is listed under. Absent until the database counts them.
+   */
+  creationsByKind?: OwnerCreationKindTotals;
   /** Profile ▸ Creations' Failed scope. Absent until the database counts it. */
   failedCreations?: number;
   /** Profile ▸ Creations' Archived scope. Absent until the database counts it. */
   archivedCreations?: number;
   posts: number;
+  /**
+   * The Post Library's visibility filters: the live posts (`posts`) by their
+   * visibility. Absent until the database counts them.
+   */
+  postsByVisibility?: OwnerPostVisibilityTotals;
   archivedPosts: number;
   saved: number;
 }
+
+/** The Active creations by Studio's media filter (`owner_profile_counts`' `creationsByKind`). */
+export type OwnerCreationKindTotals = Record<'images' | 'videos' | 'audio', number>;
+
+/** The live posts by visibility (`owner_profile_counts`' `postsByVisibility`). */
+export type OwnerPostVisibilityTotals = Record<'public' | 'unlisted' | 'private', number>;
 
 export interface OwnerProfileSales {
   earningsUsdCents: number;

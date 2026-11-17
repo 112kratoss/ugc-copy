@@ -1,3 +1,4 @@
+import type { OwnerCreationKindTotals, OwnerPostVisibilityTotals, OwnerProfileStats } from '@/lib/profile';
 import { buildShowcaseDetailPath } from '@/lib/share';
 
 type CreationWorkspaceState =
@@ -344,6 +345,9 @@ export function resolveCreationWorkspaceCardState(
 
 export type CreationMediaFilter = 'all' | 'images' | 'videos' | 'audio';
 
+/** A media filter of one kind: every one but All. */
+export type CreationMediaKindFilter = Exclude<CreationMediaFilter, 'all'>;
+
 /** The number each media filter shows: its total, or null where Studio does not know it. */
 export type CreationMediaTotals = Record<CreationMediaFilter, number | null>;
 
@@ -393,14 +397,17 @@ export interface StudioListCounts<Filter extends string> extends StudioTotal {
  * filters too. A number is drawn only where it is a total:
  * - every page loaded, and the server, read with the list, counting as many:
  *   the loaded rows are the library, so each count is its total;
- * - otherwise, the server's total (`owner_profile_counts`, which counts by the
- *   list's own rule) is the header's and All's, and a filter the server does
- *   not count shows no number. Where a loaded list and the server disagree,
- *   either can be the older: a later page's creations are kept as they were
- *   when the first is reread, so one archived elsewhere still counts in the
- *   list, while the total comes with the first page, and a page loaded after
- *   it can be newer. The total is drawn, and no filter's number, until a
- *   refresh reads both again;
+ * - otherwise, the server's totals (`owner_profile_counts`, which counts by
+ *   the list's own rules): its total is the header's and All's, and each
+ *   filter's is the filter's where the server counts every filter of the list
+ *   (`serverFilterTotals`) and they add up to its total, as they do when read
+ *   together; a filter the server does not count (a database from before
+ *   20261117192621) shows no number, and so does every filter of a split that
+ *   no longer adds up. Where a loaded list and the server disagree, either can
+ *   be the older: a later page's creations are kept as they were when the
+ *   first is reread, so one archived elsewhere still counts in the list, while
+ *   the totals come with the first page, and a page loaded after it can be
+ *   newer. The server's numbers are drawn until a refresh reads both again;
  * - no server total (it could not count) once the list has answered: the
  *   header says what is loaded with a "+", and no filter a number;
  * - before anything has answered, no number at all (`total` null), never 0.
@@ -410,6 +417,7 @@ export function getStudioListCounts<Filter extends string>({
   listAnswered,
   listComplete,
   serverTotal,
+  serverFilterTotals = null,
 }: {
   /** What the loaded pages hold, by filter; `all` is the list's own count. */
   loaded: Record<Filter | 'all', number>;
@@ -419,16 +427,37 @@ export function getStudioListCounts<Filter extends string>({
   listComplete: boolean;
   /** The library's total from `/api/profile` (`stats`), or null when unread. */
   serverTotal: number | null;
+  /**
+   * Each filter's total, read with `serverTotal` (`stats.creationsByKind`,
+   * `stats.postsByVisibility`), or null where the server does not count them.
+   */
+  serverFilterTotals?: Partial<Record<Filter, number>> | null;
 }): StudioListCounts<Filter | 'all'> {
   // No filter's total known but All's, which may be unknown too.
   const allKnownOnly = (all: number | null) => Object.fromEntries(
     Object.keys(loaded).map((key) => [key, key === 'all' ? all : null]),
   ) as Record<Filter | 'all', number | null>;
+  // The server's totals: All's, and each filter's where it counts them all and they add up to All's.
+  const serverCounts = (all: number) => {
+    const filters = Object.keys(loaded).filter((key) => key !== 'all') as Filter[];
+    const split = filters.map((key) => serverFilterTotals?.[key]);
+    if (
+      serverFilterTotals === null
+      || !split.every((count): count is number => typeof count === 'number' && Number.isFinite(count))
+      || split.reduce((sum, count) => sum + count, 0) !== all
+    ) {
+      return allKnownOnly(all);
+    }
+    return Object.fromEntries([
+      ['all', all],
+      ...filters.map((key, index) => [key, split[index]]),
+    ]) as Record<Filter | 'all', number | null>;
+  };
   if (listComplete && (serverTotal === null || serverTotal === loaded.all)) {
     return { total: loaded.all, totalIsAtLeast: false, filterTotals: { ...loaded } };
   }
   if (serverTotal !== null) {
-    return { total: serverTotal, totalIsAtLeast: false, filterTotals: allKnownOnly(serverTotal) };
+    return { total: serverTotal, totalIsAtLeast: false, filterTotals: serverCounts(serverTotal) };
   }
   if (listAnswered) {
     return { total: loaded.all, totalIsAtLeast: true, filterTotals: allKnownOnly(null) };
@@ -439,17 +468,48 @@ export function getStudioListCounts<Filter extends string>({
 /**
  * Studio's creation counts, for its header and its media filters
  * (`getStudioListCounts`). The server counts the finished creations
- * (`stats.creations`), not each kind of them.
+ * (`stats.creations`) and, since 20261117192621, each kind of them
+ * (`stats.creationsByKind`), filed as the owner list files a creation: Images,
+ * Videos and Audio say their totals while pages wait.
  */
-export function getStudioCreationCounts(input: {
+export function getStudioCreationCounts({
+  serverKindTotals = null,
+  ...input
+}: {
   /** The finished creations the loaded pages hold, by filter. */
   loaded: Record<CreationMediaFilter, number>;
   listAnswered: boolean;
   listComplete: boolean;
   /** The library's total from `/api/profile` (`stats.creations`), or null when unread. */
   serverTotal: number | null;
+  /** Its kinds (`stats.creationsByKind`), or null where the server does not count them. */
+  serverKindTotals?: OwnerCreationKindTotals | null;
 }): StudioListCounts<CreationMediaFilter> {
-  return getStudioListCounts(input);
+  return getStudioListCounts({ ...input, serverFilterTotals: serverKindTotals });
+}
+
+/** The media filter a creation of a kind is listed under, as Studio's grid files it. */
+export function getCreationMediaKindFilter(kind: 'image' | 'video' | 'audio'): CreationMediaKindFilter {
+  return kind === 'image' ? 'images' : kind === 'video' ? 'videos' : 'audio';
+}
+
+/**
+ * The server's creation totals Studio holds, moved by a change it made to one
+ * finished creation (archived, restored or deleted there): the Active total,
+ * and its kind's where the server counts kinds, so the two still add up.
+ */
+export function moveStudioCreationTotals(
+  stats: OwnerProfileStats,
+  kind: CreationMediaKindFilter,
+  delta: number,
+): OwnerProfileStats {
+  return {
+    ...stats,
+    creations: Math.max(0, stats.creations + delta),
+    ...(stats.creationsByKind
+      ? { creationsByKind: { ...stats.creationsByKind, [kind]: Math.max(0, stats.creationsByKind[kind] + delta) } }
+      : {}),
+  };
 }
 
 /** The Post Library's filters: every live post, one per visibility, and the archived ones. */
@@ -461,11 +521,13 @@ export type StudioPostTotals = Record<StudioPostFilter, number | null>;
 /**
  * The Post Library's counts, for its header ("42 POSTS · 8 ARCHIVED") and its
  * visibility filters together, by the rule of `getStudioListCounts`. The owner
- * list holds every post, archived ones too, so the two totals the server
- * counts (`owner_profile_counts`: `posts`, the live ones, and `archivedPosts`)
- * are each read against the posts loaded on its side of the archive: All and
- * Archived say them while pages wait, and Public, Unlisted and Private, which
- * the server does not count, say no number until every page is loaded.
+ * list holds every post, archived ones too, so the totals the server counts
+ * (`owner_profile_counts`: `posts`, the live ones, split by visibility in
+ * `postsByVisibility`, and `archivedPosts`) are each read against the posts
+ * loaded on its side of the archive: All, Public, Unlisted, Private and
+ * Archived say them while pages wait. A database from before the split
+ * (20261117192621) leaves Public, Unlisted and Private no number until every
+ * page is loaded.
  */
 export function getStudioPostCounts({
   loaded,
@@ -480,7 +542,7 @@ export function getStudioPostCounts({
   /** Whether the list's last page is loaded: the server said no page follows it. */
   listComplete: boolean;
   /** The library's totals from `/api/profile` (`stats`), or null when unread. */
-  serverTotals: { posts: number; archivedPosts: number } | null;
+  serverTotals: { posts: number; archivedPosts: number; postsByVisibility?: OwnerPostVisibilityTotals } | null;
 }): { live: StudioTotal; archived: StudioTotal; filterTotals: StudioPostTotals } {
   const { archived: loadedArchived, ...loadedLive } = loaded;
   const live = getStudioListCounts({
@@ -488,6 +550,7 @@ export function getStudioPostCounts({
     listAnswered,
     listComplete,
     serverTotal: serverTotals?.posts ?? null,
+    serverFilterTotals: serverTotals?.postsByVisibility ?? null,
   });
   const archived = getStudioListCounts({
     loaded: { all: loadedArchived },
@@ -499,6 +562,47 @@ export function getStudioPostCounts({
     live: { total: live.total, totalIsAtLeast: live.totalIsAtLeast },
     archived: { total: archived.total, totalIsAtLeast: archived.totalIsAtLeast },
     filterTotals: { ...live.filterTotals, archived: archived.filterTotals.all },
+  };
+}
+
+/** Where a post counts in the server's post totals: under its visibility while it is live, or archived. */
+export interface StudioPostPlace {
+  visibility: 'public' | 'unlisted' | 'private';
+  archivedAt: string | null;
+}
+
+/**
+ * The server's post totals Studio holds, moved by a change it made to one post
+ * (its visibility changed, archived, restored or deleted there): from where the
+ * post counted (`before`) to where it counts now (`after`, null once deleted),
+ * the live or archived total and its visibility's where the server counts them.
+ * The same stats when the post's place did not change.
+ */
+export function moveStudioPostTotals(
+  stats: OwnerProfileStats,
+  before: StudioPostPlace | null,
+  after: StudioPostPlace | null,
+): OwnerProfileStats {
+  const place = (post: StudioPostPlace | null) => (post === null ? null : post.archivedAt ? 'archived' : post.visibility);
+  const from = place(before);
+  const to = place(after);
+  if (from === to) return stats;
+  const step = (key: NonNullable<typeof from>) => (to === key ? 1 : 0) - (from === key ? 1 : 0);
+  const isLive = (key: typeof from) => key !== null && key !== 'archived';
+  const byVisibility = stats.postsByVisibility;
+  return {
+    ...stats,
+    posts: Math.max(0, stats.posts + (isLive(to) ? 1 : 0) - (isLive(from) ? 1 : 0)),
+    archivedPosts: Math.max(0, stats.archivedPosts + step('archived')),
+    ...(byVisibility
+      ? {
+        postsByVisibility: {
+          public: Math.max(0, byVisibility.public + step('public')),
+          unlisted: Math.max(0, byVisibility.unlisted + step('unlisted')),
+          private: Math.max(0, byVisibility.private + step('private')),
+        },
+      }
+      : {}),
   };
 }
 

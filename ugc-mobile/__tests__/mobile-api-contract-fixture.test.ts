@@ -35,7 +35,8 @@ import {
   profileFailedGenerationsQueryOptions,
   selectFailedCreations,
 } from '../lib/profile-media-query';
-import { getOwnerCreationScopeCounts } from '../lib/profile-view-model';
+import { applyProfileStatsDelta } from '../lib/profile-stats';
+import { getOwnerCreationScopeCounts, getProfileScopeTotal } from '../lib/profile-view-model';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
 import { getShowcaseRemixAccess } from '../lib/showcase-remix-access';
 import type {
@@ -895,6 +896,21 @@ describe('mobile shared API v1 contract fixture', () => {
       active: stats.creations,
       failed: stats.failedCreations,
       archived: stats.archivedCreations,
+    });
+  });
+
+  // The profile read also carries the web Studio's splits of two totals (`creationsByKind`,
+  // `postsByVisibility`, 20261117192621), which the app does not draw: its header, its scope
+  // chips and the totals it moves read the totals alone, and a move leaves the splits as sent.
+  it("reads the profile read's totals the same with the web Studio's splits beside them", () => {
+    const profile = mobileApiContract.endpoints.getProfile.response;
+
+    expect(getProfileScopeTotal(profile.stats, 'Creations')).toBe(profile.stats.creations);
+    expect(getProfileScopeTotal(profile.stats, 'Posts')).toBe(profile.stats.posts);
+    expect(applyProfileStatsDelta(profile, { creations: -1, posts: 1 }).stats).toEqual({
+      ...profile.stats,
+      creations: profile.stats.creations - 1,
+      posts: profile.stats.posts + 1,
     });
   });
 

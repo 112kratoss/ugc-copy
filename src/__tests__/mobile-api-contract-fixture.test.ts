@@ -22,6 +22,7 @@ import {
 } from '@/lib/mobile-client-compatibility';
 import { MobileCommerceError, unlockPostResourceBundleWithCredits } from '@/lib/mobile-commerce';
 import { listOwnerPostsForRoute } from '@/lib/owner-post-list-route-service';
+import { parseOwnerProfileCounts } from '@/lib/owner-profile-counts';
 import { readPostMedia, resetPostMediaSignaturesForTests } from '@/lib/post-media-read-service';
 import { getPostMediaRouteResponse } from '@/lib/post-media-route-adapter-service';
 import { POST_RESOURCE_FILE_URL_BATCH_LIMIT } from '@/lib/post-resource-bundles';
@@ -1338,6 +1339,20 @@ describe('shared mobile API v1 contract fixture', () => {
 
     const told = await read(storedRow('2026-10-19T09:00:00.000Z'));
     expect(told.body).toHaveProperty('saverNoticeSeen', true);
+  });
+
+  // Studio's filters read two splits of the totals (owner_profile_counts, 20261117192621); the
+  // app reads the totals alone. Each split adds up to the total it splits, as the database
+  // counts them, and the route reads the fixture's counts back as they are.
+  it("answers the profile read with Studio's splits of the totals, each adding up to its total", () => {
+    const stats = mobileApiContract.endpoints.getProfile.response.stats;
+    const sum = (split: Record<string, number>) => Object.values(split).reduce((total, count) => total + count, 0);
+
+    expect(Object.keys(stats.creationsByKind)).toEqual(['images', 'videos', 'audio']);
+    expect(sum(stats.creationsByKind)).toBe(stats.creations);
+    expect(Object.keys(stats.postsByVisibility)).toEqual(['public', 'unlisted', 'private']);
+    expect(sum(stats.postsByVisibility)).toBe(stats.posts);
+    expect(parseOwnerProfileCounts(stats)).toEqual(stats);
   });
 
   // Both answers of a credit unlock say what stays spendable, and the refusal
