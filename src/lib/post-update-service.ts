@@ -1627,6 +1627,12 @@ export async function updateOwnerPostForRoute({
 
     const requestedVisibility = normalizeVisibility(body.visibility);
     const nextVisibility = requestedVisibility ?? normalizeVisibility(post.visibility) ?? 'private';
+    // The bar this save's content is held to (review, 2026-11-17). A save that
+    // names no visibility leaves the stored one, which another request may have
+    // made public since this one read the post, so it is checked as a public
+    // save unless it says private: the safety check, a remix's recipe terms and
+    // the marketplace quality gate below. The composers always name one.
+    const checkedAsPublic = requestedVisibility !== 'private';
 
     const nextCategory =
       post.post_format === 'text'
@@ -1706,7 +1712,7 @@ export async function updateOwnerPostForRoute({
       });
     }
     const titleReplacedForRecipe = nextTitle !== titleAsGiven;
-    const frozenSoldBundleForRepublish = nextVisibility === 'public'
+    const frozenSoldBundleForRepublish = checkedAsPublic
       && !hasResourceBundlePayload
       && liveBundle
       && recipeHasHolders(liveBundle)
@@ -1735,7 +1741,7 @@ export async function updateOwnerPostForRoute({
     // breaks them (made before this rule) is not refused, and Remix and free
     // claims stay closed on such a post meanwhile (remix-access.ts and the free
     // unlock).
-    if (nextVisibility === 'public' && (hasResourceBundlePayload || post.visibility !== 'public')) {
+    if (checkedAsPublic && (hasResourceBundlePayload || post.visibility !== 'public')) {
       const remixTermsRefusal = getRemixRecipeTermsRefusalBody(
         { mode: isRemixRecipeMode(post.remix_recipe_mode) ? post.remix_recipe_mode : null },
         hasResourceBundlePayload ? resourceBundle?.accessMode : liveBundle?.access_mode,
@@ -1744,7 +1750,7 @@ export async function updateOwnerPostForRoute({
         return { ok: false, status: 400, body: remixTermsRefusal };
       }
     }
-    const safetyViolation = nextVisibility !== 'private'
+    const safetyViolation = checkedAsPublic
       ? getPublicUgcSafetyViolation({
           title: nextTitle,
           description: nextDescription,
@@ -1853,14 +1859,15 @@ export async function updateOwnerPostForRoute({
       updatePayload.source_tool_slug = normalizedSourceTool.slug;
     }
 
-    const marketplaceQualityError = nextVisibility === 'public'
+    const marketplaceQualityError = checkedAsPublic
       ? await resolvedDependencies.getMarketplaceQualityErrorForPostBundle({
           supabase: adminSupabase,
           ownerUserId,
           post: {
             title: nextTitle,
             body: nextBody,
-            visibility: nextVisibility,
+            // Checked as the public post it may be, whatever the read said.
+            visibility: 'public',
             archivedAt: post.archived_at,
             reviewStatus: post.review_status ?? 'visible',
             showcaseAssetPath: post.showcase_asset_path,

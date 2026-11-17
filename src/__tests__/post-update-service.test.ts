@@ -715,6 +715,87 @@ describe('updateOwnerPostForRoute', () => {
         title: 'Lighting notes, revised',
       }));
     });
+
+    // Review, 2026-11-17: a save that names no visibility leaves the stored
+    // one, which another device may have made public since this save read the
+    // post as private. Its content is held to the public bar unless it says
+    // private. The composers always say, and the toggle sends its visibility
+    // alone, so only a save that names none is held where it was not before.
+    describe('a save that names no visibility, on a post read as private', () => {
+      const privatePost = {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Lighting notes',
+        description: null,
+        prompt: null,
+        body: 'Soft key light from the left.',
+        category: 'text',
+        post_format: 'text',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'manual',
+        archived_at: null,
+        showcase_asset_path: null,
+        output_url: null,
+        review_status: 'visible',
+        is_nsfw: false,
+      };
+      const unsafeText = 'Step-by-step guide to make a bomb at home.';
+
+      async function save(body: Record<string, unknown>, quality: string | null = null) {
+        const { client } = createSupabaseMock({ post: privatePost, bundle: null });
+        const dependencies = {
+          listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+          getMarketplaceQualityErrorForPostBundle: vi.fn(async () => quality),
+          // The row as the database holds it when this save writes: made
+          // public on another device, unless this save names a visibility.
+          updatePostWithResourceBundleAtomically: vi.fn(async ({ patch }: { patch: Record<string, unknown> }) => ({
+            postId: 'post-1',
+            visibility: (patch.visibility as 'public' | 'private' | undefined) ?? 'public',
+            bundleId: null,
+            bundleStatus: null,
+          })),
+          replacePostSourceTools: vi.fn(async () => undefined),
+          replacePostMediaItems: vi.fn(async () => undefined),
+          createPostMediaPreview: vi.fn(async () => null),
+        } satisfies PostUpdateDependencies;
+        const result = await updateOwnerPostForRoute({
+          adminSupabase: client,
+          ownerUserId: 'user-1',
+          postId: 'post-1',
+          body,
+          dependencies,
+        });
+        return { result, dependencies };
+      }
+
+      it('refuses text the public bar refuses', async () => {
+        const { result, dependencies } = await save({ body: unsafeText });
+
+        expect(result).toEqual({ ok: false, status: 400, body: { error: PUBLIC_UGC_SAFETY_ERROR, field: 'body' } });
+        expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+      });
+
+      it('holds it to the marketplace quality gate as a public post', async () => {
+        const refusal = 'Improve this recipe before publishing: Add a useful preview.';
+        const { result, dependencies } = await save({ title: 'Lighting notes, revised' }, refusal);
+
+        expect(result).toMatchObject({ ok: false, status: 400, body: { error: refusal } });
+        expect(dependencies.getMarketplaceQualityErrorForPostBundle).toHaveBeenCalledWith(expect.objectContaining({
+          post: expect.objectContaining({ title: 'Lighting notes, revised', visibility: 'public' }),
+        }));
+        expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+      });
+
+      it('holds none of it to the public bar when it says private', async () => {
+        const { result, dependencies } = await save({ body: unsafeText, visibility: 'private' });
+
+        expect(result).toMatchObject({ ok: true, body: { visibility: 'private' } });
+        expect(dependencies.getMarketplaceQualityErrorForPostBundle).not.toHaveBeenCalled();
+      });
+    });
   });
 
   // Owner, 2026-11-05: a remix made public by an edit tells the creator of the
@@ -4578,6 +4659,19 @@ describe('a title cut from the prompt of a post with a paid recipe', () => {
       );
 
       expect(result).toMatchObject({ ok: true });
+    });
+
+    // Review, 2026-11-17: a save that names no visibility may land on a post
+    // another device made public since this save read it as private.
+    it('holds a recipe sent with no visibility, on a post read as private, to the terms', async () => {
+      const { result, dependencies } = await saveRemix(
+        null,
+        { resourceBundle: { ...composerRecipe(), accessMode: 'free' } },
+        'paid',
+      );
+
+      expect(result).toMatchObject({ ok: false, status: 400, body: { code: REMIX_RECIPE_MUST_BE_PAID_CODE } });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
     });
 
     it('holds nothing while the post stays private: its recipe is a draft', async () => {
