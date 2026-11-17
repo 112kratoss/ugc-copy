@@ -5647,9 +5647,7 @@ describe('NewPostClient', () => {
       });
 
       render(<NewPostClient />);
-      await waitFor(() => {
-        expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
-      });
+      await waitForCreationPrompt('Window display still');
 
       expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
       expect(screen.queryByRole('radio', { name: /no recipe/i })).not.toBeInTheDocument();
@@ -5782,9 +5780,7 @@ describe('NewPostClient', () => {
       });
 
       render(<NewPostClient />);
-      await waitFor(() => {
-        expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
-      });
+      await waitForCreationPrompt('Window display still');
       expect(screen.queryByRole('checkbox', { name: /include creation references/i })).not.toBeInTheDocument();
       expect(screen.queryByRole('list', { name: 'Saved inputs' })).not.toBeInTheDocument();
 
@@ -5854,9 +5850,7 @@ describe('NewPostClient', () => {
       });
 
       render(<NewPostClient />);
-      await waitFor(() => {
-        expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
-      });
+      await waitForCreationPrompt('Window display still');
       fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
       // In by default (owner, 2026-11-05), and out again with the box.
       expect(screen.getByText('Creation references · 1 file')).toBeInTheDocument();
