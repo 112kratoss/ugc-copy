@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import ts from 'typescript';
@@ -27,7 +28,8 @@ import { describe, expect, it } from 'vitest';
  * Next's own `revalidateTag`, `revalidatePath` and `updateTag` are imported
  * by those two modules alone, where each tag keeps one profile
  * (`PUBLIC_PAGE_CACHE_TAG` says why): no other file may import them from
- * `next/cache`, by name, renamed, as the whole module or through `require`.
+ * `next/cache`, or from any path that resolves to it or to the module behind
+ * it, by name, renamed, as the whole module or through `require`.
  *
  * A use is a reference in code, read with the TypeScript parser (comments,
  * types and plain imports are not uses): a call, a member read named after the
@@ -37,6 +39,12 @@ import { describe, expect, it } from 'vitest';
  * that name (`invalidateShowcaseFeedCache = defaultInvalidateShowcaseFeedCache`,
  * `(options.invalidateShowcaseFeedCacheOnly ?? invalidateShowcaseFeedCacheOnly)()`),
  * or as a property of that name, so every call through it is counted here.
+ *
+ * A key named after a helper holds that helper (review, 2026-11-17): a
+ * property, a default, an assignment or a function of that name whose value
+ * is anything else (`{ invalidateShowcaseFeedCache: () => {} }`) would turn a
+ * write's invalidation off unseen, and fails outright. A member read by a
+ * string key (`options['invalidateShowcaseFeedCache']`) counts as one by name.
  *
  * A file whose uses change fails until its row is brought up to date, with
  * what the new use is for; a hand-on under another name fails outright.
@@ -176,11 +184,51 @@ function sourceFiles(directory: string): string[] {
 }
 
 const isName = (text: string): text is Name => (NAMES as readonly string[]).includes(text);
+type Helper = typeof HELPERS[number];
+const isHelper = (text: string): text is Helper => (HELPERS as readonly string[]).includes(text);
 
-/** The name an expression is read by: an identifier's, or a member read's last name. */
+function resolveFrom(file: string, specifier: string): string | null {
+  try {
+    return fs.realpathSync(createRequire(file).resolve(specifier));
+  } catch {
+    return null;
+  }
+}
+
+/** The files Next's invalidators come from: `next/cache` and the module it requires them from. */
+const NEXT_INVALIDATION_MODULES = new Set(
+  ['next/cache', 'next/dist/server/web/spec-extension/revalidate', 'next/dist/esm/server/web/spec-extension/revalidate']
+    .map((specifier) => resolveFrom(path.join(ROOT, 'package.json'), specifier))
+    .filter((resolved): resolved is string => resolved !== null),
+);
+
+/** Whether a module specifier reaches Next's invalidators: `next/cache`, or a path resolving to one of their files. */
+function isNextInvalidationModule(specifier: string, file: string): boolean {
+  if (specifier === 'next/cache') return true;
+  if (!/(^|[\\/])next([\\/]|$)/.test(specifier)) return false;
+  const resolved = resolveFrom(path.join(ROOT, file), specifier);
+  return resolved !== null && NEXT_INVALIDATION_MODULES.has(resolved);
+}
+
+/** The text of a member read's string key: `options['invalidateShowcaseFeedCache']`. */
+function elementKey(node: ts.Node): string | null {
+  return ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression)
+    ? node.argumentExpression.text
+    : null;
+}
+
+/** The name an expression is read by: an identifier's, or a member read's last name, by name or by string key. */
 function nameOf(node: ts.Node): string | null {
   if (ts.isIdentifier(node)) return node.text;
   if (ts.isPropertyAccessExpression(node)) return node.name.text;
+  return elementKey(node);
+}
+
+/** The name a key is written under: an identifier, a string, or a computed string. */
+function keyOf(name: ts.Node | undefined): string | null {
+  if (!name) return null;
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) return name.text;
+  if (ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression)) return name.expression.text;
   return null;
 }
 
@@ -204,24 +252,25 @@ function analyse(file: string, source: string): Analysis {
   // Local names that stand for a helper under another name: renamed imports and bindings.
   const aliases = new Map<string, Name>();
 
-  const refuseNextCache = (node: ts.Node, how: string) => {
-    if (!isCacheModule) violations.push(`${at(node)} ${how} 'next/cache' outside the two cache modules`);
+  const refuseNextCache = (node: ts.Node, how: string, specifier: string) => {
+    if (!isCacheModule) violations.push(`${at(node)} ${how} '${specifier}' outside the two cache modules`);
   };
 
   const declarations = (node: ts.Node) => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      const fromNextCache = node.moduleSpecifier.text === 'next/cache';
+      const specifier = node.moduleSpecifier.text;
+      const fromNextCache = isNextInvalidationModule(specifier, file);
       const clause = node.importClause;
-      if (fromNextCache && clause?.name) refuseNextCache(node, 'imports the default of');
+      if (fromNextCache && clause?.name) refuseNextCache(node, 'imports the default of', specifier);
       if (fromNextCache && clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
-        refuseNextCache(node, 'imports the whole of');
+        refuseNextCache(node, 'imports the whole of', specifier);
       }
       if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
         for (const element of clause.namedBindings.elements) {
           const original = (element.propertyName ?? element.name).text;
           if (!isName(original)) continue;
           if (fromNextCache && (NEXT_INVALIDATORS as readonly string[]).includes(original)) {
-            refuseNextCache(element, `imports ${original} from`);
+            refuseNextCache(element, `imports ${original} from`, specifier);
           }
           if (element.propertyName && element.propertyName.text !== element.name.text) {
             aliases.set(element.name.text, original);
@@ -231,8 +280,9 @@ function analyse(file: string, source: string): Analysis {
       }
     }
     if (ts.isExportDeclaration(node)) {
-      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === 'next/cache') {
-        refuseNextCache(node, 're-exports from');
+      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)
+        && isNextInvalidationModule(node.moduleSpecifier.text, file)) {
+        refuseNextCache(node, 're-exports from', node.moduleSpecifier.text);
       }
       if (node.exportClause && ts.isNamedExports(node.exportClause)) {
         for (const element of node.exportClause.elements) {
@@ -252,13 +302,56 @@ function analyse(file: string, source: string): Analysis {
       }
     }
     if (ts.isCallExpression(node) && node.arguments.length > 0 && ts.isStringLiteral(node.arguments[0])
-      && node.arguments[0].text === 'next/cache'
-      && ((ts.isIdentifier(node.expression) && node.expression.text === 'require') || node.expression.kind === ts.SyntaxKind.ImportKeyword)) {
-      refuseNextCache(node, ts.isIdentifier(node.expression) ? 'requires' : 'imports at run time');
+      && ((ts.isIdentifier(node.expression) && node.expression.text === 'require') || node.expression.kind === ts.SyntaxKind.ImportKeyword)
+      && isNextInvalidationModule(node.arguments[0].text, file)) {
+      refuseNextCache(node, ts.isIdentifier(node.expression) ? 'requires' : 'imports at run time', node.arguments[0].text);
     }
     ts.forEachChild(node, declarations);
   };
   declarations(parsed);
+
+  /** Whether an expression is the helper itself: its import, a renamed one, a member read of its name, or a fallback between those. */
+  const isTheHelper = (expression: ts.Expression, helper: Helper): boolean => {
+    let inner: ts.Expression = expression;
+    while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+    if (ts.isIdentifier(inner)) return inner.text === helper || aliases.get(inner.text) === helper;
+    if (ts.isPropertyAccessExpression(inner) || ts.isElementAccessExpression(inner)) return nameOf(inner) === helper;
+    if (ts.isBinaryExpression(inner)
+      && (inner.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || inner.operatorToken.kind === ts.SyntaxKind.BarBarToken)) {
+      return isTheHelper(inner.left, helper) && isTheHelper(inner.right, helper);
+    }
+    return false;
+  };
+
+  // Keys named after a helper must hold it: anything else would turn the
+  // invalidation of whatever reads that key off. The cache modules declare them.
+  const keys = (node: ts.Node) => {
+    const holds = (key: string | null, value: ts.Expression | undefined, what: (key: string) => string) => {
+      if (key && isHelper(key) && value && !isTheHelper(value, key)) {
+        violations.push(`${at(node)} ${what(key)} a value that is not ${key}`);
+      }
+    };
+    if (ts.isPropertyAssignment(node)) holds(keyOf(node.name), node.initializer, (key) => `gives the property ${key}`);
+    if (ts.isShorthandPropertyAssignment(node)) holds(node.name.text, node.objectAssignmentInitializer, (key) => `defaults ${key} to`);
+    if (ts.isBindingElement(node)) holds(keyOf(node.propertyName ?? node.name), node.initializer, (key) => `defaults ${key} to`);
+    if (ts.isParameter(node) || ts.isPropertyDeclaration(node)) holds(keyOf(node.name), node.initializer, (key) => `defaults ${key} to`);
+    if (ts.isVariableDeclaration(node)) holds(keyOf(node.name), node.initializer, (key) => `binds ${key} to`);
+    if (ts.isBinaryExpression(node) && [
+      ts.SyntaxKind.EqualsToken,
+      ts.SyntaxKind.QuestionQuestionEqualsToken,
+      ts.SyntaxKind.BarBarEqualsToken,
+      ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+    ].includes(node.operatorToken.kind)) {
+      holds(nameOf(node.left), node.right, (key) => `assigns ${key}`);
+    }
+    if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isFunctionExpression(node)
+      || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) && node.name) {
+      const key = keyOf(node.name);
+      if (key && isHelper(key)) violations.push(`${at(node)} declares its own ${key}`);
+    }
+    ts.forEachChild(node, keys);
+  };
+  if (!isCacheModule) keys(parsed);
 
   /** Whether a reference is a declaration, an import or export name, a type or an object key. */
   const isDeclarationName = (node: ts.Identifier): boolean => {
@@ -304,7 +397,7 @@ function analyse(file: string, source: string): Analysis {
       if (parent.name.text !== helper) violations.push(`${at(reference)} hands ${helper} on as the property ${parent.name.text}`);
       return;
     }
-    if (ts.isPropertyAccessExpression(target) && ts.isPropertyAccessExpression(parent) === false) {
+    if ((ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) && ts.isPropertyAccessExpression(parent) === false) {
       // `dependencies.invalidateShowcaseFeedCache` read on its own, outside a call or a fallback.
       violations.push(`${at(reference)} reads ${helper} outside a call`);
       return;
@@ -313,6 +406,12 @@ function analyse(file: string, source: string): Analysis {
   };
 
   const references = (node: ts.Node) => {
+    // `options['invalidateShowcaseFeedCache']`, read as the member read by name it is.
+    const keyed = elementKey(node);
+    if (keyed && isName(keyed)) {
+      count(keyed);
+      if (!isCacheModule || !(NEXT_INVALIDATORS as readonly string[]).includes(keyed)) checkHandOn(node, keyed);
+    }
     if (ts.isIdentifier(node)) {
       const helper = isName(node.text) ? node.text : aliases.get(node.text);
       const parent = node.parent;
@@ -337,7 +436,8 @@ function scan(): { found: Record<string, Partial<Record<Name, number>>>; violati
   for (const directory of SCANNED) {
     for (const absolute of sourceFiles(path.join(ROOT, directory))) {
       const source = fs.readFileSync(absolute, 'utf8');
-      if (!NAMES.some((name) => source.includes(name)) && !source.includes('next/cache')) continue;
+      // Every helper's name and every path to Next's invalidators has one of these in it.
+      if (!NAMES.some((name) => source.includes(name)) && !source.includes('next/cache') && !source.includes('revalidate')) continue;
       const file = path.relative(ROOT, absolute).split(path.sep).join('/');
       const analysis = analyse(file, source);
       if (Object.keys(analysis.uses).length > 0) found[file] = analysis.uses;
@@ -399,8 +499,46 @@ describe('every write that invalidates a cached feed or public page is classifie
       ['a helper kept in a variable', "import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';\nconst wipe = invalidateShowcaseFeedCache;\nexport const f = () => wipe();", /hands invalidateShowcaseFeedCache on as wipe/],
       ['a helper passed as an argument', "import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';\nexport const f = (later: (task: () => void) => void) => later(invalidateShowcaseFeedCache);", /hands invalidateShowcaseFeedCache on \(CallExpression\)/],
       ['a helper re-exported under another name', "export { invalidateShowcaseFeedCache as wipe } from '@/lib/showcase-feed-cache';", /re-exports invalidateShowcaseFeedCache as wipe/],
+      // Review, 2026-11-17: what a write path reads under a helper's name must be that helper.
+      ['a non-helper under a helper’s key', "import { deleteOwnerGenerationForRoute } from '@/lib/generation-delete-service';\nexport const f = () => deleteOwnerGenerationForRoute({ invalidateShowcaseFeedCache: () => {} } as never);", /gives the property invalidateShowcaseFeedCache a value that is not invalidateShowcaseFeedCache/],
+      ['a non-helper under a helper’s string key', "export const f = (run: (options: object) => void) => run({ 'invalidateShowcaseFeedCacheOnly': () => {} });", /gives the property invalidateShowcaseFeedCacheOnly a value/],
+      ['a non-helper as a helper’s default', "export function f({ invalidateShowcaseFeedCache = () => {} }: { invalidateShowcaseFeedCache?: () => void } = {}) { invalidateShowcaseFeedCache(); }", /defaults invalidateShowcaseFeedCache to a value that is not/],
+      ['a variable of a helper’s name bound to a non-helper', "const invalidateShowcaseFeedCacheOnly = () => {};\nexport const f = (run: (options: object) => void) => run({ invalidateShowcaseFeedCacheOnly });", /binds invalidateShowcaseFeedCacheOnly to a value that is not/],
+      ['a function of a helper’s name', "export function invalidateShowcaseFeedAndRefreshEveryPage() {}", /declares its own invalidateShowcaseFeedAndRefreshEveryPage/],
+      ['a helper read by a string key and kept', "export const f = (dependencies: Record<string, () => void>) => { const wipe = dependencies['invalidateShowcaseFeedCache']; wipe(); };", /hands invalidateShowcaseFeedCache on as wipe/],
+      ['revalidateTag from the module behind next/cache', "import { revalidateTag } from 'next/dist/server/web/spec-extension/revalidate';\nexport const f = () => revalidateTag('x', 'max');", /imports revalidateTag from 'next\/dist\/server\/web\/spec-extension\/revalidate'/],
+      ['next/cache by its file name', "import { updateTag } from 'next/cache.js';\nexport const f = () => updateTag('x');", /imports updateTag from 'next\/cache\.js'/],
+      ['the ESM module behind next/cache through require', "const { revalidatePath } = require('next/dist/esm/server/web/spec-extension/revalidate');\nexports.f = () => revalidatePath('/');", /requires 'next\/dist\/esm\/server\/web\/spec-extension\/revalidate'/],
     ])('refuses %s', (_name, source, refusal) => {
       expect(analyse('src/lib/probe.ts', source).violations).toEqual([expect.stringMatching(refusal)]);
+    });
+
+    it('refuses a non-helper assigned to a helper’s key, and the read that makes it', () => {
+      expect(analyse('src/lib/probe.ts', lines(
+        'export function f(options: { invalidateShowcaseFeedCache?: () => void }) {',
+        '  options.invalidateShowcaseFeedCache = () => {};',
+        '}',
+      )).violations).toEqual([
+        expect.stringMatching(/assigns invalidateShowcaseFeedCache a value that is not invalidateShowcaseFeedCache/),
+        expect.stringMatching(/reads invalidateShowcaseFeedCache outside a call/),
+      ]);
+    });
+
+    it('counts a member read by a string key as one by name', () => {
+      expect(analyse('src/lib/probe.ts', lines(
+        "import * as cacheModule from '@/lib/showcase-feed-cache';",
+        'export const f = (dependencies: { invalidateShowcaseFeedCache?: () => void }) =>',
+        "  (dependencies['invalidateShowcaseFeedCache'] ?? cacheModule.invalidateShowcaseFeedCache)();",
+      ))).toEqual({ uses: { invalidateShowcaseFeedCache: 2 }, violations: [] });
+    });
+
+    it("finds the files Next's invalidators come from, so a path to them is refused", () => {
+      const found = [...NEXT_INVALIDATION_MODULES].map((file) => file.split(path.sep).join('/'));
+      expect(found).toEqual([
+        expect.stringMatching(/\/next\/cache\.js$/),
+        expect.stringMatching(/\/next\/dist\/server\/web\/spec-extension\/revalidate\.js$/),
+        expect.stringMatching(/\/next\/dist\/esm\/server\/web\/spec-extension\/revalidate\.js$/),
+      ]);
     });
 
     it('follows a renamed import and a renamed binding as the helper', () => {
