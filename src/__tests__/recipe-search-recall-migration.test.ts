@@ -183,7 +183,8 @@ describe('recipe search recall migration', () => {
     expect(oneArgument?.[0]).toMatch(/AS \$function\$\s+SELECT public\.search_corrected_query\(p_query, false\);\s+\$function\$;$/);
     expect(newestDefinition('search_corrected_query').file).toBe(MIGRATION);
     const posts = newestDefinition('search_public_posts');
-    expect(posts.file).toBe('20261112174210_search_entities_filters_corrected_reading.sql');
+    // Re-created since for whole words first (20261116200234), with its correction as it was.
+    expect(posts.file).toBe('20261116200234_search_whole_words_first.sql');
     expect(posts.definition).toContain('v_corrected := public.search_corrected_query(v_query);');
     // Recipe search, in the list and the recheck, reads recipes' words.
     for (const name of ['list_marketplace_resource_bundles', 'marketplace_search_texts_match']) {

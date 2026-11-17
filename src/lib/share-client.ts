@@ -22,6 +22,49 @@ export function withSharersInvite(url: string): string {
   return withInviteShareCode(url, currentInviteShareCode());
 }
 
+/**
+ * The browser took the link neither way: its share sheet refused it (refused, not dismissed) and
+ * so did the clipboard, or it has neither. By the time the sheet says no it has spent the click's
+ * activation, and a clipboard that wants one refuses the write too ("Write permission denied" in
+ * an embedded Chromium; in-app browsers and webviews alike), so trying again ends the same way.
+ * The link rides on the error for the person to copy by hand (`ShareLinkSheet`): with Copy link,
+ * a press of its own (`copyLinkToClipboard`), or with their own copy of the field. Nothing was
+ * shared, so nothing is counted until then.
+ */
+export class ShareLinkRefusedError extends Error {
+  readonly url: string;
+  /**
+   * Counts the share as a copied link once the person has the link, for what it was shared for as
+   * the share was made: the button that asked may be showing another post by then (the reel moves
+   * on), and the count goes with the link in the sheet.
+   */
+  readonly countCopy: () => Promise<void>;
+
+  constructor(url: string, countCopy: () => Promise<void>, cause: unknown) {
+    super('The browser refused both its share sheet and the clipboard', { cause });
+    this.name = 'ShareLinkRefusedError';
+    this.url = url;
+    this.countCopy = countCopy;
+  }
+}
+
+/** The link onto the clipboard; throws where the browser has none or refuses the write. */
+export async function copyLinkToClipboard(url: string): Promise<void> {
+  if (!navigator.clipboard?.writeText) {
+    throw new Error('Clipboard sharing is not supported in this browser');
+  }
+  await navigator.clipboard.writeText(url);
+}
+
+/** The share's last way out: the clipboard, or the link handed back for a copy by hand. */
+async function copyLinkOrHandBack(url: string, countCopy: () => Promise<void>) {
+  try {
+    await copyLinkToClipboard(url);
+  } catch (error) {
+    throw new ShareLinkRefusedError(url, countCopy, error);
+  }
+}
+
 async function postShareClick({
   generationId,
   sourceSurface,
@@ -143,17 +186,14 @@ export async function sharePublicGeneration({
     }
   }
 
-  if (!navigator.clipboard?.writeText) {
-    throw new Error('Clipboard sharing is not supported in this browser');
-  }
-
-  await navigator.clipboard.writeText(url);
-  await postShareClick({
+  const countCopy = () => postShareClick({
     generationId,
     sourceSurface,
     channel: 'copy-link',
     accessToken,
   });
+  await copyLinkOrHandBack(url, countCopy);
+  await countCopy();
   return 'copy-link';
 }
 
@@ -206,16 +246,13 @@ export async function shareCreatorProfile({
     }
   }
 
-  if (!navigator.clipboard?.writeText) {
-    throw new Error('Clipboard sharing is not supported in this browser');
-  }
-
-  await navigator.clipboard.writeText(url);
-  await postProfileShareClick({
+  const countCopy = () => postProfileShareClick({
     username,
     sourceSurface,
     channel: 'copy-link',
     accessToken,
   });
+  await copyLinkOrHandBack(url, countCopy);
+  await countCopy();
   return 'copy-link';
 }

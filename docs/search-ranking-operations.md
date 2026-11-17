@@ -149,17 +149,48 @@ To change one:
 A change to the word order itself (`search_public_posts`, `search_post_score`) changes the blended
 order too, since the word list is that function's rows: run the check for it as well.
 
+### Whole words first (the word order, since 2026-11-17)
+
+`search_public_posts` finds a post that holds the query's last word as a prefix (`cat` in catwalk,
+category, cathedral: results must not come and go while a word is typed), that holds the query as a
+run of characters anywhere (`cat` in delicate, intricate, location) and whose title or tool nearly
+spells it. Those posts stay found, but since migration `20261116200234_search_whole_words_first.sql`
+they rank under every post that holds the query's words whole (each a word of its own, or its
+english stem: "cats" holds "cat"): `search_post_score` takes `p_whole_words`, and a partial match
+falls 30 under the tier its match would have had, so its best (a title starting with the letters,
+-10) is a whole tier under the least whole match (a caption, 0), and the partial tiers keep the order
+they had among themselves (a word still being typed, "portr", is ranked as before). A title starts
+with the query only where what follows it is no letter, digit or hyphen (the ASCII one, U+2010, or
+U+2011, the non-breaking hyphen assistants write compounds with; an en dash still ends a word): a
+hyphen joins a compound, so "Cat-eye sunglasses" holds "cat" as a word of its title (10, the parser
+splits the compound) and ranks under "Cat on a windowsill" (20). Before it a one-word search, which is never blended, put a
+new or saved post that said "delicate", or a title "Category winners", above older posts about a
+cat: inside a tier freshness (up to 1.0) and engagement (up to 2.5) outweigh the text rank of one
+word in a long prompt. A title that is the query still scores 30 or more and nothing else does,
+which is what `c_exact_title_score` reads.
+
+Related searches (`search_related_searches`), once a post of the page holds the query's words whole,
+leave out the posts search found only by a part of a word, a run of characters or a near-miss (they
+pass the query read with its last word as a prefix, the `ILIKE` or the trigram match, and not the
+whole reading). A post that matches no word of the query, which a blended answer brought by
+meaning, is still read, so a blended page with one whole-word post keeps its related searches. While
+no post of the page holds the words whole (a word still being typed, a page found by meaning alone)
+every post of the page is read, as before. A phrase that holds the query is offered first
+(`docs/production-deployment-runbook.md`, "Search Suggestions").
+`supabase/tests/database/search_whole_words_first.test.sql` holds both on the defect's fixture.
+
 ## The relevance check
 
 A fixed set of synthetic public posts and graded queries, scored in the word order and in the blended
 order. It is the acceptance check for a ranking change: it fails when the blended order is worse.
 
-**The set** (`config/search-relevance/relevance-set.json`): 123 posts over eleven subjects (seascapes,
+**The set** (`config/search-relevance/relevance-set.json`): 127 posts over eleven subjects (seascapes,
 portraits, food, cars, anime, buildings and rooms, product shots, pets, science fiction, fashion, a
 city at night), among them posts whose title says nothing of their subject ("Take 12", "Option B"),
 near-misses that carry a word of another subject ("Sea of clouds", "Hot dog stand", "Catwalk"), posts
-that hold a query's words and are about something else, and four with no words of their own. 75
-queries, each with the posts a person would call relevant at three grades (3 the post asked for, 2
+that hold a query's words and are about something else, four that hold "cat" only inside other
+words ("Category winners", "Catching the bus", "delicate", "intricate", 2026-11-17), and four with no
+words of their own. 77 queries, each with the posts a person would call relevant at three grades (3 the post asked for, 2
 on the subject, 1 near it; an unlisted post is wrong):
 
 | Kind | Queries | What it tests |
@@ -171,7 +202,7 @@ on the subject, 1 near it; an unlisted post is wrong):
 | `noisy` | 2 | many posts hold the words and few are about it |
 | `trap` | 7 | the words are right and one of them means another subject |
 | `off` | 5 | about nothing in the set: every post returned is wrong |
-| `one-word` | 2 | never blended: both orders must be the same |
+| `one-word` | 4 | never blended: both orders must be the same ("cat" and "car" against posts that hold their letters inside other words) |
 
 **What is measured**, per order: nDCG@10 (gain 2^grade - 1), averaged over the queries with a
 relevant post; the share of those queries with a post of grade 2 or 3 among the first five; the mean
@@ -220,38 +251,48 @@ of the blend must reproduce the database's order for every query, and the verdic
 numbers the test pins. A migration that changes a constant fails that test until the check is run
 and recorded again.
 
-### The numbers (2026-11-15, real `gte-small` vectors, 119 of 123 posts embedded)
+### The numbers (2026-11-17, real `gte-small` vectors, 123 of 127 posts embedded)
+
+Recorded with whole words first (`20261116200234`) on the set with "cat", "car" and their traps:
 
 | | Words | Blended |
 |---|---|---|
-| nDCG@10, mean of 70 queries | 0.5410 | 0.7837 |
-| a relevant post in the top 5 | 0.7286 | 0.9714 |
-| relevant posts in the top 5, mean | 1.21 | 2.14 |
-| wrong posts in the top 10, mean | 0.30 | 1.90 |
+| nDCG@10, mean of 72 queries | 0.5468 | 0.7813 |
+| a relevant post in the top 5 | 0.7500 | 0.9722 |
+| relevant posts in the top 5, mean | 1.28 | 2.18 |
+| wrong posts in the top 10, mean | 0.43 | 2.00 |
 | posts returned for 5 queries about nothing | 0 | 0 |
 
 nDCG@10 by kind: exact 0.7394 to 0.8190, model 0.9315 to 0.9743, paraphrase 0.0596 to 0.6978, mixed
-0.6687 to 0.7951, noisy 0.3545 to 0.4841, trap 0.9477 to 0.9588, one-word unchanged. No query scores
-lower blended, and all 15 title matches keep first place.
+0.6784 to 0.7980, noisy 0.4051 to 0.5445, trap 0.9477 to 0.9588, one-word unchanged (0.5879). All 15
+title matches keep first place. One query scores lower blended than by words, "studio light"
+(0.5293 to 0.4887): whole words first lifted its word order (0.3358 before) past its blend (0.4316
+before), and no query of either order scores lower than before the change. On the set as it was
+recorded on 2026-11-15 the change moved nDCG@10 by words from 0.5410 to 0.5452 and blended from
+0.7837 to 0.7863, and nothing else; on the extended set by words from 0.5376 to 0.5468 and blended
+from 0.7736 to 0.7813 ("cat" 0.4784 to 0.7375, "car" 0.3589 to 0.4738). Of that, "cat" 0.6003 to
+0.7375 is the hyphen rule's ("Cat-eye sunglasses" no longer leads it), the only query a title
+starting with a query and a hyphen touches in either set. The runs are in
+`archive/web-sweep-fixes-2026-11-17/search/` of the parent folder.
 
 By similarity floor, at meaning weight 0.9:
 
 | Floor | nDCG@10 | Relevant in top 5 | Wrong in top 10 | Posts for queries about nothing |
 |---|---|---|---|---|
-| 0.80 | 0.8536 | 0.9857 | 3.74 | 1 |
-| 0.81 | 0.8264 | 0.9857 | 2.64 | 0 |
-| **0.82** | **0.7837** | **0.9714** | **1.90** | **0** |
-| 0.83 | 0.7558 | 0.9714 | 1.11 | 0 |
-| 0.84 | 0.6700 | 0.8857 | 0.60 | 0 |
+| 0.80 | 0.8458 | 1.0000 | 3.81 | 1 |
+| 0.81 | 0.8199 | 1.0000 | 2.78 | 0 |
+| **0.82** | **0.7813** | **0.9722** | **2.00** | **0** |
+| 0.83 | 0.7560 | 0.9722 | 1.22 | 0 |
+| 0.84 | 0.6724 | 0.8889 | 0.74 | 0 |
 
 What the blend costs is in that table: `gte-small` scores short texts that share vocabulary high,
 whatever their subject, so at 0.82 almost two of the first ten posts are wrong for the query ("Sea
 of clouds" brings seascapes behind the post of that name). They rank behind the word matches and say
-`matchedBy: "meaning"`. 0.83 is the cautious setting (one wrong post in ten, 0.028 less nDCG); 0.81
+`matchedBy: "meaning"`. 0.83 is the cautious setting (about one wrong post in ten, 0.025 less nDCG); 0.81
 leaves a margin of 0.005 over the nearest post to a query about nothing (0.805), which is none.
 
-The weight barely moves the result on this set (at 0.82, weights 0.5 to 0.95 score 0.7836 to 0.7841;
-1.0 scores 0.7833): word lists of several words are short on a small corpus. 0.9 is set by a rule
+The weight barely moves the result on this set (at 0.82, weights 0.5 to 0.95 score 0.7795 to 0.7813;
+1.0 scores 0.7811): word lists of several words are short on a small corpus. 0.9 is set by a rule
 instead: a meaning-only post at rank *m* outranks a word-only post at rank *r* when
 *r* > 5.56 + 1.11 *m*, so the first six word matches, the number under which the product already
 calls an answer thin, are never displaced by a post that holds no word of the query. The meaning

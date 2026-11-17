@@ -53,7 +53,7 @@ const NO_HAND_OVER: Record<string, string> = {
   'src/app/create-workflow/WorkflowTemplatePublishDrawer.tsx':
     'A drawer of the workflow canvas, loaded with `ssr: false` (CreateWorkflowEntry).',
   'src/app/creations/CreatorProfileCard.tsx':
-    'Its form is the Edit profile dialog, which a click opens after a profile read (ProfileActions); DeferredCreatorProfileCard loads it with `ssr: false`.',
+    'Its form is the Edit profile dialog, which a click opens after a profile read (ProfileActions); on /profile/edit DeferredCreatorProfileCard draws it only once the page has been idle in the browser, never in the server’s HTML.',
   'src/app/delete-account/SignedInAccountDeletion.tsx':
     'Draws nothing until the client’s auth listener has a session.',
   'src/app/invite/InviteClient.tsx':
@@ -81,6 +81,8 @@ const NO_HAND_OVER: Record<string, string> = {
     'The publish panel draws once a run has finished on the client.',
   'src/components/PostComments.tsx':
     'The composer draws for a signed-in user, whom the post page’s server render never has; the report form opens on a click.',
+  'src/components/PublicShareButton.tsx':
+    'Its one field is read-only and draws in the sheet a share the browser refused opens.',
   'src/components/StudioModelPicker.tsx':
     'Its search draws in the model list, which the model chip opens.',
   'src/components/templates/TemplateDetailClient.tsx':

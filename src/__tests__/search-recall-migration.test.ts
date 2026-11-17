@@ -191,11 +191,12 @@ describe('search recall migration', () => {
 
   it('matches posts on the new query, labelled posts still left out, and corrects a query nothing holds', () => {
     // Re-created since by the ranking migration (20261112103547: tiers, an
-    // instant, Latest, blocks) and by the entities and filters migration
-    // (20261112174210: filters, the corrected reading), which must keep every
+    // instant, Latest, blocks), by the entities and filters migration
+    // (20261112174210: filters, the corrected reading) and by the whole-words
+    // migration (20261116200234: whole words first), which must keep every
     // rule below.
     const { file, definition } = newestDefinition('search_public_posts');
-    expect(file).toMatch(/_search_entities_filters_corrected_reading\.sql$/);
+    expect(file).toMatch(/_search_whole_words_first\.sql$/);
     expect(definition).toContain('v_tsquery := public.search_query_tsquery(v_query, true);');
     const match = '    WHERE posts.is_nsfw = false\n'
       + '      AND (\n'

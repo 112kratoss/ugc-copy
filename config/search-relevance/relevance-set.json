@@ -134,7 +134,11 @@
     {"key": "mis-17", "creator": "c5", "title": "Marathon medal", "caption": "Ran the city marathon after a sleepless night", "made": "mb:nano-banana-pro", "kind": "image", "ageDays": 48},
     {"key": "k21-01", "creator": "c1", "title": "Koi pond", "caption": "Orange fish under lily pads", "made": "mb:kling-2.1-master", "kind": "video", "ageDays": 59},
     {"key": "k21-02", "creator": "c2", "title": "Paper lantern festival", "caption": "Hundreds of lights rising over the river", "made": "mb:kling-2.1-master", "kind": "video", "ageDays": 70},
-    {"key": "k21-03", "creator": "c3", "title": "Snowboard trick", "caption": "A backflip off the kicker, powder everywhere", "made": "mb:kling-2.1-master", "kind": "video", "ageDays": 81}
+    {"key": "k21-03", "creator": "c3", "title": "Snowboard trick", "caption": "A backflip off the kicker, powder everywhere", "made": "mb:kling-2.1-master", "kind": "video", "ageDays": 81},
+    {"key": "trp-01", "creator": "c2", "title": "Monsoon girl sticker", "caption": "Sticker of a girl with a delicate paper umbrella and rain drops", "made": "midjourney", "kind": "image", "ageDays": 0},
+    {"key": "trp-02", "creator": "c3", "title": "Heroine in the rain", "caption": "Lightning hero on a rooftop, intricate suit, scattered sparks", "made": "mb:seedream-4.5", "kind": "image", "ageDays": 1},
+    {"key": "trp-03", "creator": "c4", "title": "Category winners", "caption": "Our favourite entries from this month's challenge", "made": "midjourney", "kind": "image", "ageDays": 2},
+    {"key": "trp-04", "creator": "c5", "title": "Catching the bus", "caption": "Commuters running in the morning drizzle", "made": "mb:veo-3.1", "kind": "video", "ageDays": 3}
   ],
   "queries": [
     {"id": "q01", "text": "sea after sunset", "kind": "exact", "exactTitle": "sea-01", "relevant": {"3": ["sea-01"], "2": ["sea-02", "sea-04", "sea-06", "sea-08"], "1": ["sea-03", "sea-05", "sea-07", "sea-09", "mis-09"]}},
@@ -211,6 +215,8 @@
     {"id": "q72", "text": "mortgage interest rates", "kind": "off", "relevant": {}},
     {"id": "q73", "text": "football league table", "kind": "off", "relevant": {}},
     {"id": "q74", "text": "portrait", "kind": "one-word", "relevant": {"2": ["por-01", "por-02", "por-07", "por-03", "por-04", "por-05", "por-06", "por-08"], "1": ["por-09", "pet-05"]}},
-    {"id": "q75", "text": "sunset", "kind": "one-word", "relevant": {"2": ["sea-01", "mis-09", "ani-04"], "1": ["mis-01", "sea-02", "sea-08"]}}
+    {"id": "q75", "text": "sunset", "kind": "one-word", "relevant": {"2": ["sea-01", "mis-09", "ani-04"], "1": ["mis-01", "sea-02", "sea-08"]}},
+    {"id": "q76", "text": "cat", "kind": "one-word", "relevant": {"2": ["pet-03", "pet-08", "mis-11", "pet-01"], "1": ["ani-05"]}},
+    {"id": "q77", "text": "car", "kind": "one-word", "relevant": {"2": ["car-01", "car-02", "car-03", "car-04", "car-05", "car-06", "car-07", "car-08", "mis-04"], "1": ["car-09", "mis-01", "cty-06"]}}
   ]
 }
