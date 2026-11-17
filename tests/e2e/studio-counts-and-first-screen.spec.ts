@@ -13,6 +13,9 @@ import { expect, test, type Locator, type Page, type Route } from '@playwright/t
  *   setup card filled the first screen, and no creation showed in it.
  * - The Post Library, which loads its posts 36 at a time too, counted only the pages loaded in its
  *   header and its visibility filters (#836's note, fixed after it).
+ * - A filter's own total: since 20261117192621 the server splits the creations by kind and the
+ *   live posts by visibility, and each filter says its number while pages wait; a profile without
+ *   the splits, as a database from before them answers, keeps a filter's number for the whole list.
  *
  * Studio reads its data from the browser, so page.route answers each request; nothing here reads
  * Supabase on the server.
@@ -186,6 +189,26 @@ test.describe('Studio with more creations than its first page', () => {
 
     // Every page loaded: each number is the library's.
     await expect(header(page)).toHaveText('54 CREATIONS TOTAL');
+    expect(await filterLabels(page)).toEqual(['All (54)', 'Images (47)', 'Videos (7)']);
+  });
+
+  // owner_profile_counts counts each kind too since 20261117192621 (the owner's ask of 2026-11-17):
+  // a media filter says the library's number while pages wait.
+  test("with the server's kinds, a media filter says its total while pages wait", async ({ page }) => {
+    await page.route('**/api/profile', (route) => json(route, {
+      ...PROFILE,
+      stats: { ...PROFILE.stats, creationsByKind: { images: 47, videos: 7, audio: 0 } },
+    }));
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/creations');
+    await expect(page.getByText('Studio image 2', { exact: true })).toBeVisible(COLD_PAGE);
+
+    await expect(header(page)).toHaveText('54 CREATIONS TOTAL');
+    // A kind with nothing loaded is still no filter.
+    expect(await filterLabels(page)).toEqual(['All (54)', 'Images (47)']);
+
+    await page.getByRole('button', { name: 'Load more creations' }).click();
+    await expect(page.getByText('Studio video 60', { exact: true })).toBeVisible(COLD_PAGE);
     expect(await filterLabels(page)).toEqual(['All (54)', 'Images (47)', 'Videos (7)']);
   });
 
@@ -402,6 +425,37 @@ test.describe("Studio's Post Library with more posts than its first page", () =>
     await expect(header(page)).toHaveText('41 POSTS · 9 ARCHIVED');
     expect(await postFilterLabels(page))
       .toEqual(['All (41)', 'Public (29)', 'Unlisted (1)', 'Private (11)', 'Archived (9)']);
+  });
+
+  // owner_profile_counts counts the live posts by visibility since 20261117192621, which #860 left
+  // for a migration: Public and Private say the library's numbers while pages wait.
+  test("with the server's visibilities, a visibility filter says its total while pages wait", async ({ page }) => {
+    await page.route('**/api/profile', (route) => json(route, {
+      ...PROFILE,
+      stats: {
+        creations: 0,
+        failedCreations: 0,
+        archivedCreations: 0,
+        posts: 42,
+        postsByVisibility: { public: 30, unlisted: 1, private: 11 },
+        archivedPosts: 8,
+        saved: 0,
+      },
+    }));
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/creations?view=posts');
+    await expect(page.getByText('Library post 0', { exact: true })).toBeVisible(COLD_PAGE);
+
+    await expect(header(page)).toHaveText('42 POSTS · 8 ARCHIVED');
+    // Unlisted is a filter only once a post saved as one is loaded.
+    expect(await postFilterLabels(page)).toEqual(['All (42)', 'Public (30)', 'Private (11)', 'Archived (8)']);
+
+    // A post archived here moves from its visibility to the archived total at once, pages waiting.
+    await choosePostAction(page, 'Library post 0', 'Archive post');
+    await page.getByRole('alertdialog', { name: 'Archive this post?' }).getByRole('button', { name: 'Archive' }).click();
+    await expect(page.getByText('Post archived. Find it under Archived.')).toBeVisible();
+    await expect(header(page)).toHaveText('41 POSTS · 9 ARCHIVED');
+    expect(await postFilterLabels(page)).toEqual(['All (41)', 'Public (29)', 'Private (11)', 'Archived (9)']);
   });
 
   // The next page is asked for by offset, the place of its first post in the owner list. A delete

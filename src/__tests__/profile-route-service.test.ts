@@ -34,8 +34,18 @@ const user: ProfileRouteUser = {
   user_metadata: { full_name: 'Creator Metadata', avatar_url: 'https://example.test/avatar.png' },
 };
 
-// The RPC's jsonb since 2026-10-31: the Failed and Archived creations beside the Active ones.
-const COUNTS = { creations: 6, failedCreations: 4, archivedCreations: 2, posts: 3, archivedPosts: 1, saved: 2 };
+// The RPC's jsonb since 2026-11-17: the Active creations split into Studio's media filters and
+// the live posts by visibility, beside the Failed and Archived creations of 2026-10-31.
+const COUNTS = {
+  creations: 6,
+  creationsByKind: { images: 3, videos: 2, audio: 1 },
+  failedCreations: 4,
+  archivedCreations: 2,
+  posts: 3,
+  postsByVisibility: { public: 2, unlisted: 0, private: 1 },
+  archivedPosts: 1,
+  saved: 2,
+};
 // The RPC's jsonb since 2026-10-17: paid sales and free unlocks apart.
 const SALES = { earningsUsdCents: 1250, listingCount: 3, salesCount: 4, freeUnlockCount: 9 };
 
@@ -548,6 +558,43 @@ describe('profile route service', () => {
     expect(stats).toEqual({ creations: 6, posts: 3, archivedPosts: 1, saved: 2 });
     expect(stats).not.toHaveProperty('failedCreations');
     expect(stats).not.toHaveProperty('archivedCreations');
+  });
+
+  it("leaves Studio's splits out while the database does not count them", async () => {
+    // The function as it was before 20261117192621: a 0 here would draw "Videos (0)" over a
+    // library of clips, where Studio draws no number on a total it does not know.
+    const client = createClient({
+      profiles: [storedProfile()],
+      counts: { creations: 6, failedCreations: 4, archivedCreations: 2, posts: 3, archivedPosts: 1, saved: 2 },
+    });
+
+    const result = await getProfileForRoute({ user, client: client.client });
+
+    const stats = result.ok ? (result.response as { stats?: Record<string, unknown> }).stats : undefined;
+    expect(stats).toEqual({ creations: 6, failedCreations: 4, archivedCreations: 2, posts: 3, archivedPosts: 1, saved: 2 });
+  });
+
+  it('keeps every total of a split a whole, non-negative number, and a split it cannot read whole out', async () => {
+    const read = async (counts: Record<string, unknown>) => {
+      const result = await getProfileForRoute({ user, client: createClient({ profiles: [storedProfile()], counts }).client });
+      return result.ok ? (result.response as { stats?: Record<string, unknown> }).stats : undefined;
+    };
+
+    await expect(read({
+      ...COUNTS,
+      creationsByKind: { images: '3', videos: -1, audio: 1.6 },
+      postsByVisibility: { public: 2, unlisted: 0, private: '1' },
+    })).resolves.toMatchObject({
+      creationsByKind: { images: 3, videos: 0, audio: 2 },
+      postsByVisibility: { public: 2, unlisted: 0, private: 1 },
+    });
+    // A split missing one of its totals, or not a split at all, says nothing rather than a 0.
+    for (const broken of [{ images: 3, videos: 2 }, { images: 3, videos: 2, audio: null }, [3, 2, 1], 6, null]) {
+      const stats = await read({ ...COUNTS, creationsByKind: broken, postsByVisibility: broken });
+      expect(stats).toMatchObject({ creations: 6, posts: 3 });
+      expect(stats).not.toHaveProperty('creationsByKind');
+      expect(stats).not.toHaveProperty('postsByVisibility');
+    }
   });
 
   it('rate limits profile updates before validation and persistence', async () => {

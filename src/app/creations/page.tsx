@@ -34,15 +34,19 @@ import {
     buildCreationComposerPath,
     buildPostRecipeManagementPath,
     getCreationMediaFilters,
+    getCreationMediaKindFilter,
     getStudioCreationCounts,
     getStudioPostCounts,
     getStudioPostFilters,
+    moveStudioCreationTotals,
+    moveStudioPostTotals,
     resolveCreationWorkspaceCardState,
     type CreationMediaFilter,
     type CreationWorkspaceCardState,
     type CreationWorkspaceMonetizationKind,
     type CreationWorkspacePublishBadge,
     type StudioPostFilter,
+    type StudioPostPlace,
     type StudioTotal,
 } from '@/lib/creation-workspace';
 import { formatDurationShort, formatTimeAgoShort } from '@/lib/generation-timing';
@@ -489,6 +493,39 @@ function isFinishedCreation(generation: Generation): boolean {
     return generation.status === 'succeeded' && Boolean(generation.output_url || generation.source_unavailable_at);
 }
 
+function getGenerationCategory(generation: Generation): 'image' | 'video' | 'audio' | 'motion' | 'ugc-ad' {
+    if (generation.category === 'audio' || generation.category === 'image' || generation.category === 'motion' || generation.category === 'ugc-ad') {
+        return generation.category;
+    }
+
+    if (generation.category === 'video') {
+        return 'video';
+    }
+
+    if (isImageModel(generation.model)) {
+        return 'image';
+    }
+
+    if (isAudioModel(generation.model)) {
+        return 'audio';
+    }
+
+    return 'video';
+}
+
+/**
+ * The kind the grid draws a creation as, and the media filter that lists it
+ * (`getCreationMediaKindFilter`). The list sends every creation's category as
+ * it reads it, from the file and then the stored category, which is the rule
+ * `owner_profile_counts` splits the library's total by (`creationsByKind`).
+ */
+function getMediaKind(generation: Generation): 'image' | 'video' | 'audio' {
+    const category = getGenerationCategory(generation);
+    if (category === 'image') return 'image';
+    if (category === 'audio') return 'audio';
+    return 'video';
+}
+
 /**
  * The list's next cursor one row earlier, after a row before it was deleted here. The owner
  * list's cursor is the offset of its next row (`buildPagination` in
@@ -760,17 +797,14 @@ export default function CreationsPage() {
     // The server's post totals this page holds, moved by a change made here, as Creations' total
     // is (moveHeldCreationsTotal): a post's change does not refresh the page, and with every page
     // loaded the counts would otherwise believe the old totals over the list (getStudioPostCounts).
-    const moveHeldPostTotals = useCallback((delta: { posts: number; archivedPosts: number }) => {
-        const moved = (current: ProfileApiResponse | null) => (current?.stats
-            ? {
-                ...current,
-                stats: {
-                    ...current.stats,
-                    posts: Math.max(0, current.stats.posts + delta.posts),
-                    archivedPosts: Math.max(0, current.stats.archivedPosts + delta.archivedPosts),
-                },
-            }
-            : current);
+    // A post moves from where it counted to where it counts now: live or archived, and under its
+    // visibility, which the server counts too (`postsByVisibility`).
+    const moveHeldPostTotals = useCallback((before: StudioPostPlace | null, after: StudioPostPlace | null) => {
+        const moved = (current: ProfileApiResponse | null) => {
+            if (!current?.stats) return current;
+            const stats = moveStudioPostTotals(current.stats, before, after);
+            return stats === current.stats ? current : { ...current, stats };
+        };
         profileRef.current = moved(profileRef.current);
         setProfile(moved);
     }, []);
@@ -781,10 +815,14 @@ export default function CreationsPage() {
     // and from its own linked_post_* columns only as a fallback, so both are
     // kept in step.
     const patchPost = useCallback((postId: string, patch: PostLifecyclePatch) => {
-        // Archived or restored, or put back when that failed: from one total to the other.
+        // Archived or restored, or made public or private, or put back when that failed: from one
+        // total to the other.
         const patched = postsRef.current.find((post) => post.id === postId);
-        if (patched && patch.archivedAt !== undefined && Boolean(patched.archivedAt) !== Boolean(patch.archivedAt)) {
-            moveHeldPostTotals(patch.archivedAt ? { posts: -1, archivedPosts: 1 } : { posts: 1, archivedPosts: -1 });
+        if (patched) {
+            moveHeldPostTotals(patched, {
+                visibility: patch.visibility ?? patched.visibility,
+                archivedAt: patch.archivedAt !== undefined ? patch.archivedAt : patched.archivedAt,
+            });
         }
         const nextPosts = postsRef.current.map((post) => {
             if (post.id !== postId) {
@@ -835,7 +873,7 @@ export default function CreationsPage() {
         // back under Archived with the next refresh, which counts it there again.
         const removed = postsRef.current.find((post) => post.id === postId);
         if (removed) {
-            moveHeldPostTotals(removed.archivedAt ? { posts: 0, archivedPosts: -1 } : { posts: -1, archivedPosts: 0 });
+            moveHeldPostTotals(removed, null);
             // The list's offset counts places, and this post sat before it: gone from the server,
             // every later post moved up a place, so the next page starts a place earlier, or Load
             // more would skip the one that moved into its first place. One kept for its buyers
@@ -874,9 +912,11 @@ export default function CreationsPage() {
     // creation, so the loaded list and it still agree, and the refresh after only confirms them:
     // the counts believe the server over a list it disagrees with (getStudioCreationCounts), and
     // drew the old total, with no kind numbers, until the refresh landed, or for good when it failed.
-    const moveHeldCreationsTotal = useCallback((delta: number) => {
+    // Its kind's total moves with it, where the server counts kinds (`creationsByKind`).
+    const moveHeldCreationsTotal = useCallback((delta: number, generation: Generation) => {
+        const kind = getCreationMediaKindFilter(getMediaKind(generation));
         const moved = (current: ProfileApiResponse | null) => (current?.stats
-            ? { ...current, stats: { ...current.stats, creations: Math.max(0, current.stats.creations + delta) } }
+            ? { ...current, stats: moveStudioCreationTotals(current.stats, kind, delta) }
             : current);
         profileRef.current = moved(profileRef.current);
         setProfile(moved);
@@ -885,7 +925,7 @@ export default function CreationsPage() {
     const dropGeneration = useCallback((generationId: string) => {
         const dropped = generationsRef.current.find((generation) => generation.id === generationId);
         if (dropped && !dropped.archived_at && isFinishedCreation(dropped)) {
-            moveHeldCreationsTotal(-1);
+            moveHeldCreationsTotal(-1, dropped);
         }
         const nextGenerations = generationsRef.current.filter((generation) => generation.id !== generationId);
         generationsRef.current = nextGenerations;
@@ -905,7 +945,7 @@ export default function CreationsPage() {
     const setGenerationArchivedAt = useCallback((generationId: string, archivedAt: string | null) => {
         const changed = generationsRef.current.find((generation) => generation.id === generationId);
         if (changed && isFinishedCreation(changed) && Boolean(changed.archived_at) !== Boolean(archivedAt)) {
-            moveHeldCreationsTotal(archivedAt ? -1 : 1);
+            moveHeldCreationsTotal(archivedAt ? -1 : 1, changed);
         }
         const nextGenerations = generationsRef.current.map((generation) => (
             generation.id === generationId ? { ...generation, archived_at: archivedAt } : generation
@@ -1738,33 +1778,6 @@ export default function CreationsPage() {
         return `Completed in ${formatDurationShort(Math.max(0, completedAtMs - startedAtMs))}`;
     };
 
-    const getGenerationCategory = (generation: Generation): 'image' | 'video' | 'audio' | 'motion' | 'ugc-ad' => {
-        if (generation.category === 'audio' || generation.category === 'image' || generation.category === 'motion' || generation.category === 'ugc-ad') {
-            return generation.category;
-        }
-
-        if (generation.category === 'video') {
-            return 'video';
-        }
-
-        if (isImageModel(generation.model)) {
-            return 'image';
-        }
-
-        if (isAudioModel(generation.model)) {
-            return 'audio';
-        }
-
-        return 'video';
-    };
-
-    const getMediaKind = (generation: Generation): 'image' | 'video' | 'audio' => {
-        const category = getGenerationCategory(generation);
-        if (category === 'image') return 'image';
-        if (category === 'audio') return 'audio';
-        return 'video';
-    };
-
     const inferDownloadExtension = (generation: Generation): string => {
         const mediaKind = getMediaKind(generation);
         const fallback = mediaKind === 'image' ? 'jpg' : mediaKind === 'audio' ? 'mp3' : 'mp4';
@@ -2101,6 +2114,7 @@ export default function CreationsPage() {
         listAnswered: generationsAnswered,
         listComplete: generationsComplete,
         serverTotal: profile?.stats?.creations ?? null,
+        serverKindTotals: profile?.stats?.creationsByKind ?? null,
     });
     // "—" until something has answered, as the profile draws a count it does not know: never 0.
     // A screen reader hears "Counting" in its place.

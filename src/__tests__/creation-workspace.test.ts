@@ -3,9 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPostRecipeManagementPath,
   getCreationMediaFilters,
+  getCreationMediaKindFilter,
   getStudioCreationCounts,
+  getStudioListCounts,
   getStudioPostCounts,
   getStudioPostFilters,
+  moveStudioCreationTotals,
+  moveStudioPostTotals,
   resolveCreationWorkspaceCardState,
 } from '@/lib/creation-workspace';
 
@@ -331,6 +335,159 @@ describe('getStudioCreationCounts', () => {
       serverTotal: null,
     })).toEqual({ total: null, totalIsAtLeast: false, filterTotals: unknown });
   });
+
+  // The owner asked for each kind's number while pages wait (2026-11-17): owner_profile_counts
+  // counts the Active creations by the filter the owner list files each one under
+  // (`creationsByKind`, 20261117192621).
+  describe('with the kinds the server counts', () => {
+    const everyPage = { all: 54, images: 47, videos: 7, audio: 0 };
+    const kinds = { images: 47, videos: 7, audio: 0 };
+
+    it("says each kind's total while pages wait", () => {
+      expect(getStudioCreationCounts({
+        loaded: firstPage,
+        listAnswered: true,
+        listComplete: false,
+        serverTotal: 54,
+        serverKindTotals: kinds,
+      })).toEqual({ total: 54, totalIsAtLeast: false, filterTotals: { all: 54, ...kinds } });
+    });
+
+    it('counts what is loaded once every page is and the server counts as many', () => {
+      expect(getStudioCreationCounts({
+        loaded: everyPage,
+        listAnswered: true,
+        listComplete: true,
+        serverTotal: 54,
+        serverKindTotals: kinds,
+      })).toEqual({ total: 54, totalIsAtLeast: false, filterTotals: everyPage });
+    });
+
+    it("believes the server's kinds over a loaded list it disagrees with", () => {
+      // A clip of a later page archived elsewhere: the list still holds it, the server does not.
+      expect(getStudioCreationCounts({
+        loaded: everyPage,
+        listAnswered: true,
+        listComplete: true,
+        serverTotal: 53,
+        serverKindTotals: { images: 47, videos: 6, audio: 0 },
+      })).toEqual({ total: 53, totalIsAtLeast: false, filterTotals: { all: 53, images: 47, videos: 6, audio: 0 } });
+    });
+
+    it('says no kind a number when the kinds do not add up to the total', () => {
+      // Never a split that contradicts All: the total moved without its kind, or read apart from it.
+      expect(getStudioCreationCounts({
+        loaded: firstPage,
+        listAnswered: true,
+        listComplete: false,
+        serverTotal: 54,
+        serverKindTotals: { images: 47, videos: 6, audio: 0 },
+      })).toEqual({ total: 54, totalIsAtLeast: false, filterTotals: { ...unknown, all: 54 } });
+    });
+
+    it('says what is loaded with a "+" when the server could not count, its kinds included', () => {
+      expect(getStudioCreationCounts({
+        loaded: firstPage,
+        listAnswered: true,
+        listComplete: false,
+        serverTotal: null,
+        serverKindTotals: null,
+      })).toEqual({ total: 29, totalIsAtLeast: true, filterTotals: unknown });
+    });
+  });
+});
+
+describe('getStudioListCounts', () => {
+  it('draws no filter a number unless the server counts every filter of the list', () => {
+    expect(getStudioListCounts<'first' | 'second'>({
+      loaded: { all: 2, first: 1, second: 1 },
+      listAnswered: true,
+      listComplete: false,
+      serverTotal: 5,
+      serverFilterTotals: { first: 5 },
+    })).toEqual({ total: 5, totalIsAtLeast: false, filterTotals: { all: 5, first: null, second: null } });
+    expect(getStudioListCounts<'first' | 'second'>({
+      loaded: { all: 2, first: 1, second: 1 },
+      listAnswered: true,
+      listComplete: false,
+      serverTotal: 5,
+      serverFilterTotals: { first: 5, second: 0 },
+    })).toEqual({ total: 5, totalIsAtLeast: false, filterTotals: { all: 5, first: 5, second: 0 } });
+  });
+});
+
+describe('getCreationMediaKindFilter', () => {
+  it("names the filter that lists each kind of creation the grid draws", () => {
+    expect(getCreationMediaKindFilter('image')).toBe('images');
+    expect(getCreationMediaKindFilter('video')).toBe('videos');
+    expect(getCreationMediaKindFilter('audio')).toBe('audio');
+  });
+});
+
+// A change made in Studio moves the totals it holds, which it believes over a list they disagree
+// with: the kind's and the visibility's totals move with the totals they split.
+describe('moveStudioCreationTotals', () => {
+  const stats = { creations: 54, creationsByKind: { images: 47, videos: 7, audio: 0 }, posts: 3, archivedPosts: 1, saved: 2 };
+
+  it('moves the Active total and its kind together, so the two still add up', () => {
+    expect(moveStudioCreationTotals(stats, 'videos', -1))
+      .toEqual({ ...stats, creations: 53, creationsByKind: { images: 47, videos: 6, audio: 0 } });
+    expect(moveStudioCreationTotals(stats, 'audio', 1))
+      .toEqual({ ...stats, creations: 55, creationsByKind: { images: 47, videos: 7, audio: 1 } });
+  });
+
+  it('never moves a total below 0', () => {
+    expect(moveStudioCreationTotals(stats, 'audio', -1).creationsByKind).toEqual({ images: 47, videos: 7, audio: 0 });
+    expect(moveStudioCreationTotals({ ...stats, creations: 0 }, 'images', -1).creations).toBe(0);
+  });
+
+  it('moves the total alone where the server counts no kinds', () => {
+    const older = { creations: 54, posts: 3, archivedPosts: 1, saved: 2 };
+    expect(moveStudioCreationTotals(older, 'images', -1)).toEqual({ ...older, creations: 53 });
+  });
+});
+
+describe('moveStudioPostTotals', () => {
+  const stats = {
+    creations: 0,
+    posts: 42,
+    postsByVisibility: { public: 30, unlisted: 1, private: 11 },
+    archivedPosts: 8,
+    saved: 0,
+  };
+  const live = (visibility: 'public' | 'unlisted' | 'private') => ({ visibility, archivedAt: null });
+  const archivedAs = (visibility: 'public' | 'unlisted' | 'private') => ({ visibility, archivedAt: '2026-06-02T10:00:00.000Z' });
+
+  it('moves an archived post from its visibility to the archived total, and back when it is restored', () => {
+    const archived = moveStudioPostTotals(stats, live('public'), archivedAs('public'));
+    expect(archived).toEqual({ ...stats, posts: 41, postsByVisibility: { public: 29, unlisted: 1, private: 11 }, archivedPosts: 9 });
+    expect(moveStudioPostTotals(archived, archivedAs('public'), live('public'))).toEqual(stats);
+  });
+
+  it('moves a post made private from Public to Private, the live total as it was', () => {
+    expect(moveStudioPostTotals(stats, live('public'), live('private')))
+      .toEqual({ ...stats, postsByVisibility: { public: 29, unlisted: 1, private: 12 } });
+    // An old unlisted post the menu makes private.
+    expect(moveStudioPostTotals(stats, live('unlisted'), live('private')))
+      .toEqual({ ...stats, postsByVisibility: { public: 30, unlisted: 0, private: 12 } });
+  });
+
+  it('takes a deleted post out of its total: its visibility while live, the archived total once archived', () => {
+    expect(moveStudioPostTotals(stats, live('private'), null))
+      .toEqual({ ...stats, posts: 41, postsByVisibility: { public: 30, unlisted: 1, private: 10 } });
+    expect(moveStudioPostTotals(stats, archivedAs('public'), null)).toEqual({ ...stats, archivedPosts: 7 });
+  });
+
+  it('leaves the totals as they are when the post stays where it counted', () => {
+    expect(moveStudioPostTotals(stats, live('public'), live('public'))).toBe(stats);
+    // An archived post counts under no visibility, whichever it has.
+    expect(moveStudioPostTotals(stats, archivedAs('public'), archivedAs('private'))).toBe(stats);
+  });
+
+  it('moves the live and archived totals alone where the server counts no visibilities', () => {
+    const older = { creations: 0, posts: 42, archivedPosts: 8, saved: 0 };
+    expect(moveStudioPostTotals(older, live('public'), archivedAs('public'))).toEqual({ ...older, posts: 41, archivedPosts: 9 });
+  });
 });
 
 // The Post Library loads its posts 36 at a time too, and its header and visibility filters counted
@@ -397,6 +554,48 @@ describe('getStudioPostCounts', () => {
       live: { total: null, totalIsAtLeast: false },
       archived: { total: null, totalIsAtLeast: false },
       filterTotals: unknown,
+    });
+  });
+
+  // #860 left Public, Unlisted and Private without a number until every page was in, for want of
+  // the server's split: owner_profile_counts counts the live posts by visibility since
+  // 20261117192621 (`postsByVisibility`).
+  describe('with the visibilities the server counts', () => {
+    const byVisibility = { ...library, postsByVisibility: { public: 30, unlisted: 1, private: 11 } };
+
+    it("says each visibility's total while pages wait", () => {
+      expect(getStudioPostCounts({ loaded: firstPage, listAnswered: true, listComplete: false, serverTotals: byVisibility })).toEqual({
+        live: exact(42),
+        archived: exact(8),
+        filterTotals: { all: 42, public: 30, unlisted: 1, private: 11, archived: 8 },
+      });
+    });
+
+    it('counts what is loaded once every page is and the server counts as many', () => {
+      expect(getStudioPostCounts({ loaded: everyPage, listAnswered: true, listComplete: true, serverTotals: byVisibility }))
+        .toEqual({ live: exact(42), archived: exact(8), filterTotals: everyPage });
+    });
+
+    it("believes the server's visibilities over a loaded list it disagrees with", () => {
+      expect(getStudioPostCounts({
+        loaded: everyPage,
+        listAnswered: true,
+        listComplete: true,
+        serverTotals: { posts: 43, archivedPosts: 8, postsByVisibility: { public: 31, unlisted: 1, private: 11 } },
+      })).toEqual({
+        live: exact(43),
+        archived: exact(8),
+        filterTotals: { all: 43, public: 31, unlisted: 1, private: 11, archived: 8 },
+      });
+    });
+
+    it('says no visibility a number when they do not add up to the live total', () => {
+      expect(getStudioPostCounts({
+        loaded: firstPage,
+        listAnswered: true,
+        listComplete: false,
+        serverTotals: { posts: 42, archivedPosts: 8, postsByVisibility: { public: 30, unlisted: 0, private: 11 } },
+      })).toEqual({ live: exact(42), archived: exact(8), filterTotals: { ...unknown, all: 42, archived: 8 } });
     });
   });
 });
