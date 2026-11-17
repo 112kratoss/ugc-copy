@@ -23,6 +23,12 @@ const LANE = `/showcase?sort=recent&tool=${exploreReel.toolSlug}`;
 const [OPENED] = exploreReel.posts;
 // In `next dev` a page compiles on its first request; offline Explore also waits on reads.
 const COLD_PAGE = { timeout: 60_000 };
+// The reel is a chunk of its own, which `next dev` compiles the first time a test in the run opens
+// it, and the wait for the reel holds that compile (the fourth gotcha in .claude/rules/e2e.md).
+// Which test is first depends on how the run is split into shards: main's run at 6b2637844 (#861,
+// which added a spec to the shard) failed this file's first reel open at the default 10 s. A later
+// open is at once.
+const REEL_OPENS = { timeout: 45_000 };
 const DISPLAY_COPY_DELAY_MS = 1_500;
 const FOLLOW_READ_DELAY_MS = 1_200;
 const PREVIEW_PICTURE = fs.readFileSync(path.join(__dirname, 'fixtures/red.png'));
@@ -139,7 +145,7 @@ test('a tile opened in the reel and closed with the pointer shows no controls on
   await expect.poll(() => controlsOpacity(page)).toBe('1');
 
   await openButton(page).click();
-  await expect(reel(page)).toBeVisible();
+  await expect(reel(page)).toBeVisible(REEL_OPENS);
   await reel(page).getByRole('button', { name: 'Explore', exact: true }).click();
   await expect(reel(page)).toBeHidden();
   // Focus comes back to the tile the reel was opened from (a keyboard reader's place).
@@ -159,7 +165,7 @@ test('a tile opened in the reel and closed from the keyboard keeps its controls 
   await expect(openButton(page)).toBeFocused();
 
   await page.keyboard.press('Enter');
-  await expect(reel(page)).toBeVisible();
+  await expect(reel(page)).toBeVisible(REEL_OPENS);
   await page.keyboard.press('Escape');
   await expect(reel(page)).toBeHidden();
   await expect(openButton(page)).toBeFocused();
@@ -174,7 +180,7 @@ test('a tile opened in the reel and closed from the keyboard keeps its controls 
 test('a tile opened in the reel with the pointer and closed with Escape shows no controls once the pointer has left it', async ({ page, context }) => {
   await openLane(page, context);
   await openButton(page).click();
-  await expect(reel(page)).toBeVisible();
+  await expect(reel(page)).toBeVisible(REEL_OPENS);
   await page.keyboard.press('Escape');
   await expect(reel(page)).toBeHidden();
   await expect(openButton(page)).toBeFocused();
@@ -192,7 +198,7 @@ test('a tile opened in the reel with the pointer and closed with Escape shows no
 test('a tile opened in the reel with the pointer shows its controls again once the reader tabs on after the close', async ({ page, context }) => {
   await openLane(page, context);
   await openButton(page).click();
-  await expect(reel(page)).toBeVisible();
+  await expect(reel(page)).toBeVisible(REEL_OPENS);
   await reel(page).getByRole('button', { name: 'Explore', exact: true }).click();
   await expect(openButton(page)).toBeFocused();
   await pointerAway(page);
@@ -211,7 +217,7 @@ test('a tile opened in the reel with the pointer shows its controls again once t
 test('a tile given focus back quietly keeps its controls hidden through later keys that do not move focus', async ({ page, context }) => {
   await openLane(page, context);
   await openButton(page).click();
-  await expect(reel(page)).toBeVisible();
+  await expect(reel(page)).toBeVisible(REEL_OPENS);
   await page.keyboard.press('Escape');
   await expect(reel(page)).toBeHidden();
   await expect(openButton(page)).toBeFocused();
@@ -238,7 +244,7 @@ test('where focus() takes no focusVisible option, a tile closed with Escape is m
   });
   await openLane(page, context);
   await openButton(page).click();
-  await expect(reel(page)).toBeVisible();
+  await expect(reel(page)).toBeVisible(REEL_OPENS);
   await page.keyboard.press('Escape');
   await expect(reel(page)).toBeHidden();
   await expect(openButton(page)).toBeFocused();
@@ -347,7 +353,7 @@ test('a tile opens its reel in one step: no "Opening preview", the tile\'s pictu
   }, OPENED.title);
 
   await openButton(page).click();
-  await expect(reel(page)).toBeVisible();
+  await expect(reel(page)).toBeVisible(REEL_OPENS);
   await page.screenshot({ path: testInfo.outputPath('reel-just-opened.png') });
   await expect.poll(() => page.evaluate(() => (window as unknown as { __reelProbe: { frames: unknown[] } }).__reelProbe.frames.length)).toBe(3);
   const probe = await page.evaluate(() => (window as unknown as { __reelProbe: { sawOpeningPreview: boolean; frames: ReelFrame[] } }).__reelProbe);
