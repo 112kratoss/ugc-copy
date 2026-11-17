@@ -9,7 +9,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
-import { invalidateShowcaseFeedCacheOnly } from '@/lib/showcase-feed-cache';
+import { invalidateShowcaseFeedCacheOnly as defaultInvalidateShowcaseFeedCacheOnly } from '@/lib/showcase-feed-cache';
 import {
   parseFeedDeliveryIdField,
   scheduleAuthoritativeFeedEvent,
@@ -90,7 +90,7 @@ export async function submitPostReportForRoute({
   createAdminSupabase,
   // The feeds only: a report hides the post from its reporter's feed and
   // nowhere else until a moderator decides, so no cached public page changes.
-  invalidateFeedCache = invalidateShowcaseFeedCacheOnly,
+  invalidateShowcaseFeedCacheOnly = defaultInvalidateShowcaseFeedCacheOnly,
   runAfterResponse,
   scheduleFeedEvent = scheduleAuthoritativeFeedEvent,
 }: {
@@ -98,7 +98,7 @@ export async function submitPostReportForRoute({
   reporterUserId: string;
   readBody: () => Promise<unknown>;
   createAdminSupabase: () => SupabaseClient;
-  invalidateFeedCache?: typeof invalidateShowcaseFeedCacheOnly;
+  invalidateShowcaseFeedCacheOnly?: typeof defaultInvalidateShowcaseFeedCacheOnly;
   /**
    * The route passes one so the report's feed event is written behind the
    * answer; without it the event is written, bounded by its timeout, first.
@@ -202,7 +202,7 @@ export async function submitPostReportForRoute({
     logBackendError('failed_to_hide_reported_post_from_feed', { error: feedbackError });
   }
 
-  invalidateFeedCache();
+  invalidateShowcaseFeedCacheOnly();
 
   // The report is stored and out of the reporter's feed. Its feed event is
   // v4's `report` signal. Attributed to the feed delivery the client reported

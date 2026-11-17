@@ -5,12 +5,17 @@ import { Heart, Images, LockKeyhole, Repeat2 } from 'lucide-react';
 
 import {
   getCreatorProfilePageData,
+  getCreatorProfileSummary,
   type CreatorProfilePageData,
 } from '@/lib/creator-profile';
 import { buildCreatorProfilePath } from '@/lib/profile';
 import { JsonLd } from '@/components/JsonLd';
 import { OptionalAuth } from '@/components/RouteAuthBoundary';
-import { cachePublicPageRead } from '@/lib/public-page-cache';
+import {
+  cachePublicPageRead,
+  creatorHandlePageCacheTags,
+  creatorPageCacheTags,
+} from '@/lib/public-page-cache';
 import {
   buildBreadcrumbSchema,
   buildProfilePageSchema,
@@ -29,11 +34,16 @@ type CreatorPageProps = {
  * would, and never the session, a cookie, a header or the query: a block with
  * the viewer, a share visit and the creator's own just-saved profile are read
  * in the browser (`CreatorPageViewer`, `CreatorProfileHeader`), and Follow,
- * Edit profile and saves already were. A profile edit, a publish, an archive,
- * a delete, an account deletion and a moderation decision invalidate the
- * public pages' tag (`PUBLIC_PAGE_CACHE_TAG`), which the read below carries
- * into this page's cache entry; a block or a report does not. Kept equal to
- * PUBLIC_PAGE_REVALIDATE_SECONDS (five minutes: that file says why).
+ * Edit profile and saves already were. The reads below carry their tags into
+ * this page's cache entry: the public pages' removal tag (an archive, a
+ * delete, an account deletion or a take-down expires it at once), the
+ * creator's own (`creatorPageCacheTags`: a publish or an edit of a post the
+ * page lists, or of a post a listed remix credits, refreshes it in the
+ * background), and the handle's (`creatorHandlePageCacheTags`: a profile
+ * taking the handle expires a not-found drawn before). A profile edit
+ * refreshes every page in the background; a block or a report does nothing
+ * here. Kept equal to PUBLIC_PAGE_REVALIDATE_SECONDS (five minutes: that file
+ * says why).
  */
 export const revalidate = 300;
 
@@ -43,19 +53,41 @@ export async function generateStaticParams(): Promise<Array<{ username: string }
 }
 
 /**
- * The first page: the header, the creator's totals and their first posts. An
- * unknown handle, or an account being deleted, reads as none before anything
- * else is read (`loadCreatorProfileRow`). Prices are quoted in no country: the
- * cards price recipes in credits, and every later page is the API's.
+ * Whom the handle names: a write knows its creator by id, never by handle, so
+ * the page is tagged by the id this lookup finds. Null for an unknown handle
+ * or an account being deleted (`loadCreatorProfileRow`). A handle moves only
+ * with a profile saved or an account deleted, which refresh or expire every
+ * page, this lookup included.
  */
-async function readCreatorPage(username: string): Promise<CreatorProfilePageData | null> {
-  return getCreatorProfilePageData(username, { limit: 24, offset: 0 });
+async function readCreatorId(username: string): Promise<string | null> {
+  return (await getCreatorProfileSummary(username))?.id ?? null;
 }
 
-const readCachedCreatorPage = cachePublicPageRead(readCreatorPage, ['creator-page-v1']);
+const readCachedCreatorId = cachePublicPageRead(readCreatorId, ['creator-id-v1'], creatorHandlePageCacheTags);
+
+/**
+ * The first page: the header, the creator's totals and their first posts.
+ * Prices are quoted in no country: the cards price recipes in credits, and
+ * every later page is the API's. A page whose handle has meanwhile come to
+ * name someone else is none, rather than that person's page under the tags
+ * of the one the lookup found.
+ */
+async function readCreatorPage(username: string, creatorId: string): Promise<CreatorProfilePageData | null> {
+  const data = await getCreatorProfilePageData(username, { limit: 24, offset: 0 });
+  return data?.profile.id === creatorId ? data : null;
+}
+
+const readCachedCreatorPage = cachePublicPageRead(
+  readCreatorPage,
+  ['creator-page-v2'],
+  (_username, creatorId) => creatorPageCacheTags(creatorId),
+);
 
 /** One read per render, shared by the metadata and the page. */
-const loadCreatorPage = cache((username: string) => readCachedCreatorPage(username));
+const loadCreatorPage = cache(async (username: string) => {
+  const creatorId = await readCachedCreatorId(username);
+  return creatorId ? readCachedCreatorPage(username, creatorId) : null;
+});
 
 /**
  * A creator page earns indexing by having published something. The count is the

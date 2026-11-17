@@ -163,8 +163,10 @@ const nextConfig: NextConfig = {
   // How old a cached ISR page may be and still be served while it is drawn
   // again: past an hour it never is, and the next request waits for a fresh
   // render. Next's default is a year, which let a page whose invalidation was
-  // missed (the hourly feed maintenance invalidates only after its RPCs
-  // succeed; a take-down made outside Next) be served stale once, long after.
+  // missed (a take-down made outside Next whose request to expire the pages
+  // did not get through; a count that moves with no event) be served stale
+  // once, long after. A tag refreshed in the background (`'max'`) does not
+  // lengthen this: a page past its hour is drawn again first, whatever its tags.
   // Each route keeps its own `revalidate`: the header becomes
   // `s-maxage=<revalidate>, stale-while-revalidate=<3600 - revalidate>` (the
   // 300 s public pages, the 900 s signed-out home), and a route revalidated

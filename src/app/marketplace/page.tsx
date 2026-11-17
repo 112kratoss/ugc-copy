@@ -51,13 +51,13 @@ export const revalidate = 300;
 
 /**
  * The plain storefront's first page and the tool filters' options, cached
- * with the page under the marketplace's tag (sales, free unlocks, recipe
- * changes) and the public pages' (`PUBLIC_PAGE_CACHE_TAG`: a publish, an edit,
- * a take-down from the console, which invalidates that one with the feed's;
- * `getCachedMarketplaceResourceListBase` says why the listing needs it). A
- * block or a report leaves it: blocks are read in the browser. The listing's
- * own minute-long cache sits inside this read and is passed over there, so
- * the page keeps its own backstop rather than the minute.
+ * with the page under the marketplace's tag (a sale, a free unlock, a publish
+ * or an edit of a post, recipe or not, refreshes it in the background) and the
+ * public pages' tags (a removal expires every page at once; a profile change
+ * refreshes every page in the background: a seller's name is on their cards).
+ * A block or a report leaves it: blocks are read in the browser. The
+ * listing's own minute-long cache sits inside this read and is passed over
+ * there, so the page keeps its own backstop rather than the minute.
  */
 async function readMarketplacePage() {
   const [firstPage, sourceToolOptions] = await Promise.all([
@@ -89,9 +89,11 @@ async function readMarketplacePage() {
   };
 }
 
+// v2: the read carries the public pages' background tag (an entry kept from
+// v1 lacks it, so a profile change's refresh would draw the page from it again).
 const readCachedMarketplacePage = cachePublicPageRead(
   readMarketplacePage,
-  ['marketplace-page-v1'],
+  ['marketplace-page-v2'],
   [MARKETPLACE_RESOURCE_LIST_CACHE_TAG],
 );
 

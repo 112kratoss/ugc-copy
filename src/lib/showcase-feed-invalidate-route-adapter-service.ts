@@ -36,7 +36,6 @@ export async function getShowcaseFeedInvalidateRouteResponse({
   request: Request;
 }) {
   const isAuthorized = dependencies.isAuthorizedCronRequest ?? isAuthorizedCronRequest;
-  const invalidate = dependencies.invalidateShowcaseFeedCache ?? invalidateShowcaseFeedCache;
   const logEvent = dependencies.logEvent ?? logBackendEvent;
 
   if (!isAuthorized(request)) {
@@ -48,7 +47,8 @@ export async function getShowcaseFeedInvalidateRouteResponse({
 
   const requestId = getApiRequestId(request);
   try {
-    invalidate();
+    // Called by its own name, so `public-page-invalidation-classes.test.ts` counts it.
+    (dependencies.invalidateShowcaseFeedCache ?? invalidateShowcaseFeedCache)();
   } catch (error) {
     logEvent('error', 'showcase_feed_cache_invalidation_failed', {
       route: SHOWCASE_FEED_INVALIDATE_ROUTE,

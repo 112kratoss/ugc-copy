@@ -8,6 +8,14 @@ vi.mock('@/lib/backend-logger', async (importOriginal) => ({
   logBackendWarning: vi.fn(),
 }));
 
+// The default invalidation, for the one test that leaves it to the module.
+const cacheMocks = vi.hoisted(() => ({
+  invalidateShowcaseFeedCache: vi.fn(),
+  invalidateShowcaseFeedCacheOnly: vi.fn(),
+  invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
+}));
+vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
+
 function createRpcClient(results: Record<string, { data: unknown; error: unknown }>) {
   const rpc = vi.fn(async (name: string) => {
     const result = results[name];
@@ -57,12 +65,12 @@ describe('maintainFeedPersonalization', () => {
       },
     });
     const now = new Date('2026-07-11T07:20:00.000Z');
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedCacheOnly = vi.fn();
     const refreshAccountLabels = labelPass();
 
     await expect(maintainFeedPersonalization(db.client as never, {
       now,
-      invalidateFeedCache,
+      invalidateShowcaseFeedCacheOnly,
       refreshAccountLabels,
     })).resolves.toEqual({
       asOf: '2026-07-11T07:20:00.000Z',
@@ -139,7 +147,7 @@ describe('maintainFeedPersonalization', () => {
         p_fact_retention_days: 30,
       }],
     ]);
-    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    expect(invalidateShowcaseFeedCacheOnly).toHaveBeenCalledOnce();
     expect(refreshAccountLabels).toHaveBeenCalledOnce();
     expect(refreshAccountLabels).toHaveBeenCalledWith(db.client, { now });
   });
@@ -166,7 +174,7 @@ describe('maintainFeedPersonalization', () => {
 
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-07-11T07:20:00.000Z'),
-      invalidateFeedCache: () => calls.push('invalidate-feed-cache'),
+      invalidateShowcaseFeedCacheOnly: () => calls.push('invalidate-feed-cache'),
       refreshAccountLabels: labelPass(async () => {
         calls.push('account-labels');
         return LABELS_SUMMARY;
@@ -208,7 +216,7 @@ describe('maintainFeedPersonalization', () => {
 
     await expect(maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-07-11T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels,
     })).rejects.toThrow(failing === 'labels'
       ? 'Feed maintenance RPC upsert_account_labels failed: boom'
@@ -235,18 +243,41 @@ describe('maintainFeedPersonalization', () => {
       },
       prune_feed_personalization_data: { data: { skipped: false }, error: null },
     });
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedCacheOnly = vi.fn();
 
     await expect(maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-07-11T07:20:00.000Z'),
-      invalidateFeedCache,
+      invalidateShowcaseFeedCacheOnly,
       refreshAccountLabels: labelPass(),
     })).rejects.toThrow(
       'Feed maintenance RPC refresh_user_interest_weights failed: statement timeout',
     );
     expect(db.rpc).toHaveBeenCalledTimes(4);
     expect(db.rpc).not.toHaveBeenCalledWith('prune_feed_personalization_data', expect.anything());
-    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    expect(invalidateShowcaseFeedCacheOnly).toHaveBeenCalledOnce();
+  });
+
+  // Its totals and account labels are read by the feeds' ranking alone: no
+  // cached public page draws them, so none is refreshed.
+  it('expires the feeds alone, never a cached public page', async () => {
+    const db = createRpcClient({
+      refresh_post_feed_stats: { data: 4, error: null },
+      refresh_post_feed_engagement_stats: { data: 2, error: null },
+      refresh_creator_feed_stats: { data: 1, error: null },
+      refresh_user_interest_weights: {
+        data: null,
+        error: { message: 'statement timeout' },
+      },
+    });
+
+    await expect(maintainFeedPersonalization(db.client as never, {
+      now: new Date('2026-07-11T07:20:00.000Z'),
+      refreshAccountLabels: labelPass(),
+    })).rejects.toThrow('refresh_user_interest_weights');
+
+    expect(cacheMocks.invalidateShowcaseFeedCacheOnly).toHaveBeenCalledOnce();
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
   });
 
   it('rejects invalid timestamps before querying Supabase', async () => {
@@ -290,7 +321,7 @@ describe('maintainFeedPersonalization', () => {
 
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-08-09T15:00:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     });
 
@@ -334,7 +365,7 @@ describe('maintainFeedPersonalization', () => {
 
     await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-08-09T15:00:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     });
 
@@ -370,7 +401,7 @@ describe('maintainFeedPersonalization prune batches', () => {
 
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-11-04T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     });
 
@@ -391,7 +422,7 @@ describe('maintainFeedPersonalization prune batches', () => {
 
     await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-11-04T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     });
 
@@ -411,7 +442,7 @@ describe('maintainFeedPersonalization prune batches', () => {
 
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-11-04T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
       clock: () => clockMs,
     });
@@ -426,7 +457,7 @@ describe('maintainFeedPersonalization prune batches', () => {
 
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-11-04T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     });
 
@@ -439,7 +470,7 @@ describe('maintainFeedPersonalization prune batches', () => {
 
     const summary = await maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-11-04T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     });
 
@@ -452,7 +483,7 @@ describe('maintainFeedPersonalization prune batches', () => {
 
     await expect(maintainFeedPersonalization(db.client as never, {
       now: new Date('2026-11-04T07:20:00.000Z'),
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedCacheOnly: vi.fn(),
       refreshAccountLabels: labelPass(),
     })).rejects.toThrow('prune_feed_personalization_data failed: canceling statement due to lock timeout');
   });

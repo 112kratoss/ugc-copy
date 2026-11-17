@@ -8,8 +8,13 @@ import { insertAdminSession } from '@/lib/admin-session-store';
 import { postAdminPostReportDecision, postAdminSubjectReportDecision, postAdminPostModeration } from '@/lib/admin-moderation-route-adapter-service';
 import { postAdminGenerationModeration, postAdminContactTriage } from '@/lib/admin-content-moderation-route-adapter-service';
 import { postAdminUserSanction } from '@/lib/admin-user-sanction-route-adapter-service';
+import { invalidateShowcaseFeedAndRefreshEveryPage } from '@/lib/showcase-feed-cache';
 
-vi.mock('@/lib/showcase-feed-cache', () => ({ invalidateShowcaseFeedCache: vi.fn() }));
+vi.mock('@/lib/showcase-feed-cache', () => ({
+  invalidateShowcaseFeedCache: vi.fn(),
+  // A restore drops the post's not-found and refreshes every other page in the background.
+  invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
+}));
 const configPath = process.env.AUDIT_STORAGE_CONFIG, connectionString = process.env.SUPABASE_TEST_DB_URL;
 const routes = [
   { path: '/api/admin/moderation/post-reports', handler: postAdminPostReportDecision },
@@ -167,7 +172,9 @@ describe.skipIf(!configPath || !connectionString)('admin moderation through actu
       } else {
         expectedActions.posts=2; const body={postId:id,action:'hide',reason:'Fixture moderation',idempotencyKey:randomUUID()};
         await invoke(body); await invoke(body); expect((await db.query('select review_status,reviewed_by from public.posts where id=$1', [id])).rows[0]).toEqual({review_status:'hidden',reviewed_by:reviewerId});
+        const refreshes = vi.mocked(invalidateShowcaseFeedAndRefreshEveryPage).mock.calls.length;
         await invoke({...body,action:'restore',idempotencyKey:randomUUID()}); expect((await db.query('select review_status from public.posts where id=$1', [id])).rows[0].review_status).toBe('visible');
+        expect(vi.mocked(invalidateShowcaseFeedAndRefreshEveryPage).mock.calls.slice(refreshes)).toEqual([[{postIds:[id]}]]);
       }
     }
   });

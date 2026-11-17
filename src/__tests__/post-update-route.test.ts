@@ -559,7 +559,10 @@ describe('/api/posts/[postId] route', () => {
         'Content-Type': 'application/json',
         Authorization: 'Bearer token',
       },
+      // Named as the composers name it: a save that names no visibility is
+      // held to the public bar (review, 2026-11-17), which this draft is not.
       body: JSON.stringify({
+        visibility: 'private',
         sourceTools: [{
           toolLabel: 'Runway',
           toolSlug: 'runway',

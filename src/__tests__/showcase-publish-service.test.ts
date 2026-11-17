@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 const cacheMocks = vi.hoisted(() => ({
   SHOWCASE_FEED_CACHE_TAG: 'showcase-feed:v2',
   invalidateShowcaseFeedCache: vi.fn(),
+  invalidateShowcaseFeedAndRefreshPostPages: vi.fn(async () => {}),
 }));
 
 const logBackendErrorMock = vi.hoisted(() => vi.fn());
@@ -11,6 +12,11 @@ const logBackendErrorMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 vi.mock('@/lib/backend-logger', () => ({
   logBackendError: logBackendErrorMock,
+}));
+// A publish secures a covered post's media before it writes; the cases about
+// the mature mark check what the write is sent, not the copies.
+vi.mock('@/lib/nsfw-media-security', () => ({
+  secureNsfwPostMedia: vi.fn(async () => new Map()),
 }));
 // No case here reaches the database for the post's Made with: the ones about
 // that row pass a writer of their own.
@@ -289,6 +295,7 @@ function cardRecipe({
 describe('publishGenerationToShowcaseForRoute', () => {
   beforeEach(() => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
+    cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mockClear();
     logBackendErrorMock.mockClear();
   });
 
@@ -693,7 +700,10 @@ describe('publishGenerationToShowcaseForRoute', () => {
       'showcase/gen-1/example.preview.1234.webp',
     ]);
     expect(adminClient.queued).toEqual([]);
+    // A save that leaves the post private is a removal, whatever was read
+    // before it: every cached page at once.
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   // The removal reads the legacy rows, removes what they name, then deletes the
@@ -1360,6 +1370,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
       },
     });
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   it('revalidates a frozen sold generation package before status-only republish', async () => {
@@ -1458,6 +1469,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
     });
     expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   // Owner, 2026-11-03: the composers answer this refusal with "Post without
@@ -3207,5 +3219,280 @@ describe('a creation’s new post and its posting defaults', () => {
       const { result } = await publish({ allowRemixes: true, leaveOutGenerationReferenceIds, resourceBundle: recipe('free') });
       expect(result).toEqual({ ok: false, status: 400, body: { error: 'leaveOutGenerationReferenceIds must list saved input ids.' } });
     }
+  });
+});
+
+// Owner, 2026-11-17: a publish that removes nothing refreshes the pages that
+// draw the post in the background; one that takes the post out of view (to
+// private, out of the lists) still expires every cached page at once.
+describe('the cached public pages a publish reaches', () => {
+  const generation = {
+    id: 'gen-pages',
+    user_id: 'user-1',
+    status: 'succeeded',
+    model: 'nano-banana-2',
+    category: 'image',
+    creation_mode: null,
+    output_url: 'generated_images/user-1/harbor.jpg',
+    showcase_asset_path: null,
+    title: null,
+    description: null,
+    prompt: 'A harbor at dawn.',
+  };
+  const storedPost = (overrides: Record<string, unknown>) => ({
+    id: 'post-pages',
+    is_nsfw: false,
+    visibility: 'public',
+    archived_at: null,
+    review_status: 'visible',
+    tombstoned_at: null,
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    cacheMocks.invalidateShowcaseFeedCache.mockClear();
+    cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mockClear();
+  });
+
+  async function publish(visibility: 'public' | 'private', stored: Record<string, unknown> | null) {
+    const adminClient = createAdminClientMock(generation, null, stored ? { storedPost: stored } : {});
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: { generationId: 'gen-pages', visibility, title: 'Harbor at dawn', resourceBundle: { accessMode: 'none' } },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({ outputUrl: mediaGeneration.outputUrl, createdLocation: null })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+        ]),
+        validatePostResourceBundleInput: vi.fn(() => null),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        loadRemixRecipeTerms: vi.fn(async () => ({ mode: null, bundleId: null, originGenerationId: null })),
+        planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [] })),
+        loadGenerationPostVisibility: vi.fn(async () => (stored?.visibility as string | undefined) ?? null),
+        publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-pages',
+          visibility,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+        requestPostEmbedding: vi.fn(async () => undefined),
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+    expect(result).toMatchObject({ ok: true });
+    return adminClient.client;
+  }
+
+  it('drops the not-found of a first post at once and refreshes its pages in the background', async () => {
+    const client = await publish('public', null);
+
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mock.calls).toEqual([[client, {
+      postId: 'post-pages',
+      generationId: 'gen-pages',
+      creatorId: 'user-1',
+      arrived: true,
+      isNew: true,
+    }]]);
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('refreshes a public post\'s pages in the background when it is published again', async () => {
+    await publish('public', storedPost({}));
+
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      postId: 'post-pages',
+      arrived: false,
+      isNew: false,
+    }));
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('calls a private post made public an arrival, its not-found dropped at once', async () => {
+    await publish('public', storedPost({ visibility: 'private' }));
+
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      arrived: true,
+      isNew: false,
+    }));
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  // A publish moves neither the archive nor a moderation hold: the post stays
+  // out of view, and a write that leaves it there is a removal.
+  it('expires every cached page at once for an archived post published again', async () => {
+    await publish('public', storedPost({ archived_at: '2026-11-17T00:00:00.000Z' }));
+
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
+  });
+
+  // Review, 2026-11-17: the post is read at the publish's start and written
+  // later; another request may have made it public in between.
+  it('expires every cached page at once when a post read as private is saved private', async () => {
+    await publish('private', storedPost({ visibility: 'private' }));
+
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
+  });
+
+  it('expires every cached page at once when a public post is saved private', async () => {
+    await publish('private', storedPost({}));
+
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
+  });
+});
+
+// Review, 2026-11-17: the post is read at the publish's start and written
+// later. Studio's dialog with its switch off and an agent's publish_post send
+// no mature mark, and a mark put on by another request in between must stay
+// on: the publish writes the mark off only when the request says so. The
+// publish RPC sets the mark only when the post it is sent carries the key
+// (upsert_post_with_resource_bundle, 20261105152921).
+describe('a post’s mature mark, which a publish writes off only when the request says so', () => {
+  const generation = {
+    id: 'gen-mark',
+    user_id: 'user-1',
+    status: 'succeeded',
+    model: 'nano-banana-2',
+    category: 'image',
+    creation_mode: null,
+    output_url: 'generated_images/user-1/orchard.jpg',
+    showcase_asset_path: null,
+    title: null,
+    description: null,
+    prompt: 'An orchard in the rain.',
+  };
+  const storedPost = {
+    id: 'post-mark',
+    title: 'Orchard in the rain',
+    description: null,
+    prompt: null,
+    body: null,
+    category: 'image',
+    is_nsfw: false,
+    visibility: 'public',
+    archived_at: null,
+    review_status: 'visible',
+    tombstoned_at: null,
+  };
+  const composed = { title: 'Orchard in the rain', resourceBundle: { accessMode: 'none' } };
+
+  /**
+   * Publishes with the post as the publish reads it (`stored`), and writes as
+   * the RPC does: the mark the post is sent with, else the row's own as it
+   * stands at the write (`markAtWrite`, put there by another request since
+   * the read), else the column's default for a new row, which the upsert also
+   * makes when the post was deleted after the read (`goneAtWrite`).
+   */
+  async function publish(
+    body: Record<string, unknown>,
+    options: {
+      stored?: Record<string, unknown> | null;
+      markAtWrite?: boolean;
+      goneAtWrite?: boolean;
+      dependencies?: Partial<ShowcasePublishServiceDependencies>;
+    } = {},
+  ) {
+    const stored = options.stored === undefined ? storedPost : options.stored;
+    let markAfterWrite: unknown = null;
+    const publishAtomically = vi.fn(async ({ post }: { post: Record<string, unknown> }) => {
+      markAfterWrite = 'is_nsfw' in post
+        ? post.is_nsfw
+        : options.goneAtWrite ? false : options.markAtWrite ?? stored?.is_nsfw ?? false;
+      return { postId: 'post-mark', visibility: 'public' as const, bundleId: null, bundleStatus: null };
+    });
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock(generation, null, stored ? { storedPost: stored } : {}).client,
+      body: { generationId: 'gen-mark', visibility: 'public', ...body },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({ outputUrl: mediaGeneration.outputUrl, createdLocation: null })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+        ]),
+        validatePostResourceBundleInput: vi.fn(() => null),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        loadRemixRecipeTerms: vi.fn(async () => ({ mode: null, bundleId: null, originGenerationId: null })),
+        planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [] })),
+        publishGenerationPostWithResourceBundleAtomically: publishAtomically,
+        ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+        requestPostEmbedding: vi.fn(async () => undefined),
+        ...options.dependencies,
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(publishAtomically).toHaveBeenCalledTimes(1);
+    return { sentPost: publishAtomically.mock.calls[0][0].post, markAfterWrite };
+  }
+
+  it.each([
+    ['a composed post', composed],
+    ['a visibility-only request', {}],
+  ])('keeps a mark put on since the publish read the post, for %s that sends none', async (_, body) => {
+    const { sentPost, markAfterWrite } = await publish(body, { markAtWrite: true });
+
+    expect(markAfterWrite).toBe(true);
+    expect(sentPost).not.toHaveProperty('is_nsfw');
+  });
+
+  it('leaves a new post’s mark to the column’s default when the request sends none', async () => {
+    const { sentPost, markAfterWrite } = await publish(composed, { stored: null });
+
+    expect(sentPost).not.toHaveProperty('is_nsfw');
+    expect(markAfterWrite).toBe(false);
+  });
+
+  it('writes the mark the request sends, on or off', async () => {
+    const on = await publish({ ...composed, visibility: 'private', isNsfw: true }, { stored: null });
+    expect(on.sentPost).toMatchObject({ is_nsfw: true });
+
+    // The composer that edits the mark sends it either way, and its "off" is the owner's.
+    const off = await publish({ ...composed, isNsfw: false }, { stored: { ...storedPost, is_nsfw: true } });
+    expect(off.sentPost).toMatchObject({ is_nsfw: false });
+    expect(off.markAfterWrite).toBe(false);
+  });
+
+  // Review, 2026-11-17: a post deleted after a read is made again by the
+  // upsert, with the column's default unless the mark is sent. A publish that
+  // takes the post as covered, from either read, sends the mark on, so the
+  // post it makes is covered as the media it secured are. A stale "on" can
+  // only cover a post again.
+  describe('a publish that takes the post as covered', () => {
+    const coveredPost = { ...storedPost, is_nsfw: true };
+
+    it('writes the mark on when the post is deleted after the publish read it', async () => {
+      const { sentPost, markAfterWrite } = await publish(composed, { stored: coveredPost, goneAtWrite: true });
+
+      expect(markAfterWrite).toBe(true);
+      expect(sentPost).toMatchObject({ is_nsfw: true });
+    });
+
+    it('writes the mark on when the post read first is gone by the later read', async () => {
+      const { sentPost, markAfterWrite } = await publish({ visibility: 'private' }, {
+        stored: null,
+        dependencies: {
+          loadExistingGenerationPostContent: vi.fn(async () => ({
+            is_nsfw: true,
+            title: 'Orchard in the rain',
+            description: null,
+            prompt: null,
+            body: null,
+            category: 'image',
+            resourceBundle: null,
+          })),
+        },
+      });
+
+      expect(markAfterWrite).toBe(true);
+      expect(sentPost).toMatchObject({ is_nsfw: true });
+    });
+
+    it('covers again a post uncovered since its read, the safe way to be stale', async () => {
+      const { markAfterWrite } = await publish(composed, { stored: coveredPost, markAtWrite: false });
+
+      expect(markAfterWrite).toBe(true);
+    });
   });
 });

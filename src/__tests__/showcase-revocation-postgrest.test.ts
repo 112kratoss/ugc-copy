@@ -274,7 +274,7 @@ describe.skipIf(!configPath||!connectionString)('background showcase revocation 
       await db.query('delete from public.posts where id=$1',[postId]);
       return response;
     };
-    await repairMediaPreviews(admin,{batchSize:5,invalidateFeedCache:vi.fn()});
+    await repairMediaPreviews(admin,{batchSize:5,invalidateShowcaseFeedAndRefreshEveryPage:vi.fn()});
     intercept=null;
     expect(uploaded,'The sweep never uploaded a preview').not.toBeNull();
     expect((await db.query('select reason from public.showcase_media_revocations where generation_id=$1 and showcase_asset_path=$2',[generationId,uploaded])).rows).toEqual([{reason:'sweep_unrecorded'}]);
