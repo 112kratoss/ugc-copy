@@ -176,6 +176,20 @@ test('more posts arriving under a reader at the bottom of Explore move nothing o
   expectNothingMoved(await settledFrames(page, title(PAGE_SIZE + 1)));
 });
 
+// The narrowest four-column grid: its row is the shortest a page can draw in the loading row's
+// place, and a reader who scrolled on into that row is the one a shorter page moves furthest.
+test('at 1280px, a reader who scrolls on into the loading row is not moved when the page comes', async ({ page, context, baseURL }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await answerOffline(context, page, baseURL!);
+  await openLane(page);
+
+  await toTheBottom(page);
+  await expect(page.locator('[data-showcase-load-more-skeleton]')).toBeAttached();
+  await toTheBottom(page);
+  await recordFrames(page, title(PAGE_SIZE));
+  expectNothingMoved(await settledFrames(page, title(PAGE_SIZE + 1)));
+});
+
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true });
 

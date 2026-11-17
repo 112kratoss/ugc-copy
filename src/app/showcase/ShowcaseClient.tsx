@@ -2502,15 +2502,21 @@ export default function ShowcaseClient({
                     </div>
                 ) : null}
 
-                {pageInfo.hasMore && !isLoadingInitialFeed && !hasDeferredItems && (
+                {/* Load More keeps its place while rows are still to be revealed, loading in
+                    place of its words: gone for those ticks, it took its height out of the page
+                    as a page came, and a reader at the bottom was moved up with it. */}
+                {(pageInfo.hasMore || hasDeferredItems) && !isLoadingInitialFeed && (
                     <div className="mt-12 text-center">
                         <button
                             type="button"
                             onClick={() => void loadMore()}
-                            disabled={isLoadingMore}
+                            disabled={isLoadingMore || hasDeferredItems}
+                            aria-label={isLoadingMore || hasDeferredItems ? 'Loading more posts' : undefined}
                             className="ui-focus-ring min-h-12 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-6 text-sm font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-3)] disabled:opacity-50"
                         >
-                            {isLoadingMore ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Load More'}
+                            {isLoadingMore || hasDeferredItems
+                                ? <Loader2 className="w-5 h-5 animate-spin mx-auto" aria-hidden="true" />
+                                : 'Load More'}
                         </button>
                     </div>
                 )}
