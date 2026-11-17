@@ -184,6 +184,10 @@ type Frame = {
   composerInitials: string | null;
   /** The thread's comments drawn. */
   comments: number;
+  /** The rail's pointer to the recipe as it reads ("Free recipe View"), null while none is shown. */
+  recipeLink: string | null;
+  /** The recipe's bar along the bottom edge as it reads (below 1180px), null while none is shown. */
+  recipeBar: string | null;
 };
 
 /**
@@ -196,6 +200,8 @@ const RECORDER = `(() => {
   window.__railFrames = frames;
   let last = '';
   const shown = (element) => Boolean(element && element.getClientRects().length > 0);
+  // What a shown element reads: the text of what is shown of it, as one line.
+  const reads = (element) => (shown(element) ? element.innerText.replace(/\\s+/g, ' ').trim() : null);
   function sample() {
     const rail = document.querySelector('[data-testid="canonical-post-actions"]');
     if (rail) {
@@ -225,6 +231,10 @@ const RECORDER = `(() => {
           ? composerRow.firstElementChild.textContent.trim()
           : null,
         comments: rail.querySelectorAll('ol[aria-label="Comment thread"] > li').length,
+        recipeLink: reads(rail.querySelector('[data-testid="recipe-jump-link"]')),
+        // The bar is the page's other link to the recipe, outside the rail.
+        recipeBar: reads(Array.from(document.querySelectorAll('a[href="#recipe"]'))
+          .find((link) => !rail.contains(link) && shown(link))),
       };
       const key = JSON.stringify(frame);
       if (key !== last) {
@@ -262,6 +272,11 @@ async function twoFrames(page: Page) {
  */
 const CHECK_ASKED = { ...COLD_PAGE, intervals: [50] };
 
+/** The rail's pointer to the post's free recipe, as anyone but its creator reads it. */
+const FREE_RECIPE_LINK = 'Free recipe View';
+/** The same pointer as the recipe's creator reads it. */
+const OWN_RECIPE_LINK = 'Your recipe View';
+
 /** The rail as the reader keeps it: the same in every frame it was drawn in. */
 function expectSteadyRail(frames: Frame[], reader: 'signed in' | 'signed out') {
   const all = JSON.stringify(frames);
@@ -288,6 +303,19 @@ function expectSteadyRail(frames: Frame[], reader: 'signed in' | 'signed out') {
   const firstDrawn = frames.findIndex((frame) => frame.comments > 0);
   expect(firstDrawn, all).toBeGreaterThanOrEqual(0);
   expect(frames.slice(firstDrawn).filter((frame) => frame.comments === 0), all).toEqual([]);
+  // The free recipe is offered to anyone but its creator, in every frame the rail is drawn in.
+  expect(drawn.filter((frame) => frame.recipeLink !== FREE_RECIPE_LINK), all).toEqual([]);
+}
+
+/**
+ * The creator's own recipe as they keep it on their own post: theirs in every frame, and never
+ * offered to them, in the rail or along the bottom edge.
+ */
+function expectOwnRecipe(frames: Frame[]) {
+  const all = JSON.stringify(frames);
+  expect(frames.some((frame) => frame.recipeLink === OWN_RECIPE_LINK), all).toBe(true);
+  expect(frames.filter((frame) => frame.recipeLink !== null && frame.recipeLink !== OWN_RECIPE_LINK), all).toEqual([]);
+  expect(frames.filter((frame) => frame.recipeBar !== null), all).toEqual([]);
 }
 
 /**
@@ -302,6 +330,7 @@ function expectOwnerRail(frames: Frame[]) {
   expect(frames.filter((frame) => frame.signInShown), all).toEqual([]);
   const offsets = new Set(frames.map((frame) => frame.commentsOffset).filter((offset) => offset !== null));
   expect([...offsets], all).toHaveLength(1);
+  expectOwnRecipe(frames);
 }
 
 const rail = (page: Page) => page.getByTestId('canonical-post-actions');
@@ -517,6 +546,72 @@ test("the post's creator, opening their own post from the Marketplace, has Owner
   const frames = await recordedFrames(page);
   await expectOwnerToolsOpen(page);
   expectOwnerRail(frames);
+});
+
+/**
+ * The room under the post, from the end of its column to the end of the page: the page's own
+ * 1.5rem, and 5rem more while the recipe's bar floats along the bottom edge.
+ */
+function roomUnderThePost(page: Page) {
+  return page.evaluate(() => {
+    const shell = document.querySelector('.canonical-post-shell');
+    const pageBody = shell?.parentElement;
+    return shell && pageBody
+      ? Math.round(pageBody.getBoundingClientRect().bottom - shell.getBoundingClientRect().bottom)
+      : null;
+  });
+}
+
+// Live sweep of 2026-11-17: on their own post the creator was offered their own
+// recipe, "Free recipe · View" in the rail and, below 1180px, "View free recipe" along the bottom
+// edge, until their own read of the recipe landed (live, the post later read "Your recipe · View").
+// The page is drawn once for everyone and the recipe's words came only from that read. Here the read
+// never answers (answerApi), so whatever the creator is shown comes from the page alone.
+test("the post's creator, loading their own post below 1180px, reads their recipe as theirs and is offered no bar for it, from the first frame", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const { checks } = await signIn(context, postCreator);
+  checks.hold();
+  await answerApi(page);
+  await page.addInitScript(RECORDER);
+
+  await page.goto(POST_PATH);
+  await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  await twoFrames(page);
+
+  checks.release();
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect(rail(page).getByText(COMMENT)).toBeVisible();
+  const frames = await recordedFrames(page);
+  expectOwnerRail(frames);
+  // No room is kept under the post for a bar that is never drawn.
+  expect(await roomUnderThePost(page)).toBeLessThan(40);
+});
+
+test('a signed-in reader below 1180px is offered the free recipe in the rail and along the bottom edge in every frame', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const { checks } = await signIn(context);
+  checks.hold();
+  await answerApi(page);
+  await page.addInitScript(RECORDER);
+
+  await page.goto(POST_PATH);
+  await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  await twoFrames(page);
+
+  checks.release();
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect(rail(page).getByText(COMMENT)).toBeVisible();
+  const frames = await recordedFrames(page);
+  const all = JSON.stringify(frames);
+  expectSteadyRail(frames, 'signed in');
+  // The bar comes with the end of the page's HTML, and once drawn it stays as it reads.
+  const firstBar = frames.findIndex((frame) => frame.recipeBar !== null);
+  expect(firstBar, all).toBeGreaterThanOrEqual(0);
+  expect(frames.slice(firstBar).filter((frame) => !frame.recipeBar?.startsWith('View free recipe')), all).toEqual([]);
+  // The post's end scrolls clear of the bar.
+  expect(await roomUnderThePost(page)).toBeGreaterThan(90);
 });
 
 // Review of #833: Supabase's check has no deadline of its own, and a stalled one held the thread

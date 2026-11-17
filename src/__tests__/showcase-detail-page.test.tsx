@@ -1125,6 +1125,115 @@ describe('Showcase detail page', () => {
       expect(consoleError).not.toHaveBeenCalled();
     });
 
+    // Sweep of 2026-11-17: on their own post the creator was offered their own recipe, "Free recipe ·
+    // View" in the rail and "View free recipe" along the bottom edge, until their own read landed.
+    describe('their recipe', () => {
+      const freeRecipe = {
+        id: 'bundle-1',
+        postId: POST_ID,
+        accessMode: 'free',
+        priceQuote: { formatted: 'Free', note: null },
+        resourceKinds: ['prompt'],
+        lockedPreview: null,
+        viewerCanAccess: false,
+        viewerIsOwner: false,
+        viewerHasPurchased: false,
+        salesCount: 0,
+        freeUnlockCount: 2,
+        resources: null,
+        purchasedRevision: null,
+        title: 'Recipe',
+        summary: '',
+        previewText: '',
+        priceUsdCents: 0,
+        allowRemix: false,
+        status: 'published',
+        seller: { id: 'user-1' },
+      };
+      const recipeLink = () => screen.getByTestId('recipe-jump-link');
+      const recipeBar = () => screen.queryByText('View free recipe');
+      /** The page's room for the bar along the bottom edge. */
+      const barRoom = () => document.querySelector('.canonical-post-cta-room');
+
+      beforeEach(async () => {
+        const detail = await getPublicPostDetailMock(POST_ID);
+        getPublicPostDetailMock.mockResolvedValue({ ...detail, resourceBundle: freeRecipe });
+      });
+
+      it("reads as theirs, with no bar offering it, while a cookie naming them is checked and before their read lands", async () => {
+        // Their own read of the recipe is never answered here: the page's words do not wait for it.
+        vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+        holdSessionCookieOf('user-1');
+        const { rerender } = render(await openPost());
+        expect(recipeLink()).toHaveTextContent(/^Your recipeView$/);
+        expect(recipeBar()).not.toBeInTheDocument();
+        expect(barRoom()).toBeNull();
+
+        signInAs('user-1');
+        rerender(await openPost());
+        expect(recipeLink()).toHaveTextContent(/^Your recipeView$/);
+        expect(recipeBar()).not.toBeInTheDocument();
+      });
+
+      it('is offered to anyone else while their cookie is checked, with its bar', async () => {
+        holdSessionCookieOf('user-2');
+        render(await openPost());
+        expect(recipeLink()).toHaveTextContent(/^Free recipeView$/);
+        expect(recipeBar()).toBeInTheDocument();
+        expect(barRoom()).not.toBeNull();
+      });
+
+      it("reads as theirs once their read lands, and as a buyer's once a buyer's does", async () => {
+        stubPageFetch({}, { viewerBundle: { ...freeRecipe, viewerIsOwner: true, viewerCanAccess: true } });
+        signInAs('user-1');
+        const { unmount } = render(await openPost());
+        await waitFor(() => expect(requestsTo(RECIPE_READ)).toHaveLength(1));
+        expect(recipeLink()).toHaveTextContent(/^Your recipeView$/);
+        expect(recipeBar()).not.toBeInTheDocument();
+        unmount();
+
+        stubPageFetch({}, { viewerBundle: { ...freeRecipe, viewerCanAccess: true, viewerHasPurchased: true } });
+        signInAs('user-2');
+        render(await openPost());
+        // A buyer's "Unlocked" is their read's alone: the page offers the recipe until it lands.
+        expect(recipeLink()).toHaveTextContent(/^Free recipeView$/);
+        await waitFor(() => expect(recipeLink()).toHaveTextContent(/^UnlockedView$/));
+        expect(recipeBar()).not.toBeInTheDocument();
+      });
+
+      // The page is drawn ahead of time for every viewer, and no cookie can be read on the server.
+      it("draws both in the server's HTML: the root element's mark shows the creator theirs and anyone else the pitch, before the first paint", async () => {
+        const root = document.documentElement;
+        onTestFinished(() => root.removeAttribute('data-auth-user'));
+        const page = await openPost();
+        const container = document.createElement('div');
+        container.innerHTML = renderToString(page);
+        document.body.appendChild(container);
+        onTestFinished(() => container.remove());
+        const link = within(container).getByTestId('recipe-jump-link');
+        const bar = within(container).getByText('View free recipe').closest('a') as HTMLElement;
+        const room = container.querySelector('.canonical-post-cta-room') as HTMLElement;
+        // What is shown of each: the words the pointer reads, and whether the bar and its room are drawn.
+        const reads = () => Array.from(link.querySelectorAll('span'))
+          .filter((span) => span.children.length === 0 && window.getComputedStyle(span).display !== 'none')
+          .map((span) => span.textContent)
+          .join(' · ');
+        const pitched = () => [bar, room].map((element) => window.getComputedStyle(element).display !== 'none');
+
+        // A visitor, and another account.
+        expect([reads(), pitched()]).toEqual(['Free recipe · View', [true, true]]);
+        root.setAttribute('data-auth-user', 'user-2');
+        expect([reads(), pitched()]).toEqual(['Free recipe · View', [true, true]]);
+        // The creator.
+        root.setAttribute('data-auth-user', 'user-1');
+        expect([reads(), pitched()]).toEqual(['Your recipe · View', [false, false]]);
+
+        const consoleError = vi.spyOn(console, 'error');
+        render(page, { container, hydrate: true });
+        expect(consoleError).not.toHaveBeenCalled();
+      });
+    });
+
     it("draws the report row and no Owner tools in the server's HTML for a creator a style rule cannot name", async () => {
       const detail = await getPublicPostDetailMock(POST_ID);
       getPublicPostDetailMock.mockResolvedValueOnce({
