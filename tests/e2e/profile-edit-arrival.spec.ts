@@ -188,10 +188,12 @@ test('a full load of Edit profile draws Connected apps only where it stays, on a
 });
 
 // Connected apps waits in the editor's boundary, so an editor whose code did not load (a dropped
-// connection, a deploy that rotated the chunk names) took it down too, and React.lazy keeps the
-// rejection, so every return failed the same way (review of #841). The editor's chunk fails its first
-// request here: a card says so with Try again, Connected apps is still drawn, and Try again asks for
-// the code anew and draws the editor.
+// connection, a deploy that rotated the chunk names) took it down too (review of #841). The editor's
+// chunk fails its first request here: a card says so, Connected apps is still drawn, and Try again
+// reloads the page, whose request for the chunk (the second) goes through and draws the editor. A
+// reload and not a retry in place: after a deploy a retry asks for the old name again, and in
+// production Turbopack's runtime hands a retry the same failed load; this server, `next dev
+// --webpack`, would retry, so the spec holds the reload itself.
 test('an editor whose code fails to load leaves Connected apps drawn, and Try again brings the editor', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await signIn(page);
@@ -219,8 +221,16 @@ test('an editor whose code fails to load leaves Connected apps drawn, and Try ag
   ]);
   expect(cardBottom).toBeLessThanOrEqual(appsTop);
 
+  // The document Try again leaves is marked, so the editor that follows is shown to be a new
+  // document's, not the old one's retry.
+  await page.evaluate(() => {
+    (window as unknown as { __beforeTryAgain?: boolean }).__beforeTryAgain = true;
+  });
+  const reloaded = page.waitForEvent('load', SLOW_PAGE);
   await page.getByRole('button', { name: 'Try again' }).click();
+  await reloaded;
   await expect(page.locator('#creator-profile-form')).toBeVisible(SLOW_PAGE);
+  expect(await page.evaluate(() => (window as unknown as { __beforeTryAgain?: boolean }).__beforeTryAgain ?? false)).toBe(false);
   expect(editorChunks.length).toBeGreaterThan(1);
   await expect(failed).toHaveCount(0);
   await expect(page.getByRole('region', { name: 'Connected apps' })).toBeVisible();

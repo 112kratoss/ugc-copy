@@ -32,15 +32,7 @@ type IdleWindow = Window & {
 
 // React.lazy in a Suspense boundary of this file's own, not next/dynamic: dynamic draws its loading
 // state in a boundary of its own, and what comes under the editor has to wait in the editor's.
-function lazyCreatorProfileCard() {
-  return lazy(() => import('@/app/creations/CreatorProfileCard'));
-}
-
-// One while it works. A lazy keeps a rejected import and throws it on every render after, which
-// would leave the editor unavailable for the rest of the visit after one dropped connection, so the
-// boundary below replaces it after a failure and Try again fetches the editor's code again (the
-// pattern of `FeedbackViewport`'s question).
-let CreatorProfileCard = lazyCreatorProfileCard();
+const CreatorProfileCard = lazy(() => import('@/app/creations/CreatorProfileCard'));
 
 /**
  * The editor's load can fail: a deploy rotated the chunk names while the tab was open, or the
@@ -49,6 +41,12 @@ let CreatorProfileCard = lazyCreatorProfileCard();
  * client-exception page, and with it what comes under the editor: Connected apps, the one place
  * to disconnect an agent. Kept here instead: a card says the editor did not load, with Try again,
  * and what comes under the editor is still drawn, under the card.
+ *
+ * Try again reloads the page, as Alerts' error card does: a reload fetches the chunk names of the
+ * deployment that is live now. An in-place retry cannot work in production: after a deploy it asks
+ * for the old name again, and Turbopack's runtime, which `next build` uses, keeps one loader per
+ * chunk URL and hands a retry the same failed load (`chunkResolvers`). `next dev --webpack`, the
+ * E2E server, retries, which is why a retry that renewed the lazy passed there (review of #841).
  */
 class EditorBoundary extends Component<
   { editor: EditorProps; placeholder: ReactNode; children?: ReactNode },
@@ -62,8 +60,6 @@ class EditorBoundary extends Component<
 
   componentDidCatch(error: unknown) {
     console.error('Failed to load the profile editor:', error);
-    // Try again asks for the editor's code anew.
-    CreatorProfileCard = lazyCreatorProfileCard();
     // Caught here, it never reaches Next's own reportError, which is what Sentry hears: hand it
     // on as an uncaught one would be.
     window.reportError?.(error);
@@ -77,9 +73,9 @@ class EditorBoundary extends Component<
           <StatusCallout
             tone="danger"
             title="The profile editor did not load."
-            body="Check your connection and try again."
+            body="Try again reloads the page."
             action={(
-              <Button variant="secondary" icon={RefreshCw} onClick={() => this.setState({ failed: false })}>
+              <Button variant="secondary" icon={RefreshCw} onClick={() => window.location.reload()}>
                 Try again
               </Button>
             )}
