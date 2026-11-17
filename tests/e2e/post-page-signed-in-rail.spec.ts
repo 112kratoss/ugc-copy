@@ -401,8 +401,13 @@ function expectOwnRecipe(frames: Frame[]) {
 function expectCreatorsOwnRail(frames: Frame[]) {
   const all = JSON.stringify(frames);
   expect(frames.length, 'frames of the rail').toBeGreaterThan(0);
+  // As in `expectSteadyRail`: a frame painted from part of the page's HTML has no Comments yet and
+  // can end between the recipe link and Owner tools (#852's CI run of 2026-11-17 painted one), so
+  // what a frame must show is asked of the frames with Comments drawn.
+  const drawn = frames.filter((frame) => frame.commentsOffset !== null);
+  expect(drawn.length, all).toBeGreaterThan(0);
   expect(frames.filter((frame) => frame.reportPostShown || frame.reportUserShown), all).toEqual([]);
-  expect(frames.filter((frame) => !frame.ownerToolsShown), all).toEqual([]);
+  expect(drawn.filter((frame) => !frame.ownerToolsShown), all).toEqual([]);
   const offsets = new Set(frames.map((frame) => frame.commentsOffset).filter((offset) => offset !== null));
   expect([...offsets], all).toHaveLength(1);
   expectOwnRecipe(frames);
