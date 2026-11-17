@@ -124,6 +124,10 @@ AS $$
     -- The kind of its file, as inferVisualContentType reads the stored
     -- output_url: a video, then a picture, then a sound, by the extension or
     -- the storage folder; none for any other address or for no file.
+    -- OFFSET 0, here and below, keeps the planner from pulling the two
+    -- subqueries up into the counts, which copied their CASEs into each
+    -- media filter's FILTER and ran the patterns once per filter and per
+    -- mention of file_kind: each row's kind is worked out once.
     CROSS JOIN LATERAL (
       SELECT CASE
         WHEN generations.output_url ~* '\.(mp4|mov|m4v|webm)(\?|$)'
@@ -133,6 +137,7 @@ AS $$
         WHEN generations.output_url ~* '\.(mp3|m4a|wav|aac)(\?|$)'
           OR starts_with(generations.output_url, 'generated_audio/') THEN 'audio'
       END AS file_kind
+      OFFSET 0
     ) AS output_file
     -- The filter that files it, as classifyVisualMedia reads its category and
     -- its file: a sound first, then a video, and a picture for anything else.
@@ -142,6 +147,7 @@ AS $$
         WHEN generations.category = 'video' OR output_file.file_kind = 'video' THEN 'videos'
         ELSE 'images'
       END AS studio_filter
+      OFFSET 0
     ) AS media
     WHERE generations.user_id IN (SELECT owner_ids.id FROM owner_ids)
       AND (

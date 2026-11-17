@@ -103,6 +103,13 @@ describe('owner profile counts: kinds and visibility migration', () => {
     }
   });
 
+  // Review of #865: pulled up into the counts, the two subqueries' CASEs were copied into each media
+  // filter's FILTER, and the patterns ran once per filter and per mention of file_kind.
+  it("works each row's kind out once: both subqueries are fenced from being pulled up", () => {
+    expect(migration).toContain('END AS file_kind\n      OFFSET 0\n    ) AS output_file');
+    expect(migration).toContain('END AS studio_filter\n      OFFSET 0\n    ) AS media');
+  });
+
   it('files a sound first, then a video, and a picture for anything else, as classifyVisualMedia does', () => {
     expect(migration).toContain(
       "WHEN generations.category = 'audio' OR output_file.file_kind = 'audio' THEN 'audio'\n"

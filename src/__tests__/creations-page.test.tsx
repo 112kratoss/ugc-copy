@@ -1310,6 +1310,91 @@ describe('CreationsPage', () => {
           postsByVisibility: { public: 0, unlisted: 1, private: 3 },
         });
       });
+
+      // Review of #865: a creation card changes the visibility of its post, which the loaded pages
+      // of the Post Library may not hold, and the split this page holds moved only for a loaded
+      // post: Public and Private stayed a post apart from the server's until a refresh.
+      describe("a creation card's post that the loaded pages do not hold", () => {
+        const stubLinkedPost = (visibility?: Promise<Response>) => stubStudioFetch((url, init) => {
+          if (url === GENERATIONS_PAGE_URL) {
+            return Promise.resolve(jsonResponse({
+              generations: [makeGeneration({
+                id: 'gen-linked',
+                title: 'Linked picture',
+                linked_post_id: 'post-older',
+                linked_post_title: 'Older post',
+                linked_post_visibility: 'public',
+                linked_post_archived_at: null,
+              })],
+              pagination: { limit: 36, hasMore: false, nextCursor: null },
+            }));
+          }
+          if (url === POSTS_PAGE_URL) {
+            // Two newer posts; the creation's own is on a page not loaded.
+            return Promise.resolve(jsonResponse({
+              posts: [makePost('a', 'public'), makePost('c', 'private')],
+              pageInfo: { hasMore: true, nextOffset: 36 },
+            }));
+          }
+          if (url === '/api/profile') {
+            return Promise.resolve(jsonResponse({
+              username: 'creator-user1',
+              stats: { ...LIBRARY_STATS, creations: 1, postsByVisibility: { public: 3, unlisted: 0, private: 2 } },
+            }));
+          }
+          if (url === '/api/posts/post-older' && init?.method === 'PUT') {
+            return visibility ?? Promise.resolve(jsonResponse({ success: true, visibility: 'private', postId: 'post-older' }));
+          }
+          return null;
+        });
+        const makeOlderPostPrivate = async () => {
+          fireEvent.click(await screen.findByRole('button', { name: 'Visibility of Older post: Public' }));
+          const menu = await screen.findByRole('menu', { name: 'Visibility of Older post' });
+          fireEvent.click(within(menu).getByRole('menuitemradio', { name: /private/i }));
+        };
+
+        it('moves the split from Public to Private, as the card reads the post', async () => {
+          stubLinkedPost();
+          const page = () => <><CreationsPage /><FeedbackViewport /></>;
+          const { rerender } = render(page());
+          expect(await screen.findByText('Linked picture')).toBeInTheDocument();
+
+          await makeOlderPostPrivate();
+          expect(await screen.findByText('Post is private.')).toBeInTheDocument();
+          expect(readSnapshot().profile?.stats).toMatchObject({
+            posts: 5,
+            postsByVisibility: { public: 2, unlisted: 0, private: 3 },
+          });
+
+          navigationState.searchParams = new URLSearchParams('view=posts');
+          rerender(page());
+          expect(postFilters()).toEqual(['All (5)', 'Public (2)', 'Private (3)', 'Archived (2)']);
+        });
+
+        it('moves it back when the change fails', async () => {
+          let failChange!: () => void;
+          stubLinkedPost(new Promise<Response>((resolve) => {
+            failChange = () => resolve(jsonResponse({ error: 'Could not change the post.' }, { status: 500 }));
+          }));
+          render(<><CreationsPage /><FeedbackViewport /></>);
+          expect(await screen.findByText('Linked picture')).toBeInTheDocument();
+
+          await makeOlderPostPrivate();
+          // On its way: moved at once.
+          await waitFor(() => expect(readSnapshot().profile?.stats).toMatchObject({
+            postsByVisibility: { public: 2, unlisted: 0, private: 3 },
+          }));
+
+          await act(async () => {
+            failChange();
+          });
+          expect(await screen.findByText('Could not change the post.')).toBeInTheDocument();
+          expect(readSnapshot().profile?.stats).toMatchObject({
+            posts: 5,
+            postsByVisibility: { public: 3, unlisted: 0, private: 2 },
+          });
+        });
+      });
     });
 
     describe('drawn from the snapshot before the refresh answers', () => {

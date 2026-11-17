@@ -816,12 +816,24 @@ export default function CreationsPage() {
     // kept in step.
     const patchPost = useCallback((postId: string, patch: PostLifecyclePatch) => {
         // Archived or restored, or made public or private, or put back when that failed: from one
-        // total to the other.
-        const patched = postsRef.current.find((post) => post.id === postId);
-        if (patched) {
-            moveHeldPostTotals(patched, {
-                visibility: patch.visibility ?? patched.visibility,
-                archivedAt: patch.archivedAt !== undefined ? patch.archivedAt : patched.archivedAt,
+        // total to the other. A creation card changes the visibility of its post, which the loaded
+        // pages may not hold: where it counted is then the card's copy (linked_post_*), read as the
+        // card reads it (resolveCreationWorkspaceCardState) and patched below with the post, so the
+        // answer and a rollback move from where the change left it (review of #865).
+        const loaded = postsRef.current.find((post) => post.id === postId);
+        const linkedFrom = loaded
+            ? undefined
+            : generationsRef.current.find((generation) => generation.linked_post_id === postId);
+        const before: StudioPostPlace | null = loaded ?? (linkedFrom
+            ? {
+                visibility: linkedFrom.linked_post_visibility ?? 'public',
+                archivedAt: linkedFrom.linked_post_archived_at ?? null,
+            }
+            : null);
+        if (before) {
+            moveHeldPostTotals(before, {
+                visibility: patch.visibility ?? before.visibility,
+                archivedAt: patch.archivedAt !== undefined ? patch.archivedAt : before.archivedAt,
             });
         }
         const nextPosts = postsRef.current.map((post) => {
