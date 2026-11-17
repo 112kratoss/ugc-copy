@@ -318,7 +318,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
           displayName={profile.displayName}
           sourceSurface="creator-profile"
           accessToken={accessToken}
-          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-5 py-2.5 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-70"
+          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-5 py-2.5 text-sm font-semibold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.1] aria-disabled:cursor-not-allowed aria-disabled:opacity-70"
         />
       </div>
     );
@@ -422,7 +422,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
           displayName={profile.displayName}
           sourceSurface="creator-profile"
           accessToken={accessToken}
-          className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-5 text-sm font-bold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-70"
+          className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-5 text-sm font-bold text-zinc-100 transition hover:border-white/20 hover:bg-white/[0.09] aria-disabled:cursor-not-allowed aria-disabled:opacity-70"
         />
         {/* Never on your own page. Drawn in the body: the card around this row clips what it holds. */}
         {isOwner ? null : (

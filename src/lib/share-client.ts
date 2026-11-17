@@ -22,6 +22,41 @@ export function withSharersInvite(url: string): string {
   return withInviteShareCode(url, currentInviteShareCode());
 }
 
+/**
+ * The browser took the link neither way: its share sheet refused it (refused, not dismissed) and
+ * so did the clipboard, or it has neither. By the time the sheet says no it has spent the click's
+ * activation, and a clipboard that wants one refuses the write too ("Write permission denied" in
+ * an embedded Chromium; in-app browsers and webviews alike), so trying again ends the same way.
+ * The link rides on the error for the person to copy by hand (`ShareLinkSheet`), whose Copy link
+ * is a press of its own (`copyPublicGenerationLink`, `copyCreatorProfileLink`). Nothing was shared,
+ * so nothing is counted.
+ */
+export class ShareLinkRefusedError extends Error {
+  readonly url: string;
+
+  constructor(url: string, cause: unknown) {
+    super('The browser refused both its share sheet and the clipboard', { cause });
+    this.name = 'ShareLinkRefusedError';
+    this.url = url;
+  }
+}
+
+async function writeLinkToClipboard(url: string) {
+  if (!navigator.clipboard?.writeText) {
+    throw new Error('Clipboard sharing is not supported in this browser');
+  }
+  await navigator.clipboard.writeText(url);
+}
+
+/** The share's last way out: the clipboard, or the link handed back for a copy by hand. */
+async function copyLinkOrHandBack(url: string) {
+  try {
+    await writeLinkToClipboard(url);
+  } catch (error) {
+    throw new ShareLinkRefusedError(url, error);
+  }
+}
+
 async function postShareClick({
   generationId,
   sourceSurface,
@@ -143,11 +178,7 @@ export async function sharePublicGeneration({
     }
   }
 
-  if (!navigator.clipboard?.writeText) {
-    throw new Error('Clipboard sharing is not supported in this browser');
-  }
-
-  await navigator.clipboard.writeText(url);
+  await copyLinkOrHandBack(url);
   await postShareClick({
     generationId,
     sourceSurface,
@@ -155,6 +186,27 @@ export async function sharePublicGeneration({
     accessToken,
   });
   return 'copy-link';
+}
+
+/**
+ * Copy link on the link a refused share handed back (`ShareLinkRefusedError`): a press of its own,
+ * which the browser may allow where the share's spent click was not. Throws where the clipboard
+ * refuses it even so, and the link stays in its field for a copy by hand. Counted as a copied link
+ * once it is on the clipboard, behind the copy: the person has the link then and waits for nothing.
+ */
+export async function copyPublicGenerationLink({
+  url,
+  generationId,
+  sourceSurface,
+  accessToken,
+}: {
+  url: string;
+  generationId: string;
+  sourceSurface: GenerationShareSourceSurface;
+  accessToken?: string | null;
+}): Promise<void> {
+  await writeLinkToClipboard(url);
+  void postShareClick({ generationId, sourceSurface, channel: 'copy-link', accessToken });
 }
 
 export async function shareCreatorProfile({
@@ -206,11 +258,7 @@ export async function shareCreatorProfile({
     }
   }
 
-  if (!navigator.clipboard?.writeText) {
-    throw new Error('Clipboard sharing is not supported in this browser');
-  }
-
-  await navigator.clipboard.writeText(url);
+  await copyLinkOrHandBack(url);
   await postProfileShareClick({
     username,
     sourceSurface,
@@ -218,4 +266,20 @@ export async function shareCreatorProfile({
     accessToken,
   });
   return 'copy-link';
+}
+
+/** `copyPublicGenerationLink`, for a creator profile's link. */
+export async function copyCreatorProfileLink({
+  url,
+  username,
+  sourceSurface,
+  accessToken,
+}: {
+  url: string;
+  username: string;
+  sourceSurface: ProfileShareSourceSurface;
+  accessToken?: string | null;
+}): Promise<void> {
+  await writeLinkToClipboard(url);
+  void postProfileShareClick({ username, sourceSurface, channel: 'copy-link', accessToken });
 }

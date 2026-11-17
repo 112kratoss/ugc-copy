@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import type { GenerationShareChannel } from '@/lib/share';
+import { ShareLinkRefusedError } from '@/lib/share-client';
 
 export type ShareActionState = 'idle' | 'loading' | 'copied' | 'shared' | 'error';
 
@@ -10,10 +11,24 @@ interface UseShareActionOptions {
   label: string;
   disabled?: boolean;
   onAction: () => Promise<GenerationShareChannel | null>;
+  /**
+   * Copy link on a link the browser refused both ways (`ShareLinkRefusedError`): puts it on the
+   * clipboard and counts the share, or throws where the clipboard refuses it even then.
+   */
+  onCopyLink: (url: string) => Promise<void>;
   onShared?: () => void;
 }
 
 const RESET_DELAY_MS = 2200;
+
+/**
+ * A share button while it shares is busy, not disabled: a focused button that goes disabled gives
+ * the focus up, and a keyboard or screen-reader user who pressed Share landed at the top of the
+ * page (2026-11-17). It carries `aria-disabled` and takes no press meanwhile (`runShareAction`).
+ * Callers dim it with `aria-disabled:` classes, as they did with `disabled:`; this keeps the arrow
+ * the app's disabled buttons show, which globals.css gives only to `:disabled`, over its pointer.
+ */
+export const SHARE_BUSY_STYLE: CSSProperties = { cursor: 'default' };
 
 function getShareActionLabel(state: ShareActionState, label: string) {
   switch (state) {
@@ -47,10 +62,16 @@ export function useShareAction({
   label,
   disabled = false,
   onAction,
+  onCopyLink,
   onShared,
 }: UseShareActionOptions) {
   const [state, setState] = useState<ShareActionState>('idle');
+  // The link the browser refused both ways, offered to copy by hand while it is set.
+  const [refusedLink, setRefusedLink] = useState<string | null>(null);
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A share under way. The button takes presses while it shares, so they are turned away here,
+  // not by the state: a press can come before React has drawn the share as under way.
+  const sharingRef = useRef(false);
 
   const clearResetTimer = () => {
     if (resetTimerRef.current) {
@@ -70,10 +91,13 @@ export function useShareAction({
   useEffect(() => clearResetTimer, []);
 
   const runShareAction = async () => {
-    if (disabled || state === 'loading') {
+    if (disabled || sharingRef.current) {
       return;
     }
 
+    sharingRef.current = true;
+    // A "Copied link" from the last share must not turn this one back to Share while it runs.
+    clearResetTimer();
     setState('loading');
 
     try {
@@ -88,10 +112,37 @@ export function useShareAction({
       onShared?.();
       queueReset();
     } catch (error) {
+      if (error instanceof ShareLinkRefusedError) {
+        // Not a failure to try again: a second try is refused the same way. The link, to copy.
+        setState('idle');
+        setRefusedLink(error.url);
+        return;
+      }
       console.error('Failed to share:', error);
       setState('error');
       queueReset();
+    } finally {
+      sharingRef.current = false;
     }
+  };
+
+  /** The sheet's Copy link: true once the link is on the clipboard, the share done and counted. */
+  const copyRefusedLink = async () => {
+    if (!refusedLink) {
+      return false;
+    }
+
+    try {
+      await onCopyLink(refusedLink);
+    } catch (error) {
+      console.error('Failed to copy the link:', error);
+      return false;
+    }
+
+    setState('copied');
+    onShared?.();
+    queueReset();
+    return true;
   };
 
   return {
@@ -100,5 +151,8 @@ export function useShareAction({
     resolvedLabel: getShareActionLabel(state, label),
     statusMessage: getShareActionStatus(state),
     runShareAction,
+    refusedLink,
+    copyRefusedLink,
+    dismissRefusedLink: () => setRefusedLink(null),
   };
 }

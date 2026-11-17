@@ -81,6 +81,8 @@ const NO_HAND_OVER: Record<string, string> = {
     'The publish panel draws once a run has finished on the client.',
   'src/components/PostComments.tsx':
     'The composer draws for a signed-in user, whom the post page’s server render never has; the report form opens on a click.',
+  'src/components/PublicShareButton.tsx':
+    'Its one field is read-only and draws in the sheet a share the browser refused opens.',
   'src/components/StudioModelPicker.tsx':
     'Its search draws in the model list, which the model chip opens.',
   'src/components/templates/TemplateDetailClient.tsx':
