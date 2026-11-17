@@ -74,12 +74,16 @@ export type ShowcasePostBundleAccess = BundleRefreshPayload;
  * their tools' place until it ended, about 16 frames (sweep of 2026-11-17).
  *
  * - `owner`: the check has named the creator.
- * - `owner-checking`: the browser's session cookie names the creator and the check has not ended
- *   (`useViewerSessionCheck`): their tools are drawn, inert until it ends.
+ * - `owner-checking`: the browser's session cookie names the creator and the check has not ended,
+ *   its deadline passed or not: their tools are drawn, inert until it ends. The deadline
+ *   (`useViewerSessionCheck`) stops the page waiting for the reader's own parts, the thread and the
+ *   composer's place, never for the creator's: only the check's answer says the cookie is not theirs.
+ *   Drawn as anyone else's past it, their Remix read "Remix", "Remix · Free", "Remix" when a late
+ *   answer named them (CI, 2026-11-17: the dev server sent supabase-js 8.2 s after the page's script).
  * - `unread`: the server's HTML and the render that hydrates it, where no cookie can be read. Both
  *   are drawn, and the root element's `data-auth-user` mark, set from the session cookie before the
  *   first paint (`app-shell-account-restore.ts`), shows the creator theirs and everyone else the row.
- * - `other`: anyone else, a visitor, and a check that found no one or outlasted its deadline.
+ * - `other`: anyone else: a visitor, a cookie naming someone else, and a check that ended with no one.
  */
 export type ShowcasePostOwnership = 'owner' | 'owner-checking' | 'unread' | 'other';
 
@@ -216,7 +220,8 @@ export function useShowcasePostViewer({
       : viewerCheck === 'unread'
         // A creator a style rule cannot name gets the row, as a visitor does, until the check ends.
         ? canStyleRuleNameAuthUser(creatorId) ? 'unread' : 'other'
-        : viewerCheck === 'checking' && readSupabaseAuthCookieUserId() === creatorId
+        // The provider is still checking the cookie, whatever its deadline says (`owner-checking`).
+        : hasAuthCookie && isLoading && readSupabaseAuthCookieUserId() === creatorId
           ? 'owner-checking'
           : 'other';
   const effectiveVisibility = useOwnerPostVisibility(postId, viewerIsOwner) ?? visibility;

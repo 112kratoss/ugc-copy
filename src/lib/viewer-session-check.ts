@@ -23,7 +23,9 @@ import {
  *   signed-in viewer, and what depends on who they are is not read yet.
  * - `visitor`: no one is signed in, or the check has outlasted its deadline (SESSION_CHECK_DEADLINE_MS
  *   from when it began, SESSION_CHECK_START_DEADLINE_MS for one that has not). Drawn and read as for
- *   a visitor, as before the check was waited for, until a late answer names someone.
+ *   a visitor, as before the check was waited for, until a late answer names someone. What only a
+ *   post's own creator gets on it does not fall back here: it waits for the check's answer
+ *   (`ShowcasePostOwnership` in useShowcasePostViewer).
  * - `signed-in`: the provider has named the viewer (`useAuth().user`).
  */
 export type ViewerSessionCheck = 'unread' | 'checking' | 'visitor' | 'signed-in';
