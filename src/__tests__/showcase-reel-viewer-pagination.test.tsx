@@ -1678,6 +1678,127 @@ describe('ShowcaseReelViewer pagination', () => {
       };
     }
 
+    // The owner's own post opened in the reel offered "Get free recipe" for about a second, until
+    // the recipe's read came back with their access (live sweep, 2026-11-17), and a press there
+    // asked the server to unlock it for them. A recipe the viewer is known to hold, their own or
+    // one the listing says they have, is held where it opens instead, never offered.
+    describe('a recipe the viewer holds, while its read is out', () => {
+      function holdBundleRead() {
+        let answer: (response: Response) => void = () => {};
+        const reads: string[] = [];
+        const fetchMock = stubRequests({
+          '/api/posts/post-1/resource-bundle': () => {
+            reads.push('read');
+            return new Promise<Response>((resolve) => { answer = resolve; });
+          },
+        });
+        return { fetchMock, reads, answer: (response: Response) => act(async () => { answer(response); }) };
+      }
+
+      function renderReelOf(asset: NonNullable<ShowcaseFeedItem['asset']>) {
+        return render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ id: 'post-1', title: 'Own Frame', asset })] })} />);
+      }
+
+      it("holds the creator's own recipe where it opens, and opens it when the read is in", async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'creator-1' };
+        const { fetchMock, answer } = holdBundleRead();
+
+        renderReelOf(freeAsset);
+
+        expect(await screen.findByText('Opening your recipe…')).toBeInTheDocument();
+        expect(screen.getAllByText('Your recipe').length).toBeGreaterThan(0);
+        expect(screen.queryByRole('button', { name: /get free recipe/i })).toBeNull();
+        expect(screen.queryByText('Get the reusable prompt and notes free.')).toBeNull();
+        // The rail's Recipe goes to the recipe; it never asks for a free unlock.
+        const railRecipe = screen.getByRole('button', { name: 'View recipe' });
+        fireEvent.click(railRecipe);
+        expect(fetchMock).not.toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-free', expect.anything());
+
+        await answer(new Response(JSON.stringify({
+          bundle: unlockedBundle(
+            [item({ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'own recipe prompt' })],
+            { accessMode: 'free', priceUsdCents: 0, viewerIsOwner: true },
+          ),
+        })));
+
+        expect(await screen.findByText('own recipe prompt')).toBeInTheDocument();
+        expect(screen.queryByText('Opening your recipe…')).toBeNull();
+        expect(screen.queryByRole('button', { name: /get free recipe/i })).toBeNull();
+      });
+
+      it('holds a recipe the listing says the reader has, as Unlocked, not at its price', async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'reader-1' };
+        const { answer } = holdBundleRead();
+
+        renderReelOf({ ...paidAsset, viewerHasUnlocked: true });
+
+        expect(await screen.findByText('Opening your recipe…')).toBeInTheDocument();
+        expect(screen.getAllByText('Unlocked').length).toBeGreaterThan(0);
+        expect(screen.queryByRole('button', { name: /unlock for/i })).toBeNull();
+
+        await answer(new Response(JSON.stringify({
+          bundle: unlockedBundle([item({ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'bought recipe prompt' })]),
+        })));
+
+        expect(await screen.findByText('bought recipe prompt')).toBeInTheDocument();
+      });
+
+      it('offers the recipe after all when its read finds the reader does not have it', async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'reader-1' };
+        const { answer } = holdBundleRead();
+
+        renderReelOf({ ...paidAsset, viewerHasUnlocked: true });
+        expect(await screen.findByText('Opening your recipe…')).toBeInTheDocument();
+
+        await answer(new Response(JSON.stringify({ bundle: { viewerCanAccess: false, viewerIsOwner: false, resources: null } })));
+
+        expect((await screen.findAllByRole('button', { name: /unlock for \$9\.00/i })).length).toBeGreaterThan(0);
+        expect(screen.queryByText('Opening your recipe…')).toBeNull();
+      });
+
+      it('says when the read fails, and asks again on Try again', async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'creator-1' };
+        let reads = 0;
+        stubRequests({
+          '/api/posts/post-1/resource-bundle': () => {
+            reads += 1;
+            return reads === 1
+              ? new Response(JSON.stringify({ error: 'Service unavailable' }), { status: 503 })
+              : new Response(JSON.stringify({
+                bundle: unlockedBundle(
+                  [item({ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'own recipe prompt' })],
+                  { viewerIsOwner: true },
+                ),
+              }));
+          },
+        });
+
+        renderReelOf(freeAsset);
+
+        expect(await screen.findByText('The recipe could not be opened.')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /get free recipe/i })).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+        expect(await screen.findByText('own recipe prompt')).toBeInTheDocument();
+        expect(reads).toBe(2);
+      });
+
+      it('still offers a recipe to a reader the listing does not say has it', async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'reader-1' };
+        holdBundleRead();
+
+        renderReelOf(freeAsset);
+
+        expect((await screen.findAllByRole('button', { name: /get free recipe/i })).length).toBeGreaterThan(0);
+        expect(screen.queryByText('Opening your recipe…')).toBeNull();
+      });
+    });
+
     it('shows a recipe of settings alone', async () => {
       authState.session = { access_token: 'token-1' };
       stubRequests({
