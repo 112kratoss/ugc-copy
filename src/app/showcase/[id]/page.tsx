@@ -4,7 +4,7 @@ import { cache } from 'react';
 
 import { JsonLd } from '@/components/JsonLd';
 import { OptionalAuth } from '@/components/RouteAuthBoundary';
-import { cachePublicPageRead } from '@/lib/public-page-cache';
+import { cachePublicPageRead, showcasePostPageCacheTags } from '@/lib/public-page-cache';
 import {
   getPostReferenceForShowcaseId,
   getPublicPostDetail,
@@ -39,10 +39,14 @@ type ShowcaseDetailPageProps = {
  * (`getPublicPostDetail`), so it answers not-found for everyone, its owner
  * included, as it did before.
  *
- * Every publish, edit, visibility change, archive, delete, console moderation
- * decision, profile change and account deletion invalidates the public pages'
- * tag (`PUBLIC_PAGE_CACHE_TAG`), which the read below carries into this page's
- * cache entry; a block or a report does not, as the page draws neither.
+ * The read below carries its tags into this page's cache entry: the public
+ * pages' removal tag, which a delete, an archive, a move to private, a
+ * take-down or an account deletion expires at once, and this address's own
+ * (`showcasePostPageCacheTags`), which an edit of the post, or of the post its
+ * remix credit names, refreshes in the background, and which the post coming
+ * into view expires at once (a not-found is never served stale). A profile
+ * change refreshes every page in the background; a block or a report does
+ * nothing here, as the page draws neither (`showcase-feed-cache.ts`).
  * `revalidate` is the backstop for what moves without one: counts, and a
  * take-down made with the moderation CLI (PUBLIC_PAGE_REVALIDATE_SECONDS says
  * why five minutes; kept equal to it).
@@ -77,7 +81,13 @@ async function readShowcasePostPage(id: string): Promise<ShowcasePostPageRead> {
     : { kind: 'missing' };
 }
 
-const readCachedShowcasePostPage = cachePublicPageRead(readShowcasePostPage, ['showcase-post-page-v1']);
+// v2: the read carries the address's own tags (an entry kept from v1 has only
+// the removal tag, so a background refresh would draw the page from it again).
+const readCachedShowcasePostPage = cachePublicPageRead(
+  readShowcasePostPage,
+  ['showcase-post-page-v2'],
+  showcasePostPageCacheTags,
+);
 
 /** A post id, and a legacy generation id, are both UUIDs. */
 const SHOWCASE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

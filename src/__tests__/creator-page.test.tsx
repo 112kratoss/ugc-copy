@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
     throw new Error('NEXT_NOT_FOUND');
   }),
   getCreatorProfilePageData: vi.fn(),
+  // Whom the handle names: the page is tagged by that id (`readCreatorId`).
+  getCreatorProfileSummary: vi.fn(),
   search: { current: '' },
   clientAuth: {
     current: { session: null, user: null } as {
@@ -42,6 +44,7 @@ vi.mock('@/lib/supabase-server', () => ({
 
 vi.mock('@/lib/creator-profile', () => ({
   getCreatorProfilePageData: (username: string, options: unknown) => mocks.getCreatorProfilePageData(username, options),
+  getCreatorProfileSummary: (username: string) => mocks.getCreatorProfileSummary(username),
 }));
 
 vi.mock('@/components/AuthProvider', () => ({
@@ -157,6 +160,7 @@ describe('creator page', () => {
     mocks.search.current = '';
     mocks.clientAuth.current = { session: null, user: null };
     mocks.getCreatorProfilePageData.mockResolvedValue(pageData());
+    mocks.getCreatorProfileSummary.mockResolvedValue({ id: 'creator-1', username: 'creator-name' });
     answerCreatorRead('clear');
   });
 
@@ -256,11 +260,23 @@ describe('creator page', () => {
     });
 
     it('answers not found for an unknown handle', async () => {
+      mocks.getCreatorProfileSummary.mockResolvedValue(null);
       mocks.getCreatorProfilePageData.mockResolvedValue(null);
 
       await expect(openPage()).rejects.toThrow('NEXT_NOT_FOUND');
       await expect(generateMetadata({ params: Promise.resolve({ username: 'creator-name' }) }))
         .resolves.toEqual({ title: 'Creator Not Found' });
+    });
+  });
+
+  describe('a handle that names someone else', () => {
+    // The lookup tags the page by the creator it found; a read that finds
+    // another account under the handle is no page of theirs under that tag.
+    it('answers not found rather than draw another account under the tags of the one the lookup found', async () => {
+      mocks.getCreatorProfileSummary.mockResolvedValue({ id: 'creator-1', username: 'creator-name' });
+      mocks.getCreatorProfilePageData.mockResolvedValue(pageData({ id: 'creator-2' }));
+
+      await expect(openPage()).rejects.toThrow('NEXT_NOT_FOUND');
     });
   });
 

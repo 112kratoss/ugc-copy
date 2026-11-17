@@ -14,12 +14,13 @@ import {
 } from '@/lib/marketplace-resource-list-cache';
 
 describe('marketplace resource list cache', () => {
-  it('expires the shared marketplace tag immediately', () => {
+  // A sale or a free unlock moves counts and removes nothing: the storefront
+  // is answered from the cache once more while it is read again behind it.
+  it('refreshes the shared marketplace tag in the background', () => {
     invalidateMarketplaceResourceListCache();
 
-    expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(
-      MARKETPLACE_RESOURCE_LIST_CACHE_TAG,
-      { expire: 0 },
-    );
+    expect(cacheMocks.revalidateTag.mock.calls).toEqual([
+      [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, 'max'],
+    ]);
   });
 });
