@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 import freeRemixPost from './fixtures/creation-post-free-recipe.json';
 
@@ -67,6 +67,15 @@ async function signIn(context: BrowserContext) {
   });
 }
 
+function hydrationCommitted(page: Page) {
+  return page.evaluate(() => {
+    type HostRoot = { stateNode?: { current?: { memoizedState?: { isDehydrated?: boolean } } } };
+    const key = Object.keys(document).find((name) => name.startsWith('__reactContainer$'));
+    const root = key ? (document as unknown as Record<string, HostRoot>)[key] : undefined;
+    return root?.stateNode?.current?.memoizedState?.isDehydrated === false;
+  });
+}
+
 test('a signed-in visit to a cached post page hydrates the server\'s HTML without a mismatch', async ({ page, context }) => {
   const problems: string[] = [];
   const note = (text: string) => {
@@ -85,11 +94,17 @@ test('a signed-in visit to a cached post page hydrates the server\'s HTML withou
   await page.goto(`/showcase/${freeRemixPost.post.id}`);
   await expect(page.getByRole('heading', { level: 1, name: freeRemixPost.post.title })).toBeVisible(COLD_PAGE);
 
-  // The session still arrives, after hydration: the signed-in-only row and the shell's Sign in.
-  await expect(page.getByRole('link', { name: /^Sign in/ })).toHaveCount(0, COLD_PAGE);
-  await expect(page.getByRole('button', { name: /^Report user/ })).toBeVisible(COLD_PAGE);
+  // The root's pre-paint script marks the page signed in from the Supabase cookie, and the CSS
+  // then hides Sign in and shows the server's Report user row, so those two checks are met by the
+  // server's HTML before any React runs. Two things only the script gives are waited for instead:
+  // the hydration's commit (the root no longer dehydrated), and Report user turning enabled, which
+  // needs AuthProvider's user: after the bypass is applied post-hydration (the fix), or after the
+  // failed hydration's client render (main). Either way the hydration attempt has settled.
+  await expect.poll(() => hydrationCommitted(page), COLD_PAGE).toBe(true);
+  await expect(page.getByRole('button', { name: 'Report user' })).toBeEnabled(COLD_PAGE);
+  await expect(page.getByRole('link', { name: /^Sign in/ })).toHaveCount(0);
 
-  // Hydration errors are logged during the first seconds; give a late one time to show.
-  await page.waitForTimeout(3_000);
+  // A console event can trail the render that raised it by a moment: a short wait, kept at 1 s.
+  await page.waitForTimeout(1_000);
   expect(problems).toEqual([]);
 });
