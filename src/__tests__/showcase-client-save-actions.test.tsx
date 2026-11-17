@@ -4,6 +4,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseClient, { type ShowcaseClientProps } from '@/app/showcase/ShowcaseClient';
+import {
+  EXPLORE_ACTIVE_FILTER_PILL_CLASS,
+  EXPLORE_ACTIVE_FILTER_ROW_CLASS,
+} from '@/app/showcase/explore-active-filters';
 import { resetSaverNoticeForTests } from '@/components/saver-notice';
 import {
   FEED_REMOVAL_UNDO_MS,
@@ -441,6 +445,38 @@ describe('ShowcaseClient save actions', () => {
     expect(phoneBrowse.className).toContain('sm:hidden');
     const heading = screen.getByRole('heading', { level: 1, name: 'Explore' });
     expect(entry.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // The server's shell draws the same row from the same filters (showcase-bootstrap-client.test.tsx),
+  // so the grid stays where it was as this page takes over (tests/e2e/explore-filter-row-steady.spec.ts).
+  it("draws the lane's active filters in the row the server's shell drew, each taking its filter off", () => {
+    renderShowcase(createShowcaseItem(), {
+      initialTool: 'magicbooklet',
+      initialUnlock: 'with-unlock',
+      initialResource: 'prompt',
+    });
+
+    const row = document.querySelector<HTMLElement>('[data-explore-active-filters]');
+    expect(row).not.toBeNull();
+    expect(row!.parentElement).toHaveAttribute('data-explore-filter-bar');
+    expect(row!.className).toBe(EXPLORE_ACTIVE_FILTER_ROW_CLASS);
+    const pills = within(row!).getAllByRole('button');
+    expect(pills.map((pill) => pill.textContent)).toEqual(['magicbooklet', 'Recipes', 'Prompts']);
+    for (const pill of pills) {
+      expect(pill.className).toBe(EXPLORE_ACTIVE_FILTER_PILL_CLASS);
+      expect(pill.querySelector('svg.lucide-x')).not.toBeNull();
+    }
+    expect(screen.getByRole('button', { name: /^Filters/ })).toHaveTextContent('Filters3');
+
+    fireEvent.click(within(row!).getByRole('button', { name: 'Recipes' }));
+    expect(mockReplace).toHaveBeenCalledWith('/showcase?sort=recent&tool=magicbooklet&resource=prompt', { scroll: false });
+  });
+
+  it('draws no row of active filters on a lane without one', () => {
+    renderShowcase(createShowcaseItem(), { initialCategory: 'video' });
+
+    expect(document.querySelector('[data-explore-active-filters]')).toBeNull();
+    expect(screen.getByRole('button', { name: /^Filters/ })).toHaveTextContent(/^Filters$/);
   });
 
   it('takes over the bootstrap prefix, then fills the rest one card per tick without scrolling', () => {

@@ -1,9 +1,13 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseBootstrapClient, {
   type ShowcaseBootstrapClientProps,
 } from '@/app/showcase/ShowcaseBootstrapClient';
+import {
+  EXPLORE_ACTIVE_FILTER_PILL_CLASS,
+  EXPLORE_ACTIVE_FILTER_ROW_CLASS,
+} from '@/app/showcase/explore-active-filters';
 import { createReelEntryState } from '@/lib/reel-history-entry';
 import { SHOWCASE_INITIAL_RENDER_COUNT, type ShowcaseFeedItem } from '@/lib/showcase';
 import {
@@ -169,6 +173,71 @@ describe('ShowcaseBootstrapClient', () => {
 
     // Items past the prefix wait for the interactive client.
     expect(screen.queryByText(`Trailing campaign ${SHOWCASE_INITIAL_RENDER_COUNT}`)).not.toBeInTheDocument();
+  });
+
+  // Drawn by the full page alone, the row moved the grid down as it took over: under a visitor's
+  // first scroll, or just after a signed-in reader's load (web sweep, 2026-11-17; measured by
+  // tests/e2e/explore-filter-row-steady.spec.ts).
+  it("draws the lane's active filters in the full page's row, each a link to the lane without it", async () => {
+    render(
+      <ShowcaseBootstrapClient
+        {...createProps()}
+        initialSort="recent"
+        initialTool="kling"
+        initialUnlock="with-unlock"
+        initialResource="prompt"
+        sourceToolOptions={[{ slug: 'veo', label: 'Veo' }, { slug: 'kling', label: 'Kling' }]}
+      />
+    );
+
+    const row = document.querySelector<HTMLElement>('[data-explore-active-filters]');
+    expect(row).not.toBeNull();
+    // In the filter bar, under its controls, as the full page draws it.
+    expect(row!.parentElement).toBe(screen.getByRole('navigation', { name: 'Explore filters' }));
+    expect(row!.className).toBe(EXPLORE_ACTIVE_FILTER_ROW_CLASS);
+    const pills = within(row!).getAllByRole('link');
+    expect(pills.map((pill) => [pill.textContent, pill.getAttribute('href')])).toEqual([
+      ['Kling', '/showcase?sort=recent&unlock=with-unlock&resource=prompt'],
+      ['Recipes', '/showcase?sort=recent&tool=kling&resource=prompt'],
+      ['Prompts', '/showcase?sort=recent&tool=kling&unlock=with-unlock'],
+    ]);
+    for (const pill of pills) {
+      expect(pill.className).toBe(EXPLORE_ACTIVE_FILTER_PILL_CLASS);
+      expect(pill.querySelector('svg.lucide-x')).not.toBeNull();
+    }
+    // The kind and sort links keep the lane's filters.
+    expect(screen.getByRole('link', { name: 'Images' })).toHaveAttribute(
+      'href',
+      '/showcase?category=image&sort=recent&tool=kling&unlock=with-unlock&resource=prompt'
+    );
+
+    // A press on one is its own page load, as on the shell's other filter links: it does not wake the full page.
+    fireEvent.pointerDown(pills[0], { button: 0 });
+    // The shell marks itself busy in the same task a hand-over starts, before the full page's
+    // module is asked for, so this fails at once where a hand-over began.
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+    await act(async () => Promise.resolve());
+    expect(fullClientModuleLoaded).not.toHaveBeenCalled();
+  });
+
+  it('draws no row of active filters on a lane without one', () => {
+    const { unmount } = render(<ShowcaseBootstrapClient {...createProps()} initialCategory="video" initialSort="recent" />);
+    expect(document.querySelector('[data-explore-active-filters]')).toBeNull();
+    unmount();
+
+    // `tool=` and `tool=all` filter by no tool.
+    render(<ShowcaseBootstrapClient {...createProps()} initialTool="" />);
+    expect(document.querySelector('[data-explore-active-filters]')).toBeNull();
+  });
+
+  // From 640px the header's eyebrow shows. Its line box takes its height from its first item, and
+  // the shell's 8px dot drew it 3px taller than the full page's icon: the grid moved up by 3px as
+  // the full page took over, on every lane.
+  it("leads the header's eyebrow with the full page's icon", () => {
+    render(<ShowcaseBootstrapClient {...createProps()} />);
+
+    const eyebrow = screen.getByText('Creator community');
+    expect(eyebrow.firstElementChild).toHaveClass('lucide-trending-up', 'h-3.5', 'w-3.5');
   });
 
   it('keeps the stable bootstrap through idle time without loading the heavy client', async () => {

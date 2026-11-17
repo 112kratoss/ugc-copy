@@ -15,6 +15,14 @@ import SkeletonLoader from '@/components/SkeletonLoader';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
+import {
+    EXPLORE_ACTIVE_FILTER_PILL_CLASS,
+    EXPLORE_ACTIVE_FILTER_ROW_CLASS,
+    RESOURCE_FILTERS,
+    UNLOCK_FILTERS,
+    exploreActiveFilters,
+    type ExploreActiveFilter,
+} from '@/app/showcase/explore-active-filters';
 import ShowcaseReel from '@/app/showcase/ShowcaseReel';
 import { SHOWCASE_REEL_WARM_IDLE_TIMEOUT_MS, warmShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
 import {
@@ -148,22 +156,6 @@ const SHOWCASE_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', {
 function formatShowcaseDate(value: string): string {
     return SHOWCASE_DATE_FORMATTER.format(new Date(value));
 }
-
-const UNLOCK_FILTERS: Array<{ id: ShowcaseUnlockFilter; label: string }> = [
-    { id: 'all', label: 'All' },
-    { id: 'with-unlock', label: 'Recipes' },
-    { id: 'free', label: 'Free' },
-    { id: 'paid', label: 'Paid' },
-];
-
-const RESOURCE_FILTERS: Array<{ id: ShowcaseResourceFilter; label: string }> = [
-    { id: 'all', label: 'All kinds' },
-    { id: 'prompt', label: 'Prompts' },
-    { id: 'workflow', label: 'Workflows' },
-    { id: 'files', label: 'Files' },
-    { id: 'notes', label: 'Notes' },
-    { id: 'remix', label: 'Remixable' },
-];
 
 export interface ShowcaseClientProps {
     initialFeed: ShowcaseFeedPage;
@@ -2159,32 +2151,24 @@ export default function ShowcaseClient({
         void refreshLane();
     };
 
-    const activeFilterPills = [
-        tool !== 'all' ? {
-            key: 'tool',
-            label: sourceToolOptions.find((option) => option.slug === tool)?.label ?? tool,
-            clear: () => {
-                setTool('all');
-                navigateWithFilters(category, sort, 'all', unlock, resource);
-            },
-        } : null,
-        unlock !== 'all' ? {
-            key: 'unlock',
-            label: UNLOCK_FILTERS.find((option) => option.id === unlock)?.label ?? unlock,
-            clear: () => {
-                setUnlock('all');
-                navigateWithFilters(category, sort, tool, 'all', resource);
-            },
-        } : null,
-        resource !== 'all' ? {
-            key: 'resource',
-            label: RESOURCE_FILTERS.find((option) => option.id === resource)?.label ?? resource,
-            clear: () => {
-                setResource('all');
-                navigateWithFilters(category, sort, tool, unlock, 'all');
-            },
-        } : null,
-    ].filter((pill): pill is { key: string; label: string; clear: () => void } => Boolean(pill));
+    // Named as the server's shell names them (`exploreActiveFilters`), which draws the same row
+    // until this page takes over from it.
+    const clearFilter: Record<ExploreActiveFilter['key'], () => void> = {
+        tool: () => {
+            setTool('all');
+            navigateWithFilters(category, sort, 'all', unlock, resource);
+        },
+        unlock: () => {
+            setUnlock('all');
+            navigateWithFilters(category, sort, tool, 'all', resource);
+        },
+        resource: () => {
+            setResource('all');
+            navigateWithFilters(category, sort, tool, unlock, 'all');
+        },
+    };
+    const activeFilterPills = exploreActiveFilters({ tool, unlock, resource }, sourceToolOptions)
+        .map((filter) => ({ ...filter, clear: clearFilter[filter.key] }));
     // Worded as the app's end of Explore: For you as it comes is all caught
     // up, and a narrower lane is named by its narrowest choice, the tool or
     // filter first as in the app, then the kind, then the sort.
@@ -2305,14 +2289,16 @@ export default function ShowcaseClient({
                     </div>
                   </div>
 
+                  {/* The server's shell and the loading outline draw this row too, from the
+                      lane's filters, so it is there before this page takes over. */}
                   {activeFilterPills.length > 0 ? (
-                    <div className="mt-2 flex gap-2 overflow-x-auto pb-1 sm:mt-3">
+                    <div data-explore-active-filters="" className={EXPLORE_ACTIVE_FILTER_ROW_CLASS}>
                         {activeFilterPills.map((pill) => (
                             <button
                                 key={pill.key}
                                 type="button"
                                 onClick={pill.clear}
-                                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm text-zinc-200 hover:bg-white/[0.08]"
+                                className={EXPLORE_ACTIVE_FILTER_PILL_CLASS}
                             >
                                 {pill.label}
                                 <X className="h-3.5 w-3.5" />

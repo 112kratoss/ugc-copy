@@ -1,5 +1,6 @@
 import { SkeletonBlock } from '@/components/TabLoadingShell';
 import { SearchEntryLink } from '@/components/search/SearchEntryLink';
+import ExploreActiveFiltersPlaceholder from '@/app/showcase/ExploreActiveFiltersPlaceholder';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import ReelHostMark from '@/components/ReelHostMark';
 
@@ -34,10 +35,13 @@ function LinePlaceholder({ lineClassName, barClassName }: { lineClassName: strin
  * from 640px the header with its eyebrow, title and two-line blurb at their
  * line heights and the "Browse recipes" pill (under the text below 1024px);
  * below 640px no header, the pill beside the search bar instead; the filter
- * bar's two rows below 1024px and one above, and cards of a 4:5 picture over
- * a title and byline, so the page lands where its placeholders stood at every
- * width. The status region keeps the tab's name for screen readers in a
- * hidden line, which is what a live region reads out.
+ * bar's two rows below 1024px and one above, with the row of the lane's
+ * active filters under them when the address names one (the outline is the
+ * only drawing without the page's props, so it reads them from the address);
+ * and cards of a 4:5 picture over a title and byline, so the page lands where
+ * its placeholders stood at every width. The status region keeps the tab's
+ * name for screen readers in a hidden line, which is what a live region reads
+ * out.
  */
 export default function ShowcaseLoading() {
   return (
@@ -55,9 +59,10 @@ export default function ShowcaseLoading() {
 
         <div className="mb-7 hidden flex-col gap-5 border-b border-[var(--ui-border-subtle)] pb-7 sm:flex lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0 flex-1">
-            {/* Eyebrow: an inline-flex text-xs row, which the page's 16px/1.5 text sets in
-                a 21px line box (measured, 2026-11-14). */}
-            <LinePlaceholder lineClassName="mb-3 h-[21px]" barClassName="h-3 w-40" />
+            {/* Eyebrow: an inline-flex text-xs row led by a 14px icon, which the page's 16px/1.5
+                text sets in an 18px line box (measured, 2026-11-17; the shell's 8px dot made it
+                21px, until the shell drew the icon too). */}
+            <LinePlaceholder lineClassName="mb-3 h-[18px]" barClassName="h-3 w-40" />
             {/* Title: text-4xl (40px line), sm:text-5xl (48px line). */}
             <LinePlaceholder lineClassName="h-10 sm:h-12" barClassName="h-8 w-44 sm:h-10 sm:w-52" />
             {/* Blurb: 24px lines, two from 640px (the header is not drawn below it). */}
@@ -87,6 +92,8 @@ export default function ShowcaseLoading() {
               <SkeletonBlock className="h-12 w-24" />
             </div>
           </div>
+          {/* The row of the lane's active filters, which the address names. */}
+          <ExploreActiveFiltersPlaceholder />
         </div>
 
         <div className={SHOWCASE_FEED_GRID_CLASS}>
