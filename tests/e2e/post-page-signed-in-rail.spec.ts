@@ -3,6 +3,7 @@ import { expect, test, type BrowserContext, type Page, type Request } from '@pla
 import freeRecipePost from './fixtures/creation-post-free-recipe.json';
 import paidRecipePost from './fixtures/creation-post-paid-recipe.json';
 import plainCreationPost from './fixtures/creation-post.json';
+import uploadRecipePost from './fixtures/upload-post-recipe-without-remix.json';
 
 // The owner's screen recording of the live site, 2026-11-16 (build 24ac32b80, signed in, Chrome on a
 // laptop): every post opened from the Marketplace drew its Comments card with "Sign in to join the
@@ -43,6 +44,16 @@ const PAID_POST: DrawnPost = {
   path: `/showcase/${paidRecipePost.post.id}`,
   title: paidRecipePost.post.title,
   creatorId: paidRecipePost.creator.id,
+};
+/**
+ * A picture made elsewhere whose free recipe gates a Remix it does not include
+ * (fixtures/upload-post-recipe-without-remix.json): its creator's own, and nobody else's.
+ */
+const UPLOAD_POST: DrawnPost = {
+  id: uploadRecipePost.post.id,
+  path: `/showcase/${uploadRecipePost.post.id}`,
+  title: uploadRecipePost.post.title,
+  creatorId: uploadRecipePost.creator.id,
 };
 
 test.describe.configure({ timeout: 180_000 });
@@ -104,6 +115,14 @@ const paidPostCreator = {
   id: paidRecipePost.creator.id,
   email: 'paid-recipe-creator@example.com',
   user_metadata: { name: paidRecipePost.creator.display_name },
+};
+
+/** The upload's creator. */
+const uploadPostCreator = {
+  ...user,
+  id: uploadRecipePost.creator.id,
+  email: 'upload-recipe-creator@example.com',
+  user_metadata: { name: uploadRecipePost.creator.display_name },
 };
 
 /** The account's profile row, which the top bar reads its name, picture and balance from. */
@@ -746,6 +765,55 @@ test('a signed-in reader below 1180px is offered a paid recipe at its price, in 
   expect(firstBar, all).toBeGreaterThanOrEqual(0);
   expect(frames.slice(firstBar).filter((frame) => !frame.recipeBar?.startsWith(PAID_RECIPE_BAR)), all).toEqual([]);
   expect(await roomUnderThePost(page)).toBeGreaterThan(90);
+});
+
+// Review of #847's second round: a recipe that gates the post's Remix without including it (its
+// `allow_remix` off, as here on a picture made elsewhere whose recipe holds a reference picture)
+// gives everyone else no Remix at all, and the server's HTML drew none for the creator either: their
+// open Remix came in after the page's script, moving Save, Comment and Share along the row.
+test("the post's creator, where nobody else gets a Remix, has their own open Remix from the first frame", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const { checks } = await signIn(context, uploadPostCreator);
+  checks.hold();
+  await answerApi(page, [], UPLOAD_POST);
+  await page.addInitScript(RECORDER);
+
+  await page.goto(UPLOAD_POST.path);
+  await expect(page.getByRole('heading', { level: 1, name: UPLOAD_POST.title })).toBeVisible(COLD_PAGE);
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  await twoFrames(page);
+  // While the check runs, it waits for it: a press would have sent the creator to sign in. Soft, so
+  // a Remix drawn late still reaches the frames below, which say when it came.
+  await expect.soft(page.getByTestId('media-detail-document').getByRole('button', { name: 'Remix', exact: true })).toBeDisabled({ timeout: 1_000 });
+
+  checks.release();
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect(rail(page).getByText(COMMENT)).toBeVisible();
+  await expect(page.getByTestId('media-detail-document').getByRole('button', { name: 'Remix', exact: true })).toBeEnabled();
+  const frames = await recordedFrames(page, { path: UPLOAD_POST.path });
+  // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
+  expectRemixInEveryFrame(await recordedRemixFrames(page, { path: UPLOAD_POST.path }), OPEN_REMIX);
+  expectOwnerRail(frames);
+});
+
+test('a signed-in reader is offered no Remix in any frame where the recipe does not include it', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const { checks } = await signIn(context);
+  checks.hold();
+  await answerApi(page, [], UPLOAD_POST);
+  await page.addInitScript(RECORDER);
+
+  await page.goto(UPLOAD_POST.path);
+  await expect(page.getByRole('heading', { level: 1, name: UPLOAD_POST.title })).toBeVisible(COLD_PAGE);
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  await twoFrames(page);
+
+  checks.release();
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect(rail(page).getByText(COMMENT)).toBeVisible();
+  const frames = await recordedFrames(page, { path: UPLOAD_POST.path });
+  expectRemixInEveryFrame(await recordedRemixFrames(page, { path: UPLOAD_POST.path }), '');
+  expectSteadyRail(frames, 'signed in');
 });
 
 // Review of #833: Supabase's check has no deadline of its own, and a stalled one held the thread

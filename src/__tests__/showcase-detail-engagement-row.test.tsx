@@ -381,10 +381,14 @@ describe('ShowcaseDetailEngagementRow', () => {
   // Free") or to unlock ("Remix · 900 credits") until their own read of the recipe landed. The
   // server's HTML draws their open Remix beside it, and the page's rule shows each its own.
   describe("the creator's open Remix in the server's HTML", () => {
+    // Third case, review of #847's second round: a recipe that gates the Remix without including it
+    // (`allowRemix` false, as a recipe of reference pictures on an upload reads) gives everyone else
+    // no Remix at all, and the creator's appeared only after hydration, moving Save along the row.
     it.each([
-      ['free', { access: 'free', priceLabel: 'Free' } as const, 'Remix · Free'],
-      ['paid', { access: 'paid', priceLabel: '900 credits' } as const, 'Remix · 900 credits'],
-    ])("is shown to the creator in place of a %s recipe's locked Remix, before the first paint, and hydrates as drawn", (_kind, recipeRemix, locked) => {
+      ['free', { access: 'free', priceLabel: 'Free' } as const, ['Remix · Free']],
+      ['paid', { access: 'paid', priceLabel: '900 credits' } as const, ['Remix · 900 credits']],
+      ['no-Remix', null, []],
+    ])("is shown to the creator in place of a %s recipe's Remix for everyone else, before the first paint, inert, and hydrates as drawn", (_kind, recipeRemix, others) => {
       const props = rowProps({
         canRemix: false,
         recipeRemix,
@@ -411,12 +415,14 @@ describe('ShowcaseDetailEngagementRow', () => {
         .filter((text) => /^Remix\b/.test(text));
 
       // A visitor, and another account.
-      expect(remixes()).toEqual([locked]);
+      expect(remixes()).toEqual(others);
       root.setAttribute('data-auth-user', 'user-2');
-      expect(remixes()).toEqual([locked]);
-      // The creator: their own creation, to remix and nothing to take or pay.
+      expect(remixes()).toEqual(others);
+      // The creator: their own creation, to remix and nothing to take or pay, inert until the
+      // page's script has named them.
       root.setAttribute('data-auth-user', 'user-1');
       expect(remixes()).toEqual(['Remix']);
+      expect(container.querySelector('[data-post-remix-owner="user-1"]')).toBeDisabled();
 
       const consoleError = vi.spyOn(console, 'error');
       render(<ShowcaseDetailEngagementRow {...props} />, { container, hydrate: true });
@@ -435,6 +441,27 @@ describe('ShowcaseDetailEngagementRow', () => {
       render(<ShowcaseDetailEngagementRow {...rowProps({ creatorRemixMark: 'user-1', creatorCanRemix: true })} />);
       const remix = screen.getByRole('button', { name: 'Remix' });
       expect(remix).not.toHaveAttribute('data-post-remix-owner');
+    });
+
+    // Review of #847's second round: while the session check ran on the creator's cookie their open
+    // Remix took a press, and with no account named yet it sent them to sign in.
+    it('holds the open Remix inert, and undimmed, while the session check runs, then lets it start the remix', async () => {
+      useAuthMock.mockReturnValue({ user: null, session: null });
+      const { rerender } = render(<ShowcaseDetailEngagementRow {...rowProps({ remixHeld: true })} />);
+      const remix = screen.getByRole('button', { name: 'Remix' });
+      expect(remix).toBeDisabled();
+      expect(remix).not.toHaveClass('opacity-60');
+      fireEvent.click(remix);
+      expect(pushMock).not.toHaveBeenCalled();
+      expect(requestShowcaseRemix).not.toHaveBeenCalled();
+
+      // The check names the creator.
+      useAuthMock.mockReturnValue({ user: { id: 'user-1' }, session: { access_token: 'token-1' } });
+      rerender(<ShowcaseDetailEngagementRow {...rowProps({ remixHeld: false })} />);
+      expect(remix).toBeEnabled();
+      fireEvent.click(remix);
+      await waitFor(() => expect(requestShowcaseRemix).toHaveBeenCalledWith({ accessToken: 'token-1', postId: 'post-1' }));
+      await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/create-image?remix=1'));
     });
   });
 });

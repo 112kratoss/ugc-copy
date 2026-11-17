@@ -37,6 +37,7 @@ export default function ShowcaseDetailEngagementRow({
   recipeRemix = null,
   creatorRemixMark,
   creatorCanRemix = false,
+  remixHeld = false,
 }: {
   postId: string;
   generationId: string | null;
@@ -61,13 +62,20 @@ export default function ShowcaseDetailEngagementRow({
   recipeRemix?: { access: 'paid' | 'free'; priceLabel: string } | null;
   /**
    * The post's creator, in the server's HTML and the render that hydrates it only, where no cookie
-   * can be read: the open Remix of their own creation is drawn beside the Remix locked behind the
-   * recipe, and the page's rule (`ownerFirstPaintRules`) shows the creator theirs and everyone else
-   * the locked one. Their own creation is theirs to remix, never to claim or to unlock.
+   * can be read: wherever their Remix is the open one and everyone else's is not, the open Remix of
+   * their own creation is drawn beside what everyone else gets (a Remix locked behind the recipe, or
+   * none), and the page's rule (`ownerFirstPaintRules`) shows each their own. Their own creation is
+   * theirs to remix, never to claim or to unlock.
    */
   creatorRemixMark?: string;
   /** The creator's own Remix is the open one (`creatorRemix` in useShowcasePostViewer). */
   creatorCanRemix?: boolean;
+  /**
+   * The open Remix waits for the session check: the post's creator while it runs on their cookie
+   * (`ownership` 'owner-checking'). Drawn as it will be and inert until the check names them, as
+   * their Owner tools are: a press before it would have sent them to sign in.
+   */
+  remixHeld?: boolean;
 }) {
   const router = useRouter();
   const { session, user } = useAuth();
@@ -148,9 +156,13 @@ export default function ShowcaseDetailEngagementRow({
   };
 
   const lockedRemix = !canRemix && recipeRemix && nsfwRevealed !== false ? recipeRemix : null;
-  // Where the server's HTML draws the creator's open Remix beside the locked one, each is marked
-  // for the page's rule.
-  const creatorsRemixMark = creatorRemixMark && lockedRemix && creatorCanRemix ? creatorRemixMark : undefined;
+  // Where the server's HTML draws the creator's open Remix beside what everyone else gets, both are
+  // marked for the page's rule: everyone else may get the locked Remix or none at all (a recipe that
+  // gates the Remix without including it), and in neither case may the creator's appear late, moving
+  // Save, Comment and Share along the row (review of #847).
+  const creatorsRemixMark = creatorRemixMark && creatorCanRemix && !canRemix ? creatorRemixMark : undefined;
+  // Inert while the creator is not yet named: in the server's HTML, and while their check runs.
+  const openRemixWaits = remixHeld || Boolean(creatorsRemixMark);
 
   return (
     <div className="mt-6 border-y border-white/8 py-1 text-xs font-semibold text-zinc-400">
@@ -183,12 +195,15 @@ export default function ShowcaseDetailEngagementRow({
           </button>
         ) : null}
         {canRemix || creatorsRemixMark ? (
+          // Dimmed only while a remix is on its way: one waiting for the session looks as it will.
           <button
             type="button"
             onClick={() => void handleRemix()}
-            disabled={isRemixing}
+            disabled={isRemixing || openRemixWaits}
             data-post-remix-owner={creatorsRemixMark}
-            className="ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 px-4 text-xs font-extrabold text-[var(--ui-primary)] transition hover:bg-[var(--ui-primary)]/20 disabled:opacity-60"
+            className={`ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 px-4 text-xs font-extrabold text-[var(--ui-primary)] transition hover:bg-[var(--ui-primary)]/20${
+              isRemixing ? ' opacity-60' : ''
+            }`}
           >
             {isRemixing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Repeat2 className="h-4 w-4" aria-hidden="true" />}
             Remix

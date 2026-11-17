@@ -17,7 +17,8 @@
 // another creator of its own (fixtures/creation-post.json), and an image post made from a creation
 // whose free recipe brings its Remix, by a third creator (fixtures/creation-post-free-recipe.json),
 // and one whose paid recipe locks its Remix at the recipe's price, by a fourth
-// (fixtures/creation-post-paid-recipe.json).
+// (fixtures/creation-post-paid-recipe.json), and a picture made elsewhere whose free recipe gates a
+// Remix it does not include, by a fifth (fixtures/upload-post-recipe-without-remix.json).
 // And one post editor's: an image post of
 // the E2E user's with one picture and no recipe (fixtures/post-composer-saved-twice.json). And
 // Pricing's referral terms: no active program, which Pricing drew from the failed read too. And
@@ -69,6 +70,12 @@ const freeRemixPost = require('../fixtures/creation-post-free-recipe.json');
 // of its own: post-page-signed-in-rail.spec.ts draws it for that creator and for another reader.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const paidRecipePost = require('../fixtures/creation-post-paid-recipe.json');
+// A picture made elsewhere (no creation), whose free recipe holds a reference picture and does not
+// include the post's Remix (`allow_remix` off): the recipe gates a Remix only its creator gets, and
+// nobody else has one to unlock. post-page-signed-in-rail.spec.ts draws it for that creator and for
+// another reader.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const uploadRecipePost = require('../fixtures/upload-post-recipe-without-remix.json');
 // The E2E user's two free recipes, each on a text post of theirs: the older one unlocked five times,
 // the newer one never. Recipe sales, /marketplace/sell, reads them in
 // getSellerPostResourceBundleDashboard (src/lib/post-resource-bundles-server.ts).
@@ -373,6 +380,48 @@ const READS = [
     path: '/rest/v1/generations',
     filters: { id: `eq.${paidRecipePost.post.generation_id}` },
     answer: ({ wantsObject }) => json(wantsObject ? paidRecipePost.generation : [paidRecipePost.generation], { 'content-range': '0-0/1' }),
+  },
+  {
+    // fetchPublicPostRow: the picture made elsewhere, by id. It has no creation to read.
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: `eq.${uploadRecipePost.post.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? uploadRecipePost.post : [uploadRecipePost.post], { 'content-range': '0-0/1' }),
+  },
+  {
+    // loadPostMediaItemsMap: its one picture, in the public bucket.
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: `in.(${uploadRecipePost.post.id})` },
+    answer: () => json(uploadRecipePost.media, { 'content-range': `0-${uploadRecipePost.media.length - 1}/${uploadRecipePost.media.length}` }),
+  },
+  {
+    // loadPublicPostCreator.
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `eq.${uploadRecipePost.creator.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? uploadRecipePost.creator : [uploadRecipePost.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // getPostResourceBundleDetailByPostId: its free recipe, a reference picture.
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { post_id: `eq.${uploadRecipePost.post.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? uploadRecipePost.bundle : [uploadRecipePost.bundle], { 'content-range': '0-0/1' }),
+  },
+  {
+    // hydrateBundleRows: the recipe's seller (loadProfileMap)...
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `in.(${uploadRecipePost.creator.id})` },
+    answer: () => json([uploadRecipePost.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // ...and the post it belongs to (loadLinkedPostMap).
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: `in.(${uploadRecipePost.post.id})` },
+    answer: () => json([uploadRecipePost.post], { 'content-range': '0-0/1' }),
   },
   {
     // fetchOwnerPostRow: the post by id and owner. maybeSingle() asks for a list.

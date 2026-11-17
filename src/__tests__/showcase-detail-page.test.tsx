@@ -140,17 +140,19 @@ vi.mock('@/components/PostComments', () => ({
 }));
 
 vi.mock('@/app/showcase/[id]/ShowcaseDetailEngagementRow', () => ({
-  default: ({ postId, canRemix, recipeRemix, creatorRemixMark, creatorCanRemix }: {
+  default: ({ postId, canRemix, recipeRemix, creatorRemixMark, creatorCanRemix, remixHeld }: {
     postId: string;
     canRemix: boolean;
     recipeRemix?: { access: string; priceLabel: string } | null;
     creatorRemixMark?: string;
     creatorCanRemix?: boolean;
+    remixHeld?: boolean;
   }) => (
     <div
       data-testid="showcase-detail-engagement-row"
       data-recipe-remix={recipeRemix ? `${recipeRemix.access}:${recipeRemix.priceLabel}` : ''}
       data-creator-remix={creatorRemixMark ? `${creatorRemixMark}:${creatorCanRemix ? 'open' : 'none'}` : ''}
+      data-remix-held={String(Boolean(remixHeld))}
     >
       {`${postId}:${canRemix}`}
     </div>
@@ -1223,10 +1225,13 @@ describe('Showcase detail page', () => {
         const { rerender, unmount } = render(await openPost());
         expect(row()).toHaveTextContent(`${POST_ID}:true`);
         expect(row()).toHaveAttribute('data-recipe-remix', '');
+        // Inert until the check names them, as their Owner tools are.
+        expect(row()).toHaveAttribute('data-remix-held', 'true');
         signInAs('user-1');
         rerender(await openPost());
         expect(row()).toHaveTextContent(`${POST_ID}:true`);
         expect(row()).toHaveAttribute('data-recipe-remix', '');
+        expect(row()).toHaveAttribute('data-remix-held', 'false');
         unmount();
 
         // Anyone else is offered it with the free recipe.
@@ -1236,6 +1241,7 @@ describe('Showcase detail page', () => {
         expect(row()).toHaveTextContent(`${POST_ID}:false`);
         expect(row()).toHaveAttribute('data-recipe-remix', 'free:Free');
         expect(row()).toHaveAttribute('data-creator-remix', '');
+        expect(row()).toHaveAttribute('data-remix-held', 'false');
         other.unmount();
 
         // The server's HTML: everyone else's, with the creator's own open Remix for the page's rule.

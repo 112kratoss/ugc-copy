@@ -349,6 +349,7 @@ export default function ShowcaseDetailBody({
       recipeRemix={remixOffer.recipeRemix}
       creatorRemixMark={recipeMark}
       creatorCanRemix={viewer.creatorRemix.canRemix}
+      remixHeld={ownership === 'owner-checking'}
     />
   );
 
