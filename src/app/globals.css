@@ -538,6 +538,23 @@ button:disabled,
     0 0 0 4px rgba(255, 170, 148, 0.55);
 }
 
+/* A post card of /blog, whose title's link covers it (its ::after): the card
+   draws the link's ring, around all of it. */
+.blog-post-card:has(a:focus-visible) {
+  box-shadow:
+    0 0 0 2px var(--ui-bg-app),
+    0 0 0 4px rgba(255, 170, 148, 0.55);
+}
+
+/* Forced colours drop box shadows, and the link draws no outline of its own:
+   the card outlines itself instead, in the system's colour. */
+@media (forced-colors: active) {
+  .blog-post-card:has(a:focus-visible) {
+    outline: 2px solid CanvasText;
+    outline-offset: 2px;
+  }
+}
+
 .ui-enter {
   animation: ui-rise var(--ui-duration-reveal) var(--ui-ease-standard) both;
 }
