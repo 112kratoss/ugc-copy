@@ -232,10 +232,24 @@ export default function PayoutPanel({
     return (
       <Surface as="section" variant="card" padding="none" className={clsx('flex flex-col p-4 sm:p-5', className)}>
         {heading}
-        <p className="mt-5 flex items-center gap-2 text-sm text-[var(--ui-text-muted)]">
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-          Loading your balance…
-        </p>
+        {/* The tile's common settled shape (nothing to withdraw yet), so the
+            recipes under it do not move when the balance arrives. The balance
+            line is held by a blank at its loaded size and the rails line
+            invisible at its own
+            (the minimum is the server's to say, so no figure is shown). */}
+        <Text as="p" variant="metric" className="mt-4" aria-hidden="true">{'\u00a0'}</Text>
+        <Text variant="caption" className="mt-1">
+          <span role="status" className="flex items-center gap-2">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+            Loading your balance…
+          </span>
+        </Text>
+        <div className="mt-auto pt-4" aria-hidden="true">
+          <div className="h-1.5 rounded-full bg-[var(--ui-surface-inset)]" />
+          <p className="invisible mt-2 text-xs font-semibold leading-5">
+            {creatorPayoutRailsLine('$000.00')}
+          </p>
+        </div>
       </Surface>
     );
   }
