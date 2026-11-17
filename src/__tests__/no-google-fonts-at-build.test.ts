@@ -20,7 +20,7 @@ describe('fonts at build time', () => {
     expect(offenders).toEqual([]);
   });
 
-  it.each(['display-font.ts', 'handwriting-font.ts', 'geist-font.ts'])('%s names only files that are committed', (module) => {
+  it.each(['display-font.ts', 'handwriting-font.ts', 'geist-font.ts', 'welcome-popup-font.ts'])('%s names only files that are committed', (module) => {
     const source = readFileSync(path.join(SRC, 'lib', module), 'utf8');
     const paths = [...source.matchAll(/path:\s*'(\.\.\/fonts\/[^']+)'/g)].map((m) => m[1]);
     expect(paths.length).toBeGreaterThan(0);

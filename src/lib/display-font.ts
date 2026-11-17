@@ -3,8 +3,13 @@ import localFont from 'next/font/local';
 /*
  * The app's display face (`DISPLAY_FONT` in `ugc-mobile/lib/theme.ts`) for the
  * onboarding screens: the sign-in page's headline and wordmark, the
- * welcome-credits popup and the first sign-up intro. Imported only where it is
- * used, never by the root layout, so no other page loads it.
+ * first sign-up intro. Imported only by the routes that draw it (`/login`,
+ * `/onboarding`), and nothing the root layout reaches may import it, however
+ * lazily: Next preloads a font on every route whose module graph reaches its
+ * loader, async chunks included, and the welcome-credits popup, which the root
+ * layout lazy-loads, took this face until 2026-11-17 and made all 71 routes
+ * preload it (and Caveat, which shares its CSS chunk). The popup has its own,
+ * `welcome-popup-font.ts`; `root-layout-font-graph.test.ts` holds the line.
  *
  * Bricolage Grotesque, served from `src/fonts/` (the files `next/font/google`
  * produced, see `src/fonts/README.md`) so the build never reaches Google. A face
