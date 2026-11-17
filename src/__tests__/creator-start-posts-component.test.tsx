@@ -71,6 +71,7 @@ describe('the empty canvas\'s start posts', () => {
         title="Your video will appear here"
         hint="Write a prompt, then Generate. Or remix a post below."
         frame={FRAME}
+        templatesLive
       />,
     );
 
@@ -88,6 +89,25 @@ describe('the empty canvas\'s start posts', () => {
       .toHaveAttribute('href', '/create-image?remix=gen-g&remixPost=giraffe');
     expect(within(section).getByRole('link', { name: 'See all in Explore' })).toHaveAttribute('href', '/showcase');
     expect(screen.getByRole('link', { name: 'Browse templates' })).toHaveAttribute('href', '/templates');
+  });
+
+  // The web sweep of 2026-11-17 followed "Browse templates" to "No templates are live yet".
+  it('offers no templates while none is live', async () => {
+    await renderSettled(
+      <CreatorEmptyCanvas
+        source={Promise.resolve([post('cats')])}
+        tool="motion"
+        icon={Video}
+        title="Your motion video will appear here"
+        hint="Add a picture and a clip, then Generate. Or remix a post below."
+        frame={FRAME}
+        templatesLive={false}
+      />,
+    );
+
+    expect(screen.getByRole('region', { name: 'Start from a post' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Browse templates' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Prefer a step-by-step start?')).not.toBeInTheDocument();
   });
 
   it('keeps the frame alone where the shelf has no posts, and for a remix', async () => {

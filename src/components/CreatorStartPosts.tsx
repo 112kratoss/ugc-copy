@@ -222,12 +222,13 @@ function CanvasPostsSection({ posts }: { posts: CreatorStartPost[] | null }) {
   );
 }
 
-function EmptyCanvasBody({ posts, icon, title, hint, frame }: {
+function EmptyCanvasBody({ posts, icon, title, hint, frame, templatesLive }: {
   posts: CreatorStartPost[] | null;
   icon: LucideIcon;
   title: string;
   hint: string;
   frame: ReactNode;
+  templatesLive: boolean;
 }) {
   if (posts && posts.length === 0) return <>{frame}</>;
   return (
@@ -237,13 +238,15 @@ function EmptyCanvasBody({ posts, icon, title, hint, frame }: {
       <div data-testid="creator-start-posts" className="hidden min-w-0 flex-col gap-6 min-[1120px]:flex">
         <CanvasEmptyLine icon={icon} title={title} hint={hint} />
         <CanvasPostsSection posts={posts} />
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-[var(--ui-text-muted)]">
-          <LayoutTemplate aria-hidden className="h-4 w-4 shrink-0" />
-          Prefer a step-by-step start?
-          <Link href="/templates" prefetch={false} className={CREATOR_NOTE_LINK_CLASS}>
-            Browse templates
-          </Link>
-        </p>
+        {templatesLive ? (
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-[var(--ui-text-muted)]">
+            <LayoutTemplate aria-hidden className="h-4 w-4 shrink-0" />
+            Prefer a step-by-step start?
+            <Link href="/templates" prefetch={false} className={CREATOR_NOTE_LINK_CLASS}>
+              Browse templates
+            </Link>
+          </p>
+        ) : null}
       </div>
     </>
   );
@@ -251,19 +254,22 @@ function EmptyCanvasBody({ posts, icon, title, hint, frame }: {
 
 /**
  * The empty canvas beside the column: where the result will land, then the posts to
- * start from, each Remix priced as the run it opens. Under the column, and where there
- * are no posts, the frame alone (`frame`, drawn in a `CreatorCanvasStage`), as before.
+ * start from, each Remix priced as the run it opens, and "Browse templates" while the
+ * catalog lists one (`templatesLive`; it led to an empty catalog until 2026-11-17).
+ * Under the column, and where there are no posts, the frame alone (`frame`, drawn in a
+ * `CreatorCanvasStage`), as before.
  */
-export function CreatorEmptyCanvas({ source, tool, icon, title, hint, frame }: {
+export function CreatorEmptyCanvas({ source, tool, icon, title, hint, frame, templatesLive = false }: {
   source: StartPostsSource;
   tool: RemixTool;
   icon: LucideIcon;
   title: string;
   hint: string;
   frame: ReactNode;
+  templatesLive?: boolean;
 }) {
   if (!source) return <>{frame}</>;
-  const shared = { icon, title, hint, frame };
+  const shared = { icon, title, hint, frame, templatesLive };
   return (
     <WithStartPosts
       source={source}

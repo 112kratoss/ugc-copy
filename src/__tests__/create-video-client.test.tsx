@@ -4,6 +4,7 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CreateVideoClient from '@/app/create-video/CreateVideoClient';
+import { CreatorTemplatesTile } from '@/components/CreatorColumn';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { resetFeedbackState } from '@/components/feedback-state';
 import { clearGenerationsOnPage, subscribeToGenerationOnPage } from '@/lib/generation-status-client';
@@ -654,6 +655,20 @@ describe('CreateVideoClient Kling video elements', () => {
       .filter((props) => props.context?.shotIndex === shotIndex)
       .at(-1);
   }
+
+  // The tile led to "No templates are live yet" (web sweep, 2026-11-17): Enhance takes its row alone then.
+  it('puts the Templates tile beside Enhance only while a template is live', async () => {
+    const lastLeading = () => (enhanceButtonPropsMock.mock.calls.at(-1)?.[0] as { leading?: React.ReactNode } | undefined)?.leading;
+    const view = render(<CreateVideoClient prefill={{}} />);
+    await waitFor(() => expect(enhanceButtonPropsMock).toHaveBeenCalled());
+    expect(lastLeading() ?? null).toBeNull();
+    view.unmount();
+
+    enhanceButtonPropsMock.mockClear();
+    render(<CreateVideoClient prefill={{}} templatesLive />);
+    await waitFor(() => expect(enhanceButtonPropsMock).toHaveBeenCalled());
+    expect((lastLeading() as React.ReactElement | undefined)?.type).toBe(CreatorTemplatesTile);
+  });
 
   // The server keeps a motion run out of the video creator's (creator-active-run-service).
   it('asks the API for a video run at work as it opens, with the session\'s token', async () => {

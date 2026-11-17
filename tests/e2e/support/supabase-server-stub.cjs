@@ -19,6 +19,7 @@
 // And one post editor's: an image post of
 // the E2E user's with one picture and no recipe (fixtures/post-composer-saved-twice.json). And
 // Pricing's referral terms: no active program, which Pricing drew from the failed read too. And
+// whether a template is live, which the creators ask: none, as the failed read answered too. And
 // /api/search/suggest's two calls (its rate limit, by its scope, and its read, for one query:
 // fixtures/search-suggestions.json), a route and not a page. And /api/search/starter's two
 // (its rate limit, by its scope, and its read for a visitor: fixtures/search-starter.json). And
@@ -371,6 +372,27 @@ const READS = [
       const program = { amount: 25, enabled: true };
       return json(wantsObject ? program : [program], { 'content-range': '0-0/1' });
     },
+  },
+  {
+    // hasLiveMediaTemplates (src/lib/live-media-templates.ts): whether /templates lists a template,
+    // which every creator page waits for before it draws its ways into the catalog. None, which
+    // leaves them out as the failed read did, the same on every run and without a failed read's
+    // log line on every creator a spec draws (the read itself gives up after one try and at most
+    // two seconds; 2026-11-17). Matched by its one-column select,
+    // its limit of one and every one of the catalog's filters, so the catalog's own read, the
+    // sitemap's and the poster repair's (hasRepairableTemplateDemoPosters, the same select and
+    // limit) still fail offline as before.
+    methods: ['GET'],
+    path: '/rest/v1/templates',
+    filters: {
+      select: 'id',
+      status: 'eq.active',
+      is_active: 'eq.true',
+      active_version_id: 'not.is.null',
+      creator_user_id: 'not.is.null',
+      limit: '1',
+    },
+    answer: () => json([], { 'content-range': '*/0' }),
   },
   {
     // readActiveReferralProgramTerms: the Invite & Earn terms Pricing's banner prints. No active

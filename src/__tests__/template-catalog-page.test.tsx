@@ -6,6 +6,11 @@ const mocks = vi.hoisted(() => ({
   createServiceClient: vi.fn(),
   listActiveMediaTemplates: vi.fn(),
   catalogProps: vi.fn(),
+  templatesLive: false,
+}));
+
+vi.mock('@/lib/live-media-templates', () => ({
+  loadTemplatesLive: async () => mocks.templatesLive,
 }));
 
 vi.mock('@/lib/server-helpers', () => ({
@@ -22,6 +27,9 @@ vi.mock('@/lib/media-template-service', () => ({
 vi.mock('@/components/RouteAuthBoundary', () => ({
   OptionalAuth: ({ children }: { children: ReactNode }) => (
     <div data-testid="optional-auth">{children}</div>
+  ),
+  RequireAuth: ({ children, returnTo }: { children: ReactNode; returnTo: string }) => (
+    <div data-testid="require-auth" data-return-to={returnTo}>{children}</div>
   ),
 }));
 
@@ -141,5 +149,22 @@ describe('TemplatesPage server bootstrap', () => {
       serverError
     );
     consoleError.mockRestore();
+  });
+});
+
+// The owner's "Browse templates" opened "No templates are live yet" (review of #840): the page
+// tells the catalog's client whether a template is live, as the creators' pages tell theirs.
+describe('MyTemplatesPage', () => {
+  it('tells the owner\'s catalog whether a template is live', async () => {
+    const { default: MyTemplatesPage } = await import('@/app/templates/mine/page');
+
+    for (const templatesLive of [true, false]) {
+      mocks.templatesLive = templatesLive;
+      mocks.catalogProps.mockClear();
+      const view = render(await MyTemplatesPage());
+      expect(screen.getByTestId('require-auth')).toHaveAttribute('data-return-to', '/templates/mine');
+      expect(mocks.catalogProps).toHaveBeenLastCalledWith({ mode: 'owner', templatesLive });
+      view.unmount();
+    }
   });
 });

@@ -233,6 +233,19 @@ function BootstrapRemixCredit({ credit }: { credit: RemixCredit }) {
     );
 }
 
+/** Browse recipes as the full client draws it (`BrowseRecipesLink`), a plain link until it takes over. */
+function BrowseRecipesStaticLink({ className = '' }: { className?: string }) {
+    return (
+        <a
+            href="/marketplace"
+            data-showcase-static-link="true"
+            className={`ui-focus-ring inline-flex min-h-12 items-center gap-2 whitespace-nowrap rounded-full border border-amber-300/20 bg-amber-400/10 px-5 text-sm font-bold text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15 ${className}`}
+        >
+            Browse recipes
+        </a>
+    );
+}
+
 function shouldDeferGlobalActivation(target: EventTarget | null): boolean {
     return target instanceof Element && Boolean(target.closest(
         '[data-showcase-static-link="true"], [data-showcase-bootstrap-card="true"]'
@@ -446,43 +459,43 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
 
     return (
         <div
-            className="ui-page ui-page-ambient min-h-screen py-5 font-[family-name:var(--font-geist-sans)] sm:py-7"
+            className="ui-page ui-page-ambient min-h-screen pt-3 pb-5 font-[family-name:var(--font-geist-sans)] sm:py-7"
             aria-busy={isActivating || undefined}
         >
             <ReelHostMark />
             <div className="studio-shell relative z-10">
-                {/* As the full page draws it (ShowcaseClient): the shell hands over without a move. */}
-                <SearchEntryLink className="mb-5 lg:hidden" />
-                <header className="ui-enter mb-7 flex flex-col gap-5 border-b border-[var(--ui-border-subtle)] pb-7 lg:flex-row lg:items-end lg:justify-between">
+                {/* As the full page draws it (ShowcaseClient): the shell hands over without a move.
+                    Below 640px the search bar shares its row with Browse recipes, and the header is
+                    the title alone, for screen readers. */}
+                <div className="mb-3 flex items-center gap-2 sm:mb-5 lg:hidden">
+                    <SearchEntryLink className="min-w-0 flex-1" />
+                    <BrowseRecipesStaticLink className="shrink-0 sm:hidden" />
+                </div>
+                <header className="ui-enter flex flex-col gap-5 border-[var(--ui-border-subtle)] sm:mb-7 sm:border-b sm:pb-7 lg:flex-row lg:items-end lg:justify-between">
                     <div>
-                        <div className="mb-3 inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-primary)]">
+                        <div className="mb-3 hidden items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-primary)] sm:inline-flex">
                             <span className="h-2 w-2 rounded-full bg-current" aria-hidden="true" />
                             Creator community
                         </div>
-                        <h1 className="text-4xl font-extrabold tracking-[-0.035em] text-[var(--ui-text-primary)] sm:text-5xl">
+                        <h1 className="sr-only text-4xl font-extrabold tracking-[-0.035em] text-[var(--ui-text-primary)] sm:not-sr-only sm:text-5xl">
                             Explore
                         </h1>
-                        <p className="mt-3 max-w-2xl text-sm leading-6 text-[var(--ui-text-muted)] sm:text-base">
+                        <p className="mt-3 hidden max-w-2xl text-sm leading-6 text-[var(--ui-text-muted)] sm:block sm:text-base">
                             Fresh creator posts with optional recipes. Browse the result, then save it, remix it, or open the reusable process.
                         </p>
                     </div>
                     {/* As the client draws it (ShowcaseClient): a post starts from the top bar's Create menu. */}
-                    <div className="flex flex-wrap gap-2">
-                        <a
-                            href="/marketplace"
-                            data-showcase-static-link="true"
-                            className="ui-focus-ring inline-flex min-h-12 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/10 px-5 text-sm font-bold text-amber-100 transition hover:border-amber-300/35 hover:bg-amber-400/15"
-                        >
-                            Browse recipes
-                        </a>
+                    <div className="hidden flex-wrap gap-2 sm:flex">
+                        <BrowseRecipesStaticLink />
                     </div>
                 </header>
 
                 <nav
                     aria-label="Explore filters"
-                    className="sticky top-[calc(var(--app-shell-topbar-height)+0.5rem)] z-30 mb-7 rounded-4xl border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-3 shadow-[0_12px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:p-4"
+                    data-explore-filter-bar=""
+                    className="sticky top-[calc(var(--app-shell-topbar-height)+0.5rem)] z-30 mb-3 rounded-4xl border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-2 shadow-[0_12px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:mb-7 sm:p-4"
                 >
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex flex-col gap-2 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <div className="relative min-w-0 w-full sm:w-auto">
                           <div className="flex gap-2 overflow-x-auto pb-1 pr-12 sm:pb-0 sm:pr-0" aria-label="Filter posts by media type">
                             {CATEGORY_LINKS.map((category) => {
@@ -493,7 +506,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                                         href={buildFilterHref(props, category.id, props.initialSort)}
                                         data-showcase-static-link="true"
                                         aria-current={isActive ? 'page' : undefined}
-                                        className={`ui-focus-ring flex min-h-12 shrink-0 items-center whitespace-nowrap rounded-full border px-4 text-sm font-bold transition ${isActive
+                                        className={`ui-focus-ring flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-full border px-4 text-sm font-bold transition sm:min-h-12 ${isActive
                                             ? 'border-[var(--ui-primary-strong)] bg-[var(--ui-primary)] text-[var(--ui-primary-on)]'
                                             : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)] hover:border-[var(--ui-border-default)] hover:text-[var(--ui-text-primary)]'
                                         }`}

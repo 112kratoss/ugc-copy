@@ -183,6 +183,25 @@ describe('TemplateCatalogClient initial data', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  // The owner's "Browse templates" opened "No templates are live yet" (review of #840), as the
+  // creators' ways in did: it is drawn while the catalog lists a template; Create template always.
+  it('offers the owner the catalog only while a template is live', async () => {
+    mocks.useAuth.mockReturnValue({
+      session: { access_token: 'owner-token', user: { id: 'owner-1' } },
+      isLoading: false,
+    });
+    mocks.listTemplates.mockResolvedValue([]);
+
+    const view = render(<TemplateCatalogClient mode="owner" templatesLive={false} />);
+    await waitFor(() => expect(mocks.listTemplates).toHaveBeenCalled());
+    expect(screen.queryByRole('link', { name: 'Browse templates' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Create template' })[0]).toHaveAttribute('href', '/templates/new');
+    view.unmount();
+
+    render(<TemplateCatalogClient mode="owner" templatesLive />);
+    expect(await screen.findByRole('link', { name: 'Browse templates' })).toHaveAttribute('href', '/templates');
+  });
+
   it('keeps owner mode authenticated and API-backed even if initial data is passed', async () => {
     mocks.useAuth.mockReturnValue({
       session: { access_token: 'owner-token', user: { id: 'owner-1' } },

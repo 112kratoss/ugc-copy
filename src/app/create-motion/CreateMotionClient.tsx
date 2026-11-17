@@ -262,6 +262,8 @@ type CreateMotionClientProps = {
     opening?: CreatorOpening | null;
     /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
     startPosts?: StartPostsSource;
+    /** Whether `/templates` lists a template: its ways in (the Templates tile, "Browse templates") are drawn only then. */
+    templatesLive?: boolean;
 };
 
 /**
@@ -298,6 +300,7 @@ function MotionCreator({
     visitorWelcomeCredits = null,
     opening = null,
     startPosts = null,
+    templatesLive = false,
     draft,
     form,
 }: CreateMotionClientProps & { draft: CreatorDraftOwner; form: CreatorForm }) {
@@ -1948,7 +1951,7 @@ function MotionCreator({
 
                         <EnhancePromptButton
                             variant="toolbar"
-                            leading={<CreatorTemplatesTile />}
+                            leading={templatesLive ? <CreatorTemplatesTile /> : null}
                             prompt={prompt}
                             onEnhanced={(text) => handlePromptChange(text)}
                             onCreditsUpdate={updateCredits}
@@ -2053,6 +2056,7 @@ function MotionCreator({
                         ) : (
                             <CreatorEmptyCanvas
                                 source={startPosts}
+                                templatesLive={templatesLive}
                                 tool="motion"
                                 icon={Play}
                                 title={isVisitor ? 'Try it before you sign up' : 'Your motion clip will appear here'}
