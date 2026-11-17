@@ -48,7 +48,14 @@ from (values
   -- A title that starts with a hyphenated compound of the word, new and
   -- saved, and an older one that starts with the word itself (review of #839).
   ('26', '02', 'Dog-ear notebook', 'Pages folded at the corners', 500, interval '0'),
-  ('27', '03', 'Dog on a porch', 'A sleepy hound in the afternoon', 0, interval '60 days')
+  ('27', '03', 'Dog on a porch', 'A sleepy hound in the afternoon', 0, interval '60 days'),
+  -- The same with the hyphens of Unicode an assistant or an editor writes:
+  -- U+2011, the non-breaking hyphen (which NFKC makes U+2010), and U+2010
+  -- itself (second review of #839).
+  ('28', '01', 'Fish' || chr(8209) || 'eye lens portrait', 'A wide round frame', 500, interval '0'),
+  ('29', '02', 'Fish in a glass bowl', 'A goldfish in clear water', 0, interval '60 days'),
+  ('30', '03', 'Star' || chr(8208) || 'shaped cookies', 'Sugar dusted biscuits', 500, interval '0'),
+  ('31', '01', 'Star over the desert', 'A bright night sky', 0, interval '60 days')
 ) as post(suffix, creator, title, body, saves, age);
 
 select public.rebuild_search_terms();
@@ -117,6 +124,16 @@ select is(
   pg_temp.posts_found('dog'),
   array['27', '26'],
   'a title that starts with the word leads one that starts with a hyphenated compound of it, new and saved as that one is'
+);
+select is(
+  pg_temp.posts_found('fish'),
+  array['29', '28'],
+  'and one whose compound is joined by a non-breaking hyphen (U+2011)'
+);
+select is(
+  pg_temp.posts_found('star'),
+  array['31', '30'],
+  'and one whose compound is joined by the hyphen U+2010'
 );
 
 -- Among posts that hold the query only inside longer words, the tiers keep

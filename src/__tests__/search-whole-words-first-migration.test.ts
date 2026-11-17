@@ -137,7 +137,7 @@ describe('search whole words first migration', () => {
     expect(posts).toContain('shown.title = v_query AS title_is_query');
     expect(posts).toContain("shown.title LIKE v_like || '%' AS title_starts");
     // A hyphen goes on with the word: 'cat-eye' does not start with 'cat' (review of #839).
-    expect(posts).toMatch(/shown\.title LIKE v_like \|\| '%'\s+AND substr\(shown\.title, char_length\(v_query\) \+ 1, 1\) !~ '\[\[:alnum:\]-\]' AS title_starts_whole/);
+    expect(posts).toMatch(/shown\.title LIKE v_like \|\| '%'\s+AND substr\(shown\.title, char_length\(v_query\) \+ 1, 1\) !~ '\[\[:alnum:\]\\u2010\\u2011-\]' AS title_starts_whole/);
     expect(posts).toContain('documents.tool_normalized = v_query OR shown.headline @@ v_tsquery AS headline_holds');
     expect(posts).toContain('documents.tool_normalized = v_query OR shown.headline @@ v_whole AS headline_whole');
     expect(posts).toContain('documents.search_vector @@ v_whole AS body_whole');

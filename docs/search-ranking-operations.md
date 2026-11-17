@@ -160,9 +160,10 @@ english stem: "cats" holds "cat"): `search_post_score` takes `p_whole_words`, an
 falls 30 under the tier its match would have had, so its best (a title starting with the letters,
 -10) is a whole tier under the least whole match (a caption, 0), and the partial tiers keep the order
 they had among themselves (a word still being typed, "portr", is ranked as before). A title starts
-with the query only where what follows it is no letter, digit or hyphen: a hyphen joins a compound,
-so "Cat-eye sunglasses" holds "cat" as a word of its title (10, the parser splits the compound) and
-ranks under "Cat on a windowsill" (20). Before it a one-word search, which is never blended, put a
+with the query only where what follows it is no letter, digit or hyphen (the ASCII one, U+2010, or
+U+2011, the non-breaking hyphen assistants write compounds with; an en dash still ends a word): a
+hyphen joins a compound, so "Cat-eye sunglasses" holds "cat" as a word of its title (10, the parser
+splits the compound) and ranks under "Cat on a windowsill" (20). Before it a one-word search, which is never blended, put a
 new or saved post that said "delicate", or a title "Category winners", above older posts about a
 cat: inside a tier freshness (up to 1.0) and engagement (up to 2.5) outweigh the text rank of one
 word in a long prompt. A title that is the query still scores 30 or more and nothing else does,

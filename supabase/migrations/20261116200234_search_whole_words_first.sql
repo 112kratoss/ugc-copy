@@ -48,7 +48,9 @@
 -- A title starts with the query when what follows it is no letter, digit or
 -- hyphen: a hyphen joins a compound, so "Cat-eye sunglasses" does not start
 -- with "cat" and holds it only as the parser splits the compound (10), under
--- "Cat on a windowsill" (20).
+-- "Cat on a windowsill" (20). The hyphens are the ASCII one, U+2010 and the
+-- non-breaking U+2011 that assistants write compounds with; an en dash or
+-- another dash still ends a word.
 --
 -- Every tier is still 10 from the next and the parts inside one add 8.8 at
 -- most, so every whole-word match ranks before every partial one, and the
@@ -483,9 +485,12 @@ BEGIN
           -- and 'cat-eye' with the first part of a word of its own (a hyphen
           -- joins a compound: cat-eye sunglasses are no cat). Such a title
           -- still holds 'cat' among its words, as the parser splits it
-          -- (title holds the words, 10), under 'cat on a sill'.
+          -- (title holds the words, 10), under 'cat on a sill'. A hyphen is
+          -- the ASCII one, U+2010 or U+2011, the non-breaking hyphen assistants
+          -- write compounds with (NFKC below makes it U+2010), each a regex
+          -- escape; an en dash or another dash still ends a word.
           shown.title LIKE v_like || '%'
-            AND substr(shown.title, char_length(v_query) + 1, 1) !~ '[[:alnum:]-]' AS title_starts_whole,
+            AND substr(shown.title, char_length(v_query) + 1, 1) !~ '[[:alnum:]\u2010\u2011-]' AS title_starts_whole,
           -- The title and the models are the vector's A lexemes, the tool
           -- names its C; the caption and the prompt are B and do not count.
           documents.tool_normalized = v_query OR shown.headline @@ v_tsquery AS headline_holds,
