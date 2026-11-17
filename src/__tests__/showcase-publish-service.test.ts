@@ -13,6 +13,11 @@ vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 vi.mock('@/lib/backend-logger', () => ({
   logBackendError: logBackendErrorMock,
 }));
+// A publish secures a covered post's media before it writes; the cases about
+// the mature mark check what the write is sent, not the copies.
+vi.mock('@/lib/nsfw-media-security', () => ({
+  secureNsfwPostMedia: vi.fn(async () => new Map()),
+}));
 // No case here reaches the database for the post's Made with: the ones about
 // that row pass a writer of their own.
 vi.mock('@/lib/post-source-tools-server', () => ({
@@ -3342,9 +3347,10 @@ describe('the cached public pages a publish reaches', () => {
 // Review, 2026-11-17: the post is read at the publish's start and written
 // later. Studio's dialog with its switch off and an agent's publish_post send
 // no mature mark, and a mark put on by another request in between must stay
-// on. The publish RPC sets the mark only when the post it is sent carries the
-// key (upsert_post_with_resource_bundle, 20261105152921).
-describe('a post’s mature mark, which a publish writes only when it is sent', () => {
+// on: the publish writes the mark off only when the request says so. The
+// publish RPC sets the mark only when the post it is sent carries the key
+// (upsert_post_with_resource_bundle, 20261105152921).
+describe('a post’s mature mark, which a publish writes off only when the request says so', () => {
   const generation = {
     id: 'gen-mark',
     user_id: 'user-1',
@@ -3377,20 +3383,24 @@ describe('a post’s mature mark, which a publish writes only when it is sent', 
    * Publishes with the post as the publish reads it (`stored`), and writes as
    * the RPC does: the mark the post is sent with, else the row's own as it
    * stands at the write (`markAtWrite`, put there by another request since
-   * the read), else the column's default for a new row.
+   * the read), else the column's default for a new row, which the upsert also
+   * makes when the post was deleted after the read (`goneAtWrite`).
    */
   async function publish(
     body: Record<string, unknown>,
     options: {
       stored?: Record<string, unknown> | null;
       markAtWrite?: boolean;
+      goneAtWrite?: boolean;
       dependencies?: Partial<ShowcasePublishServiceDependencies>;
     } = {},
   ) {
     const stored = options.stored === undefined ? storedPost : options.stored;
     let markAfterWrite: unknown = null;
     const publishAtomically = vi.fn(async ({ post }: { post: Record<string, unknown> }) => {
-      markAfterWrite = 'is_nsfw' in post ? post.is_nsfw : options.markAtWrite ?? stored?.is_nsfw ?? false;
+      markAfterWrite = 'is_nsfw' in post
+        ? post.is_nsfw
+        : options.goneAtWrite ? false : options.markAtWrite ?? stored?.is_nsfw ?? false;
       return { postId: 'post-mark', visibility: 'public' as const, bundleId: null, bundleStatus: null };
     });
     const result = await publishGenerationToShowcaseForRoute({
@@ -3444,24 +3454,45 @@ describe('a post’s mature mark, which a publish writes only when it is sent', 
     expect(off.markAfterWrite).toBe(false);
   });
 
-  // The post read first is gone by the later read, and the publish makes it
-  // again: it keeps the mark that post had rather than the column's default.
-  it('keeps the mark of a post deleted since the publish first read it, which the publish makes again', async () => {
-    const { sentPost } = await publish({ visibility: 'private' }, {
-      stored: null,
-      dependencies: {
-        loadExistingGenerationPostContent: vi.fn(async () => ({
-          is_nsfw: true,
-          title: 'Orchard in the rain',
-          description: null,
-          prompt: null,
-          body: null,
-          category: 'image',
-          resourceBundle: null,
-        })),
-      },
+  // Review, 2026-11-17: a post deleted after a read is made again by the
+  // upsert, with the column's default unless the mark is sent. A publish that
+  // takes the post as covered, from either read, sends the mark on, so the
+  // post it makes is covered as the media it secured are. A stale "on" can
+  // only cover a post again.
+  describe('a publish that takes the post as covered', () => {
+    const coveredPost = { ...storedPost, is_nsfw: true };
+
+    it('writes the mark on when the post is deleted after the publish read it', async () => {
+      const { sentPost, markAfterWrite } = await publish(composed, { stored: coveredPost, goneAtWrite: true });
+
+      expect(markAfterWrite).toBe(true);
+      expect(sentPost).toMatchObject({ is_nsfw: true });
     });
 
-    expect(sentPost).toMatchObject({ is_nsfw: true });
+    it('writes the mark on when the post read first is gone by the later read', async () => {
+      const { sentPost, markAfterWrite } = await publish({ visibility: 'private' }, {
+        stored: null,
+        dependencies: {
+          loadExistingGenerationPostContent: vi.fn(async () => ({
+            is_nsfw: true,
+            title: 'Orchard in the rain',
+            description: null,
+            prompt: null,
+            body: null,
+            category: 'image',
+            resourceBundle: null,
+          })),
+        },
+      });
+
+      expect(markAfterWrite).toBe(true);
+      expect(sentPost).toMatchObject({ is_nsfw: true });
+    });
+
+    it('covers again a post uncovered since its read, the safe way to be stale', async () => {
+      const { markAfterWrite } = await publish(composed, { stored: coveredPost, markAtWrite: false });
+
+      expect(markAfterWrite).toBe(true);
+    });
   });
 });

@@ -1167,17 +1167,14 @@ export async function publishGenerationToShowcaseForRoute({
     slug: 'magicbooklet',
   });
   const postPayload = {
-    // The mature mark is written only when sent (the RPC sets it only when the
-    // key is here): a post already there keeps its own as it stands at the
-    // write, not as read above, so one covered since then stays covered, and a
-    // new post takes the column's default. The exception is a post read
-    // covered first and gone by the later read, which this publish makes
-    // again: it keeps its mark.
-    ...(typeof requestBody.isNsfw === 'boolean'
-      ? { is_nsfw: requestBody.isNsfw }
-      : !existingRating.data && isNsfw
-        ? { is_nsfw: true }
-        : {}),
+    // The mature mark (the RPC sets it only when the key is here). On whenever
+    // this publish takes the post as covered, sent or read: a post deleted
+    // since a read is made again by the upsert, and stays covered as the media
+    // secured above are. A stale "on" can only cover a post again. Off only
+    // when the request says so: otherwise a post already there keeps its own
+    // as it stands at the write, so one covered since the read stays covered,
+    // and a new post takes the column's default.
+    ...(isNsfw ? { is_nsfw: true } : requestBody.isNsfw === false ? { is_nsfw: false } : {}),
     // The caller's post, whichever of its identities made the creation.
     user_id: userId,
     visibility: effectiveVisibility,
