@@ -49,8 +49,10 @@ export default function MatureContentSetting({
   const [attempt, setAttempt] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  // The read in flight. A change stops it: an answer read before the change
-  // would draw the setting back as it was.
+  // The read in flight. A change that goes ahead stops it: an answer read
+  // before the change would draw the setting back as it was. A question
+  // answered "Not now" leaves it running, so a setting drawn stale (Back) is
+  // still put right by it.
   const readRef = useRef<AbortController | null>(null);
   const askToConfirm = useConfirmation();
 
@@ -77,8 +79,8 @@ export default function MatureContentSetting({
 
   const changePreference = async (showMature: boolean) => {
     if (preference.status !== 'ready' || isSaving) return;
-    readRef.current?.abort();
     if (showMature && !(await askToConfirm(TURN_ON_QUESTION))) return;
+    readRef.current?.abort();
 
     setIsSaving(true);
     setSaveError(null);

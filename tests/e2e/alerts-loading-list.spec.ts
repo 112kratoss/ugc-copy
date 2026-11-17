@@ -287,7 +287,9 @@ test('Mark all read neither acts nor lights up with nothing unread, and turns on
   await page.getByRole('button', { name: 'Refresh alerts' }).click();
   await expect(page.getByText('2 unread alerts')).toBeVisible();
   await expect(markAll).toBeEnabled();
-  expect(await look()).not.toEqual(resting);
+  // Read until the colours have moved: the change from rest runs a 150ms transition.
+  await expect.poll(look).not.toEqual(resting);
+  await expect.poll(async () => (await look()).background).not.toBe(resting.background);
   await markAll.click();
   await expect(page.getByText('0 unread alerts')).toBeVisible();
   expect(markAllRequests).toBe(1);

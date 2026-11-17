@@ -186,3 +186,42 @@ test('a full load of Edit profile draws Connected apps only where it stays, on a
 
   expectConnectedAppsDrawnWhereItStays(frames, shifts);
 });
+
+// Connected apps waits in the editor's boundary, so an editor whose code did not load (a dropped
+// connection, a deploy that rotated the chunk names) took it down too, and React.lazy keeps the
+// rejection, so every return failed the same way (review of #841). The editor's chunk fails its first
+// request here: a card says so with Try again, Connected apps is still drawn, and Try again asks for
+// the code anew and draws the editor.
+test('an editor whose code fails to load leaves Connected apps drawn, and Try again brings the editor', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signIn(page);
+  // Compiled once, so the failed request is the browser's, not the compile's.
+  await page.goto('/profile/edit', SLOW_PAGE);
+  await expect(page.locator('#creator-profile-form')).toBeVisible(SLOW_PAGE);
+
+  const editorChunks: string[] = [];
+  await page.route(/CreatorProfileCard/, (route) => {
+    if (route.request().resourceType() !== 'script') return route.continue();
+    editorChunks.push(route.request().url());
+    return editorChunks.length === 1 ? route.abort('connectionfailed') : route.continue();
+  });
+  await page.reload();
+  const failed = page.getByRole('alert').filter({ hasText: 'The profile editor did not load.' });
+  await expect(failed).toBeVisible(SLOW_PAGE);
+  expect(editorChunks).toHaveLength(1);
+  await expect(page.locator('#creator-profile-form')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Connected apps' })).toBeVisible();
+  await expect(page.getByText('No apps connected')).toBeVisible();
+  // The card stands where the editor would: above Connected apps.
+  const [cardBottom, appsTop] = await Promise.all([
+    failed.evaluate((card) => card.getBoundingClientRect().bottom),
+    page.getByRole('region', { name: 'Connected apps' }).evaluate((apps) => apps.getBoundingClientRect().top),
+  ]);
+  expect(cardBottom).toBeLessThanOrEqual(appsTop);
+
+  await page.getByRole('button', { name: 'Try again' }).click();
+  await expect(page.locator('#creator-profile-form')).toBeVisible(SLOW_PAGE);
+  expect(editorChunks.length).toBeGreaterThan(1);
+  await expect(failed).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Connected apps' })).toBeVisible();
+});

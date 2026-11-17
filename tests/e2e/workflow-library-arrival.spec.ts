@@ -94,7 +94,9 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 375, height: 812 
   });
 }
 
-for (const viewport of [{ width: 375, height: 812 }, { width: 1440, height: 900 }]) {
+// A phone's stacked controls, 768px with the side navigation (where the controls share the row with
+// the least room), and a desktop.
+for (const viewport of [{ width: 375, height: 812 }, { width: 768, height: 1024 }, { width: 1440, height: 900 }]) {
   test(`the whole Sort box opens the picker, not only its words, at ${viewport.width}px`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await answerNoWorkflows(page);
@@ -120,6 +122,27 @@ for (const viewport of [{ width: 375, height: 812 }, { width: 1440, height: 900 
         });
     });
     expect(misses).toEqual([]);
+
+    // Its words keep their room beside the search field. A select of the box's width can be squeezed
+    // to its padding, and from 640px to 933px it was: 41-86px of room for 101px of "Recently edited"
+    // (review of #841). The words are measured in the select's own font.
+    const fit = await sort.evaluate((select: HTMLSelectElement) => {
+      const style = getComputedStyle(select);
+      const probe = document.createElement('span');
+      probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font:${style.font};letter-spacing:${style.letterSpacing}`;
+      probe.textContent = select.selectedOptions[0]?.textContent ?? '';
+      document.body.append(probe);
+      const words = probe.getBoundingClientRect().width;
+      probe.remove();
+      return {
+        words: Math.round(words * 10) / 10,
+        room: select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+        sideNavigation: Boolean(document.querySelector('aside.app-shell-sidebar')?.getClientRects().length),
+      };
+    });
+    // Within the pixel `clientWidth` rounds to: unsqueezed, the select is exactly as wide as its words.
+    expect(fit.room + 1, JSON.stringify(fit)).toBeGreaterThanOrEqual(fit.words);
+    if (viewport.width === 768) expect(fit.sideNavigation, 'the side navigation is drawn at 768px').toBe(true);
 
     // It still sorts, and keeps the order in the address.
     await sort.selectOption('name');

@@ -607,8 +607,10 @@ export default function WorkflowLibraryClient() {
           </label>
           {/* The select is the whole box, its icons drawn over it and passing presses through: a press
               on the box around a smaller select only focused it, and its picker opened only on its
-              words (133x19 of a 335x48 box on a phone, 2026-11-17). */}
-          <label className="relative flex min-h-12 rounded-2xl border border-white/10 bg-white/[0.035] text-sm text-zinc-300 transition focus-within:border-emerald-400/35">
+              words (133x19 of a 335x48 box on a phone, 2026-11-17). The box keeps its words' width
+              beside the search field (`shrink-0`): a select of the box's width can be squeezed to its
+              padding, and from 640px to 933px it was, to 41-86px of room for 101px of words. */}
+          <label className="relative flex min-h-12 shrink-0 rounded-2xl border border-white/10 bg-white/[0.035] text-sm text-zinc-300 transition focus-within:border-emerald-400/35">
             <ListFilter aria-hidden className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
             <span className="sr-only">Sort workflows</span>
             <select value={sort} onChange={(event) => chooseSort(event.target.value as LibrarySort)} className="w-full cursor-pointer appearance-none bg-transparent pl-11 pr-11 outline-none">

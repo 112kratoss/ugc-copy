@@ -183,10 +183,13 @@ describe('MatureContentSetting', () => {
       expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
     });
 
-    it('never lets a read asked before a change draw over it', async () => {
-      // The read answers only once the change has been made, with the setting
-      // as it was when the read was asked (on), and whether or not it was
-      // stopped: the row itself must leave it unused.
+    /**
+     * The quiet read is held until the test answers it, with `readAnswer` (the
+     * setting as it was when the read was asked), and answers whether or not
+     * it was stopped: what the row draws of it is the row's own doing. A change
+     * is stored and answered at once.
+     */
+    function holdTheRead(readAnswer: boolean) {
       let answerRead: () => void = () => undefined;
       const readAnswered = new Promise<void>((resolve) => {
         answerRead = resolve;
@@ -202,8 +205,18 @@ describe('MatureContentSetting', () => {
           return json({ showMature: storedShowMature });
         }
         await readAnswered;
-        return json({ showMature: true });
+        return json({ showMature: readAnswer });
       }));
+      return async () => {
+        await act(async () => {
+          answerRead();
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+      };
+    }
+
+    it('never lets a read asked before turning it off draw over it', async () => {
+      const answerRead = holdTheRead(true);
       render(<MatureContentSetting initialShowMature />);
       const toggle = screen.getByRole('switch', { name: 'Mature content' });
       await waitFor(() => expect(sent).toHaveLength(1));
@@ -213,11 +226,55 @@ describe('MatureContentSetting', () => {
       await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'));
       expect(storedShowMature).toBe(false);
 
-      await act(async () => {
-        answerRead();
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      });
+      await answerRead();
       expect(toggle).toHaveAttribute('aria-checked', 'false');
+    });
+
+    it('never lets a read asked before turning it on draw over it', async () => {
+      const answerRead = holdTheRead(false);
+      render(
+        <>
+          <MatureContentSetting initialShowMature={false} />
+          <FeedbackViewport />
+        </>
+      );
+      const toggle = screen.getByRole('switch', { name: 'Mature content' });
+      await waitFor(() => expect(sent).toHaveLength(1));
+
+      fireEvent.click(toggle);
+      const question = await screen.findByRole('alertdialog', { name: 'Turn on mature content?' });
+      fireEvent.click(within(question).getByRole('button', { name: 'I’m 18 or older' }));
+      await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
+      expect(storedShowMature).toBe(true);
+
+      await answerRead();
+      expect(toggle).toHaveAttribute('aria-checked', 'true');
+    });
+
+    // Back drew "Off" from the router's cache while the account is on. A tap
+    // to turn it on stopped the read that would put it right, before the 18+
+    // question, so "Not now" left it drawn off (review of #841).
+    it('lets the read put a stale setting right when the 18+ question is declined', async () => {
+      storedShowMature = true;
+      const answerRead = holdTheRead(true);
+      render(
+        <>
+          <MatureContentSetting initialShowMature={false} />
+          <FeedbackViewport />
+        </>
+      );
+      const toggle = screen.getByRole('switch', { name: 'Mature content' });
+      await waitFor(() => expect(sent).toHaveLength(1));
+
+      fireEvent.click(toggle);
+      const question = await screen.findByRole('alertdialog', { name: 'Turn on mature content?' });
+      fireEvent.click(within(question).getByRole('button', { name: 'Not now' }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+      expect(toggle).toHaveAttribute('aria-checked', 'false');
+
+      await answerRead();
+      expect(toggle).toHaveAttribute('aria-checked', 'true');
+      expect(posts()).toHaveLength(0);
     });
   });
 });
