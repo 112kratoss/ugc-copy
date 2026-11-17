@@ -8,9 +8,12 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test';
  * reel's first frame, and opens when its read is in.
  *
  * The creator's page is the E2E user's own (`/creators/e2e-creator`, fixtures/creator-profile.json),
- * opened on a post's address, which the reel reads by itself (`/api/showcase/posts/<id>`). The
- * client signs in with a made-up session, as creator-canvas.spec.ts does, so the reel knows its
- * viewer. The recipe's read is held 1.5 s, as a read on a slow connection would be.
+ * opened on a post's address, which the reel reads by itself (`/api/showcase/posts/<id>`). The page
+ * is public, so there is no E2E auth cookie: the browser holds a made-up Supabase session in its
+ * sign-in cookie, as creator-canvas.spec.ts makes one, and the check of it (`/auth/v1/user`) is held
+ * 2 s, so the reel draws while the session is still being read, as on a reload (review of #863). The
+ * recipe's read is answered as the server would: without a token as anyone's, no access; with the
+ * creator's token, their recipe, 1.5 s late.
  */
 
 const COLD_PAGE = { timeout: 45_000 };
@@ -52,14 +55,17 @@ const session = {
 };
 
 async function signIn(context: BrowserContext) {
-  await context.addCookies([{ name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' }]);
   const cookie = `sb-example-auth-token=base64-${base64url(JSON.stringify(session))}`;
   await context.addInitScript((value) => {
     document.cookie = `${value}; path=/; SameSite=Lax`;
   }, cookie);
-  await context.route('https://example.supabase.co/**', (route) => {
+  await context.route('https://example.supabase.co/**', async (route) => {
     const { pathname } = new URL(route.request().url());
-    if (pathname === '/auth/v1/user') return route.fulfill({ json: user });
+    if (pathname === '/auth/v1/user') {
+      // The session is still being read while the reel draws.
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      return route.fulfill({ json: user });
+    }
     if (pathname === '/auth/v1/token') return route.fulfill({ json: session });
     if (pathname === '/rest/v1/profiles') {
       const row = { display_name: 'E2E Creator', avatar_url: null, credits: 25 };
@@ -189,6 +195,10 @@ test("a creator opening their own post in the reel never has its recipe offered 
   await page.route(`**/api/showcase/posts/${POST_ID}`, (route) => route.fulfill({ json: { item: ownPost } }));
   await page.route(`**/api/posts/${POST_ID}/resource-bundle`, async (route) => {
     bundleReads += 1;
+    // Without a token the server answers as for anyone: no access, and no recipe.
+    if (!route.request().headers().authorization) {
+      return route.fulfill({ json: { bundle: { ...ownBundle, viewerCanAccess: false, viewerIsOwner: false, resources: null } } });
+    }
     await readHeld;
     await route.fulfill({ json: { bundle: ownBundle } });
   });
@@ -205,10 +215,15 @@ test("a creator opening their own post in the reel never has its recipe offered 
   await expect(reel.getByRole('heading', { name: 'Bookshop in the rain' })).toBeVisible(COLD_PAGE);
   // The read is out, and held while the reel is drawn.
   await expect.poll(() => bundleReads).toBeGreaterThan(0);
-  await page.waitForTimeout(1_500);
+  // The rail's Recipe (its name is its `aria-label`, whatever it says) never asks to unlock the
+  // creator's own recipe.
+  await reel.locator('button[aria-label="View recipe"], button[aria-label="Get free recipe"]').click();
+  await page.waitForTimeout(2_500);
   releaseRead();
 
   await expect(reel.getByText('A tiny bookshop in a rainy alley', { exact: false })).toBeVisible(COLD_PAGE);
+  // The read that brought it carried the session.
+  expect(bundleReads).toBeGreaterThan(1);
   // A frame drawn since: the recorder runs on the next animation frame.
   await expect.poll(async () => (await frames(page)).at(-1)).toEqual({ offer: false, held: false, recipe: true });
   const drawn = await frames(page);

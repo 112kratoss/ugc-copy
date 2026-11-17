@@ -32,6 +32,7 @@ import RemixCreditLine from '@/app/showcase/RemixCreditLine';
 import PublicShareButton from '@/components/PublicShareButton';
 import TextPostPreviewCard from '@/components/TextPostPreviewCard';
 import { useAuth } from '@/components/AuthProvider';
+import { useSupabaseAuthCookieHint } from '@/components/useSupabaseAuthCookieHint';
 import { readFeedbackSnapshot, requestConfirmation, setToastHost } from '@/components/feedback-state';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import {
@@ -55,6 +56,7 @@ import {
 } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
+import { readSupabaseAuthCookieUserId } from '@/lib/supabase-auth-cookie';
 import { formatCompactCount, getPostFeedRemixAccess } from '@/lib/post-feed-presentation';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import { trackProductEvent } from '@/lib/product-analytics';
@@ -290,7 +292,8 @@ export default function ShowcaseReelViewer({
   buildDetailPath,
 }: ShowcaseReelViewerProps) {
   const router = useRouter();
-  const { session, user, credits, marketplaceSpendableCredits, updateCredits } = useAuth();
+  const { session, user, isLoading: isAuthLoading, credits, marketplaceSpendableCredits, updateCredits } = useAuth();
+  const hasAuthCookie = useSupabaseAuthCookieHint();
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const wheelCooldownRef = useRef(0);
   const detailsScrollerRef = useRef<HTMLDivElement | null>(null);
@@ -330,10 +333,10 @@ export default function ShowcaseReelViewer({
   const [unlockSuccessItemId, setUnlockSuccessItemId] = useState<string | null>(null);
   // The recipe the reader has, as the post page's panel draws it (B-F1).
   const [unlockedBundle, setUnlockedBundle] = useState<ReelBundle | null>(null);
-  // The recipe's read, for one the viewer holds while it is out: the post it found no access to
+  // The recipe's read, for one the viewer holds while it is out: the posts it found no access to
   // after all (a session's read, so not the read made before the session was known), the post it
   // failed for, and Try again's count.
-  const [accessReadDeniedItemId, setAccessReadDeniedItemId] = useState<string | null>(null);
+  const [accessReadDeniedItemIds, setAccessReadDeniedItemIds] = useState<ReadonlySet<string>>(() => new Set());
   const [accessReadFailedItemId, setAccessReadFailedItemId] = useState<string | null>(null);
   const [accessReadAttempt, setAccessReadAttempt] = useState(0);
   // The post the reader unlocked in this reel just now: its panel says so.
@@ -410,6 +413,9 @@ export default function ShowcaseReelViewer({
     setActiveUnlockCheckoutItemId(null);
     setUnlockWorkingAction(null);
     setUnlockError(null);
+    // A recipe read that failed on a post is read again when the reel comes back to it, and its
+    // failure is not said again while that read is out.
+    setAccessReadFailedItemId(null);
     setUnlockNotice(null);
     // "Recipe unlocked" is said once, on the post it was made on: coming back
     // to that post draws its panel without the announcement.
@@ -462,6 +468,7 @@ export default function ShowcaseReelViewer({
     setActiveUnlockCheckoutItemId(null);
     setUnlockWorkingAction(null);
     setUnlockError(null);
+    setAccessReadFailedItemId(null);
     setUnlockNotice(null);
     setJustUnlockedItemId(null);
     setTransitionDirection('neutral');
@@ -839,7 +846,7 @@ export default function ShowcaseReelViewer({
           setUnlockedBundle(bundle);
           setUnlockError(null);
         } else if (readsAsViewer) {
-          setAccessReadDeniedItemId(postId);
+          setAccessReadDeniedItemIds((denied) => (denied.has(postId) ? denied : new Set(denied).add(postId)));
         }
       })
       .catch((err) => {
@@ -937,14 +944,24 @@ export default function ShowcaseReelViewer({
   const isUnlockCheckoutOpen = Boolean(item.asset && activeUnlockCheckoutItemId === item.id);
   const hasReelUnlockAccess = unlockSuccessItemId === item.id;
   const isOwnPost = Boolean(user && item.creator.id === user.id);
+  // The post's creator while their session is still being read: the sign-in cookie names them (as
+  // the post page's `owner-checking` does), so a reload of their own page on a post's address does
+  // not offer them their recipe before the session is known (review of #863).
+  const ownerChecking = !user
+    && isAuthLoading
+    && hasAuthCookie
+    && Boolean(item.creator.id)
+    && readSupabaseAuthCookieUserId() === item.creator.id;
+  const viewerIsCreator = isOwnPost || ownerChecking;
   // A recipe the viewer is known to hold from the first frame: their own, or one the listing says
-  // they have (`viewerHasUnlocked`). Until its read brings what it holds, it is held where it opens,
-  // never offered: the creator's own post offered "Get free recipe" for about a second, and a press
-  // there asked to unlock it for them (live sweep, 2026-11-17). A session's read that finds no
-  // access after all offers it as to anyone.
+  // a signed-in reader has (`viewerHasUnlocked`). Until its read brings what it holds, it is held
+  // where it opens, never offered: the creator's own post offered "Get free recipe" for about a
+  // second, and a press there asked to unlock it for them (live sweep, 2026-11-17). A session's read
+  // that finds no access after all offers it as to anyone, and so does a listing whose reader has
+  // signed out since.
   const holdsRecipe = Boolean(item.asset)
-    && (isOwnPost || item.asset?.viewerHasUnlocked === true)
-    && accessReadDeniedItemId !== item.id;
+    && (viewerIsCreator || (Boolean(user) && item.asset?.viewerHasUnlocked === true))
+    && !accessReadDeniedItemIds.has(item.id);
   const awaitsHeldRecipe = holdsRecipe && !hasReelUnlockAccess;
   const accessReadFailed = accessReadFailedItemId === item.id;
   const isFreeUnlock = Boolean(item.asset && (item.asset.accessMode === 'free' || item.asset.priceUsdCents === 0));
@@ -2146,8 +2163,10 @@ export default function ShowcaseReelViewer({
                   // opens in, under its name and the viewer's word for it, never at its price.
                   <div
                     ref={recipePanelRef}
+                    // Try again's own button goes when it is pressed: the focus comes here.
+                    tabIndex={-1}
                     aria-busy={accessReadFailed ? undefined : true}
-                    className="mt-5 scroll-mt-4 rounded-2xl border border-emerald-300/20 bg-black/30 p-4"
+                    className="mt-5 scroll-mt-4 rounded-2xl border border-emerald-300/20 bg-black/30 p-4 outline-none"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -2155,7 +2174,7 @@ export default function ShowcaseReelViewer({
                         <h3 className="mt-2 text-base font-semibold text-white">{item.asset.title}</h3>
                       </div>
                       <span className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-300 px-2.5 py-1 text-xs font-bold text-slate-950">
-                        {getAssetAccessLabel(item.asset, { isOwner: isOwnPost })}
+                        {getAssetAccessLabel(item.asset, { isOwner: viewerIsCreator })}
                       </span>
                     </div>
                     {accessReadFailed ? (
@@ -2166,6 +2185,7 @@ export default function ShowcaseReelViewer({
                           onClick={() => {
                             setAccessReadFailedItemId(null);
                             setAccessReadAttempt((attempt) => attempt + 1);
+                            recipePanelRef.current?.focus({ preventScroll: true });
                           }}
                           className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/12 bg-white/[0.05] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.09]"
                         >
@@ -2174,7 +2194,7 @@ export default function ShowcaseReelViewer({
                         </button>
                       </div>
                     ) : (
-                      <p role="status" className="mt-3 inline-flex items-center gap-2 text-sm leading-6 text-emerald-50/80">
+                      <p className="mt-3 inline-flex items-center gap-2 text-sm leading-6 text-emerald-50/80">
                         <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden />
                         Opening your recipe…
                       </p>
