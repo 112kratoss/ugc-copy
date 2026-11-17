@@ -25,8 +25,11 @@ export type FxRatesRouteResult =
       ok: true;
       body: {
         base: 'INR';
-        /** When the rates were updated: an ISO 8601 stamp in UTC, "2026-11-16T00:02:31.000Z". */
-        updatedAt: string;
+        /**
+         * When the rates were updated: an ISO 8601 stamp in UTC, "2026-11-16T00:02:31.000Z". Left
+         * out for a provider stamp that cannot be read, and Pricing then says no time.
+         */
+        updatedAt?: string;
         rates: Record<SupportedFxCurrency, number>;
       };
     }
@@ -53,12 +56,14 @@ function pickSupportedRates(rates: Record<string, unknown>) {
 /**
  * When the provider last updated its rates, as an ISO 8601 stamp in UTC, so every client reads one
  * well-defined format: open.er-api.com sends `time_last_update_utc` as an RFC 2822 date, which the
- * route passed on as it came until 2026-11-17. A stamp it does not send, or that cannot be read,
- * gives the time the route read the rates, as a missing one always did.
+ * route passed on as it came until 2026-11-17. As then, a stamp not sent as text gives the time
+ * the route read the rates. One sent that cannot be read gives none (null): Pricing showed no time
+ * for it then, and its read time would claim the rates were updated when they were only read.
  */
-function toIsoUpdatedAt(providerStamp: unknown, now: () => Date): string {
-  const timestamp = typeof providerStamp === 'string' ? Date.parse(providerStamp) : Number.NaN;
-  return (Number.isFinite(timestamp) ? new Date(timestamp) : now()).toISOString();
+function toIsoUpdatedAt(providerStamp: unknown, now: () => Date): string | null {
+  if (typeof providerStamp !== 'string') return now().toISOString();
+  const timestamp = Date.parse(providerStamp);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 
 function normalizeFxPayload(payload: ExchangeRateApiResponse, now: () => Date): FxRatesRouteResult {
@@ -76,11 +81,12 @@ function normalizeFxPayload(payload: ExchangeRateApiResponse, now: () => Date): 
     throw new Error('FX upstream USD/INR rate is outside the accepted safety band');
   }
 
+  const updatedAt = toIsoUpdatedAt(payload.time_last_update_utc, now);
   return {
     ok: true,
     body: {
       base: 'INR',
-      updatedAt: toIsoUpdatedAt(payload.time_last_update_utc, now),
+      ...(updatedAt ? { updatedAt } : {}),
       rates,
     },
   };

@@ -70,11 +70,12 @@ describe('loadFxRatesForRoute', () => {
         rates: { USD: 0.0119, EUR: 0.011, GBP: 0.0094, AUD: 0.0184, CAD: 0.0161, SGD: 0.016 },
       }),
     } as Response));
-    const updatedAt = async (stamp: Record<string, unknown>) => {
+    const answerFor = async (stamp: Record<string, unknown>) => {
       const result = await loadFxRatesForRoute({ fetchImpl: answerWith(stamp), now: () => READ_AT });
       if (!result.ok) throw new Error('the rates were refused');
-      return result.body.updatedAt;
+      return result.body;
     };
+    const updatedAt = async (stamp: Record<string, unknown>) => (await answerFor(stamp)).updatedAt;
 
     it("says the provider's stamp in UTC, in ISO 8601, whatever offset it was written with", async () => {
       await expect(updatedAt({ time_last_update_utc: 'Mon, 16 Nov 2026 00:02:31 +0000' })).resolves.toBe('2026-11-16T00:02:31.000Z');
@@ -82,11 +83,23 @@ describe('loadFxRatesForRoute', () => {
       await expect(updatedAt({ time_last_update_utc: 'Mon, 16 Nov 2026 00:02:31 GMT' })).resolves.toBe('2026-11-16T00:02:31.000Z');
     });
 
-    it('says when the route read the rates, in ISO 8601, for a stamp it does not send or that cannot be read', async () => {
+    // As before the stamp was converted: the route said when it read the rates only for a stamp
+    // the provider did not send as text.
+    it('says when the route read the rates, in ISO 8601, for a stamp the provider does not send', async () => {
       await expect(updatedAt({})).resolves.toBe('2026-11-17T09:30:00.000Z');
-      await expect(updatedAt({ time_last_update_utc: 'sometime yesterday' })).resolves.toBe('2026-11-17T09:30:00.000Z');
-      await expect(updatedAt({ time_last_update_utc: '' })).resolves.toBe('2026-11-17T09:30:00.000Z');
+      await expect(updatedAt({ time_last_update_utc: null })).resolves.toBe('2026-11-17T09:30:00.000Z');
       await expect(updatedAt({ time_last_update_utc: 1_763_251_351 })).resolves.toBe('2026-11-17T09:30:00.000Z');
+    });
+
+    // Review of #860: one the route could not read became the time it read the rates, and Pricing
+    // said "Rates updated" at that time; Pricing showed no line for one before. With none sent, it
+    // shows none (PricingClient.tsx).
+    it('sends no time for a stamp the provider sends that cannot be read', async () => {
+      for (const stamp of ['sometime yesterday', '']) {
+        const body = await answerFor({ time_last_update_utc: stamp });
+        expect(body).not.toHaveProperty('updatedAt');
+        expect(body.rates.USD).toBe(0.0119);
+      }
     });
   });
 

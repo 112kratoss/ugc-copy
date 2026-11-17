@@ -700,6 +700,10 @@ export default function CreationsPage() {
     const postsLoadMoreInFlightRef = useRef<Promise<void> | null>(null);
     const [postDeletesInFlight, setPostDeletesInFlight] = useState(0);
     const postDeletesInFlightRef = useRef(0);
+    // Moved on each time the posts list is replaced whole (a refresh rereads its first page, or a
+    // snapshot is drawn): a page asked for before belongs to the list that is gone, and is dropped
+    // when it lands rather than added after a gap (review of #860).
+    const postsListGenerationRef = useRef(0);
     const [postsLoadMoreError, setPostsLoadMoreError] = useState<string | null>(null);
     const [generationDetailLoadingId, setGenerationDetailLoadingId] = useState<string | null>(null);
     const [generationDetailError, setGenerationDetailError] = useState<string | null>(null);
@@ -932,12 +936,14 @@ export default function CreationsPage() {
         onPublicIdentitySaved: applySavedPublicIdentity,
     });
 
-    // A delete from the Post Library: a Load more under way lands first, as the offset it sets is
-    // the one the delete steps back (removePost), and Load more waits until the delete is done.
-    // The wait comes before the question, which the hook asks: the question is modal, so the page
-    // beneath it cannot load more anyway.
+    // A delete from the Post Library. A Load more under way sets the offset when its page lands,
+    // after the delete's step back (removePost), which it would undo, so the two take turns:
+    // Delete is held while a Load more is under way (its menu item says so), and Load more while a
+    // delete is, its question included, which is modal anyway. Review of #860: the delete waited
+    // for the page before asking, so a press showed nothing, and presses made meanwhile opened
+    // their questions when it landed, each closing the one before.
     const removeLibraryPost = async (post: OwnerPost) => {
-        await postsLoadMoreInFlightRef.current;
+        if (postsLoadMoreInFlightRef.current) return;
         postDeletesInFlightRef.current += 1;
         setPostDeletesInFlight((count) => count + 1);
         try {
@@ -977,6 +983,7 @@ export default function CreationsPage() {
         generationsRef.current = cachedWorkspace.generations;
         // Hydrate the last user-scoped workspace snapshot before the network refresh completes.
         setGenerations(cachedWorkspace.generations);
+        postsListGenerationRef.current += 1;
         setPosts(cachedWorkspace.posts);
         setProfile(cachedWorkspace.profile);
         setGenerationsComplete(cachedWorkspace.generationsComplete);
@@ -1047,6 +1054,7 @@ export default function CreationsPage() {
                 // In the ref at once, as the profile below: a post's change that lands before the
                 // next render moves the totals from this list, not from the one it replaced.
                 postsRef.current = loadedPosts;
+                postsListGenerationRef.current += 1;
                 setPosts(loadedPosts);
                 setPostsNextOffset(freshPostsOffset);
                 setPostsComplete(freshPostsOffset === null);
@@ -1196,6 +1204,7 @@ export default function CreationsPage() {
 
         setIsLoadingMorePosts(true);
         setPostsLoadMoreError(null);
+        const listGeneration = postsListGenerationRef.current;
         const load = (async () => {
             try {
                 const response = await fetch(
@@ -1203,6 +1212,10 @@ export default function CreationsPage() {
                     { headers: { Authorization: `Bearer ${accessToken}` } }
                 );
                 const data = await response.json() as OwnerPostsApiResponse;
+                // The list was replaced meanwhile (a refresh reread its first page, and its offset
+                // is the one Load more goes on from): this page followed the pages that are gone,
+                // and added to the new list it would follow a gap. Its failure is that list's too.
+                if (postsListGenerationRef.current !== listGeneration) return;
                 if (!response.ok) throw new Error('Failed to load more posts.');
 
                 // Onto the posts as they stand now, and with the totals as they stand now: a post
@@ -1222,7 +1235,9 @@ export default function CreationsPage() {
                 });
             } catch (error) {
                 console.error('Failed to load more posts:', error);
-                setPostsLoadMoreError(error instanceof Error ? error.message : 'Failed to load more posts.');
+                if (postsListGenerationRef.current === listGeneration) {
+                    setPostsLoadMoreError(error instanceof Error ? error.message : 'Failed to load more posts.');
+                }
             } finally {
                 setIsLoadingMorePosts(false);
             }
@@ -1235,17 +1250,20 @@ export default function CreationsPage() {
         }
     }, [accessToken, isLoadingMorePosts, postsNextOffset, redirectToSignIn, setPostsComplete, userId]);
 
+    // The posts and the profile as they stand when it writes, beside the flags: the details of a
+    // creation an alert opens are loaded by the render the page mounts with, before its posts and
+    // its profile came, and wrote those, none, with the posts' flag up to date (review of #860).
     const cacheGenerations = useCallback((nextGenerations: Generation[]) => {
         generationsRef.current = nextGenerations;
         setGenerations(nextGenerations);
         writeCreationsWorkspaceCache(userId, {
             generations: nextGenerations,
-            posts,
-            profile,
+            posts: postsRef.current,
+            profile: profileRef.current,
             generationsComplete: generationsCompleteRef.current,
             postsComplete: postsCompleteRef.current,
         });
-    }, [posts, profile, userId]);
+    }, [userId]);
 
     const loadGenerationById = useCallback(async (
         generationId: string,
@@ -3081,7 +3099,9 @@ export default function CreationsPage() {
                                     label: 'Delete post',
                                     icon: <Trash2 className="h-4 w-4" />,
                                     tone: 'danger',
-                                    disabled: isBusy,
+                                    // Held while a Load more is under way (removeLibraryPost).
+                                    disabled: isBusy || isLoadingMorePosts,
+                                    description: isLoadingMorePosts ? 'Waiting for more posts to load' : undefined,
                                     pending: pendingAction === 'delete',
                                     onSelect: () => void removeLibraryPost(post),
                                 });

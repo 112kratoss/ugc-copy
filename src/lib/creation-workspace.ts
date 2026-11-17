@@ -395,9 +395,12 @@ export interface StudioListCounts<Filter extends string> extends StudioTotal {
  *   the loaded rows are the library, so each count is its total;
  * - otherwise, the server's total (`owner_profile_counts`, which counts by the
  *   list's own rule) is the header's and All's, and a filter the server does
- *   not count shows no number. A loaded list the server disagrees with is
- *   behind it: a later page's creations are kept as they were when the first
- *   is reread, so one archived elsewhere still counts;
+ *   not count shows no number. Where a loaded list and the server disagree,
+ *   either can be the older: a later page's creations are kept as they were
+ *   when the first is reread, so one archived elsewhere still counts in the
+ *   list, while the total comes with the first page, and a page loaded after
+ *   it can be newer. The total is drawn, and no filter's number, until a
+ *   refresh reads both again;
  * - no server total (it could not count) once the list has answered: the
  *   header says what is loaded with a "+", and no filter a number;
  * - before anything has answered, no number at all (`total` null), never 0.

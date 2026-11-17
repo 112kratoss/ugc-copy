@@ -464,6 +464,66 @@ describe('CreationsPage', () => {
     });
   });
 
+  // Review of #860: the details of a creation an alert opened went into the snapshot a return to
+  // Studio draws first with the posts and the profile of the page's first render, none, beside the
+  // up-to-date flag that said the posts were every post: "0 POSTS" until the refresh landed.
+  it('saves the posts and the profile it holds with the details of the creation an alert opened', async () => {
+    navigationState.searchParams = new URLSearchParams('generation=gen-notification');
+    let answerDetails!: () => void;
+    const detailsAnswered = new Promise<void>((resolve) => {
+      answerDetails = resolve;
+    });
+    const posts = [
+      { ...FIRST_POSTS_PAGE[0] },
+      { ...FIRST_POSTS_PAGE[3] },
+    ];
+    stubStudioFetch((url) => {
+      if (url === GENERATIONS_PAGE_URL) return Promise.resolve(jsonResponse({ generations: [] }));
+      if (url === generationDetailUrl('gen-notification')) {
+        return detailsAnswered.then(() => jsonResponse({
+          generations: [makeGeneration({
+            id: 'gen-notification',
+            title: 'Notification image',
+            prompt: 'A product image opened from an alert.',
+            input_media: [],
+            paywallPrefill: null,
+          })],
+        }));
+      }
+      if (url === POSTS_PAGE_URL) return Promise.resolve(jsonResponse({ posts }));
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({
+          username: 'creator-user1',
+          stats: { creations: 1, posts: 1, archivedPosts: 1, saved: 0 },
+        }));
+      }
+      return null;
+    });
+    const readSnapshot = () => JSON.parse(
+      window.sessionStorage.getItem('magicbooklet:creations-cache:v1:user-1') ?? '{}',
+    ) as {
+      generations?: Array<{ id: string }>;
+      posts?: Array<{ id: string }>;
+      profile?: { stats?: Record<string, number> } | null;
+      postsComplete?: boolean;
+    };
+
+    render(<CreationsPage />);
+
+    // The page's own reads land first, while the details are on their way.
+    await waitFor(() => expect(readSnapshot().postsComplete).toBe(true));
+    await act(async () => {
+      answerDetails();
+    });
+    expect(await screen.findByRole('dialog', { name: 'Notification image' })).toBeInTheDocument();
+
+    const snapshot = readSnapshot();
+    expect(snapshot.generations?.map((generation) => generation.id)).toEqual(['gen-notification']);
+    expect(snapshot.posts?.map((post) => post.id)).toEqual(['a', 'd']);
+    expect(snapshot.profile?.stats).toMatchObject({ posts: 1, archivedPosts: 1 });
+    expect(snapshot.postsComplete).toBe(true);
+  });
+
   // The preview's own Escape listens on the window; the Escape that answered
   // "Delete this creation?" used to close the preview behind it as well.
   it('keeps the preview open when Escape answers its delete question', async () => {
@@ -1026,8 +1086,14 @@ describe('CreationsPage', () => {
       window.sessionStorage.getItem('magicbooklet:creations-cache:v1:user-1') ?? '{}',
     ) as { postsComplete?: boolean; profile?: { stats?: typeof LIBRARY_STATS } };
 
-    /** The library's two pages, the server's totals, and the post actions the cases take. */
-    const stubPostLibrary = ({ archiveFails = false }: { archiveFails?: boolean } = {}) => stubStudioFetch((url, init) => {
+    /**
+     * The library's two pages, the server's totals, and the post actions the cases take: `archive`
+     * answers the archive of a (by default it succeeds), and `deleted` a delete of c or d.
+     */
+    const stubPostLibrary = ({
+      archive,
+      deleted = { success: true },
+    }: { archive?: Promise<Response>; deleted?: Record<string, unknown> } = {}) => stubStudioFetch((url, init) => {
       if (url.startsWith('/api/generations')) {
         return Promise.resolve(jsonResponse({ generations: [] }));
       }
@@ -1041,15 +1107,13 @@ describe('CreationsPage', () => {
         return Promise.resolve(jsonResponse({ username: 'creator-user1', stats: LIBRARY_STATS }));
       }
       if (url === '/api/posts/a/archive' && init?.method === 'POST') {
-        return Promise.resolve(archiveFails
-          ? jsonResponse({ error: 'Could not archive the post.' }, { status: 500 })
-          : jsonResponse({ success: true }));
+        return archive ?? Promise.resolve(jsonResponse({ success: true }));
       }
       if (url === '/api/posts/d/restore' && init?.method === 'POST') {
         return Promise.resolve(jsonResponse({ success: true }));
       }
-      if (url === '/api/posts/c' && init?.method === 'DELETE') {
-        return Promise.resolve(jsonResponse({ success: true }));
+      if ((url === '/api/posts/c' || url === '/api/posts/d') && init?.method === 'DELETE') {
+        return Promise.resolve(jsonResponse(deleted));
       }
       return null;
     });
@@ -1148,16 +1212,21 @@ describe('CreationsPage', () => {
     // which believe the server, said the old totals with no visibility numbers. Post actions do
     // not refresh the page, so they said them until the next visit.
     describe('the totals it holds, moved by a change made here', () => {
-      const loadEveryPage = async () => {
+      /** Loads the second page, and waits for one of its posts the filter in view shows. */
+      const loadEveryPage = async (shownFromSecondPage = 'Post e') => {
         expect(await screen.findByText('5 POSTS · 2 ARCHIVED')).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: 'Load more posts' }));
-        expect(await screen.findByText('Post e')).toBeInTheDocument();
+        expect(await screen.findByText(shownFromSecondPage)).toBeInTheDocument();
         expect(postFilters()).toEqual(['All (5)', 'Public (2)', 'Unlisted (1)', 'Private (2)', 'Archived (2)']);
       };
 
-      it('moves a post archived here from one total to the other, and back when the archive fails', async () => {
+      it('moves a post archived here from one total to the other while the archive is on its way, and back when it fails', async () => {
         navigationState.searchParams = new URLSearchParams('view=posts');
-        stubPostLibrary({ archiveFails: true });
+        let failArchive!: () => void;
+        const archive = new Promise<Response>((resolve) => {
+          failArchive = () => resolve(jsonResponse({ error: 'Could not archive the post.' }, { status: 500 }));
+        });
+        stubPostLibrary({ archive });
         render(<><CreationsPage /><FeedbackViewport /></>);
         await loadEveryPage();
 
@@ -1165,10 +1234,55 @@ describe('CreationsPage', () => {
         fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Archive this post?' }))
           .getByRole('button', { name: 'Archive' }));
 
+        // On its way: archived here at once, and its totals with it.
+        expect(await screen.findByText('4 POSTS · 3 ARCHIVED')).toBeInTheDocument();
+        expect(postFilters()).toEqual(['All (4)', 'Public (1)', 'Unlisted (1)', 'Private (2)', 'Archived (3)']);
+        expect(readSnapshot().profile?.stats).toMatchObject({ posts: 4, archivedPosts: 3 });
+
+        await act(async () => {
+          failArchive();
+        });
+
         // The archive failed: the post and the totals are back where they were.
         expect(await screen.findByText('Could not archive the post.')).toBeInTheDocument();
         expect(screen.getByText('5 POSTS · 2 ARCHIVED')).toBeInTheDocument();
         expect(postFilters()).toEqual(['All (5)', 'Public (2)', 'Unlisted (1)', 'Private (2)', 'Archived (2)']);
+        expect(readSnapshot().profile?.stats).toMatchObject({ posts: 5, archivedPosts: 2 });
+      });
+
+      // A post with buyers stays on the server, archived (post-delete-service.ts), and leaves the list
+      // here: it leaves its total with it, so the counts say what the list shows, and the next
+      // refresh, which lists it under Archived, counts it there.
+      it('takes a post its buyers keep out of the list and out of its total', async () => {
+        navigationState.searchParams = new URLSearchParams('view=posts');
+        stubPostLibrary({ deleted: { success: true, tombstoned: true } });
+        render(<><CreationsPage /><FeedbackViewport /></>);
+        await loadEveryPage();
+
+        await chooseCardAction('Post c', 'Delete post');
+        fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this post permanently?' }))
+          .getByRole('button', { name: 'Delete' }));
+
+        expect(await screen.findByText('Post deleted. Buyers keep access to its recipe.')).toBeInTheDocument();
+        expect(screen.queryByText('Post c')).not.toBeInTheDocument();
+        expect(screen.getByText('4 POSTS · 2 ARCHIVED')).toBeInTheDocument();
+        expect(postFilters()).toEqual(['All (4)', 'Public (2)', 'Unlisted (1)', 'Private (1)', 'Archived (2)']);
+      });
+
+      it('takes an archived post deleted here out of the archived total', async () => {
+        navigationState.searchParams = new URLSearchParams('view=posts&visibility=archived');
+        stubPostLibrary();
+        render(<><CreationsPage /><FeedbackViewport /></>);
+        await loadEveryPage('Post g');
+
+        await chooseCardAction('Post d', 'Delete post');
+        fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this post permanently?' }))
+          .getByRole('button', { name: 'Delete' }));
+
+        expect(await screen.findByText('Post deleted.')).toBeInTheDocument();
+        expect(screen.queryByText('Post d')).not.toBeInTheDocument();
+        expect(screen.getByText('5 POSTS · 1 ARCHIVED')).toBeInTheDocument();
+        expect(postFilters()).toEqual(['All (5)', 'Public (2)', 'Unlisted (1)', 'Private (2)', 'Archived (1)']);
       });
 
       it('keeps the counts right after an archive, a restore and a delete', async () => {
@@ -1249,7 +1363,12 @@ describe('CreationsPage', () => {
       expect(postsPageReads(fetchMock)).toEqual([POSTS_PAGE_URL, postsPageUrl(35)]);
     });
 
-    it('sends a delete only once a Load more under way has landed, so the next page still starts a place earlier', async () => {
+    // A Load more under way sets the offset when its page lands, after a delete's step back, which
+    // it would undo, so a delete cannot start meanwhile: Delete waits, and says so. Archive and
+    // Restore move no post and stay open. Review of #860: the delete waited for the page before its
+    // question, so a press showed nothing, and presses made meanwhile opened their questions when
+    // it landed, each closing the one before (feedback-state.ts holds one question).
+    it('holds Delete while a Load more is under way, so the next page still starts a place earlier', async () => {
       navigationState.searchParams = new URLSearchParams('view=posts');
       let answerSecondPage!: () => void;
       const secondPageAnswered = new Promise<void>((resolve) => {
@@ -1272,31 +1391,102 @@ describe('CreationsPage', () => {
         }
         return null;
       });
-      const deletesSent = () => fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE').length;
 
       render(<><CreationsPage /><FeedbackViewport /></>);
 
       expect(await screen.findByText('Post a')).toBeInTheDocument();
       fireEvent.click(loadMore());
-      await chooseCardAction('Post a', 'Delete post');
-      await act(flushPromises);
-      // The page under way lands first: the delete, and its question, wait for it.
+      fireEvent.click(screen.getByRole('button', { name: 'More actions for Post a' }));
+      const menu = await screen.findByRole('menu', { name: 'More actions for Post a' });
+      const heldDelete = within(menu).getByRole('menuitem', { name: /^Delete post/ });
+      expect(heldDelete).toBeDisabled();
+      expect(heldDelete).toHaveTextContent('Waiting for more posts to load');
+      expect(within(menu).getByRole('menuitem', { name: 'Archive post' })).toBeEnabled();
+      fireEvent.keyDown(menu, { key: 'Escape' });
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-      expect(deletesSent()).toBe(0);
 
       await act(async () => {
         answerSecondPage();
       });
       expect(await screen.findByText('Post e')).toBeInTheDocument();
-      fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this post permanently?' }))
-        .getByRole('button', { name: 'Delete' }));
+      await deletePost('Post a');
       expect(await screen.findByText('Post deleted.')).toBeInTheDocument();
-      expect(deletesSent()).toBe(1);
       await waitFor(() => expect(loadMore()).toBeEnabled());
 
       fireEvent.click(loadMore());
       expect(await screen.findByText('Post h')).toBeInTheDocument();
       expect(postsPageReads(fetchMock)).toEqual([POSTS_PAGE_URL, NEXT_POSTS_PAGE_URL, postsPageUrl(71)]);
+    });
+
+    // Review of #860: a page that landed after a refresh had reread the first page was added to
+    // that page, after a gap: the pages loaded before were gone, none was asked for again, and with
+    // the last page in Load more went. The 30-second check that refreshes Studio when a running
+    // creation finishes is what lands so; Refresh now stands in for it here.
+    it('drops a page that lands after a refresh reread the first page, and goes on from the refreshed one', async () => {
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      let answerThirdPage!: () => void;
+      const thirdPageAnswered = new Promise<void>((resolve) => {
+        answerThirdPage = resolve;
+      });
+      const running = makeGeneration({
+        id: 'gen-running',
+        title: 'Running creation',
+        status: 'processing',
+        output_url: null,
+        completed_at: null,
+      });
+      const fetchMock = stubStudioFetch((url) => {
+        if (url.startsWith('/api/generations')) return Promise.resolve(jsonResponse({ generations: [running] }));
+        if (url === POSTS_PAGE_URL) {
+          return Promise.resolve(jsonResponse({ posts: FIRST_POSTS_PAGE, pageInfo: { hasMore: true, nextOffset: 36 } }));
+        }
+        if (url === NEXT_POSTS_PAGE_URL) {
+          return Promise.resolve(jsonResponse({ posts: SECOND_POSTS_PAGE, pageInfo: { hasMore: true, nextOffset: 72 } }));
+        }
+        if (url === postsPageUrl(72)) {
+          return thirdPageAnswered.then(() => jsonResponse({
+            posts: [makePost('h', 'public')],
+            pageInfo: { hasMore: false, nextOffset: null },
+          }));
+        }
+        return null;
+      });
+      // A new element each time: React keeps one it was given before as it was, address and all.
+      const page = () => <CreationsPage />;
+      const { rerender } = render(page());
+
+      expect(await screen.findByText('Post a')).toBeInTheDocument();
+      fireEvent.click(loadMore());
+      expect(await screen.findByText('Post e')).toBeInTheDocument();
+      // The third page is on its way when Studio refreshes, from Creations.
+      fireEvent.click(loadMore());
+      navigationState.searchParams = new URLSearchParams();
+      rerender(page());
+      fireEvent.click(await screen.findByRole('button', { name: 'Refresh now' }));
+      await waitFor(() => expect(postsPageReads(fetchMock).filter((url) => url === POSTS_PAGE_URL)).toHaveLength(2));
+      await act(flushPromises);
+
+      await act(async () => {
+        answerThirdPage();
+      });
+      await act(flushPromises);
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      rerender(page());
+
+      // The refreshed first page, and no page after a gap: Load more goes on from it.
+      expect(await screen.findByText('Post a')).toBeInTheDocument();
+      expect(screen.queryByText('Post h')).not.toBeInTheDocument();
+      expect(screen.queryByText('Post e')).not.toBeInTheDocument();
+      await waitFor(() => expect(loadMore()).toBeEnabled());
+      fireEvent.click(loadMore());
+      expect(await screen.findByText('Post e')).toBeInTheDocument();
+      expect(postsPageReads(fetchMock)).toEqual([
+        POSTS_PAGE_URL,
+        NEXT_POSTS_PAGE_URL,
+        postsPageUrl(72),
+        POSTS_PAGE_URL,
+        NEXT_POSTS_PAGE_URL,
+      ]);
     });
 
     it('holds Load more while a delete is under way', async () => {
