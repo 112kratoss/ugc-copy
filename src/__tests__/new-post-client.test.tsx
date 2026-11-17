@@ -242,6 +242,10 @@ describe('NewPostClient', () => {
     }));
     searchParamsState.value = new URLSearchParams();
     authSessionState.accessToken = 'test-token';
+    // A composer left with unsaved work keeps its leave guard's entry on the
+    // history, which the file's tests share, and the next composer mounts on it
+    // as after a reload. Each test starts on a clean entry, as a fresh page does.
+    window.history.replaceState(null, '', window.location.href);
     queuedResponses = [];
     fetchMock.mockImplementation(async (url: string | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : String(url);
