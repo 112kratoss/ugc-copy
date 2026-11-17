@@ -29,6 +29,18 @@ select lives_ok($$select * from public.upsert_post_with_resource_bundle('{"id":"
 select ok((select is_nsfw from public.posts where id='ab290002-1000-4000-8000-000000000002'),'created post is labeled');
 select lives_ok($$select * from public.update_post_with_resource_bundle('ab290002-1000-4000-8000-000000000002','ab290001-1000-4000-8000-000000000001','{"title":"Old client edit"}',false,null)$$,'old client can edit without sending a label');
 select ok((select is_nsfw from public.posts where id='ab290002-1000-4000-8000-000000000002'),'old client cannot silently clear the warning');
+-- A creation's publish sends the warning only when it is on or asked off (review, 2026-11-17).
+-- One that read the post uncovered while another request covered it sends none: the post
+-- keeps its warning, its creation stays private, and the public copy that publish would give
+-- it is refused, so the race can neither uncover the post nor expose its media.
+insert into public.generations(id,user_id,status,model,category,cost,is_public)
+values('ab290004-1000-4000-8000-000000000001','ab290001-1000-4000-8000-000000000001','succeeded','audit-inert','image',0,false);
+insert into public.posts(id,user_id,generation_id,title,body,category,post_format,source_kind,visibility,is_nsfw,output_url)
+values('ab290002-1000-4000-8000-000000000004','ab290001-1000-4000-8000-000000000001','ab290004-1000-4000-8000-000000000001','A covered creation','A synthetic test fixture for a warning.','image','media','magicbooklet','private',true,'generated_images/ab290001-1000-4000-8000-000000000001/creation.jpg');
+select lives_ok($$select * from public.publish_generation_post_with_resource_bundle('ab290004-1000-4000-8000-000000000001','ab290001-1000-4000-8000-000000000001','{"is_public":true}','{"user_id":"ab290001-1000-4000-8000-000000000001","generation_id":"ab290004-1000-4000-8000-000000000001","visibility":"public","category":"image","title":"A covered creation","body":"A synthetic test fixture for a warning.","post_format":"media","source_kind":"magicbooklet","output_url":"generated_images/ab290001-1000-4000-8000-000000000001/creation.jpg"}',null,false)$$,'a publish that sends no warning saves');
+select ok((select is_nsfw from public.posts where id='ab290002-1000-4000-8000-000000000004'),'a publish that sends no warning keeps the stored one');
+select ok(not (select is_public from public.generations where id='ab290004-1000-4000-8000-000000000001'),'a covered post''s creation stays private through a public publish');
+select throws_ok($$select * from public.publish_generation_post_with_resource_bundle('ab290004-1000-4000-8000-000000000001','ab290001-1000-4000-8000-000000000001','{"is_public":true,"showcase_asset_path":"showcase/ab290004-1000-4000-8000-000000000001/copy.jpg"}','{"user_id":"ab290001-1000-4000-8000-000000000001","generation_id":"ab290004-1000-4000-8000-000000000001","visibility":"public","category":"image","title":"A covered creation","body":"A synthetic test fixture for a warning.","post_format":"media","source_kind":"magicbooklet","output_url":"generated_images/ab290001-1000-4000-8000-000000000001/creation.jpg","showcase_asset_path":"showcase/ab290004-1000-4000-8000-000000000001/copy.jpg"}',null,false)$$,'P0001','NSFW_PRIVATE_MEDIA_REQUIRED','a covered post is refused the public copy a publish that read it uncovered would give it');
 -- A public object's descriptor is never changed without a verified private copy.
 insert into public.posts(id,user_id,visibility,category,post_format,source_kind,showcase_asset_path)
 values('ab290002-1000-4000-8000-000000000003','ab290001-1000-4000-8000-000000000001','public','image','media','manual','posts/ab290002-1000-4000-8000-000000000003/test.jpg');
