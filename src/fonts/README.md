@@ -1,6 +1,6 @@
 # Self-hosted web fonts
 
-The production build must not reach Google. `next/font/google` fetches each font at build time, and on a slow or failed fetch Turbopack's build died ("Can't resolve '@vercel/turbopack-next/internal/font/google/font'", seen on CI 2026-11-17 and before). These faces are committed instead and loaded with `next/font/local` (`src/lib/display-font.ts`, `src/lib/handwriting-font.ts`, `src/lib/geist-font.ts`).
+The production build must not reach Google. `next/font/google` fetches each font at build time, and on a slow or failed fetch Turbopack's build died ("Can't resolve '@vercel/turbopack-next/internal/font/google/font'", seen on CI 2026-11-17 and before). These faces are committed instead and loaded with `next/font/local` (`src/lib/display-font.ts`, `src/lib/handwriting-font.ts`, `src/lib/geist-font.ts`, `src/lib/welcome-popup-font.ts`).
 
 Each `.woff2` is, byte for byte, the file `next/font/google` served for that family and subset (taken from a production build's `.next/static/media`, not downloaded from Google by hand). One file per Google subset, named for it; the module sets that subset's `unicode-range`, as Google's stylesheet did.
 

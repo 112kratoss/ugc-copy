@@ -70,7 +70,11 @@ import {
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { recipeKeepsPromptPrivate, titleForRecipePost } from '@/lib/creation-post-title';
 import { requestPostEmbedding } from '@/lib/feed-embeddings';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { classifyPostPageChange, postPageStateOfRow } from '@/lib/public-page-change';
+import {
+  invalidateShowcaseFeedAndRefreshPostPages,
+  invalidateShowcaseFeedCache,
+} from '@/lib/showcase-feed-cache';
 import { notifyPostedRemix } from '@/lib/completed-remix-notification';
 import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import { isTemplateResultGeneration, shownGenerationModel } from '@/lib/template-result';
@@ -1058,7 +1062,8 @@ export async function publishGenerationToShowcaseForRoute({
   if (requestBody.isNsfw !== undefined && typeof requestBody.isNsfw !== 'boolean') {
     return { ok: false, status: 400, body: { error: 'isNsfw must be a boolean.' } };
   }
-  const existingRating = await adminSupabase.from('posts').select('id, is_nsfw').eq('generation_id', generationId).eq('user_id', userId).maybeSingle();
+  // The post as it stood, which also says what this publish does to the cached pages (below).
+  const existingRating = await adminSupabase.from('posts').select('id, is_nsfw, visibility, archived_at, review_status, tombstoned_at').eq('generation_id', generationId).eq('user_id', userId).maybeSingle();
   if (existingRating.error) throw existingRating.error;
   // A creation's new post carries its recipe (owner, 2026-11-05; remix plan, phase 2): a composer
   // that sends "Allow remixes" offers no post of a creation without one, and is held to it here.
@@ -1162,7 +1167,14 @@ export async function publishGenerationToShowcaseForRoute({
     slug: 'magicbooklet',
   });
   const postPayload = {
-    is_nsfw: isNsfw,
+    // The mature mark (the RPC sets it only when the key is here). On whenever
+    // this publish takes the post as covered, sent or read: a post deleted
+    // since a read is made again by the upsert, and stays covered as the media
+    // secured above are. A stale "on" can only cover a post again. Off only
+    // when the request says so: otherwise a post already there keeps its own
+    // as it stands at the write, so one covered since the read stays covered,
+    // and a new post takes the column's default.
+    ...(isNsfw ? { is_nsfw: true } : requestBody.isNsfw === false ? { is_nsfw: false } : {}),
     // The caller's post, whichever of its identities made the creation.
     user_id: userId,
     visibility: effectiveVisibility,
@@ -1334,7 +1346,24 @@ export async function publishGenerationToShowcaseForRoute({
     }
   }
 
-  invalidateShowcaseFeedCache();
+  // A move to private, out of the lists (public to unlisted) or behind the
+  // mature cover takes what was shown out of view: every cached page expires
+  // at once. Anything else (a first publish, a move to public, an edit) is
+  // refreshed in the background on the pages that draw the post. A publish
+  // moves neither the archive nor a moderation hold, so those carry over.
+  const postBefore = existingRating.data ? postPageStateOfRow(existingRating.data) : null;
+  const pageChange = classifyPostPageChange(postBefore, { ...postBefore, visibility: effectiveVisibility, isNsfw });
+  if (pageChange.kind === 'removal' || !postId) {
+    invalidateShowcaseFeedCache();
+  } else {
+    await invalidateShowcaseFeedAndRefreshPostPages(adminSupabase, {
+      postId,
+      generationId: generation.id,
+      creatorId: userId,
+      arrived: pageChange.arrived,
+      isNew: !existingRating.data,
+    });
+  }
 
   // A remix posted where everyone can see it tells the creator of the post it
   // remixed, by the remixer's name, behind the answer: when it goes public, and

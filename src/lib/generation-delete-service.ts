@@ -16,7 +16,7 @@ import {
   PRIVATE_POST_MEDIA_PREFIX,
   postMediaStorageBucket,
 } from '@/lib/post-media-storage';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { invalidateShowcaseFeedCache as defaultInvalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import {
   getCanonicalStoredMediaLocation,
   getUserOwnedStoredMediaLocation,
@@ -88,7 +88,7 @@ export interface GenerationDeleteRouteInput {
   createAdminSupabase: () => unknown;
   createUserSupabase: () => unknown;
   generationId: string;
-  invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
+  invalidateShowcaseFeedCache?: typeof defaultInvalidateShowcaseFeedCache;
   requireIdentity?: typeof requireIdentity;
   request: Request;
 }
@@ -293,7 +293,7 @@ export async function deleteOwnerGenerationForRoute({
   createAdminSupabase,
   createUserSupabase,
   generationId,
-  invalidateFeedCache = invalidateShowcaseFeedCache,
+  invalidateShowcaseFeedCache = defaultInvalidateShowcaseFeedCache,
   requireIdentity: requireIdentityForRequest = requireIdentity,
 }: GenerationDeleteRouteInput): Promise<GenerationDeleteRouteResult> {
   const supabase = createUserSupabase() as GenerationDeleteClient;
@@ -459,7 +459,7 @@ export async function deleteOwnerGenerationForRoute({
       }
     }
 
-    invalidateFeedCache();
+    invalidateShowcaseFeedCache();
     await removeStoragePaths(adminSupabase, removablePaths, deleted.id);
     if (queuedPublicPaths.length > 0) {
       await queueUnrecordedShowcaseMedia(adminSupabase, queuedPublicPaths);

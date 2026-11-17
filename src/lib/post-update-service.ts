@@ -77,7 +77,11 @@ import {
   isDatabaseRecipeTitleRefusal,
 } from '@/lib/marketplace-trust';
 import { recipeKeepsPromptPrivate, titleForRecipePost, type CreationTitleSource } from '@/lib/creation-post-title';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { classifyPostPageChange, postPageStateOfRow, type PostPageChange } from '@/lib/public-page-change';
+import {
+  invalidateShowcaseFeedAndRefreshPostPages,
+  invalidateShowcaseFeedCache,
+} from '@/lib/showcase-feed-cache';
 import { isTemplateResultGeneration, type TemplateRunLink } from '@/lib/template-result';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
@@ -1357,6 +1361,12 @@ export async function updateOwnerPostForRoute({
   }
 
   let didMutate = false;
+  // What the saved change did to the cached public pages, and the creation
+  // whose id is the post page's legacy address: decided once the save commits.
+  let pageChange: PostPageChange | null = null;
+  let pageGenerationId: string | null = null;
+  // The save deleted media files the post's page drew (a picture replaced or taken out).
+  let pageMediaRemoved = false;
 
   try {
     const post = await loadOwnedPost(adminSupabase, postId, ownerUserId);
@@ -1615,7 +1625,14 @@ export async function updateOwnerPostForRoute({
       };
     }
 
-    const nextVisibility = normalizeVisibility(body.visibility) ?? normalizeVisibility(post.visibility) ?? 'private';
+    const requestedVisibility = normalizeVisibility(body.visibility);
+    const nextVisibility = requestedVisibility ?? normalizeVisibility(post.visibility) ?? 'private';
+    // The bar this save's content is held to (review, 2026-11-17). A save that
+    // names no visibility leaves the stored one, which another request may have
+    // made public since this one read the post, so it is checked as a public
+    // save unless it says private: the safety check, a remix's recipe terms and
+    // the marketplace quality gate below. The composers always name one.
+    const checkedAsPublic = requestedVisibility !== 'private';
 
     const nextCategory =
       post.post_format === 'text'
@@ -1695,7 +1712,7 @@ export async function updateOwnerPostForRoute({
       });
     }
     const titleReplacedForRecipe = nextTitle !== titleAsGiven;
-    const frozenSoldBundleForRepublish = nextVisibility === 'public'
+    const frozenSoldBundleForRepublish = checkedAsPublic
       && !hasResourceBundlePayload
       && liveBundle
       && recipeHasHolders(liveBundle)
@@ -1724,7 +1741,7 @@ export async function updateOwnerPostForRoute({
     // breaks them (made before this rule) is not refused, and Remix and free
     // claims stay closed on such a post meanwhile (remix-access.ts and the free
     // unlock).
-    if (nextVisibility === 'public' && (hasResourceBundlePayload || post.visibility !== 'public')) {
+    if (checkedAsPublic && (hasResourceBundlePayload || post.visibility !== 'public')) {
       const remixTermsRefusal = getRemixRecipeTermsRefusalBody(
         { mode: isRemixRecipeMode(post.remix_recipe_mode) ? post.remix_recipe_mode : null },
         hasResourceBundlePayload ? resourceBundle?.accessMode : liveBundle?.access_mode,
@@ -1733,7 +1750,7 @@ export async function updateOwnerPostForRoute({
         return { ok: false, status: 400, body: remixTermsRefusal };
       }
     }
-    const safetyViolation = nextVisibility !== 'private'
+    const safetyViolation = checkedAsPublic
       ? getPublicUgcSafetyViolation({
           title: nextTitle,
           description: nextDescription,
@@ -1759,8 +1776,13 @@ export async function updateOwnerPostForRoute({
     }
     const nextIsNsfw = typeof body.isNsfw === 'boolean' ? body.isNsfw : post.is_nsfw === true;
     const updatePayload: Record<string, unknown> = {
-      is_nsfw: nextIsNsfw,
-      visibility: nextVisibility,
+      // Each written only when the save names it (review, 2026-11-17): the update keeps the stored
+      // value of a key left out, so a save that names neither never puts back what another device
+      // changed since this request read the post (a post made private again made public, a covered
+      // one uncovered). Both composers send both; a visibility toggle sends its visibility alone.
+      // A post still stored unlisted is moved to private by any save (product decision 12).
+      ...(typeof body.isNsfw === 'boolean' ? { is_nsfw: body.isNsfw } : {}),
+      ...(requestedVisibility !== null || nextVisibility !== post.visibility ? { visibility: nextVisibility } : {}),
       category: nextCategory,
       // Written only when sent (remix plan, phase 2): an older composer's save keeps the post's own.
       ...(typeof body.allowRemixes === 'boolean' ? { remixes_allowed: body.allowRemixes } : {}),
@@ -1837,14 +1859,15 @@ export async function updateOwnerPostForRoute({
       updatePayload.source_tool_slug = normalizedSourceTool.slug;
     }
 
-    const marketplaceQualityError = nextVisibility === 'public'
+    const marketplaceQualityError = checkedAsPublic
       ? await resolvedDependencies.getMarketplaceQualityErrorForPostBundle({
           supabase: adminSupabase,
           ownerUserId,
           post: {
             title: nextTitle,
             body: nextBody,
-            visibility: nextVisibility,
+            // Checked as the public post it may be, whatever the read said.
+            visibility: 'public',
             archivedAt: post.archived_at,
             reviewStatus: post.review_status ?? 'visible',
             showcaseAssetPath: post.showcase_asset_path,
@@ -2089,6 +2112,18 @@ export async function updateOwnerPostForRoute({
         ...(preparedMedia ? { mediaItems: preparedMedia.mediaItems } : {}),
       });
       didMutate = true;
+      // A move to private or out of the lists (public to unlisted), or behind
+      // the mature cover, takes what was shown out of view; anything else is a
+      // change the post's pages take in the background. An edit moves neither
+      // the archive nor a moderation hold.
+      const postBefore = postPageStateOfRow(post);
+      pageChange = classifyPostPageChange(postBefore, {
+        ...postBefore,
+        visibility: updatedPost.visibility,
+        isNsfw: nextIsNsfw,
+      });
+      pageGenerationId = post.generation_id ?? null;
+      pageMediaRemoved = (preparedMedia?.removedStoragePaths.length ?? 0) > 0;
     } catch (error) {
       if (error instanceof DefinitiveSupabaseMutationRejection) {
         await Promise.all(resourceConsumptionClaims.map((claim) => (
@@ -2280,7 +2315,19 @@ export async function updateOwnerPostForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to update post.' } };
   } finally {
     if (didMutate) {
-      invalidateShowcaseFeedCache();
+      if (!pageChange || pageChange.kind === 'removal') {
+        invalidateShowcaseFeedCache();
+      } else {
+        await invalidateShowcaseFeedAndRefreshPostPages(adminSupabase, {
+          postId,
+          generationId: pageGenerationId,
+          creatorId: ownerUserId,
+          arrived: pageChange.arrived,
+          // Its old files are deleted with this save (`finalizePreparedEditedPostMedia`): a stale
+          // copy of its own page would show them broken.
+          ...(pageMediaRemoved ? { mediaRemoved: true } : {}),
+        });
+      }
     }
   }
 }

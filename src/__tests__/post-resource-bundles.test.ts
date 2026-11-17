@@ -11,6 +11,7 @@ import {
   formatPostResourcePriceLabel,
   getBundleAccessLabel,
   getPostResourceBundleLengthError,
+  isMediaPostWithoutCreation,
   normalizePostResourceItems,
   normalizePostResourceSections,
   resolvePostRemixCapability,
@@ -510,6 +511,8 @@ describe('post resource bundle validation', () => {
       target: 'image',
     });
 
+    // A workflow in the recipe of a post with no creation: no client acted on its `workflow`
+    // target, and with no creation there is nothing to remix (owner, 2026-11-17).
     expect(resolvePostRemixCapability({
       generationId: null,
       postFormat: 'media',
@@ -526,8 +529,8 @@ describe('post resource bundle validation', () => {
         }]),
       },
     })).toEqual({
-      capability: 'unlock_required',
-      target: 'workflow',
+      capability: 'unsupported',
+      target: null,
     });
 
     expect(resolvePostRemixCapability({
@@ -615,7 +618,7 @@ describe('a creation post’s recipe includes its Remix', () => {
   });
 
   it('reads a published creation recipe as remix-included, and nothing else', () => {
-    const published = { storedAllowRemix: false, status: 'published', generationId: 'generation-1' };
+    const published = { storedAllowRemix: false, status: 'published', generationId: 'generation-1', postFormat: 'media', category: 'image' };
 
     expect(resolveRecipeAllowRemix(published)).toBe(true);
     expect(resolveRecipeAllowRemix({ ...published, storedAllowRemix: null })).toBe(true);
@@ -669,6 +672,90 @@ describe('a creation post’s recipe includes its Remix', () => {
       .toEqual({ allowRemix: false, resourceKinds: ['prompt'], itemCounts: { prompt: 1, remix_link: 1 }, lockedPreview: closed });
     // A summary without counts or a preview gains none.
     expect(withoutRecipeRemix({ allowRemix: true })).toEqual({ allowRemix: false });
+  });
+});
+
+// Owner, 2026-11-17, asked "Remix can't work on posts made outside the app. Hide it there for now?":
+// "Yes, hide it". A post with no creation behind it was offered a Remix wherever its recipe held a
+// reference picture, Remix access or a workflow, and its recipe was listed as including one while its
+// stored switch was on; the remix route answers every such post 400 "Only generation-backed posts can
+// be remixed", so that Remix was a dead end for anyone, a free one claiming the recipe on its way.
+// Read-time only: what the recipe stores stays as it is.
+describe('a post with no creation offers no Remix', () => {
+  const upload = { generationId: null, postFormat: 'media', category: 'image', sourceKind: 'external' };
+  const referencePicture = normalizePostResourceItems([
+    { type: 'reference_image', title: 'Reference picture', storagePath: 'user-1/reference.png', contentType: 'image/png' },
+  ]);
+
+  it('is a post with media and no creation, never a text post or a creation’s', () => {
+    expect(isMediaPostWithoutCreation(upload)).toBe(true);
+    expect(isMediaPostWithoutCreation({ ...upload, postFormat: 'mixed' })).toBe(true);
+    expect(isMediaPostWithoutCreation({ ...upload, generationId: '' })).toBe(true);
+    expect(isMediaPostWithoutCreation({ ...upload, generationId: 'generation-1' })).toBe(false);
+    expect(isMediaPostWithoutCreation({ ...upload, postFormat: 'text', category: 'text' })).toBe(false);
+    expect(isMediaPostWithoutCreation({ ...upload, category: 'text' })).toBe(false);
+  });
+
+  it.each([
+    ['a reference picture', referencePicture],
+    ['Remix access', normalizePostResourceItems([{ type: 'remix_access', title: 'Remix access' }])],
+    ['a clip for a direct remix', normalizePostResourceItems([
+      { type: 'reference_video', title: 'Clip', storagePath: 'user-1/clip.mp4', remixUse: 'direct_remix' },
+    ])],
+    ['a workflow', normalizePostResourceItems([{ type: 'workflow', title: 'Workflow', externalUrl: 'https://example.com/workflow' }])],
+  ])('offers none from %s in its recipe, to someone without it or with it, its switch on or off', (_label, items) => {
+    for (const viewerCanAccess of [false, true]) {
+      for (const allowRemix of [false, true]) {
+        expect(resolvePostRemixCapability({ ...upload, resourceBundle: { viewerCanAccess, allowRemix, items } }), `${viewerCanAccess}/${allowRemix}`)
+          .toEqual({ capability: 'unsupported', target: null });
+      }
+    }
+  });
+
+  it('answers as a post without a recipe does, a creation deleted since included', () => {
+    expect(resolvePostRemixCapability({ ...upload, resourceBundle: null }))
+      .toEqual({ capability: 'unsupported', target: null });
+    expect(resolvePostRemixCapability({
+      ...upload,
+      sourceKind: 'magicbooklet',
+      resourceBundle: { viewerCanAccess: true, allowRemix: true, items: referencePicture },
+    })).toEqual({ capability: 'none', target: null });
+  });
+
+  it('reads its recipe as including no Remix, whatever its stored switch says', () => {
+    const recipe = { status: 'published', generationId: null, postFormat: 'media', category: 'image' };
+
+    expect(resolveRecipeAllowRemix({ ...recipe, storedAllowRemix: true })).toBe(false);
+    expect(resolveRecipeAllowRemix({ ...recipe, storedAllowRemix: true, status: 'draft' })).toBe(false);
+    expect(resolveRecipeAllowRemix({ ...recipe, storedAllowRemix: false })).toBe(false);
+    // Nor where its post could not be read: nothing says it has a creation.
+    expect(resolveRecipeAllowRemix({ ...recipe, storedAllowRemix: true, postFormat: null, category: null })).toBe(false);
+  });
+
+  it('leaves a text post and a creation post as they were', () => {
+    // A text post's template is a remix of its own kind, and its stored switch stands.
+    expect(resolvePostRemixCapability({
+      generationId: null,
+      postFormat: 'text',
+      category: 'text',
+      sourceKind: 'manual',
+      resourceBundle: {
+        viewerCanAccess: false,
+        allowRemix: true,
+        items: normalizePostResourceItems([{ type: 'note', title: 'Template', textContent: 'Hook / proof / CTA', remixUse: 'text_template' }]),
+      },
+    })).toEqual({ capability: 'unlock_required', target: 'text_template' });
+    expect(resolveRecipeAllowRemix({ storedAllowRemix: true, status: 'published', generationId: null, postFormat: 'text', category: 'text' }))
+      .toBe(true);
+    expect(resolvePostRemixCapability({
+      generationId: 'generation-1',
+      postFormat: 'media',
+      category: 'image',
+      sourceKind: 'magicbooklet',
+      resourceBundle: { viewerCanAccess: false, allowRemix: true, items: referencePicture },
+    })).toEqual({ capability: 'unlock_required', target: 'image' });
+    expect(resolveRecipeAllowRemix({ storedAllowRemix: false, status: 'published', generationId: 'generation-1', postFormat: 'media', category: 'image' }))
+      .toBe(true);
   });
 });
 

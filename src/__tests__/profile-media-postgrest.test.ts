@@ -117,7 +117,7 @@ it.skipIf(!enabled).each(modes)('profile media with actual Storage and SQL: %s',
       // injected local Storage client, whose fetch rejects external origins.
       const avatarUrl = 'https://profile-fixture.invalid/storage/v1/object/public/profiles/' + intent.path;
       const body = { username: 'audit-' + owner.slice(0, 12), displayName: 'Profile fixture', avatarUrl };
-      const saved = await updateProfileForRoute({ userId: owner, body, client: admin, invalidateFeedCache: () => {} });
+      const saved = await updateProfileForRoute({ userId: owner, body, client: admin, invalidateShowcaseFeedAndRefreshEveryPage: () => {} });
       expect(saved).toMatchObject({ ok: true });
       const stored = await admin.storage.from('profiles').download(intent.path);
       expect(stored.error).toBeNull();
@@ -143,10 +143,10 @@ it.skipIf(!enabled).each(modes)('profile media with actual Storage and SQL: %s',
       expect((await db.query('select r.finalization_status,r.consumption_disposition,r.consumed_at is null unconsumed,r.actual_storage_version=o.version::text version_matches from public.upload_byte_reservations r join storage.objects o on o.bucket_id=r.bucket_id and o.name=r.storage_path where r.id=$1', [intent.uploadId])).rows)
         .toEqual([{ finalization_status: 'finalized', consumption_disposition: null, unconsumed: true, version_matches: true }]);
       // The upload's URL again reaches the same copy, whose name is its content.
-      expect(await updateProfileForRoute({ userId: owner, body: { ...body, displayName: 'Edited fixture' }, client: admin, invalidateFeedCache: () => {} }))
+      expect(await updateProfileForRoute({ userId: owner, body: { ...body, displayName: 'Edited fixture' }, client: admin, invalidateShowcaseFeedAndRefreshEveryPage: () => {} }))
         .toMatchObject({ ok: true, response: { avatarUrl: copyUrl } });
       // The copy's URL back, as the web sends every field on every save, keeps it.
-      expect(await updateProfileForRoute({ userId: owner, body: { ...body, displayName: 'Edited again', avatarUrl: copyUrl }, client: admin, invalidateFeedCache: () => {} }))
+      expect(await updateProfileForRoute({ userId: owner, body: { ...body, displayName: 'Edited again', avatarUrl: copyUrl }, client: admin, invalidateShowcaseFeedAndRefreshEveryPage: () => {} }))
         .toMatchObject({ ok: true, response: { avatarUrl: copyUrl } });
       expect((await admin.storage.from('profiles').download(intent.path)).error).toBeNull();
       expect((await db.query('select avatar_url,display_name from public.profiles where id=$1', [owner])).rows).toEqual([{ avatar_url: copyUrl, display_name: 'Edited again' }]);

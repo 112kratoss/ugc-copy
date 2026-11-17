@@ -54,7 +54,7 @@ describe.skipIf(!process.env.AUDIT_STORAGE_CONFIG || !process.env.SUPABASE_TEST_
     const payload = () => ({ username: 'audit-' + owner.slice(0, 12), displayName: 'Bounded fixture', role: 'avatar', fileName: 'fixture.png', mimeType: 'image/png', sizeBytes: 68, paths: [owner + '/absent.png'] });
     const invoke = async (request: Request, authClient = signed) => {
       const dependencies = { createUserClient: () => authClient, createServiceClient: () => admin };
-      return operation === 'patch' ? patchProfileRouteResult({ request, dependencies: { ...dependencies, updateProfileForRoute: (input) => updateProfileForRoute({ ...input, invalidateFeedCache: () => {} }) } })
+      return operation === 'patch' ? patchProfileRouteResult({ request, dependencies: { ...dependencies, updateProfileForRoute: (input) => updateProfileForRoute({ ...input, invalidateShowcaseFeedAndRefreshEveryPage: () => {} }) } })
         : operation === 'validate' ? postProfileValidateRouteResponse({ request, dependencies })
           : operation === 'sign' ? postProfileMediaSignRouteResponse({ request, dependencies })
             : postProfileMediaCleanupRouteResponse({ request, dependencies });

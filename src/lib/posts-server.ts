@@ -696,10 +696,13 @@ export async function getMarketplaceAssetSummaryHydration(
   adminSupabase = createServiceClient(),
   options: {
     /**
-     * The posts among `postIds` whose creator turned "Allow remixes" off (`posts.remixes_allowed`,
-     * owner 2026-11-05), which the summaries do not know (the RPC reports `allow_remix` for every
-     * published creation recipe): each one's recipe is summed up with no Remix in its kinds, its
-     * switch or its teaser (the review of phase 2), as the marketplace lists it.
+     * The posts among `postIds` whose recipe sells no Remix, which the summaries do not know (the
+     * RPC reports `allow_remix` for every published creation recipe, and the stored switch for any
+     * other): those whose creator turned "Allow remixes" off (`posts.remixes_allowed`, owner
+     * 2026-11-05), and those with media and no creation, which have nothing to remix
+     * (`isMediaPostWithoutCreation`, owner 2026-11-17). Each one's recipe is summed up with no
+     * Remix in its kinds, its switch or its teaser (the review of phase 2), as the marketplace
+     * lists it.
      */
     remixesClosedPostIds?: ReadonlySet<string>;
   } = {},

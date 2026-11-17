@@ -2140,6 +2140,70 @@ describe('showcase feed', () => {
     expect(remixable.items.map((item) => item.id)).toEqual(['open-creation']);
   });
 
+  // Owner, 2026-11-17 ("Yes, hide it"): a post with no creation (a picture made elsewhere) sold a
+  // Remix with its recipe wherever its stored switch was on or a Remix access item was among its
+  // items, its reference picture locked a Remix behind the recipe, and the Remix filter listed it;
+  // the remix route refuses every such post. Its recipe still sells, with no Remix in it.
+  it('sells no Remix with the recipe of a post with no creation, offers none, and leaves it out of the Remix filter', async () => {
+    const promptItem = { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'The exact prompt.' };
+    const referenceItem = {
+      id: 'reference-1',
+      type: 'reference_image',
+      title: 'Reference picture',
+      storagePath: 'user-1/reference.png',
+      contentType: 'image/png',
+    };
+    postsState = [
+      createPostRow({ id: 'upload-switch-on', created_at: '2026-03-20T10:04:00.000Z' }),
+      createPostRow({ id: 'upload-access', created_at: '2026-03-20T10:03:00.000Z' }),
+      createPostRow({ id: 'upload-reference', created_at: '2026-03-20T10:02:00.000Z' }),
+      createPostRow({ id: 'open-creation', created_at: '2026-03-20T10:01:00.000Z', generation_id: 'gen-open', source_kind: 'magicbooklet' }),
+    ];
+    generationModelsState = [];
+    const recipe = (postId: string, overrides: Partial<ResourceBundleRow>): ResourceBundleRow => ({
+      id: `bundle-${postId}`,
+      post_id: postId,
+      title: 'Reference kit',
+      access_mode: 'free',
+      price_usd_cents: 0,
+      preview_text: 'The prompt and the reference behind it.',
+      resource_items: [promptItem],
+      allow_remix: false,
+      status: 'published',
+      ...overrides,
+    });
+    resourceBundlesState = [
+      recipe('upload-switch-on', { allow_remix: true }),
+      recipe('upload-access', { resource_items: [promptItem, { id: 'access-1', type: 'remix_access', title: 'Remix access' }] }),
+      recipe('upload-reference', { resource_items: [promptItem, referenceItem] }),
+      recipe('open-creation', { allow_remix: true }),
+    ];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({ category: 'media', sort: 'recent', offset: 0, limit: 12, bypassCache: true });
+    const items = new Map(page.items.map((item) => [item.id, item]));
+
+    for (const id of ['upload-switch-on', 'upload-access', 'upload-reference']) {
+      const item = items.get(id);
+      expect(item?.asset, id).toMatchObject({ allowRemix: false });
+      expect(item?.asset?.resourceKinds, id).not.toContain('remix');
+      expect(item?.asset?.lockedPreview, id).toMatchObject({ hasRemix: false });
+      expect(item?.asset?.itemCounts, id).not.toHaveProperty('remix_access');
+      expect(item, id).toMatchObject({ canRemix: false, remixCapability: 'unsupported', remixTarget: null });
+    }
+    expect(items.get('open-creation')?.asset).toMatchObject({ allowRemix: true, resourceKinds: ['prompt', 'remix'] });
+
+    const remixable = await getShowcaseFeedPage({
+      category: 'media',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+      resource: 'remix',
+      bypassCache: true,
+    });
+    expect(remixable.items.map((item) => item.id)).toEqual(['open-creation']);
+  });
+
   it('sorts top sales across all candidate posts before slicing', async () => {
     postsState = [
       ...Array.from({ length: 55 }, (_, index) => createPostRow({

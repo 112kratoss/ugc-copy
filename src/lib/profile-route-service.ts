@@ -17,6 +17,7 @@ import {
   getAuthAvatarUrl,
   getCreatorDisplayName,
   getReservedProfileUsernameError,
+  normalizeUsername,
   type ProfileApiResponse,
   type ProfileFieldErrors,
   type ProfileFieldUpdate,
@@ -24,7 +25,7 @@ import {
 } from '@/lib/profile';
 import { parseOwnerPostSalesSummary } from '@/lib/owner-post-sales-summary';
 import { parseOwnerProfileCounts } from '@/lib/owner-profile-counts';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { invalidateShowcaseFeedAndRefreshEveryPage as defaultInvalidateShowcaseFeedAndRefreshEveryPage } from '@/lib/showcase-feed-cache';
 import { deriveNormalizedProfileImage } from '@/lib/profile-image-normalization';
 import {
   getCanonicalStoredMediaLocation,
@@ -333,12 +334,15 @@ export async function updateProfileForRoute({
   userId,
   body,
   client,
-  invalidateFeedCache = invalidateShowcaseFeedCache,
+  // A profile is drawn on every page of the creator's, on each remix credit
+  // that names them and on the storefront's cards: every page is refreshed in
+  // the background, and the page of a handle just taken is dropped at once.
+  invalidateShowcaseFeedAndRefreshEveryPage = defaultInvalidateShowcaseFeedAndRefreshEveryPage,
 }: {
   userId: string;
   body: unknown;
   client: ProfileRouteClientInput;
-  invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
+  invalidateShowcaseFeedAndRefreshEveryPage?: typeof defaultInvalidateShowcaseFeedAndRefreshEveryPage;
 }): Promise<ProfileRouteResult> {
   const resolvedClient = resolveClient(client);
   try {
@@ -567,7 +571,9 @@ export async function updateProfileForRoute({
     return { ok: false, status: 500, error: completed.error };
   }
 
-  invalidateFeedCache();
+  const savedHandle = normalizeUsername((updatedProfile as Partial<ProfileRow> | null)?.username);
+  const handleTaken = savedHandle !== null && savedHandle !== normalizeUsername(validation.existingUsername);
+  invalidateShowcaseFeedAndRefreshEveryPage(handleTaken ? { handles: [savedHandle] } : {});
 
   return {
     ok: true,

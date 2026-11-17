@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-vi.mock('@/lib/showcase-feed-cache', async () => ({ ...await vi.importActual<Record<string, unknown>>('@/lib/showcase-feed-cache'), invalidateShowcaseFeedCache: vi.fn() }));
+// The managed run takes feed maintenance's own default, the feeds-only helper, which has no Next request to expire tags in here.
+vi.mock('@/lib/showcase-feed-cache', async () => ({ ...await vi.importActual<Record<string, unknown>>('@/lib/showcase-feed-cache'), invalidateShowcaseFeedCacheOnly: vi.fn() }));
 vi.mock('@/lib/backend-logger', () => ({ logBackendError: vi.fn(), logBackendEvent: vi.fn(), logBackendWarning: vi.fn() }));
 import { runFeedMaintenanceBackendJob } from '@/lib/backend-job-executions';
 import { maintainFeedPersonalization } from '@/lib/feed-maintenance';
@@ -32,7 +33,7 @@ describe.skipIf(!configPath || !connectionString)('feed maintenance interruption
   const managedNow = new Date('2005-01-02T00:06:00Z').getTime();
   const managed = () => runFeedMaintenanceBackendJob({ serviceClient: admin, requestId: `${requestPrefix}-${sequence++}`, startedAtMs: managedNow });
   const runs = async () => (await db.query('select status,summary,error_message,skip_reason from public.backend_job_runs where request_id like $1 order by request_id', [requestPrefix + '%'])).rows;
-  const run = () => maintainFeedPersonalization(admin, { now, invalidateFeedCache: invalidation });
+  const run = () => maintainFeedPersonalization(admin, { now, invalidateShowcaseFeedCacheOnly: invalidation });
   const rollups = async () => (await db.query('select deliveries,opens from public.feed_delivery_fact_daily where algorithm_version_id=$1', [algorithm])).rows;
   beforeAll(async () => {
     const config = JSON.parse(readFileSync(configPath!, 'utf8'));

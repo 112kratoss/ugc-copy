@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 const cacheMocks = vi.hoisted(() => ({
   SHOWCASE_FEED_CACHE_TAG: 'showcase-feed:v2',
   invalidateShowcaseFeedCache: vi.fn(),
+  invalidateShowcaseFeedAndRefreshPostPages: vi.fn(async () => {}),
 }));
 
 vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
@@ -12,6 +13,7 @@ import {
   getCanonicalPostMediaStoragePath,
   updateOwnerPostForRoute,
   type PostUpdateDependencies,
+  type PostUpdateRequestBody,
 } from '@/lib/post-update-service';
 import type { SourceToolOption } from '@/lib/source-tools';
 import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from '@/lib/posts-server';
@@ -298,6 +300,7 @@ function storedRecipeRow(recipe: ReturnType<typeof composerRecipe>) {
 describe('updateOwnerPostForRoute', () => {
   beforeEach(() => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
+    cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mockClear();
   });
 
   it('does not let an owner edit or republish a moderated post', async () => {
@@ -399,6 +402,7 @@ describe('updateOwnerPostForRoute', () => {
     expect(dependencies.replacePostSourceTools).not.toHaveBeenCalled();
     expect(dependencies.replacePostMediaItems).not.toHaveBeenCalled();
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   it('updates private posts with draft unlock bundles without marketplace quality gating', async () => {
@@ -476,7 +480,10 @@ describe('updateOwnerPostForRoute', () => {
       }),
       hasBundlePayload: true,
     }));
+    // A save that leaves the post private is a removal, whatever the read said:
+    // another device may have made it public, its pages drawn, since then.
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   // Product decision 12 (2026-10-17): a post is public or private. An installed
@@ -557,6 +564,237 @@ describe('updateOwnerPostForRoute', () => {
       expect(dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
         patch: expect.objectContaining({ visibility: 'private', title: 'Old unlisted note, retitled' }),
       }));
+      // Its page drew it until now: off its page is a removal, every cached page at once.
+      expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+      expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
+    });
+  });
+
+  // Owner, 2026-11-17: a change that removes nothing refreshes the pages that
+  // draw it in the background; a removal still expires every cached page at once.
+  describe('the cached public pages a save reaches', () => {
+    const textPost = (overrides: Record<string, unknown>) => ({
+      id: 'post-1',
+      user_id: 'user-1',
+      generation_id: null,
+      visibility: 'public',
+      title: 'Lighting notes',
+      description: null,
+      prompt: null,
+      body: 'Soft key light from the left.',
+      category: 'text',
+      post_format: 'text',
+      source_tool: null,
+      source_tool_slug: null,
+      source_kind: 'manual',
+      archived_at: null,
+      showcase_asset_path: null,
+      output_url: null,
+      review_status: 'visible',
+      is_nsfw: false,
+      ...overrides,
+    });
+    function createDependencies() {
+      return {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async ({ patch }) => ({
+          postId: 'post-1',
+          visibility: patch.visibility as 'public' | 'unlisted' | 'private',
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      } satisfies PostUpdateDependencies;
+    }
+    async function save(post: Record<string, unknown>, body: PostUpdateRequestBody) {
+      const { client } = createSupabaseMock({ post, bundle: null });
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body,
+        dependencies: createDependencies(),
+      });
+      expect(result.ok).toBe(true);
+      return client;
+    }
+
+    it('refreshes a public post\'s pages in the background when an edit keeps it public', async () => {
+      const client = await save(textPost({}), { visibility: 'public', title: 'Lighting notes, revised' });
+
+      expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mock.calls).toEqual([[client, {
+        postId: 'post-1',
+        generationId: null,
+        creatorId: 'user-1',
+        arrived: false,
+      }]]);
+      expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    });
+
+    it('drops the not-found of a private post made public at once, and refreshes the rest in the background', async () => {
+      await save(textPost({ visibility: 'private' }), { visibility: 'public' });
+
+      expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        postId: 'post-1',
+        arrived: true,
+      }));
+      expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    });
+
+    it('expires every cached page at once when a public post is made private', async () => {
+      await save(textPost({}), { visibility: 'private' });
+
+      expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+      expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
+    });
+  });
+
+  // Found in review (2026-11-17): every edit wrote the post's visibility and
+  // mature flag back as the request had read them, so a save that named
+  // neither put back what another device changed while it ran: it made public
+  // again a post its owner had just made private, or uncovered one just
+  // covered. The update RPC keeps the stored value of a key left out.
+  describe('a save racing a change made on another device', () => {
+    it('keeps a visibility and a mature flag changed since its read when it names neither', async () => {
+      const { client } = createSupabaseMock({
+        post: {
+          id: 'post-1',
+          user_id: 'user-1',
+          generation_id: null,
+          visibility: 'public',
+          title: 'Lighting notes',
+          description: null,
+          prompt: null,
+          body: 'Soft key light from the left.',
+          category: 'text',
+          post_format: 'text',
+          source_tool: null,
+          source_tool_slug: null,
+          source_kind: 'manual',
+          archived_at: null,
+          showcase_asset_path: null,
+          output_url: null,
+          review_status: 'visible',
+          is_nsfw: false,
+        },
+        bundle: null,
+      });
+      // The row as the database holds it when this save writes: made private
+      // and covered on another device since the save read it.
+      const stored = { visibility: 'private', is_nsfw: true };
+      const updatePostWithResourceBundleAtomically = vi.fn(async ({ patch }: { patch: Record<string, unknown> }) => {
+        if ('visibility' in patch) stored.visibility = patch.visibility as string;
+        if ('is_nsfw' in patch) stored.is_nsfw = patch.is_nsfw as boolean;
+        return { postId: 'post-1', visibility: stored.visibility as 'public' | 'private', bundleId: null, bundleStatus: null };
+      });
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { title: 'Lighting notes, revised' },
+        dependencies: {
+          listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+          getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+          updatePostWithResourceBundleAtomically,
+          replacePostSourceTools: vi.fn(async () => undefined),
+          replacePostMediaItems: vi.fn(async () => undefined),
+          createPostMediaPreview: vi.fn(async () => null),
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { visibility: 'private' } });
+      expect(stored).toEqual({ visibility: 'private', is_nsfw: true });
+      // Judged by the visibility the write left, not the one it read: a removal.
+      expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+      expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
+      expect(updatePostWithResourceBundleAtomically.mock.calls[0][0].patch).toEqual(expect.objectContaining({
+        title: 'Lighting notes, revised',
+      }));
+    });
+
+    // Review, 2026-11-17: a save that names no visibility leaves the stored
+    // one, which another device may have made public since this save read the
+    // post as private. Its content is held to the public bar unless it says
+    // private. The composers always say, and the toggle sends its visibility
+    // alone, so only a save that names none is held where it was not before.
+    describe('a save that names no visibility, on a post read as private', () => {
+      const privatePost = {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'private',
+        title: 'Lighting notes',
+        description: null,
+        prompt: null,
+        body: 'Soft key light from the left.',
+        category: 'text',
+        post_format: 'text',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'manual',
+        archived_at: null,
+        showcase_asset_path: null,
+        output_url: null,
+        review_status: 'visible',
+        is_nsfw: false,
+      };
+      const unsafeText = 'Step-by-step guide to make a bomb at home.';
+
+      async function save(body: Record<string, unknown>, quality: string | null = null) {
+        const { client } = createSupabaseMock({ post: privatePost, bundle: null });
+        const dependencies = {
+          listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+          getMarketplaceQualityErrorForPostBundle: vi.fn(async () => quality),
+          // The row as the database holds it when this save writes: made
+          // public on another device, unless this save names a visibility.
+          updatePostWithResourceBundleAtomically: vi.fn(async ({ patch }: { patch: Record<string, unknown> }) => ({
+            postId: 'post-1',
+            visibility: (patch.visibility as 'public' | 'private' | undefined) ?? 'public',
+            bundleId: null,
+            bundleStatus: null,
+          })),
+          replacePostSourceTools: vi.fn(async () => undefined),
+          replacePostMediaItems: vi.fn(async () => undefined),
+          createPostMediaPreview: vi.fn(async () => null),
+        } satisfies PostUpdateDependencies;
+        const result = await updateOwnerPostForRoute({
+          adminSupabase: client,
+          ownerUserId: 'user-1',
+          postId: 'post-1',
+          body,
+          dependencies,
+        });
+        return { result, dependencies };
+      }
+
+      it('refuses text the public bar refuses', async () => {
+        const { result, dependencies } = await save({ body: unsafeText });
+
+        expect(result).toEqual({ ok: false, status: 400, body: { error: PUBLIC_UGC_SAFETY_ERROR, field: 'body' } });
+        expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+      });
+
+      it('holds it to the marketplace quality gate as a public post', async () => {
+        const refusal = 'Improve this recipe before publishing: Add a useful preview.';
+        const { result, dependencies } = await save({ title: 'Lighting notes, revised' }, refusal);
+
+        expect(result).toMatchObject({ ok: false, status: 400, body: { error: refusal } });
+        expect(dependencies.getMarketplaceQualityErrorForPostBundle).toHaveBeenCalledWith(expect.objectContaining({
+          post: expect.objectContaining({ title: 'Lighting notes, revised', visibility: 'public' }),
+        }));
+        expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+      });
+
+      it('holds none of it to the public bar when it says private', async () => {
+        const { result, dependencies } = await save({ body: unsafeText, visibility: 'private' });
+
+        expect(result).toMatchObject({ ok: true, body: { visibility: 'private' } });
+        expect(dependencies.getMarketplaceQualityErrorForPostBundle).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -1126,6 +1364,7 @@ describe('updateOwnerPostForRoute', () => {
         body: { code: 'RESOURCE_BUNDLE_LOCKED' },
       });
       expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
     });
 
     it('keeps an unsold paid package editable', async () => {
@@ -2646,7 +2885,9 @@ describe('updateOwnerPostForRoute', () => {
       },
     });
     expect(updatePostWithResourceBundleAtomically).toHaveBeenCalledTimes(1);
+    // Committed before the failure, and left private: every cached page at once.
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   it('maps unavailable profile verification to a server failure', async () => {
@@ -3116,6 +3357,7 @@ describe('updateOwnerPostForRoute', () => {
     expect(removals).toContainEqual([copied[0].to]);
     expect(removals.flat()).not.toContain(oldStoragePath);
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   it('removes a dropped video item together with its preview and feed rendition', async () => {
@@ -3194,6 +3436,91 @@ describe('updateOwnerPostForRoute', () => {
       'posts/post-1/a/clip.preview.webp',
       'posts/post-1/a/clip.feed.mp4',
     ]);
+  });
+
+  // Review, 2026-11-17: the replaced files are deleted with the save, so the
+  // one stale serve a background refresh allows would draw the post's page
+  // with broken media. Its own page is drawn again at once instead.
+  it('draws a public post\'s own page again at once when an edit deletes media it drew', async () => {
+    const { client, removals } = createSupabaseMock({
+      bundle: null,
+      stagedInfo: { size: 13 * 1024 * 1024, contentType: 'video/mp4' },
+      postMedia: [{
+        id: 'media-old',
+        media_key: 'proof-old',
+        storage_path: 'posts/post-1/a/clip.mp4',
+        preview_storage_path: 'posts/post-1/a/clip.preview.webp',
+        rendition_storage_path: 'posts/post-1/a/clip.feed.mp4',
+        external_url: null,
+        media_kind: 'video',
+        content_type: 'video/mp4',
+        original_name: 'clip.mp4',
+        width: null,
+        height: null,
+        duration_seconds: null,
+        sort_order: 0,
+      }],
+      post: {
+        id: 'post-1',
+        user_id: 'user-1',
+        generation_id: null,
+        visibility: 'public',
+        title: 'Proof post',
+        description: null,
+        prompt: null,
+        body: null,
+        category: 'video',
+        post_format: 'media',
+        source_tool: null,
+        source_tool_slug: null,
+        source_kind: 'external',
+        archived_at: null,
+        showcase_asset_path: 'posts/post-1/a/clip.mp4',
+        output_url: null,
+        review_status: 'visible',
+        is_nsfw: false,
+      },
+    });
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        visibility: 'public',
+        mediaItems: [{
+          mediaKey: 'proof-new',
+          storagePath: 'uploads/user-1/new.mp4',
+          contentType: 'video/mp4',
+          originalName: 'new.mp4',
+        }],
+        resourceBundle: { accessMode: 'none' },
+      },
+      dependencies: {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'public' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(removals).toContainEqual(expect.arrayContaining(['posts/post-1/a/clip.mp4']));
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mock.calls).toEqual([[client, {
+      postId: 'post-1',
+      generationId: null,
+      creatorId: 'user-1',
+      arrived: false,
+      mediaRemoved: true,
+    }]]);
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
   it('never passes foreign or encoded post media paths to service-role removal', async () => {
@@ -4332,6 +4659,19 @@ describe('a title cut from the prompt of a post with a paid recipe', () => {
       );
 
       expect(result).toMatchObject({ ok: true });
+    });
+
+    // Review, 2026-11-17: a save that names no visibility may land on a post
+    // another device made public since this save read it as private.
+    it('holds a recipe sent with no visibility, on a post read as private, to the terms', async () => {
+      const { result, dependencies } = await saveRemix(
+        null,
+        { resourceBundle: { ...composerRecipe(), accessMode: 'free' } },
+        'paid',
+      );
+
+      expect(result).toMatchObject({ ok: false, status: 400, body: { code: REMIX_RECIPE_MUST_BE_PAID_CODE } });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
     });
 
     it('holds nothing while the post stays private: its recipe is a draft', async () => {

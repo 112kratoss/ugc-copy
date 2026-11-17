@@ -1623,24 +1623,23 @@ function normalizePostResourceRemixDescriptors(value: unknown): PostResourceRemi
     .filter((item): item is PostResourceRemixDescriptor => item !== null);
 }
 
-function resolveResourceRemixDescriptorTarget(items: PostResourceRemixDescriptor[]): PostRemixTarget {
-  if (items.some((item) => item.remixUse === 'text_template')) {
-    return 'text_template';
-  }
-
-  if (items.some((item) => item.type !== 'remix_link' && item.remixUse === 'direct_remix')) {
-    return 'image';
-  }
-
-  if (items.some((item) => item.type === 'workflow' && item.remixUse === 'import_source')) {
-    return 'workflow';
-  }
-
-  if (items.some((item) => item.type !== 'remix_link' && item.remixUse === 'reference_only')) {
-    return 'image';
-  }
-
-  return null;
+/**
+ * A post with media and no creation behind it (`generation_id` null): a picture or clip made
+ * elsewhere, from the composer or an agent's `publish_post`, or one whose creation has been deleted
+ * since. A Remix starts from a creation, and the remix route refuses every other post ("Only
+ * generation-backed posts can be remixed", `showcase-remix-service.ts`), so such a post offers no
+ * Remix to anyone and its recipe sells none, whatever its stored switch or its items say (owner,
+ * 2026-11-17: "Yes, hide it"). Read-time only: what its recipe stores is not changed. A text post is
+ * not one: its recipe's text template is a remix of its own kind. A post read with neither its
+ * format nor a creation (its read failed) counts as one, so nothing claims a Remix for it.
+ */
+export function isMediaPostWithoutCreation(post: {
+  generationId: string | null | undefined;
+  postFormat: string | null | undefined;
+  category: string | null | undefined;
+}): boolean {
+  const hasCreation = typeof post.generationId === 'string' && post.generationId.length > 0;
+  return !hasCreation && post.postFormat !== 'text' && post.category !== 'text';
 }
 
 /**
@@ -1652,16 +1651,21 @@ function resolveResourceRemixDescriptorTarget(items: PostResourceRemixDescriptor
  * post's Remix at the unlock. Read-time only; nothing stored changes, and a
  * stored `true` stays true. A post whose creator turned "Allow remixes" off
  * (`posts.remixes_allowed`, owner 2026-11-05) offers no Remix with its recipe,
- * so none is listed, filtered on or sold with it.
+ * so none is listed, filtered on or sold with it, and nor does a post with
+ * media and no creation (`isMediaPostWithoutCreation`, owner 2026-11-17),
+ * whatever its stored switch says. A text post keeps its stored switch.
  */
 export function resolveRecipeAllowRemix(input: {
   storedAllowRemix: boolean | null | undefined;
   status: string | null | undefined;
   generationId: string | null | undefined;
+  /** The post's format and category, which tell a text post from one with no creation. */
+  postFormat: string | null | undefined;
+  category: string | null | undefined;
   templateResult?: boolean;
   remixesAllowed?: boolean | null;
 }): boolean {
-  if (input.remixesAllowed === false) {
+  if (input.remixesAllowed === false || isMediaPostWithoutCreation(input)) {
     return false;
   }
   if (input.storedAllowRemix === true) {
@@ -1736,14 +1740,13 @@ export function resolvePostRemixCapability(input: PostRemixResolutionInput): {
   }
 
   const resourceBundle = input.resourceBundle ?? null;
-  const items = normalizePostResourceRemixDescriptors(resourceBundle?.items ?? []);
   const bundleRequiresUnlock = Boolean(resourceBundle && !resourceBundle.viewerCanAccess);
-  const resourceTarget = resolveResourceRemixDescriptorTarget(items);
   const isTextPost = input.postFormat === 'text' || input.category === 'text';
   const hasGeneration = typeof input.generationId === 'string' && input.generationId.length > 0;
 
   if (isTextPost) {
-    if (resourceTarget === 'text_template') {
+    const items = normalizePostResourceRemixDescriptors(resourceBundle?.items ?? []);
+    if (items.some((item) => item.remixUse === 'text_template')) {
       return {
         capability: bundleRequiresUnlock ? 'unlock_required' : 'public',
         target: 'text_template',
@@ -1756,9 +1759,20 @@ export function resolvePostRemixCapability(input: PostRemixResolutionInput): {
     };
   }
 
+  // No creation behind it (`isMediaPostWithoutCreation`): nothing to remix, whoever asks and whatever
+  // its recipe holds (owner, 2026-11-17). A reference picture, Remix access or a workflow in its recipe
+  // gave it a Remix (target `image` or `workflow`) that the remix route refused; its recipe can still
+  // be claimed or bought. It answers as such a post without a recipe always has.
+  if (!hasGeneration) {
+    return {
+      capability: input.sourceKind === 'external' || input.sourceKind === 'manual' ? 'unsupported' : 'none',
+      target: null,
+    };
+  }
+
   // Its prompt, settings and inputs were never kept and its model is the
   // template's, so a remix would restore nothing of it: like an upload, no Remix.
-  if (hasGeneration && input.templateResult) {
+  if (input.templateResult) {
     return {
       capability: 'none',
       target: null,
@@ -1770,29 +1784,8 @@ export function resolvePostRemixCapability(input: PostRemixResolutionInput): {
   // the creation's prompt never goes to someone who has not unlocked a recipe
   // that sells it (its settings the post shows everyone, since 2026-11-03).
   // Callers pass a published recipe, or one this viewer may open.
-  if (hasGeneration) {
-    return {
-      capability: bundleRequiresUnlock ? 'unlock_required' : 'public',
-      target: targetForMediaCategory(input.category, input.creationMode),
-    };
-  }
-
-  if (resourceTarget) {
-    return {
-      capability: bundleRequiresUnlock ? 'unlock_required' : 'public',
-      target: resourceTarget,
-    };
-  }
-
-  if (input.sourceKind === 'external' || input.sourceKind === 'manual') {
-    return {
-      capability: 'unsupported',
-      target: null,
-    };
-  }
-
   return {
-    capability: 'none',
-    target: null,
+    capability: bundleRequiresUnlock ? 'unlock_required' : 'public',
+    target: targetForMediaCategory(input.category, input.creationMode),
   };
 }

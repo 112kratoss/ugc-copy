@@ -5,7 +5,9 @@ import { logBackendError } from '@/lib/backend-logger';
 
 import {
   addPostResourceItemCountKinds,
+  getPostResourceItemCounts,
   getPostResourceKinds,
+  isMediaPostWithoutCreation,
   resolveRecipeAllowRemix,
   stripDerivedGenerationReferenceItems,
   normalizePostResourceAttachments,
@@ -545,6 +547,47 @@ async function loadBundleMap(adminSupabase: ServiceClient, postIds: string[]) {
   );
 }
 
+/**
+ * What the recipes of a page hold, by item type, where the compact summary names a recipe by its Remix
+ * alone and its post sells no Remix: one with media and no creation (owner, 2026-11-17), or one whose
+ * creator turned remixes off. Those kinds cannot say whether that Remix was the creator's own link,
+ * which is still something the recipe holds and lists by (review of #853), or a Remix access mark or
+ * the stored switch, which hold nothing such a post sells. Only those recipes are read, for their items'
+ * types: a page with none asks nothing. A failed read keeps the grade the kinds give.
+ */
+async function loadRemixOnlyRecipeItemCounts(
+  adminSupabase: ServiceClient,
+  rows: readonly OwnerPostRow[],
+  bundles: ReadonlyMap<string, BundleSummaryRow>,
+): Promise<Map<string, PostResourceItemCounts>> {
+  const postIds = rows.flatMap((row) => {
+    const kinds = bundles.get(row.id)?.resource_kinds;
+    const sellsNoRemix = row.remixes_allowed === false || isMediaPostWithoutCreation({
+      generationId: row.generation_id,
+      postFormat: row.post_format,
+      category: row.category,
+    });
+    return sellsNoRemix && kinds?.includes('remix') && withoutRemixKind(kinds).length === 0 ? [row.id] : [];
+  });
+  if (postIds.length === 0) {
+    return new Map();
+  }
+
+  const { data, error } = await adminSupabase
+    .from('post_resource_bundles')
+    .select('post_id, resource_items')
+    .in('post_id', postIds);
+  if (error) {
+    logBackendError('owner_post_recipe_item_types_load_failed', { error });
+    return new Map();
+  }
+
+  return new Map(((data ?? []) as unknown as Array<{ post_id: string; resource_items?: unknown }>).map((bundle) => [
+    bundle.post_id,
+    getPostResourceItemCounts(normalizePostResourceItems(bundle.resource_items)),
+  ]));
+}
+
 function isMissingPostSourceToolsTableError(error: unknown): boolean {
   if (!error || typeof error !== 'object') {
     return false;
@@ -622,7 +665,10 @@ function toOwnerListingQuality(
   bundleRow: BundleSummaryRow,
   resourceKinds: PostResourceKind[],
   post: { title: string; mediaUrl: string | null; mediaKind: ShowcaseMediaKind | null },
-  sellerProfile: OwnerSellerProfile | null
+  sellerProfile: OwnerSellerProfile | null,
+  // What the recipe holds by item type, where it is known: a Remix link counts where its kind is
+  // not sold (review of #853).
+  itemCounts: PostResourceItemCounts | undefined,
 ): OwnerPostBundleSummary['quality'] {
   if (!sellerProfile || typeof bundleRow.title !== 'string') {
     return null;
@@ -638,11 +684,14 @@ function toOwnerListingQuality(
       accessMode: bundleRow.access_mode,
       priceUsdCents: bundleRow.price_usd_cents,
       resourceKinds,
+      itemCounts,
     },
     post: {
       title: post.title,
       body: row.body,
       postFormat: row.post_format,
+      category: row.category,
+      generationId: row.generation_id,
       visibility: row.visibility,
       archivedAt: row.archived_at,
       reviewStatus: row.review_status,
@@ -668,7 +717,10 @@ async function toOwnerPostListItem(
   // What the owner's own unlock of each recipe holds that its stored kinds do
   // not say, by post: the creation's inputs it merges in (B3). Only the kinds
   // of the items counted are added.
-  unlockedItemCounts: ReadonlyMap<string, PostResourceItemCounts>
+  unlockedItemCounts: ReadonlyMap<string, PostResourceItemCounts>,
+  // What a recipe the compact summary names by its Remix alone holds, by item
+  // type, for one that sells no Remix (`loadRemixOnlyRecipeItemCounts`).
+  remixOnlyItemCounts: ReadonlyMap<string, PostResourceItemCounts> = new Map(),
 ) {
   const rawMediaItems = mediaItemsMap.get(row.id) ?? await buildLegacyPostMediaItems({
     supabase: adminSupabase,
@@ -699,6 +751,8 @@ async function toOwnerPostListItem(
       storedAllowRemix: bundleRow.allow_remix,
       status: bundleRow.status,
       generationId: row.generation_id,
+      postFormat: row.post_format,
+      category: row.category,
       remixesAllowed: row.remixes_allowed,
     })
     ? [...storedResourceKinds, 'remix']
@@ -712,10 +766,24 @@ async function toOwnerPostListItem(
   // A post whose creator turned "Allow remixes" off sells no Remix with its
   // recipe (the review of phase 2), whatever its stored switch, the summary's
   // kinds or a Remix link among its items say: Studio and Your Sales name and
-  // grade the listing as the marketplace lists it (20261105152921).
-  const resourceKinds = row.remixes_allowed === false
+  // grade the listing as the marketplace lists it (20261105152921). Nor does a
+  // post with media and no creation, which has nothing to remix (owner,
+  // 2026-11-17).
+  const sellsNoRemix = row.remixes_allowed === false || isMediaPostWithoutCreation({
+    generationId: row.generation_id,
+    postFormat: row.post_format,
+    category: row.category,
+  });
+  const resourceKinds = sellsNoRemix
     ? withoutRemixKind(countedResourceKinds)
     : countedResourceKinds;
+  // Graded on what the recipe holds as well as the kinds it is sold with: a Remix link, whose kind
+  // such a recipe is not sold with, is still the creator's link (review of #853), as the database's
+  // listing rule counts it. The select names every item; the compact summary none, so the few whose
+  // kinds were its Remix alone were read for them.
+  const recipeItemCounts = normalizedBundleResources
+    ? getPostResourceItemCounts(normalizedBundleResources.items ?? [])
+    : remixOnlyItemCounts.get(row.id);
   const title =
     row.title?.trim() ||
     deriveTitleFromBody(row.body) ||
@@ -773,7 +841,7 @@ async function toOwnerPostListItem(
           earningsUsdCents: bundleRow.earnings_usd_cents,
           resourceKinds,
           reviewStatus: row.review_status ?? null,
-          quality: toOwnerListingQuality(row, bundleRow, resourceKinds, { title, mediaUrl, mediaKind }, sellerProfile),
+          quality: toOwnerListingQuality(row, bundleRow, resourceKinds, { title, mediaUrl, mediaKind }, sellerProfile, recipeItemCounts),
           retiredAt: bundleRow.retired_at ?? null,
         }
       : null,
@@ -824,7 +892,18 @@ export async function getOwnerPostList(
       ? countGenerationRecipeReferenceItemsByPostId({ adminSupabase, postIds: sharingPostIds, ownerUserId: userId })
       : new Map<string, PostResourceItemCounts>();
   });
-  const [bundleMap, sourceToolsMap, mediaItemsMap, generationPreviewMap, sellerProfile, creationReferenceCounts] = await Promise.all([
+  const remixOnlyItemCountsPromise = bundleMapPromise.then((bundles) => (
+    loadRemixOnlyRecipeItemCounts(adminSupabase, rows, bundles)
+  ));
+  const [
+    bundleMap,
+    sourceToolsMap,
+    mediaItemsMap,
+    generationPreviewMap,
+    sellerProfile,
+    creationReferenceCounts,
+    remixOnlyItemCounts,
+  ] = await Promise.all([
     bundleMapPromise,
     loadSourceToolsMap(adminSupabase, postIds),
     mediaItemsPromise,
@@ -841,6 +920,7 @@ export async function getOwnerPostList(
     ),
     sellerProfilePromise,
     creationReferenceCountsPromise,
+    remixOnlyItemCountsPromise,
   ]);
   const filteredRows = rows.filter((row) => {
     if (visibility === 'archived') {
@@ -864,6 +944,7 @@ export async function getOwnerPostList(
       generationPreviewMap,
       sellerProfile,
       creationReferenceCounts,
+      remixOnlyItemCounts,
     )
   ));
 }
@@ -909,6 +990,10 @@ export async function getOwnerPostDetail(
   // A recipe removed while people had it is retired: its row stays for them,
   // but the post has no recipe, so the editor opens on "No recipe".
   const liveBundle = bundleDetail && !bundleDetail.retiredAt ? bundleDetail : null;
+  // The recipe as the owner's own unlock reads it, with the creation's inputs
+  // it shares merged in (B3): read once, for the editor and its kinds, and for
+  // its grade, which counts what it holds (review of #853).
+  const ownUnlockCounts = new Map(liveBundle?.lockedPreview ? [[row.id, liveBundle.lockedPreview.itemCounts]] : []);
   const listItem = await toOwnerPostListItem(
     adminSupabase,
     row,
@@ -917,9 +1002,8 @@ export async function getOwnerPostDetail(
     mediaItemsMap,
     generationPreviewMap,
     sellerProfile,
-    // The recipe as the owner's own unlock reads it, with the creation's
-    // inputs it shares merged in (B3): read once, for the editor and its kinds.
-    new Map(liveBundle?.lockedPreview ? [[row.id, liveBundle.lockedPreview.itemCounts]] : []),
+    ownUnlockCounts,
+    ownUnlockCounts,
   );
 
   return {
