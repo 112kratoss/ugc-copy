@@ -4,9 +4,9 @@ import { ArrowRight, Clapperboard, LayoutTemplate, Plus } from 'lucide-react';
 import { CreatorToolPreview } from '@/components/CreatorToolPreview';
 import { CreatorToolCard, SectionHeading } from '@/components/CreatorStudio';
 import { Kicker, Text } from '@/components/DesignSystem';
-import { loadTemplatesLive } from '@/lib/creator-page-server';
 import { CREATOR_STARTER_RECIPES, CREATOR_TOOLS } from '@/lib/creator-tools';
 import { loadCreatorToolPreviewMap } from '@/lib/creator-tool-previews';
+import { loadTemplatesLive } from '@/lib/live-media-templates';
 
 export default async function CreateHubPage() {
   const [previewByTool, templatesLive] = await Promise.all([
@@ -53,19 +53,26 @@ export default async function CreateHubPage() {
           })}
         </section>
 
-        {/* The catalog's card, and the sentence that offers it, only while /templates lists a
-            template: it led to "No templates are live yet" (web sweep, 2026-11-17), as the
-            creators' Templates tile did. Publishing one is always offered. */}
+        {/* The catalog's card only while /templates lists a template: it led to "No templates
+            are live yet" (web sweep, 2026-11-17), as the creators' Templates tile did. With
+            none live the section is headed for making one, not for using one, and publishing
+            one, always offered, takes the whole row (owner, review of #840). */}
         <section className="mt-10">
-          <SectionHeading
-            eyebrow="Viral templates"
-            title="Bring your photo. Keep the format."
-            description={templatesLive
-              ? 'Use a published format with your own media and review its checkpoints along the way. Or package your own workflow for everyone to reuse.'
-              : 'Package your own workflow for everyone to reuse.'}
-          />
+          {templatesLive ? (
+            <SectionHeading
+              eyebrow="Viral templates"
+              title="Bring your photo. Keep the format."
+              description="Use a published format with your own media and review its checkpoints along the way. Or package your own workflow for everyone to reuse."
+            />
+          ) : (
+            <SectionHeading
+              eyebrow="Templates"
+              title="Package your workflow for everyone to reuse."
+              description="No templates are live yet."
+            />
+          )}
 
-          <div className={templatesLive ? 'grid gap-4 lg:grid-cols-[minmax(0,1.55fr)_minmax(260px,0.75fr)]' : 'grid gap-4 lg:grid-cols-2'}>
+          <div className={templatesLive ? 'grid gap-4 lg:grid-cols-[minmax(0,1.55fr)_minmax(260px,0.75fr)]' : 'grid gap-4'}>
             {templatesLive ? (
               <Link
                 href="/templates"

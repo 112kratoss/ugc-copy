@@ -17,9 +17,7 @@ import {
   type GenerationModelKind,
 } from '@/lib/generation-model-catalog';
 import { loadPublishedGenerationModelCatalog } from '@/lib/generation-model-catalog-store';
-import { hasLiveMediaTemplates } from '@/lib/live-media-templates';
 import { REFERRAL_CLAIM_REASON_PATTERN, REFERRAL_CLAIM_STATUS_PARAM } from '@/lib/referral-claim-copy';
-import { createServiceClient } from '@/lib/server-helpers';
 import { getServerAuthState } from '@/lib/supabase-server';
 import { loadWelcomeCreditAmount } from '@/lib/welcome-credit-program-server';
 
@@ -68,30 +66,6 @@ export async function loadVisitorWelcomeCredits(): Promise<number | null> {
   } catch (error) {
     logBackendError('creator_visitor_welcome_credits_load_failed', { error });
     return null;
-  }
-}
-
-// Asked of the catalog at most once in five minutes for all of the creators' traffic, as
-// fresh as `/templates` itself (`revalidate = 300` there): a template published or taken
-// down shows up in the two at about the same time.
-const loadCachedTemplatesLive = unstable_cache(
-  () => hasLiveMediaTemplates(createServiceClient()),
-  ['creator-templates-live'],
-  { revalidate: 300 },
-);
-
-/**
- * Whether `/templates` lists a template, so the creators draw their ways into it (the
- * Templates tile beside Enhance, "Browse templates" under "Start from a post") only when
- * it has something to show. False when the catalog cannot be read: a way in that may lead
- * to an empty page is left out, and the next request asks again. Never throws.
- */
-export async function loadTemplatesLive(): Promise<boolean> {
-  try {
-    return await loadCachedTemplatesLive();
-  } catch (error) {
-    logBackendError('creator_templates_live_load_failed', { error });
-    return false;
   }
 }
 

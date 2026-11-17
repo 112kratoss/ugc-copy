@@ -376,11 +376,20 @@ const READS = [
     // hasLiveMediaTemplates (src/lib/live-media-templates.ts): whether /templates lists a template,
     // which every creator page waits for before it draws its ways into the catalog. None, which
     // leaves them out as the failed read did, without the seven seconds supabase-js spends retrying
-    // a failed read on every creator a spec draws (2026-11-17). Matched by its one-column select and
-    // its limit of one, so the catalog's own read and the sitemap's still fail offline as before.
+    // a failed read on every creator a spec draws (2026-11-17). Matched by its one-column select,
+    // its limit of one and every one of the catalog's filters, so the catalog's own read, the
+    // sitemap's and the poster repair's (hasRepairableTemplateDemoPosters, the same select and
+    // limit) still fail offline as before.
     methods: ['GET'],
     path: '/rest/v1/templates',
-    filters: { select: 'id', status: 'eq.active', limit: '1' },
+    filters: {
+      select: 'id',
+      status: 'eq.active',
+      is_active: 'eq.true',
+      active_version_id: 'not.is.null',
+      creator_user_id: 'not.is.null',
+      limit: '1',
+    },
     answer: () => json([], { 'content-range': '*/0' }),
   },
   {

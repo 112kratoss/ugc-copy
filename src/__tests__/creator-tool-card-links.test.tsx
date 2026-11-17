@@ -9,7 +9,7 @@ const getShowcaseFeedPageMock = vi.fn();
 /** Whether /templates lists a template, as the launchpad's read answers. */
 const catalog = vi.hoisted(() => ({ templatesLive: true }));
 
-vi.mock('@/lib/creator-page-server', () => ({
+vi.mock('@/lib/live-media-templates', () => ({
   loadTemplatesLive: async () => catalog.templatesLive,
 }));
 
@@ -199,19 +199,32 @@ describe('creator tool card links', () => {
   // to publish one stays.
   it('offers the templates only while one is live, and publishing one always', async () => {
     const templatesLinks = () => screen.queryAllByRole('link').filter((link) => link.getAttribute('href') === '/templates');
+    const publishCard = () => screen.getByText('Create a template').closest('a')!;
 
     const live = render(await CreateHubPage());
     expect(templatesLinks()).toHaveLength(1);
     expect(templatesLinks()[0]).toHaveTextContent('Explore templates');
+    // As it was: the pitch for using a template, over the two cards side by side.
+    expect(screen.getByText('Viral templates')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Bring your photo. Keep the format.' })).toBeInTheDocument();
+    expect(screen.getByText(/^Use a published format with your own media/)).toBeInTheDocument();
+    expect(publishCard().parentElement!.className).toContain('lg:grid-cols-[minmax(0,1.55fr)_minmax(260px,0.75fr)]');
     live.unmount();
 
     catalog.templatesLive = false;
     render(await CreateHubPage());
     expect(templatesLinks()).toHaveLength(0);
     expect(screen.queryByText('Explore templates')).not.toBeInTheDocument();
+    expect(publishCard()).toHaveAttribute('href', '/templates/new');
+    // With none to use, the section is headed for making one (the owner's rules, review of #840):
+    // no pitch for using templates, not the card's own title again, and the card the whole row.
+    expect(screen.queryByText('Viral templates')).not.toBeInTheDocument();
+    expect(screen.queryByText('Bring your photo. Keep the format.')).not.toBeInTheDocument();
     expect(screen.queryByText(/Use a published format/)).not.toBeInTheDocument();
-    expect(screen.getByText('Create a template').closest('a')).toHaveAttribute('href', '/templates/new');
-    expect(screen.getByText('Package your own workflow for everyone to reuse.')).toBeInTheDocument();
+    const sectionTitle = screen.getByRole('heading', { level: 2, name: 'Package your workflow for everyone to reuse.' });
+    expect(sectionTitle).not.toHaveTextContent('Publish your own format');
+    expect(screen.getByText('No templates are live yet.')).toBeInTheDocument();
+    expect(publishCard().parentElement!.className).not.toMatch(/grid-cols/);
   });
 
   it('prefetches neither the video nor the workflow page from its card', async () => {

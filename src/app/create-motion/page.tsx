@@ -1,6 +1,7 @@
 import { RequestHintedOptionalAuth, RequireAuth } from '@/components/RouteAuthBoundary';
 import type { CreatorOpening } from '@/lib/creator-opening';
-import { loadCreatorOpening, loadCreatorStartPostsForRequest, loadTemplatesLive, loadVisitorWelcomeCredits, readCreatorReturn } from '@/lib/creator-page-server';
+import { loadCreatorOpening, loadCreatorStartPostsForRequest, loadVisitorWelcomeCredits, readCreatorReturn } from '@/lib/creator-page-server';
+import { loadTemplatesLive } from '@/lib/live-media-templates';
 
 import CreateMotionClient, { type CreateMotionPrefill } from './CreateMotionClient';
 
