@@ -1,6 +1,7 @@
 import { Sparkles } from 'lucide-react';
 import { redirect } from 'next/navigation';
 
+import { loadMatureContentPreference } from './load-mature-content-preference';
 import { loadOwnerProfile } from './load-owner-profile';
 import OwnerProfileMediaHub, { type OwnerWalletBalance } from './OwnerProfileMediaHub';
 import { isGuestUser } from '@/lib/account-identity';
@@ -79,9 +80,11 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
       stats,
     },
     walletBalance,
+    showMatureContent,
   ] = await Promise.all([
     loadOwnerProfile(profileReturnPath, { includeTotals: true }),
     loadWalletBalance(),
+    loadMatureContentPreference(),
   ]);
 
   return (
@@ -119,6 +122,7 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
             }}
             stats={stats}
             walletBalance={walletBalance}
+            showMatureContent={showMatureContent}
             publicProfilePath={publicProfilePath}
             publicProfileDisplayName={publicProfileDisplayName}
           />

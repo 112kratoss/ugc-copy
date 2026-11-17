@@ -31,7 +31,8 @@
 // creator of their own (fixtures/explore-reel.json). And the storefront, /marketplace: its first
 // page, four free recipes on picture posts by a creator of their own and a fifth the page reads to
 // know there are more (fixtures/marketplace-recipes.json). Both read the source tools catalog,
-// answered with no rows (below), which they draw as the app's own list.
+// answered with no rows (below), which they draw as the app's own list. And the E2E user's
+// mature-content setting, on, which their profile's Mature content row draws (below).
 // A page added here brings each of its reads, matched by method, path and the filters that name
 // its own rows: a whole table answered with no rows would change what every other page draws.
 //
@@ -552,6 +553,18 @@ const READS = [
     path: '/rest/v1/source_tools',
     filters: { is_active: 'eq.true' },
     answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // loadMatureContentPreference (src/app/profile/load-mature-content-preference.ts): the E2E
+    // user's mature-content setting, on, which the profile's Mature content row draws from its first
+    // frame (profile-mature-setting-first-paint.spec.ts). Answered without a fixture row: no other
+    // page reads the table on the server, and /api/content-preferences refuses the E2E user offline
+    // before its own read (its identity check fails), so nothing else draws differently.
+    // maybeSingle() asks for a list.
+    methods: ['GET'],
+    path: '/rest/v1/content_preferences',
+    filters: { user_id: 'eq.workflow-user', select: 'show_mature' },
+    answer: ({ wantsObject }) => json(wantsObject ? { show_mature: true } : [{ show_mature: true }], { 'content-range': '0-0/1' }),
   },
 ];
 

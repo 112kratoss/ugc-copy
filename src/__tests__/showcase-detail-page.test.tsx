@@ -7,6 +7,7 @@ import ReportPostButton from '@/app/showcase/[id]/ReportPostButton';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import { coverNsfwContent } from '@/lib/nsfw-content';
 import { clearOwnerPageEditsForTests, rememberOwnerPostVisibility } from '@/lib/owner-page-edits';
+import { asksAbsentRecipeAsNone, postRecipeReadPath } from '@/lib/post-recipe-read';
 import { PUBLIC_PAGE_REVALIDATE_SECONDS } from '@/lib/public-page-cache';
 import { SESSION_CHECK_DEADLINE_MS } from '@/lib/viewer-session-check';
 
@@ -18,6 +19,8 @@ const POST_ID = '5a1e0000-0000-4000-8000-000000000001';
 const GENERATION_ID = '6e0e0000-0000-4000-8000-000000000001';
 const TEXT_POST_ID = '5a1e0000-0000-4000-8000-0000000000aa';
 const MISSING_POST_ID = '5a1e0000-0000-4000-8000-00000000dead';
+// The page's read of the viewer's recipe: one that is not there for them is answered as none.
+const RECIPE_READ = postRecipeReadPath(POST_ID);
 
 // The page is one cached render for everyone (ISR): a read of the request's
 // headers, its cookies or the server's session would make it render per request
@@ -108,10 +111,16 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 vi.mock('@/app/showcase/[id]/ShowcaseDetailActions', () => ({
-  default: (props: { postId: string; viewerIsOwner: boolean }) => {
+  default: (props: { postId: string; ownerTools: string | null }) => {
     showcaseDetailActionsPropsMock(props);
     return (
-      <div data-testid="showcase-detail-actions" data-owner-tools={String(props.viewerIsOwner)}>{props.postId}</div>
+      <div
+        data-testid="showcase-detail-actions"
+        data-owner-tools={String(props.ownerTools === 'ready')}
+        data-owner-tools-state={props.ownerTools ?? 'none'}
+      >
+        {props.postId}
+      </div>
     );
   },
 }));
@@ -171,10 +180,13 @@ function stubPageFetch(revealedDetail: Record<string, unknown> = {}, {
     if (url === '/api/showcase/viewer-exclusions') {
       return reply({ blockedCreatorIds, hiddenCreatorIds: [], hiddenPostIds: [] });
     }
-    if (url === `/api/posts/${POST_ID}/resource-bundle` && viewerBundle !== undefined) {
+    if (url.split('?')[0] === `/api/posts/${POST_ID}/resource-bundle` && viewerBundle !== undefined) {
+      // As the route answers: none for one asked with absent=none, else not found.
       return viewerBundle
         ? reply({ success: true, bundle: viewerBundle })
-        : reply({ error: 'Resource bundle not found.' }, 404);
+        : asksAbsentRecipeAsNone(url)
+          ? reply({ success: true, bundle: null })
+          : reply({ error: 'Resource bundle not found.' }, 404);
     }
     return reply({ success: true });
   }));
@@ -1005,6 +1017,125 @@ describe('Showcase detail page', () => {
         <ReportPostButton postId={POST_ID} creator={{ id: 'user"] *{display:none} [x="', name: 'Creator Name' }} />,
       );
       expect(html).not.toContain('Report user');
+      expect(html).not.toContain('<style');
+    });
+  });
+
+  // Sweep of 2026-11-17 (build 941e2a55b): on their own post, opened by a client navigation, the
+  // creator saw "Report post or recipe" where their tools go for about 16 frames, until the session
+  // check named them; on a load, until the page's script had run and the check had ended.
+  describe("the creator's own rail", () => {
+    const AUTH_COOKIE = 'sb-project-ref-auth-token';
+    const openPost = () => ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) });
+    const reportRow = () => screen.queryByRole('button', { name: 'Report post or recipe' });
+    const ownerTools = () => screen.getByTestId('showcase-detail-actions').getAttribute('data-owner-tools-state');
+    /** A session cookie as @supabase/ssr writes it, naming its account. */
+    function holdSessionCookieOf(userId: string) {
+      const session = Buffer.from(JSON.stringify({ access_token: 'cookie-token', user: { id: userId } }))
+        .toString('base64url');
+      document.cookie = `${AUTH_COOKIE}=base64-${session}; Path=/`;
+    }
+
+    beforeEach(() => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project-ref.supabase.co');
+      clientAuth.current = { session: null, user: null, isLoading: true };
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      document.cookie = `${AUTH_COOKIE}=; Max-Age=0; Path=/`;
+      vi.unstubAllEnvs();
+    });
+
+    it('draws the creator their tools, inert, and no report row while a cookie naming them is checked', async () => {
+      holdSessionCookieOf('user-1');
+      const { rerender } = render(await openPost());
+      expect(ownerTools()).toBe('checking');
+      expect(reportRow()).not.toBeInTheDocument();
+
+      signInAs('user-1');
+      rerender(await openPost());
+      expect(ownerTools()).toBe('ready');
+      expect(reportRow()).not.toBeInTheDocument();
+    });
+
+    it('keeps the report row, and no Owner tools, for anyone else while their cookie is checked', async () => {
+      holdSessionCookieOf('user-2');
+      const { rerender } = render(await openPost());
+      expect(ownerTools()).toBe('none');
+      expect(reportRow()).toBeInTheDocument();
+
+      signInAs('user-2');
+      rerender(await openPost());
+      expect(ownerTools()).toBe('none');
+      expect(reportRow()).toBeInTheDocument();
+    });
+
+    it("draws a check that outlasts its deadline as a visitor's rail, and the tools once a late answer names the creator", async () => {
+      holdSessionCookieOf('user-1');
+      const page = await openPost();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: performance.now() };
+      const { rerender } = render(page);
+      expect(ownerTools()).toBe('checking');
+
+      act(() => {
+        vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS);
+      });
+      expect(ownerTools()).toBe('none');
+      expect(reportRow()).toBeInTheDocument();
+
+      vi.useRealTimers();
+      signInAs('user-1');
+      rerender(await openPost());
+      expect(ownerTools()).toBe('ready');
+      expect(reportRow()).not.toBeInTheDocument();
+    });
+
+    // The page is drawn ahead of time for every viewer, and no cookie can be read on the server.
+    it("draws both in the server's HTML: the root element's mark shows the creator their tools and anyone else the row, before the first paint", async () => {
+      const root = document.documentElement;
+      onTestFinished(() => root.removeAttribute('data-auth-user'));
+      const page = await openPost();
+      const container = document.createElement('div');
+      container.innerHTML = renderToString(page);
+      document.body.appendChild(container);
+      onTestFinished(() => container.remove());
+
+      expect(within(container).getByTestId('showcase-detail-actions')).toHaveAttribute('data-owner-tools-state', 'unread');
+      const reportRows = container.querySelector('[data-post-report-rows="user-1"]') as HTMLElement;
+      expect(within(reportRows).getByRole('button', { name: 'Report post or recipe' })).toBeInTheDocument();
+      // Owner tools as ShowcaseDetailActions marks them in that HTML (showcase-detail-actions.test.tsx).
+      const tools = document.createElement('details');
+      tools.setAttribute('data-post-owner-tools', 'user-1');
+      reportRows.before(tools);
+      const shown = (element: HTMLElement) => window.getComputedStyle(element).display !== 'none';
+
+      // A visitor, and another account.
+      expect([shown(tools), shown(reportRows)]).toEqual([false, true]);
+      root.setAttribute('data-auth-user', 'user-2');
+      expect([shown(tools), shown(reportRows)]).toEqual([false, true]);
+      // The creator.
+      root.setAttribute('data-auth-user', 'user-1');
+      expect([shown(tools), shown(reportRows)]).toEqual([true, false]);
+
+      tools.remove();
+      const consoleError = vi.spyOn(console, 'error');
+      render(page, { container, hydrate: true });
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    it("draws the report row and no Owner tools in the server's HTML for a creator a style rule cannot name", async () => {
+      const detail = await getPublicPostDetailMock(POST_ID);
+      getPublicPostDetailMock.mockResolvedValueOnce({
+        ...detail,
+        creator: { id: 'user"] *{display:none} [x="', username: 'creator-name', name: 'Creator Name', avatar: null },
+      });
+      const html = renderToString(await openPost());
+
+      expect(html).toContain('Report post or recipe');
+      expect(html).toContain('data-owner-tools-state="none"');
+      expect(html).not.toContain('data-post-report-rows=');
       expect(html).not.toContain('<style');
     });
   });
@@ -2106,7 +2237,7 @@ describe('Showcase detail page', () => {
 
       expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Unlock');
       // A visitor's read carries no session.
-      const [, init] = requestTo(`/api/posts/${POST_ID}/resource-bundle`) ?? [];
+      const [, init] = requestTo(RECIPE_READ) ?? [];
       expect(init?.headers).toBeUndefined();
       await waitFor(() => expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('₹750.00 · 900 credits'));
       expect(screen.getByText('Unlock recipe for ₹750.00 · 900 credits')).toBeInTheDocument();
@@ -2114,7 +2245,7 @@ describe('Showcase detail page', () => {
 
     it("asks nothing for a visitor's free recipe or a post with none", async () => {
       render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
-      expect(requestTo(`/api/posts/${POST_ID}/resource-bundle`)).toBeUndefined();
+      expect(requestsTo(RECIPE_READ)).toEqual([]);
     });
 
     it("opens the recipe, Remix and the rail for a buyer once the browser has read it as theirs", async () => {
@@ -2126,7 +2257,7 @@ describe('Showcase detail page', () => {
       render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
 
       await waitFor(() => expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Unlocked'));
-      const [, init] = requestTo(`/api/posts/${POST_ID}/resource-bundle`) ?? [];
+      const [, init] = requestTo(RECIPE_READ) ?? [];
       expect(init?.headers).toMatchObject({ Authorization: 'Bearer live-token' });
       expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({
         viewerCanAccess: true,
@@ -2163,17 +2294,59 @@ describe('Showcase detail page', () => {
       expect(screen.queryByTestId('recipe-jump-link')).not.toBeInTheDocument();
     });
 
+    // Sweep of 2026-11-17: every post a signed-in reader opened that had no recipe asked for theirs,
+    // which the route answered 404, and the browser logged a failed load on every such post.
+    it("asks a signed-in reader's recipe with one that is not there answered as none, and draws none", async () => {
+      stubPageFetch({}, { viewerBundle: null });
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+      await waitFor(() => expect(requestsTo(RECIPE_READ)).toHaveLength(1));
+      expect(RECIPE_READ).toBe(`/api/posts/${POST_ID}/resource-bundle?absent=none`);
+      const [, init] = requestTo(RECIPE_READ) ?? [];
+      expect(init?.headers).toMatchObject({ Authorization: 'Bearer live-token' });
+      expect(screen.queryByTestId('canonical-post-recipe')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('recipe-jump-link')).not.toBeInTheDocument();
+    });
+
+    it('takes the recipe off the page for a 404 too, from a server that predates absent=none', async () => {
+      await serveLockedRecipe();
+      vi.mocked(fetch).mockImplementation(async (input) => (
+        String(input) === RECIPE_READ
+          ? { ok: false, status: 404, json: async () => ({ error: 'Resource bundle not found.' }) } as Response
+          : { ok: true, status: 200, json: async () => ({ success: true }) } as Response
+      ));
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+      await waitFor(() => expect(screen.queryByTestId('canonical-post-recipe')).not.toBeInTheDocument());
+      expect(screen.queryByTestId('recipe-jump-link')).not.toBeInTheDocument();
+    });
+
+    it("keeps the page's recipe for an answer that names no recipe and no none", async () => {
+      await serveLockedRecipe();
+      vi.mocked(fetch).mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({ success: true }) } as Response));
+      signInAs('user-2');
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+      await waitFor(() => expect(requestTo(RECIPE_READ)).toBeDefined());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByTestId('canonical-post-recipe')).toBeInTheDocument();
+    });
+
     it('keeps the page\'s recipe when the read fails', async () => {
       await serveLockedRecipe();
       vi.mocked(fetch).mockImplementation(async (input) => (
-        String(input) === `/api/posts/${POST_ID}/resource-bundle`
+        String(input) === RECIPE_READ
           ? { ok: false, status: 503, json: async () => ({ error: 'Down' }) } as Response
           : { ok: true, status: 200, json: async () => ({ success: true }) } as Response
       ));
       signInAs('user-2');
       render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
 
-      await waitFor(() => expect(requestTo(`/api/posts/${POST_ID}/resource-bundle`)).toBeDefined());
+      await waitFor(() => expect(requestTo(RECIPE_READ)).toBeDefined());
       expect(screen.getByTestId('canonical-post-recipe')).toBeInTheDocument();
       expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Unlock');
     });
@@ -2237,7 +2410,7 @@ describe('Showcase detail page', () => {
       render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
 
       expect(screen.getByRole('button', { name: 'Reveal post' })).toBeInTheDocument();
-      expect(requestTo(`/api/posts/${POST_ID}/resource-bundle`)).toBeUndefined();
+      expect(requestsTo(RECIPE_READ)).toEqual([]);
     });
   });
 });

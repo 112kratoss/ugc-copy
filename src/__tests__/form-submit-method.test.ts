@@ -30,8 +30,9 @@ const POSTING_FORMS: Record<string, string> = {
   'src/app/login/LoginClient.tsx': 'src/app/login/page.tsx',
   'src/app/admin/login/AdminLoginForm.tsx': 'src/app/admin/login/page.tsx',
 };
-// The profile editor is loaded with `ssr: false` (DeferredCreatorProfileCard) or opened by its
-// owner (ProfileActions), and finds its first invalid field by name.
+// The profile editor is drawn by the browser alone: once the page has been idle on /profile/edit
+// (DeferredCreatorProfileCard, never in the server's HTML) or opened by its owner (ProfileActions),
+// and finds its first invalid field by name.
 const DRAWN_BY_THE_BROWSER = new Set(['src/app/creations/CreatorProfileCard.tsx']);
 
 type NamedField = { at: string; file: string; name: string; inPostingForm: boolean };

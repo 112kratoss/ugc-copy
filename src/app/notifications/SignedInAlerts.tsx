@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 
 import { AlertsErrorCard } from './AlertsErrorCard';
+import { MARK_ALL_READ_AT_REST, MARK_ALL_READ_ON_OFFER, MARK_ALL_READ_SHAPE } from './mark-all-read-look';
 import type { WebNotification } from './web-notification';
 
 const CATEGORY_META = {
@@ -51,8 +52,12 @@ interface SignedInAlertsActionsProps {
   onMarkAllRead: () => void;
 }
 
-/** Refresh and Mark all read, beside the page's heading. */
+/**
+ * Refresh and Mark all read, beside the page's heading. Mark all read is off, and looks it, until
+ * the count says something is unread (`mark-all-read-look.ts`).
+ */
 export function SignedInAlertsActions({ unreadCount, isMarkingAll, onRefresh, onMarkAllRead }: SignedInAlertsActionsProps) {
+  const somethingUnread = Boolean(unreadCount);
   return (
     <div className="flex gap-2">
       <button
@@ -65,8 +70,8 @@ export function SignedInAlertsActions({ unreadCount, isMarkingAll, onRefresh, on
       </button>
       <button
         onClick={onMarkAllRead}
-        disabled={!unreadCount || isMarkingAll}
-        className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+        disabled={!somethingUnread || isMarkingAll}
+        className={`ui-focus-ring ${MARK_ALL_READ_SHAPE} ${somethingUnread ? MARK_ALL_READ_ON_OFFER : MARK_ALL_READ_AT_REST}`}
       >
         {isMarkingAll ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <CheckCheck className="h-4 w-4" />}
         <span>Mark all read</span>

@@ -127,27 +127,38 @@ export default async function MarketplacePage() {
         {/* The emerald and sky bokeh blobs that used to sit here are gone:
             docs/design/design-web.md rules out purely atmospheric backgrounds, and they were
             spending two of the system's content-type accents on decoration. */}
-        <div className="studio-shell relative z-10 py-8 sm:py-10">
-          <div className="rounded-3xl border border-white/8 bg-[linear-gradient(135deg,rgba(5,8,12,0.98),rgba(16,18,25,0.92))] p-6 shadow-[0_28px_90px_rgba(0,0,0,0.5)] sm:p-8">
+        {/* Below 640px the card is compact: a smaller headline, no paragraph, and Recipe sales
+            beside the badge, so a phone's first screen reaches the first recipe (live sweep,
+            2026-11-17: at 375 × 812 this card and the filters filled it). From 640px, as it was. */}
+        <div className="studio-shell relative z-10 py-4 sm:py-10">
+          <div className="rounded-3xl border border-white/8 bg-[linear-gradient(135deg,rgba(5,8,12,0.98),rgba(16,18,25,0.92))] p-5 shadow-[0_28px_90px_rgba(0,0,0,0.5)] sm:p-8">
             <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
               <div className="max-w-3xl">
-                <div className="inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-amber-100">
-                  <ShoppingBag className="h-3.5 w-3.5" />
-                  Recipes
+                <div className="flex items-center justify-between gap-3 sm:block">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-amber-100">
+                    <ShoppingBag className="h-3.5 w-3.5" />
+                    Recipes
+                  </div>
+                  <Link
+                    href="/marketplace/sell"
+                    className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08] sm:hidden"
+                  >
+                    Recipe sales
+                  </Link>
                 </div>
                 {/* A step down from 4xl/5xl. This is a storefront: the headline
                     should introduce the page, not compete with the goods for the
                     first screen. */}
-                <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+                <h1 className="mt-3 text-2xl font-semibold tracking-tight text-white sm:text-4xl">
                   Buy the reusable parts behind community posts
                 </h1>
-                <p className="mt-3 max-w-2xl text-sm leading-7 text-zinc-300 sm:text-base">
+                <p className="mt-3 hidden max-w-2xl text-sm leading-7 text-zinc-300 sm:block sm:text-base">
                   Browse free and paid recipes attached to public posts. Check the post first, then unlock its prompt, workflow, files, notes, or remix access.
                 </p>
               </div>
 
               {/* A post starts from the top bar's Create menu. */}
-              <div className="flex flex-wrap gap-3">
+              <div className="hidden flex-wrap gap-3 sm:flex">
                 <Link
                   href="/marketplace/sell"
                   className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"

@@ -723,11 +723,17 @@ export async function searchPublicContent(
     queryVectors: queryVectors(),
     viewerKey,
   });
+  // Related posts as cards (relatedPostCards: their own block read and
+  // hydration), made the moment their rows are in, beside the hydration of the
+  // search's own posts rather than after it. Neither step rejects.
+  const relatedCardsOf = (rows: Promise<RelatedPostRow[] | null>) => rows.then((found) => (
+    relatedPostCards({ adminSupabase, dependencies, options, rows: found })
+  ));
   // Started here, the moment the ranked rows are known to be few, so the
   // query's vector is fetched while the search's own posts are hydrated and
   // the wait for it is beside that work, not after it. Not awaited yet.
-  let relatedRowsPromise = relatedLooked && Math.min(postRows.length, isTop ? postTake : options.limit) < SEARCH_RELATED_THIN_POST_COUNT
-    ? startRelatedRows()
+  let relatedCardsPromise = relatedLooked && Math.min(postRows.length, isTop ? postTake : options.limit) < SEARCH_RELATED_THIN_POST_COUNT
+    ? relatedCardsOf(startRelatedRows())
     : null;
 
   // search_public_creators and search_public_posts leave both sides of a block
@@ -736,8 +742,10 @@ export async function searchPublicContent(
   // stays for what they cannot cover: a block made between the ranked read and
   // this line, and recipes, whose list takes no viewer; a blocked seller's
   // recipe is dropped here, after the cut, and that page comes back short
-  // while its cursor still reaches the rest.
-  const blockedIds = await blockedCreatorIds({
+  // while its cursor still reaches the rest. Its answer is applied to what the
+  // other reads bring, so nothing waits for it: until 2026-11-17 the posts were
+  // hydrated only once it was in, one more round trip on every signed-in search.
+  const blockedIdsPromise = blockedCreatorIds({
     adminSupabase,
     creatorIds: [
       ...creatorRows.map((row) => row.creator_user_id),
@@ -748,56 +756,65 @@ export async function searchPublicContent(
     viewerUserId: options.viewerUserId,
   });
 
-  const creatorHasMore = !isTop && creatorRows.length > options.limit;
-  const visibleCreatorRows = creatorRows
-    .slice(0, isTop ? creatorTake : options.limit)
-    .filter((row) => !blockedIds.has(row.creator_user_id));
-  const creatorCursorRow = creatorHasMore ? creatorRows[options.limit - 1] : null;
-
-  const visiblePostRows = postRows
-    .slice(0, isTop ? postTake : options.limit)
-    .filter((row) => !blockedIds.has(row.creator_user_id));
+  const pagePostRows = postRows.slice(0, isTop ? postTake : options.limit);
   // Related searches, only for a client that asked for them
   // (`relatedSearches=1`), on the first page of a Top or Posts search: what
-  // this page's posts share. One call of its own, started beside the
-  // hydration of those posts and awaited after it, so the search's own read
-  // is untouched and nothing waits on it. The database reads each post again
-  // as search reads one (unlabelled, neither side of a block), so a post
-  // labelled or blocked since the ranked read counts for nothing.
+  // this page's posts share. One call of its own, about the posts the answer
+  // may show (asked once the block read is in), beside the hydration of those
+  // posts and awaited after it, so the search's own read is untouched and
+  // nothing waits on it. The database reads each post again as search reads
+  // one (unlabelled, neither side of a block), so a post labelled or blocked
+  // since the ranked read counts for nothing.
   const relatedSearchesAsked = (options.relatedSearches ?? false)
     && contentQueryAllowed
     && (options.type === 'top' || options.type === 'posts')
     && options.cursor === null
     && !isSearchRelatedSearchesDisabled(dependencies.env);
   const relatedSearchesPromise = relatedSearchesAsked
-    ? dependencies.findRelatedSearches(
+    ? blockedIdsPromise.then((blockedIds) => dependencies.findRelatedSearches(
       adminSupabase,
       {
         query: options.normalizedQuery,
         correctedQuery: exact ? null : postRows[0]?.corrected_query ?? null,
-        postIds: visiblePostRows.map((row) => row.post_id),
+        postIds: pagePostRows.filter((row) => !blockedIds.has(row.creator_user_id)).map((row) => row.post_id),
         viewerUserId: options.viewerUserId,
       },
       { logEvent: dependencies.logEvent },
-    ).catch((error) => {
-      // Never rejects on its own; held so a search cannot fail for it.
+    )).catch((error) => {
+      // Never rejects on its own; held so a search cannot fail for it (a block
+      // read that failed fails the search below, and is not this line's).
       dependencies.logEvent('warn', 'public_search_related_searches_failed', { error });
       return [];
     })
     : null;
-  const hydratedPosts = visiblePostRows.length > 0
-    ? await dependencies.getShowcaseFeedItemsByPostIds({
-      postIds: visiblePostRows.map((row) => row.post_id),
-      viewerUserId: options.viewerUserId,
-      countryCode: options.countryCode,
-    })
-    : [];
+  // The page's posts, hydrated beside the block read: a post of a creator
+  // blocked since the ranked read is hydrated and then left out.
+  const [blockedIds, hydratedPosts] = await Promise.all([
+    blockedIdsPromise,
+    pagePostRows.length > 0
+      ? dependencies.getShowcaseFeedItemsByPostIds({
+        postIds: pagePostRows.map((row) => row.post_id),
+        viewerUserId: options.viewerUserId,
+        countryCode: options.countryCode,
+      })
+      : Promise.resolve([] as ShowcaseFeedItem[]),
+  ]);
+
+  const creatorHasMore = !isTop && creatorRows.length > options.limit;
+  const visibleCreatorRows = creatorRows
+    .slice(0, isTop ? creatorTake : options.limit)
+    .filter((row) => !blockedIds.has(row.creator_user_id));
+  const creatorCursorRow = creatorHasMore ? creatorRows[options.limit - 1] : null;
+
+  const visiblePostIds = new Set(
+    pagePostRows.filter((row) => !blockedIds.has(row.creator_user_id)).map((row) => row.post_id),
+  );
   // search_public_posts already leaves NSFW-labelled posts out before its
   // limit, which keeps pages full. Hydration covers a labelled post rather
   // than dropping it, so a post labelled after the ranked read would still
   // come back as a "Mature content" card matched on its hidden words. Explore
   // drops such a post after hydration, and so does search.
-  const shownPosts = hydratedPosts.filter((item) => !item.isNsfw);
+  const shownPosts = hydratedPosts.filter((item) => visiblePostIds.has(item.id) && !item.isNsfw);
   const postCursorRow = postHasMore ? postRows[options.limit - 1] : null;
 
   // The list pages in raw rows and drops the ones it cannot show (a hidden
@@ -818,11 +835,11 @@ export async function searchPublicContent(
   // Enough rows were ranked, and fewer than that are shown (a post labelled
   // or a creator blocked since the ranked read): the answer is thin after
   // all, and related posts are looked for now.
-  if (relatedLooked && !relatedRowsPromise && shownPosts.length < SEARCH_RELATED_THIN_POST_COUNT) {
-    relatedRowsPromise = startRelatedRows();
+  if (relatedLooked && !relatedCardsPromise && shownPosts.length < SEARCH_RELATED_THIN_POST_COUNT) {
+    relatedCardsPromise = relatedCardsOf(startRelatedRows());
   }
-  const related = relatedRowsPromise
-    ? await relatedPostCards({ adminSupabase, dependencies, options, rows: await relatedRowsPromise })
+  const related = relatedCardsPromise
+    ? await relatedCardsPromise
     // Asked for, and the blended answer is thin: the group is there and empty.
     : relatedAsked && blended && shownPosts.length < SEARCH_RELATED_THIN_POST_COUNT ? [] : undefined;
 

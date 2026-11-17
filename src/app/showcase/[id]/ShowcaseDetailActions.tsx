@@ -17,13 +17,27 @@ import { rememberOwnerPostVisibility } from '@/lib/owner-page-edits';
 import type { PostVisibility } from '@/lib/post-lifecycle-client';
 import { getCurrentInternalPath } from '@/lib/share';
 
+/**
+ * The creator's Owner tools, by what the page knows of who is looking (`ownership` in
+ * `useShowcasePostViewer`): `ready` once the session check names the creator; `checking` while the
+ * browser's session cookie names them and the check has not ended; `unread` in the server's HTML
+ * and the render that hydrates it, shown only where the root element names the creator (the
+ * page's rule for `data-post-owner-tools`). Until `ready` they are their row alone, inert: what it
+ * opens onto (the edit links, the visibility menu, Archive and Delete) acts with the session, and
+ * the server's HTML is every visitor's and every crawler's.
+ */
+export type ShowcaseOwnerTools = 'ready' | 'checking' | 'unread';
+
 interface ShowcaseDetailActionsProps {
   postId: string;
   generationId: string | null;
   title: string;
   creatorUsername: string | null;
   visibility: 'public' | 'unlisted';
-  viewerIsOwner: boolean;
+  /** Null for anyone but the post's creator. */
+  ownerTools: ShowcaseOwnerTools | null;
+  /** The creator's account, which marks `unread` tools for the page's rule. */
+  ownerToolsMark?: string | null;
   hasResourceBundle: boolean;
   /** The owner's bundle, so lifecycle policy can see what a change affects. */
   bundle?: PostLifecycleTarget['bundle'];
@@ -35,7 +49,8 @@ export default function ShowcaseDetailActions({
   title,
   creatorUsername,
   visibility,
-  viewerIsOwner,
+  ownerTools,
+  ownerToolsMark = null,
   hasResourceBundle,
   bundle = null,
 }: ShowcaseDetailActionsProps) {
@@ -101,7 +116,7 @@ export default function ShowcaseDetailActions({
   const lifecyclePending = postLifecycle.pendingAction(postId);
 
   return (
-    <div className="space-y-4">
+    <div>
       <div className="grid gap-2 sm:grid-cols-2">
         {creatorUsername ? (
           <Link
@@ -121,61 +136,77 @@ export default function ShowcaseDetailActions({
         </Link>
       </div>
 
-      {viewerIsOwner ? (
+      {ownerTools ? (
         // Chrome-less: the rail card already draws the border, so a nested
-        // card here would inset this row from every other one.
-        <details className="group -mx-5 -mb-5 border-t border-white/8 sm:-mx-6 sm:-mb-6">
+        // card here would inset this row from every other one. Drawn as they
+        // stay from the first frame, and inert while the session is checked:
+        // closed, they cannot be opened, nor act without it. Their gap is their
+        // own (`mt-4`): hidden in the server's HTML from anyone but the creator,
+        // they must leave the buttons above as they are (a `space-y` parent
+        // spaced the buttons from them even then).
+        <details
+          className="group -mx-5 -mb-5 mt-4 border-t border-white/8 sm:-mx-6 sm:-mb-6"
+          inert={ownerTools !== 'ready'}
+          data-post-owner-tools={ownerTools === 'unread' && ownerToolsMark ? ownerToolsMark : undefined}
+        >
           <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-5 py-3.5 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.03] sm:px-6 [&::-webkit-details-marker]:hidden">
             <span>Owner tools</span>
             <span className="text-xs font-medium text-zinc-500 group-open:hidden">Edit, visibility, archive</span>
             <span className="hidden text-xs font-medium text-zinc-500 group-open:inline">Hide tools</span>
           </summary>
-          <div className="flex flex-wrap gap-2 border-t border-white/8 px-5 pb-4 pt-3 sm:px-6">
-            <Link
-              href={`/post/${postId}/edit`}
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-            >
-              <PencilLine className="h-4 w-4" />
-              Edit post
-            </Link>
-
-            {hasResourceBundle ? (
+          {/*
+            * What the row opens onto comes with the session, never before: closed, the row draws
+            * the same either way, and the server's HTML, every visitor's and every crawler's, held
+            * the edit links, the menu and the actions on every post (review of #838).
+            */}
+          {ownerTools === 'ready' ? (
+            <div className="flex flex-wrap gap-2 border-t border-white/8 px-5 pb-4 pt-3 sm:px-6">
               <Link
-                href={`/post/${postId}/edit#recipe`}
-                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                href={`/post/${postId}/edit`}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
               >
-                Manage recipe
+                <PencilLine className="h-4 w-4" />
+                Edit post
               </Link>
-            ) : null}
 
-            <PostVisibilityMenu
-              value={ownerVisibility}
-              onChange={(next) => void postLifecycle.setVisibility(lifecycleTarget, next)}
-              pending={lifecyclePending === 'visibility'}
-              disabled={Boolean(lifecyclePending)}
-              label={`Visibility of ${title}`}
-            />
+              {hasResourceBundle ? (
+                <Link
+                  href={`/post/${postId}/edit#recipe`}
+                  className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
+                >
+                  Manage recipe
+                </Link>
+              ) : null}
 
-            <button
-              type="button"
-              disabled={Boolean(lifecyclePending)}
-              onClick={() => void postLifecycle.archive(lifecycleTarget)}
-              className="ui-focus-ring inline-flex items-center gap-2 rounded-full border border-amber-400/25 bg-amber-500/10 px-3.5 py-2 text-sm font-medium text-amber-50 transition hover:border-amber-300/35 hover:bg-amber-500/15 disabled:opacity-60"
-            >
-              {lifecyclePending === 'archive' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Archive className="h-4 w-4" />}
-              Archive
-            </button>
+              <PostVisibilityMenu
+                value={ownerVisibility}
+                onChange={(next) => void postLifecycle.setVisibility(lifecycleTarget, next)}
+                pending={lifecyclePending === 'visibility'}
+                disabled={Boolean(lifecyclePending)}
+                label={`Visibility of ${title}`}
+              />
 
-            <button
-              type="button"
-              disabled={Boolean(lifecyclePending)}
-              onClick={() => void postLifecycle.remove(lifecycleTarget)}
-              className="ui-focus-ring inline-flex items-center gap-2 rounded-full border border-rose-400/25 bg-rose-500/10 px-3.5 py-2 text-sm font-medium text-rose-50 transition hover:border-rose-300/35 hover:bg-rose-500/15 disabled:opacity-60"
-            >
-              {lifecyclePending === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-              Delete
-            </button>
-          </div>
+              <button
+                type="button"
+                disabled={Boolean(lifecyclePending)}
+                onClick={() => void postLifecycle.archive(lifecycleTarget)}
+                className="ui-focus-ring inline-flex items-center gap-2 rounded-full border border-amber-400/25 bg-amber-500/10 px-3.5 py-2 text-sm font-medium text-amber-50 transition hover:border-amber-300/35 hover:bg-amber-500/15 disabled:opacity-60"
+              >
+                {lifecyclePending === 'archive' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Archive className="h-4 w-4" />}
+                Archive
+              </button>
+
+              <button
+                type="button"
+                disabled={Boolean(lifecyclePending)}
+                onClick={() => void postLifecycle.remove(lifecycleTarget)}
+                className="ui-focus-ring inline-flex items-center gap-2 rounded-full border border-rose-400/25 bg-rose-500/10 px-3.5 py-2 text-sm font-medium text-rose-50 transition hover:border-rose-300/35 hover:bg-rose-500/15 disabled:opacity-60"
+              >
+                {lifecyclePending === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                Delete
+              </button>
+            </div>
+          ) : null}
         </details>
       ) : null}
     </div>

@@ -58,6 +58,15 @@ export function marketplaceFiltersKey(filters: MarketplaceFilters): string {
   return [filters.access, filters.resource, filters.tool, filters.sort, filters.q].join('\u0000');
 }
 
+/**
+ * How many of the choices a phone keeps behind Filters are set: Access, Kind, Tool and an order
+ * other than Recent (the search stays in view). Its Filters button says so (review of #837).
+ */
+export function countMarketplaceFiltersSet(filters: MarketplaceFilters): number {
+  return [filters.access !== 'all', filters.resource !== 'all', Boolean(filters.tool), filters.sort !== 'recent']
+    .filter(Boolean).length;
+}
+
 /** The list API's query for a listing (`GET /api/marketplace/resources`). */
 export function buildMarketplaceListQuery(
   filters: MarketplaceFilters,

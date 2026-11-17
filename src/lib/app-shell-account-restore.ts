@@ -28,6 +28,15 @@ export const APP_SHELL_AUTH_HINT_SIGNED_IN = 'signed-in';
 export const APP_SHELL_AUTH_USER_ATTRIBUTE = 'data-auth-user';
 
 /**
+ * Whether a style rule can name this account in `data-auth-user` as it stands (a UUID can). A part
+ * drawn for one account only is drawn in the server's HTML for an account a rule can name, and for
+ * no other.
+ */
+export function canStyleRuleNameAuthUser(userId: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(userId);
+}
+
+/**
  * Where the browser keeps how many digits the last balance it showed had, so the placeholder is
  * as wide as the balance that replaces it (`--app-shell-credits-digits` in globals.css).
  */
