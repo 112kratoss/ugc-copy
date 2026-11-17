@@ -16,9 +16,10 @@ import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-se
 
 /**
  * Explore's grid, so a recipe sits in the same place and at the same size as
- * the post it came from: four across on a laptop, one on a phone.
+ * the post it came from: four across on a laptop, one on a phone, where it
+ * sits closer under the filters so the first screen reaches it.
  */
-export const MARKETPLACE_RECIPE_GRID_CLASS = `mt-10 ${SHOWCASE_FEED_GRID_CLASS}`;
+export const MARKETPLACE_RECIPE_GRID_CLASS = `mt-6 sm:mt-10 ${SHOWCASE_FEED_GRID_CLASS}`;
 
 // The tile's share of the page at each of the grid's widths.
 const TILE_IMAGE_SIZES = '(min-width: 1280px) 25vw, (min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw';

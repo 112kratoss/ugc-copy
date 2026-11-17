@@ -5,7 +5,7 @@ import { Ban, Flag, Loader2, ShieldAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 import { useAuth } from '@/components/AuthProvider';
-import { APP_SHELL_AUTH_USER_ATTRIBUTE } from '@/lib/app-shell-account-restore';
+import { APP_SHELL_AUTH_USER_ATTRIBUTE, canStyleRuleNameAuthUser } from '@/lib/app-shell-account-restore';
 import {
   blockCreatorAfterConfirmation,
   reportCreatorAfterConfirmation,
@@ -28,9 +28,6 @@ export const REPORT_REASONS = [
 
 /** About a recipe and its purchase: offered only on a post that carries one. */
 const RECIPE_REPORT_REASONS = new Set(['misleading_unlock', 'payment_issue']);
-
-/** An account id the server's HTML can name in a style rule as it stands (a UUID is one). */
-const PLAIN_ACCOUNT_ID = /^[A-Za-z0-9_-]+$/;
 
 interface ReportPostButtonProps {
   postId: string;
@@ -102,7 +99,7 @@ export default function ReportPostButton({
     : user
       ? creatorId !== user.id ? 'ready' : null
       : viewerCheck === 'unread'
-        ? PLAIN_ACCOUNT_ID.test(creatorId) ? 'unread' : null
+        ? canStyleRuleNameAuthUser(creatorId) ? 'unread' : null
         : viewerCheck === 'checking' && readSupabaseAuthCookieUserId() !== creatorId
           ? 'checking'
           : null;

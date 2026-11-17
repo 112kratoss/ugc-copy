@@ -8,11 +8,13 @@ import {
   useHasHydratedSupabaseAuthCookieHint,
   useSupabaseAuthCookieHint,
 } from '@/components/useSupabaseAuthCookieHint';
+import { canStyleRuleNameAuthUser } from '@/lib/app-shell-account-restore';
 import type { PostRemixCapability, PostRemixTarget } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import type { StoredInviteHandoff } from '@/lib/invite-handoff';
 import { useInviteVisitFromSharedLink } from '@/lib/invite-share-landing';
 import { useOwnerPostVisibility } from '@/lib/owner-page-edits';
+import { postRecipeReadPath } from '@/lib/post-recipe-read';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import {
   SHARE_SOURCE_QUERY_PARAM,
@@ -21,6 +23,8 @@ import {
   type ShowcaseReturnContext,
 } from '@/lib/share';
 import { fetchShowcaseViewerExclusions } from '@/lib/showcase-viewer-exclusions-client';
+import { readSupabaseAuthCookieUserId } from '@/lib/supabase-auth-cookie';
+import { useViewerSessionCheck } from '@/lib/viewer-session-check';
 import {
   remixCreditUserIds,
   withoutBlockedRemixCredit,
@@ -36,10 +40,12 @@ import type { BundleRefreshPayload } from './PostResourceBundlePanel';
  * depends on who is looking, from where, or how they got here is read here, in
  * the browser, after the page has drawn:
  *
- * - who the viewer is (`useAuth`), and so whether the post is theirs;
+ * - who the viewer is (`useAuth`), and so whether the post is theirs, decided
+ *   from the session cookie while the provider checks it (`ownership`);
  * - the recipe as this viewer may read it (`GET /api/posts/{id}/resource-bundle`):
  *   unlocked for its buyers and its owner, a delisted or retired one for the
- *   people who bought it, priced in the viewer's currency;
+ *   people who bought it, priced in the viewer's currency; none for everyone
+ *   else, answered as none rather than not found (`post-recipe-read.ts`);
  * - whether a block stands between the viewer and the creator either way
  *   (`POST /api/showcase/viewer-exclusions`), which hides the post as the
  *   app's by-id read does;
@@ -61,10 +67,27 @@ export interface ShowcasePostRemix {
 /** What the recipe panel reports once it has unlocked or re-read the recipe. */
 export type ShowcasePostBundleAccess = BundleRefreshPayload;
 
+/**
+ * Whether the post is the viewer's own, as the page knows it at this render: it draws the rail's
+ * Owner tools for the creator and "Report post or recipe" for everyone else. A client navigation
+ * starts the page's session check again (`OptionalAuth`), and the creator saw the report row in
+ * their tools' place until it ended, about 16 frames (sweep of 2026-11-17).
+ *
+ * - `owner`: the check has named the creator.
+ * - `owner-checking`: the browser's session cookie names the creator and the check has not ended
+ *   (`useViewerSessionCheck`): their tools are drawn, inert until it ends.
+ * - `unread`: the server's HTML and the render that hydrates it, where no cookie can be read. Both
+ *   are drawn, and the root element's `data-auth-user` mark, set from the session cookie before the
+ *   first paint (`app-shell-account-restore.ts`), shows the creator theirs and everyone else the row.
+ * - `other`: anyone else, a visitor, and a check that found no one or outlasted its deadline.
+ */
+export type ShowcasePostOwnership = 'owner' | 'owner-checking' | 'unread' | 'other';
+
 export interface ShowcasePostViewer {
   /** The signed-in viewer, once the session check found one. */
   viewerUserId: string | null;
   viewerIsOwner: boolean;
+  ownership: ShowcasePostOwnership;
   /** The page's visibility, or for its owner the one they last saved here. */
   visibility: 'public' | 'unlisted';
   /** The recipe as this viewer may read it: the page's (a visitor's) until their own read lands. */
@@ -170,6 +193,17 @@ export function useShowcasePostViewer({
   // is being checked, so a signed-in viewer is never first read as a visitor.
   const viewerKey = viewerUserId ?? (!hydrated || (hasAuthCookie && isLoading) ? null : VISITOR);
   const viewerIsOwner = Boolean(viewerUserId && creatorId && viewerUserId === creatorId);
+  const viewerCheck = useViewerSessionCheck();
+  const ownership: ShowcasePostOwnership = viewerIsOwner
+    ? 'owner'
+    : viewerUserId || !creatorId
+      ? 'other'
+      : viewerCheck === 'unread'
+        // A creator a style rule cannot name gets the row, as a visitor does, until the check ends.
+        ? canStyleRuleNameAuthUser(creatorId) ? 'unread' : 'other'
+        : viewerCheck === 'checking' && readSupabaseAuthCookieUserId() === creatorId
+          ? 'owner-checking'
+          : 'other';
   const effectiveVisibility = useOwnerPostVisibility(postId, viewerIsOwner) ?? visibility;
 
   // `null` until `ShowcaseSearchParamsReporter` has read the address.
@@ -202,17 +236,22 @@ export function useShowcasePostViewer({
   useEffect(() => {
     if (!readsBundle || viewerKey === null) return;
     const controller = new AbortController();
-    void fetch(`/api/posts/${encodeURIComponent(postId)}/resource-bundle`, {
+    // Asked on every post a signed-in reader opens, recipe or not: the cached page cannot say
+    // whether one is held back for them. None for them is answered as none, not as a 404 the
+    // browser logs as a failed load on every such post (`postRecipeReadPath`).
+    void fetch(postRecipeReadPath(postId), {
       headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
       signal: controller.signal,
     }).then(async (response) => {
       // Gone for this viewer: never published to them, taken off sale since
-      // the page was cached, or a block. Any other failure keeps the page's.
+      // the page was cached, or a block; answered as none, or as a 404 by a
+      // server from before `absent=none`. Any other failure keeps the page's.
       if (response.status !== 404 && !response.ok) return;
       const body = response.ok
-        ? await response.json().catch(() => null) as { bundle?: PostResourceBundleDetail } | null
+        ? await response.json().catch(() => null) as { bundle?: PostResourceBundleDetail | null } | null
         : null;
-      if (controller.signal.aborted || (response.ok && !body?.bundle)) return;
+      // An answer that says neither keeps the page's too.
+      if (controller.signal.aborted || (response.ok && body?.bundle === undefined)) return;
       const read = response.ok ? body?.bundle ?? null : null;
       // What the panel reported after an unlock is newer than a read sent before it.
       setViewerBundle((current) => (
@@ -322,6 +361,7 @@ export function useShowcasePostViewer({
   return {
     viewerUserId,
     viewerIsOwner,
+    ownership,
     visibility: effectiveVisibility,
     bundle,
     bundlePanelKey: `${viewerKey ?? 'unknown'}:${ownBundle?.panelStart ?? 'page'}`,

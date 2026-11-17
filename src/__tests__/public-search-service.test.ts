@@ -949,6 +949,29 @@ describe('public search service', () => {
       expect(result).not.toHaveProperty('related');
     });
 
+    it('makes their cards while the search’s own posts are being hydrated, not after', async () => {
+      // Their block read and hydration waited for the answer's own hydration: two more round trips
+      // on a thin answer's follow-up (2026-11-17).
+      const { search, getShowcaseFeedItemsByPostIds } = harness();
+      let finishHydration: () => void = () => undefined;
+      const hydrating = new Promise<void>((resolve) => { finishHydration = resolve; });
+      getShowcaseFeedItemsByPostIds.mockImplementationOnce(async ({ postIds }: { postIds: string[] }) => {
+        await hydrating;
+        return postIds.map((id) => ({ id, isNsfw: false }));
+      });
+      const answering = search();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      // The answer's own posts, then the related ones, both asked before either is in.
+      expect(getShowcaseFeedItemsByPostIds.mock.calls.map(([options]) => options.postIds)).toEqual([
+        [post(1), post(2)],
+        relatedRows.map((row) => row.post_id),
+      ]);
+      finishHydration();
+      const result = await answering;
+      expect(result.posts.items.map((item) => item.id)).toEqual([post(1), post(2)]);
+      expect(result.related?.posts.map((item) => item.id)).toEqual(relatedRows.map((row) => row.post_id));
+    });
+
     it('counts the posts it shows: five shown of six ranked, one labelled meanwhile, is a thin answer', async () => {
       const { search, findRelatedPostRows, getShowcaseFeedItemsByPostIds } = harness({ lexical: lexicalRows(6), nsfw: [post(3)] });
       // Six rows were ranked, so nothing is started beside the hydration...
@@ -1033,6 +1056,7 @@ describe('public search service', () => {
       lexical = rows(3),
       found = FOUND as typeof FOUND | Error,
       blocked = [] as string[],
+      blocksRead = null as Promise<Set<string>> | null,
       env = {} as Record<string, string | undefined>,
     } = {}) {
       const rpc = vi.fn(async (name: string) => {
@@ -1051,6 +1075,7 @@ describe('public search service', () => {
         return found;
       });
       const logEvent = vi.fn();
+      const getShowcaseFeedItemsByPostIds = vi.fn(async ({ postIds }: { postIds: string[] }) => postIds.map((id) => ({ id, isNsfw: false })));
       const search = (options: Partial<Parameters<typeof searchPublicContent>[0]> = {}) => searchPublicContent({
         query: 'Portrait',
         normalizedQuery: 'Portrait',
@@ -1064,20 +1089,41 @@ describe('public search service', () => {
       }, {
         createServiceClient: vi.fn(() => client),
         findRelatedSearches: findRelatedSearches as never,
-        getShowcaseFeedItemsByPostIds: vi.fn(async ({ postIds }: { postIds: string[] }) => postIds.map((id) => ({ id, isNsfw: false }))) as never,
+        getShowcaseFeedItemsByPostIds: getShowcaseFeedItemsByPostIds as never,
         getMarketplaceResourceList: vi.fn(async () => ({
           items: [],
           pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 6 },
         })) as never,
-        loadBlockedCreatorIds: vi.fn(async ({ creatorIds }: { creatorIds: string[] }) => (
-          new Set(creatorIds.filter((id) => blocked.includes(id)))
-        )) as never,
+        loadBlockedCreatorIds: vi.fn(async ({ creatorIds }: { creatorIds: string[] }) => {
+          const read = blocksRead ? await blocksRead : new Set(blocked);
+          return new Set(creatorIds.filter((id) => read.has(id)));
+        }) as never,
         logEvent,
         env,
         now,
       });
-      return { search, rpc, findRelatedSearches, logEvent };
+      return { search, rpc, findRelatedSearches, getShowcaseFeedItemsByPostIds, logEvent };
     }
+
+    it('hydrates the page’s posts while the block read is on its way, and leaves out a creator it names', async () => {
+      // The block read was waited for before the posts were hydrated: one more round trip on
+      // every signed-in search (2026-11-17). search_public_posts already left blocked creators out
+      // before its limit; this read is for a block made since, so its answer is applied to the
+      // hydrated cards and to the related searches' posts, never waited for ahead of them.
+      let answerBlocks: (blocked: Set<string>) => void = () => undefined;
+      const blocksRead = new Promise<Set<string>>((resolve) => { answerBlocks = resolve; });
+      const { search, findRelatedSearches, getShowcaseFeedItemsByPostIds } = harness({ blocksRead });
+      const answering = search();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(getShowcaseFeedItemsByPostIds).toHaveBeenCalledTimes(1);
+      expect(getShowcaseFeedItemsByPostIds.mock.calls[0][0].postIds).toEqual([post(1), post(2), post(3)]);
+      // The related searches are asked about the posts the answer may show: after the block read.
+      expect(findRelatedSearches).not.toHaveBeenCalled();
+      answerBlocks(new Set(['creator-2']));
+      const result = await answering;
+      expect(result.posts.items.map((item) => item.id)).toEqual([post(1), post(3)]);
+      expect(findRelatedSearches.mock.calls[0][1].postIds).toEqual([post(1), post(3)]);
+    });
 
     it('answers the searches the page’s posts suggest, asked with the query, the viewer and those posts', async () => {
       const { search, findRelatedSearches } = harness();

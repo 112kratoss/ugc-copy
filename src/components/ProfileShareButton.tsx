@@ -2,7 +2,8 @@
 
 import { Check, Loader2, Share2 } from 'lucide-react';
 
-import { useShareAction } from '@/components/useShareAction';
+import { ShareLinkSheet } from '@/components/PublicShareButton';
+import { SHARE_BUSY_STYLE, useShareAction } from '@/components/useShareAction';
 import { shareCreatorProfile } from '@/lib/share-client';
 import type { ProfileShareSourceSurface } from '@/lib/share';
 
@@ -29,6 +30,10 @@ export default function ProfileShareButton({
     resolvedLabel,
     statusMessage,
     runShareAction,
+    refusedLink,
+    copyRefusedLink,
+    countRefusedLinkCopiedByHand,
+    dismissRefusedLink,
   } = useShareAction({
     label,
     onAction: () =>
@@ -45,9 +50,11 @@ export default function ProfileShareButton({
       <button
         type="button"
         onClick={() => void runShareAction()}
-        disabled={isLoading}
+        // Busy while it shares, never disabled, so the focus stays on it (`SHARE_BUSY_STYLE`).
+        aria-disabled={isLoading || undefined}
         aria-busy={isLoading}
         className={className}
+        style={isLoading ? SHARE_BUSY_STYLE : undefined}
       >
         {state === 'loading' ? (
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -61,6 +68,14 @@ export default function ProfileShareButton({
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {statusMessage}
       </span>
+      {refusedLink ? (
+        <ShareLinkSheet
+          link={refusedLink}
+          onCopy={copyRefusedLink}
+          onCopiedByHand={countRefusedLinkCopiedByHand}
+          onClose={dismissRefusedLink}
+        />
+      ) : null}
     </>
   );
 }

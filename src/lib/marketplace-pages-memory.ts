@@ -156,6 +156,50 @@ export function withRememberedPages(firstPage: MarketplacePages, remembered: Mar
     : firstPage;
 }
 
+const FILTERS_OPEN_KEY = 'marketplace-filters-open';
+
+interface RememberedFiltersOpen {
+  listingKey: string;
+  savedAt: number;
+}
+
+/**
+ * The filters a phone or a tablet folds behind Filters, left open on a listing (review of #837):
+ * Back from a recipe draws them open again, so the page above the grid is as tall as when the
+ * reader left it and the browser puts them back on their recipe, a panel's height off otherwise.
+ * One listing at a time, `marketplaceFiltersKey`'s; folded is the default and keeps nothing. As the
+ * kept pages are, never from before this document loaded, nor older than ten minutes.
+ */
+export function rememberMarketplaceFiltersOpen(listingKey: string, open: boolean): void {
+  const store = sessionStore();
+  if (!store) return;
+  try {
+    if (open) {
+      store.setItem(FILTERS_OPEN_KEY, JSON.stringify({ listingKey, savedAt: Date.now() } satisfies RememberedFiltersOpen));
+    } else {
+      const raw = store.getItem(FILTERS_OPEN_KEY);
+      if (raw && (JSON.parse(raw) as Partial<RememberedFiltersOpen>).listingKey === listingKey) store.removeItem(FILTERS_OPEN_KEY);
+    }
+  } catch {
+    // Storage refused: Back draws the filters folded, as before.
+  }
+}
+
+/** Whether the filters were left open on this listing, in this document lately. */
+export function recallMarketplaceFiltersOpen(listingKey: string): boolean {
+  const store = sessionStore();
+  if (!store) return false;
+  try {
+    const entry = JSON.parse(store.getItem(FILTERS_OPEN_KEY) ?? 'null') as Partial<RememberedFiltersOpen> | null;
+    return entry?.listingKey === listingKey
+      && typeof entry.savedAt === 'number'
+      && entry.savedAt >= performance.timeOrigin
+      && Date.now() - entry.savedAt <= MARKETPLACE_PAGES_MEMORY_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
 /** A creator has been blocked: their recipes leave every listing this tab keeps. */
 export function takeBlockedCreatorOffMarketplacePages(creatorId: string): void {
   const store = sessionStore();

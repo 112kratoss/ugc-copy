@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ProfileShareButton from '@/components/ProfileShareButton';
@@ -131,9 +131,12 @@ describe('ProfileShareButton', () => {
     expect(readProfileShareCall()).toBeNull();
   });
 
-  it('shows a retry state when sharing fails', async () => {
+  // A refused clipboard left "Sharing failed. Try again.", and trying again was refused the same
+  // way (2026-11-17): the link comes up to copy by hand instead, and Copy link is a press of its own.
+  it('offers the link to copy by hand where the browser refuses the clipboard, and counts it once copied', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    writeTextMock.mockRejectedValue(new Error('Clipboard denied'));
+    const link = `${window.location.origin}/creators/creator-name?s=creator-profile`;
+    writeTextMock.mockRejectedValue(new DOMException('Write permission denied.', 'NotAllowedError'));
     Object.defineProperty(navigator, 'share', {
       configurable: true,
       value: undefined,
@@ -144,13 +147,82 @@ describe('ProfileShareButton', () => {
         username="creator-name"
         displayName="Creator Name"
         sourceSurface="creator-profile"
+        accessToken="token-1"
         className="inline-flex"
       />
     );
 
     fireEvent.click(screen.getByRole('button', { name: /share profile/i }));
 
-    expect(await screen.findByRole('button', { name: /try again/i })).toBeInTheDocument();
-    expect(screen.getByText('Sharing failed. Try again.')).toBeInTheDocument();
+    const sheet = await screen.findByRole('dialog', { name: 'Copy the link' });
+    expect(within(sheet).getByRole('textbox', { name: 'Link' })).toHaveValue(link);
+    expect(screen.queryByText('Sharing failed. Try again.')).toBeNull();
+    expect(readProfileShareCall()).toBeNull();
+
+    writeTextMock.mockReset();
+    writeTextMock.mockResolvedValue(undefined);
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Copy link' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(writeTextMock).toHaveBeenCalledWith(link);
+    expect(screen.getByRole('button', { name: /copied link/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(readProfileShareCall()).toMatchObject({
+        headers: { Authorization: 'Bearer token-1' },
+        body: { username: 'creator-name', sourceSurface: 'creator-profile', channel: 'copy-link' },
+      });
+    });
+  });
+
+  it('counts the person\'s own copy of the profile link once, where Copy link is refused too', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    writeTextMock.mockRejectedValue(new DOMException('Write permission denied.', 'NotAllowedError'));
+    Object.defineProperty(navigator, 'share', { configurable: true, value: undefined });
+
+    render(
+      <ProfileShareButton
+        username="creator-name"
+        displayName="Creator Name"
+        sourceSurface="creator-profile"
+        className="inline-flex"
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /share profile/i }));
+    const sheet = await screen.findByRole('dialog', { name: 'Copy the link' });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Copy link' }));
+    await within(sheet).findByText('Copying is blocked here too. Select the link and copy it yourself.');
+    expect(readProfileShareCall()).toBeNull();
+
+    fireEvent.copy(within(sheet).getByRole('textbox', { name: 'Link' }));
+    fireEvent.copy(within(sheet).getByRole('textbox', { name: 'Link' }));
+
+    await waitFor(() => {
+      expect(readProfileShareCall()).toMatchObject({
+        body: { username: 'creator-name', sourceSurface: 'creator-profile', channel: 'copy-link' },
+      });
+    });
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/profile/share')).toHaveLength(1);
+  });
+
+  it('stays focusable while it shares, busy, and takes no second press meanwhile', async () => {
+    shareMock.mockImplementation(() => new Promise<void>(() => undefined));
+    Object.defineProperty(navigator, 'share', { configurable: true, value: shareMock });
+
+    render(
+      <ProfileShareButton
+        username="creator-name"
+        displayName="Creator Name"
+        sourceSurface="creator-profile"
+        className="inline-flex"
+      />
+    );
+    const button = screen.getByRole('button', { name: /share profile/i });
+    fireEvent.click(button);
+
+    expect(await screen.findByRole('button', { name: 'Sharing...' })).toBe(button);
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(button);
+    expect(shareMock).toHaveBeenCalledTimes(1);
   });
 });

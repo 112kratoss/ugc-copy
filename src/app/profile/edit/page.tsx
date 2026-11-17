@@ -36,10 +36,12 @@ export default async function EditProfilePage() {
           loadError={loadError}
           collapseOptionalDetails
           hideIntro
-        />
-
-        {/* The agents this account approved through the MCP server's consent screen, each with Disconnect. */}
-        <ConnectedApps />
+        >
+          {/* The agents this account approved through the MCP server's consent screen, each with
+              Disconnect. Drawn with the editor, under it: never under the editor's shorter
+              placeholder, which the editor's arrival pushed it out of. */}
+          <ConnectedApps />
+        </DeferredCreatorProfileCard>
       </div>
     </div>
   );

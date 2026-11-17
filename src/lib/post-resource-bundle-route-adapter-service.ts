@@ -10,6 +10,7 @@ import {
 } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
 import { isMarketplaceCreatorBlockedForViewer } from '@/lib/marketplace-viewer-filter';
+import { asksAbsentRecipeAsNone } from '@/lib/post-recipe-read';
 import {
   getPostResourceBundleForRoute,
   type PostResourceBundleRouteResult,
@@ -40,9 +41,15 @@ function resolveDependencies(dependencies: PostResourceBundleRouteAdapterDepende
   };
 }
 
-function toJsonResponse(result: PostResourceBundleRouteResult) {
+function toJsonResponse(result: PostResourceBundleRouteResult, request: Request) {
   if (!result.ok && 'rateLimitError' in result) {
     return createBackendRateLimitResponse(result.rateLimitError);
+  }
+
+  // The post page asks with `absent=none` (post-recipe-read.ts): a recipe that is not there for this
+  // viewer is none, not a load that failed. Every other caller keeps the 404 it reads as not found.
+  if (!result.ok && result.status === 404 && asksAbsentRecipeAsNone(request.url)) {
+    return NextResponse.json({ success: true, bundle: null });
   }
 
   return NextResponse.json(result.body, { status: result.ok ? 200 : result.status });
@@ -68,11 +75,11 @@ async function handleResourceBundleGET(
   context: PostResourceBundleRouteContext,
   dependencies: ReturnType<typeof resolveDependencies>,
   hasAuthorizationHeader: boolean,
-) {
+): Promise<PostResourceBundleRouteResult> {
   const { postId } = await context.params;
   const viewerUserId = await getViewerUserId(request, hasAuthorizationHeader, dependencies);
 
-  return toJsonResponse(await dependencies.getPostResourceBundleForRoute({
+  return dependencies.getPostResourceBundleForRoute({
     postId,
     viewerUserId,
     countryCode: request.headers.get('x-vercel-ip-country'),
@@ -86,7 +93,7 @@ async function handleResourceBundleGET(
         ? null
         : detail;
     },
-  }));
+  });
 }
 
 /**
@@ -95,7 +102,8 @@ async function handleResourceBundleGET(
  * as it does the marketplace listing's: the post page asks it for every
  * visitor who opens a cash-priced recipe, to price it in their currency. Every
  * answer read with a bearer is that viewer's (bought, owned, across a block),
- * and is never stored anywhere; nor is a refusal or an error.
+ * and is never stored anywhere; nor is a refusal, an error or a recipe answered
+ * as none (`absent=none`), which may be listed in a minute.
  */
 export async function getPostResourceBundleRouteResponse({
   context,
@@ -107,16 +115,16 @@ export async function getPostResourceBundleRouteResponse({
   request: Request;
 }) {
   const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
-  const response = await handleResourceBundleGET(
+  const result = await handleResourceBundleGET(
     request,
     context,
     resolveDependencies(dependencies),
     hasAuthorizationHeader,
   );
   return applyApiResponseHeaders(
-    response,
+    toJsonResponse(result, request),
     request,
-    response.status === 200 ? getViewerAwareApiCacheControl(hasAuthorizationHeader) : API_CACHE_CONTROL.privateNoStore,
+    result.ok ? getViewerAwareApiCacheControl(hasAuthorizationHeader) : API_CACHE_CONTROL.privateNoStore,
     { vary: ['Authorization', 'x-vercel-ip-country'] },
   );
 }

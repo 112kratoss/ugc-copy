@@ -274,6 +274,57 @@ describe('search starter', () => {
     expect(await screen.findByRole('region', { name: SEARCH_STARTER_LABEL })).toBeTruthy();
   });
 
+  it('asks for the starter only once a page opened on a search has its answer, and draws it at once when the box is emptied, slow as it is', async () => {
+    // Every opening asked for it beside the search's own request (2.7 s on production, signed in,
+    // 2026-11-17). Asked only when the box was emptied, it left the page blank under the box for as
+    // long as it took (review of #839). Now: after the search, before the person needs it.
+    let answerSearch: () => void = () => {};
+    searchFetchMock.mockImplementation((url: string) => new Promise((resolve) => {
+      const params = new URL(url, 'http://localhost').searchParams;
+      answerSearch = () => resolve(ok(answer(params.get('q') ?? '', params.get('type') ?? 'top', { posts: { items: [post('p1')], nextCursor: null } })));
+    }));
+    // The starter takes two seconds.
+    starterFetchMock.mockImplementation(() => new Promise((resolve) => { setTimeout(() => resolve(ok(STARTER)), 2_000); }));
+    render(<SearchClient initialQuery="portrait" initialType="top" />);
+    await waitFor(() => expect(searchFetchMock).toHaveBeenCalledTimes(1));
+    await settle();
+    // The search goes first: nothing else is asked while it is on its way.
+    expect(starterFetchMock).not.toHaveBeenCalled();
+    await act(async () => { answerSearch(); });
+    expect(await screen.findByText('Post p1')).toBeTruthy();
+    await waitFor(() => expect(starterFetchMock).toHaveBeenCalledTimes(1));
+    expect(searchFetchMock.mock.invocationCallOrder[0]).toBeLessThan(starterFetchMock.mock.invocationCallOrder[0]);
+    // Nothing of it drawn over the results.
+    expect(screen.queryByRole('region', { name: SEARCH_STARTER_LABEL })).toBeNull();
+    // The person reads the results a moment, then empties the box: the starter is there at once.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_100)); });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '' } });
+    expect(screen.getByRole('region', { name: SEARCH_STARTER_LABEL })).toBeTruthy();
+    expect(screen.queryByText(SEARCH_IDLE_TITLE)).toBeNull();
+    // A search again, then the box emptied again: drawn from the answer it has, asked once.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'portrait' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '' } });
+    expect(screen.getByRole('region', { name: SEARCH_STARTER_LABEL })).toBeTruthy();
+    expect(starterFetchMock).toHaveBeenCalledTimes(1);
+  }, SLOW_RUNNER_MS);
+
+  it('lends a model card of the answer the starter’s picture, asked after that answer', async () => {
+    // A search's own answer carries no picture for its models and tools; the starter's are lent to
+    // their cards (search-ui-web-client.test.tsx). Asked once the answer is in, never beside it.
+    const nano = { kind: 'model' as const, key: 'nano-banana-pro', label: 'Nano Banana Pro', postCount: 200, postCountCapped: true };
+    searchFetchMock.mockImplementation(async (url: string) => {
+      const params = new URL(url, 'http://localhost').searchParams;
+      return ok(answer(params.get('q') ?? '', params.get('type') ?? 'top', {
+        entities: [nano],
+        posts: { items: [post('p1')], nextCursor: null },
+      }));
+    });
+    render(<SearchClient initialQuery="nano" initialType="top" />);
+    expect(await screen.findByText('Post p1')).toBeTruthy();
+    await waitFor(() => expect(starterFetchMock).toHaveBeenCalledTimes(1));
+    expect(searchFetchMock.mock.invocationCallOrder[0]).toBeLessThan(starterFetchMock.mock.invocationCallOrder[0]);
+  });
+
   it('draws "No results", then the starter under its own heading, for a search that found nothing', async () => {
     render(<SearchClient initialQuery="zzzznope" initialType="top" />);
     expect(await screen.findByText('No results for “zzzznope”')).toBeTruthy();

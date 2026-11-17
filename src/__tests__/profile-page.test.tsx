@@ -41,6 +41,11 @@ const payoutAnswers = vi.hoisted(() => ({
   requests: { data: [], error: null } as { data: unknown; error: unknown },
 }));
 const tablesRead = vi.hoisted(() => [] as string[]);
+// What the mature-content setting's read answers, and the account it was asked for.
+const preferenceRead = vi.hoisted(() => ({
+  answer: { data: null, error: null } as { data: unknown; error: unknown },
+  userIds: [] as string[],
+}));
 
 const getServerAuthStateMock = vi.fn(async () => ({
   session: {
@@ -74,6 +79,20 @@ vi.mock('@/lib/server-helpers', () => ({
       if (table === 'creator_payout_requests') {
         return {
           select: () => ({ eq: () => ({ order: () => ({ limit: async () => payoutAnswers.requests }) }) }),
+        };
+      }
+      if (table === 'content_preferences') {
+        return {
+          select: (columns: string) => ({
+            eq: (column: string, value: string) => ({
+              maybeSingle: async () => {
+                expect(columns).toBe('show_mature');
+                expect(column).toBe('user_id');
+                preferenceRead.userIds.push(value);
+                return preferenceRead.answer;
+              },
+            }),
+          }),
         };
       }
       if (table !== 'profiles') {
@@ -119,11 +138,13 @@ vi.mock('@/app/profile/OwnerProfileMediaHub', () => ({
     publicProfilePath,
     stats,
     walletBalance,
+    showMatureContent,
   }: {
     creator: { name: string; username: string | null };
     publicProfilePath?: string | null;
     stats?: unknown;
     walletBalance?: unknown;
+    showMatureContent?: boolean | null;
   }) => (
     <div
       data-testid="owner-profile-media-hub"
@@ -131,6 +152,7 @@ vi.mock('@/app/profile/OwnerProfileMediaHub', () => ({
       data-username={creator.username ?? ''}
       data-stats={JSON.stringify(stats ?? null)}
       data-wallet={JSON.stringify(walletBalance ?? null)}
+      data-show-mature={JSON.stringify(showMatureContent === undefined ? 'absent' : showMatureContent)}
     >
       Profile media hub
       {publicProfilePath ? <a href={publicProfilePath}>View public profile</a> : null}
@@ -149,6 +171,8 @@ describe('ProfilePage', () => {
     payoutAnswers.wallet = { data: null, error: null };
     payoutAnswers.requests = { data: [], error: null };
     tablesRead.length = 0;
+    preferenceRead.answer = { data: null, error: null };
+    preferenceRead.userIds = [];
   });
 
   afterEach(() => {
@@ -262,7 +286,11 @@ describe('ProfilePage', () => {
       },
       credits: 0,
     };
-    getServerAuthStateMock.mockResolvedValueOnce(guest as never).mockResolvedValueOnce(guest as never);
+    // One auth state per request: the profile's, the Wallet's and the mature-content setting's reads.
+    getServerAuthStateMock
+      .mockResolvedValueOnce(guest as never)
+      .mockResolvedValueOnce(guest as never)
+      .mockResolvedValueOnce(guest as never);
     profileState = {
       id: 'a1b2c3d4-1111-2222-3333-444455556666',
       username: 'persisted-name',
@@ -283,6 +311,50 @@ describe('ProfilePage', () => {
     expect(screen.getByTestId('owner-profile-media-hub')).toHaveAttribute('data-wallet', 'null');
     expect(tablesRead).not.toContain('creator_resource_wallets');
     expect(tablesRead).not.toContain('creator_payout_requests');
+    // `GET /api/content-preferences` refuses a guest, so the page does not read theirs either: the
+    // row reads it itself, as before.
+    expect(tablesRead).not.toContain('content_preferences');
+    expect(screen.getByTestId('owner-profile-media-hub')).toHaveAttribute('data-show-mature', 'null');
+  });
+
+  // The Mature content row read "Loading your setting…" for up to a second
+  // after the page was drawn (2026-11-17). The page reads the setting beside
+  // the profile, as `GET /api/content-preferences` reads it: the account's own
+  // row, a missing one being off.
+  it("hands the hub the account's mature-content setting, read with the page", async () => {
+    profileState = {
+      id: 'a1b2c3d4-1111-2222-3333-444455556666',
+      username: 'persisted-name',
+      display_name: 'Creator Name',
+      bio: null,
+      avatar_url: null,
+      cover_url: null,
+      website_url: null,
+      twitter_handle: null,
+      instagram_handle: null,
+      tiktok_handle: null,
+      location: null,
+      credits: 10,
+    };
+    preferenceRead.answer = { data: { show_mature: true }, error: null };
+
+    render(await ProfilePage({}));
+
+    expect(screen.getByTestId('owner-profile-media-hub')).toHaveAttribute('data-show-mature', 'true');
+    expect(preferenceRead.userIds).toEqual(['a1b2c3d4-1111-2222-3333-444455556666']);
+  });
+
+  it('hands the hub the setting as off for an account that never set it, and leaves it to the row when the read fails', async () => {
+    profileState = null;
+    preferenceRead.answer = { data: null, error: null };
+
+    const { unmount } = render(await ProfilePage({}));
+    expect(screen.getByTestId('owner-profile-media-hub')).toHaveAttribute('data-show-mature', 'false');
+    unmount();
+
+    preferenceRead.answer = { data: null, error: { message: 'statement timeout' } };
+    render(await ProfilePage({}));
+    expect(screen.getByTestId('owner-profile-media-hub')).toHaveAttribute('data-show-mature', 'null');
   });
 
   it('still draws the profile when a count fails, with that total left unknown', async () => {

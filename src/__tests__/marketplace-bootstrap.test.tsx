@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
 import { marketplaceFiltersKey } from '@/app/marketplace/marketplace-address';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
-import { buildMarketplacePagesKey, rememberMarketplacePages } from '@/lib/marketplace-pages-memory';
+import {
+  buildMarketplacePagesKey,
+  rememberMarketplaceFiltersOpen,
+  rememberMarketplacePages,
+} from '@/lib/marketplace-pages-memory';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 const browserModuleLoaded = vi.hoisted(() => vi.fn());
@@ -33,11 +37,17 @@ vi.mock('@/components/AuthProvider', async (importOriginal) => {
   };
 });
 
+// What the shell handed the interactive list when it last drew it.
+const browserProps = vi.hoisted(() => ({ last: null as null | Record<string, unknown> }));
+
 vi.mock('@/app/marketplace/MarketplaceBrowser', () => {
   browserModuleLoaded();
 
   return {
-    default: () => <div data-testid="interactive-marketplace-browser">Interactive marketplace browser</div>,
+    default: (props: Record<string, unknown>) => {
+      browserProps.last = props;
+      return <div data-testid="interactive-marketplace-browser">Interactive marketplace browser</div>;
+    },
   };
 });
 
@@ -71,6 +81,7 @@ describe('MarketplaceBootstrap', () => {
 
   beforeEach(() => {
     browserModuleLoaded.mockClear();
+    browserProps.last = null;
     Object.defineProperty(window, 'scrollY', {
       configurable: true,
       value: 0,
@@ -372,6 +383,76 @@ describe('MarketplaceBootstrap', () => {
     expect(screen.queryByText('Unlock 1')).not.toBeInTheDocument();
   });
 
+  // Live sweep, 2026-11-17: the first press only brought the interactive list in, which drew the
+  // same four recipes, and the reader had to press again. The press goes with the list it brings,
+  // which asks for the next page itself (marketplace-browser-progressive-render's cases).
+  it('hands the list a press of Load more, which reads as loading until the list comes', async () => {
+    render(
+      <MarketplaceBootstrap
+        initialPage={createPage(4, true)}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
+    expect(screen.getByRole('button', { name: 'Loading' })).toBeDisabled();
+
+    expect(await screen.findByTestId('interactive-marketplace-browser')).toBeInTheDocument();
+    expect(browserProps.last).toMatchObject({
+      loadMoreOnOpen: marketplaceFiltersKey(INITIAL_FILTERS),
+      // Outside Next's router no read of the address's own first page is coming.
+      listingSettled: true,
+      initialFiltersOpen: false,
+    });
+  });
+
+  // Below 1024px the filters wait behind Filters (live sweep, 2026-11-17: on a phone they and the
+  // hero filled the first screen); the list that takes over keeps them as the reader left them.
+  it('keeps the filters behind Filters, and hands them over open or folded as the reader left them', async () => {
+    render(
+      <MarketplaceBootstrap
+        initialPage={createPage(4, true)}
+        initialFilters={INITIAL_FILTERS}
+        sourceToolOptions={[]}
+      />
+    );
+
+    const filters = screen.getByRole('button', { name: 'Filters' });
+    const panel = document.getElementById(filters.getAttribute('aria-controls') ?? '');
+    expect(filters).toHaveAttribute('aria-expanded', 'false');
+    expect(filters).toHaveClass('lg:hidden');
+    expect(panel).toHaveClass('hidden', 'lg:block');
+    expect(within(panel!).getByRole('link', { name: 'Paid' })).toBeInTheDocument();
+    expect(within(panel!).getByRole('link', { name: 'Top sales' })).toBeInTheDocument();
+    // The search is never folded away.
+    expect(panel).not.toContainElement(screen.getByRole('searchbox', { name: /search marketplace recipes/i }));
+
+    fireEvent.click(filters);
+    expect(filters).toHaveAttribute('aria-expanded', 'true');
+    expect(panel).toHaveClass('block');
+    expect(panel).not.toHaveClass('hidden');
+
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
+    expect(await screen.findByTestId('interactive-marketplace-browser')).toBeInTheDocument();
+    expect(browserProps.last).toMatchObject({ initialFiltersOpen: true });
+  });
+
+  // Review of #837: `?sort=price-low` on a phone said nothing of the order, folded behind Filters.
+  it('names an order other than Recent while the filters are folded, and counts what is set on Filters', () => {
+    render(
+      <MarketplaceBootstrap
+        initialPage={createPage(4, true)}
+        initialFilters={{ ...INITIAL_FILTERS, access: 'free', sort: 'price-low' }}
+        sourceToolOptions={[]}
+      />
+    );
+
+    expect(screen.getByText(/^Showing Free/)).toHaveTextContent('Showing Free · Sorted by Price low');
+    expect(screen.getByText(/Sorted by Price low/, { selector: 'span' })).toHaveClass('lg:hidden');
+    expect(screen.getByRole('button', { name: 'Filters, 2 set' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('activates near the continuation sentinel only after scroll intent', async () => {
     let intersectionCallback: IntersectionObserverCallback | null = null;
 
@@ -419,6 +500,8 @@ describe('MarketplaceBootstrap', () => {
     });
 
     expect(await screen.findByTestId('interactive-marketplace-browser')).toBeInTheDocument();
+    // A scroll brings the list in with no press to carry out.
+    expect(browserProps.last).toMatchObject({ loadMoreOnOpen: null });
   });
 
   // Back from a recipe drew this shell, the first page alone, though Load more had brought more
@@ -470,6 +553,34 @@ describe('MarketplaceBootstrap', () => {
 
       expect(screen.queryByTestId('interactive-marketplace-browser')).not.toBeInTheDocument();
       expect(screen.getByText('Unlock 1')).toBeInTheDocument();
+    });
+
+    // Review of #837: a phone that had left the filters open came back with them folded, the page
+    // above the grid a panel shorter, and the reader landed that far down from their recipe.
+    it('draws the filters open again where the reader left them open, the shell and the list it hands over', async () => {
+      const listingKey = marketplaceFiltersKey(INITIAL_FILTERS);
+      rememberMarketplaceFiltersOpen(listingKey, true);
+
+      const shell = backToListing();
+      const filters = screen.getByRole('button', { name: 'Filters' });
+      expect(filters).toHaveAttribute('aria-expanded', 'true');
+      expect(document.getElementById(filters.getAttribute('aria-controls') ?? '')).toHaveClass('block');
+      shell.unmount();
+
+      await browserCameInThisDocument();
+      rememberMarketplacePages(buildMarketplacePagesKey(listingKey, null), 4, createPage(16, true));
+      rememberMarketplaceFiltersOpen(listingKey, true);
+      backToListing();
+      expect(screen.getByTestId('interactive-marketplace-browser')).toBeInTheDocument();
+      expect(browserProps.last).toMatchObject({ initialFiltersOpen: true });
+    });
+
+    it("draws them folded for another listing's, or once they were folded", () => {
+      rememberMarketplaceFiltersOpen(marketplaceFiltersKey({ ...INITIAL_FILTERS, access: 'paid' }), true);
+
+      backToListing();
+
+      expect(screen.getByRole('button', { name: 'Filters' })).toHaveAttribute('aria-expanded', 'false');
     });
 
     // Owner's recording, 2026-11-16: signed in, Back drew the first page alone, because the page's

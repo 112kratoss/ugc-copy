@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EyeOff, Loader2, RefreshCw } from 'lucide-react';
 
 import type { ConfirmationRequest } from '@/components/feedback-state';
@@ -26,26 +26,51 @@ const TURN_ON_QUESTION: ConfirmationRequest = {
  * The route takes the change from the website's own cookie session only, so
  * no bearer token is sent.
  */
-export default function MatureContentSetting() {
-  const [preference, setPreference] = useState<PreferenceState>({ status: 'loading' });
+export default function MatureContentSetting({
+  initialShowMature = null,
+}: {
+  /**
+   * The setting as the server read it with the page, drawn from the first
+   * frame: the row read "Loading your setting…" for up to a second after the
+   * page was drawn (live, 2026-11-17). Null when the server could not read it;
+   * the row then reads it before drawing it, as it always did.
+   */
+  initialShowMature?: boolean | null;
+} = {}) {
+  const [preference, setPreference] = useState<PreferenceState>(() => (
+    typeof initialShowMature === 'boolean'
+      ? { status: 'ready', showMature: initialShowMature }
+      : { status: 'loading' }
+  ));
+  // A drawn setting is still read once, quietly: Back brings the page's first
+  // render, setting and all, from the router's cache, so a change made since
+  // would be drawn undone. That read never draws a failure over the setting.
+  const [checksDrawnSetting] = useState(() => typeof initialShowMature === 'boolean');
   const [attempt, setAttempt] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // The read in flight. A change that goes ahead stops it: an answer read
+  // before the change would draw the setting back as it was. A question
+  // answered "Not now" leaves it running, so a setting drawn stale (Back) is
+  // still put right by it.
+  const readRef = useRef<AbortController | null>(null);
   const askToConfirm = useConfirmation();
 
   useEffect(() => {
     const controller = new AbortController();
+    readRef.current = controller;
+    const quiet = checksDrawnSetting && attempt === 0;
     fetch('/api/content-preferences', { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
         const body = await response.json().catch(() => null) as { showMature?: unknown } | null;
         if (!response.ok || typeof body?.showMature !== 'boolean') throw new Error('Unreadable preference');
-        setPreference({ status: 'ready', showMature: body.showMature });
+        if (!controller.signal.aborted) setPreference({ status: 'ready', showMature: body.showMature });
       })
       .catch(() => {
-        if (!controller.signal.aborted) setPreference({ status: 'failed' });
+        if (!controller.signal.aborted && !quiet) setPreference({ status: 'failed' });
       });
     return () => controller.abort();
-  }, [attempt]);
+  }, [attempt, checksDrawnSetting]);
 
   const retry = () => {
     setPreference({ status: 'loading' });
@@ -55,6 +80,7 @@ export default function MatureContentSetting() {
   const changePreference = async (showMature: boolean) => {
     if (preference.status !== 'ready' || isSaving) return;
     if (showMature && !(await askToConfirm(TURN_ON_QUESTION))) return;
+    readRef.current?.abort();
 
     setIsSaving(true);
     setSaveError(null);

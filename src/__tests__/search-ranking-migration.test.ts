@@ -61,14 +61,16 @@ describe('search ranking migration', () => {
     expect(MIGRATION > '20261112084002').toBe(true);
     expect(statements.trim().startsWith("BEGIN;\nSET LOCAL lock_timeout = '5s';")).toBe(true);
     expect(statements.trim().endsWith('COMMIT;')).toBe(true);
-    for (const name of ['search_post_score', 'search_creator_score', 'search_public_creators']) {
+    for (const name of ['search_creator_score', 'search_public_creators']) {
       expect(newestDefiner(name), name).toBe(MIGRATION);
     }
     // Post search was re-created since, for its filters and its corrected
-    // reading (20261112174210). What this file holds of it below is this
-    // migration's definition; search-entities-filters-migration.test.ts holds
-    // the same rules to the newest one.
-    expect(newestDefiner('search_public_posts')).toBe('20261112174210_search_entities_filters_corrected_reading.sql');
+    // reading (20261112174210), and with the post score for whole words first
+    // (20261116200234). What this file holds of them below is this migration's
+    // definition; search-entities-filters-migration.test.ts and
+    // search-whole-words-first-migration.test.ts hold the same rules to the newest.
+    expect(newestDefiner('search_post_score')).toBe('20261116200234_search_whole_words_first.sql');
+    expect(newestDefiner('search_public_posts')).toBe('20261116200234_search_whole_words_first.sql');
   });
 
   it('holds the post score in one function whose parts cannot cross a tier', () => {

@@ -57,11 +57,14 @@ describe('search entities and filters migration', () => {
     expect(statements.trim().startsWith("BEGIN;\nSET LOCAL lock_timeout = '5s';")).toBe(true);
     expect(statements.trim().endsWith('COMMIT;')).toBe(true);
     for (const name of [
-      'search_public_posts', 'search_public_entities', 'search_recipes_corrected_query',
+      'search_public_entities', 'search_recipes_corrected_query',
       'refresh_post_search_entities', 'post_search_entity_rows', 'search_entity_key',
     ]) {
       expect(newestDefiner(name), name).toBe(MIGRATION);
     }
+    // Post search was re-created since for whole words first (20261116200234),
+    // whose test holds this file's rules to that definition.
+    expect(newestDefiner('search_public_posts')).toBe('20261116200234_search_whole_words_first.sql');
   });
 
   it('takes one lock, which searches read beside, and none on posts', () => {

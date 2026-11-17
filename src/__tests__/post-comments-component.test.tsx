@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import FeedbackViewport from '@/components/FeedbackViewport';
 import PostComments from '@/components/PostComments';
+import { forgetAccountProfilesForTests } from '@/lib/account-avatar';
 import type { PostComment, PostCommentsPage } from '@/lib/post-comments-client';
 import { forgetPostCommentSortsForTests, readPostCommentSort, rememberPostCommentSort } from '@/lib/post-comment-sort-memory';
 import { SESSION_CHECK_DEADLINE_MS, SESSION_CHECK_START_DEADLINE_MS } from '@/lib/viewer-session-check';
@@ -30,8 +31,37 @@ vi.mock('@/components/AuthProvider', () => ({
 }));
 
 vi.mock('@/components/PostCommentAvatar', () => ({
-    default: ({ name }: { name: string }) => <span aria-hidden="true">{name}</span>,
+    default: ({ name, avatarUrl }: { name: string | null; avatarUrl: string | null }) => (
+        <span aria-hidden="true" data-avatar-url={avatarUrl ?? undefined}>{name}</span>
+    ),
 }));
+
+type ProfileAnswer = { data: unknown; error: unknown };
+
+// The signed-in reader's own profile, as the browser's Supabase client reads it for the composer's
+// avatar (`account-avatar.ts`): none unless a test says otherwise.
+const { profileRead } = vi.hoisted(() => ({
+    profileRead: vi.fn<(userId: string) => Promise<ProfileAnswer>>(),
+}));
+
+vi.mock('@/lib/supabase', () => ({
+    supabase: {
+        from: () => ({
+            select: () => ({
+                eq: (_column: string, userId: string) => ({ maybeSingle: () => profileRead(userId) }),
+            }),
+        }),
+    },
+}));
+
+/** A profile read answered when the test says. */
+function deferredProfile() {
+    let resolve: (answer: ProfileAnswer) => void = () => {};
+    const promise = new Promise<ProfileAnswer>((settle) => {
+        resolve = settle;
+    });
+    return { promise, resolve };
+}
 
 function comment(overrides: Partial<PostComment> = {}): PostComment {
     return {
@@ -162,6 +192,9 @@ describe('PostComments', () => {
         // The order chosen for a post's comments is kept for the tab: one case's must not reach the next.
         window.sessionStorage.clear();
         forgetPostCommentSortsForTests();
+        forgetAccountProfilesForTests();
+        profileRead.mockReset();
+        profileRead.mockResolvedValue({ data: null, error: null });
         window.history.replaceState(null, '', '/feed?chip=recent');
         vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
             callback(0);
@@ -383,6 +416,78 @@ describe('PostComments', () => {
         expect(within(container).getByText('Add a comment…').closest('.app-shell-when-signed-in'))
             .not.toBeNull();
         expect(within(container).getByText('Loading comments…')).toBeInTheDocument();
+    });
+
+    // Sweep of 2026-11-17, signed in as @magicbooklet: the composer's avatar read "I", the first
+    // letter of the sign-in email (no name in Supabase's user_metadata), where the top bar read
+    // "MB", from the profile's name. It is the top bar's reader now (`AccountAvatar`).
+    describe("the composer's avatar", () => {
+        const composerAvatar = () => {
+            const row = screen.getByRole('textbox', { name: 'Write a comment' }).closest('.flex.items-start');
+            return row?.firstElementChild as HTMLElement;
+        };
+
+        beforeEach(() => {
+            vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(page([]))));
+            authState.session = { access_token: 'token-1' };
+            authState.user = { id: 'viewer-ivy', email: 'ivy.reader@example.com', user_metadata: {} };
+        });
+
+        it("names the reader by their profile's name, as the top bar does, never by the sign-in email", async () => {
+            const read = deferredProfile();
+            profileRead.mockReturnValueOnce(read.promise);
+            render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={0} />);
+
+            // Blank while the profile is read: never a letter it then takes back.
+            expect(composerAvatar()).toHaveTextContent(/^$/);
+            await waitFor(() => expect(profileRead).toHaveBeenCalledWith('viewer-ivy'));
+            expect(composerAvatar()).toHaveTextContent(/^$/);
+            read.resolve({ data: { display_name: 'Magic Booklet', avatar_url: null }, error: null });
+            await waitFor(() => expect(composerAvatar()).toHaveTextContent('Magic Booklet'));
+        });
+
+        it('reads the profile once for every thread the page opens, and draws it at once in the next', async () => {
+            profileRead.mockResolvedValue({ data: { display_name: 'Magic Booklet', avatar_url: null }, error: null });
+            const first = render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={0} />);
+            await waitFor(() => expect(composerAvatar()).toHaveTextContent('Magic Booklet'));
+            first.unmount();
+
+            render(<PostComments postId="post-2" postCreatorId="post-owner" commentCount={0} />);
+            expect(composerAvatar()).toHaveTextContent('Magic Booklet');
+            expect(profileRead).toHaveBeenCalledTimes(1);
+        });
+
+        it("falls back as the top bar does: the email's name without a profile name, its picture after the sign-in's", async () => {
+            profileRead.mockResolvedValueOnce({ data: { display_name: null, avatar_url: 'https://cdn.example.test/profile.png' }, error: null });
+            const { unmount } = render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={0} />);
+            await waitFor(() => expect(composerAvatar()).toHaveTextContent('ivy.reader'));
+            expect(composerAvatar()).toHaveAttribute('data-avatar-url', 'https://cdn.example.test/profile.png');
+            unmount();
+
+            // A sign-in provider's picture comes first, as in the top bar.
+            forgetAccountProfilesForTests();
+            authState.user = {
+                id: 'viewer-ivy',
+                email: 'ivy.reader@example.com',
+                user_metadata: { avatar_url: 'https://cdn.example.test/google.png' },
+            };
+            profileRead.mockResolvedValueOnce({ data: { display_name: 'Magic Booklet', avatar_url: 'https://cdn.example.test/profile.png' }, error: null });
+            render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={0} />);
+            await waitFor(() => expect(composerAvatar()).toHaveTextContent('Magic Booklet'));
+            expect(composerAvatar()).toHaveAttribute('data-avatar-url', 'https://cdn.example.test/google.png');
+        });
+
+        it("draws the email's name when the profile cannot be read, and reads it again for the next thread", async () => {
+            profileRead.mockRejectedValueOnce(new Error('offline'));
+            const first = render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={0} />);
+            await waitFor(() => expect(composerAvatar()).toHaveTextContent('ivy.reader'));
+            first.unmount();
+
+            profileRead.mockResolvedValueOnce({ data: { display_name: 'Magic Booklet', avatar_url: null }, error: null });
+            render(<PostComments postId="post-2" postCreatorId="post-owner" commentCount={0} />);
+            await waitFor(() => expect(composerAvatar()).toHaveTextContent('Magic Booklet'));
+            expect(profileRead).toHaveBeenCalledTimes(2);
+        });
     });
 
     // Owner, 2026-11-15: the order chosen came back as Top after a refresh or Back to the post.
