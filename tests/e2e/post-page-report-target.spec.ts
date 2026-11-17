@@ -37,6 +37,23 @@ function measure(report: Locator) {
   });
 }
 
+/**
+ * `measure` once two reads 300 ms apart agree. After the page's script runs, the rail's own parts
+ * below the button (Comments, which the 503s here end in their error state) settle in their own
+ * time. A read taken while they still change measures them, not the button: on CI the rail grew
+ * 6 px between the two reads while nothing near the button moved (main's run of 2026-11-17).
+ */
+async function settledMeasure(report: Locator) {
+  let last = await measure(report);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await report.page().waitForTimeout(300);
+    const next = await measure(report);
+    if (JSON.stringify(next) === JSON.stringify(last)) return next;
+    last = next;
+  }
+  throw new Error(`the rail never stopped changing: ${JSON.stringify(last)}`);
+}
+
 test('"Report post or recipe" is a target at least 24px tall, and nothing around it moved for it', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.context().route('https://example.supabase.co/**', (route) => route.fulfill({ status: 401, json: {} }));
@@ -46,7 +63,7 @@ test('"Report post or recipe" is a target at least 24px tall, and nothing around
   const report = page.getByTestId('canonical-post-actions').getByRole('button', { name: 'Report post or recipe' });
   await expect(report).toBeVisible(COLD_PAGE);
 
-  const drawn = await measure(report);
+  const drawn = await settledMeasure(report);
   expect(drawn.targetHeight, JSON.stringify(drawn)).toBeGreaterThanOrEqual(24);
   expect(drawn.targetWidth, JSON.stringify(drawn)).toBeGreaterThanOrEqual(24);
 
@@ -55,7 +72,7 @@ test('"Report post or recipe" is a target at least 24px tall, and nothing around
     button.style.setProperty('padding', '0', 'important');
     button.style.setProperty('margin', '0', 'important');
   });
-  const asBefore = await measure(report);
+  const asBefore = await settledMeasure(report);
   expect(asBefore.targetHeight, JSON.stringify(asBefore)).toBeLessThan(drawn.targetHeight);
   // Its icon and words, its row, Comments under it and the rail are where they were.
   expect({ ...drawn, targetHeight: null }).toEqual({ ...asBefore, targetHeight: null });
