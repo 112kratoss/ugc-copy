@@ -210,6 +210,11 @@ test('a failed run names its cause on the canvas, says the credits are back and 
 // Under the column the canvas can be out of view: a creator at the next prompt hears of the failure from the bar.
 test('a failed run is said in the bar on a phone, and See why brings the canvas into view with the focus', async ({ page, context }) => {
   await page.setViewportSize(PHONE);
+  // Once the start is answered, the page brings the canvas into view (`revealKey`), smoothly
+  // unless motion is reduced. A scroll to the top while that smooth scroll ran was carried on by
+  // it, and the canvas ended in view: main's run at 8eb1f3dac failed so (2026-11-17), its reveal
+  // starting just before this test's scroll. With motion reduced the reveal is one jump.
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await signIn(context);
   let release: (() => void) | null = null;
   const held = new Promise<void>((resolve) => { release = resolve; });
@@ -219,7 +224,9 @@ test('a failed run is said in the bar on a phone, and See why brings the canvas 
   });
 
   await startRun(page);
-  await expect(canvas(page).getByRole('heading', { name: 'Making your video' })).toBeVisible();
+  // Drawn from the press; in view only once the start is answered and the reveal has run, so the
+  // scroll below is the last.
+  await expect(canvas(page).getByRole('heading', { name: 'Making your video' })).toBeInViewport();
   // Back at the prompt, typing the next run, while this one works.
   const prompt = page.getByRole('textbox', { name: 'Prompt' });
   await prompt.focus();
