@@ -2890,15 +2890,22 @@ describe('ShowcaseClient save actions', () => {
         await Promise.resolve();
       }
     });
-    /** Feed reads held until the test answers them; every other call answered at once. */
+    /**
+     * Feed reads held until the test answers them, all at once (the client drops one it aborted);
+     * every other call answered at once.
+     */
     const holdFeedReads = () => {
-      const held: { answer?: (page: ShowcaseFeedPage) => void; requests: string[] } = { requests: [] };
+      const pending: Array<(page: ShowcaseFeedPage) => void> = [];
+      const held = {
+        requests: [] as string[],
+        answer: (page: ShowcaseFeedPage) => pending.splice(0).forEach((resolve) => resolve(page)),
+      };
       vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
         const url = String(input);
         if (url.startsWith('/api/showcase/feed?')) {
           held.requests.push(url);
           return new Promise((resolve) => {
-            held.answer = (page) => resolve({ ok: true, json: async () => page } as Response);
+            pending.push((page) => resolve({ ok: true, json: async () => page } as Response));
           });
         }
         return Promise.resolve({
@@ -2928,12 +2935,16 @@ describe('ShowcaseClient save actions', () => {
           sourceToolOptions={SOURCE_TOOL_OPTIONS}
         />
       );
-      fireEvent.click(await screen.findByRole('button', { name: 'Load More' }));
+      const loadMore = await screen.findByRole('button', { name: 'Load More' });
+      // From here no reveal tick runs until the test says so.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      fireEvent.click(loadMore);
+      expect(held.requests).toHaveLength(1);
       expect(loadingRow()).not.toBeNull();
       expect(screen.getByRole('button', { name: 'Loading more posts' })).toBeDisabled();
 
       await act(async () => {
-        held.answer?.(createFeed(posts('Recent', 9, 8), { hasMore: true, nextOffset: 16, limit: 8, offset: 8 }));
+        held.answer(createFeed(posts('Recent', 9, 8), { hasMore: true, nextOffset: 16, limit: 8, offset: 8 }));
       });
       await settle();
 
@@ -2942,8 +2953,11 @@ describe('ShowcaseClient save actions', () => {
       expect(screen.queryByText('Recent 16')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Loading more posts' })).toBeDisabled();
 
-      expect(await screen.findByText('Recent 16')).toBeInTheDocument();
-      expect(await screen.findByRole('button', { name: 'Load More' })).toBeEnabled();
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(screen.getByText('Recent 16')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Load More' })).toBeEnabled();
     });
 
     it("draws a row of the viewer's own For you page as the loading row of a Load More that waited on it goes", async () => {
@@ -2962,14 +2976,18 @@ describe('ShowcaseClient save actions', () => {
           sourceToolOptions={SOURCE_TOOL_OPTIONS}
         />
       );
-      fireEvent.click(await screen.findByRole('button', { name: 'Load More' }));
-      await waitFor(() => expect(held.answer).toBeDefined());
-      // The viewer's own page, not a page by cursor or offset: page one has neither.
-      expect(held.requests.at(-1)).toBe(`/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}&category=media`);
+      const loadMore = await screen.findByRole('button', { name: 'Load More' });
+      await waitFor(() => expect(held.requests).toHaveLength(1));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      fireEvent.click(loadMore);
+      await settle();
+      // The Load More waits on the page already on its way: it is not dropped and asked again,
+      // which kept the loading row up for as long again.
+      expect(held.requests).toEqual([`/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}&category=media`]);
       expect(loadingRow()).not.toBeNull();
 
       await act(async () => {
-        held.answer?.({
+        held.answer({
           items: [...firstPage, ...posts('For you', 9, 8)],
           feedSessionId: 'session-own',
           pageInfo: { hasMore: true, nextOffset: 16, nextCursor: 'cursor-2', limit: 16, offset: 0 },
@@ -2980,7 +2998,10 @@ describe('ShowcaseClient save actions', () => {
       expect(loadingRow()).toBeNull();
       expect(screen.getByText('For you 9')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Loading more posts' })).toBeDisabled();
-      expect(await screen.findByText('For you 16')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(screen.getByText('For you 16')).toBeInTheDocument();
     });
   });
 

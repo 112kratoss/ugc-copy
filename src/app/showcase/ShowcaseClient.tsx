@@ -1627,7 +1627,12 @@ export default function ShowcaseClient({
             isLoadingMoreRef.current = true;
             setIsLoadingMore(true);
             setLoadMoreError(null);
-            setHasAnonymousPersonalizationDemand(true);
+            // A guest's demand. A signed-in viewer's page is asked for without it, and marking it
+            // re-ran the refresh effect, which dropped the page already on its way and asked again:
+            // the loading row showed for as long again.
+            if (!hasAuthenticatedSession) {
+                setHasAnonymousPersonalizationDemand(true);
+            }
             if (!personalizedRefreshPendingRef.current) {
                 setPersonalizedRefreshRequest((request) => request + 1);
             }
@@ -1726,6 +1731,7 @@ export default function ShowcaseClient({
     }, [
         accessToken,
         category,
+        hasAuthenticatedSession,
         pageInfo.hasMore,
         pageInfo.nextCursor,
         pageInfo.nextOffset,
