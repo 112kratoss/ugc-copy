@@ -78,9 +78,11 @@ test('every setting and every model is priced against the balance, and a picked 
   await answerQuotes(page, pricesNearProduction);
 
   await page.goto('/create-video', COLD_PAGE);
-  // Typed only once the page's script runs, or hydration resets the field.
-  await expect(page.getByRole('button', { name: 'Generate · 19 credits' })).toBeVisible(COLD_PAGE);
+  // The prompt box takes in what was typed before the page's script ran. Generate names the server's
+  // price from the first paint, so its name is no sign of the script: only the script enables it, once
+  // it holds the prompt and the page's own price. Pressed before that, the settings chip did nothing.
   await page.getByRole('textbox', { name: 'Prompt' }).fill(PROMPT);
+  await expect(page.getByRole('button', { name: 'Generate · 19 credits' })).toBeEnabled(COLD_PAGE);
   const note = page.locator('[data-creator-bar-note]');
   await expect(note).toContainText('Balance 25');
   await expect(note).toContainText('Leaves 6');
@@ -165,8 +167,9 @@ test('a remix\'s packs lead to Pricing and back to the remix', async ({ page }) 
   await sheet.getByRole('link', { name: 'See every pack' }).click();
 
   await expect(page).toHaveURL(INTENSE_TOP_UP_PATH, COLD_PAGE);
-  // The exchange rates' line is drawn by the page's script alone: the press below reaches React.
-  await expect(page.getByText(/^(Updating FX\.\.\.|FX unavailable|Updated .+)$/)).toBeVisible(COLD_PAGE);
+  // The exchange rates' line is drawn by the page's script alone: the press below reaches React. Its
+  // words since #836 say when the rates were read ("Rates updated Nov 17, 2026, 5:32 AM").
+  await expect(page.getByText(/^(Updating FX\.\.\.|FX unavailable|Rates updated .+)$/)).toBeVisible(COLD_PAGE);
   await page.getByRole('link', { name: 'Back to your remix' }).click();
 
   await expect(page).toHaveURL(INTENSE_REMIX_PATH, COLD_PAGE);

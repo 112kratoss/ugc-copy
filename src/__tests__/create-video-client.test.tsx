@@ -4152,6 +4152,44 @@ describe('CreateVideoClient Kling video elements', () => {
         };
       }
 
+      /** Generate as the server draws it for an account: its face, its name, and whether it is held. */
+      function serverRenderedGenerate(element: React.ReactElement) {
+        const html = document.createElement('div');
+        html.innerHTML = renderToString(element);
+        const button = html.querySelector<HTMLButtonElement>('[data-creator-bar] button[aria-label^="Generate · "]');
+        return { face: button?.textContent, name: button?.getAttribute('aria-label'), held: button?.disabled };
+      }
+
+      // The web sweep of 2026-11-17: Generate read "Loading settings…" until the catalog came, then
+      // "Calculating..." until the page's own quote came back, at the price under the bar all along.
+      it('names the server\'s price on Generate from the first paint, held until the page\'s own price is in', async () => {
+        modelCatalogState.withoutCatalog = true;
+        const opening = openingFor();
+        expect(serverRenderedGenerate(<CreateVideoClient prefill={{}} opening={opening} />))
+          .toEqual({ face: 'Generate · 19 credits', name: 'Generate · 19 credits', held: true });
+        const view = render(<CreateVideoClient prefill={{}} opening={opening} />);
+        fireEvent.change(screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/), { target: { value: 'A paper boat drifting across a sunlit pond.' } });
+        expect(generateButton()).toHaveTextContent('Generate · 19 credits');
+        expect(generateButton()).toBeDisabled();
+
+        // The catalog comes back at the server's revision and the page asks its own price: the same words.
+        quoteStandIn.reset(19);
+        quoteStandIn.answers = ['pending'];
+        modelCatalogState.withoutCatalog = false;
+        modelCatalogState.videoDefault = 'seedance-2-mini';
+        modelCatalogState.extraModels = [miniWithDefaults({})];
+        view.rerender(<CreateVideoClient prefill={{}} opening={opening} />);
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+        expect(generateButton()).toHaveTextContent('Generate · 19 credits');
+        expect(generateButton()).toBeDisabled();
+
+        // Its own price in, Generate goes at it.
+        quoteStandIn.answers = [19];
+        view.rerender(<CreateVideoClient prefill={{}} opening={opening} />);
+        await waitFor(() => expect(generateButton()).toBeEnabled());
+        expect(generateButton()).toHaveTextContent('Generate · 19 credits');
+      });
+
       it('draws the default, its settings and its price before the catalog is in', () => {
         authState.signedIn = false;
         modelCatalogState.withoutCatalog = true;

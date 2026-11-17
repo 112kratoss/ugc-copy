@@ -80,7 +80,9 @@ test('a visitor sets up a video, signs up at Generate and comes back to it, with
   await page.goto('/create-video', COLD_PAGE);
   const prompt = page.getByRole('textbox', { name: 'Prompt' });
   await expect(prompt).toBeVisible(COLD_PAGE);
-  await expect(page.getByText('Try it before you sign up')).toBeVisible();
+  // Beside the column the canvas's line says it over the posts to start from; the frame that says it
+  // under the column is hidden there.
+  await expect(page.getByText('Try it before you sign up').filter({ visible: true })).toBeVisible();
   // What a new account starts with, under the bar (the server stub's welcome grant).
   await expect(page.locator('[data-creator-bar-note]')).toContainText('New accounts get 25 free credits');
   // Typed and pressed only once the page's script runs (the fifth gotcha in .claude/rules/e2e.md). All

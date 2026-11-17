@@ -22,6 +22,13 @@ vi.mock('@/components/OptimizedPreviewImage', () => ({
   OptimizedPreviewImage: ({ previewSrc }: { previewSrc: string }) => <span data-testid="poster" data-src={previewSrc} />,
 }));
 
+// A media worker's preview, as `isGeneratedPreviewImage` reads one on the project's own storage, which
+// this file's environment does not name.
+vi.mock('@/lib/preview-images', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/preview-images')>()),
+  isGeneratedPreviewImage: (src: string) => /\.preview\.[a-f0-9]{8,}\.webp$/.test(src),
+}));
+
 /**
  * "Start from a post" and "While you wait" (owner, 2026-10-28; artboards Main and
  * Generating): the shelf's posts on the creator pages, each Remix priced as the run it
@@ -198,5 +205,72 @@ describe('the posts to watch while a run works', () => {
     const section = screen.getByRole('region', { name: 'While you wait' });
     expect(within(section).getByRole('link', { name: /Post cats/ })).toHaveAttribute('href', '/showcase/cats');
     expect(within(section).queryByRole('link', { name: /^Remix/ })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The web sweep of 2026-11-17: the posts came in a later part of the page's stream, drawn as empty
+ * places until then; their pictures were lazy, and next/image asked for each a second time once the
+ * page hydrated. They were the page's LCP at 1.84 s.
+ */
+describe('the posts the page was handed', () => {
+  const preview = (id: string) => post(id, {
+    tool: 'image',
+    posterUrl: `https://project.example/storage/v1/object/public/showcase_media/${id}.preview.e2e5f0b1.webp`,
+    remix: null,
+  });
+  const pictureLoading = (place: Element) => [...place.querySelectorAll('img')]
+    .map((picture) => [picture.getAttribute('loading'), picture.getAttribute('fetchpriority')]);
+
+  it('draws them in the same render, with no places held for them', () => {
+    render(<CreatorEmptyCanvas source={[preview('a'), preview('b')]} tool="image" icon={Video} title="t" hint="h" frame={FRAME} />);
+    const section = screen.getByRole('region', { name: 'Start from a post' });
+    expect(section.querySelector('ul[aria-hidden]')).toBeNull();
+    expect(within(section).getAllByRole('link', { name: /^Remix “/ })).toHaveLength(2);
+  });
+
+  it('asks for the pictures on screen with the page, the first row first, and those under a run once near the screen', () => {
+    const posts = ['a', 'b', 'c', 'd'].map(preview);
+    render(
+      <>
+        <CreatorStartPostsStrip source={posts} tool="image" />
+        <CreatorEmptyCanvas source={posts} tool="image" icon={Video} title="t" hint="h" frame={FRAME} />
+        <CreatorWhileYouWait source={posts} tool="image" />
+      </>,
+    );
+    const firstRow = [['eager', 'high'], ['eager', 'high'], ['eager', 'high'], ['eager', null]];
+    expect(pictureLoading(screen.getByTestId('creator-start-posts'))).toEqual(firstRow);
+    const [strip] = screen.getAllByRole('region', { name: 'Start from a post' });
+    expect(pictureLoading(strip)).toEqual(firstRow);
+    expect(pictureLoading(screen.getByRole('region', { name: 'While you wait' }))).toEqual(Array(4).fill(['lazy', null]));
+    // Straight from storage, as next/image left a worker's preview: no second request at hydration.
+    expect(screen.getByTestId('creator-start-posts').querySelector('img')).toHaveAttribute('src', posts[0].posterUrl);
+  });
+
+  it('leaves out a picture that failed, before the page hydrated or after', () => {
+    // Asked for with the page's HTML and broken before React was there to hear it.
+    const complete = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'complete');
+    Object.defineProperty(HTMLImageElement.prototype, 'complete', { configurable: true, get: () => true });
+    try {
+      const view = render(<CreatorStartPostsStrip source={[preview('a')]} tool="image" />);
+      expect(view.container.querySelector('img')).toBeNull();
+      expect(screen.getByRole('link', { name: 'Post a, by @fluffy' })).toBeInTheDocument();
+      view.unmount();
+    } finally {
+      if (complete) Object.defineProperty(HTMLImageElement.prototype, 'complete', complete);
+    }
+
+    const view = render(<CreatorStartPostsStrip source={[preview('b')]} tool="image" />);
+    const picture = view.container.querySelector('img')!;
+    expect(picture).not.toBeNull();
+    fireEvent.error(picture);
+    expect(view.container.querySelector('img')).toBeNull();
+  });
+
+  it('keeps any other source on the optimizer', () => {
+    render(<CreatorEmptyCanvas source={[post('cats')]} tool="video" icon={Video} title="t" hint="h" frame={FRAME} />);
+    expect(screen.getByTestId('creator-start-posts').querySelector('img')).toBeNull();
+    expect(screen.getByTestId('creator-start-posts').querySelector('[data-testid="poster"]'))
+      .toHaveAttribute('data-src', 'https://cdn.example/cats.webp');
   });
 });

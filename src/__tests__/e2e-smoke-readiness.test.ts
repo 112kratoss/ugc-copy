@@ -224,4 +224,20 @@ describe('E2E smoke job', () => {
     expect(read('tests/e2e/support/supabase-server-stub.cjs')).toContain(`const HOST = '${new URL(PLACEHOLDER_PROJECT).host}';`);
     expect(serverEnv.NEXT_PUBLIC_SUPABASE_URL).toBe(PLACEHOLDER_PROJECT);
   });
+
+  // The creators' "Start from a post" and Home's shelf read the shelf's pins, and the stub answers
+  // that read for the pins its fixture names. Pins changed without it, every creator a spec drew would
+  // wait again for a read that fails offline after supabase-js's three retries, about seven seconds.
+  it('answers the shelf\'s read for the pins the shelf has now, with enough posts for a shelf', async () => {
+    const { HOME_SHELF_PINS } = await import('@/lib/home-shelf-lineup');
+    const { HOME_SHELF_MIN_CREATIONS } = await import('@/lib/home-shelf');
+    const fixture = JSON.parse(read('tests/e2e/fixtures/creator-start-posts.json')) as {
+      pinnedPostIds: string[];
+      posts: Array<{ id: string }>;
+    };
+
+    expect(fixture.pinnedPostIds).toEqual(HOME_SHELF_PINS.map((pin) => pin.postId));
+    expect(fixture.posts.map((post) => post.id).every((id) => fixture.pinnedPostIds.includes(id))).toBe(true);
+    expect(fixture.posts.length).toBeGreaterThanOrEqual(HOME_SHELF_MIN_CREATIONS);
+  });
 });

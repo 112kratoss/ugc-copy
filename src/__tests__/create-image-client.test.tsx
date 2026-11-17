@@ -3495,6 +3495,12 @@ describe('CreateImageClient opening', () => {
     expect(modelChip(view.container)).toHaveTextContent('GPT Image 2');
     expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName('Generation settings: 2K · 4:5');
     expect(view.container.querySelector('[data-creator-bar-note]')).toHaveTextContent('Balance 10000Leaves 9986');
+    // Generate names the same price (it read "Loading settings…" until the 2026-11-17 sweep), and is
+    // held until the page's own quote of the run is in.
+    fireEvent.change(screen.getByPlaceholderText(PROMPT_PLACEHOLDER), { target: { value: 'A lighthouse at dawn' } });
+    expect(costShown()).toBe('14 credits');
+    expect(generateButton()).toHaveTextContent('Generate · 14 credits');
+    expect(generateButton()).toBeDisabled();
   });
 
   it('waits for the revision the network confirms before its first pick', async () => {

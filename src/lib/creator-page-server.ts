@@ -71,9 +71,9 @@ export async function loadVisitorWelcomeCredits(): Promise<number | null> {
 
 /**
  * The posts a creator's empty canvas offers to start from (`loadCreatorStartPosts`), for
- * this request's viewer: one with no sign-in cookie is a visitor. Handed to the page
- * unawaited, so the creator draws at once and the posts stream in after. Never throws:
- * the canvas draws without them.
+ * this request's viewer: one with no sign-in cookie is a visitor. Started as the page starts
+ * and waited for only briefly (`startPostsWithin`), so the creator never waits long on them.
+ * Never throws: the canvas draws without them.
  */
 export async function loadCreatorStartPostsForRequest(): Promise<CreatorStartPost[]> {
   try {
@@ -85,6 +85,36 @@ export async function loadCreatorStartPostsForRequest(): Promise<CreatorStartPos
   } catch (error) {
     logBackendError('creator_start_posts_load_failed', { error });
     return [];
+  }
+}
+
+/**
+ * How much longer than its other reads a creator page waits for its start posts. Handed over still
+ * on their way, they came in a later part of the page's stream, after the whole first part (about a
+ * megabyte on magicbooklet.com, its styles twice over), drawn as empty places until then, and their
+ * pictures were asked for late (the web sweep of 2026-11-17). Read from the shelf's shared build,
+ * a visitor's are in within the page's own reads, and an account's after a few reads of its own.
+ */
+export const START_POSTS_WAIT_MS = 300;
+
+/**
+ * The posts, when `read` brings them within `waitMs`: the page then draws them in its first part,
+ * and their pictures are asked for with it. Null past that, or for a read that fails, when the page
+ * hands over the read itself and the posts come in after, or the canvas draws without them, as before:
+ * a slow or failing read never holds the creator up for more than this, nor breaks it.
+ */
+export async function startPostsWithin(
+  read: Promise<CreatorStartPost[]>,
+  waitMs = START_POSTS_WAIT_MS,
+): Promise<CreatorStartPost[] | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), waitMs);
+  });
+  try {
+    return await Promise.race([read.catch(() => null), late]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -1361,15 +1361,17 @@ function ImageCreator({
         quoteStatus: quoteState.status,
         quotedCost: quoteState.quote?.costCredits,
         quoteErrorMessage: quoteState.error?.message,
+        openingCost: openingCost(opening, {
+            run: { modelId: selectedModel, settings: generationSettings, inputs: runInputs },
+            quoteStatus: quoteState.status,
+            confirmedRevision: modelCatalog.isCheckingRevision ? null : modelCatalog.revision,
+            catalogFailed: Boolean(modelCatalog.error) || modelCatalog.missingIds.includes(selectedModel),
+        }),
     });
     const currentCost = quoteUi.costCredits;
-    // The price under the bar: the page's own, or until it is in, the server's for the run the page opened on.
-    const notedCost = currentCost ?? openingCost(opening, {
-        run: { modelId: selectedModel, settings: generationSettings, inputs: runInputs },
-        quoteStatus: quoteState.status,
-        confirmedRevision: modelCatalog.isCheckingRevision ? null : modelCatalog.revision,
-        catalogFailed: Boolean(modelCatalog.error) || modelCatalog.missingIds.includes(selectedModel),
-    });
+    // The price the bar names, on Generate and under it: the page's own, or until it is in, the
+    // server's for the run the page opened on.
+    const notedCost = quoteUi.shownCost;
     const availableResolutions = getImageResolutionOptions(selectedModel, aspectRatio);
     // Descriptor-derived where the catalog is available: a resolution control offering a
     // single value is a fixed setting, not a choice worth rendering. Falls back to the
@@ -2082,7 +2084,7 @@ function ImageCreator({
         <CreatorPendingStartNotice
             message={pendingStartNotice ?? START_UNCONFIRMED_MESSAGE}
             costLabel={quoteUi.costLabel}
-            hasPrice={currentCost !== null}
+            hasPrice={notedCost !== null}
             disabled={generateBlocked}
             onStartNew={handleStartNewRun}
         />
@@ -2144,7 +2146,7 @@ function ImageCreator({
             isGenerating={isGenerating}
             disabled={generateBlocked || canvasPublish.inFlight}
             costLabel={quoteUi.costLabel}
-            hasPrice={currentCost !== null}
+            hasPrice={notedCost !== null}
             onGenerate={handleGenerate}
             signUp={isVisitor}
         />
@@ -2503,7 +2505,7 @@ function ImageCreator({
                             holdsFootUnderColumn={!(publishPanel && !canvasPublish.posted)}
                             settingsSummary={settingsSummary}
                             settings={settingsPanel}
-                            settingsFootNote={<CreatorSettingsFootNote cost={currentCost} costLabel={quoteUi.costLabel} balance={listBalance} isVisitor={isVisitor} />}
+                            settingsFootNote={<CreatorSettingsFootNote cost={notedCost} costLabel={quoteUi.costLabel} balance={listBalance} isVisitor={isVisitor} />}
                             settingsOpen={settingsOpen}
                             onSettingsOpenChange={setSettingsOpen}
                             status={barStatus}

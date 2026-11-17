@@ -38,7 +38,11 @@
 // page, four free recipes on picture posts by a creator of their own and a fifth the page reads to
 // know there are more (fixtures/marketplace-recipes.json). Both read the source tools catalog,
 // answered with no rows (below), which they draw as the app's own list. And the E2E user's
-// mature-content setting, on, which their profile's Mature content row draws (below).
+// mature-content setting, on, which their profile's Mature content row draws (below). And the
+// "Make this" shelf's pins, which the image, video and motion creators draw as "Start from a post"
+// and the signed-out Home as its shelf: three pictures made in the app by a creator of their own
+// (fixtures/creator-start-posts.json), with what a signed-in viewer's shelf reads of the E2E user
+// (none of them hidden, reported or blocked).
 // A page added here brings each of its reads, matched by method, path and the filters that name
 // its own rows: a whole table answered with no rows would change what every other page draws.
 //
@@ -183,6 +187,15 @@ const exploreLoadMoreMedia = exploreLoadMorePosts.map((post, index) => {
 // (src/lib/post-resource-bundles-server.ts); marketplace-keeps-place.spec.ts draws it.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const marketplaceRecipes = require('../fixtures/marketplace-recipes.json');
+// The "Make this" shelf's pinned posts (HOME_SHELF_PINS, src/lib/home-shelf-lineup.ts, which
+// e2e-smoke-readiness.test.ts holds the fixture's list to): three of the five answer, pictures made
+// in the app by a creator of their own, each a creation on Nano Banana 2 whose remix is open to
+// everyone. The creators read them as "Start from a post" (loadCreatorStartPosts), and Home as its
+// shelf. Offline the read failed after supabase-js's three retries (1 + 2 + 4 s), and a creator
+// page's document stayed open for those seven seconds on every navigation (2026-11-17);
+// creator-arrival-steady.spec.ts draws the posts and their pictures.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const startPosts = require('../fixtures/creator-start-posts.json');
 // In the order the page asks for them: its recipes' posts as its read lists the recipes, newest
 // first, and the posts' covers as that read answers (the fixture's posts are in the same order).
 const sellerPostIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.post_id).join(',')})`;
@@ -192,6 +205,10 @@ const exploreReelPostIds = `in.(${exploreReel.posts.map(({ id }) => id).join(','
 const exploreLoadMorePostIds = `in.(${exploreLoadMorePosts.map(({ id }) => id).join(',')})`;
 const marketplacePostIds = `in.(${marketplaceRecipes.posts.map((post) => post.id).join(',')})`;
 const marketplaceBundleIds = `in.(${marketplaceRecipes.bundles.map((bundle) => bundle.id).join(',')})`;
+// The shelf reads its pins in their order, then hydrates the posts its read answered, in theirs.
+const startPostPinIds = `in.(${startPosts.pinnedPostIds.join(',')})`;
+const startPostIds = `in.(${startPosts.posts.map(({ id }) => id).join(',')})`;
+const startPostGenerationIds = `in.(${startPosts.generations.map(({ id }) => id).join(',')})`;
 
 const HOST = 'example.supabase.co';
 
@@ -843,6 +860,101 @@ const READS = [
     path: '/rest/v1/content_preferences',
     filters: { user_id: 'eq.workflow-user', select: 'show_mature' },
     answer: ({ wantsObject }) => json(wantsObject ? { show_mature: true } : [{ show_mature: true }], { 'content-range': '0-0/1' }),
+  },
+  {
+    // The shelf's build (buildHomeShelfCreations, src/lib/home-shelf-server.ts) reads its pins as the
+    // feed does (getShowcaseFeedItemsByPostIds): public and not archived. Three of the five answer.
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: startPostPinIds, visibility: 'eq.public', archived_at: 'is.null' },
+    answer: () => json(startPosts.posts, { 'content-range': `0-${startPosts.posts.length - 1}/${startPosts.posts.length}` }),
+  },
+  {
+    // resolvePostRowsToFeedItems: their pictures, one each, with a grid preview, as the media workers
+    // leave them...
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: startPostIds },
+    answer: () => json(startPosts.media, { 'content-range': `0-${startPosts.media.length - 1}/${startPosts.media.length}` }),
+  },
+  {
+    // ...their creator...
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `in.(${startPosts.creator.id})` },
+    answer: () => json([startPosts.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // ...no Made with rows...
+    methods: ['GET'],
+    path: '/rest/v1/post_source_tools',
+    filters: { post_id: startPostIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // ...none marked NSFW...
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: startPostIds, select: 'id,is_nsfw' },
+    answer: () => json(startPosts.posts.map(({ id }) => ({ id, is_nsfw: false }))),
+  },
+  {
+    // ...no recipe, in the public summaries...
+    methods: ['POST'],
+    path: '/rest/v1/rpc/get_public_post_resource_bundle_summaries',
+    body: { p_post_ids: startPosts.posts.map(({ id }) => id) },
+    answer: () => json([]),
+  },
+  {
+    // ...nor in which of them has a published recipe at all...
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { post_id: startPostIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // ...and their creations: the card's model (loadGenerationPreviewInfoMap) and the settings its
+    // remix opens on, which the shelf prices on the code catalog (loadGenerations), in both reads.
+    methods: ['GET'],
+    path: '/rest/v1/generations',
+    filters: { id: startPostGenerationIds },
+    answer: () => json(startPosts.generations, { 'content-range': `0-${startPosts.generations.length - 1}/${startPosts.generations.length}` }),
+  },
+  {
+    // A signed-in viewer's shelf leaves out what the feed leaves out for them (loadViewerRelations,
+    // src/lib/showcase-feed-personalization.ts). The E2E user has marked none of the posts Not
+    // interested...
+    methods: ['GET'],
+    path: '/rest/v1/feed_user_post_feedback',
+    filters: { user_id: 'eq.workflow-user', post_id: startPostIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // ...hidden none of their creator's...
+    methods: ['GET'],
+    path: '/rest/v1/feed_user_creator_feedback',
+    filters: { user_id: 'eq.workflow-user', creator_user_id: `in.(${startPosts.creator.id})` },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // ...reported none...
+    methods: ['GET'],
+    path: '/rest/v1/post_reports',
+    filters: { reporter_user_id: 'eq.workflow-user', post_id: startPostIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // ...and neither has blocked the other (loadBlockedCreatorIds), asked both ways.
+    methods: ['GET'],
+    path: '/rest/v1/user_blocks',
+    filters: { blocker_user_id: 'eq.workflow-user', blocked_user_id: `in.(${startPosts.creator.id})` },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    methods: ['GET'],
+    path: '/rest/v1/user_blocks',
+    filters: { blocked_user_id: 'eq.workflow-user', blocker_user_id: `in.(${startPosts.creator.id})` },
+    answer: () => json([], { 'content-range': '*/0' }),
   },
 ];
 

@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
+import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import CreateMotionClient from '@/app/create-motion/CreateMotionClient';
@@ -25,6 +26,8 @@ const modelCatalogState = vi.hoisted(() => ({
   summaries: [] as Array<{ id: string; kind: string; displayName: string; description: string }>,
   /** The network has not yet confirmed the revision: the catalog is the browser's stored copy. */
   checkingRevision: false,
+  /** The catalog has not come back yet, as on a first visit's first frames. */
+  withoutCatalog: false,
 }));
 const generationCatalogRefetchMock = vi.hoisted(() => vi.fn());
 // One stable catalog: a fresh object per render re-runs every effect keyed on it.
@@ -226,10 +229,11 @@ vi.mock('@/lib/generation-model-client', async () => {
   return {
     ...actual,
     useWebGenerationModelCatalog: () => ({
-      summaries: modelCatalogState.summaries, missingIds: modelCatalogState.missingIds, detailsReady: true, isLoadingModels: false,
-      catalog: motionCatalog,
+      summaries: modelCatalogState.summaries, missingIds: modelCatalogState.missingIds,
+      detailsReady: !modelCatalogState.withoutCatalog, isLoadingModels: false,
+      catalog: modelCatalogState.withoutCatalog ? null : motionCatalog,
       error: modelCatalogState.error,
-      isLoading: false,
+      isLoading: modelCatalogState.withoutCatalog,
       isCheckingRevision: modelCatalogState.checkingRevision,
       revision: 'test-catalog-rev',
       refetch: generationCatalogRefetchMock,
@@ -409,6 +413,7 @@ beforeEach(() => {
   modelCatalogState.error = null;
   modelCatalogState.checkingRevision = false;
   modelCatalogState.summaries = [];
+  modelCatalogState.withoutCatalog = false;
   quoteStandIn.reset(20);
   priceListStandIn.reset();
   for (const model of motionCatalog.models) delete (model as { inputModes?: unknown }).inputModes;
@@ -573,6 +578,22 @@ describe('CreateMotionClient quote', () => {
     });
     expect(screen.queryByText('Add a character image and a motion clip to see the cost.')).not.toBeInTheDocument();
     expect(costShown()).toBe('20 credits');
+  });
+
+  // The web sweep of 2026-11-17: Generate read "Loading settings…" until the catalog came, then
+  // "Add both inputs", with the line saying why arriving over the bar.
+  it('says what it waits for from the first paint, before its catalog is in', () => {
+    modelCatalogState.withoutCatalog = true;
+    const html = document.createElement('div');
+    html.innerHTML = renderToString(<CreateMotionClient prefill={{}} />);
+    expect(html.querySelector('[data-creator-bar]')).toHaveTextContent('Add a character image and a motion clip to see the cost.');
+    expect(html.querySelector('[data-creator-bar] button[aria-label^="Generate · "]')).toHaveAttribute('aria-label', 'Generate · Add both inputs');
+
+    render(<CreateMotionClient prefill={{}} />);
+    expect(costShown()).toBe('Add both inputs');
+    expect(generateButton()).toBeDisabled();
+    expect(screen.getByText('Add a character image and a motion clip to see the cost.')).toBeInTheDocument();
+    expect(screen.queryByText(/Loading settings/)).not.toBeInTheDocument();
   });
 });
 

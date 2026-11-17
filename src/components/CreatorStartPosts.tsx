@@ -12,6 +12,7 @@ import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import { useMediaLoadingPreferences } from '@/components/useMediaLoadingPreferences';
 import { orderStartPosts, startPostRemixCost, type CreatorStartPost } from '@/lib/creator-start-posts';
 import { homeShelfCreatorLabel } from '@/lib/home-shelf-copy';
+import { isGeneratedPreviewImage } from '@/lib/preview-images';
 import type { RemixTool } from '@/lib/remix-tools';
 import { buildShowcaseDetailPath } from '@/lib/share';
 
@@ -20,13 +21,14 @@ import { buildShowcaseDetailPath } from '@/lib/share';
  * Generating): "Start from a post" in the empty canvas beside the column, a strip in the
  * column where the canvas sits under it, and "While you wait" under a run at work. Each
  * card's Remix says what its remix costs: the run on the post's own model and settings,
- * where the page opens it whatever the balance (`startPostRemixCost`). The page is handed
- * the posts unawaited, so each place reads them in a boundary of its own
- * (`WithStartPosts`) and the creator never waits on them.
+ * where the page opens it whatever the balance (`startPostRemixCost`). The page hands over
+ * the posts themselves when they are in by the time it draws (`startPostsWithin`), so they
+ * and their pictures come with the page's first part; otherwise still on their way, and each
+ * place reads them in a boundary of its own (`WithStartPosts`), so the creator never waits on them.
  */
 
-/** The posts the page was handed: none for a remix, which opens on its own post. */
-export type StartPostsSource = Promise<CreatorStartPost[]> | null | undefined;
+/** The posts the page was handed, or their read still on its way: none for a remix, which opens on its own post. */
+export type StartPostsSource = CreatorStartPost[] | Promise<CreatorStartPost[]> | null | undefined;
 
 /**
  * The posts come in the page's stream, and a stream cut off on the way rejects them:
@@ -51,24 +53,36 @@ class StartPostsErrorBoundary extends Component<{ fallback: ReactNode; children:
   }
 }
 
+function OrderedList({ posts, tool, children }: {
+  posts: CreatorStartPost[];
+  tool: RemixTool;
+  children: (posts: CreatorStartPost[]) => ReactNode;
+}) {
+  const ordered = useMemo(() => orderStartPosts(posts, tool), [posts, tool]);
+  return <>{children(ordered)}</>;
+}
+
 function OrderedPosts({ source, tool, children }: {
   source: Promise<CreatorStartPost[]>;
   tool: RemixTool;
   children: (posts: CreatorStartPost[]) => ReactNode;
 }) {
   const posts = use(source);
-  const ordered = useMemo(() => orderStartPosts(posts, tool), [posts, tool]);
-  return <>{children(ordered)}</>;
+  return <OrderedList posts={posts} tool={tool}>{children}</OrderedList>;
 }
 
-/** One place's read of the posts: `loading` while they are on their way, `failed` where they never came. */
+/**
+ * One place's posts: drawn at once when the page was handed them, else read in a boundary of its
+ * own, `loading` while they are on their way and `failed` where they never came.
+ */
 function WithStartPosts({ source, tool, loading, failed, children }: {
-  source: Promise<CreatorStartPost[]>;
+  source: CreatorStartPost[] | Promise<CreatorStartPost[]>;
   tool: RemixTool;
   loading: ReactNode;
   failed: ReactNode;
   children: (posts: CreatorStartPost[]) => ReactNode;
 }) {
+  if (Array.isArray(source)) return <OrderedList posts={source} tool={tool}>{children}</OrderedList>;
   return (
     <StartPostsErrorBoundary fallback={failed}>
       <Suspense fallback={loading}>
@@ -89,15 +103,60 @@ function remixWords(post: CreatorStartPost) {
   };
 }
 
+/** How many of a place's first pictures are asked for ahead of the rest: the canvas's first row at its narrowest. */
+const FIRST_PICTURES = 3;
+
+/**
+ * A post's picture. Where it is on screen as the page opens (the empty canvas, the strip) it is
+ * asked for as the page's HTML is read, the first row first. Lazy, it waited until its part of the
+ * page was shown and laid out: on magicbooklet.com the posts' pictures were asked for at about 1.7 s
+ * and were the page's LCP at 1.84 s (the web sweep of 2026-11-17). And it is asked for once:
+ * `OptimizedPreviewImage` hands next/image an `onError`, and next/image sets every picture's `src`
+ * again once the page has hydrated, to replay an error React never saw, which asks for the picture
+ * again where the browser has not kept it and draws it blank until it is back. Here an error before
+ * hydration is read off the element as React attaches to it. A media worker's preview
+ * (`isGeneratedPreviewImage`) skipped the optimizer already; any other source still goes through it.
+ */
+function PostPicture({ src, sizes, eager, first }: { src: string; sizes: string; eager: boolean; first: boolean }) {
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  if (!isGeneratedPreviewImage(src)) {
+    return <OptimizedPreviewImage previewSrc={src} alt="" sizes={sizes} className="object-cover" loading={eager ? 'eager' : 'lazy'} />;
+  }
+  if (failedSrc === src) return null;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- a ready-made preview, which next/image would ask for twice
+    <img
+      ref={eager ? (picture) => {
+        // Asked for with the page's HTML: one that failed before hydration is broken by now.
+        if (picture?.complete && picture.naturalWidth === 0) setFailedSrc(src);
+      } : undefined}
+      src={src}
+      alt=""
+      loading={eager ? 'eager' : 'lazy'}
+      fetchPriority={eager && first ? 'high' : undefined}
+      decoding="async"
+      onError={() => setFailedSrc(src)}
+      className="absolute inset-0 h-full w-full object-cover"
+    />
+  );
+}
+
 /**
  * A post's picture, its clip playing while the pointer is over it or a key is on the
  * post's link: mounted only then, so a row of posts fetches no clip nobody looks at, and
  * never where the viewer asked for less motion or data, as on Home's shelf.
  */
-function PostThumb({ post, playing, badge, sizes }: { post: CreatorStartPost; playing: boolean; badge?: string | null; sizes: string }) {
+function PostThumb({ post, playing, badge, sizes, eager, first }: {
+  post: CreatorStartPost;
+  playing: boolean;
+  badge?: string | null;
+  sizes: string;
+  eager: boolean;
+  first: boolean;
+}) {
   return (
     <span className="relative block aspect-[3/4] overflow-hidden rounded-ui-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)]">
-      <OptimizedPreviewImage previewSrc={post.posterUrl} alt="" sizes={sizes} className="object-cover" />
+      <PostPicture src={post.posterUrl} sizes={sizes} eager={eager} first={first} />
       {playing && post.clipUrl ? (
         <HoverVideo key={post.clipUrl} src={post.clipUrl} autoPlay className="absolute inset-0 h-full w-full object-cover" />
       ) : null}
@@ -118,13 +177,15 @@ function PostThumb({ post, playing, badge, sizes }: { post: CreatorStartPost; pl
 }
 
 /** One post: its picture and title (to the post), its creator, and its Remix with the price. */
-const StartPostCard = memo(function StartPostCard({ post, compact = false, watchOnly = false, className }: {
+const StartPostCard = memo(function StartPostCard({ post, compact = false, watchOnly = false, index, className }: {
   post: CreatorStartPost;
   className?: string;
   /** The phone strip's: no model badge, the price alone on the button. */
   compact?: boolean;
-  /** "While you wait": a post to watch, with no Remix under it. */
+  /** "While you wait": a post to watch, with no Remix under it, whose picture waits until it is near the screen. */
   watchOnly?: boolean;
+  /** Its place in its row of posts. */
+  index: number;
 }) {
   const [hovered, setHovered] = useState(false);
   const { prefersReducedMotion, saveData } = useMediaLoadingPreferences();
@@ -153,6 +214,8 @@ const StartPostCard = memo(function StartPostCard({ post, compact = false, watch
           playing={hovered && !prefersReducedMotion && !saveData}
           badge={compact ? null : post.modelName}
           sizes={compact ? '132px' : '(min-width: 1440px) 200px, 160px'}
+          eager={!watchOnly}
+          first={index < FIRST_PICTURES}
         />
         <span className="truncate text-sm font-bold text-[var(--ui-text-primary)] group-hover:underline">{post.title}</span>
       </Link>
@@ -213,7 +276,7 @@ function CanvasPostsSection({ posts }: { posts: CreatorStartPost[] | null }) {
       </div>
       {posts ? (
         <ul className={CANVAS_GRID_CLASS}>
-          {posts.map((post) => <StartPostCard key={post.id} post={post} />)}
+          {posts.map((post, index) => <StartPostCard key={post.id} post={post} index={index} />)}
         </ul>
       ) : (
         <CardPlaces count={4} className={CANVAS_GRID_CLASS} />
@@ -316,7 +379,7 @@ export function CreatorStartPostsStrip({ source, tool }: { source: StartPostsSou
         <StripSection>
           {/* Scrolled sideways by touch; the column keeps its width. */}
           <ul className={STRIP_TRACK_CLASS}>
-            {posts.map((post) => <StartPostCard key={post.id} post={post} compact className="snap-start" />)}
+            {posts.map((post, index) => <StartPostCard key={post.id} post={post} index={index} compact className="snap-start" />)}
           </ul>
         </StripSection>
       ))}
@@ -333,7 +396,7 @@ export function CreatorWhileYouWait({ source, tool }: { source: StartPostsSource
         <section aria-labelledby="creator-while-you-wait-title" className="space-y-3">
           <h3 id="creator-while-you-wait-title" className="ui-kicker">While you wait</h3>
           <ul className={CANVAS_GRID_CLASS}>
-            {posts.map((post) => <StartPostCard key={post.id} post={post} watchOnly />)}
+            {posts.map((post, index) => <StartPostCard key={post.id} post={post} index={index} watchOnly />)}
           </ul>
         </section>
       ))}

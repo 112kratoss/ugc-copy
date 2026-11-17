@@ -146,10 +146,12 @@ const answer = (body: StatusAnswer) => (route: Route) => route.fulfill({ json: b
 
 async function startRun(page: Page) {
   await page.goto('/create-video', COLD_PAGE);
-  // Typed only once the page's script runs, or hydration resets the field.
-  await expect(page.getByRole('button', { name: 'Generate · 19 credits' })).toBeVisible(COLD_PAGE);
+  // The prompt box takes in what was typed before the page's script ran. Generate names the server's
+  // price from the first paint; only the script enables it, once it holds the prompt and its own price.
   await page.getByRole('textbox', { name: 'Prompt' }).fill(PROMPT);
-  await page.getByRole('button', { name: 'Generate · 19 credits' }).click();
+  const generate = page.getByRole('button', { name: 'Generate · 19 credits' });
+  await expect(generate).toBeEnabled(COLD_PAGE);
+  await generate.click();
 }
 
 function canvas(page: Page) {
