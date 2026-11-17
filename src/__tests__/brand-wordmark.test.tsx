@@ -9,8 +9,8 @@ describe('BrandWordmark', () => {
 
     expect(screen.getByRole('heading')).toHaveTextContent(/^Magic Booklet$/);
     const lockup = container.querySelector('h1 > span')!;
-    // `font-bricolage-grotesque` is the test stand-in's class for the display face (mocks/next-font-google.ts).
-    expect(lockup).toHaveClass('font-bricolage-grotesque', 'font-extrabold', 'text-[40px]');
+    // `font-display` is the test stand-in's class for the display face (mocks/next-font-local.ts).
+    expect(lockup).toHaveClass('font-display', 'font-extrabold', 'text-[40px]');
     // One colour: the name takes the text colour around it, as the app's lockup does.
     const name = screen.getByText('Magic Booklet');
     expect(name.className).toBe('');
