@@ -382,7 +382,8 @@ describe('usePostLifecycle', () => {
     fireEvent.click(screen.getByRole('button', { name: 'delete' }));
 
     await waitFor(() => {
-      expect(onRemoved).toHaveBeenCalledWith('post-1');
+      // Kept on the server for its buyers, archived: a list that pages by place still holds it.
+      expect(onRemoved).toHaveBeenCalledWith('post-1', { tombstoned: true });
     });
     expect(onPatch).not.toHaveBeenCalled();
     expect(clientMocks.requestPostDelete).toHaveBeenNthCalledWith(1, { postId: 'post-1', accessToken: 'token', force: false });
@@ -396,6 +397,20 @@ describe('usePostLifecycle', () => {
       tone: 'success',
       message: 'Post deleted. Buyers keep access to its recipe.',
     });
+  });
+
+  it('says a post deleted outright is gone from the server', async () => {
+    clientMocks.requestPostDelete.mockResolvedValueOnce({ deleted: true, tombstoned: false });
+    const onRemoved = vi.fn();
+    render(<Harness onRemoved={onRemoved} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'delete' }));
+
+    await waitFor(() => {
+      expect(onRemoved).toHaveBeenCalledWith('post-1', { tombstoned: false });
+    });
+    expect(clientMocks.requestPostDelete).toHaveBeenCalledTimes(1);
+    expect(feedbackMocks.pushToast).toHaveBeenCalledWith({ tone: 'success', message: 'Post deleted.' });
   });
 
   it('keeps a sold post when the forced delete is declined', async () => {

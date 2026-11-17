@@ -13,7 +13,7 @@ describe('fx route adapter service', () => {
       ok: true as const,
       body: {
         base: 'INR' as const,
-        updatedAt: 'Tue, 23 Jun 2026 00:00:00 +0000',
+        updatedAt: '2026-06-23T00:00:00.000Z',
         rates: {
           USD: 0.012,
           EUR: 0.011,

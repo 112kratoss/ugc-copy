@@ -17,7 +17,8 @@ import { expect, test, type Page } from '@playwright/test';
 
 const COLD_PAGE = { timeout: 45_000 };
 const STORAGE_KEY = 'magicbooklet_currency';
-const FX = { base: 'INR', rates: { USD: 0.012, EUR: 0.011, GBP: 0.0095 }, updatedAt: 'Fri, 06 Nov 2026 00:02:31 +0000' };
+// The rates' stamp as /api/fx sends it, in ISO 8601 (fx-rates-service.ts).
+const FX = { base: 'INR', rates: { USD: 0.012, EUR: 0.011, GBP: 0.0095 }, updatedAt: '2026-11-06T00:02:31.000Z' };
 // The FX line under the picker, in this run's language and zone (fx-rates-updated.ts).
 const FX_LINE = 'Rates updated Nov 6, 2026, 12:02 AM';
 

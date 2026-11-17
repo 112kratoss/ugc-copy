@@ -121,6 +121,33 @@ describe('pricing page currency storage', () => {
     expect(window.localStorage.getItem('ugc_currency')).toBeNull();
   });
 
+  // /api/fx sends no `updatedAt` for a provider stamp it cannot read (fx-rates-service.ts): the
+  // prices are converted, and no line says when the rates were read.
+  it('says when the rates were read only when the route says it', async () => {
+    let answerFx!: (response: Response) => void;
+    fetchMock.mockImplementation((input: RequestInfo | URL) => (String(input) === '/api/fx'
+      ? new Promise<Response>((resolve) => {
+        answerFx = resolve;
+      })
+      : Promise.resolve(new Response('{}', { status: 404 }))));
+    window.localStorage.setItem('magicbooklet_currency', 'USD');
+
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    render(<PricingClient initialCountryCode="US" />);
+
+    expect(await screen.findByText('Updating FX...')).toBeInTheDocument();
+    await act(async () => {
+      answerFx(new Response(JSON.stringify({ base: 'INR', rates: { INR: 1, USD: 0.012, EUR: 0.011 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    });
+
+    await waitFor(() => expect(screen.queryByText('Updating FX...')).not.toBeInTheDocument());
+    expect(screen.queryByText('FX unavailable')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Rates updated/)).not.toBeInTheDocument();
+  });
+
   it('loads the currency preference from the legacy ugc key when the newer keys are absent', async () => {
     window.localStorage.setItem('ugc_currency', 'USD');
 

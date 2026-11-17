@@ -33,12 +33,13 @@ describe('FX route through actual loopback provider HTTP', () => {
     } }) },
   });
   it('returns all supported positive rates and excludes unsupported values with public success caching', async () => {
-    mode = 'json'; payload = { result: 'success', base_code: 'INR', time_last_update_utc: 'Audit fixture time', rates: { ...validRates, JPY: 1.7, OTHER: 'invalid' } };
+    mode = 'json'; payload = { result: 'success', base_code: 'INR', time_last_update_utc: 'Mon, 16 Nov 2026 00:02:31 +0000', rates: { ...validRates, JPY: 1.7, OTHER: 'invalid' } };
     const result = await response();
     expect(result.status).toBe(200);
     expect(result.headers.get('Cache-Control')).toContain('s-maxage=3600');
     expect(result.headers.get('x-request-id')).toBe('audit-fx-loopback');
-    expect(await result.json()).toEqual({ base: 'INR', updatedAt: 'Audit fixture time', rates: validRates });
+    // The provider's RFC 2822 stamp, in ISO 8601 (fx-rates-service.ts).
+    expect(await result.json()).toEqual({ base: 'INR', updatedAt: '2026-11-16T00:02:31.000Z', rates: validRates });
   });
   it.each(currencies.flatMap(currency => ['zero', 'negative', 'null', 'missing'].map(kind => ({ currency, kind }))))('does not publish an unsafe $currency rate: $kind', async ({ currency, kind }) => {
     mode = 'json';
