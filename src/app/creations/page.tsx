@@ -17,6 +17,7 @@ import SkeletonLoader from '@/components/SkeletonLoader';
 import {
     usePostLifecycle,
     type PostLifecyclePatch,
+    type PostLifecycleRemoval,
     type PostLifecycleTarget,
 } from '@/components/usePostLifecycle';
 import { HoverVideo } from '@/components/HoverVideo';
@@ -576,6 +577,16 @@ function mergeGenerationAppend(previousGenerations: Generation[], incomingGenera
     ];
 }
 
+/**
+ * The posts list's next offset one place earlier, after a post before it was deleted here. The
+ * owner list's offset is the place of its next post (`listOwnerPostsForRoute`) in a list of every
+ * post, archived ones too, so an archive or a restore moves no post, and neither does a delete
+ * that keeps a post for its buyers, archived.
+ */
+function stepPostsOffsetBack(offset: number | null): number | null {
+    return offset === null ? null : Math.max(0, offset - 1);
+}
+
 function mergePostAppend(previousPosts: OwnerPost[], incomingPosts: OwnerPost[]): OwnerPost[] {
     const previousIds = new Set(previousPosts.map((post) => post.id));
     return [
@@ -682,6 +693,13 @@ export default function CreationsPage() {
         setPostsCompleteState(complete);
     }, []);
     const [isLoadingMorePosts, setIsLoadingMorePosts] = useState(false);
+    // The posts list's offset counts places, so a delete steps it back a place (removePost), and
+    // the two must not cross, as Creations' cursor and its deletes (#836): a delete waits for the
+    // Load more under way, whose offset would land after the step back and undo it, and Load more
+    // waits while deletes are under way, as the page it asked for could be counted without the post.
+    const postsLoadMoreInFlightRef = useRef<Promise<void> | null>(null);
+    const [postDeletesInFlight, setPostDeletesInFlight] = useState(0);
+    const postDeletesInFlightRef = useRef(0);
     const [postsLoadMoreError, setPostsLoadMoreError] = useState<string | null>(null);
     const [generationDetailLoadingId, setGenerationDetailLoadingId] = useState<string | null>(null);
     const [generationDetailError, setGenerationDetailError] = useState<string | null>(null);
@@ -808,12 +826,19 @@ export default function CreationsPage() {
         });
     }, [moveHeldPostTotals, userId]);
 
-    const removePost = useCallback((postId: string) => {
+    const removePost = useCallback((postId: string, removal?: PostLifecycleRemoval) => {
         // Deleted: out of its total. A post with buyers is kept on the server, archived, and comes
         // back under Archived with the next refresh, which counts it there again.
         const removed = postsRef.current.find((post) => post.id === postId);
         if (removed) {
             moveHeldPostTotals(removed.archivedAt ? { posts: 0, archivedPosts: -1 } : { posts: -1, archivedPosts: 0 });
+            // The list's offset counts places, and this post sat before it: gone from the server,
+            // every later post moved up a place, so the next page starts a place earlier, or Load
+            // more would skip the one that moved into its first place. One kept for its buyers
+            // keeps its place.
+            if (!removal?.tombstoned) {
+                setPostsNextOffset(stepPostsOffsetBack);
+            }
         }
         const nextPosts = postsRef.current.filter((post) => post.id !== postId);
         const nextGenerations = generationsRef.current.map((generation) => (
@@ -906,6 +931,22 @@ export default function CreationsPage() {
         onRemoved: removePost,
         onPublicIdentitySaved: applySavedPublicIdentity,
     });
+
+    // A delete from the Post Library: a Load more under way lands first, as the offset it sets is
+    // the one the delete steps back (removePost), and Load more waits until the delete is done.
+    // The wait comes before the question, which the hook asks: the question is modal, so the page
+    // beneath it cannot load more anyway.
+    const removeLibraryPost = async (post: OwnerPost) => {
+        await postsLoadMoreInFlightRef.current;
+        postDeletesInFlightRef.current += 1;
+        setPostDeletesInFlight((count) => count + 1);
+        try {
+            await postLifecycle.remove(post);
+        } finally {
+            postDeletesInFlightRef.current -= 1;
+            setPostDeletesInFlight((count) => count - 1);
+        }
+    };
 
     // A generation card's linked post is the full owner record when it is
     // loaded, so policy can see its bundle; otherwise the generation's own
@@ -1150,38 +1191,47 @@ export default function CreationsPage() {
             redirectToSignIn();
             return;
         }
-        if (postsNextOffset === null || isLoadingMorePosts) return;
+        // A delete under way moves the offset this would ask from (removeLibraryPost).
+        if (postsNextOffset === null || isLoadingMorePosts || postDeletesInFlightRef.current > 0) return;
 
         setIsLoadingMorePosts(true);
         setPostsLoadMoreError(null);
-        try {
-            const response = await fetch(
-                `/api/posts?scope=owner&includeArchived=true&limit=${CREATIONS_POSTS_PAGE_SIZE}&offset=${postsNextOffset}`,
-                { headers: { Authorization: `Bearer ${accessToken}` } }
-            );
-            const data = await response.json() as OwnerPostsApiResponse;
-            if (!response.ok) throw new Error('Failed to load more posts.');
+        const load = (async () => {
+            try {
+                const response = await fetch(
+                    `/api/posts?scope=owner&includeArchived=true&limit=${CREATIONS_POSTS_PAGE_SIZE}&offset=${postsNextOffset}`,
+                    { headers: { Authorization: `Bearer ${accessToken}` } }
+                );
+                const data = await response.json() as OwnerPostsApiResponse;
+                if (!response.ok) throw new Error('Failed to load more posts.');
 
-            // Onto the posts as they stand now, and with the totals as they stand now: a post
-            // archived while the page was on its way stays archived, and its move stays counted.
-            const nextPosts = mergePostAppend(postsRef.current, Array.isArray(data.posts) ? data.posts : []);
-            const nextOffset = data.pageInfo?.hasMore ? data.pageInfo.nextOffset ?? null : null;
-            postsRef.current = nextPosts;
-            setPosts(nextPosts);
-            setPostsNextOffset(nextOffset);
-            setPostsComplete(nextOffset === null);
-            writeCreationsWorkspaceCache(userId, {
-                generations: generationsRef.current,
-                posts: nextPosts,
-                profile: profileRef.current,
-                generationsComplete: generationsCompleteRef.current,
-                postsComplete: postsCompleteRef.current,
-            });
-        } catch (error) {
-            console.error('Failed to load more posts:', error);
-            setPostsLoadMoreError(error instanceof Error ? error.message : 'Failed to load more posts.');
+                // Onto the posts as they stand now, and with the totals as they stand now: a post
+                // archived while the page was on its way stays archived, and its move stays counted.
+                const nextPosts = mergePostAppend(postsRef.current, Array.isArray(data.posts) ? data.posts : []);
+                const nextOffset = data.pageInfo?.hasMore ? data.pageInfo.nextOffset ?? null : null;
+                postsRef.current = nextPosts;
+                setPosts(nextPosts);
+                setPostsNextOffset(nextOffset);
+                setPostsComplete(nextOffset === null);
+                writeCreationsWorkspaceCache(userId, {
+                    generations: generationsRef.current,
+                    posts: nextPosts,
+                    profile: profileRef.current,
+                    generationsComplete: generationsCompleteRef.current,
+                    postsComplete: postsCompleteRef.current,
+                });
+            } catch (error) {
+                console.error('Failed to load more posts:', error);
+                setPostsLoadMoreError(error instanceof Error ? error.message : 'Failed to load more posts.');
+            } finally {
+                setIsLoadingMorePosts(false);
+            }
+        })();
+        postsLoadMoreInFlightRef.current = load;
+        try {
+            await load;
         } finally {
-            setIsLoadingMorePosts(false);
+            if (postsLoadMoreInFlightRef.current === load) postsLoadMoreInFlightRef.current = null;
         }
     }, [accessToken, isLoadingMorePosts, postsNextOffset, redirectToSignIn, setPostsComplete, userId]);
 
@@ -2941,7 +2991,7 @@ export default function CreationsPage() {
                             <button
                                 type="button"
                                 onClick={() => void loadMorePosts()}
-                                disabled={isLoadingMorePosts}
+                                disabled={isLoadingMorePosts || postDeletesInFlight > 0}
                                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 {isLoadingMorePosts ? (
@@ -3033,7 +3083,7 @@ export default function CreationsPage() {
                                     tone: 'danger',
                                     disabled: isBusy,
                                     pending: pendingAction === 'delete',
-                                    onSelect: () => void postLifecycle.remove(post),
+                                    onSelect: () => void removeLibraryPost(post),
                                 });
 
                                 return (
@@ -3162,7 +3212,7 @@ export default function CreationsPage() {
                                 <button
                                     type="button"
                                     onClick={() => void loadMorePosts()}
-                                    disabled={isLoadingMorePosts}
+                                    disabled={isLoadingMorePosts || postDeletesInFlight > 0}
                                     className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     {isLoadingMorePosts ? (

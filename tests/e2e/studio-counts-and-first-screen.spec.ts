@@ -296,7 +296,14 @@ const SECOND_POSTS_PAGE = [
   ...range(47, 3).map((index) => libraryPost(index, 'public', true)),
 ];
 
+/**
+ * The Post Library's reads and writes, answered as the owner list answers them: every post of the
+ * library, archived ones too, newest first, a page of `limit` from `offset` (owner-posts.ts). A
+ * delete takes its post out of the list, an archive leaves it in its place.
+ */
 async function answerPostLibrary(page: Page) {
+  // Each test's own copy: an archive or a delete changes it.
+  const library = [...FIRST_POSTS_PAGE, ...SECOND_POSTS_PAGE].map((post) => ({ ...post }));
   await page.context().addCookies([
     { name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' },
   ]);
@@ -311,12 +318,29 @@ async function answerPostLibrary(page: Page) {
     pagination: { limit: 36, hasMore: false, nextCursor: null },
   }));
   await page.route('**/api/posts?**', (route) => {
-    const offset = new URL(route.request().url()).searchParams.get('offset');
-    return offset === '36'
-      ? json(route, { posts: SECOND_POSTS_PAGE, pageInfo: { hasMore: false, nextOffset: null } })
-      : json(route, { posts: FIRST_POSTS_PAGE, pageInfo: { hasMore: true, nextOffset: 36 } });
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+    const limit = Number(url.searchParams.get('limit') ?? 36);
+    const hasMore = library.length > offset + limit;
+    return json(route, {
+      posts: library.slice(offset, offset + limit),
+      pageInfo: { hasMore, nextOffset: hasMore ? offset + limit : null },
+    });
   });
-  await page.route('**/api/posts/post-e2e-library-0/archive', (route) => json(route, { success: true }));
+  await page.route('**/api/posts/post-e2e-library-*/archive', (route) => {
+    const id = new URL(route.request().url()).pathname.split('/').at(-2);
+    const archived = library.find((post) => post.id === id);
+    if (archived) archived.archivedAt = '2026-11-17T12:00:00.000Z';
+    return json(route, { success: true });
+  });
+  await page.route('**/api/posts/post-e2e-library-*', (route) => {
+    if (route.request().method() !== 'DELETE') return route.fallback();
+    const id = new URL(route.request().url()).pathname.split('/').at(-1);
+    const index = library.findIndex((post) => post.id === id);
+    if (index === -1) return json(route, { error: 'Post not found.' }, 404);
+    library.splice(index, 1);
+    return json(route, { success: true });
+  });
 }
 
 /** The visibility filters' labels, in their order. */
@@ -324,6 +348,22 @@ async function postFilterLabels(page: Page) {
   const filters = page.getByRole('group', { name: 'Filter posts by visibility' });
   await expect(filters).toBeVisible(COLD_PAGE);
   return filters.getByRole('link').allTextContents();
+}
+
+/**
+ * Chooses one of a post's actions behind its More actions menu. A menu closes on any scroll, and a
+ * scroll's event comes a frame after it: the row is brought into view first, and the press repeated
+ * if that event closed the menu (as in post-page-comments-rail.spec.ts).
+ */
+async function choosePostAction(page: Page, title: string, action: string) {
+  const postMenu = page.getByRole('button', { name: `More actions for ${title}`, exact: true });
+  const item = page.getByRole('menu').getByRole('menuitem', { name: action });
+  await postMenu.scrollIntoViewIfNeeded();
+  await expect(async () => {
+    if (await page.getByRole('menu').count() === 0) await postMenu.click({ timeout: 2_000 });
+    await expect(item).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
+  await item.click();
 }
 
 test.describe("Studio's Post Library with more posts than its first page", () => {
@@ -355,21 +395,39 @@ test.describe("Studio's Post Library with more posts than its first page", () =>
     expect(await postFilterLabels(page))
       .toEqual(['All (42)', 'Public (30)', 'Unlisted (1)', 'Private (11)', 'Archived (8)']);
 
-    // A post archived here moves from one total to the other at once. A menu closes on any scroll,
-    // and a scroll's event comes a frame after it: the row is brought into view first, and the press
-    // repeated if that event closed the menu (as in post-page-comments-rail.spec.ts).
-    const postMenu = page.getByRole('button', { name: 'More actions for Library post 0' });
-    const archive = page.getByRole('menu').getByRole('menuitem', { name: 'Archive post' });
-    await postMenu.scrollIntoViewIfNeeded();
-    await expect(async () => {
-      if (await page.getByRole('menu').count() === 0) await postMenu.click({ timeout: 2_000 });
-      await expect(archive).toBeVisible({ timeout: 2_000 });
-    }).toPass({ timeout: 20_000 });
-    await archive.click();
+    // A post archived here moves from one total to the other at once.
+    await choosePostAction(page, 'Library post 0', 'Archive post');
     await page.getByRole('alertdialog', { name: 'Archive this post?' }).getByRole('button', { name: 'Archive' }).click();
     await expect(page.getByText('Post archived. Find it under Archived.')).toBeVisible();
     await expect(header(page)).toHaveText('41 POSTS · 9 ARCHIVED');
     expect(await postFilterLabels(page))
       .toEqual(['All (41)', 'Public (29)', 'Unlisted (1)', 'Private (11)', 'Archived (9)']);
+  });
+
+  // The next page is asked for by offset, the place of its first post in the owner list. A delete
+  // moves every later post up a place, and Load more asked a place too far on: "Library post 36",
+  // which moved up into the next page's first place, never came.
+  test('a post deleted while more pages wait leaves no gap: the next page starts a place earlier', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/creations?view=posts');
+    await expect(page.getByText('Library post 1', { exact: true })).toBeVisible(COLD_PAGE);
+
+    await choosePostAction(page, 'Library post 1', 'Delete post');
+    await page.getByRole('alertdialog', { name: 'Delete this post permanently?' }).getByRole('button', { name: 'Delete' }).click();
+    await expect(page.getByText('Post deleted.')).toBeVisible();
+    await expect(page.getByText('Library post 1', { exact: true })).toBeHidden();
+
+    const nextPage = page.waitForRequest((request) => (
+      request.url().includes('/api/posts?') && new URL(request.url()).searchParams.get('offset') !== '0'
+    ));
+    await page.getByRole('button', { name: 'Load more posts' }).click();
+    expect(new URL((await nextPage).url()).searchParams.get('offset')).toBe('35');
+    await expect(page.getByText('Library post 36', { exact: true })).toBeVisible(COLD_PAGE);
+    await expect(page.getByRole('button', { name: 'Load more posts' })).toBeHidden();
+
+    // The whole library, the deleted post out of it.
+    await expect(header(page)).toHaveText('41 POSTS · 8 ARCHIVED');
+    expect(await postFilterLabels(page))
+      .toEqual(['All (41)', 'Public (29)', 'Unlisted (1)', 'Private (11)', 'Archived (8)']);
   });
 });

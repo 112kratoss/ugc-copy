@@ -967,54 +967,57 @@ describe('CreationsPage', () => {
     });
   });
 
+  // The Post Library's pages: the owner list, every post archived or not, 36 a page by offset.
+  const postsPageUrl = (offset: number) => `/api/posts?scope=owner&includeArchived=true&limit=36&offset=${offset}`;
+  const POSTS_PAGE_URL = postsPageUrl(0);
+  const NEXT_POSTS_PAGE_URL = postsPageUrl(36);
+  const makePost = (
+    id: string,
+    visibility: 'public' | 'unlisted' | 'private',
+    archivedAt: string | null = null,
+  ) => ({
+    id,
+    generationId: null,
+    visibility,
+    archivedAt,
+    mediaUrl: null,
+    mediaKind: null,
+    title: `Post ${id}`,
+    description: '',
+    prompt: '',
+    body: 'Body',
+    category: 'text',
+    postFormat: 'text',
+    sourceKind: 'manual',
+    sourceTool: null,
+    sourceLabel: 'Manual',
+    createdAt: '2026-06-01T10:00:00.000Z',
+    updatedAt: '2026-06-01T10:00:00.000Z',
+    publicPath: null,
+    ownerPath: `/post/${id}/edit`,
+    resourcePath: null,
+    canShare: false,
+    bundle: null,
+  });
+  const ARCHIVED_AT = '2026-06-02T10:00:00.000Z';
+  // A library of 5 posts (2 public, 1 unlisted, 2 private) and 2 archived, over two pages.
+  const FIRST_POSTS_PAGE = [
+    makePost('a', 'public'),
+    makePost('b', 'public'),
+    makePost('c', 'private'),
+    makePost('d', 'public', ARCHIVED_AT),
+  ];
+  const SECOND_POSTS_PAGE = [
+    makePost('e', 'unlisted'),
+    makePost('f', 'private'),
+    makePost('g', 'private', ARCHIVED_AT),
+  ];
+
   // The Post Library had the fault #836 fixed in Creations: it loads its posts 36 at a time, and its
   // header and visibility filters counted the posts of the pages loaded so far. The rule is
   // getStudioPostCounts (creation-workspace.ts); studio-counts-and-first-screen.spec.ts draws it in
   // a browser.
   describe("the Post Library's counts", () => {
-    const POSTS_PAGE_URL = '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0';
-    const NEXT_POSTS_PAGE_URL = '/api/posts?scope=owner&includeArchived=true&limit=36&offset=36';
-    const makePost = (
-      id: string,
-      visibility: 'public' | 'unlisted' | 'private',
-      archivedAt: string | null = null,
-    ) => ({
-      id,
-      generationId: null,
-      visibility,
-      archivedAt,
-      mediaUrl: null,
-      mediaKind: null,
-      title: `Post ${id}`,
-      description: '',
-      prompt: '',
-      body: 'Body',
-      category: 'text',
-      postFormat: 'text',
-      sourceKind: 'manual',
-      sourceTool: null,
-      sourceLabel: 'Manual',
-      createdAt: '2026-06-01T10:00:00.000Z',
-      updatedAt: '2026-06-01T10:00:00.000Z',
-      publicPath: null,
-      ownerPath: `/post/${id}/edit`,
-      resourcePath: null,
-      canShare: false,
-      bundle: null,
-    });
-    const ARCHIVED_AT = '2026-06-02T10:00:00.000Z';
-    // A library of 5 posts (2 public, 1 unlisted, 2 private) and 2 archived, over two pages.
-    const FIRST_POSTS_PAGE = [
-      makePost('a', 'public'),
-      makePost('b', 'public'),
-      makePost('c', 'private'),
-      makePost('d', 'public', ARCHIVED_AT),
-    ];
-    const SECOND_POSTS_PAGE = [
-      makePost('e', 'unlisted'),
-      makePost('f', 'private'),
-      makePost('g', 'private', ARCHIVED_AT),
-    ];
     const LIBRARY_STATS = { creations: 0, posts: 5, archivedPosts: 2, saved: 0 };
     const postFilters = () => within(screen.getByRole('group', { name: 'Filter posts by visibility' }))
       .getAllByRole('link')
@@ -1202,6 +1205,175 @@ describe('CreationsPage', () => {
         expect(screen.getByText('4 POSTS · 2 ARCHIVED')).toBeInTheDocument();
         expect(postFilters()).toEqual(['All (4)', 'Public (2)', 'Unlisted (1)', 'Private (1)', 'Archived (2)']);
       });
+    });
+  });
+
+  // The Post Library's next page is asked for by offset, the place of its first post in the owner
+  // list, which holds every post, archived ones too, newest first. A delete takes its post out of
+  // that list and moves every later one up a place, so Load more asked a place too far on and
+  // skipped the post that moved up into the next page's first place. As #836 for Creations' cursor.
+  describe("the Post Library's next page", () => {
+    const postsPageReads = (fetchMock: ReturnType<typeof stubStudioFetch>) => fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.startsWith('/api/posts?'));
+    const deletePost = async (title: string) => {
+      await chooseCardAction(title, 'Delete post');
+      fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this post permanently?' }))
+        .getByRole('button', { name: 'Delete' }));
+    };
+    const loadMore = () => screen.getByRole('button', { name: 'Load more posts' });
+
+    it('asks for the next page a place earlier after a post is deleted while more pages wait', async () => {
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      const fetchMock = stubStudioFetch((url, init) => {
+        if (url.startsWith('/api/generations')) return Promise.resolve(jsonResponse({ generations: [] }));
+        if (url === POSTS_PAGE_URL) {
+          return Promise.resolve(jsonResponse({ posts: FIRST_POSTS_PAGE, pageInfo: { hasMore: true, nextOffset: 36 } }));
+        }
+        if (url === '/api/posts/c' && init?.method === 'DELETE') return Promise.resolve(jsonResponse({ success: true }));
+        if (url.startsWith(postsPageUrl(3))) {
+          return Promise.resolve(jsonResponse({ posts: SECOND_POSTS_PAGE, pageInfo: { hasMore: false, nextOffset: null } }));
+        }
+        return null;
+      });
+
+      render(<><CreationsPage /><FeedbackViewport /></>);
+
+      expect(await screen.findByText('Post c')).toBeInTheDocument();
+      await deletePost('Post c');
+      expect(await screen.findByText('Post deleted.')).toBeInTheDocument();
+      await waitFor(() => expect(loadMore()).toBeEnabled());
+
+      fireEvent.click(loadMore());
+      expect(await screen.findByText('Post e')).toBeInTheDocument();
+      expect(postsPageReads(fetchMock)).toEqual([POSTS_PAGE_URL, postsPageUrl(35)]);
+    });
+
+    it('sends a delete only once a Load more under way has landed, so the next page still starts a place earlier', async () => {
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      let answerSecondPage!: () => void;
+      const secondPageAnswered = new Promise<void>((resolve) => {
+        answerSecondPage = resolve;
+      });
+      const fetchMock = stubStudioFetch((url, init) => {
+        if (url.startsWith('/api/generations')) return Promise.resolve(jsonResponse({ generations: [] }));
+        if (url === POSTS_PAGE_URL) {
+          return Promise.resolve(jsonResponse({ posts: FIRST_POSTS_PAGE, pageInfo: { hasMore: true, nextOffset: 36 } }));
+        }
+        if (url === NEXT_POSTS_PAGE_URL) {
+          return secondPageAnswered.then(() => jsonResponse({
+            posts: SECOND_POSTS_PAGE,
+            pageInfo: { hasMore: true, nextOffset: 72 },
+          }));
+        }
+        if (url === '/api/posts/a' && init?.method === 'DELETE') return Promise.resolve(jsonResponse({ success: true }));
+        if (url.startsWith(postsPageUrl(7))) {
+          return Promise.resolve(jsonResponse({ posts: [makePost('h', 'public')], pageInfo: { hasMore: false, nextOffset: null } }));
+        }
+        return null;
+      });
+      const deletesSent = () => fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE').length;
+
+      render(<><CreationsPage /><FeedbackViewport /></>);
+
+      expect(await screen.findByText('Post a')).toBeInTheDocument();
+      fireEvent.click(loadMore());
+      await chooseCardAction('Post a', 'Delete post');
+      await act(flushPromises);
+      // The page under way lands first: the delete, and its question, wait for it.
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(deletesSent()).toBe(0);
+
+      await act(async () => {
+        answerSecondPage();
+      });
+      expect(await screen.findByText('Post e')).toBeInTheDocument();
+      fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this post permanently?' }))
+        .getByRole('button', { name: 'Delete' }));
+      expect(await screen.findByText('Post deleted.')).toBeInTheDocument();
+      expect(deletesSent()).toBe(1);
+      await waitFor(() => expect(loadMore()).toBeEnabled());
+
+      fireEvent.click(loadMore());
+      expect(await screen.findByText('Post h')).toBeInTheDocument();
+      expect(postsPageReads(fetchMock)).toEqual([POSTS_PAGE_URL, NEXT_POSTS_PAGE_URL, postsPageUrl(71)]);
+    });
+
+    it('holds Load more while a delete is under way', async () => {
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      let answerDelete!: () => void;
+      const deleteAnswered = new Promise<void>((resolve) => {
+        answerDelete = resolve;
+      });
+      stubStudioFetch((url, init) => {
+        if (url.startsWith('/api/generations')) return Promise.resolve(jsonResponse({ generations: [] }));
+        if (url === POSTS_PAGE_URL) {
+          return Promise.resolve(jsonResponse({ posts: FIRST_POSTS_PAGE, pageInfo: { hasMore: true, nextOffset: 36 } }));
+        }
+        if (url === '/api/posts/a' && init?.method === 'DELETE') {
+          return deleteAnswered.then(() => jsonResponse({ success: true }));
+        }
+        return null;
+      });
+
+      render(<><CreationsPage /><FeedbackViewport /></>);
+
+      expect(await screen.findByText('Post a')).toBeInTheDocument();
+      expect(loadMore()).toBeEnabled();
+      await deletePost('Post a');
+      await waitFor(() => expect(loadMore()).toBeDisabled());
+
+      await act(async () => {
+        answerDelete();
+      });
+      expect(await screen.findByText('Post deleted.')).toBeInTheDocument();
+      await waitFor(() => expect(loadMore()).toBeEnabled());
+      expect(screen.queryByText('Post a')).not.toBeInTheDocument();
+    });
+
+    // The owner list keeps an archived post where it was, and a post with buyers too, archived, when
+    // its creator deletes it (post-delete-service.ts): none of these moves a later post.
+    it('starts the next page where it was after an archive, a restore, and a delete that keeps a post for its buyers', async () => {
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      const fetchMock = stubStudioFetch((url, init) => {
+        if (url.startsWith('/api/generations')) return Promise.resolve(jsonResponse({ generations: [] }));
+        if (url === POSTS_PAGE_URL) {
+          return Promise.resolve(jsonResponse({ posts: FIRST_POSTS_PAGE, pageInfo: { hasMore: true, nextOffset: 36 } }));
+        }
+        if (url === '/api/posts/a/archive' && init?.method === 'POST') return Promise.resolve(jsonResponse({ success: true }));
+        if (url === '/api/posts/d/restore' && init?.method === 'POST') return Promise.resolve(jsonResponse({ success: true }));
+        if (url === '/api/posts/b' && init?.method === 'DELETE') {
+          return Promise.resolve(jsonResponse({ success: true, tombstoned: true }));
+        }
+        if (url.startsWith(postsPageUrl(3))) {
+          return Promise.resolve(jsonResponse({ posts: SECOND_POSTS_PAGE, pageInfo: { hasMore: false, nextOffset: null } }));
+        }
+        return null;
+      });
+      // A new element each time: React keeps one it was given before as it was, address and all.
+      const page = () => <><CreationsPage /><FeedbackViewport /></>;
+      const { rerender } = render(page());
+
+      expect(await screen.findByText('Post a')).toBeInTheDocument();
+      await chooseCardAction('Post a', 'Archive post');
+      fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Archive this post?' }))
+        .getByRole('button', { name: 'Archive' }));
+      expect(await screen.findByText('Post archived. Find it under Archived.')).toBeInTheDocument();
+
+      navigationState.searchParams = new URLSearchParams('view=posts&visibility=archived');
+      rerender(page());
+      await chooseCardAction('Post d', 'Restore post');
+      expect(await screen.findByText('Post restored.')).toBeInTheDocument();
+
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      rerender(page());
+      await deletePost('Post b');
+      expect(await screen.findByText('Post deleted. Buyers keep access to its recipe.')).toBeInTheDocument();
+      await waitFor(() => expect(loadMore()).toBeEnabled());
+
+      fireEvent.click(loadMore());
+      expect(await screen.findByText('Post e')).toBeInTheDocument();
+      expect(postsPageReads(fetchMock)).toEqual([POSTS_PAGE_URL, NEXT_POSTS_PAGE_URL]);
     });
   });
 

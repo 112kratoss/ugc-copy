@@ -35,6 +35,11 @@ export interface PostLifecyclePatch {
   bundleStatus?: 'draft' | 'published' | null;
 }
 
+/** How a post left: deleted outright, or kept on the server for its buyers, archived. */
+export interface PostLifecycleRemoval {
+  tombstoned: boolean;
+}
+
 export interface PostLifecycleEvent {
   type: PostLifecycleActionType;
   postId: string;
@@ -59,8 +64,11 @@ export interface UsePostLifecycleOptions {
    * (or the reverse patch if the request fails).
    */
   onPatch: (postId: string, patch: PostLifecyclePatch) => void;
-  /** A post was deleted on the server. Never called optimistically. */
-  onRemoved?: (postId: string) => void;
+  /**
+   * A post was deleted on the server. Never called optimistically. A post with buyers is kept
+   * there, archived (`tombstoned`), so a list that pages by place still holds it.
+   */
+  onRemoved?: (postId: string, removal: PostLifecycleRemoval) => void;
   /** After any action the server accepted. */
   onSettled?: (event: PostLifecycleEvent) => void;
   /**
@@ -328,7 +336,7 @@ export function usePostLifecycle({
         }
       }
 
-      onRemoved?.(post.id);
+      onRemoved?.(post.id, { tombstoned: result.tombstoned });
       pushToast({
         tone: 'success',
         message: result.tombstoned ? 'Post deleted. Buyers keep access to its recipe.' : 'Post deleted.',
