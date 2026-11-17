@@ -8,7 +8,7 @@ import {
   useHasHydratedSupabaseAuthCookieHint,
   useSupabaseAuthCookieHint,
 } from '@/components/useSupabaseAuthCookieHint';
-import { canStyleRuleNameAuthUser } from '@/lib/app-shell-account-restore';
+import { useCreatorOwnershipAndSessionCheck, type CreatorOwnership } from '@/lib/creator-ownership';
 import type { PostRemixCapability, PostRemixTarget } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import type { StoredInviteHandoff } from '@/lib/invite-handoff';
@@ -23,8 +23,7 @@ import {
   type ShowcaseReturnContext,
 } from '@/lib/share';
 import { fetchShowcaseViewerExclusions } from '@/lib/showcase-viewer-exclusions-client';
-import { readSupabaseAuthCookieUserId } from '@/lib/supabase-auth-cookie';
-import { useViewerSessionCheck } from '@/lib/viewer-session-check';
+import { SESSION_CHECK_DEADLINE_MS } from '@/lib/viewer-session-check';
 import {
   remixCreditUserIds,
   withoutBlockedRemixCredit,
@@ -68,24 +67,16 @@ export interface ShowcasePostRemix {
 export type ShowcasePostBundleAccess = BundleRefreshPayload;
 
 /**
- * Whether the post is the viewer's own, as the page knows it at this render: it draws the rail's
- * Owner tools for the creator and "Report post or recipe" for everyone else. A client navigation
- * starts the page's session check again (`OptionalAuth`), and the creator saw the report row in
- * their tools' place until it ended, about 16 frames (sweep of 2026-11-17).
- *
- * - `owner`: the check has named the creator.
- * - `owner-checking`: the browser's session cookie names the creator and the check has not ended,
- *   its deadline passed or not: their tools are drawn, inert until it ends. The deadline
- *   (`useViewerSessionCheck`) stops the page waiting for the reader's own parts, the thread and the
- *   composer's place, never for the creator's: only the check's answer says the cookie is not theirs.
- *   Drawn as anyone else's past it, their Remix read "Remix", "Remix · Free", "Remix" when a late
- *   answer named them (CI, 2026-11-17: the dev server sent supabase-js 8.2 s after the page's script).
- * - `unread`: the server's HTML and the render that hydrates it, where no cookie can be read. Both
- *   are drawn, and the root element's `data-auth-user` mark, set from the session cookie before the
- *   first paint (`app-shell-account-restore.ts`), shows the creator theirs and everyone else the row.
- * - `other`: anyone else: a visitor, a cookie naming someone else, and a check that ended with no one.
+ * Whether the post is the viewer's own, as the page knows it at this render (`CreatorOwnership`,
+ * which the creator page shares): it draws the rail's Owner tools for the creator and "Report post
+ * or recipe" for everyone else, the creator's open Remix and their recipe as theirs, in the rail and
+ * in the panel under the post. A client navigation starts the page's session check again
+ * (`OptionalAuth`), and the creator saw the report row in their tools' place until it ended, about
+ * 16 frames (sweep of 2026-11-17). Past the check's deadline their parts stay theirs: drawn as
+ * anyone else's there, their Remix read "Remix", "Remix · Free", "Remix" when a late answer named
+ * them (CI, 2026-11-17: the dev server sent supabase-js 8.2 s after the page's script).
  */
-export type ShowcasePostOwnership = 'owner' | 'owner-checking' | 'unread' | 'other';
+export type ShowcasePostOwnership = CreatorOwnership;
 
 export interface ShowcasePostViewer {
   /** The signed-in viewer, once the session check found one. */
@@ -101,6 +92,26 @@ export interface ShowcasePostViewer {
    * starts again from it; never when the panel itself reports an unlock.
    */
   bundlePanelKey: string;
+  /**
+   * The viewer's own read of the recipe failed (an error, or an answer that names neither a recipe
+   * nor none): the page keeps its own recipe, and the creator's own, held until their read brings
+   * it, says so (`creatorHold` in ShowcaseDetailBody).
+   */
+  bundleReadFailed: boolean;
+  /**
+   * The check of a session cookie naming the creator has outlasted its deadline (`owner-checking`
+   * while `useViewerSessionCheck` reads `visitor`): their Owner tools and Remix still wait for its
+   * answer, but their recipe, held for a read only that answer lets go out, says it could not be
+   * opened, with Try again (`retryCreatorRecipe`), where it waited for good when supabase-js never
+   * loaded or Supabase never answered (review of #866).
+   */
+  creatorCheckOverdue: boolean;
+  /**
+   * The creator's held recipe's Try again: the session check asked again while it is overdue
+   * (`refreshSessionState`), drawn as opening for at most a check's deadline; else their read of the
+   * recipe asked again.
+   */
+  retryCreatorRecipe: () => void;
   /** The viewer has not got the recipe: the page pitches it. */
   lockedViewer: boolean;
   /**
@@ -202,7 +213,7 @@ export function useShowcasePostViewer({
   /** The post was made from a creation (`generationId`), the only kind a Remix can start from. */
   hasCreation: boolean;
 }): ShowcasePostViewer {
-  const { session, user, isLoading } = useAuth();
+  const { session, user, isLoading, refreshSessionState } = useAuth();
   const hasAuthCookie = useSupabaseAuthCookieHint();
   const hydrated = useHasHydratedSupabaseAuthCookieHint();
   const accessToken = session?.access_token ?? null;
@@ -212,23 +223,15 @@ export function useShowcasePostViewer({
   // is being checked, so a signed-in viewer is never first read as a visitor.
   const viewerKey = viewerUserId ?? (!hydrated || (hasAuthCookie && isLoading) ? null : VISITOR);
   const viewerIsOwner = Boolean(viewerUserId && creatorId && viewerUserId === creatorId);
-  const viewerCheck = useViewerSessionCheck();
-  const ownership: ShowcasePostOwnership = viewerIsOwner
-    ? 'owner'
-    : viewerUserId || !creatorId
-      ? 'other'
-      : viewerCheck === 'unread'
-        // A creator a style rule cannot name gets the row, as a visitor does, until the check ends.
-        ? canStyleRuleNameAuthUser(creatorId) ? 'unread' : 'other'
-        // The provider is still checking the cookie, whatever its deadline says (`owner-checking`).
-        : hasAuthCookie && isLoading && readSupabaseAuthCookieUserId() === creatorId
-          ? 'owner-checking'
-          : 'other';
+  const { ownership, viewerCheck } = useCreatorOwnershipAndSessionCheck(creatorId);
   const effectiveVisibility = useOwnerPostVisibility(postId, viewerIsOwner) ?? visibility;
 
   // `null` until `ShowcaseSearchParamsReporter` has read the address.
   const [search, setSearch] = useState<string | null>(null);
   const [viewerBundle, setViewerBundle] = useState<ViewerBundle | null>(null);
+  // The viewer the read of the recipe last failed for, and how many times it has been asked again.
+  const [bundleReadFailedFor, setBundleReadFailedFor] = useState<string | null>(null);
+  const [bundleReadAttempt, setBundleReadAttempt] = useState(0);
   const [blockedFor, setBlockedFor] = useState<string | null>(null);
   // The people the credit names that a block stands between, for the viewer it was asked for.
   const [blockedCreditPeople, setBlockedCreditPeople] = useState<{ viewer: string; ids: string[] } | null>(null);
@@ -270,6 +273,11 @@ export function useShowcasePostViewer({
   useEffect(() => {
     if (!readsBundle || viewerKey === null) return;
     const controller = new AbortController();
+    // Said for the viewer it was asked for: the creator's own recipe, held until this read brings it,
+    // says so and offers to ask again. Anyone else keeps the page's recipe, as before.
+    const failed = () => {
+      if (!controller.signal.aborted) setBundleReadFailedFor(viewerKey);
+    };
     // Asked on every post a signed-in reader opens, recipe or not: the cached page cannot say
     // whether one is held back for them. None for them is answered as none, not as a 404 the
     // browser logs as a failed load on every such post (`postRecipeReadPath`).
@@ -280,22 +288,71 @@ export function useShowcasePostViewer({
       // Gone for this viewer: never published to them, taken off sale since
       // the page was cached, or a block; answered as none, or as a 404 by a
       // server from before `absent=none`. Any other failure keeps the page's.
-      if (response.status !== 404 && !response.ok) return;
+      if (response.status !== 404 && !response.ok) {
+        failed();
+        return;
+      }
       const body = response.ok
         ? await response.json().catch(() => null) as { bundle?: PostResourceBundleDetail | null } | null
         : null;
+      if (controller.signal.aborted) return;
       // An answer that says neither keeps the page's too.
-      if (controller.signal.aborted || (response.ok && body?.bundle === undefined)) return;
+      if (response.ok && body?.bundle === undefined) {
+        failed();
+        return;
+      }
       const read = response.ok ? body?.bundle ?? null : null;
+      setBundleReadFailedFor(null);
       // What the panel reported after an unlock is newer than a read sent before it.
       setViewerBundle((current) => (
         current?.viewerKey === viewerKey && current.source === 'panel'
           ? current
           : { viewerKey, bundle: read, source: 'read', panelStart: 'read' }
       ));
-    }).catch(() => undefined);
+    }).catch(failed);
     return () => controller.abort();
-  }, [accessToken, postId, readsBundle, viewerKey]);
+  }, [accessToken, bundleReadAttempt, postId, readsBundle, viewerKey]);
+
+  const retryBundleRead = useCallback(() => {
+    setBundleReadFailedFor(null);
+    setBundleReadAttempt((attempt) => attempt + 1);
+  }, []);
+
+  // The creator's read of their recipe goes out only once the check names them, and a check that
+  // never ends (supabase-js failing to load after a deploy, `getUser` hanging) held their recipe at
+  // "Opening your recipe…" for good. Past the check's deadline it says it could not be opened, with
+  // Try again, which asks the check again; their Owner tools and Remix still wait for its answer.
+  // While the check asked again runs, the recipe is drawn opening, for at most another deadline.
+  const [creatorCheckRetry, setCreatorCheckRetry] = useState<number | null>(null);
+  // Whether this page is still the one on screen when a retry's failure lands: its reload is for
+  // this page alone, never for one the creator went on to.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (creatorCheckRetry === null) return undefined;
+    const deadline = setTimeout(() => setCreatorCheckRetry(null), SESSION_CHECK_DEADLINE_MS);
+    return () => clearTimeout(deadline);
+  }, [creatorCheckRetry]);
+  const creatorCheckOverdue = ownership === 'owner-checking' && viewerCheck === 'visitor' && creatorCheckRetry === null;
+  const retryCreatorRecipe = useCallback(() => {
+    if (!creatorCheckOverdue) {
+      retryBundleRead();
+      return;
+    }
+    const startedAt = performance.now();
+    setCreatorCheckRetry(startedAt);
+    void refreshSessionState()
+      // supabase-js itself would not load (a deploy renamed its chunk): only a new page has it.
+      .catch(() => {
+        if (mountedRef.current) window.location.reload();
+      })
+      .finally(() => setCreatorCheckRetry((current) => (current === startedAt ? null : current)));
+  }, [creatorCheckOverdue, refreshSessionState, retryBundleRead]);
 
   // A block either way hides the post, as the app's by-id read does and as
   // blocking promises ("You will stop seeing their posts"). A check that could
@@ -399,6 +456,9 @@ export function useShowcasePostViewer({
     visibility: effectiveVisibility,
     bundle,
     bundlePanelKey: `${viewerKey ?? 'unknown'}:${ownBundle?.panelStart ?? 'page'}`,
+    bundleReadFailed: viewerKey !== null && bundleReadFailedFor === viewerKey,
+    creatorCheckOverdue,
+    retryCreatorRecipe,
     lockedViewer,
     remix,
     creatorRemix,

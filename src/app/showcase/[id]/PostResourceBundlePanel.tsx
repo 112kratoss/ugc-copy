@@ -18,6 +18,7 @@ import {
   NotebookText,
   Paperclip,
   Play,
+  RefreshCw,
   Repeat2,
   ShoppingCart,
   SlidersHorizontal,
@@ -51,6 +52,7 @@ import {
 } from '@/lib/post-resource-bundles';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
+import { FREE_RECIPE_LABEL, OWN_RECIPE_LABEL, RECIPE_UNLOCKED_LABEL } from '@/lib/showcase-asset-labels';
 import { getCurrentInternalPath } from '@/lib/share';
 import { RECIPE_RETURN_ANCHOR } from '@/lib/pricing-return';
 import { trackProductEvent } from '@/lib/product-analytics';
@@ -189,6 +191,24 @@ export interface PostResourceBundlePanelProps {
   /** The host has just unlocked it (the reel): the panel says so, as it does after its own unlock. */
   announceUnlock?: boolean;
   /**
+   * The post page only: the recipe's creator, whom the page knows before their own read of the
+   * recipe has brought it (`ownership` in useShowcasePostViewer), while the recipe it holds is the
+   * one everyone else reads, locked. Their recipe reads "Your recipe" and offers nothing, and its
+   * body is held: 'opening' while that read is out or still to be asked, 'failed' once it failed
+   * or the session check it waits for outlasted its deadline, with Try again
+   * (`onRetryCreatorRead`). The read that lands starts the panel again from it.
+   */
+  creatorHold?: 'opening' | 'failed' | null;
+  /** Try again on `creatorHold` 'failed': the page asks again what held it, the read or the check. */
+  onRetryCreatorRead?: () => void;
+  /**
+   * The post page's server HTML and the render that hydrates it only, where no cookie can be read:
+   * the recipe's creator. Everyone else's offer and the creator's held recipe are both drawn, each
+   * marked for the page's rule, which shows each their own before the first paint
+   * (`ownerFirstPaintRules`).
+   */
+  creatorMark?: string;
+  /**
    * The panel unlocked or re-read the recipe for this viewer. The post page
    * passes it: its other parts (Remix, the rail, the bottom bar) follow the
    * viewer's recipe from the browser, because the page the server sends is the
@@ -289,6 +309,9 @@ export default function PostResourceBundlePanel({
   remixIncluded = false,
   returnPath,
   announceUnlock = false,
+  creatorHold = null,
+  onRetryCreatorRead,
+  creatorMark,
   onAccessChange,
 }: PostResourceBundlePanelProps) {
   const router = useRouter();
@@ -403,6 +426,12 @@ export default function PostResourceBundlePanel({
   );
   const groupHeadingId = useId();
   const isRecipeVisible = hasAccess || viewerIsOwner;
+  // The creator's own recipe before their read of it lands: theirs, held, never offered to them.
+  const heldForCreator = !isRecipeVisible && creatorHold !== null;
+  // Offered to this viewer: its price or "Free recipe", what an unlock gives and the ways to get it.
+  const offered = !isRecipeVisible && !heldForCreator;
+  // In the post page's server HTML: everyone else's offer, marked, beside the creator's held recipe.
+  const offerMark = offered ? creatorMark : undefined;
   const basePriceCredits = Math.max(0, Math.round(priceUsdCents));
   const creditCost = priceChange && priceChange.fromPriceCredits === basePriceCredits
     ? priceChange.priceCredits
@@ -414,6 +443,7 @@ export default function PostResourceBundlePanel({
   // the new one is shown in dollars.
   const cashPriceLabel = priceChanged ? formatUsdCents(creditCost) : priceLabel;
   const accessPriceLabel = formatPostResourcePriceLabel(creditCost, cashPriceLabel);
+  const offerLabel = isFree ? FREE_RECIPE_LABEL : accessPriceLabel;
   const allPublicCardPreviews = (preview.cardPreviews ?? []).filter((card) => card.publicTitle.trim().length > 0);
   const selectableMedia = useMemo(
     () => activeMediaItems.filter((item) => Boolean(item.mediaKey)),
@@ -1187,8 +1217,20 @@ export default function PostResourceBundlePanel({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-zinc-500">
         <span className="font-semibold uppercase tracking-[0.2em] text-emerald-300/80">Recipe</span>
         <span className="rounded-full border border-emerald-300/25 bg-emerald-300 px-2.5 py-0.5 font-bold text-slate-950">
-          {/* One word for one state: a recipe the viewer has is "Unlocked" here as on every card. */}
-          {isRecipeVisible ? (viewerIsOwner ? 'Your recipe' : 'Unlocked') : isFree ? 'Free recipe' : accessPriceLabel}
+          {/* One word for one state: a recipe the viewer has is "Unlocked" here as on every card, and
+              the creator's own is "Your recipe" whether their read of it has landed or not. */}
+          {isRecipeVisible
+            ? (viewerIsOwner ? OWN_RECIPE_LABEL : RECIPE_UNLOCKED_LABEL)
+            : heldForCreator
+              ? OWN_RECIPE_LABEL
+              : offerMark
+                ? (
+                    <>
+                      <span data-post-recipe-pitch={offerMark}>{offerLabel}</span>
+                      <span data-post-recipe-owner={offerMark}>{OWN_RECIPE_LABEL}</span>
+                    </>
+                  )
+                : offerLabel}
         </span>
         {typeof activeUnlockCount === 'number' ? (
           <span>{formatUnlockCountLabel(activeIsFree ? 'free' : 'paid', activeUnlockCount)}</span>
@@ -1200,8 +1242,8 @@ export default function PostResourceBundlePanel({
         <h2 className="mt-3 text-lg font-semibold tracking-tight text-white">{activeTitle}</h2>
       ) : null}
 
-      {!isRecipeVisible ? (
-        <div className="mt-4 space-y-4">
+      {offered ? (
+        <div data-post-recipe-pitch={offerMark} className="mt-4 space-y-4">
           <p className="max-w-2xl text-sm leading-7 text-zinc-300">{summaryLine}</p>
           <p className="text-sm leading-7 text-zinc-300">{accessLabel}</p>
 
@@ -1298,13 +1340,40 @@ export default function PostResourceBundlePanel({
         </div>
       ) : null}
 
+      {heldForCreator || offerMark ? (
+        // The creator's own recipe while the page holds the one everyone else reads: held in the
+        // panel's frame until their own read brings it. In the server's HTML it is drawn beside the
+        // offer, for the page's rule to show the creator theirs (`ownerFirstPaintRules`).
+        <div data-post-recipe-held={offerMark} className="mt-4">
+          {creatorHold === 'failed' ? (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm leading-6 text-zinc-300">The recipe could not be opened.</p>
+              <button
+                type="button"
+                onClick={onRetryCreatorRead}
+                className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/12 bg-white/[0.05] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.09]"
+              >
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                Try again
+              </button>
+            </div>
+          ) : (
+            <p role="status" className="inline-flex items-center gap-2 text-sm leading-6 text-zinc-400">
+              <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
+              Opening your recipe…
+            </p>
+          )}
+        </div>
+      ) : null}
+
       {/* Unlock actions and their outcomes; each block gates itself. */}
       <div className="mt-1">
-        {!hasAccess && !viewerIsOwner && isFree ? (
+        {offered && isFree ? (
           <button
             type="button"
             onClick={() => void unlockFree()}
             disabled={isAnyActionWorking}
+            data-post-recipe-pitch={offerMark}
             className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {workingAction === 'free' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
@@ -1312,8 +1381,8 @@ export default function PostResourceBundlePanel({
           </button>
         ) : null}
 
-        {!hasAccess && !viewerIsOwner && !isFree ? (
-          <div className={`mt-5 grid gap-3 ${offersCashCheckout ? 'sm:grid-cols-2' : ''}`}>
+        {offered && !isFree ? (
+          <div data-post-recipe-pitch={offerMark} className={`mt-5 grid gap-3 ${offersCashCheckout ? 'sm:grid-cols-2' : ''}`}>
             {offersCashCheckout ? (
               <button
                 type="button"
@@ -1346,8 +1415,8 @@ export default function PostResourceBundlePanel({
           </div>
         ) : null}
 
-        {!hasAccess && !viewerIsOwner && !isFree && (!session?.access_token || spendableCredits !== null || offersBuyCredits) ? (
-          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
+        {offered && !isFree && (!session?.access_token || spendableCredits !== null || offersBuyCredits) ? (
+          <div data-post-recipe-pitch={offerMark} className="mt-3 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
             {!session?.access_token ? <span>Sign in to see your credit balance</span> : null}
             {spendableCredits !== null ? <span>{`${spendableCredits.toLocaleString()} credits available`}</span> : null}
             {holdsUnspendableCredits ? <span>{UNSPENDABLE_CREDITS_NOTE}</span> : null}

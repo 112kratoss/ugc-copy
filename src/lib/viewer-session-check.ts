@@ -50,7 +50,8 @@ export function useViewerSessionCheck(): ViewerSessionCheck {
   const hydrated = useHasHydratedSupabaseAuthCookieHint();
   const checking = !user && hydrated && hasAuthCookie && isLoading;
   // Kept once passed: a provider checks a cookie once, when it mounts, so a deadline passed is never
-  // another check's (`refreshSessionState` checks again, but no page that waits here calls it).
+  // another check's. The post page's Try again for a creator's held recipe asks again
+  // (`refreshSessionState`) and keeps its own deadline for that check (`creatorCheckRetry`).
   const [overdue, setOverdue] = useState(false);
 
   useEffect(() => {

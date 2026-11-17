@@ -42,12 +42,15 @@ import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { displaySourceToolLabel } from '@/lib/source-tools';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
-import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
+import { getAssetAccessLabel, OWN_RECIPE_LABEL } from '@/lib/showcase-asset-labels';
 import { fetchShowcaseViewerExclusions } from '@/lib/showcase-viewer-exclusions-client';
 import ReelHostMark from '@/components/ReelHostMark';
 import { CREATOR_TAB_HASHES, CREATOR_TAB_MARK, type CreatorTab } from '@/lib/address-first-paint';
+import { useCreatorOwnership } from '@/lib/creator-ownership';
 import { useFirstPaintMark } from '@/lib/use-first-paint-mark';
 import { itemsWithoutBlockedRemixCredits } from '../../../../ugc-mobile/lib/remix-credit/remix-credit';
+
+import { ownRecipeFirstPaintRules } from './own-recipe-first-paint';
 
 const PAGE_SIZE = 24;
 const tabHashes: Record<CreatorTab, string> = CREATOR_TAB_HASHES;
@@ -102,6 +105,15 @@ function CreatorContentTabsView({
   const router = useRouter();
   const pathname = usePathname();
   const { session, user } = useAuth();
+  // Whether this is the viewer's own page, decided as the post page decides a post is theirs: their
+  // recipes read "Your recipe" from the first frame, while their session is still being checked. The
+  // tiles asked the check alone (`useAuth().user`), and read "Free recipe" until it named them, about
+  // half a second (sweep of 2026-11-17). In the server's HTML and the render that hydrates it both
+  // are drawn, and the page's rule shows each their own (`ownRecipeFirstPaintRules`).
+  const creatorId = initialData.profile.id;
+  const ownership = useCreatorOwnership(creatorId);
+  const viewerIsCreator = ownership === 'owner' || ownership === 'owner-checking';
+  const ownRecipeMark = ownership === 'unread' ? creatorId : undefined;
   // The server draws Posts. A `#creator-unlocks` or `#creator-tools` link
   // picks its tab once the page is live (below), so hydration meets the
   // markup the server sent.
@@ -516,6 +528,8 @@ function CreatorContentTabsView({
   return (
     <section className="mt-7" aria-label="Creator portfolio" onClickCapture={closeOnLinkToThisPage}>
       <ReelHostMark />
+      {/* Ahead of the tiles whose chips it picks between, so none is painted before it applies. */}
+      {ownRecipeMark ? <style>{ownRecipeFirstPaintRules(ownRecipeMark)}</style> : null}
       {/* Sticky under the top bar, and opaque, so the grid scrolls under it. */}
       <SegmentedControl
         role="tab"
@@ -554,7 +568,8 @@ function CreatorContentTabsView({
               <CreatorCard
                 key={item.id}
                 item={item}
-                isOwner={Boolean(user?.id) && item.creator.id === user?.id}
+                isOwner={viewerIsCreator && item.creator.id === creatorId}
+                ownRecipeMark={item.creator.id === creatorId ? ownRecipeMark : undefined}
                 onOpen={openViewer}
               />
             ))}
@@ -631,11 +646,18 @@ function CreatorContentTabsView({
 function CreatorCard({
   item,
   isOwner,
+  ownRecipeMark,
   onOpen,
 }: {
   item: ShowcaseFeedItem;
   /** The viewer's own page: their recipe reads "Your recipe", not a price. */
   isOwner: boolean;
+  /**
+   * The page's creator, in the server's HTML and the render that hydrates it only, where no cookie
+   * can be read: the chip draws their words beside everyone else's, and the page's rule shows each
+   * their own (`ownRecipeFirstPaintRules`).
+   */
+  ownRecipeMark?: string;
   onOpen: (item: ShowcaseFeedItem, mediaIndex?: number) => void;
 }) {
   const mediaItems = getShowcaseItemMediaItems(item);
@@ -682,7 +704,14 @@ function CreatorCard({
         {unlockLabel ? (
           <div className="pointer-events-none absolute left-2.5 top-2.5 z-[5] inline-flex max-w-[75%] items-center gap-1.5 rounded-full border border-amber-300/20 bg-black/75 px-2.5 py-1 text-[11px] font-black text-amber-300 backdrop-blur-md">
             <LockKeyhole className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">{unlockLabel}</span>
+            <span className="truncate">
+              {ownRecipeMark && unlockLabel !== OWN_RECIPE_LABEL ? (
+                <>
+                  <span data-creator-recipe-pitch={ownRecipeMark}>{unlockLabel}</span>
+                  <span data-creator-recipe-owner={ownRecipeMark}>{OWN_RECIPE_LABEL}</span>
+                </>
+              ) : unlockLabel}
+            </span>
           </div>
         ) : null}
       </div>

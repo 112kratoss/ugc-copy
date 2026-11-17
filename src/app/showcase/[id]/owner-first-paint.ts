@@ -11,11 +11,15 @@ import { APP_SHELL_AUTH_USER_ATTRIBUTE } from '@/lib/app-shell-account-restore';
  *
  * - `data-post-owner-tools`: their Owner tools (ShowcaseDetailActions).
  * - `data-post-report-rows`: everyone else's "Report post or recipe" (ReportPostButton).
- * - `data-post-recipe-owner`: their words for their own recipe, "Your recipe · View".
+ * - `data-post-recipe-owner`: their words for their own recipe, "Your recipe · View" in the rail
+ *   and "Your recipe" on the recipe panel's badge (PostResourceBundlePanel).
+ * - `data-post-recipe-held`: their own recipe's body in the recipe panel, held ("Opening your
+ *   recipe…") until their own read of it brings the recipe.
  * - `data-post-remix-owner`: the open Remix of their own creation (ShowcaseDetailEngagementRow).
  * - `data-post-recipe-pitch`: everyone else's pitch of the recipe, which the creator never gets:
- *   the rail's price or "Free recipe", the bar along the bottom edge and the room kept for it, and
- *   Remix locked behind the recipe.
+ *   the rail's price or "Free recipe", the panel's (its badge, what an unlock gives and the ways to
+ *   get it), the bar along the bottom edge and the room kept for it, and Remix locked behind the
+ *   recipe.
  */
 export function ownerFirstPaintRules(creatorId: string): string {
   const creatorsBrowser = `html[${APP_SHELL_AUTH_USER_ATTRIBUTE}="${creatorId}"]`;
@@ -25,6 +29,8 @@ export function ownerFirstPaintRules(creatorId: string): string {
     `${creatorsBrowser} [data-post-report-rows="${creatorId}"]{display:none}`,
     `[data-post-recipe-owner="${creatorId}"]{display:none}`,
     `${creatorsBrowser} [data-post-recipe-owner="${creatorId}"]{display:inline}`,
+    `[data-post-recipe-held="${creatorId}"]{display:none}`,
+    `${creatorsBrowser} [data-post-recipe-held="${creatorId}"]{display:block}`,
     `[data-post-remix-owner="${creatorId}"]{display:none}`,
     `${creatorsBrowser} [data-post-remix-owner="${creatorId}"]{display:inline-flex}`,
     `${creatorsBrowser} [data-post-recipe-pitch="${creatorId}"]{display:none}`,

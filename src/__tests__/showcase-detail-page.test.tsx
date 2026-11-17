@@ -62,6 +62,8 @@ const clientAuth = vi.hoisted(() => ({
     isLoading?: boolean;
     /** When the provider began that check (`performance.now()`). */
     sessionCheckStartedAt?: number | null;
+    /** Asks the provider to check the session again. */
+    refreshSessionState?: () => Promise<void>;
   },
 }));
 // The address the page was opened at, as the browser's router reads it: the
@@ -1234,6 +1236,149 @@ describe('Showcase detail page', () => {
         expect(recipeLink()).toHaveTextContent(/^Free recipeView$/);
         await waitFor(() => expect(recipeLink()).toHaveTextContent(/^UnlockedView$/));
         expect(recipeBar()).not.toBeInTheDocument();
+      });
+
+      // Sweep of 2026-11-17 (build 988d55079): the recipe panel under the post read "Free recipe" and
+      // offered "Get free recipe" to its creator until their own read landed, 0.4 to 1.6 s.
+      describe('in the panel under the post', () => {
+        const panelProps = () => postResourceBundlePanelPropsMock.mock.lastCall?.[0] as {
+          viewerIsOwner: boolean;
+          creatorHold?: 'opening' | 'failed' | null;
+          creatorMark?: string;
+          onRetryCreatorRead?: () => void;
+        };
+        /** The creator's own read of their recipe: all of it, theirs. */
+        const ownRead = {
+          ...freeRecipe,
+          viewerIsOwner: true,
+          viewerCanAccess: true,
+          resources: { promptText: 'Prompt', notesMarkdown: null, workflowShareUrl: null, workflowSnapshot: null, attachments: [], allowRemix: false },
+        };
+
+        it("is held as theirs while a cookie naming them is checked and while their read is out", async () => {
+          // Their own read of the recipe is never answered here.
+          vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+          holdSessionCookieOf('user-1');
+          const { rerender } = render(await openPost());
+          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: 'opening', creatorMark: undefined });
+
+          signInAs('user-1');
+          rerender(await openPost());
+          await waitFor(() => expect(requestsTo(RECIPE_READ)).toHaveLength(1));
+          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: 'opening', creatorMark: undefined });
+        });
+
+        it('says their read failed, asks it again when they say so, and opens the recipe from the read that lands', async () => {
+          vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+            const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, json: async () => body }) as Response;
+            if (String(input) !== RECIPE_READ) return reply({ success: true });
+            return requestsTo(RECIPE_READ).length === 1
+              ? reply({ error: 'Down' }, 503)
+              : reply({ success: true, bundle: ownRead });
+          }));
+          signInAs('user-1');
+          render(await openPost());
+          await waitFor(() => expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: 'failed' }));
+
+          // Try again: the read it sends goes out with the render it asks for, and is answered.
+          await act(async () => {
+            panelProps().onRetryCreatorRead?.();
+          });
+          await act(async () => {
+            await vi.waitFor(() => expect(requestsTo(RECIPE_READ)).toHaveLength(2));
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          });
+          expect(panelProps()).toMatchObject({ viewerIsOwner: true, creatorHold: null });
+          expect(recipeLink()).toHaveTextContent(/^Your recipeView$/);
+        });
+
+        // Review of #866: their read goes out only once the check names them, so a check that never
+        // ends (supabase-js failing to load after a deploy, `getUser` hanging) held the recipe at
+        // "Opening your recipe…" for good, with nothing to press.
+        it("says it could not be opened once the check of their cookie outlasts its deadline, and Try again asks the check again", async () => {
+          vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+          holdSessionCookieOf('user-1');
+          // The check asked again hangs too.
+          const refreshSessionState = vi.fn(() => new Promise<void>(() => {}));
+          const page = await openPost();
+          vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+          clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: performance.now(), refreshSessionState };
+          render(page);
+          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: 'opening' });
+
+          act(() => {
+            vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS);
+          });
+          expect(panelProps()).toMatchObject({ creatorHold: 'failed' });
+          // Their Owner tools and Remix still wait for the check's answer, as before.
+          expect(ownerTools()).toBe('checking');
+          expect(screen.getByTestId('showcase-detail-engagement-row')).toHaveAttribute('data-remix-held', 'true');
+          // No read went out: the check has not named them.
+          expect(requestsTo(RECIPE_READ)).toHaveLength(0);
+
+          // Try again asks the check again, and the recipe is opening while it runs...
+          act(() => panelProps().onRetryCreatorRead?.());
+          expect(refreshSessionState).toHaveBeenCalledTimes(1);
+          expect(panelProps()).toMatchObject({ creatorHold: 'opening' });
+          // ...for at most another deadline.
+          act(() => {
+            vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS);
+          });
+          expect(panelProps()).toMatchObject({ creatorHold: 'failed' });
+          expect(requestsTo(RECIPE_READ)).toHaveLength(0);
+        });
+
+        it('asks the check again, not the read, and opens the recipe once the check asked again names them', async () => {
+          holdSessionCookieOf('user-1');
+          let named = () => {};
+          const refreshSessionState = vi.fn(() => new Promise<void>((resolve) => {
+            named = resolve;
+          }));
+          stubPageFetch({}, { viewerBundle: ownRead });
+          const page = await openPost();
+          vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+          clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: performance.now(), refreshSessionState };
+          const { rerender } = render(page);
+          act(() => {
+            vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS);
+          });
+          expect(panelProps()).toMatchObject({ creatorHold: 'failed' });
+
+          act(() => panelProps().onRetryCreatorRead?.());
+          expect(refreshSessionState).toHaveBeenCalledTimes(1);
+          vi.useRealTimers();
+          // The provider's check names them.
+          signInAs('user-1');
+          await act(async () => {
+            named();
+            rerender(await openPost());
+          });
+          await waitFor(() => expect(panelProps()).toMatchObject({ viewerIsOwner: true, creatorHold: null }));
+          expect(requestsTo(RECIPE_READ)).toHaveLength(1);
+        });
+
+        it("is held through a read whose answer names no recipe and no none, which the page keeps its own over", async () => {
+          vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ success: true }) }) as Response));
+          signInAs('user-1');
+          render(await openPost());
+          await waitFor(() => expect(panelProps()).toMatchObject({ creatorHold: 'failed' }));
+        });
+
+        it('offers the recipe to anyone else as before, while their cookie is checked and once named', async () => {
+          vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+          holdSessionCookieOf('user-2');
+          const { rerender } = render(await openPost());
+          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: null, creatorMark: undefined });
+
+          signInAs('user-2');
+          rerender(await openPost());
+          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: null, creatorMark: undefined });
+        });
+
+        it("is drawn both ways in the server's HTML, for the page's rule, and held for no one there", async () => {
+          renderToString(await openPost());
+          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: null, creatorMark: 'user-1' });
+        });
       });
 
       // Review of #847: a creation post whose Remix the recipe brings offered its creator their own
