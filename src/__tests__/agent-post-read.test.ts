@@ -97,6 +97,18 @@ describe('a post as an agent reads it', () => {
     });
   });
 
+  // Owner, 2026-11-17 ("Yes, hide it"): a post with media and no creation has nothing to remix, and
+  // its answer said remixes were allowed (the column's default) all the same.
+  it('says remixes are allowed only on a post that can be remixed', () => {
+    expect(toAgentPostView(row(), OWNER).remixesAllowed).toBe(true);
+    expect(toAgentPostView(row({ remixes_allowed: false }), OWNER).remixesAllowed).toBe(false);
+    expect(toAgentPostView(row({ generation_id: null, source_kind: 'external' }), OWNER).remixesAllowed).toBe(false);
+    expect(toAgentPostView(row({ generation_id: null, deleted_generation_id: '55555555-5555-4555-8555-555555555555' }), OWNER).remixesAllowed)
+      .toBe(false);
+    // A text post's answer is as it was.
+    expect(toAgentPostView(row({ generation_id: null, post_format: 'text', category: 'text' }), OWNER).remixesAllowed).toBe(true);
+  });
+
   it('shows the owner every state, anyone else only a live post, and reads with the service client', async () => {
     const live = admin(row());
     expect(await readPostForAgent(live.client, { postId: POST_ID, viewerUserId: OTHER })).toMatchObject({ ok: true, post: { state: 'live', isOwn: false } });

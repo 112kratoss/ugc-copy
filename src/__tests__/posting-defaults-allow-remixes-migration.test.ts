@@ -100,19 +100,28 @@ describe('posting defaults: allow remixes migration', () => {
   it('reports a recipe of a post with remixes off without Remix, in the app as in the marketplace', () => {
     const serverSource = fs.readFileSync(path.resolve(process.cwd(), 'src/lib/post-resource-bundles-server.ts'), 'utf8');
     expect(serverSource).toMatch(
-      /resolveRecipeAllowRemix\(\{\s+storedAllowRemix: row\.allow_remix,\s+status: row\.status,\s+generationId: post\?\.generationId \?\? null,\s+remixesAllowed: post\?\.remixesAllowed,\s+\}\)/,
+      /resolveRecipeAllowRemix\(\{\s+storedAllowRemix: row\.allow_remix,\s+status: row\.status,\s+generationId: post\?\.generationId \?\? null,\s+postFormat: post\?\.postFormat \?\? null,\s+category: post\?\.category \?\? null,\s+remixesAllowed: post\?\.remixesAllowed,\s+\}\)/,
     );
-    // And drops a Remix its items make (a Remix link or access), as the SQL's wrapper does.
-    expect(serverSource).toContain('const item = post?.remixesAllowed === false ? withoutRecipeRemix(counted) : counted;');
+    // And drops a Remix its items make (a Remix link or access), as the SQL's wrapper does; and on a
+    // post with media and no creation too (owner, 2026-11-17), which the SQL does not.
+    expect(serverSource).toMatch(/const sellsNoRemix = post\?\.remixesAllowed === false \|\| isMediaPostWithoutCreation\(\{/);
+    expect(serverSource).toContain('const item = sellsNoRemix ? withoutRecipeRemix(counted) : counted;');
+    const posts = [
+      { generationId: 'generation-1', postFormat: 'media', category: 'image' },
+      { generationId: null, postFormat: 'text', category: 'text' },
+      { generationId: null, postFormat: 'media', category: 'image' },
+    ];
     for (const storedAllowRemix of [true, false, null]) {
-      for (const generationId of ['generation-1', null]) {
+      for (const post of posts) {
         for (const remixesAllowed of [true, false, undefined]) {
           // As the SQL reads post_resource_bundle_kinds: Remix from the stored switch or the creation,
-          // left out while the post's switch is off.
+          // left out while the post's switch is off. The app leaves it out of a post with media and no
+          // creation as well, whatever is stored (owner, 2026-11-17).
           const open = remixesAllowed !== false;
-          const sqlRule = (storedAllowRemix === true && open) || (generationId !== null && open);
-          expect(resolveRecipeAllowRemix({ storedAllowRemix, status: 'published', generationId, remixesAllowed }), JSON.stringify({ storedAllowRemix, generationId, remixesAllowed }))
-            .toBe(sqlRule);
+          const sqlRule = (storedAllowRemix === true && open) || (post.generationId !== null && open);
+          const appRule = post.postFormat === 'media' && post.generationId === null ? false : sqlRule;
+          expect(resolveRecipeAllowRemix({ storedAllowRemix, status: 'published', ...post, remixesAllowed }), JSON.stringify({ storedAllowRemix, post, remixesAllowed }))
+            .toBe(appRule);
         }
       }
     }

@@ -351,6 +351,9 @@ items `{ storage_path }`, each the path `upload_input` answered), or neither, wh
 - The post's id is its only handle: `list_creations` lists creations, and the answer says to keep
   the `post_id`. `get_post` reads such a post (`generation_id` null) and `delete_post` deletes it,
   with its media, since no creation holds a copy.
+- Such a post offers no Remix, and its resource sells none (owner, 2026-11-17): a Remix starts
+  from a creation. `get_post` answers `allow_remixes: false` for it whatever its column holds, as
+  it does for a creation's post whose creation was deleted since; a text post's answer is as it was.
 
 **How it is recorded.** Under `tool = 'publish_post'`, so the daily cap, the moderation list and
 the partial index apply unchanged: `PUBLISHED_PUBLIC` or `PUBLISHED_PRIVATE` with `post_id` set

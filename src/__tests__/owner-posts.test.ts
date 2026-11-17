@@ -259,10 +259,18 @@ vi.mock('@/lib/server-helpers', () => ({
               return {
                 data: bundleRows.value
                   .filter((row) => args.p_post_ids.includes(row.post_id as string))
-                  .map((row) => ({
-                    ...pickColumns(row, 'id, post_id, access_mode, status, price_usd_cents, sales_count, free_unlock_count, earnings_usd_cents'),
-                    resource_kinds: row.prompt_text ? ['prompt'] : [],
-                  })),
+                  .map((row) => {
+                    // The SQL's Remix (20261017145444): a Remix access or link among the items, or
+                    // the stored switch of a recipe with none.
+                    const items = Array.isArray(row.resource_items) ? row.resource_items as Array<{ type?: string }> : [];
+                    const remix = items.length > 0
+                      ? items.some((item) => item.type === 'remix_access' || item.type === 'remix_link')
+                      : row.allow_remix === true;
+                    return {
+                      ...pickColumns(row, 'id, post_id, access_mode, status, price_usd_cents, sales_count, free_unlock_count, earnings_usd_cents'),
+                      resource_kinds: [...(row.prompt_text ? ['prompt'] : []), ...(remix ? ['remix'] : [])],
+                    };
+                  }),
                 error: null,
               };
             },
@@ -823,6 +831,80 @@ describe('owner posts', () => {
       expect(kindsOf('closed-creation')).toEqual(['prompt']);
       expect(kindsOf('closed-link')).toEqual(['prompt']);
       expect(kindsOf('open-creation')).toEqual(['prompt', 'remix']);
+    });
+
+    // Owner, 2026-11-17 ("Yes, hide it"): a post with no creation has nothing to remix, so Studio and
+    // Your Sales name and grade its listing with no Remix, as the marketplace lists it, whatever its
+    // stored switch or a Remix access item among its items says. A text post's stays as it was.
+    it.each([
+      ['the compact summary RPC', true],
+      ['the bundle select fallback', false],
+    ])('names no Remix on the listing of a post with no creation, through %s', async (_label, rpcEnabled) => {
+      compactSummaryRpc.enabled = rpcEnabled;
+      postRows.value = [
+        ...postRows.value,
+        listingPost('upload-switch-on', '2026-07-05T00:00:00.000Z'),
+        listingPost('upload-access', '2026-07-06T00:00:00.000Z'),
+        listingPost('text-switch-on', '2026-07-07T00:00:00.000Z', { post_format: 'text', category: 'text', source_kind: 'manual' }),
+      ] as unknown as typeof postRows.value;
+      bundleRows.value = [
+        recipe('upload-switch-on', { allow_remix: true }),
+        recipe('upload-access', {
+          resource_items: [
+            { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'A warm golden hour portrait with soft rim light.' },
+            { id: 'access-1', type: 'remix_access', title: 'Remix access' },
+          ],
+        }),
+        recipe('text-switch-on', { allow_remix: true }),
+      ];
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      const listings = await getOwnerPostList('user-1', { includeArchived: true, visibility: 'all', listingsOnly: true });
+      const kindsOf = (postId: string) => listings.find((post) => post.id === postId)?.bundle?.resourceKinds;
+
+      expect(kindsOf('upload-switch-on')).toEqual(['prompt']);
+      expect(kindsOf('upload-access')).toEqual(['prompt']);
+      expect(kindsOf('text-switch-on')).toEqual(['prompt', 'remix']);
+    });
+
+    // Review of #853: such a recipe of a Remix link alone holds the creator's link, which the
+    // marketplace lists (the database counts every labelled item); with no Remix among its kinds it
+    // was graded as holding nothing. One of a Remix access mark or the stored switch alone holds
+    // nothing now, and its creator is not told to add a remix permission, which such a post can't.
+    it.each([
+      ['the compact summary RPC', true],
+      ['the bundle select fallback', false],
+    ])('grades a recipe of a Remix link alone on a post with no creation as listable, through %s', async (_label, rpcEnabled) => {
+      compactSummaryRpc.enabled = rpcEnabled;
+      postRows.value = [
+        ...postRows.value,
+        listingPost('upload-link', '2026-07-05T00:00:00.000Z'),
+        listingPost('upload-access', '2026-07-06T00:00:00.000Z'),
+        listingPost('upload-switch', '2026-07-07T00:00:00.000Z'),
+      ] as unknown as typeof postRows.value;
+      bundleRows.value = [
+        recipe('upload-link', {
+          prompt_text: null,
+          resource_items: [{ id: 'link-1', type: 'remix_link', title: 'Remix link', externalUrl: 'https://example.com/remix' }],
+        }),
+        recipe('upload-access', {
+          prompt_text: null,
+          resource_items: [{ id: 'access-1', type: 'remix_access', title: 'Remix access' }],
+        }),
+        recipe('upload-switch', { prompt_text: null, allow_remix: true }),
+      ];
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      const listings = await getOwnerPostList('user-1', { includeArchived: true, visibility: 'all', listingsOnly: true });
+      const bundleOf = (postId: string) => listings.find((post) => post.id === postId)?.bundle;
+
+      expect(bundleOf('upload-link')).toMatchObject({ resourceKinds: [], quality: { eligible: true, message: null } });
+      for (const postId of ['upload-access', 'upload-switch']) {
+        expect(bundleOf(postId), postId).toMatchObject({
+          resourceKinds: [],
+          quality: { eligible: false, message: 'Attach at least one useful prompt, workflow, file, or note.' },
+        });
+      }
     });
 
     it('names no Remix on the editor’s own read of such a post, whatever its unlock counts', async () => {

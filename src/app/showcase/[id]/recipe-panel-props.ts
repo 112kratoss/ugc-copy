@@ -32,9 +32,12 @@ export interface RecipeRemixOffer {
  * Whether a post's Remix comes with its recipe, and how the post page offers
  * it to this viewer: open, or locked behind the recipe with its price ("Remix
  * · 900 credits", "Remix · Free"), as the feed's card offers it
- * (`getPostFeedRemixAccess`).
+ * (`getPostFeedRemixAccess`). A post with no creation has no Remix, so its
+ * recipe neither names nor offers one (owner, 2026-11-17).
  */
 export function getRecipeRemixOffer(post: {
+  /** The post's creation, the only thing a Remix starts from. */
+  generationId: string | null;
   canRemix: boolean;
   remixCapability?: PostRemixCapability;
   remixTarget?: PostRemixTarget;
@@ -42,6 +45,7 @@ export function getRecipeRemixOffer(post: {
 }): RecipeRemixOffer {
   const remixAccess = getPostFeedRemixAccess({
     asset: post.bundle ? { allowRemix: post.bundle.allowRemix, accessMode: post.bundle.accessMode } : null,
+    generationId: post.generationId,
     canRemix: post.canRemix,
     remixCapability: post.remixCapability,
     remixTarget: post.remixTarget,

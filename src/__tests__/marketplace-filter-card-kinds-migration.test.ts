@@ -134,17 +134,27 @@ describe('marketplace filter card kinds migration', () => {
     // What that rule says, against the function the app calls, called as
     // hydrateBundleRows calls it (no templateResult).
     expect(serverSource).toMatch(
-      /resolveRecipeAllowRemix\(\{\s+storedAllowRemix: row\.allow_remix,\s+status: row\.status,\s+generationId: post\?\.generationId \?\? null,\s+(?:remixesAllowed: post\?\.remixesAllowed,\s+)?\}\)/,
+      /resolveRecipeAllowRemix\(\{\s+storedAllowRemix: row\.allow_remix,\s+status: row\.status,\s+generationId: post\?\.generationId \?\? null,\s+postFormat: post\?\.postFormat \?\? null,\s+category: post\?\.category \?\? null,\s+(?:remixesAllowed: post\?\.remixesAllowed,\s+)?\}\)/,
     );
+    const posts = [
+      { generationId: 'generation-1', postFormat: 'media', category: 'image' },
+      { generationId: null, postFormat: 'text', category: 'text' },
+      { generationId: null, postFormat: 'media', category: 'image' },
+    ];
     for (const storedAllowRemix of [true, false, null]) {
       for (const status of ['published', 'draft']) {
-        for (const generationId of ['generation-1', null]) {
-          const sqlRule = storedAllowRemix === true || (status === 'published' && generationId !== null);
-          expect([storedAllowRemix, status, generationId, resolveRecipeAllowRemix({ storedAllowRemix, status, generationId })])
-            .toEqual([storedAllowRemix, status, generationId, sqlRule]);
+        for (const post of posts) {
+          const sqlRule = storedAllowRemix === true || (status === 'published' && post.generationId !== null);
+          // Owner, 2026-11-17: a post with media and no creation sells no Remix, whatever is stored.
+          // The SQL still reads the stored switch there, so the page the list serves checks its Remix
+          // filter again on what the app reports (getMarketplaceResourceListBase).
+          const appRule = post.postFormat === 'media' && post.generationId === null ? false : sqlRule;
+          expect([storedAllowRemix, status, post, resolveRecipeAllowRemix({ storedAllowRemix, status, ...post })])
+            .toEqual([storedAllowRemix, status, post, appRule]);
         }
       }
     }
+    expect(serverSource).toContain("&& (resource !== 'remix' || item.resourceKinds.includes('remix'))");
     expect(getPostResourceKinds({ items: [{ type: 'prompt' }], allowRemix: true } as never)).toEqual(['prompt', 'remix']);
   });
 

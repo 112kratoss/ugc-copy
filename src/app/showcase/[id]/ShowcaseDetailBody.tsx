@@ -266,12 +266,13 @@ export default function ShowcaseDetailBody({
   // for a viewer without it, and named in the panel either way (B-F3).
   const remixOffer = getRecipeRemixOffer({
     ...viewer.remix,
+    generationId: detail.generationId,
     bundle,
   });
   // Whether the recipe includes the Remix is the recipe's to say, whoever is looking: read from the
-  // page's own offer, it reads the same for the creator of a post with no creation, who has no Remix
-  // of their own, and the same as before for everyone else.
-  const recipeIncludesRemix = getRecipeRemixOffer({ ...pageRemix, bundle }).remixIncluded;
+  // page's own offer, it reads the same for the post's creator and everyone else. A post with no
+  // creation has no Remix for its recipe to include (owner, 2026-11-17).
+  const recipeIncludesRemix = getRecipeRemixOffer({ ...pageRemix, generationId: detail.generationId, bundle }).remixIncluded;
   const resourceBundlePanel = bundle ? (
     <PostResourceBundlePanel
       // Starts again from the viewer's own read of the recipe when it lands;

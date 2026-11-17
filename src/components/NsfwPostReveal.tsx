@@ -33,6 +33,7 @@ function RevealedRecipe({ detail }: { detail: PublicPostDetail }) {
   const bundle = detail.resourceBundle;
   if (!bundle) return null;
   const { remixIncluded } = getRecipeRemixOffer({
+    generationId: detail.generationId,
     canRemix: detail.canRemix,
     remixCapability: detail.remixCapability,
     remixTarget: detail.remixTarget,

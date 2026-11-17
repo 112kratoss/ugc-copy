@@ -2190,6 +2190,29 @@ describe('ShowcaseReelViewer pagination', () => {
       render(<ShowcaseReelViewer {...reelProps({ items: [lockedRemix(paidAsset, { remixTarget: 'workflow' })] })} />);
       expect(screen.queryByRole('button', { name: /remix/i })).not.toBeInTheDocument();
     });
+
+    // Owner, 2026-11-17 ("Yes, hide it"): a post with no creation has nothing to remix, and the
+    // remix route refuses it, so the reel offers no Remix on one, whatever its read says: locked
+    // behind its recipe, open, or the recipe had in the reel. Nor does the recipe name one.
+    it('offers no Remix on a post with no creation, and its recipe names none once it is had', async () => {
+      authState.session = { access_token: 'token-1' };
+      stubRequests({ '/api/posts/post-1/resource-bundle': accessAnswer });
+      const upload = { generationId: null, sourceKind: 'external' } as const;
+      const { unmount } = render(<ShowcaseReelViewer {...reelProps({ items: [lockedRemix(freeAsset, upload)] })} />);
+      expect(screen.queryByRole('button', { name: /remix/i })).not.toBeInTheDocument();
+      unmount();
+
+      const onRemix = vi.fn();
+      render(<ShowcaseReelViewer {...reelProps({
+        items: [createShowcaseItem({ ...upload, canRemix: true, remixCapability: 'public', remixTarget: 'image', asset: { ...freeAsset, allowRemix: true } })],
+        onRemix,
+      })} />);
+      // Its recipe is the reader's here (the read answers it as theirs): its panel opens, with no Remix.
+      expect(await screen.findByText('recipe prompt')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /remix/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/remix included/i)).not.toBeInTheDocument();
+      expect(onRemix).not.toHaveBeenCalled();
+    });
   });
 
   describe("the reel's own unlock", () => {

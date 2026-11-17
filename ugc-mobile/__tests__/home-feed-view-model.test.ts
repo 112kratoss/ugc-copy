@@ -409,11 +409,14 @@ describe('home feed view model', () => {
 describe("a Home card's recipe chip", () => {
   const read = (name: string) => readFileSync(path.resolve(__dirname, '..', name), 'utf8');
 
-  function recipePost({ asset, remix }: {
+  function recipePost({ asset, remix, withoutCreation = false }: {
     asset: { accessMode: string; priceUsdCents: number; viewerHasUnlocked?: boolean } | null;
     remix: boolean;
+    /** A post with no creation, which has nothing to remix whatever its read says (owner, 2026-11-17). */
+    withoutCreation?: boolean;
   }) {
     return item({
+      ...(withoutCreation ? { generationId: null } : {}),
       // `none` is the server saying there is nothing to remix, whatever is attached.
       canRemix: remix,
       remixCapability: remix ? 'public' : 'none',
@@ -430,13 +433,16 @@ describe("a Home card's recipe chip", () => {
 
   it.each(feedRecipeChipContract.cases)('draws $name as the contract says', (entry) => {
     const { asset, remix, chip } = entry;
-    const post = recipePost({ asset, remix });
+    // `remix` is what the post's read says; a post with no creation is drawn no Remix whatever it
+    // says, as the web draws none (owner, 2026-11-17).
+    const withoutCreation = 'creation' in entry && entry.creation === false;
+    const post = recipePost({ asset, remix, withoutCreation });
     // Whose post it is is the viewer's to know, not the item's: the card is
     // built for the signed-in viewer, here the post's creator or someone else.
     const viewerIsOwner = 'viewerIsOwner' in entry && entry.viewerIsOwner === true;
     const card = showcaseToHomeFeedCard(post, new Date(), viewerIsOwner ? post.creator.id : 'someone-else');
 
-    expect(Boolean(card.remixAccess)).toBe(remix);
+    expect(Boolean(card.remixAccess)).toBe(remix && !withoutCreation);
     expect(card.recipeChip?.tone ?? null).toBe(chip?.tone ?? null);
     expect(card.recipeChip?.kind ?? null).toBe(chip?.kind ?? null);
     expect(card.recipeChip?.label ?? null).toBe(chip?.label.mobile ?? null);
