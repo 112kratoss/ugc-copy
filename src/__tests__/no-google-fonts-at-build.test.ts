@@ -38,5 +38,9 @@ describe('fonts at build time', () => {
     const declared = [...source.matchAll(/prop: 'font-family', value: '([^']+)'/g)].map((m) => m[1]);
     expect(declared.length).toBeGreaterThan(0);
     expect(new Set(declared)).toEqual(new Set([primary]));
+    // One declaration per subset call: every `localFont(` but the exported one, so a subset added
+    // without its `font-family` (named after its own const, so never used) fails here.
+    const calls = source.match(/= localFont\(/g)?.length ?? 0;
+    expect(declared.length).toBe(calls - 1);
   });
 });

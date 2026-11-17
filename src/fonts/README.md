@@ -8,7 +8,7 @@ Each `.woff2` is, byte for byte, the file `next/font/google` served for that fam
 |---|---|---|---|
 | `bricolage-grotesque-*.woff2` (vietnamese, latin-ext, latin; variable, weights 700 and 800 use one file) | Bricolage Grotesque | https://github.com/ateliertriay/bricolage, Copyright 2022 The Bricolage Grotesque Project Authors | SIL Open Font License 1.1 |
 | `caveat-700-*.woff2` (cyrillic-ext, cyrillic, latin-ext, latin) | Caveat Bold | https://github.com/googlefonts/caveat, Copyright 2014 The Caveat Project Authors | SIL Open Font License 1.1 |
-| `geist-*.woff2` (cyrillic-ext, cyrillic, vietnamese, latin-ext, latin; variable, weights 100 to 900) | Geist | https://github.com/vercel/geist-font, Copyright 2023 Vercel, in collaboration with basement.studio | SIL Open Font License 1.1 |
+| `geist-*.woff2` (cyrillic-ext, cyrillic, vietnamese, latin-ext, latin; variable, weights 100 to 900) | Geist | https://github.com/vercel/geist-font, Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font.git), as Google Fonts ships these files; the upstream repository's LICENSE names Copyright 2023 Vercel, in collaboration with basement.studio | SIL Open Font License 1.1 |
 
 The three families are under the same license text, below. None of them uses a Reserved Font Name.
 
