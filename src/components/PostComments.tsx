@@ -56,6 +56,7 @@ import {
     type PostCommentSort,
     type PostCommentsPage,
 } from '@/lib/post-comments-client';
+import { accountAvatar, useAccountProfile } from '@/lib/account-avatar';
 import { formatCompactCount, formatRelativeTime } from '@/lib/post-feed-presentation';
 import { getCurrentInternalPath } from '@/lib/share';
 import { readPostCommentSort, usePostCommentSort } from '@/lib/post-comment-sort-memory';
@@ -178,6 +179,8 @@ export default function PostComments({
     // (owner's recording, 2026-11-16).
     const viewerCheck = useViewerSessionCheck();
     const readerKey = viewerId ?? (viewerCheck === 'visitor' ? VISITOR : null);
+    // The reader beside the composer, as the top bar draws them: their profile's name and picture.
+    const readerProfile = useAccountProfile(viewerId);
     const askToConfirm = useConfirmation();
 
     // The order chosen for this post's comments, kept for the tab: a refresh or Back keeps it.
@@ -996,8 +999,7 @@ export default function PostComments({
                     ) : null}
                     <div className="flex items-start gap-3">
                         <PostCommentAvatar
-                            avatarUrl={(user.user_metadata?.avatar_url as string | undefined) ?? null}
-                            name={(user.user_metadata?.full_name as string | undefined) || user.email || 'You'}
+                            {...accountAvatar(user, readerProfile)}
                             size={replyTo ? 24 : 32}
                         />
                         <div className="min-w-0 flex-1">

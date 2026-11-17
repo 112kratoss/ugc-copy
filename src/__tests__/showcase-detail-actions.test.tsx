@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const routerMocks = vi.hoisted(() => ({
@@ -50,7 +51,7 @@ function renderOwnerTools(overrides: Partial<React.ComponentProps<typeof Showcas
         title="Sunset study"
         creatorUsername="creator"
         visibility="public"
-        viewerIsOwner
+        ownerTools="ready"
         hasResourceBundle
         bundle={{ accessMode: 'paid', status: 'published', salesCount: 0 }}
         {...overrides}
@@ -198,8 +199,79 @@ describe('ShowcaseDetailActions owner tools', () => {
   });
 
   it('hides the owner tools from other viewers', () => {
-    renderOwnerTools({ viewerIsOwner: false });
+    renderOwnerTools({ ownerTools: null });
     expect(screen.queryByText('Owner tools')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /visibility of/i })).not.toBeInTheDocument();
+  });
+
+  // Sweep of 2026-11-17: the creator's tools are drawn from the first frame of their own post, while
+  // the session is still checked, and do nothing until it ends: closed, and they act with it.
+  it('draws the tools inert while the session is checked, and alive once it names the creator', () => {
+    const tools = (ownerTools: 'checking' | 'ready') => (
+      <ShowcaseDetailActions
+        postId="post-1"
+        generationId="gen-1"
+        title="Sunset study"
+        creatorUsername="creator"
+        visibility="public"
+        ownerTools={ownerTools}
+        ownerToolsMark="owner-1"
+        hasResourceBundle
+        bundle={{ accessMode: 'paid', status: 'published', salesCount: 0 }}
+      />
+    );
+    const { container, rerender } = render(tools('checking'));
+    const details = container.querySelector('details') as HTMLDetailsElement;
+    expect(within(details).getByText('Owner tools')).toBeInTheDocument();
+    expect(details).toHaveAttribute('inert');
+    // Only the server's HTML is marked for the page's rule.
+    expect(details).not.toHaveAttribute('data-post-owner-tools');
+    // The row alone: what it opens onto comes with the session.
+    expect(details.querySelector('summary')).not.toBeNull();
+    expect(details.querySelectorAll('a, button')).toHaveLength(0);
+
+    rerender(tools('ready'));
+    expect(container.querySelector('details')).toBe(details);
+    expect(details).not.toHaveAttribute('inert');
+    expect(within(details).getByRole('link', { name: 'Edit post' })).toHaveAttribute('href', '/post/post-1/edit');
+    expect(within(details).getByRole('link', { name: 'Manage recipe' })).toHaveAttribute('href', '/post/post-1/edit#recipe');
+    expect(within(details).getByRole('button', { name: /^Visibility of Sunset study/ })).toBeInTheDocument();
+    expect(within(details).getByRole('button', { name: 'Archive' })).toBeInTheDocument();
+    expect(within(details).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+  });
+
+  it("marks the server's HTML for the page's rule, which shows the tools to the creator only, inert", () => {
+    const { container } = renderOwnerTools({ ownerTools: 'unread', ownerToolsMark: 'owner-1' });
+    const tools = container.querySelector('details') as HTMLDetailsElement;
+    expect(tools).toHaveAttribute('data-post-owner-tools', 'owner-1');
+    expect(tools).toHaveAttribute('inert');
+  });
+
+  // Review of #838: the server's HTML is every visitor's and every crawler's (ISR), and a hidden link is
+  // still a link: each post page carried its /post/<id>/edit links, the visibility menu, Archive and
+  // Delete, and each crawl of an edit link is a function invocation that redirects to sign-in.
+  it("draws only the row in the server's HTML: no link, menu or action, for anyone", () => {
+    for (const ownerTools of ['unread', 'checking'] as const) {
+      const html = renderToString(
+        <ShowcaseDetailActions
+          postId="post-1"
+          generationId="gen-1"
+          title="Sunset study"
+          creatorUsername="creator"
+          visibility="public"
+          ownerTools={ownerTools}
+          ownerToolsMark="owner-1"
+          hasResourceBundle
+          bundle={{ accessMode: 'paid', status: 'published', salesCount: 0 }}
+        />,
+      );
+
+      expect(html).toContain('Owner tools');
+      expect(html).toMatch(/<details[^>]*inert=""/);
+      expect(html).not.toContain('/post/post-1/edit');
+      for (const action of ['Edit post', 'Manage recipe', 'Visibility of', 'Archive', 'Delete']) {
+        expect(html).not.toContain(action);
+      }
+    }
   });
 });
