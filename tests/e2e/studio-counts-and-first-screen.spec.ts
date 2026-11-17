@@ -11,6 +11,8 @@ import { expect, test, type Locator, type Page, type Route } from '@playwright/t
  *   the media filters counted the finished creations of the loaded page ("All (29)", "Images (29)").
  * - The phone (375 × 812): the header, the section tabs wrapped onto two lines and the portfolio
  *   setup card filled the first screen, and no creation showed in it.
+ * - The Post Library, which loads its posts 36 at a time too, counted only the pages loaded in its
+ *   header and its visibility filters (#836's note, fixed after it).
  *
  * Studio reads its data from the browser, so page.route answers each request; nothing here reads
  * Supabase on the server.
@@ -256,5 +258,118 @@ test.describe('Studio with more creations than its first page', () => {
     await expect(setup.getByRole('button', { name: 'Steps' })).toBeHidden();
     // The section tabs and the line that says what the open one holds, as before.
     await expect(page.getByText('Preview private outputs, then turn the strongest ones into posts.')).toBeVisible();
+  });
+});
+
+type PostVisibility = 'public' | 'unlisted' | 'private';
+
+/** A text post of the library, newest first by its number. An archived one keeps its visibility. */
+function libraryPost(index: number, visibility: PostVisibility, archived = false) {
+  const createdAt = new Date(Date.UTC(2026, 10, 16, 12) - index * 60_000).toISOString();
+  const shown = !archived && visibility !== 'private';
+  return {
+    ...PUBLIC_POST,
+    id: `post-e2e-library-${index}`,
+    visibility,
+    archivedAt: archived ? createdAt : null,
+    title: `Library post ${index}`,
+    createdAt,
+    updatedAt: createdAt,
+    publicPath: shown ? `/showcase/post-e2e-library-${index}` : null,
+    ownerPath: `/post/post-e2e-library-${index}/edit`,
+    canShare: shown,
+  };
+}
+
+// 36 posts: 22 public, 9 private and 5 archived.
+const FIRST_POSTS_PAGE = [
+  ...range(0, 22).map((index) => libraryPost(index, 'public')),
+  ...range(22, 9).map((index) => libraryPost(index, 'private')),
+  ...range(31, 5).map((index) => libraryPost(index, 'public', true)),
+];
+// The other 14: 8 public, the one unlisted post left from before 2026-10-17, 2 private and 3
+// archived. The library: 42 posts (30 public, 1 unlisted, 11 private) and 8 archived.
+const SECOND_POSTS_PAGE = [
+  ...range(36, 8).map((index) => libraryPost(index, 'public')),
+  libraryPost(44, 'unlisted'),
+  ...range(45, 2).map((index) => libraryPost(index, 'private')),
+  ...range(47, 3).map((index) => libraryPost(index, 'public', true)),
+];
+
+async function answerPostLibrary(page: Page) {
+  await page.context().addCookies([
+    { name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' },
+  ]);
+  await page.route('**/api/source-tools**', (route) => json(route, { tools: [] }));
+  // owner_profile_counts: the library's 42 posts and 8 archived ones.
+  await page.route('**/api/profile', (route) => json(route, {
+    ...PROFILE,
+    stats: { creations: 0, failedCreations: 0, archivedCreations: 0, posts: 42, archivedPosts: 8, saved: 0 },
+  }));
+  await page.route('**/api/generations?**', (route) => json(route, {
+    generations: [],
+    pagination: { limit: 36, hasMore: false, nextCursor: null },
+  }));
+  await page.route('**/api/posts?**', (route) => {
+    const offset = new URL(route.request().url()).searchParams.get('offset');
+    return offset === '36'
+      ? json(route, { posts: SECOND_POSTS_PAGE, pageInfo: { hasMore: false, nextOffset: null } })
+      : json(route, { posts: FIRST_POSTS_PAGE, pageInfo: { hasMore: true, nextOffset: 36 } });
+  });
+  await page.route('**/api/posts/post-e2e-library-0/archive', (route) => json(route, { success: true }));
+}
+
+/** The visibility filters' labels, in their order. */
+async function postFilterLabels(page: Page) {
+  const filters = page.getByRole('group', { name: 'Filter posts by visibility' });
+  await expect(filters).toBeVisible(COLD_PAGE);
+  return filters.getByRole('link').allTextContents();
+}
+
+test.describe("Studio's Post Library with more posts than its first page", () => {
+  test.beforeEach(async ({ page }) => {
+    await answerPostLibrary(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('the header and the visibility filters say the same totals, and a filter shows a number only when it is a total', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    // No timeout of its own: the run's first request for the route waits for its compile.
+    await page.goto('/creations?view=posts');
+    await expect(page.getByText('Library post 0', { exact: true })).toBeVisible(COLD_PAGE);
+
+    // The first page alone said "31 POSTS · 5 ARCHIVED" over "All (31)", "Public (22)",
+    // "Private (9)" and "Archived (5)".
+    await expect(header(page)).toHaveText('42 POSTS · 8 ARCHIVED');
+    expect(await postFilterLabels(page)).toEqual(['All (42)', 'Public', 'Private', 'Archived (8)']);
+
+    await page.getByRole('button', { name: 'Load more posts' }).click();
+    await expect(page.getByText('Library post 46', { exact: true })).toBeVisible(COLD_PAGE);
+    await expect(page.getByRole('button', { name: 'Load more posts' })).toBeHidden();
+
+    // Every page loaded: each number is the library's.
+    await expect(header(page)).toHaveText('42 POSTS · 8 ARCHIVED');
+    expect(await postFilterLabels(page))
+      .toEqual(['All (42)', 'Public (30)', 'Unlisted (1)', 'Private (11)', 'Archived (8)']);
+
+    // A post archived here moves from one total to the other at once. A menu closes on any scroll,
+    // and a scroll's event comes a frame after it: the row is brought into view first, and the press
+    // repeated if that event closed the menu (as in post-page-comments-rail.spec.ts).
+    const postMenu = page.getByRole('button', { name: 'More actions for Library post 0' });
+    const archive = page.getByRole('menu').getByRole('menuitem', { name: 'Archive post' });
+    await postMenu.scrollIntoViewIfNeeded();
+    await expect(async () => {
+      if (await page.getByRole('menu').count() === 0) await postMenu.click({ timeout: 2_000 });
+      await expect(archive).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 20_000 });
+    await archive.click();
+    await page.getByRole('alertdialog', { name: 'Archive this post?' }).getByRole('button', { name: 'Archive' }).click();
+    await expect(page.getByText('Post archived. Find it under Archived.')).toBeVisible();
+    await expect(header(page)).toHaveText('41 POSTS · 9 ARCHIVED');
+    expect(await postFilterLabels(page))
+      .toEqual(['All (41)', 'Public (29)', 'Unlisted (1)', 'Private (11)', 'Archived (9)']);
   });
 });

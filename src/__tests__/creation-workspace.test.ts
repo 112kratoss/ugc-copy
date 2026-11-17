@@ -4,6 +4,8 @@ import {
   buildPostRecipeManagementPath,
   getCreationMediaFilters,
   getStudioCreationCounts,
+  getStudioPostCounts,
+  getStudioPostFilters,
   resolveCreationWorkspaceCardState,
 } from '@/lib/creation-workspace';
 
@@ -328,5 +330,100 @@ describe('getStudioCreationCounts', () => {
       listComplete: false,
       serverTotal: null,
     })).toEqual({ total: null, totalIsAtLeast: false, filterTotals: unknown });
+  });
+});
+
+// The Post Library loads its posts 36 at a time too, and its header and visibility filters counted
+// the loaded pages: "31 POSTS · 5 ARCHIVED" over "All (31)" and "Public (22)" for a library of 42
+// posts and 8 archived ones (#836's note; studio-counts-and-first-screen.spec.ts draws it).
+describe('getStudioPostCounts', () => {
+  const firstPage = { all: 31, public: 22, unlisted: 0, private: 9, archived: 5 };
+  const everyPage = { all: 42, public: 30, unlisted: 1, private: 11, archived: 8 };
+  const library = { posts: 42, archivedPosts: 8 };
+  const unknown = { all: null, public: null, unlisted: null, private: null, archived: null };
+  const exact = (total: number) => ({ total, totalIsAtLeast: false });
+
+  it("says the server's totals in the header, on All and on Archived while pages wait, and no visibility's number", () => {
+    expect(getStudioPostCounts({ loaded: firstPage, listAnswered: true, listComplete: false, serverTotals: library })).toEqual({
+      live: exact(42),
+      archived: exact(8),
+      filterTotals: { ...unknown, all: 42, archived: 8 },
+    });
+  });
+
+  it('counts what is loaded once every page is and the server counts as many, every number a total', () => {
+    expect(getStudioPostCounts({ loaded: everyPage, listAnswered: true, listComplete: true, serverTotals: library })).toEqual({
+      live: exact(42),
+      archived: exact(8),
+      filterTotals: everyPage,
+    });
+    // The server could not count: nothing says the list is behind.
+    expect(getStudioPostCounts({ loaded: everyPage, listAnswered: true, listComplete: true, serverTotals: null }))
+      .toEqual({ live: exact(42), archived: exact(8), filterTotals: everyPage });
+  });
+
+  it('reads each side of the archive against its own total', () => {
+    // A live post the list does not know of yet: the live side believes the server, and draws no
+    // visibility's number; the archived side agrees, and keeps its own.
+    expect(getStudioPostCounts({
+      loaded: everyPage,
+      listAnswered: true,
+      listComplete: true,
+      serverTotals: { posts: 43, archivedPosts: 8 },
+    })).toEqual({ live: exact(43), archived: exact(8), filterTotals: { ...unknown, all: 43, archived: 8 } });
+    expect(getStudioPostCounts({
+      loaded: everyPage,
+      listAnswered: true,
+      listComplete: true,
+      serverTotals: { posts: 42, archivedPosts: 9 },
+    })).toEqual({ live: exact(42), archived: exact(9), filterTotals: { ...everyPage, archived: 9 } });
+  });
+
+  it('says what is loaded with a "+" when the server could not count, and no filter a number', () => {
+    expect(getStudioPostCounts({ loaded: firstPage, listAnswered: true, listComplete: false, serverTotals: null })).toEqual({
+      live: { total: 31, totalIsAtLeast: true },
+      archived: { total: 5, totalIsAtLeast: true },
+      filterTotals: unknown,
+    });
+  });
+
+  it('says no number at all before anything has answered', () => {
+    expect(getStudioPostCounts({
+      loaded: { all: 0, public: 0, unlisted: 0, private: 0, archived: 0 },
+      listAnswered: false,
+      listComplete: false,
+      serverTotals: null,
+    })).toEqual({
+      live: { total: null, totalIsAtLeast: false },
+      archived: { total: null, totalIsAtLeast: false },
+      filterTotals: unknown,
+    });
+  });
+});
+
+describe('getStudioPostFilters', () => {
+  const labels = (filters: ReturnType<typeof getStudioPostFilters>) => filters.map((filter) => filter.label);
+
+  it('offers Unlisted only while a post saved as one is left, or while it is the one chosen', () => {
+    // A post is public or private since 2026-10-17 (decision 12).
+    expect(labels(getStudioPostFilters({ all: 3, public: 2, unlisted: 0, private: 1, archived: 1 }, 'all')))
+      .toEqual(['All (3)', 'Public (2)', 'Private (1)', 'Archived (1)']);
+    expect(labels(getStudioPostFilters({ all: 3, public: 1, unlisted: 1, private: 1, archived: 0 }, 'all')))
+      .toEqual(['All (3)', 'Public (1)', 'Unlisted (1)', 'Private (1)', 'Archived (0)']);
+    expect(getStudioPostFilters({ all: 0, public: 0, unlisted: 0, private: 0, archived: 2 }, 'unlisted')).toEqual([
+      { key: 'all', label: 'All (0)' },
+      { key: 'public', label: 'Public (0)' },
+      { key: 'unlisted', label: 'Unlisted (0)' },
+      { key: 'private', label: 'Private (0)' },
+      { key: 'archived', label: 'Archived (2)' },
+    ]);
+  });
+
+  it('draws a filter with no number where its total is not known', () => {
+    expect(labels(getStudioPostFilters(
+      { all: 31, public: 22, unlisted: 0, private: 9, archived: 5 },
+      'private',
+      { all: 42, public: null, unlisted: null, private: null, archived: 8 },
+    ))).toEqual(['All (42)', 'Public', 'Private', 'Archived (8)']);
   });
 });

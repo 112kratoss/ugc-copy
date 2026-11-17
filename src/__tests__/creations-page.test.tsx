@@ -967,6 +967,244 @@ describe('CreationsPage', () => {
     });
   });
 
+  // The Post Library had the fault #836 fixed in Creations: it loads its posts 36 at a time, and its
+  // header and visibility filters counted the posts of the pages loaded so far. The rule is
+  // getStudioPostCounts (creation-workspace.ts); studio-counts-and-first-screen.spec.ts draws it in
+  // a browser.
+  describe("the Post Library's counts", () => {
+    const POSTS_PAGE_URL = '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0';
+    const NEXT_POSTS_PAGE_URL = '/api/posts?scope=owner&includeArchived=true&limit=36&offset=36';
+    const makePost = (
+      id: string,
+      visibility: 'public' | 'unlisted' | 'private',
+      archivedAt: string | null = null,
+    ) => ({
+      id,
+      generationId: null,
+      visibility,
+      archivedAt,
+      mediaUrl: null,
+      mediaKind: null,
+      title: `Post ${id}`,
+      description: '',
+      prompt: '',
+      body: 'Body',
+      category: 'text',
+      postFormat: 'text',
+      sourceKind: 'manual',
+      sourceTool: null,
+      sourceLabel: 'Manual',
+      createdAt: '2026-06-01T10:00:00.000Z',
+      updatedAt: '2026-06-01T10:00:00.000Z',
+      publicPath: null,
+      ownerPath: `/post/${id}/edit`,
+      resourcePath: null,
+      canShare: false,
+      bundle: null,
+    });
+    const ARCHIVED_AT = '2026-06-02T10:00:00.000Z';
+    // A library of 5 posts (2 public, 1 unlisted, 2 private) and 2 archived, over two pages.
+    const FIRST_POSTS_PAGE = [
+      makePost('a', 'public'),
+      makePost('b', 'public'),
+      makePost('c', 'private'),
+      makePost('d', 'public', ARCHIVED_AT),
+    ];
+    const SECOND_POSTS_PAGE = [
+      makePost('e', 'unlisted'),
+      makePost('f', 'private'),
+      makePost('g', 'private', ARCHIVED_AT),
+    ];
+    const LIBRARY_STATS = { creations: 0, posts: 5, archivedPosts: 2, saved: 0 };
+    const postFilters = () => within(screen.getByRole('group', { name: 'Filter posts by visibility' }))
+      .getAllByRole('link')
+      .map((link) => link.textContent);
+    const readSnapshot = () => JSON.parse(
+      window.sessionStorage.getItem('magicbooklet:creations-cache:v1:user-1') ?? '{}',
+    ) as { postsComplete?: boolean; profile?: { stats?: typeof LIBRARY_STATS } };
+
+    /** The library's two pages, the server's totals, and the post actions the cases take. */
+    const stubPostLibrary = ({ archiveFails = false }: { archiveFails?: boolean } = {}) => stubStudioFetch((url, init) => {
+      if (url.startsWith('/api/generations')) {
+        return Promise.resolve(jsonResponse({ generations: [] }));
+      }
+      if (url === POSTS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({ posts: FIRST_POSTS_PAGE, pageInfo: { hasMore: true, nextOffset: 36 } }));
+      }
+      if (url === NEXT_POSTS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({ posts: SECOND_POSTS_PAGE, pageInfo: { hasMore: false, nextOffset: null } }));
+      }
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({ username: 'creator-user1', stats: LIBRARY_STATS }));
+      }
+      if (url === '/api/posts/a/archive' && init?.method === 'POST') {
+        return Promise.resolve(archiveFails
+          ? jsonResponse({ error: 'Could not archive the post.' }, { status: 500 })
+          : jsonResponse({ success: true }));
+      }
+      if (url === '/api/posts/d/restore' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ success: true }));
+      }
+      if (url === '/api/posts/c' && init?.method === 'DELETE') {
+        return Promise.resolve(jsonResponse({ success: true }));
+      }
+      return null;
+    });
+
+    it('says the same totals in the header and the visibility filters, and a number only where it is a total', async () => {
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      stubPostLibrary();
+
+      render(<CreationsPage />);
+
+      expect(await screen.findByText('Post a')).toBeInTheDocument();
+      // The page loaded holds 3 of the 5 posts and 1 of the 2 archived ones: it said "3 POSTS ·
+      // 1 ARCHIVED" over "All (3)", "Public (2)", "Private (1)" and "Archived (1)".
+      expect(await screen.findByText('5 POSTS · 2 ARCHIVED')).toBeInTheDocument();
+      expect(postFilters()).toEqual(['All (5)', 'Public', 'Private', 'Archived (2)']);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Load more posts' }));
+      expect(await screen.findByText('Post e')).toBeInTheDocument();
+
+      // Every page loaded: each number is a total.
+      expect(screen.getByText('5 POSTS · 2 ARCHIVED')).toBeInTheDocument();
+      expect(postFilters()).toEqual(['All (5)', 'Public (2)', 'Unlisted (1)', 'Private (2)', 'Archived (2)']);
+      // And the snapshot a return to Studio draws first says so.
+      expect(readSnapshot().postsComplete).toBe(true);
+    });
+
+    it('says no number in the header while nothing has answered, never 0', async () => {
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      vi.stubGlobal('fetch', vi.fn(() => new Promise(() => undefined)));
+
+      render(<CreationsPage />);
+
+      const total = await screen.findByText(/POSTS$/);
+      // "—" to the eye, "Counting" to a screen reader, as Creations says it.
+      expect(within(total).getByText('—')).toHaveAttribute('aria-hidden', 'true');
+      expect(within(total).getByText('Counting')).toHaveClass('sr-only');
+      expect(total).toHaveTextContent(/^—Counting POSTS$/);
+      expect(screen.queryByText(/\d\+? POSTS?\b/)).not.toBeInTheDocument();
+    });
+
+    it('says what is loaded with a "+" when the server could not count, and no filter a number', async () => {
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      stubStudioFetch((url) => {
+        if (url.startsWith('/api/generations')) return Promise.resolve(jsonResponse({ generations: [] }));
+        if (url === POSTS_PAGE_URL) {
+          return Promise.resolve(jsonResponse({ posts: FIRST_POSTS_PAGE, pageInfo: { hasMore: true, nextOffset: 36 } }));
+        }
+        if (url === '/api/profile') return Promise.resolve(jsonResponse({ error: 'Unavailable' }, { status: 503 }));
+        return null;
+      });
+
+      render(<CreationsPage />);
+
+      expect(await screen.findByText('Post a')).toBeInTheDocument();
+      expect(await screen.findByText('3+ POSTS · 1+ ARCHIVED')).toBeInTheDocument();
+      expect(postFilters()).toEqual(['All', 'Public', 'Private', 'Archived']);
+    });
+
+    describe('drawn from the snapshot before the refresh answers', () => {
+      const snapshot = (postsComplete?: boolean) => JSON.stringify({
+        fetchedAt: Date.now(),
+        generations: [],
+        posts: [...FIRST_POSTS_PAGE, ...SECOND_POSTS_PAGE],
+        profile: { username: 'creator-user1', stats: LIBRARY_STATS },
+        generationsComplete: true,
+        ...(postsComplete === undefined ? {} : { postsComplete }),
+      });
+
+      it("draws a whole library's filter totals at once", async () => {
+        navigationState.searchParams = new URLSearchParams('view=posts');
+        window.sessionStorage.setItem('magicbooklet:creations-cache:v1:user-1', snapshot(true));
+        vi.stubGlobal('fetch', vi.fn(() => new Promise(() => undefined)));
+
+        render(<CreationsPage />);
+
+        expect(await screen.findByText('Post e')).toBeInTheDocument();
+        expect(screen.getByText('5 POSTS · 2 ARCHIVED')).toBeInTheDocument();
+        expect(postFilters()).toEqual(['All (5)', 'Public (2)', 'Unlisted (1)', 'Private (2)', 'Archived (2)']);
+      });
+
+      it('draws no visibility number from a snapshot that does not say its library was whole', async () => {
+        navigationState.searchParams = new URLSearchParams('view=posts');
+        window.sessionStorage.setItem('magicbooklet:creations-cache:v1:user-1', snapshot());
+        vi.stubGlobal('fetch', vi.fn(() => new Promise(() => undefined)));
+
+        render(<CreationsPage />);
+
+        expect(await screen.findByText('Post e')).toBeInTheDocument();
+        expect(screen.getByText('5 POSTS · 2 ARCHIVED')).toBeInTheDocument();
+        expect(postFilters()).toEqual(['All (5)', 'Public', 'Unlisted', 'Private', 'Archived (2)']);
+      });
+    });
+
+    // As #836's second round found in Creations: the server's totals this page holds move with a
+    // change made here, or with every page loaded they disagree with the list, and the counts,
+    // which believe the server, said the old totals with no visibility numbers. Post actions do
+    // not refresh the page, so they said them until the next visit.
+    describe('the totals it holds, moved by a change made here', () => {
+      const loadEveryPage = async () => {
+        expect(await screen.findByText('5 POSTS · 2 ARCHIVED')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Load more posts' }));
+        expect(await screen.findByText('Post e')).toBeInTheDocument();
+        expect(postFilters()).toEqual(['All (5)', 'Public (2)', 'Unlisted (1)', 'Private (2)', 'Archived (2)']);
+      };
+
+      it('moves a post archived here from one total to the other, and back when the archive fails', async () => {
+        navigationState.searchParams = new URLSearchParams('view=posts');
+        stubPostLibrary({ archiveFails: true });
+        render(<><CreationsPage /><FeedbackViewport /></>);
+        await loadEveryPage();
+
+        await chooseCardAction('Post a', 'Archive post');
+        fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Archive this post?' }))
+          .getByRole('button', { name: 'Archive' }));
+
+        // The archive failed: the post and the totals are back where they were.
+        expect(await screen.findByText('Could not archive the post.')).toBeInTheDocument();
+        expect(screen.getByText('5 POSTS · 2 ARCHIVED')).toBeInTheDocument();
+        expect(postFilters()).toEqual(['All (5)', 'Public (2)', 'Unlisted (1)', 'Private (2)', 'Archived (2)']);
+      });
+
+      it('keeps the counts right after an archive, a restore and a delete', async () => {
+        navigationState.searchParams = new URLSearchParams('view=posts');
+        stubPostLibrary();
+        // A new element each time: React keeps one it was given before as it was, address and all.
+        const page = () => <><CreationsPage /><FeedbackViewport /></>;
+        const { rerender } = render(page());
+        await loadEveryPage();
+
+        await chooseCardAction('Post a', 'Archive post');
+        fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Archive this post?' }))
+          .getByRole('button', { name: 'Archive' }));
+        expect(await screen.findByText('Post archived. Find it under Archived.')).toBeInTheDocument();
+        expect(screen.getByText('4 POSTS · 3 ARCHIVED')).toBeInTheDocument();
+        expect(postFilters()).toEqual(['All (4)', 'Public (1)', 'Unlisted (1)', 'Private (2)', 'Archived (3)']);
+        // The snapshot a return to Studio draws first holds the moved totals.
+        expect(readSnapshot().profile?.stats).toMatchObject({ posts: 4, archivedPosts: 3 });
+
+        // An archived post is restored from the Archived filter's list.
+        navigationState.searchParams = new URLSearchParams('view=posts&visibility=archived');
+        rerender(page());
+        await chooseCardAction('Post d', 'Restore post');
+        expect(await screen.findByText('Post restored.')).toBeInTheDocument();
+        expect(screen.getByText('5 POSTS · 2 ARCHIVED')).toBeInTheDocument();
+        expect(postFilters()).toEqual(['All (5)', 'Public (2)', 'Unlisted (1)', 'Private (2)', 'Archived (2)']);
+
+        navigationState.searchParams = new URLSearchParams('view=posts');
+        rerender(page());
+        await chooseCardAction('Post c', 'Delete post');
+        fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this post permanently?' }))
+          .getByRole('button', { name: 'Delete' }));
+        expect(await screen.findByText('Post deleted.')).toBeInTheDocument();
+        expect(screen.getByText('4 POSTS · 2 ARCHIVED')).toBeInTheDocument();
+        expect(postFilters()).toEqual(['All (4)', 'Public (2)', 'Unlisted (1)', 'Private (1)', 'Archived (2)']);
+      });
+    });
+  });
+
   it('loads the next creations page without refetching the whole history', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);

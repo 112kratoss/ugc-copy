@@ -15,7 +15,8 @@ type SupportedFxCurrency = (typeof SUPPORTED_CURRENCIES)[number];
 type ExchangeRateApiResponse = {
   result?: string;
   base_code?: string;
-  time_last_update_utc?: string;
+  /** An RFC 2822 date, "Mon, 16 Nov 2026 00:02:31 +0000". */
+  time_last_update_utc?: unknown;
   rates?: Record<string, unknown>;
 };
 
@@ -24,6 +25,7 @@ export type FxRatesRouteResult =
       ok: true;
       body: {
         base: 'INR';
+        /** When the rates were updated: an ISO 8601 stamp in UTC, "2026-11-16T00:02:31.000Z". */
         updatedAt: string;
         rates: Record<SupportedFxCurrency, number>;
       };
@@ -48,7 +50,18 @@ function pickSupportedRates(rates: Record<string, unknown>) {
   return picked;
 }
 
-function normalizeFxPayload(payload: ExchangeRateApiResponse): FxRatesRouteResult {
+/**
+ * When the provider last updated its rates, as an ISO 8601 stamp in UTC, so every client reads one
+ * well-defined format: open.er-api.com sends `time_last_update_utc` as an RFC 2822 date, which the
+ * route passed on as it came until 2026-11-17. A stamp it does not send, or that cannot be read,
+ * gives the time the route read the rates, as a missing one always did.
+ */
+function toIsoUpdatedAt(providerStamp: unknown, now: () => Date): string {
+  const timestamp = typeof providerStamp === 'string' ? Date.parse(providerStamp) : Number.NaN;
+  return (Number.isFinite(timestamp) ? new Date(timestamp) : now()).toISOString();
+}
+
+function normalizeFxPayload(payload: ExchangeRateApiResponse, now: () => Date): FxRatesRouteResult {
   if (
     payload?.result !== 'success' ||
     payload?.base_code !== 'INR' ||
@@ -67,9 +80,7 @@ function normalizeFxPayload(payload: ExchangeRateApiResponse): FxRatesRouteResul
     ok: true,
     body: {
       base: 'INR',
-      updatedAt: typeof payload.time_last_update_utc === 'string'
-        ? payload.time_last_update_utc
-        : new Date().toUTCString(),
+      updatedAt: toIsoUpdatedAt(payload.time_last_update_utc, now),
       rates,
     },
   };
@@ -77,8 +88,11 @@ function normalizeFxPayload(payload: ExchangeRateApiResponse): FxRatesRouteResul
 
 export async function loadFxRatesForRoute({
   fetchImpl = fetch,
+  now = () => new Date(),
 }: {
   fetchImpl?: typeof fetch;
+  /** The clock, for the time the rates were read when the provider gives none it can read. */
+  now?: () => Date;
 } = {}): Promise<FxRatesRouteResult> {
   try {
     const upstreamResponse = await fetchWithProviderTimeout(
@@ -97,7 +111,7 @@ export async function loadFxRatesForRoute({
       throw new Error(`FX upstream error: ${upstreamResponse.status}`);
     }
 
-    return normalizeFxPayload((await upstreamResponse.json()) as ExchangeRateApiResponse);
+    return normalizeFxPayload((await upstreamResponse.json()) as ExchangeRateApiResponse, now);
   } catch (error) {
     logBackendError('fx_route_error', { error: error });
     return {

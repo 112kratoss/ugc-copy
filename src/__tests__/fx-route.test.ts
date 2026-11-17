@@ -47,7 +47,8 @@ describe('/api/fx route', () => {
     const data = await response.json();
     expect(data).toEqual({
       base: 'INR',
-      updatedAt: 'Sat, 04 Apr 2026 00:02:31 +0000',
+      // The provider's RFC 2822 stamp, in ISO 8601 (fx-rates-service.ts).
+      updatedAt: '2026-04-04T00:02:31.000Z',
       rates: {
         USD: 0.0119,
         EUR: 0.011,

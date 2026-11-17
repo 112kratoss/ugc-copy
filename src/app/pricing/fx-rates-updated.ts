@@ -1,9 +1,11 @@
 /**
  * When /pricing's exchange rates were read, for people: "16 Nov 2026, 5:32 am" in the reader's own
  * language and time zone, as Credit history says a time (`formatCreditHistoryTime`). `/api/fx`
- * passes on the provider's stamp, an RFC 2822 date such as "Mon, 16 Nov 2026 00:02:31 +0000", and
- * the page showed it as it came until the sweep of 2026-11-17. Null for a stamp that cannot be
- * read: the page then leaves the line out rather than show it raw.
+ * sends an ISO 8601 stamp, "2026-11-16T00:02:31.000Z" (fx-rates-service.ts); it passed on the
+ * provider's RFC 2822 date, "Mon, 16 Nov 2026 00:02:31 +0000", until 2026-11-17, and the page
+ * showed that as it came until the sweep of the same day. `Date.parse` reads both, so an answer the
+ * edge cached before the route changed (an hour, and a day more while it revalidates) still reads.
+ * Null for a stamp that cannot be read: the page then leaves the line out rather than show it raw.
  *
  * Only the browser formats it. The page draws the line once its script has read the rates, so the
  * server, which knows neither the reader's language nor their zone, never draws it, and hydration

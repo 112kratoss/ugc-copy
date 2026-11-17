@@ -34,11 +34,15 @@ import {
     buildPostRecipeManagementPath,
     getCreationMediaFilters,
     getStudioCreationCounts,
+    getStudioPostCounts,
+    getStudioPostFilters,
     resolveCreationWorkspaceCardState,
     type CreationMediaFilter,
     type CreationWorkspaceCardState,
     type CreationWorkspaceMonetizationKind,
     type CreationWorkspacePublishBadge,
+    type StudioPostFilter,
+    type StudioTotal,
 } from '@/lib/creation-workspace';
 import { formatDurationShort, formatTimeAgoShort } from '@/lib/generation-timing';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
@@ -122,7 +126,7 @@ interface Generation {
 
 type FilterType = CreationMediaFilter;
 type WorkspaceView = 'creations' | 'posts' | 'unlocks';
-type OwnerPostVisibilityFilter = 'all' | 'public' | 'unlisted' | 'private' | 'archived';
+type OwnerPostVisibilityFilter = StudioPostFilter;
 
 interface OwnerPost {
     id: string;
@@ -175,6 +179,8 @@ interface CreationsWorkspaceCache {
      * Studio draws the media filters' totals at once rather than when the refresh lands.
      */
     generationsComplete: boolean;
+    /** Whether `posts` held every post, the list's last page loaded, as `generationsComplete`. */
+    postsComplete: boolean;
 }
 
 interface GenerationsApiResponse {
@@ -260,6 +266,7 @@ function readCreationsWorkspaceCache(userId: string | null): CreationsWorkspaceC
             profile: isRecord(parsed.profile) ? parsed.profile as unknown as ProfileApiResponse : null,
             // A snapshot written before the flag, or by a list with pages still to load, says no.
             generationsComplete: parsed.generationsComplete === true,
+            postsComplete: parsed.postsComplete === true,
         };
     } catch {
         return null;
@@ -664,6 +671,16 @@ export default function CreationsPage() {
     const deletesInFlightRef = useRef(0);
     const [generationsLoadMoreError, setGenerationsLoadMoreError] = useState<string | null>(null);
     const [postsNextOffset, setPostsNextOffset] = useState<number | null>(null);
+    // The Post Library's list, as the creations' above: whether it has answered at all, and
+    // whether the loaded posts are every post (its last page loaded). Kept in a ref too, for the
+    // snapshot's writers.
+    const [postsAnswered, setPostsAnswered] = useState(false);
+    const [postsComplete, setPostsCompleteState] = useState(false);
+    const postsCompleteRef = useRef(false);
+    const setPostsComplete = useCallback((complete: boolean) => {
+        postsCompleteRef.current = complete;
+        setPostsCompleteState(complete);
+    }, []);
     const [isLoadingMorePosts, setIsLoadingMorePosts] = useState(false);
     const [postsLoadMoreError, setPostsLoadMoreError] = useState<string | null>(null);
     const [generationDetailLoadingId, setGenerationDetailLoadingId] = useState<string | null>(null);
@@ -718,12 +735,35 @@ export default function CreationsPage() {
             section,
         });
 
+    // The server's post totals this page holds, moved by a change made here, as Creations' total
+    // is (moveHeldCreationsTotal): a post's change does not refresh the page, and with every page
+    // loaded the counts would otherwise believe the old totals over the list (getStudioPostCounts).
+    const moveHeldPostTotals = useCallback((delta: { posts: number; archivedPosts: number }) => {
+        const moved = (current: ProfileApiResponse | null) => (current?.stats
+            ? {
+                ...current,
+                stats: {
+                    ...current.stats,
+                    posts: Math.max(0, current.stats.posts + delta.posts),
+                    archivedPosts: Math.max(0, current.stats.archivedPosts + delta.archivedPosts),
+                },
+            }
+            : current);
+        profileRef.current = moved(profileRef.current);
+        setProfile(moved);
+    }, []);
+
     // Lifecycle changes land in local state (and the session cache, so a
     // reload does not flash the old state) instead of refetching the whole
     // workspace. A generation card reads its linked post from `posts` first
     // and from its own linked_post_* columns only as a fallback, so both are
     // kept in step.
     const patchPost = useCallback((postId: string, patch: PostLifecyclePatch) => {
+        // Archived or restored, or put back when that failed: from one total to the other.
+        const patched = postsRef.current.find((post) => post.id === postId);
+        if (patched && patch.archivedAt !== undefined && Boolean(patched.archivedAt) !== Boolean(patch.archivedAt)) {
+            moveHeldPostTotals(patch.archivedAt ? { posts: -1, archivedPosts: 1 } : { posts: 1, archivedPosts: -1 });
+        }
         const nextPosts = postsRef.current.map((post) => {
             if (post.id !== postId) {
                 return post;
@@ -764,10 +804,17 @@ export default function CreationsPage() {
             posts: nextPosts,
             profile: profileRef.current,
             generationsComplete: generationsCompleteRef.current,
+            postsComplete: postsCompleteRef.current,
         });
-    }, [userId]);
+    }, [moveHeldPostTotals, userId]);
 
     const removePost = useCallback((postId: string) => {
+        // Deleted: out of its total. A post with buyers is kept on the server, archived, and comes
+        // back under Archived with the next refresh, which counts it there again.
+        const removed = postsRef.current.find((post) => post.id === postId);
+        if (removed) {
+            moveHeldPostTotals(removed.archivedAt ? { posts: 0, archivedPosts: -1 } : { posts: -1, archivedPosts: 0 });
+        }
         const nextPosts = postsRef.current.filter((post) => post.id !== postId);
         const nextGenerations = generationsRef.current.map((generation) => (
             generation.linked_post_id === postId
@@ -790,8 +837,9 @@ export default function CreationsPage() {
             posts: nextPosts,
             profile: profileRef.current,
             generationsComplete: generationsCompleteRef.current,
+            postsComplete: postsCompleteRef.current,
         });
-    }, [userId]);
+    }, [moveHeldPostTotals, userId]);
 
     // The server's library total this page holds, moved by a change made here to a finished
     // creation, so the loaded list and it still agree, and the refresh after only confirms them:
@@ -818,6 +866,7 @@ export default function CreationsPage() {
             posts: postsRef.current,
             profile: profileRef.current,
             generationsComplete: generationsCompleteRef.current,
+            postsComplete: postsCompleteRef.current,
         });
     }, [moveHeldCreationsTotal, userId]);
 
@@ -839,6 +888,7 @@ export default function CreationsPage() {
             posts: postsRef.current,
             profile: profileRef.current,
             generationsComplete: generationsCompleteRef.current,
+            postsComplete: postsCompleteRef.current,
         });
     }, [moveHeldCreationsTotal, userId]);
 
@@ -890,8 +940,10 @@ export default function CreationsPage() {
         setProfile(cachedWorkspace.profile);
         setGenerationsComplete(cachedWorkspace.generationsComplete);
         setGenerationsAnswered(true);
+        setPostsComplete(cachedWorkspace.postsComplete);
+        setPostsAnswered(true);
         setIsLoading(false);
-    }, [setGenerationsComplete, userId]);
+    }, [setGenerationsComplete, setPostsComplete, userId]);
 
     const fetchCreations = useCallback(async () => {
         if (!accessToken || !userId) {
@@ -947,21 +999,26 @@ export default function CreationsPage() {
             let nextPosts: OwnerPost[] | null = null;
             if (postsRes.ok) {
                 const loadedPosts = (postsData.posts || []) as OwnerPost[];
-                nextPosts = loadedPosts;
-                setPosts(loadedPosts);
-                setPostsNextOffset(postsData.pageInfo?.hasMore
+                const freshPostsOffset = postsData.pageInfo?.hasMore
                     ? postsData.pageInfo.nextOffset ?? null
-                    : null);
+                    : null;
+                nextPosts = loadedPosts;
+                // In the ref at once, as the profile below: a post's change that lands before the
+                // next render moves the totals from this list, not from the one it replaced.
+                postsRef.current = loadedPosts;
+                setPosts(loadedPosts);
+                setPostsNextOffset(freshPostsOffset);
+                setPostsComplete(freshPostsOffset === null);
+                setPostsAnswered(true);
                 setPostsLoadMoreError(null);
             }
 
             let nextProfile: ProfileApiResponse | null = null;
             if (profileRes.ok) {
                 nextProfile = await profileRes.json();
-                setProfile(nextProfile);
-            } else {
-                setProfile(null);
             }
+            profileRef.current = nextProfile;
+            setProfile(nextProfile);
 
             if (nextGenerations && nextPosts) {
                 writeCreationsWorkspaceCache(userId, {
@@ -969,6 +1026,7 @@ export default function CreationsPage() {
                     posts: nextPosts,
                     profile: nextProfile,
                     generationsComplete: generationsCompleteRef.current,
+                    postsComplete: postsCompleteRef.current,
                 });
             }
         } catch (err) {
@@ -978,7 +1036,7 @@ export default function CreationsPage() {
         } finally {
             setIsLoading(false);
         }
-    }, [accessToken, redirectToSignIn, setGenerationsComplete, userId]);
+    }, [accessToken, redirectToSignIn, setGenerationsComplete, setPostsComplete, userId]);
 
     const loadMoreGenerations = useCallback(async () => {
         if (!accessToken || !userId) {
@@ -1018,6 +1076,7 @@ export default function CreationsPage() {
                     posts: postsRef.current,
                     profile: profileRef.current,
                     generationsComplete: generationsCompleteRef.current,
+                    postsComplete: postsCompleteRef.current,
                 });
             } catch (error) {
                 console.error('Failed to load more creations:', error);
@@ -1103,14 +1162,20 @@ export default function CreationsPage() {
             const data = await response.json() as OwnerPostsApiResponse;
             if (!response.ok) throw new Error('Failed to load more posts.');
 
-            const nextPosts = mergePostAppend(posts, Array.isArray(data.posts) ? data.posts : []);
+            // Onto the posts as they stand now, and with the totals as they stand now: a post
+            // archived while the page was on its way stays archived, and its move stays counted.
+            const nextPosts = mergePostAppend(postsRef.current, Array.isArray(data.posts) ? data.posts : []);
+            const nextOffset = data.pageInfo?.hasMore ? data.pageInfo.nextOffset ?? null : null;
+            postsRef.current = nextPosts;
             setPosts(nextPosts);
-            setPostsNextOffset(data.pageInfo?.hasMore ? data.pageInfo.nextOffset ?? null : null);
+            setPostsNextOffset(nextOffset);
+            setPostsComplete(nextOffset === null);
             writeCreationsWorkspaceCache(userId, {
                 generations: generationsRef.current,
                 posts: nextPosts,
-                profile,
+                profile: profileRef.current,
                 generationsComplete: generationsCompleteRef.current,
+                postsComplete: postsCompleteRef.current,
             });
         } catch (error) {
             console.error('Failed to load more posts:', error);
@@ -1118,7 +1183,7 @@ export default function CreationsPage() {
         } finally {
             setIsLoadingMorePosts(false);
         }
-    }, [accessToken, isLoadingMorePosts, posts, postsNextOffset, profile, redirectToSignIn, userId]);
+    }, [accessToken, isLoadingMorePosts, postsNextOffset, redirectToSignIn, setPostsComplete, userId]);
 
     const cacheGenerations = useCallback((nextGenerations: Generation[]) => {
         generationsRef.current = nextGenerations;
@@ -1128,6 +1193,7 @@ export default function CreationsPage() {
             posts,
             profile,
             generationsComplete: generationsCompleteRef.current,
+            postsComplete: postsCompleteRef.current,
         });
     }, [posts, profile, userId]);
 
@@ -1970,9 +2036,10 @@ export default function CreationsPage() {
     });
     // "—" until something has answered, as the profile draws a count it does not know: never 0.
     // A screen reader hears "Counting" in its place.
-    const creationTotalLabel = creationCounts.total === null
+    const formatStudioTotal = ({ total, totalIsAtLeast }: StudioTotal) => (total === null
         ? <><span aria-hidden="true">—</span><span className="sr-only">Counting</span></>
-        : `${creationCounts.total}${creationCounts.totalIsAtLeast ? '+' : ''}`;
+        : `${total}${totalIsAtLeast ? '+' : ''}`);
+    const creationTotalLabel = formatStudioTotal(creationCounts);
     const visiblePosts = useMemo(() => {
         if (postVisibilityFilter === 'archived') {
             return posts.filter((post) => Boolean(post.archivedAt));
@@ -1993,12 +2060,23 @@ export default function CreationsPage() {
     const publicProfileUsername = profileReadiness.hasClaimedHandle
         ? profile?.username?.trim() || null
         : null;
-    const activePortfolioPostCount = posts.filter(
-        (post) => !post.archivedAt && post.visibility === 'public'
-    ).length;
-    const activePostCount = posts.filter((post) => !post.archivedAt).length;
-    const archivedPostCount = posts.length - activePostCount;
-    const unlistedPostCount = posts.filter((post) => !post.archivedAt && post.visibility === 'unlisted').length;
+    const livePosts = posts.filter((post) => !post.archivedAt);
+    const loadedPostCounts: Record<OwnerPostVisibilityFilter, number> = {
+        all: livePosts.length,
+        public: livePosts.filter((post) => post.visibility === 'public').length,
+        unlisted: livePosts.filter((post) => post.visibility === 'unlisted').length,
+        private: livePosts.filter((post) => post.visibility === 'private').length,
+        archived: posts.length - livePosts.length,
+    };
+    // The Post Library's header and visibility filters, by Creations' rule so they agree
+    // (creation-workspace.ts): it loads its posts 36 at a time too.
+    const postCounts = getStudioPostCounts({
+        loaded: loadedPostCounts,
+        listAnswered: postsAnswered,
+        listComplete: postsComplete,
+        serverTotals: profile?.stats ?? null,
+    });
+    const activePortfolioPostCount = loadedPostCounts.public;
     const isProfileIncomplete = !profileReadiness.profileComplete;
     // An account with no creator name sets it up at the name step, which comes
     // back here; /profile has no setup mode of its own any more.
@@ -2087,7 +2165,12 @@ export default function CreationsPage() {
                         {activeView === 'creations'
                             ? <>{creationTotalLabel} CREATION{creationCounts.total !== 1 ? 'S' : ''} TOTAL</>
                             : activeView === 'posts'
-                                ? `${activePostCount} POST${activePostCount !== 1 ? 'S' : ''}${archivedPostCount > 0 ? ` · ${archivedPostCount} ARCHIVED` : ''}`
+                                ? (
+                                    <>
+                                        {formatStudioTotal(postCounts.live)} POST{postCounts.live.total === 1 && !postCounts.live.totalIsAtLeast ? '' : 'S'}
+                                        {postCounts.archived.total ? <> · {formatStudioTotal(postCounts.archived)} ARCHIVED</> : null}
+                                    </>
+                                )
                                 : 'UNLOCKED RECIPES'}
                     </p>
                 </div>
@@ -2259,16 +2342,9 @@ export default function CreationsPage() {
 
                 {activeView === 'posts' && !isLoading && posts.length > 0 && (
                     <div role="group" aria-label="Filter posts by visibility" className="mb-8 flex flex-wrap gap-2">
-                        {([
-                            { key: 'all', label: `All (${activePostCount})` },
-                            { key: 'public', label: `Public (${posts.filter((post) => !post.archivedAt && post.visibility === 'public').length})` },
-                            { key: 'unlisted', label: `Unlisted (${unlistedPostCount})` },
-                            { key: 'private', label: `Private (${posts.filter((post) => !post.archivedAt && post.visibility === 'private').length})` },
-                            { key: 'archived', label: `Archived (${archivedPostCount})` },
-                        ] as Array<{ key: OwnerPostVisibilityFilter; label: string }>)
-                            // A post is public or private since 2026-10-17 (decision 12):
-                            // Unlisted stays a filter only while a post saved as one is left.
-                            .filter((tab) => tab.key !== 'unlisted' || unlistedPostCount > 0 || postVisibilityFilter === 'unlisted')
+                        {/* A number only where it is a total, as the header's (getStudioPostCounts);
+                            Unlisted only while a post saved as one is left (getStudioPostFilters). */}
+                        {getStudioPostFilters(loadedPostCounts, postVisibilityFilter, postCounts.filterTotals)
                             .map((tab) => (
                             // A filter is a refinement of the current section, so it
                             // replaces the history entry instead of adding one.

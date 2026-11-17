@@ -13,8 +13,9 @@ import { expect, test } from '@playwright/test';
 const COLD_PAGE = { timeout: 45_000 };
 const FX = {
   base: 'INR',
-  // As open.er-api.com sends `time_last_update_utc`, which /api/fx passes on as it comes.
-  updatedAt: 'Mon, 16 Nov 2026 00:02:31 +0000',
+  // open.er-api.com's `time_last_update_utc`, "Mon, 16 Nov 2026 00:02:31 +0000", as /api/fx sends it
+  // since 2026-11-17: in ISO 8601 (fx-rates-service.ts).
+  updatedAt: '2026-11-16T00:02:31.000Z',
   rates: { USD: 0.012, EUR: 0.011, GBP: 0.0095, AUD: 0.018, CAD: 0.016, SGD: 0.016 },
 };
 
