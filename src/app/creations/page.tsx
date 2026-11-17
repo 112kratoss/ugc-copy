@@ -473,6 +473,15 @@ function getNextGenerationCursor(payload: GenerationsApiResponse): string | null
 }
 
 /**
+ * A finished creation, archived or not: a succeeded run with an output, or one whose only source
+ * is gone (its tile stays, with a note). Studio's grid and the server's library total
+ * (`owner_profile_counts`) count these, the active ones.
+ */
+function isFinishedCreation(generation: Generation): boolean {
+    return generation.status === 'succeeded' && Boolean(generation.output_url || generation.source_unavailable_at);
+}
+
+/**
  * The list's next cursor one row earlier, after a row before it was deleted here. The owner
  * list's cursor is the offset of its next row (`buildPagination` in
  * owner-generations-route-service.ts); one in any other form is left as it is.
@@ -646,6 +655,13 @@ export default function CreationsPage() {
     // The setup card's Steps, on a phone (it shows them all from 640px).
     const [setupStepsShown, setSetupStepsShown] = useState(false);
     const [isLoadingMoreGenerations, setIsLoadingMoreGenerations] = useState(false);
+    // The list's cursor counts rows, so a delete steps it back a row (handleGenerationDelete), and
+    // the two must not cross (review of #836): a delete waits for the Load more under way, whose
+    // cursor would land after the step back and undo it, and Load more waits while deletes are
+    // under way, as the page it asked for could be counted without the deleted row.
+    const loadMoreInFlightRef = useRef<Promise<void> | null>(null);
+    const [deletesInFlight, setDeletesInFlight] = useState(0);
+    const deletesInFlightRef = useRef(0);
     const [generationsLoadMoreError, setGenerationsLoadMoreError] = useState<string | null>(null);
     const [postsNextOffset, setPostsNextOffset] = useState<number | null>(null);
     const [isLoadingMorePosts, setIsLoadingMorePosts] = useState(false);
@@ -777,7 +793,23 @@ export default function CreationsPage() {
         });
     }, [userId]);
 
+    // The server's library total this page holds, moved by a change made here to a finished
+    // creation, so the loaded list and it still agree, and the refresh after only confirms them:
+    // the counts believe the server over a list it disagrees with (getStudioCreationCounts), and
+    // drew the old total, with no kind numbers, until the refresh landed, or for good when it failed.
+    const moveHeldCreationsTotal = useCallback((delta: number) => {
+        const moved = (current: ProfileApiResponse | null) => (current?.stats
+            ? { ...current, stats: { ...current.stats, creations: Math.max(0, current.stats.creations + delta) } }
+            : current);
+        profileRef.current = moved(profileRef.current);
+        setProfile(moved);
+    }, []);
+
     const dropGeneration = useCallback((generationId: string) => {
+        const dropped = generationsRef.current.find((generation) => generation.id === generationId);
+        if (dropped && !dropped.archived_at && isFinishedCreation(dropped)) {
+            moveHeldCreationsTotal(-1);
+        }
         const nextGenerations = generationsRef.current.filter((generation) => generation.id !== generationId);
         generationsRef.current = nextGenerations;
         setGenerations(nextGenerations);
@@ -787,12 +819,16 @@ export default function CreationsPage() {
             profile: profileRef.current,
             generationsComplete: generationsCompleteRef.current,
         });
-    }, [userId]);
+    }, [moveHeldCreationsTotal, userId]);
 
     // Archived or restored on the server, so here too: the refresh that follows rereads only the
     // first page, and keeps a later page's rows as they were (mergeGenerationRefresh), so a row
     // from one would otherwise stay in its old section, and in the counts.
     const setGenerationArchivedAt = useCallback((generationId: string, archivedAt: string | null) => {
+        const changed = generationsRef.current.find((generation) => generation.id === generationId);
+        if (changed && isFinishedCreation(changed) && Boolean(changed.archived_at) !== Boolean(archivedAt)) {
+            moveHeldCreationsTotal(archivedAt ? -1 : 1);
+        }
         const nextGenerations = generationsRef.current.map((generation) => (
             generation.id === generationId ? { ...generation, archived_at: archivedAt } : generation
         ));
@@ -804,7 +840,7 @@ export default function CreationsPage() {
             profile: profileRef.current,
             generationsComplete: generationsCompleteRef.current,
         });
-    }, [userId]);
+    }, [moveHeldCreationsTotal, userId]);
 
     // A name and handle given on the way to making a post public: the
     // profile this page holds shows them from then on.
@@ -950,44 +986,53 @@ export default function CreationsPage() {
             return;
         }
 
-        if (!generationsNextCursor || isLoadingMoreGenerations) {
+        // A delete under way moves the cursor this would ask from (handleGenerationDelete).
+        if (!generationsNextCursor || isLoadingMoreGenerations || deletesInFlightRef.current > 0) {
             return;
         }
 
         setIsLoadingMoreGenerations(true);
         setGenerationsLoadMoreError(null);
 
-        try {
-            const response = await fetch(buildGenerationsPageUrl(generationsNextCursor), {
-                headers: { 'Authorization': `Bearer ${accessToken}` },
-            });
-            const data = await response.json() as GenerationsApiResponse;
+        const load = (async () => {
+            try {
+                const response = await fetch(buildGenerationsPageUrl(generationsNextCursor), {
+                    headers: { 'Authorization': `Bearer ${accessToken}` },
+                });
+                const data = await response.json() as GenerationsApiResponse;
 
-            if (!response.ok) {
-                throw new Error('Failed to load more creations.');
+                if (!response.ok) {
+                    throw new Error('Failed to load more creations.');
+                }
+
+                const loadedGenerations = Array.isArray(data.generations) ? data.generations : [];
+                const nextGenerations = mergeGenerationAppend(generationsRef.current, loadedGenerations);
+                const nextCursor = getNextGenerationCursor(data);
+                generationsRef.current = nextGenerations;
+                loadedGenerationPagesRef.current += 1;
+                setGenerations(nextGenerations);
+                setGenerationsNextCursor(nextCursor);
+                setGenerationsComplete(nextCursor === null);
+                writeCreationsWorkspaceCache(userId, {
+                    generations: nextGenerations,
+                    posts: postsRef.current,
+                    profile: profileRef.current,
+                    generationsComplete: generationsCompleteRef.current,
+                });
+            } catch (error) {
+                console.error('Failed to load more creations:', error);
+                setGenerationsLoadMoreError(error instanceof Error ? error.message : 'Failed to load more creations.');
+            } finally {
+                setIsLoadingMoreGenerations(false);
             }
-
-            const loadedGenerations = Array.isArray(data.generations) ? data.generations : [];
-            const nextGenerations = mergeGenerationAppend(generationsRef.current, loadedGenerations);
-            const nextCursor = getNextGenerationCursor(data);
-            generationsRef.current = nextGenerations;
-            loadedGenerationPagesRef.current += 1;
-            setGenerations(nextGenerations);
-            setGenerationsNextCursor(nextCursor);
-            setGenerationsComplete(nextCursor === null);
-            writeCreationsWorkspaceCache(userId, {
-                generations: nextGenerations,
-                posts,
-                profile,
-                generationsComplete: generationsCompleteRef.current,
-            });
-        } catch (error) {
-            console.error('Failed to load more creations:', error);
-            setGenerationsLoadMoreError(error instanceof Error ? error.message : 'Failed to load more creations.');
+        })();
+        loadMoreInFlightRef.current = load;
+        try {
+            await load;
         } finally {
-            setIsLoadingMoreGenerations(false);
+            if (loadMoreInFlightRef.current === load) loadMoreInFlightRef.current = null;
         }
-    }, [accessToken, generationsNextCursor, isLoadingMoreGenerations, posts, profile, redirectToSignIn, setGenerationsComplete, userId]);
+    }, [accessToken, generationsNextCursor, isLoadingMoreGenerations, redirectToSignIn, setGenerationsComplete, userId]);
 
     const refreshProcessingGenerationStatuses = useCallback(async () => {
         if (!accessToken || generationStatusRefreshInFlightRef.current) return;
@@ -1456,30 +1501,39 @@ export default function CreationsPage() {
             return;
         }
 
+        // A Load more under way lands first: the cursor it sets is the one this delete steps back.
+        await loadMoreInFlightRef.current;
+        deletesInFlightRef.current += 1;
+        setDeletesInFlight((count) => count + 1);
         try {
-            const response = await fetch(`/api/generations/${generationId}`, {
-                method: 'DELETE',
-                headers: {
-                    Authorization: `Bearer ${session.access_token}`,
-                },
-            });
-            const data = await response.json();
-            if (!response.ok || !data.success) {
-                throw new Error(data.error || 'Failed to delete creation.');
+            try {
+                const response = await fetch(`/api/generations/${generationId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        Authorization: `Bearer ${session.access_token}`,
+                    },
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Failed to delete creation.');
+                }
+            } catch (error) {
+                console.error('Failed to delete creation:', error);
+                pushToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not delete the creation.' });
+                return;
             }
-        } catch (error) {
-            console.error('Failed to delete creation:', error);
-            pushToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not delete the creation.' });
-            return;
-        }
 
-        // Gone on the server, so gone here: from the grid, from the snapshot a
-        // reload draws first, and from an open preview, whatever the refresh
-        // below brings back.
-        dropGeneration(generationId);
-        // The list's cursor counts rows, and this one sat before it: with it gone, the next page
-        // starts a row earlier, or Load more would skip the row that moved up into its place.
-        setGenerationsNextCursor(stepGenerationsCursorBack);
+            // Gone on the server, so gone here: from the grid, from the snapshot a
+            // reload draws first, and from an open preview, whatever the refresh
+            // below brings back.
+            dropGeneration(generationId);
+            // The list's cursor counts rows, and this one sat before it: with it gone, the next page
+            // starts a row earlier, or Load more would skip the row that moved up into its place.
+            setGenerationsNextCursor(stepGenerationsCursorBack);
+        } finally {
+            deletesInFlightRef.current -= 1;
+            setDeletesInFlight((count) => count - 1);
+        }
         deletedGenerationIdsRef.current.add(generationId);
         setPreviewGen((current) => (current?.id === generationId ? null : current));
         // Only while Studio is the page: one the reader went on to may name it too.
@@ -1889,7 +1943,7 @@ export default function CreationsPage() {
     // A creation whose only source is gone keeps its place in the grid with an
     // explicit note: the API withholds its address, so `output_url` alone
     // would silently hide it, which reads as deletion.
-    const successfulGenerations = activeGenerations.filter(g => g.status === 'succeeded' && (g.output_url || g.source_unavailable_at));
+    const successfulGenerations = activeGenerations.filter(isFinishedCreation);
     const processingGenerations = activeGenerations.filter(g => isActiveGenerationStatus(g.status));
     const failedGenerations = activeGenerations.filter(g => g.status === 'failed');
 
@@ -1915,8 +1969,9 @@ export default function CreationsPage() {
         serverTotal: profile?.stats?.creations ?? null,
     });
     // "—" until something has answered, as the profile draws a count it does not know: never 0.
+    // A screen reader hears "Counting" in its place.
     const creationTotalLabel = creationCounts.total === null
-        ? '—'
+        ? <><span aria-hidden="true">—</span><span className="sr-only">Counting</span></>
         : `${creationCounts.total}${creationCounts.totalIsAtLeast ? '+' : ''}`;
     const visiblePosts = useMemo(() => {
         if (postVisibilityFilter === 'archived') {
@@ -2030,7 +2085,7 @@ export default function CreationsPage() {
                     </h1>
                     <p className="text-sm text-zinc-500 font-medium tracking-wide">
                         {activeView === 'creations'
-                            ? `${creationTotalLabel} CREATION${creationCounts.total !== 1 ? 'S' : ''} TOTAL`
+                            ? <>{creationTotalLabel} CREATION{creationCounts.total !== 1 ? 'S' : ''} TOTAL</>
                             : activeView === 'posts'
                                 ? `${activePostCount} POST${activePostCount !== 1 ? 'S' : ''}${archivedPostCount > 0 ? ` · ${archivedPostCount} ARCHIVED` : ''}`
                                 : 'UNLOCKED RECIPES'}
@@ -2782,7 +2837,7 @@ export default function CreationsPage() {
                         <button
                             type="button"
                             onClick={() => void loadMoreGenerations()}
-                            disabled={isLoadingMoreGenerations}
+                            disabled={isLoadingMoreGenerations || deletesInFlight > 0}
                             className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                             {isLoadingMoreGenerations ? (
