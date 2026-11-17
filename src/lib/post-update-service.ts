@@ -77,7 +77,11 @@ import {
   isDatabaseRecipeTitleRefusal,
 } from '@/lib/marketplace-trust';
 import { recipeKeepsPromptPrivate, titleForRecipePost, type CreationTitleSource } from '@/lib/creation-post-title';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { classifyPostPageChange, postPageStateOfRow, type PostPageChange } from '@/lib/public-page-change';
+import {
+  invalidateShowcaseFeedAndRefreshPostPages,
+  invalidateShowcaseFeedCache,
+} from '@/lib/showcase-feed-cache';
 import { isTemplateResultGeneration, type TemplateRunLink } from '@/lib/template-result';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 import {
@@ -1357,6 +1361,10 @@ export async function updateOwnerPostForRoute({
   }
 
   let didMutate = false;
+  // What the saved change did to the cached public pages, and the creation
+  // whose id is the post page's legacy address: decided once the save commits.
+  let pageChange: PostPageChange | null = null;
+  let pageGenerationId: string | null = null;
 
   try {
     const post = await loadOwnedPost(adminSupabase, postId, ownerUserId);
@@ -2089,6 +2097,17 @@ export async function updateOwnerPostForRoute({
         ...(preparedMedia ? { mediaItems: preparedMedia.mediaItems } : {}),
       });
       didMutate = true;
+      // A move to private or out of the lists (public to unlisted), or behind
+      // the mature cover, takes what was shown out of view; anything else is a
+      // change the post's pages take in the background. An edit moves neither
+      // the archive nor a moderation hold.
+      const postBefore = postPageStateOfRow(post);
+      pageChange = classifyPostPageChange(postBefore, {
+        ...postBefore,
+        visibility: updatedPost.visibility,
+        isNsfw: nextIsNsfw,
+      });
+      pageGenerationId = post.generation_id ?? null;
     } catch (error) {
       if (error instanceof DefinitiveSupabaseMutationRejection) {
         await Promise.all(resourceConsumptionClaims.map((claim) => (
@@ -2280,7 +2299,16 @@ export async function updateOwnerPostForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to update post.' } };
   } finally {
     if (didMutate) {
-      invalidateShowcaseFeedCache();
+      if (!pageChange || pageChange.kind === 'removal') {
+        invalidateShowcaseFeedCache();
+      } else {
+        await invalidateShowcaseFeedAndRefreshPostPages(adminSupabase, {
+          postId,
+          generationId: pageGenerationId,
+          creatorId: ownerUserId,
+          arrived: pageChange.arrived,
+        });
+      }
     }
   }
 }

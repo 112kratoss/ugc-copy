@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 const cacheMocks = vi.hoisted(() => ({
   SHOWCASE_FEED_CACHE_TAG: 'showcase-feed:v2',
   invalidateShowcaseFeedCache: vi.fn(),
+  invalidateShowcaseFeedAndRefreshPostPages: vi.fn(async () => {}),
 }));
 
 const logBackendErrorMock = vi.hoisted(() => vi.fn());
@@ -289,6 +290,7 @@ function cardRecipe({
 describe('publishGenerationToShowcaseForRoute', () => {
   beforeEach(() => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
+    cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mockClear();
     logBackendErrorMock.mockClear();
   });
 
@@ -693,7 +695,16 @@ describe('publishGenerationToShowcaseForRoute', () => {
       'showcase/gen-1/example.preview.1234.webp',
     ]);
     expect(adminClient.queued).toEqual([]);
-    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    // No post showed the creation before this save, and none does after it:
+    // nothing is removed from view, so nothing is wiped at once.
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mock.calls).toEqual([[adminClient.client, {
+      postId: 'post-1',
+      generationId: 'gen-1',
+      creatorId: 'user-1',
+      arrived: false,
+      isNew: true,
+    }]]);
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
   // The removal reads the legacy rows, removes what they name, then deletes the
@@ -1360,6 +1371,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
       },
     });
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   it('revalidates a frozen sold generation package before status-only republish', async () => {
@@ -1458,6 +1470,7 @@ describe('publishGenerationToShowcaseForRoute', () => {
     });
     expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   // Owner, 2026-11-03: the composers answer this refusal with "Post without
@@ -3207,5 +3220,119 @@ describe('a creation’s new post and its posting defaults', () => {
       const { result } = await publish({ allowRemixes: true, leaveOutGenerationReferenceIds, resourceBundle: recipe('free') });
       expect(result).toEqual({ ok: false, status: 400, body: { error: 'leaveOutGenerationReferenceIds must list saved input ids.' } });
     }
+  });
+});
+
+// Owner, 2026-11-17: a publish that removes nothing refreshes the pages that
+// draw the post in the background; one that takes the post out of view (to
+// private, out of the lists) still expires every cached page at once.
+describe('the cached public pages a publish reaches', () => {
+  const generation = {
+    id: 'gen-pages',
+    user_id: 'user-1',
+    status: 'succeeded',
+    model: 'nano-banana-2',
+    category: 'image',
+    creation_mode: null,
+    output_url: 'generated_images/user-1/harbor.jpg',
+    showcase_asset_path: null,
+    title: null,
+    description: null,
+    prompt: 'A harbor at dawn.',
+  };
+  const storedPost = (overrides: Record<string, unknown>) => ({
+    id: 'post-pages',
+    is_nsfw: false,
+    visibility: 'public',
+    archived_at: null,
+    review_status: 'visible',
+    tombstoned_at: null,
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    cacheMocks.invalidateShowcaseFeedCache.mockClear();
+    cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mockClear();
+  });
+
+  async function publish(visibility: 'public' | 'private', stored: Record<string, unknown> | null) {
+    const adminClient = createAdminClientMock(generation, null, stored ? { storedPost: stored } : {});
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: { generationId: 'gen-pages', visibility, title: 'Harbor at dawn', resourceBundle: { accessMode: 'none' } },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({ outputUrl: mediaGeneration.outputUrl, createdLocation: null })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+        ]),
+        validatePostResourceBundleInput: vi.fn(() => null),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        loadRemixRecipeTerms: vi.fn(async () => ({ mode: null, bundleId: null, originGenerationId: null })),
+        planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [] })),
+        loadGenerationPostVisibility: vi.fn(async () => (stored?.visibility as string | undefined) ?? null),
+        publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-pages',
+          visibility,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+        ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+        requestPostEmbedding: vi.fn(async () => undefined),
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+    expect(result).toMatchObject({ ok: true });
+    return adminClient.client;
+  }
+
+  it('drops the not-found of a first post at once and refreshes its pages in the background', async () => {
+    const client = await publish('public', null);
+
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mock.calls).toEqual([[client, {
+      postId: 'post-pages',
+      generationId: 'gen-pages',
+      creatorId: 'user-1',
+      arrived: true,
+      isNew: true,
+    }]]);
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('refreshes a public post\'s pages in the background when it is published again', async () => {
+    await publish('public', storedPost({}));
+
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      postId: 'post-pages',
+      arrived: false,
+      isNew: false,
+    }));
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('calls a private post made public an arrival, its not-found dropped at once', async () => {
+    await publish('public', storedPost({ visibility: 'private' }));
+
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      arrived: true,
+      isNew: false,
+    }));
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  // A publish moves neither the archive nor a moderation hold: the page stays
+  // a not-found, and nothing comes into view.
+  it('calls no arrival for an archived post published again', async () => {
+    await publish('public', storedPost({ archived_at: '2026-11-17T00:00:00.000Z' }));
+
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      arrived: false,
+    }));
+  });
+
+  it('expires every cached page at once when a public post is saved private', async () => {
+    await publish('private', storedPost({}));
+
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 });

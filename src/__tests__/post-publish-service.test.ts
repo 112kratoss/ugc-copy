@@ -4,6 +4,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 const cacheMocks = vi.hoisted(() => ({
   SHOWCASE_FEED_CACHE_TAG: 'showcase-feed:v2',
   invalidateShowcaseFeedCache: vi.fn(),
+  invalidateShowcaseFeedAndRefreshPostPages: vi.fn(async () => {}),
+  invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
+  invalidateShowcaseFeedCacheOnly: vi.fn(),
 }));
 
 /**
@@ -183,6 +186,7 @@ async function prepareRecipeSubmission({
 describe('publishPreparedPost', () => {
   beforeEach(() => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
+    cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mockClear();
   });
 
   it('publishes prepared text posts with marketplace checks and route payload paths', async () => {
@@ -282,7 +286,16 @@ describe('publishPreparedPost', () => {
         resourceBundleStatus: null,
       },
     });
-    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    // A new public post removes nothing: the feed at once, and its page, its
+    // creator's and the storefront in the background (no remix credits it yet).
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).toHaveBeenCalledWith(expect.anything(), {
+      postId: 'post-1',
+      creatorId: 'user-1',
+      arrived: true,
+      isNew: true,
+    });
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
   it('never had a public post to invalidate when media persistence fails', async () => {
@@ -345,6 +358,7 @@ describe('publishPreparedPost', () => {
     expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
     expect(deleteEq).toHaveBeenCalledWith('id', 'post-1');
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   it('keeps the finished post as a private draft when promotion fails', async () => {
@@ -395,6 +409,7 @@ describe('publishPreparedPost', () => {
     // The draft survives — promotion failure must not tear down finished work —
     // and the never-public post never invalidates the shared feed.
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   it('returns a profile repair action before creating an incomplete public post', async () => {
@@ -440,6 +455,7 @@ describe('publishPreparedPost', () => {
     });
     expect(createPostWithResourceBundleAtomically).not.toHaveBeenCalled();
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
   });
 
   // Owner, 2026-11-03: the composers answer this refusal with "Post without

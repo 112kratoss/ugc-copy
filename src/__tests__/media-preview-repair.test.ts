@@ -1399,6 +1399,26 @@ describe('per-post media repair', () => {
     expect(invalidateFeedCache).toHaveBeenCalledTimes(1);
   });
 
+  // A repaired preview removes nothing: by default the feed is expired at
+  // once and every public page refreshed in the background (the repair knows
+  // the post, not every page that draws it), never the pages' removal tag.
+  it('by default expires the feed and refreshes every public page in the background', async () => {
+    const { revalidateTag } = await import('next/cache');
+    const { PUBLIC_PAGE_CACHE_TAG, PUBLIC_PAGE_REFRESH_TAG } = await import('@/lib/public-page-cache');
+    const { SHOWCASE_FEED_CACHE_TAG } = await import('@/lib/showcase-feed-cache');
+    const { repairMediaForPost } = await import('@/lib/media-preview-repair');
+    const { supabase } = createPostRepairClient([pendingVideoRow]);
+    vi.mocked(revalidateTag).mockClear();
+
+    await repairMediaForPost(withAdmissionFallback(supabase) as never, 'post-1');
+
+    expect(vi.mocked(revalidateTag).mock.calls).toEqual([
+      [SHOWCASE_FEED_CACHE_TAG, { expire: 0 }],
+      [PUBLIC_PAGE_REFRESH_TAG, 'max'],
+    ]);
+    expect(revalidateTag).not.toHaveBeenCalledWith(PUBLIC_PAGE_CACHE_TAG, expect.anything());
+  });
+
   it('leaves the feed cache alone when nothing was repaired', async () => {
     const { repairMediaForPost } = await import('@/lib/media-preview-repair');
     const { supabase } = createPostRepairClient([]);

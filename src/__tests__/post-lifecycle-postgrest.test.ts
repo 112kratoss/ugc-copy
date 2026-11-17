@@ -4,7 +4,11 @@ import { Client } from 'pg';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/showcase-feed-cache', () => ({ invalidateShowcaseFeedCache: vi.fn() }));
+vi.mock('@/lib/showcase-feed-cache', () => ({
+  invalidateShowcaseFeedCache: vi.fn(),
+  // A restore refreshes the post's pages in the background.
+  invalidateShowcaseFeedAndRefreshPostPages: vi.fn(async () => {}),
+}));
 import { archiveOwnerPostForRoute, restoreOwnerPostForRoute } from '@/lib/post-lifecycle-service';
 
 const configPath = process.env.AUDIT_STORAGE_CONFIG;

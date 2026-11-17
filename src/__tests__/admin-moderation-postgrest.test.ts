@@ -9,7 +9,11 @@ import { postAdminPostReportDecision, postAdminSubjectReportDecision, postAdminP
 import { postAdminGenerationModeration, postAdminContactTriage } from '@/lib/admin-content-moderation-route-adapter-service';
 import { postAdminUserSanction } from '@/lib/admin-user-sanction-route-adapter-service';
 
-vi.mock('@/lib/showcase-feed-cache', () => ({ invalidateShowcaseFeedCache: vi.fn() }));
+vi.mock('@/lib/showcase-feed-cache', () => ({
+  invalidateShowcaseFeedCache: vi.fn(),
+  // A restore drops the post's not-found and refreshes every other page in the background.
+  invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
+}));
 const configPath = process.env.AUDIT_STORAGE_CONFIG, connectionString = process.env.SUPABASE_TEST_DB_URL;
 const routes = [
   { path: '/api/admin/moderation/post-reports', handler: postAdminPostReportDecision },

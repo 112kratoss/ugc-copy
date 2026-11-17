@@ -14,7 +14,7 @@ import { createPostMediaRendition, type PostMediaTeaserOutcome } from '@/lib/pos
 import type { VideoProbeResult } from '@/lib/video-rendition';
 import { toUsablePreviewSize } from '@/lib/preview-dimensions';
 import { downloadAllowlistedRemoteMedia } from '@/lib/remote-media-security';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { invalidateShowcaseFeedAndRefreshEveryPage } from '@/lib/showcase-feed-cache';
 import {
   getCanonicalStoredMediaLocation,
   getUserOwnedStoredMediaLocation,
@@ -824,7 +824,7 @@ export async function repairPostMediaRenditions(
 export async function repairMediaForPost(
   supabase: SupabaseClient,
   postId: string,
-  options: { invalidateFeedCache?: typeof invalidateShowcaseFeedCache } = {},
+  options: { invalidateFeedCache?: typeof invalidateShowcaseFeedAndRefreshEveryPage } = {},
 ): Promise<RepairSummary> {
   const previewResult = await supabase
     .from('post_media')
@@ -875,8 +875,11 @@ export async function repairMediaForPost(
   const completed = previewOutcomes.filter(Boolean).length + renditionsCompleted;
   const attempted = previewRows.length + renditionRows.length;
 
+  // A repaired preview removes nothing: the feeds at once, and the public
+  // pages that draw it (the post's, its creator's, the storefront's) in the
+  // background, all of them, as this knows the post and not its creator.
   if (completed > 0) {
-    (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();
+    (options.invalidateFeedCache ?? invalidateShowcaseFeedAndRefreshEveryPage)();
   }
 
   return { attempted, completed, failed: attempted - completed };
@@ -1054,7 +1057,7 @@ export async function repairMediaPreviews(
   options: {
     batchSize?: number;
     renditionBatchSize?: number;
-    invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
+    invalidateFeedCache?: typeof invalidateShowcaseFeedAndRefreshEveryPage;
     lockedBy?: string;
   } = {}
 ): Promise<RepairSummary> {
@@ -1125,13 +1128,15 @@ export async function repairMediaPreviews(
   const attempted = results.length + templatePosters.attempted + renditions.attempted + teasers.attempted + privatePlayback.attempted;
 
   // Every invalidation rebuilds the signed-out home page at its next visit, so
-  // only work a cached feed page can show asks for one.
+  // only work a cached feed page can show asks for one. The public pages that
+  // draw a repaired preview are refreshed in the background, all of them: the
+  // sweep knows media rows, not every page that shows them.
   if (await finishedWorkShowsOnTheFeed(supabase, {
     generationIds: finishedGenerationIds,
     postMediaIds: finishedPostMediaIds,
     teasers: teasers.completed,
   })) {
-    (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();
+    (options.invalidateFeedCache ?? invalidateShowcaseFeedAndRefreshEveryPage)();
   }
 
   return { attempted, completed, failed: attempted - completed };
@@ -1339,7 +1344,7 @@ export async function regenerateVideoPosters(
     // the Next server, so from the CLI script this throws and the cache simply
     // expires on its own schedule; inside the server it invalidates at once.
     try {
-      invalidateShowcaseFeedCache();
+      invalidateShowcaseFeedAndRefreshEveryPage();
     } catch (error) {
       log(`feed cache not invalidated from here (${summarizeMediaToolError(error, 'no Next request context')}); it expires on its own`);
     }

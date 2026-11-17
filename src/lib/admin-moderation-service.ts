@@ -15,7 +15,10 @@ import {
   type PostReportResolution,
   type SubjectReportResolution,
 } from '@/lib/moderation-ops';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import {
+  invalidateShowcaseFeedAndRefreshEveryPage,
+  invalidateShowcaseFeedCache,
+} from '@/lib/showcase-feed-cache';
 
 /**
  * Admin console wrapper over the existing moderation ops core.
@@ -218,6 +221,10 @@ export async function applyAdminSubjectReportDecision(
  * restored post stays absent from cached pages until its tag is revalidated,
  * so an operator undoing a mistake would otherwise watch nothing happen for up
  * to the feed's revalidate window and reasonably conclude the tool is broken.
+ * A hide or a take-down expires every cached page at once; a restore removes
+ * nothing, so the post's own page (a not-found since the hide) is dropped at
+ * once and every other page is refreshed in the background (this layer does
+ * not know the post's creator, and the post's remixes credit it again).
  *
  * As with the report path this lives here rather than in `moderation-ops.ts`,
  * which is also driven by the tsx ops CLI where `next/cache` does not exist.
@@ -248,7 +255,11 @@ export async function applyAdminPostModeration(
   }
 
   if (result.status === 'applied' || result.status === 'already_applied') {
-    invalidateShowcaseFeedCache();
+    if (options.action === 'restore') {
+      invalidateShowcaseFeedAndRefreshEveryPage({ postIds: [result.postId] });
+    } else {
+      invalidateShowcaseFeedCache();
+    }
   }
 
   return result;

@@ -1,9 +1,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Which invalidation each lifecycle change makes (`showcase-feed-cache.ts`).
 const cacheMocks = vi.hoisted(() => ({
   invalidateShowcaseFeedCache: vi.fn(),
+  invalidateShowcaseFeedAndRefreshPostPages: vi.fn(async () => {}),
+  invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
+  invalidateShowcaseFeedCacheOnly: vi.fn(),
 }));
+
+function clearCacheMocks() {
+  for (const mock of Object.values(cacheMocks)) mock.mockClear();
+}
 
 vi.mock('@/lib/showcase-feed-cache', () => cacheMocks);
 
@@ -118,7 +126,7 @@ function createClient({
 
 describe('archiveOwnerPostForRoute', () => {
   beforeEach(() => {
-    cacheMocks.invalidateShowcaseFeedCache.mockClear();
+    clearCacheMocks();
   });
 
   it('rate limits before archive mutation work', async () => {
@@ -166,7 +174,10 @@ describe('archiveOwnerPostForRoute', () => {
         selectColumns: 'id, generation_id',
       },
     ]);
+    // A removal: the feed and every cached public page at once.
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
   });
 
   it('returns not found without dependent mutations when no active owned post matches', async () => {
@@ -203,7 +214,7 @@ describe('archiveOwnerPostForRoute', () => {
 
 describe('restoreOwnerPostForRoute', () => {
   beforeEach(() => {
-    cacheMocks.invalidateShowcaseFeedCache.mockClear();
+    clearCacheMocks();
   });
 
   it('restores only archived posts owned by the caller', async () => {
@@ -233,7 +244,35 @@ describe('restoreOwnerPostForRoute', () => {
       selectColumns: 'id, generation_id, visibility, showcase_asset_path',
     }]);
     expect(client.readCalls).toEqual([]);
-    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    // Nothing is removed: the post's pages in the background, and the
+    // not-found its page may hold since the archive at once.
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mock.calls).toEqual([[client.client, {
+      postId: 'post-1',
+      generationId: null,
+      creatorId: 'user-1',
+      arrived: true,
+    }]]);
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it('restores a private post without calling it an arrival, and names its creation\'s address', async () => {
+    const client = createClient({
+      postResult: { data: { id: 'post-1', generation_id: 'gen-1', visibility: 'private', showcase_asset_path: null }, error: null },
+    });
+
+    await restoreOwnerPostForRoute({
+      adminSupabase: client.client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+    });
+
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mock.calls).toEqual([[client.client, {
+      postId: 'post-1',
+      generationId: 'gen-1',
+      creatorId: 'user-1',
+      arrived: false,
+    }]]);
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
   // 03-4: a post deleted while it had buyers is tombstoned (private and
@@ -254,6 +293,7 @@ describe('restoreOwnerPostForRoute', () => {
       status: 409,
       body: { error: 'This post was deleted. Buyers keep their copy.', code: 'POST_DELETED' },
     });
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
     expect(client.updateCalls[0]?.filters).toContainEqual(['is', 'tombstoned_at', null]);
     expect(client.readCalls).toEqual([{
       table: 'posts',

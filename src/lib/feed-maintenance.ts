@@ -5,7 +5,7 @@ import {
   refreshAccountSafetyLabels,
   type AccountSafetyLabelSummary,
 } from '@/lib/feed-safety-labels';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { invalidateShowcaseFeedCacheOnly } from '@/lib/showcase-feed-cache';
 
 const POST_STATS_REFRESH_LIMIT = 1000;
 const CREATOR_STATS_REFRESH_LIMIT = 1000;
@@ -225,7 +225,7 @@ export async function maintainFeedPersonalization(
   client: SupabaseClient,
   options: {
     now?: Date;
-    invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
+    invalidateFeedCache?: typeof invalidateShowcaseFeedCacheOnly;
     refreshAccountLabels?: typeof refreshAccountSafetyLabels;
     /** Wall clock in ms, for the prune's time budget. */
     clock?: () => number;
@@ -268,7 +268,12 @@ export async function maintainFeedPersonalization(
   if (creatorStatsResult.error) {
     throw rpcError('refresh_creator_feed_stats', creatorStatsResult.error);
   }
-  (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();
+  // The feeds only: these totals, and the account labels below, are read by
+  // the feeds' ranking alone (post_feed_stats, creator_feed_stats,
+  // account_labels). No cached public page draws them: a post page's and a
+  // creator page's counts are the posts' own columns, which move with no event
+  // and wait for the pages' five-minute backstop as before.
+  (options.invalidateFeedCache ?? invalidateShowcaseFeedCacheOnly)();
 
   const deferredFailures: string[] = [];
   let accountLabels: AccountSafetyLabelSummary = {

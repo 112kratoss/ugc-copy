@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   createPostMediaPreview: vi.fn(),
   createGenerationOutputPreview: vi.fn(),
-  invalidateShowcaseFeedCache: vi.fn(),
+  invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
 }));
 
 vi.mock('@/lib/post-media-preview', () => ({
@@ -12,8 +12,9 @@ vi.mock('@/lib/post-media-preview', () => ({
 vi.mock('@/lib/generation-output-preview', () => ({
   createGenerationOutputPreview: mocks.createGenerationOutputPreview,
 }));
+// A new poster removes nothing: the feed at once, every public page in the background.
 vi.mock('@/lib/showcase-feed-cache', () => ({
-  invalidateShowcaseFeedCache: mocks.invalidateShowcaseFeedCache,
+  invalidateShowcaseFeedAndRefreshEveryPage: mocks.invalidateShowcaseFeedAndRefreshEveryPage,
 }));
 vi.mock('@/lib/post-media-rendition', () => ({
   createPostMediaRendition: vi.fn(),
@@ -103,7 +104,7 @@ describe('regenerateVideoPosters', () => {
   beforeEach(() => {
     mocks.createPostMediaPreview.mockReset();
     mocks.createGenerationOutputPreview.mockReset();
-    mocks.invalidateShowcaseFeedCache.mockReset();
+    mocks.invalidateShowcaseFeedAndRefreshEveryPage.mockReset();
     mocks.createGenerationOutputPreview.mockResolvedValue({
       previewStoragePath: 'generated_videos/user-1/clip.preview.newhash.webp',
       previewThumbhash: 'gen-thumbhash',
@@ -173,7 +174,7 @@ describe('regenerateVideoPosters', () => {
     expect(Object.keys(postUpdate?.payload ?? {})).not.toEqual(
       expect.arrayContaining(['width', 'height', 'preview_status', 'preview_attempt_count']),
     );
-    expect(mocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+    expect(mocks.invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledTimes(1);
   });
 
   it('leaves a row alone when the first frame hashes to the poster it already has', async () => {
@@ -191,7 +192,7 @@ describe('regenerateVideoPosters', () => {
 
     expect(summary.posts).toEqual({ candidates: 1, regenerated: 0, unchanged: 1, failed: 0 });
     expect(updates).toEqual([]);
-    expect(mocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(mocks.invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
   });
 
   it("queues a new poster in a creation's folder whose row went before it was recorded", async () => {
@@ -220,7 +221,7 @@ describe('regenerateVideoPosters', () => {
 
     expect(summary.posts).toEqual({ candidates: 1, regenerated: 0, unchanged: 0, failed: 1 });
     expect(queued).toEqual([{ p_paths: ['showcase/gen-1/clip.preview.newhash.webp'] }]);
-    expect(mocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    expect(mocks.invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
   });
 
   it('counts a failed row and carries on with the rest', async () => {

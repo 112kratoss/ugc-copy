@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 const cacheMocks = vi.hoisted(() => ({
   SHOWCASE_FEED_CACHE_TAG: 'showcase-feed:v2',
   invalidateShowcaseFeedCache: vi.fn(),
+  invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
 }));
 
 const moderationOpsMocks = vi.hoisted(() => ({
@@ -238,6 +239,7 @@ describe('applyAdminPostModeration', () => {
 
   beforeEach(() => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
+    cacheMocks.invalidateShowcaseFeedAndRefreshEveryPage.mockClear();
     moderationOpsMocks.applyPostModerationAction.mockReset();
   });
 
@@ -268,8 +270,8 @@ describe('applyAdminPostModeration', () => {
     expect(moderationOpsMocks.applyPostModerationAction).not.toHaveBeenCalled();
   });
 
-  it.each(['hide', 'take_down', 'restore'] as const)(
-    'invalidates the showcase feed after a %s so cached pages stop disagreeing with the database',
+  it.each(['hide', 'take_down'] as const)(
+    'expires the feed and every cached page at once after a %s, a removal',
     async (action) => {
       moderationOpsMocks.applyPostModerationAction.mockResolvedValue(moderationResult({ action }));
 
@@ -282,8 +284,31 @@ describe('applyAdminPostModeration', () => {
       });
 
       expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+      expect(cacheMocks.invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
     },
   );
+
+  // A restore removes nothing: the operator undoing a mistake sees the post
+  // at once on its own page (a not-found since the hide), and every other
+  // page catches up in the background.
+  it('drops the restored post\'s not-found at once and refreshes every other page in the background', async () => {
+    moderationOpsMocks.applyPostModerationAction.mockResolvedValue(moderationResult({
+      action: 'restore',
+      postReviewStatus: 'visible',
+      postReviewStatusBefore: 'hidden',
+    }));
+
+    await applyAdminPostModeration(client, {
+      postId: POST_ID,
+      reviewerId: REVIEWER_ID,
+      action: 'restore',
+      reason: 'policy 4.2',
+      idempotencyKey: 'key-restore',
+    });
+
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshEveryPage.mock.calls).toEqual([[{ postIds: [POST_ID] }]]);
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
 
   it('re-invalidates on a replayed action, matching the re-sweep moderation-ops performs', async () => {
     moderationOpsMocks.applyPostModerationAction.mockResolvedValue(
@@ -315,6 +340,7 @@ describe('applyAdminPostModeration', () => {
       });
 
       expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+      expect(cacheMocks.invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
     },
   );
 
