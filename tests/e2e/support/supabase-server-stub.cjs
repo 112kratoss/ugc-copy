@@ -32,7 +32,9 @@
 // E2E user's recipe sales page, /marketplace/sell: two free recipes on text posts of theirs
 // (fixtures/seller-recipes.json), with no unlock orders and no deleted posts. And Explore's Recent
 // lane for one tool of its own (/showcase?sort=recent&tool=e2e-explore-reel): three pictures by a
-// creator of their own (fixtures/explore-reel.json). And the storefront, /marketplace: its first
+// creator of their own (fixtures/explore-reel.json), and the same lane for another tool
+// (/showcase?sort=recent&tool=e2e-explore-load-more): thirty pictures, more than two pages
+// (fixtures/explore-load-more.json, the rows built below). And the storefront, /marketplace: its first
 // page, four free recipes on picture posts by a creator of their own and a fifth the page reads to
 // know there are more (fixtures/marketplace-recipes.json). Both read the source tools catalog,
 // answered with no rows (below), which they draw as the app's own list. And the E2E user's
@@ -102,6 +104,80 @@ const searchStarter = require('../fixtures/search-starter.json');
 // whose posts read names the fixture (`source_tool_slug`), so no other page's read is answered.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const exploreReel = require('../fixtures/explore-reel.json');
+// Explore's Recent lane for another tool of its own: thirty pictures by a creator of their own,
+// more than two pages, so the grid loads more as it is scrolled (explore-load-more-steady.spec.ts).
+// The fixture names the lane; its rows are built here, in the shape of explore-reel.json's.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const exploreLoadMore = require('../fixtures/explore-load-more.json');
+const exploreLoadMorePosts = Array.from({ length: exploreLoadMore.postCount }, (_, index) => {
+  const number = String(index + 1).padStart(2, '0');
+  return {
+    id: `${exploreLoadMore.postIdPrefix}${number}`,
+    user_id: exploreLoadMore.creator.id,
+    generation_id: null,
+    visibility: 'public',
+    output_url: null,
+    showcase_asset_path: null,
+    prompt: `A picture for the load-more lane, number ${number}.`,
+    title: `${exploreLoadMore.titlePrefix}${number}`,
+    body: '',
+    category: 'image',
+    creation_mode: null,
+    post_format: 'media',
+    save_count: 0,
+    remix_count: 0,
+    comment_count: 0,
+    // Newest first, as the Recent lane orders them.
+    created_at: new Date(Date.UTC(2026, 10, 3, 10, 0, 0) - index * 60_000).toISOString(),
+    source_kind: 'external',
+    source_tool: 'E2E Explore Load More',
+    source_tool_slug: exploreLoadMore.toolSlug,
+    review_status: 'visible',
+    remixes_allowed: true,
+    remix_parent_post_id: null,
+    remix_parent_user_id: null,
+    remix_origin_user_id: null,
+    is_nsfw: false,
+    archived_at: null,
+  };
+});
+const exploreLoadMoreMedia = exploreLoadMorePosts.map((post, index) => {
+  const number = String(index + 1).padStart(2, '0');
+  const path = `${exploreLoadMore.creator.id}/load-more-${number}`;
+  return {
+    id: `e2e-load-more-cover-${number}`,
+    post_id: post.id,
+    storage_path: `${path}.png`,
+    external_url: null,
+    media_kind: 'image',
+    content_type: 'image/png',
+    original_name: `load-more-${number}.png`,
+    width: 1080,
+    height: 1350,
+    duration_seconds: null,
+    sort_order: 0,
+    posts: { user_id: exploreLoadMore.creator.id },
+    media_key: 'media-1',
+    preview_storage_path: `${path}.preview.e2e10ad0.webp`,
+    preview_thumbhash: null,
+    preview_status: 'ready',
+    preview_attempt_count: 1,
+    preview_error: null,
+    preview_generated_at: post.created_at,
+    rendition_storage_path: null,
+    rendition_status: 'skipped',
+    rendition_attempt_count: 0,
+    rendition_error: null,
+    rendition_generated_at: null,
+    rendition_bytes: null,
+    teaser_storage_path: null,
+    teaser_bytes: null,
+    teaser_generated_at: null,
+    teaser_error: null,
+    source_unavailable_at: null,
+    display_storage_path: `${path}.display.e2e10ad0.webp`,
+  };
+});
 // The storefront's first page, newest first: four free recipes on picture posts and the fifth that
 // says more follow, by one creator. /marketplace reads them in getMarketplaceResourceList
 // (src/lib/post-resource-bundles-server.ts); marketplace-keeps-place.spec.ts draws it.
@@ -113,6 +189,7 @@ const sellerPostIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.post_i
 const sellerBundleIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.id).join(',')})`;
 // The lane's posts as the hydration names them, in the order its read answered them.
 const exploreReelPostIds = `in.(${exploreReel.posts.map(({ id }) => id).join(',')})`;
+const exploreLoadMorePostIds = `in.(${exploreLoadMorePosts.map(({ id }) => id).join(',')})`;
 const marketplacePostIds = `in.(${marketplaceRecipes.posts.map((post) => post.id).join(',')})`;
 const marketplaceBundleIds = `in.(${marketplaceRecipes.bundles.map((bundle) => bundle.id).join(',')})`;
 
@@ -637,6 +714,57 @@ const READS = [
     methods: ['GET'],
     path: '/rest/v1/post_resource_bundles',
     filters: { post_id: exploreReelPostIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // Explore's Recent lane for the load-more fixture's tool: all thirty posts in the filtered
+    // scan's one batch (48), so every page of the lane, the first and each Load More, is cut from
+    // them (collectFilteredFeedItems, src/lib/showcase-feed.ts).
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { source_tool_slug: `eq.${exploreLoadMore.toolSlug}`, offset: '0' },
+    answer: () => json(exploreLoadMorePosts, { 'content-range': `0-${exploreLoadMorePosts.length - 1}/${exploreLoadMorePosts.length}` }),
+  },
+  {
+    // Their pictures, one each, as explore-reel.json's...
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: exploreLoadMorePostIds },
+    answer: () => json(exploreLoadMoreMedia, { 'content-range': `0-${exploreLoadMoreMedia.length - 1}/${exploreLoadMoreMedia.length}` }),
+  },
+  {
+    // ...their creator...
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `in.(${exploreLoadMore.creator.id})` },
+    answer: () => json([exploreLoadMore.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // ...no Made with rows...
+    methods: ['GET'],
+    path: '/rest/v1/post_source_tools',
+    filters: { post_id: exploreLoadMorePostIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // ...none marked NSFW...
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: exploreLoadMorePostIds, select: 'id,is_nsfw' },
+    answer: () => json(exploreLoadMorePosts.map(({ id }) => ({ id, is_nsfw: false })), { 'content-range': `0-${exploreLoadMorePosts.length - 1}/${exploreLoadMorePosts.length}` }),
+  },
+  {
+    // ...and no recipe, in the public summaries...
+    methods: ['POST'],
+    path: '/rest/v1/rpc/get_public_post_resource_bundle_summaries',
+    body: { p_post_ids: exploreLoadMorePosts.map(({ id }) => id) },
+    answer: () => json([]),
+  },
+  {
+    // ...nor in which of them has a published recipe at all.
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { post_id: exploreLoadMorePostIds },
     answer: () => json([], { 'content-range': '*/0' }),
   },
   {

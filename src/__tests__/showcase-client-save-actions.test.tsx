@@ -2877,6 +2877,134 @@ describe('ShowcaseClient save actions', () => {
     ]);
   });
 
+  // The owner's report of 2026-11-17: Explore jumped as more posts came. The loading row and Load
+  // More's block went in one commit and the page's rows came a tick later, so the grid got shorter
+  // under a reader at its bottom and the browser moved them up. The page now takes the loading
+  // row's place in the commit that ends it (explore-load-more-steady.spec.ts measures the page in
+  // a browser; these hold the commit). Each page is answered with no time passing, so the reveal's
+  // 160 ms tick cannot be what drew its first row.
+  describe('a page that comes under the loading row', () => {
+    const loadingRow = () => document.querySelector('[data-showcase-load-more-skeleton]');
+    const settle = () => act(async () => {
+      for (let tick = 0; tick < 20; tick += 1) {
+        await Promise.resolve();
+      }
+    });
+    /**
+     * Feed reads held until the test answers them, all at once (the client drops one it aborted);
+     * every other call answered at once.
+     */
+    const holdFeedReads = () => {
+      const pending: Array<(page: ShowcaseFeedPage) => void> = [];
+      const held = {
+        requests: [] as string[],
+        answer: (page: ShowcaseFeedPage) => pending.splice(0).forEach((resolve) => resolve(page)),
+      };
+      vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/showcase/feed?')) {
+          held.requests.push(url);
+          return new Promise((resolve) => {
+            pending.push((page) => resolve({ ok: true, json: async () => page } as Response));
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }),
+        } as Response);
+      }));
+      return held;
+    };
+    const post = (lane: string, n: number) => createShowcaseItem({
+      id: `${lane}-post-${n}`,
+      generationId: `${lane}-gen-${n}`,
+      title: `${lane} ${n}`,
+    });
+    const posts = (lane: string, from: number, count: number) => Array.from({ length: count }, (_, index) => post(lane, from + index));
+
+    it('draws its first row as the loading row goes, and Load More keeps its place until the rest is drawn', async () => {
+      const held = holdFeedReads();
+      render(
+        <ShowcaseClient
+          initialFeed={createFeed(posts('Recent', 1, 8), { hasMore: true, nextOffset: 8, limit: 8 })}
+          initialCategory="all"
+          initialSort="recent"
+          initialTool={null}
+          initialUnlock="all"
+          initialResource="all"
+          sourceToolOptions={SOURCE_TOOL_OPTIONS}
+        />
+      );
+      const loadMore = await screen.findByRole('button', { name: 'Load More' });
+      // From here no reveal tick runs until the test says so.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      fireEvent.click(loadMore);
+      expect(held.requests).toHaveLength(1);
+      expect(loadingRow()).not.toBeNull();
+      expect(screen.getByRole('button', { name: 'Loading more posts' })).toBeDisabled();
+
+      await act(async () => {
+        held.answer(createFeed(posts('Recent', 9, 8), { hasMore: true, nextOffset: 16, limit: 8, offset: 8 }));
+      });
+      await settle();
+
+      expect(loadingRow()).toBeNull();
+      expect(screen.getByText('Recent 9')).toBeInTheDocument();
+      expect(screen.queryByText('Recent 16')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Loading more posts' })).toBeDisabled();
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(screen.getByText('Recent 16')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Load More' })).toBeEnabled();
+    });
+
+    it("draws a row of the viewer's own For you page as the loading row of a Load More that waited on it goes", async () => {
+      // Signed in (beforeEach): the viewer's own page is asked for as Explore mounts, and a Load
+      // More before it comes waits on it.
+      const held = holdFeedReads();
+      const firstPage = posts('For you', 1, 8);
+      render(
+        <ShowcaseClient
+          initialFeed={createFeed(firstPage, { hasMore: true, nextOffset: 8, limit: 8 })}
+          initialCategory="all"
+          initialSort="for-you"
+          initialTool={null}
+          initialUnlock="all"
+          initialResource="all"
+          sourceToolOptions={SOURCE_TOOL_OPTIONS}
+        />
+      );
+      const loadMore = await screen.findByRole('button', { name: 'Load More' });
+      await waitFor(() => expect(held.requests).toHaveLength(1));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      fireEvent.click(loadMore);
+      await settle();
+      // The Load More waits on the page already on its way: it is not dropped and asked again,
+      // which kept the loading row up for as long again.
+      expect(held.requests).toEqual([`/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}&category=media`]);
+      expect(loadingRow()).not.toBeNull();
+
+      await act(async () => {
+        held.answer({
+          items: [...firstPage, ...posts('For you', 9, 8)],
+          feedSessionId: 'session-own',
+          pageInfo: { hasMore: true, nextOffset: 16, nextCursor: 'cursor-2', limit: 16, offset: 0 },
+        });
+      });
+      await settle();
+
+      expect(loadingRow()).toBeNull();
+      expect(screen.getByText('For you 9')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Loading more posts' })).toBeDisabled();
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(screen.getByText('For you 16')).toBeInTheDocument();
+    });
+  });
+
   // The app's end of Explore: "You're all caught up." on its For you, the
   // lane named otherwise. The web's lanes stopped with nothing said.
   it.each([

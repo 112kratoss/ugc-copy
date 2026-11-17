@@ -1433,6 +1433,10 @@ export default function ShowcaseClient({
 
                     personalizedRefreshPendingRef.current = false;
                     personalizedRefreshLandedRef.current = true;
+                    // A Load More waited on this feed (`loadMore`, For you's first page): its
+                    // loading row goes below, and a row of what follows takes its place in the
+                    // same commit, as a page Load More reads does.
+                    const loadMoreWaited = isLoadingMoreRef.current;
                     const visiblePersonalizedItems = filterSessionHiddenItems(
                         personalizedFeed.items,
                         sessionHiddenPostIdsRef.current,
@@ -1472,7 +1476,10 @@ export default function ShowcaseClient({
                     }
                     setItems(nextItems);
                     setRenderedItemCount((currentCount) => Math.min(
-                        Math.max(SHOWCASE_INITIAL_RENDER_COUNT, currentCount),
+                        Math.max(
+                            SHOWCASE_INITIAL_RENDER_COUNT,
+                            currentCount + (loadMoreWaited ? getShowcaseDeferredRevealBatchSize() : 0)
+                        ),
                         nextItems.length
                     ));
                     setPageInfo(personalizedFeed.pageInfo);
@@ -1620,7 +1627,12 @@ export default function ShowcaseClient({
             isLoadingMoreRef.current = true;
             setIsLoadingMore(true);
             setLoadMoreError(null);
-            setHasAnonymousPersonalizationDemand(true);
+            // A guest's demand. A signed-in viewer's page is asked for without it, and marking it
+            // re-ran the refresh effect, which dropped the page already on its way and asked again:
+            // the loading row showed for as long again.
+            if (!hasAuthenticatedSession) {
+                setHasAnonymousPersonalizationDemand(true);
+            }
             if (!personalizedRefreshPendingRef.current) {
                 setPersonalizedRefreshRequest((request) => request + 1);
             }
@@ -1674,7 +1686,19 @@ export default function ShowcaseClient({
                 sessionHiddenPostIdsRef.current,
                 sessionHiddenCreatorIdsRef.current
             );
+            const drawnItemIds = new Set(feedItemsForEventsRef.current.map((item) => item.id));
+            const newTileCount = visibleNextItems.filter((item) => (
+                !drawnItemIds.has(item.id) && !isTextOnlyPost(item)
+            )).length;
 
+            // The page takes the loading row's place in one commit: its first row is drawn as the
+            // row goes (`finally`, below), and the rest follows on the reveal's ticks. Drawn on a
+            // tick instead, the grid lost the loading row and Load More's block first and got
+            // shorter, and a reader at its bottom was moved up with it (the owner's report of
+            // 2026-11-17, explore-load-more-steady.spec.ts).
+            if (newTileCount > 0) {
+                setRenderedItemCount((count) => count + Math.min(getShowcaseDeferredRevealBatchSize(), newTileCount));
+            }
             setItems((currentItems) => [
                 ...currentItems,
                 ...visibleNextItems.filter((item) => !currentItems.some((current) => current.id === item.id)),
@@ -1707,6 +1731,7 @@ export default function ShowcaseClient({
     }, [
         accessToken,
         category,
+        hasAuthenticatedSession,
         pageInfo.hasMore,
         pageInfo.nextCursor,
         pageInfo.nextOffset,
@@ -2483,15 +2508,21 @@ export default function ShowcaseClient({
                     </div>
                 ) : null}
 
-                {pageInfo.hasMore && !isLoadingInitialFeed && !hasDeferredItems && (
+                {/* Load More keeps its place while rows are still to be revealed, loading in
+                    place of its words: gone for those ticks, it took its height out of the page
+                    as a page came, and a reader at the bottom was moved up with it. */}
+                {(pageInfo.hasMore || hasDeferredItems) && !isLoadingInitialFeed && (
                     <div className="mt-12 text-center">
                         <button
                             type="button"
                             onClick={() => void loadMore()}
-                            disabled={isLoadingMore}
+                            disabled={isLoadingMore || hasDeferredItems}
+                            aria-label={isLoadingMore || hasDeferredItems ? 'Loading more posts' : undefined}
                             className="ui-focus-ring min-h-12 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-6 text-sm font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-3)] disabled:opacity-50"
                         >
-                            {isLoadingMore ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Load More'}
+                            {isLoadingMore || hasDeferredItems
+                                ? <Loader2 className="w-5 h-5 animate-spin mx-auto" aria-hidden="true" />
+                                : 'Load More'}
                         </button>
                     </div>
                 )}
