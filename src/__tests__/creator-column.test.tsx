@@ -751,6 +751,24 @@ describe('the bar\'s action', () => {
     expect(waiting).toBeDisabled();
   });
 
+  // PR #859's review: the server's price on a held Generate gave a screen reader no reason it waited.
+  it('says it is busy checking a price that stands in for the page\'s own, its face as it will read', () => {
+    const view = render(<CreatorBarAction {...ready} checkingPrice disabled />);
+    const checking = screen.getByRole('button', { name: 'Generate · 12 credits · Checking the price' });
+    expect(checking).toHaveTextContent(/^Generate · 12 credits$/);
+    expect(checking).toHaveAttribute('aria-busy', 'true');
+    expect(checking).toBeDisabled();
+
+    view.rerender(<CreatorBarAction {...ready} />);
+    const priced = screen.getByRole('button', { name: 'Generate · 12 credits' });
+    expect(priced).not.toHaveAttribute('aria-busy');
+    expect(priced).toBeEnabled();
+
+    // Only a price can be checked: a face that says why it waits is not busy with one.
+    view.rerender(<CreatorBarAction {...ready} checkingPrice hasPrice={false} costLabel="Calculating..." disabled />);
+    expect(screen.getByRole('button', { name: 'Generate · Calculating...' })).not.toHaveAttribute('aria-busy');
+  });
+
   it('checks an unanswered start again before it offers anything else', () => {
     const onCheckAgain = vi.fn();
     render(<CreatorBarAction {...ready} awaitingCheck showTopUp onCheckAgain={onCheckAgain} />);

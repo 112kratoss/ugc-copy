@@ -1501,9 +1501,15 @@ function MotionCreator({
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
         refetchModelCatalog();
     }, [refetchModelCatalog, quoteState.error?.code]);
-    const quoteUi = hasCatalogSettings && !motionInputsReady
+    // Until both inputs are in there is no run to price, whether or not the catalog has come: Generate
+    // says what it waits for from the first paint. It said "Loading settings…" until the catalog
+    // arrived, then "Add both inputs", and the line saying why came in over the bar (the web sweep
+    // of 2026-11-17).
+    const quoteUi = !motionInputsReady
         ? {
             costCredits: null,
+            shownCost: null,
+            checkingPrice: false,
             costLabel: hasCharacterImage && hasReferenceVideo ? 'Calculating...' : 'Add both inputs',
             blocksGenerate: true,
             message: hasCharacterImage && hasReferenceVideo ? 'Reading the motion clip’s length…' : MOTION_INPUTS_HINT,
@@ -1607,7 +1613,7 @@ function MotionCreator({
         </div>
     ) : quoteState.status === 'error' ? (
         quoteRetry
-    ) : hasCatalogSettings && !motionInputsReady ? (
+    ) : !motionInputsReady ? (
         // Why Generate waits: the price is asked for once both inputs are in.
         <p className="text-[var(--ui-text-muted)]">{quoteUi.message}</p>
     ) : null;

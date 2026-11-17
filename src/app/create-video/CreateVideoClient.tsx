@@ -238,7 +238,8 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
-import { openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-opening';
+import { openingSetting, type CreatorOpening } from '@/lib/creator-opening';
+import { useOpeningCost } from '@/lib/use-opening-cost';
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
@@ -2086,21 +2087,27 @@ function VideoCreator({
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
         refetchModelCatalog();
     }, [refetchModelCatalog, quoteState.error?.code]);
+    // The server's price for the run the page opened on, until the page's own first quote is in or a
+    // start is refused (`useOpeningCost`). Only the page's first form has it: another owner's form,
+    // drawn anew later in the page's life, waits for its own.
+    const openingPrice = useOpeningCost(form.key === 0 ? opening : null, {
+        run: { modelId: selectedModel, settings: runSettings, inputs: runInputs },
+        quoteStatus: quoteState.status,
+        confirmedRevision: modelCatalog.isCheckingRevision ? null : modelCatalog.revision,
+        catalogFailed: Boolean(modelCatalog.error) || modelCatalog.missingIds.includes(selectedModel),
+    });
     const quoteUi = resolveWebGenerationQuoteUi({
         hasCatalog: Boolean(modelCatalog.catalog && modelCatalog.detailsReady),
         catalogLoading: !modelCatalog.detailsReady && !modelCatalog.error && !modelCatalog.missingIds.includes(selectedModel),
         quoteStatus: quoteState.status,
         quotedCost: quoteState.quote?.costCredits,
         quoteErrorMessage: quoteState.error?.message,
+        openingCost: openingPrice.cost,
     });
     const estimatedCost = quoteUi.costCredits;
-    // The price under the bar: the page's own, or until it is in, the server's for the run the page opened on.
-    const notedCost = estimatedCost ?? openingCost(opening, {
-        run: { modelId: selectedModel, settings: runSettings, inputs: runInputs },
-        quoteStatus: quoteState.status,
-        confirmedRevision: modelCatalog.isCheckingRevision ? null : modelCatalog.revision,
-        catalogFailed: Boolean(modelCatalog.error) || modelCatalog.missingIds.includes(selectedModel),
-    });
+    // The price the bar names, on Generate and under it: the page's own, or until it is in, the
+    // server's for the run the page opened on.
+    const notedCost = quoteUi.shownCost;
     // A page the start keeps refusing at its own price waits for a reload, not another press.
     const quotePending = quoteUi.blocksGenerate || quoteState.pageOutOfDate;
     const quoteRetry = quoteState.status === 'error' ? <StudioQuoteRetry message={quoteUi.message} onRetry={quoteState.retry} /> : null;
@@ -4791,6 +4798,9 @@ function VideoCreator({
 
         clearPendingWebStart('video');
         setUnconfirmedStart(null);
+        // From here on the page names only its own quotes: a price asked again after a refusal
+        // (`cost_changed`) is on its way, never the one the page opened on.
+        openingPrice.settle();
         const message = startError instanceof Error && startError.message ? startError.message : 'Could not start generation.';
         const code = startError instanceof WebCatalogRequestError ? startError.code : undefined;
         if (code === 'insufficient_credits') {
@@ -5895,7 +5905,8 @@ function VideoCreator({
             isGenerating={isGenerating}
             disabled={(!isVisitor && quotePending) || runHeld || canvasPublish.inFlight}
             costLabel={quoteUi.costLabel}
-            hasPrice={estimatedCost !== null}
+            hasPrice={notedCost !== null}
+            checkingPrice={quoteUi.checkingPrice}
             onGenerate={() => void handleGenerate()}
             signUp={isVisitor}
         />
@@ -6876,7 +6887,7 @@ function VideoCreator({
                             settingsSummary={settingsSummary}
                             settingsSummaryShort={settingsSummaryShort}
                             settings={settingsPanel}
-                            settingsFootNote={<CreatorSettingsFootNote cost={estimatedCost} costLabel={quoteUi.costLabel} balance={listBalance} isVisitor={isVisitor} />}
+                            settingsFootNote={<CreatorSettingsFootNote cost={notedCost} costLabel={quoteUi.costLabel} balance={listBalance} isVisitor={isVisitor} />}
                             settingsOpen={settingsOpen}
                             onSettingsOpenChange={setSettingsOpen}
                             status={barStatus}

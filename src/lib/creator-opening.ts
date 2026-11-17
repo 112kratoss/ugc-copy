@@ -90,12 +90,13 @@ export function creatorOpeningFromCatalog(
 }
 
 /**
- * The opening's price, shown under the bar until the page has priced its own run: while the run
- * is still the one the server priced (its model, nothing attached, and every setting the server
- * priced at that value; one the page has yet to set is read as its default, as the server reads
- * it), while the page's own quote has neither answered nor failed, while its catalog has not
- * failed, and while that catalog is not one the network confirmed at another revision. Generate
- * is never priced by it: a start waits for the page's own quote of the run it sends.
+ * The opening's price, shown on Generate and under the bar until the page has priced its own run
+ * (`resolveWebGenerationQuoteUi`): while the run is still the one the server priced (its model,
+ * nothing attached, and every setting the server priced at that value; one the page has yet to set
+ * is read as its default, as the server reads it), while the page's own quote has neither answered
+ * nor failed, while its catalog has not failed, and while that catalog is not one the network
+ * confirmed at another revision. A start never goes at it: Generate is held until the page's own
+ * quote of the run it sends is in.
  */
 export function openingCost(
   opening: CreatorOpening | null,

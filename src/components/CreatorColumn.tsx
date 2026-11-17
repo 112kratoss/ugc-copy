@@ -858,9 +858,14 @@ export const CREATOR_BAR_PRIMARY_CLASS =
  * The bar's primary action. An unanswered start is checked again before
  * anything new is sent; a short balance offers a top-up; otherwise Generate,
  * named with its price while its face says why it waits ("Calculating...").
- * A run under way keeps Generate's place, spinning: the balance it left can be
- * short of the next run's price, and a top-up in its place read as if the run
- * had been refused.
+ * On arrival its price can be the server's for the run the page opened on
+ * (`checkingPrice`): the face reads "Generate · 19 credits" from the first
+ * paint, held until the page's own quote is in, and the button says it is busy
+ * checking that price, in its name and `aria-busy`, so a press that does
+ * nothing yet is not left unexplained to a screen reader. The face keeps its
+ * width. A run under way keeps Generate's place, spinning: the balance it left
+ * can be short of the next run's price, and a top-up in its place read as if
+ * the run had been refused.
  */
 export function CreatorBarAction({
   awaitingCheck,
@@ -870,6 +875,7 @@ export function CreatorBarAction({
   disabled,
   costLabel,
   hasPrice,
+  checkingPrice = false,
   onGenerate,
   signUp = false,
   topUpNeed = null,
@@ -889,6 +895,8 @@ export function CreatorBarAction({
   disabled: boolean;
   costLabel: string;
   hasPrice: boolean;
+  /** The price named is the server's, standing in while the page's own quote is on its way. */
+  checkingPrice?: boolean;
   onGenerate: () => void;
   /**
    * Signed out: the press checks the form as Generate does, then asks the
@@ -919,13 +927,16 @@ export function CreatorBarAction({
       </button>
     );
   }
+  const checking = checkingPrice && hasPrice && !isGenerating;
   return (
     <button
       type="button"
       onClick={onGenerate}
       disabled={disabled || isGenerating}
-      // The price stays in its name while the face says why it waits.
-      aria-label={isGenerating ? undefined : `Generate · ${costLabel}`}
+      // The price stays in its name while the face says why it waits, and the name says when that price
+      // is still being checked.
+      aria-label={isGenerating ? undefined : `Generate · ${costLabel}${checking ? ' · Checking the price' : ''}`}
+      aria-busy={checking || undefined}
       className={CREATOR_BAR_PRIMARY_CLASS}
     >
       {isGenerating ? (

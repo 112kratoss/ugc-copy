@@ -179,10 +179,14 @@ async function answerApi(page: Page, answers: Answers) {
 
 async function runToDone(page: Page, path = '/create-video') {
   await page.goto(path, COLD_PAGE);
-  // Typed only once the page's script runs, or hydration resets the field.
-  await expect(page.getByRole('button', { name: 'Generate · 19 credits' })).toBeVisible(COLD_PAGE);
+  // The prompt box takes in what was typed before the page's script ran. Generate shows the server's
+  // price from the first paint, held: only the page's script enables it, once the page has hydrated and
+  // its own quote is in (this creator refuses an empty prompt only when Generate is pressed), and by
+  // then the prompt box has taken in what was typed.
   await page.getByRole('textbox', { name: 'Prompt' }).fill(PROMPT);
-  await page.getByRole('button', { name: 'Generate · 19 credits' }).click();
+  const generate = page.getByRole('button', { name: 'Generate · 19 credits' });
+  await expect(generate).toBeEnabled(COLD_PAGE);
+  await generate.click();
   await expect(canvas(page).getByRole('heading', { name: 'Done' })).toBeVisible({ timeout: 30_000 });
 }
 

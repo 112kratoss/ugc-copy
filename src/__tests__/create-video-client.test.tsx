@@ -4152,6 +4152,67 @@ describe('CreateVideoClient Kling video elements', () => {
         };
       }
 
+      /** Generate as the server draws it for an account: its face, its name, whether it is held, and busy. */
+      function serverRenderedGenerate(element: React.ReactElement) {
+        const html = document.createElement('div');
+        html.innerHTML = renderToString(element);
+        const button = html.querySelector<HTMLButtonElement>('[data-creator-bar] button[aria-label^="Generate · "]');
+        return { face: button?.textContent, name: button?.getAttribute('aria-label'), held: button?.disabled, busy: button?.getAttribute('aria-busy') };
+      }
+      const CHECKING = 'Generate · 19 credits · Checking the price';
+
+      // The web sweep of 2026-11-17: Generate read "Loading settings…" until the catalog came, then
+      // "Calculating..." until the page's own quote came back, at the price under the bar all along.
+      it('names the server\'s price on Generate from the first paint, held and busy until the page\'s own price is in', async () => {
+        modelCatalogState.withoutCatalog = true;
+        const opening = openingFor();
+        expect(serverRenderedGenerate(<CreateVideoClient prefill={{}} opening={opening} />))
+          .toEqual({ face: 'Generate · 19 credits', name: CHECKING, held: true, busy: 'true' });
+        const view = render(<CreateVideoClient prefill={{}} opening={opening} />);
+        fireEvent.change(screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/), { target: { value: 'A paper boat drifting across a sunlit pond.' } });
+        expect(generateButton()).toHaveTextContent(/^Generate · 19 credits$/);
+        expect(generateButton()).toHaveAccessibleName(CHECKING);
+        expect(generateButton()).toBeDisabled();
+
+        // The catalog comes back at the server's revision and the page asks its own price: the same words.
+        quoteStandIn.reset(19);
+        quoteStandIn.answers = ['pending'];
+        modelCatalogState.withoutCatalog = false;
+        modelCatalogState.videoDefault = 'seedance-2-mini';
+        modelCatalogState.extraModels = [miniWithDefaults({})];
+        view.rerender(<CreateVideoClient prefill={{}} opening={opening} />);
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini'));
+        expect(generateButton()).toHaveTextContent(/^Generate · 19 credits$/);
+        expect(generateButton()).toHaveAccessibleName(CHECKING);
+        expect(generateButton()).toBeDisabled();
+
+        // Its own price in, Generate goes at it, busy no more.
+        quoteStandIn.answers = [19];
+        view.rerender(<CreateVideoClient prefill={{}} opening={opening} />);
+        await waitFor(() => expect(generateButton()).toBeEnabled());
+        expect(generateButton()).toHaveTextContent(/^Generate · 19 credits$/);
+        expect(generateButton()).toHaveAccessibleName('Generate · 19 credits');
+        expect(generateButton()).not.toHaveAttribute('aria-busy');
+      });
+
+      // PR #859's review: the server's price stood in again whenever a later quote of a run like the
+      // opening's was on its way: here a refreshed session's token, which is part of the quote's key.
+      it('names only its own prices once its first is in: a refreshed token\'s quote is on its way, never the server\'s', async () => {
+        quoteStandIn.reset(21);
+        modelCatalogState.videoDefault = 'seedance-2-mini';
+        modelCatalogState.extraModels = [miniWithDefaults({})];
+        const opening = openingFor();
+        const view = render(<CreateVideoClient prefill={{}} opening={opening} />);
+        await waitFor(() => expect(costShown()).toBe('21 credits'));
+
+        quoteStandIn.answers = ['pending'];
+        authState.token = 'refreshed-token';
+        view.rerender(<CreateVideoClient prefill={{}} opening={opening} />);
+        await waitFor(() => expect(costShown()).toBe('Calculating...'));
+        expect(generateButton()).not.toHaveAttribute('aria-busy');
+        expect(barNote()).not.toHaveTextContent('Leaves 9981');
+      });
+
       it('draws the default, its settings and its price before the catalog is in', () => {
         authState.signedIn = false;
         modelCatalogState.withoutCatalog = true;

@@ -297,6 +297,46 @@ describe('web generation model catalog client', () => {
       message: null,
     });
   });
+
+  // The web sweep of 2026-11-17: a creator's Generate read "Loading settings…", then "Calculating...",
+  // then the price the server had drawn under the bar from the first paint.
+  it('names the server\'s price for the run the page opened on until its own quote is in, and holds Generate', () => {
+    const loading = { hasCatalog: false, catalogLoading: true, quoteStatus: 'idle', quotedCost: null, quoteErrorMessage: null } as const;
+    expect(resolveWebGenerationQuoteUi({ ...loading, openingCost: 19 })).toEqual({
+      costCredits: null,
+      shownCost: 19,
+      checkingPrice: true,
+      costLabel: '19 credits',
+      blocksGenerate: true,
+      message: 'Loading the selected model’s settings…',
+    });
+    expect(resolveWebGenerationQuoteUi({
+      hasCatalog: true, quoteStatus: 'pending', quotedCost: null, quoteErrorMessage: null, openingCost: 1,
+    })).toEqual({
+      costCredits: null,
+      shownCost: 1,
+      checkingPrice: true,
+      costLabel: '1 credit',
+      blocksGenerate: true,
+      message: 'Wait for the current generation cost before continuing.',
+    });
+
+    // Its own quote is the price once it is in, and a start's only price.
+    expect(resolveWebGenerationQuoteUi({
+      hasCatalog: true, quoteStatus: 'ready', quotedCost: 21, quoteErrorMessage: null, openingCost: 19,
+    })).toMatchObject({ costCredits: 21, shownCost: 21, checkingPrice: false, costLabel: '21 credits', blocksGenerate: false });
+    // A failed quote, and a catalog that will not load, say so whatever the server priced.
+    expect(resolveWebGenerationQuoteUi({
+      hasCatalog: true, quoteStatus: 'error', quotedCost: null, quoteErrorMessage: 'Try again.', openingCost: 19,
+    })).toMatchObject({ costCredits: null, shownCost: null, checkingPrice: false, costLabel: 'Unavailable', blocksGenerate: true });
+    expect(resolveWebGenerationQuoteUi({ ...loading, catalogLoading: false, openingCost: 19 }))
+      .toMatchObject({ costCredits: null, shownCost: null, checkingPrice: false, costLabel: 'Unavailable', blocksGenerate: true });
+    // Without one, the page says why it waits, as before.
+    expect(resolveWebGenerationQuoteUi({ ...loading, openingCost: null }))
+      .toMatchObject({ shownCost: null, checkingPrice: false, costLabel: 'Loading settings…' });
+    expect(resolveWebGenerationQuoteUi({ hasCatalog: true, quoteStatus: 'pending', quotedCost: null, quoteErrorMessage: null }))
+      .toMatchObject({ shownCost: null, checkingPrice: false, costLabel: 'Calculating...' });
+  });
 });
 
 const START_INPUT = {
