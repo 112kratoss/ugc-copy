@@ -13,6 +13,7 @@ import {
   ArrowRight,
   Boxes,
   Check,
+  ChevronDown,
   Copy,
   Image as ImageIcon,
   ListFilter,
@@ -51,6 +52,35 @@ const LIBRARY_SORT_PARAM = 'sort';
 
 function parseLibrarySort(value: string | null): LibrarySort {
   return value === 'name' ? 'name' : 'recent';
+}
+
+// The list's place under the controls: the box the empty state draws, which the loading state
+// keeps; workflows, when there are some, start where it starts.
+const LIBRARY_PLACE = 'mt-8 flex min-h-80 flex-col items-center justify-center rounded-3xl border p-8 text-center';
+const NO_WORKFLOWS_TITLE = 'Build your first workflow';
+const NO_WORKFLOWS_BODY = 'Start with a flexible canvas, connect your media steps, and turn the result into a reusable template when it is ready.';
+
+/**
+ * The list's place while the list loads: the empty state's box at the empty state's size at every
+ * width (its words are there, unseen, so the box wraps as they do), and nothing in it that says
+ * what is coming. Three pulsing 365px cards stood here, and an account with no workflows then got
+ * a box of another shape and height (live, 2026-11-17). Drawing only: the status line says it to a
+ * screen reader, and the shimmer, which is motion, stands still under reduced motion.
+ */
+function LibraryLoadingPlace() {
+  return (
+    <div className={`relative overflow-hidden ${LIBRARY_PLACE} border-white/[0.07] bg-white/[0.025]`}>
+      <p role="status" className="sr-only">Loading workflows</p>
+      <div aria-hidden className="invisible h-14 w-14" />
+      <div aria-hidden className="invisible mt-5 text-xl font-semibold">{NO_WORKFLOWS_TITLE}</div>
+      <div aria-hidden className="invisible mt-2 max-w-md text-sm leading-6">{NO_WORKFLOWS_BODY}</div>
+      <div aria-hidden className="invisible mt-6 inline-flex min-h-11 items-center gap-2 px-5 text-sm font-semibold">
+        <span className="h-4 w-4" />
+        New workflow
+      </div>
+      <span aria-hidden className="pointer-events-none absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/[0.04] to-transparent motion-safe:animate-[skeleton-shimmer_1.5s_linear_infinite] motion-reduce:hidden" />
+    </div>
+  );
 }
 type LibraryDialog =
   | { kind: 'rename'; canvas: WorkflowCanvasListItem }
@@ -575,20 +605,22 @@ export default function WorkflowLibraryClient() {
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search workflows" className="w-full bg-transparent outline-none placeholder:text-zinc-600" />
             {query ? <button type="button" aria-label="Clear search" onClick={() => setQuery('')} className="rounded-full p-1 text-zinc-500 hover:bg-white/10 hover:text-white"><X className="h-4 w-4" /></button> : null}
           </label>
-          <label className="flex min-h-12 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.035] px-4 text-sm text-zinc-300">
-            <ListFilter className="h-4 w-4 text-zinc-500" />
+          {/* The select is the whole box, its icons drawn over it and passing presses through: a press
+              on the box around a smaller select only focused it, and its picker opened only on its
+              words (133x19 of a 335x48 box on a phone, 2026-11-17). */}
+          <label className="relative flex min-h-12 rounded-2xl border border-white/10 bg-white/[0.035] text-sm text-zinc-300 transition focus-within:border-emerald-400/35">
+            <ListFilter aria-hidden className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
             <span className="sr-only">Sort workflows</span>
-            <select value={sort} onChange={(event) => chooseSort(event.target.value as LibrarySort)} className="bg-transparent pr-4 outline-none">
+            <select value={sort} onChange={(event) => chooseSort(event.target.value as LibrarySort)} className="w-full cursor-pointer appearance-none bg-transparent pl-11 pr-11 outline-none">
               <option value="recent" className="bg-zinc-950">Recently edited</option>
               <option value="name" className="bg-zinc-950">Name</option>
             </select>
+            <ChevronDown aria-hidden className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
           </label>
         </section>
 
         {isLoading ? (
-          <div className="mt-8 grid gap-5 sm:grid-cols-2 xl:grid-cols-3" aria-label="Loading workflows">
-            {[0, 1, 2].map((item) => <div key={item} className="h-[365px] animate-pulse rounded-3xl border border-white/[0.07] bg-white/[0.025]" />)}
-          </div>
+          <LibraryLoadingPlace />
         ) : loadError ? (
           <div className="mt-8 flex min-h-72 flex-col items-center justify-center rounded-3xl border border-rose-500/20 bg-rose-500/[0.05] p-8 text-center">
             <RefreshCw className="h-8 w-8 text-rose-300" />
@@ -622,10 +654,10 @@ export default function WorkflowLibraryClient() {
             ))}
           </section>
         ) : (
-          <div className="mt-8 flex min-h-80 flex-col items-center justify-center rounded-3xl border border-dashed border-white/10 bg-white/[0.018] p-8 text-center">
+          <div className={`${LIBRARY_PLACE} border-dashed border-white/10 bg-white/[0.018]`}>
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-400/20 bg-emerald-500/10 text-emerald-200"><Workflow className="h-7 w-7" /></div>
-            <h2 className="mt-5 text-xl font-semibold">{canvases.length === 0 ? 'Build your first workflow' : 'No workflows match that search'}</h2>
-            <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">{canvases.length === 0 ? 'Start with a flexible canvas, connect your media steps, and turn the result into a reusable template when it is ready.' : 'Try a shorter title or clear the search to see the full library.'}</p>
+            <h2 className="mt-5 text-xl font-semibold">{canvases.length === 0 ? NO_WORKFLOWS_TITLE : 'No workflows match that search'}</h2>
+            <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">{canvases.length === 0 ? NO_WORKFLOWS_BODY : 'Try a shorter title or clear the search to see the full library.'}</p>
             {canvases.length === 0 ? (
               <button type="button" onClick={() => void createCanvas()} disabled={isCreating} className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-semibold text-emerald-950 hover:bg-emerald-300 disabled:opacity-60"><Plus className="h-4 w-4" /> New workflow</button>
             ) : (

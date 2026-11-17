@@ -121,6 +121,12 @@ interface OwnerProfileMediaHubProps {
    * it; null when it could not be read, which draws "Balance unavailable".
    */
   walletBalance?: OwnerWalletBalance | null;
+  /**
+   * The account's mature-content setting as the server read it beside the profile, so the
+   * Mature content row draws it from the first frame; null when it could not be read there, and
+   * the row reads it itself.
+   */
+  showMatureContent?: boolean | null;
   publicProfilePath?: string | null;
   publicProfileDisplayName?: string;
 }
@@ -315,6 +321,7 @@ export default function OwnerProfileMediaHub({
   profile = { bio: '', coverUrl: null, credits: null },
   stats = null,
   walletBalance = null,
+  showMatureContent = null,
   publicProfilePath = null,
   publicProfileDisplayName = '',
 }: OwnerProfileMediaHubProps) {
@@ -765,7 +772,7 @@ export default function OwnerProfileMediaHub({
           <span className="min-w-0"><span className="block text-sm font-bold text-white">Blocked users</span><span className="mt-0.5 block truncate text-xs text-zinc-500">See whom you blocked, and unblock them</span></span>
           <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
         </Link>
-        <MatureContentSetting />
+        <MatureContentSetting initialShowMature={showMatureContent} />
       </section>
 
       <section id="profile-media" className="mb-8 overflow-hidden rounded-3xl border border-white/8 bg-[linear-gradient(145deg,rgba(24,24,27,0.78),rgba(8,8,10,0.94))] shadow-[0_28px_90px_rgba(0,0,0,0.3)]">

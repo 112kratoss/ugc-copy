@@ -1,7 +1,6 @@
 'use client';
 
-import dynamic from 'next/dynamic';
-import { createContext, useContext, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 
 import type { EditableCreatorProfile } from '@/lib/profile';
 import CreatorProfileCardFallback from './CreatorProfileCardFallback';
@@ -11,6 +10,14 @@ interface DeferredCreatorProfileCardProps {
   loadError: string | null;
   collapseOptionalDetails?: boolean;
   hideIntro?: boolean;
+  /**
+   * What the page draws under the editor, drawn with the editor and never before it. The
+   * placeholder is much shorter than the editor, and its height cannot be the editor's: that
+   * depends on the account (a cover or none, the line under the handle) and on the editor's own
+   * layout at each width. Drawn under the placeholder, Connected apps on /profile/edit stood at
+   * y 830 of a 900px window, then the editor pushed it off the screen (live, 2026-11-17).
+   */
+  children?: ReactNode;
 }
 
 type IdleWindow = Window & {
@@ -18,21 +25,9 @@ type IdleWindow = Window & {
   cancelIdleCallback?: (handle: number) => void;
 };
 
-// A `dynamic` loading component is handed no props of its own, so the
-// skeleton drawn while the editor's code downloads reads them from here.
-const DeferredCardPropsContext = createContext<DeferredCreatorProfileCardProps | null>(null);
-
-function EditorDownloadFallback() {
-  const props = useContext(DeferredCardPropsContext);
-  return props ? <CreatorProfileCardFallback {...props} /> : null;
-}
-
-const CreatorProfileCard = dynamic(() => import('@/app/creations/CreatorProfileCard'), {
-  ssr: false,
-  // The skeleton stays up until the editor can draw: the page was blank
-  // between the idle wait and the code arriving.
-  loading: EditorDownloadFallback,
-});
+// React.lazy in a Suspense boundary of this file's own, not next/dynamic: dynamic draws its loading
+// state in a boundary of its own, and what comes under the editor has to wait in the editor's.
+const CreatorProfileCard = lazy(() => import('@/app/creations/CreatorProfileCard'));
 
 function useDeferredUntilIdle() {
   const [isReady, setIsReady] = useState(false);
@@ -59,12 +54,20 @@ function useDeferredUntilIdle() {
   return isReady;
 }
 
-export default function DeferredCreatorProfileCard(props: DeferredCreatorProfileCardProps) {
+export default function DeferredCreatorProfileCard({ children, ...props }: DeferredCreatorProfileCardProps) {
   const isReady = useDeferredUntilIdle();
+  const placeholder = <CreatorProfileCardFallback initialProfile={props.initialProfile} loadError={props.loadError} />;
 
+  if (!isReady) {
+    return placeholder;
+  }
+
+  // The placeholder stays up until the editor can draw (the page was blank between the idle wait and
+  // the code arriving), and whatever comes under the editor waits with it.
   return (
-    <DeferredCardPropsContext.Provider value={props}>
-      {isReady ? <CreatorProfileCard {...props} /> : <CreatorProfileCardFallback {...props} />}
-    </DeferredCardPropsContext.Provider>
+    <Suspense fallback={placeholder}>
+      <CreatorProfileCard {...props} />
+      {children}
+    </Suspense>
   );
 }
