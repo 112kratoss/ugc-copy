@@ -594,11 +594,14 @@ const AppShellFrame = memo(function AppShellFrame({
             <SidebarToggle />
             {title !== null ? (
               <div className="min-w-0">
-                {/* Drawn whole or not at all: a title the row has no room for drops onto a second line the box
-                    clips (the zero-width space gives the line a break to take), where an ellipsis left
-                    "Crea…" beside the sign-in pill. Every page has a heading of its own. */}
+                {/* On a phone the title is drawn whole or not at all: one the row has no room for drops onto a
+                    second line the box clips (the zero-width space gives the line a break to take), where an
+                    ellipsis left "Crea…" beside the sign-in pill. Every page has a heading of its own. From
+                    640px the bar's left cluster shares its row with the search field and is often a few
+                    pixels wide, so the title keeps its ellipsis there and is never dropped. */}
                 <div data-app-shell-title className="h-5 overflow-hidden text-[15px] font-extrabold leading-5 text-[var(--ui-text-primary)]">
-                  &#8203;<span className="inline-block whitespace-nowrap">{title}</span>
+                  <span aria-hidden="true" className="sm:hidden">&#8203;</span>
+                  <span className="inline-block whitespace-nowrap sm:block sm:truncate">{title}</span>
                 </div>
                 {activeItem ? (
                   <div className="hidden truncate text-xs text-[var(--ui-text-faint)] lg:block">
