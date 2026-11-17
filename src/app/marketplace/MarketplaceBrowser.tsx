@@ -13,7 +13,10 @@ import {
   X,
 } from 'lucide-react';
 
-import MarketplaceFiltersButton, { MARKETPLACE_FILTERS_ID } from '@/app/marketplace/MarketplaceFiltersButton';
+import MarketplaceFiltersButton, {
+  MARKETPLACE_FILTERS_ID,
+  MarketplaceFiltersSummary,
+} from '@/app/marketplace/MarketplaceFiltersButton';
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
 import {
   MARKETPLACE_RECIPE_GRID_CLASS,
@@ -37,13 +40,14 @@ import {
   buildMarketplacePagesKey,
   marketplacePagesViewer,
   recallMarketplacePages,
+  rememberMarketplaceFiltersOpen,
   rememberMarketplacePages,
   withRememberedPages,
   type MarketplacePages,
 } from '@/lib/marketplace-pages-memory';
 
 import { MarketplaceListingFailed, MarketplaceListingSkeleton } from './MarketplaceListingStates';
-import { isPlainLinkClick, marketplaceFiltersKey } from './marketplace-address';
+import { countMarketplaceFiltersSet, isPlainLinkClick, marketplaceFiltersKey } from './marketplace-address';
 import type { MarketplaceListingStatus } from './useMarketplaceListing';
 
 interface MarketplacePageInfo {
@@ -66,6 +70,13 @@ interface DrawnListing extends MarketplaceResourcePage {
   kept: boolean;
   /** Whose kept pages they are (`marketplacePagesViewer` as the listing was opened); null, a visitor's. */
   viewer: string | null;
+  /**
+   * The first page it was opened from, kept through every Load more. A Load more reads on only from
+   * a list opened from the first page the browser is given now: in the render a new one arrives in
+   * (the reader's own, their blocks taken out), the start it calls for is not drawn yet, and a page
+   * appended to the list still drawn brought the cached page's recipes back (review of #837).
+   */
+  openedFrom: MarketplaceResourcePage;
 }
 
 /** A listing as the browser starts drawing it: its first page, and what was kept of it behind. */
@@ -76,7 +87,7 @@ function openListing(
   kept: MarketplacePages | null,
 ): DrawnListing {
   const drawn = withRememberedPages(firstPage, kept);
-  return { key, viewer, items: drawn.items, pageInfo: drawn.pageInfo, kept: drawn !== firstPage };
+  return { key, viewer, items: drawn.items, pageInfo: drawn.pageInfo, kept: drawn !== firstPage, openedFrom: firstPage };
 }
 
 interface MarketplaceBrowserProps {
@@ -175,22 +186,43 @@ export default function MarketplaceBrowser({
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(initialFiltersOpen);
-  // The listing the shell's "Load more recipes" was pressed on, whose next page has not come yet.
-  // Cleared once that page is drawn, or has failed; a list started again meanwhile (its own first
-  // page read again, another viewer) asks for it again from where the new start leaves it.
+  // A Load more pressed and not yet brought: the shell's, handed over with this list, or this list's
+  // own pressed while the listing's own first page was still read. Cleared once that page is drawn,
+  // or has failed; a list started again meanwhile (its own first page landing, another viewer) asks
+  // for it again from where the new start leaves it.
   const [pressedListingKey, setPressedListingKey] = useState(() => (loadMoreOnOpen === listingKey ? listingKey : null));
   const pressPending = pressedListingKey !== null && pressedListingKey === listingKey;
+  // The list drawn is opened from the first page the list is given now, and that page is the
+  // listing's own for its viewer: a Load more may read on from it.
+  const drawnFromFirstPage = listing.openedFrom === initialPage;
+  const readyToReadOn = listingSettled && drawnFromFirstPage;
   const loadMoreAbortControllerRef = useRef<AbortController | null>(null);
+  // A Load more the last start of the list cut short, for the next start to ask for again.
+  const cutShortRef = useRef(false);
   // The listing the filters were last opened or folded for: a filter picked folds them, while the
   // same listing read again (the reader's own first page landing) leaves them as the reader has them.
   const filtersListingKeyRef = useRef(listingKey);
 
+  /** Stops the Load more under way, if there is one; says whether there was. */
+  const stopLoadMore = () => {
+    const controller = loadMoreAbortControllerRef.current;
+    loadMoreAbortControllerRef.current = null;
+    controller?.abort();
+    return controller !== null;
+  };
+
   // Who is looking is read when the listing starts again, and is no reason to start it: the
   // session arriving after a full load would cut a Load more short and the search being typed.
-  const restartListing = useEffectEvent(() => {
+  const restartListing = useEffectEvent((cutShort: boolean) => {
     setListing(openListing(listingKey, pagesViewer, initialPage, recallMarketplacePages(pagesKey)));
-    // A press for the listing left behind brings nothing to the new one.
-    if (pressedListingKey !== null && pressedListingKey !== listingKey) setPressedListingKey(null);
+    if (pressedListingKey !== null && pressedListingKey !== listingKey) {
+      // A press for the listing left behind brings nothing to the new one.
+      setPressedListingKey(null);
+    } else if (cutShort && listing.key === listingKey) {
+      // The same listing started again (the reader's own first page landing) under a Load more: it is
+      // asked for again from the new start, not lost (review of #837).
+      setPressedListingKey(listingKey);
+    }
     if (filtersListingKeyRef.current !== listingKey) {
       filtersListingKeyRef.current = listingKey;
       setFiltersOpen(false);
@@ -198,29 +230,28 @@ export default function MarketplaceBrowser({
   });
 
   useEffect(() => {
-    loadMoreAbortControllerRef.current?.abort();
-    loadMoreAbortControllerRef.current = null;
+    const cutShort = stopLoadMore() || cutShortRef.current;
+    cutShortRef.current = false;
     // Navigation supplies a new result page; discard state from the previous query, keeping the
     // later pages this listing loaded before behind its first page.
-    restartListing();
+    restartListing(cutShort);
     setSearchInput(initialFilters.q || shortQuery);
     setIsLoadingMore(false);
     setLoadError(null);
 
     return () => {
-      loadMoreAbortControllerRef.current?.abort();
-      loadMoreAbortControllerRef.current = null;
+      cutShortRef.current = stopLoadMore();
     };
   }, [initialPage, initialFilters, shortQuery]);
 
   // Pages kept for the reader the session cookie named, who turned out not to be signed in (their
   // session ended elsewhere): the listing is drawn again as the one of whoever is looking, so that
   // reader's pages, filtered for their blocks, are not shown on, nor kept as a visitor's by the
-  // next Load more (review of #835). The same reader confirmed changes nothing.
+  // next Load more (review of #835). The same reader confirmed changes nothing; a Load more under
+  // way is asked for again, as the new viewer's.
   const redrawForAnotherViewer = useEffectEvent(() => {
     if (!listing.kept || listing.viewer === pagesViewer) return;
-    loadMoreAbortControllerRef.current?.abort();
-    loadMoreAbortControllerRef.current = null;
+    if (stopLoadMore()) setPressedListingKey(listingKey);
     setIsLoadingMore(false);
     setListing(openListing(listingKey, pagesViewer, initialPage, recallMarketplacePages(pagesKey)));
   });
@@ -229,12 +260,18 @@ export default function MarketplaceBrowser({
     redrawForAnotherViewer();
   }, [pagesViewer]);
 
+  // What Back draws on a phone: the filters as the reader leaves them on this listing, open or folded
+  // (review of #837; the shell reads it as it is drawn again).
+  useEffect(() => {
+    rememberMarketplaceFiltersOpen(listingKey, filtersOpen);
+  }, [listingKey, filtersOpen]);
+
   const activeFilterLabels = useMemo(() => [
     initialFilters.access !== 'all' ? (initialFilters.access === 'free' ? 'Free' : 'Paid') : null,
     initialFilters.resource !== 'all' ? getPostResourceKindLabel(initialFilters.resource) : null,
     initialFilters.tool ? sourceToolOptions.find((option) => option.slug === initialFilters.tool)?.label ?? initialFilters.tool : null,
     initialFilters.q ? `Search: ${initialFilters.q}` : null,
-  ].filter(Boolean), [initialFilters, sourceToolOptions]);
+  ].filter((label): label is string => Boolean(label)), [initialFilters, sourceToolOptions]);
 
   const hasActiveFilters = activeFilterLabels.length > 0 || initialFilters.sort !== 'recent';
   const marketplaceReturnPath = buildMarketplacePath(initialFilters);
@@ -259,12 +296,13 @@ export default function MarketplaceBrowser({
   };
 
   const loadMore = async () => {
+    // Only from a list opened from the listing's own first page; a press waits until it is drawn.
+    if (!readyToReadOn || awaitingViewer || isLoadingMore) {
+      return;
+    }
     if (!pageInfo.hasMore || pageInfo.nextOffset === null) {
       // The list as it stands has nothing after it: a press waiting on it has nothing to bring.
       setPressedListingKey(null);
-      return;
-    }
-    if (awaitingViewer || isLoadingMore) {
       return;
     }
 
@@ -340,14 +378,22 @@ export default function MarketplaceBrowser({
     }
   };
 
-  // The shell's press, handed over with this list: its page is asked for once the list can read on
-  // from where it stands, its own first page settled and a signed-in reader's session here. A press
-  // made before the reader's first page came would otherwise be cut short by that page's arrival
-  // and asked for twice.
+  // A press waiting (the shell's, or this list's own made too early): its page is asked for once the
+  // list can read on, the listing's own first page landed and drawn and a signed-in reader's session
+  // here. A press made before the reader's first page came would otherwise be cut short by that
+  // page's arrival, or appended to the cached page it replaces.
+  const readsOnForPress = pressPending && readyToReadOn && !awaitingViewer && !isLoadingMore;
   const loadPressedPage = useEffectEvent(() => {
-    void loadMore();
+    // Read again as the timer runs, from the latest render: a newer start may have come since.
+    if (readsOnForPress) void loadMore();
   });
-  const readsOnForPress = pressPending && listingSettled && !awaitingViewer && !isLoadingMore;
+  // This list's own Load more: asked at once from a list ready to read on; pressed while the
+  // listing's own first page is still read (a signed-in reader's took about 1.5 s live), it waits
+  // for it as the shell's press does (review of #837: that page's arrival cut it short).
+  const pressLoadMore = () => {
+    if (readyToReadOn) void loadMore();
+    else setPressedListingKey(listingKey);
+  };
   useEffect(() => {
     if (!readsOnForPress) return;
     // Asked a task later: React's development double effect cancels the first of its two runs here,
@@ -372,16 +418,16 @@ export default function MarketplaceBrowser({
                 <SlidersHorizontal className="h-3.5 w-3.5" />
                 Buyer filters
               </div>
-              {activeFilterLabels.length > 0 ? (
-                <p className="mt-1 text-sm text-zinc-400">Showing {activeFilterLabels.join(' + ')}</p>
-              ) : (
-                <p className="mt-1 hidden text-sm text-zinc-400 sm:block">All quality-checked public recipes from community posts.</p>
-              )}
+              <MarketplaceFiltersSummary
+                filterLabels={activeFilterLabels}
+                sortLabel={SORT_LINKS.find((link) => link.value === initialFilters.sort && link.value !== 'recent')?.label ?? null}
+              />
             </div>
             <MarketplaceFiltersButton
               open={filtersOpen}
               onToggle={() => setFiltersOpen((value) => !value)}
               controls={MARKETPLACE_FILTERS_ID}
+              setCount={countMarketplaceFiltersSet(initialFilters)}
             />
           </div>
 
@@ -528,7 +574,7 @@ export default function MarketplaceBrowser({
             <div className="mt-8 flex justify-center">
               <button
                 type="button"
-                onClick={() => void loadMore()}
+                onClick={pressLoadMore}
                 disabled={isLoadingMore || awaitingViewer || pressPending}
                 className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-60"
               >

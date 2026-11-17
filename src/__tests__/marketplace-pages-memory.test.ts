@@ -6,7 +6,9 @@ import {
   MARKETPLACE_PAGES_MEMORY_MAX_LISTINGS,
   MARKETPLACE_PAGES_MEMORY_TTL_MS,
   marketplacePagesViewer,
+  recallMarketplaceFiltersOpen,
   recallMarketplacePages,
+  rememberMarketplaceFiltersOpen,
   rememberMarketplacePages,
   takeBlockedCreatorOffMarketplacePages,
   withRememberedPages,
@@ -219,5 +221,38 @@ describe('what the tab keeps', () => {
     rememberMarketplacePages(KEY, 4, pages(long, true));
 
     expect(recallMarketplacePages(KEY)).toBeNull();
+  });
+});
+
+// Review of #837: Back to a listing whose filters a phone had left open drew them folded, the page
+// above the grid a panel shorter, and the reader landed that far down from their recipe.
+describe("a Marketplace listing's filters, left open", () => {
+  const LISTING = 'all\u0000all\u0000\u0000recent\u0000';
+  const OTHER = 'paid\u0000all\u0000\u0000recent\u0000';
+
+  it('are given back open for that listing alone, and folded keeps nothing', () => {
+    expect(recallMarketplaceFiltersOpen(LISTING)).toBe(false);
+
+    rememberMarketplaceFiltersOpen(LISTING, true);
+    expect(recallMarketplaceFiltersOpen(LISTING)).toBe(true);
+    expect(recallMarketplaceFiltersOpen(OTHER)).toBe(false);
+
+    // Folding another listing's leaves this one's as it is.
+    rememberMarketplaceFiltersOpen(OTHER, false);
+    expect(recallMarketplaceFiltersOpen(LISTING)).toBe(true);
+
+    rememberMarketplaceFiltersOpen(LISTING, false);
+    expect(recallMarketplaceFiltersOpen(LISTING)).toBe(false);
+  });
+
+  it('are never given back from before this document loaded, nor ten minutes on', () => {
+    window.sessionStorage.setItem('marketplace-filters-open', JSON.stringify({ listingKey: LISTING, savedAt: performance.timeOrigin - 1 }));
+    expect(recallMarketplaceFiltersOpen(LISTING)).toBe(false);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(performance.timeOrigin + 60_000);
+    rememberMarketplaceFiltersOpen(LISTING, true);
+    vi.setSystemTime(Date.now() + MARKETPLACE_PAGES_MEMORY_TTL_MS + 1);
+    expect(recallMarketplaceFiltersOpen(LISTING)).toBe(false);
   });
 });

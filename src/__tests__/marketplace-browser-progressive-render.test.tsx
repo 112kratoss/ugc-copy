@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
 import MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
 import { marketplaceFiltersKey } from '@/app/marketplace/marketplace-address';
+import { recallMarketplaceFiltersOpen } from '@/lib/marketplace-pages-memory';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 // One router for every render, so the browser's effects never see a new one.
@@ -902,8 +903,188 @@ describe('MarketplaceBrowser opened by the shell\'s Load more', () => {
         onNavigate={onNavigate}
       />
     );
-    expect(screen.getByRole('button', { name: 'Filters' })).toHaveAttribute('aria-expanded', 'false');
+    // Folded, and saying the one choice set behind it.
+    expect(screen.getByRole('button', { name: 'Filters, 1 set' })).toHaveAttribute('aria-expanded', 'false');
     expect(panel).toHaveClass('hidden');
+  });
+});
+
+// Review of #837. The listing's own first page (a signed-in reader's, their blocks taken out) lands
+// after the cached one the list was drawn from, and starts the list again.
+describe('MarketplaceBrowser when the listing\'s own first page lands', () => {
+  const pressedOn = marketplaceFiltersKey(INITIAL_FILTERS);
+  const signedIn = { session: { access_token: 'token-1' }, user: { id: 'viewer-1' }, isLoading: false };
+  // The cached page drew Unlock 1 to 4; the reader blocks the creator of Unlock 2.
+  const cachedPage = () => createPage(4, true, 0, 4);
+  const readersPage = () => {
+    const page = createPage(4, true, 0, 4);
+    return { ...page, items: page.items.filter((item) => item.title !== 'Unlock 2') };
+  };
+  const readersListing = ['Unlock 1', 'Unlock 3', 'Unlock 4', ...Array.from({ length: 12 }, (_, index) => `Unlock ${index + 5}`)];
+  const drawnTitles = () => screen.getAllByRole('link', { name: /: Unlock \d+$/ })
+    .map((link) => link.getAttribute('aria-label')?.replace(/^.*: /, ''));
+  const listRequests = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls
+    .map(([input]) => String(input))
+    .filter((url) => url.startsWith('/api/marketplace/resources'));
+
+  beforeEach(() => {
+    Object.assign(authState, signedIn);
+    window.sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    window.sessionStorage.clear();
+    Object.assign(authState, { session: null, user: null, isLoading: false });
+  });
+
+  // The press's timer can run before React draws the start the landing called for (Chrome does not
+  // hold back a 0 ms timer, and React draws in a task of its own). Run here at once, a page asked for
+  // then was appended to the cached page, and the reader's blocked recipe came back, kept as theirs.
+  it("never appends a press's page to the cached page it replaces, however soon the press's timer runs", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(createPage(12, true, 4, 12))));
+    vi.stubGlobal('fetch', fetchMock);
+    const view = render(
+      <MarketplaceBrowser initialPage={cachedPage()} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} listingSettled={false} loadMoreOnOpen={pressedOn} />
+    );
+    expect(listRequests(fetchMock)).toEqual([]);
+
+    const realSetTimeout = window.setTimeout;
+    const timers = vi.spyOn(window, 'setTimeout').mockImplementation(((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      if (!timeout && typeof handler === 'function') {
+        (handler as (...rest: unknown[]) => void)(...args);
+        return 0;
+      }
+      return realSetTimeout(handler, timeout, ...args);
+    }) as typeof window.setTimeout);
+    view.rerender(
+      <MarketplaceBrowser initialPage={readersPage()} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} listingSettled loadMoreOnOpen={pressedOn} />
+    );
+    timers.mockRestore();
+
+    expect(await screen.findByText('Unlock 16')).toBeInTheDocument();
+    expect(drawnTitles()).toEqual(readersListing);
+    expect(listRequests(fetchMock)).toEqual(['/api/marketplace/resources?offset=4&limit=12']);
+    // And Back draws the reader's own listing, not the cached page's.
+    view.unmount();
+    render(<MarketplaceBrowser initialPage={readersPage()} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />);
+    expect(drawnTitles()).toEqual(readersListing);
+  });
+
+  // The reader scrolled (the list came in) and pressed its own Load more while their first page was
+  // read: the landing started the list again and cut the page short, and the button came back.
+  it('holds its own Load more pressed while that page is read, then asks once from it', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(createPage(12, true, 4, 12))));
+    vi.stubGlobal('fetch', fetchMock);
+    const view = render(
+      <MarketplaceBrowser initialPage={cachedPage()} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} listingSettled={false} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more recipes' }));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    expect(listRequests(fetchMock)).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Loading' })).toBeDisabled();
+
+    view.rerender(
+      <MarketplaceBrowser initialPage={readersPage()} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} listingSettled />
+    );
+
+    expect(await screen.findByText('Unlock 16')).toBeInTheDocument();
+    expect(drawnTitles()).toEqual(readersListing);
+    expect(listRequests(fetchMock)).toEqual(['/api/marketplace/resources?offset=4&limit=12']);
+  });
+
+  // The listing started again under a Load more already asked for (its first page read again): the
+  // page is asked for again from the new start, never lost.
+  it('asks again from the new start for a Load more the landing cut short', async () => {
+    const answers: Array<(response: Response) => void> = [];
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => {
+      answers.push(resolve);
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const view = render(<MarketplaceBrowser initialPage={cachedPage()} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more recipes' }));
+    const firstSignal = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].signal;
+    view.rerender(<MarketplaceBrowser initialPage={readersPage()} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />);
+
+    expect(firstSignal?.aborted).toBe(true);
+    await waitFor(() => expect(listRequests(fetchMock)).toHaveLength(2));
+    await act(async () => {
+      answers[1](new Response(JSON.stringify(createPage(12, true, 4, 12))));
+    });
+    expect(await screen.findByText('Unlock 16')).toBeInTheDocument();
+    expect(drawnTitles()).toEqual(readersListing);
+  });
+});
+
+// Review of #837: `?sort=price-low` on a phone said nothing of the order, folded behind Filters with
+// the rest, and the line under "Buyer filters" left it out.
+describe('MarketplaceBrowser\'s order while the filters are folded', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('names an order other than Recent below 1024px, and counts it on Filters', () => {
+    render(
+      <MarketplaceBrowser initialPage={createPage(4, true, 0, 4)} initialFilters={{ ...INITIAL_FILTERS, sort: 'price-low' }} sourceToolOptions={[]} />
+    );
+
+    const sorted = screen.getByText('Sorted by Price low');
+    expect(sorted).toHaveClass('lg:hidden');
+    // From 1024px the order's chips say it, and the line is the one it always was.
+    expect(screen.getByText('All quality-checked public recipes from community posts.')).toHaveClass('hidden', 'lg:inline');
+    expect(screen.getByRole('button', { name: 'Filters, 1 set' })).toBeInTheDocument();
+  });
+
+  it('adds the order to what the listing is narrowed to', () => {
+    render(
+      <MarketplaceBrowser initialPage={createPage(4, true, 0, 4)} initialFilters={{ ...INITIAL_FILTERS, access: 'paid', sort: 'top-sales' }} sourceToolOptions={[]} />
+    );
+
+    expect(screen.getByText(/^Showing Paid/)).toHaveTextContent('Showing Paid · Sorted by Top sales');
+    expect(screen.getByText(/Sorted by Top sales/, { selector: 'span' })).toHaveClass('lg:hidden');
+    expect(screen.getByRole('button', { name: 'Filters, 2 set' })).toBeInTheDocument();
+  });
+
+  it('says nothing of Recent, and keeps a phone\'s first screen for the recipes', () => {
+    render(<MarketplaceBrowser initialPage={createPage(4, true, 0, 4)} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />);
+
+    expect(screen.queryByText(/Sorted by/)).not.toBeInTheDocument();
+    expect(screen.getByText('All quality-checked public recipes from community posts.')).toHaveClass('hidden', 'sm:block');
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeInTheDocument();
+  });
+});
+
+// Review of #837: Back to a listing whose filters a phone had left open drew them folded, the page
+// above the grid a panel shorter, and the reader landed that far down from their recipe.
+describe('MarketplaceBrowser\'s filters, kept for Back', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.sessionStorage.clear();
+  });
+
+  it('keeps them open or folded, as the reader leaves them on the listing', () => {
+    const key = marketplaceFiltersKey(INITIAL_FILTERS);
+    render(<MarketplaceBrowser initialPage={createPage(4, true, 0, 4)} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />);
+    expect(recallMarketplaceFiltersOpen(key)).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    expect(recallMarketplaceFiltersOpen(key)).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    expect(recallMarketplaceFiltersOpen(key)).toBe(false);
   });
 });
 

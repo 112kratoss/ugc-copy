@@ -14,7 +14,10 @@ import {
 import { ArrowRight, Loader2, X } from 'lucide-react';
 
 import type MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
-import MarketplaceFiltersButton, { MARKETPLACE_FILTERS_ID } from '@/app/marketplace/MarketplaceFiltersButton';
+import MarketplaceFiltersButton, {
+  MARKETPLACE_FILTERS_ID,
+  MarketplaceFiltersSummary,
+} from '@/app/marketplace/MarketplaceFiltersButton';
 import {
   MARKETPLACE_RECIPE_GRID_CLASS,
   MarketplaceRecipeTile,
@@ -24,14 +27,21 @@ import { useAuth } from '@/components/AuthProvider';
 import {
   buildMarketplacePagesKey,
   marketplacePagesViewer,
+  recallMarketplaceFiltersOpen,
   recallMarketplacePages,
+  rememberMarketplaceFiltersOpen,
 } from '@/lib/marketplace-pages-memory';
 import { MARKETPLACE_INITIAL_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
 import type { SourceToolFilterOption } from '@/lib/source-tools';
 import { useViewerRecipeState } from '@/app/marketplace/useViewerRecipeState';
 
-import { isPlainLinkClick, marketplaceFiltersKey, type MarketplaceFilters } from './marketplace-address';
+import {
+  countMarketplaceFiltersSet,
+  isPlainLinkClick,
+  marketplaceFiltersKey,
+  type MarketplaceFilters,
+} from './marketplace-address';
 import { MarketplaceListingFailed, MarketplaceListingSkeleton } from './MarketplaceListingStates';
 import {
   MarketplaceSearchParamsReporter,
@@ -141,6 +151,21 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
   const [loadMorePressedFor, setLoadMorePressedFor] = useState<string | null>(null);
   // Phones and tablets keep the filters behind Filters; the interactive list takes them over as left.
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // Back to a listing whose filters the reader left open draws them open again, so the page above
+  // the grid is as tall as when they left it and the browser puts them back on their recipe (review
+  // of #837: folded, it landed them a panel's height off). Decided once the address bar's listing is
+  // known, before the paint, as the hand-over above is; a listing moved to in place starts folded,
+  // as the interactive list folds them for a filter picked.
+  const filtersListingKey = marketplaceFiltersKey(initialFilters);
+  const [filtersOpenReadFor, setFiltersOpenReadFor] = useState<string | null>(null);
+  if (listing.addressKnown && filtersOpenReadFor !== filtersListingKey) {
+    setFiltersOpenReadFor(filtersListingKey);
+    setFiltersOpen(recallMarketplaceFiltersOpen(filtersListingKey));
+  }
+  useEffect(() => {
+    // Kept only once read for this listing: the first render's would write over what Back reads.
+    if (filtersOpenReadFor === filtersListingKey) rememberMarketplaceFiltersOpen(filtersListingKey, filtersOpen);
+  }, [filtersOpen, filtersOpenReadFor, filtersListingKey]);
   const activationPendingRef = useRef(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
@@ -172,10 +197,10 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
 
   // Also while the list is already on its way after a scroll towards the end: the press is kept for it.
   const pressLoadMore = () => {
-    setLoadMorePressedFor(marketplaceFiltersKey(initialFilters));
+    setLoadMorePressedFor(filtersListingKey);
     activateInteractiveBrowser();
   };
-  const loadMorePressed = loadMorePressedFor !== null && loadMorePressedFor === marketplaceFiltersKey(initialFilters);
+  const loadMorePressed = loadMorePressedFor !== null && loadMorePressedFor === filtersListingKey;
 
   useEffect(() => {
     if (
@@ -282,18 +307,16 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
               >
                 Buyer filters
               </h2>
-              {activeFilterLabels.length > 0 ? (
-                <p className="mt-1 text-sm text-zinc-400">{`Showing ${activeFilterLabels.join(' + ')}`}</p>
-              ) : (
-                <p className="mt-1 hidden text-sm text-zinc-400 sm:block">
-                  All quality-checked public recipes from community posts.
-                </p>
-              )}
+              <MarketplaceFiltersSummary
+                filterLabels={activeFilterLabels}
+                sortLabel={SORT_FILTERS.find((item) => item.value === initialFilters.sort && item.value !== 'recent')?.label ?? null}
+              />
             </div>
             <MarketplaceFiltersButton
               open={filtersOpen}
               onToggle={() => setFiltersOpen((value) => !value)}
               controls={MARKETPLACE_FILTERS_ID}
+              setCount={countMarketplaceFiltersSet(initialFilters)}
             />
           </div>
 

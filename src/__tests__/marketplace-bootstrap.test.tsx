@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
 import { marketplaceFiltersKey } from '@/app/marketplace/marketplace-address';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
-import { buildMarketplacePagesKey, rememberMarketplacePages } from '@/lib/marketplace-pages-memory';
+import {
+  buildMarketplacePagesKey,
+  rememberMarketplaceFiltersOpen,
+  rememberMarketplacePages,
+} from '@/lib/marketplace-pages-memory';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
 const browserModuleLoaded = vi.hoisted(() => vi.fn());
@@ -434,6 +438,21 @@ describe('MarketplaceBootstrap', () => {
     expect(browserProps.last).toMatchObject({ initialFiltersOpen: true });
   });
 
+  // Review of #837: `?sort=price-low` on a phone said nothing of the order, folded behind Filters.
+  it('names an order other than Recent while the filters are folded, and counts what is set on Filters', () => {
+    render(
+      <MarketplaceBootstrap
+        initialPage={createPage(4, true)}
+        initialFilters={{ ...INITIAL_FILTERS, access: 'free', sort: 'price-low' }}
+        sourceToolOptions={[]}
+      />
+    );
+
+    expect(screen.getByText(/^Showing Free/)).toHaveTextContent('Showing Free · Sorted by Price low');
+    expect(screen.getByText(/Sorted by Price low/, { selector: 'span' })).toHaveClass('lg:hidden');
+    expect(screen.getByRole('button', { name: 'Filters, 2 set' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('activates near the continuation sentinel only after scroll intent', async () => {
     let intersectionCallback: IntersectionObserverCallback | null = null;
 
@@ -534,6 +553,34 @@ describe('MarketplaceBootstrap', () => {
 
       expect(screen.queryByTestId('interactive-marketplace-browser')).not.toBeInTheDocument();
       expect(screen.getByText('Unlock 1')).toBeInTheDocument();
+    });
+
+    // Review of #837: a phone that had left the filters open came back with them folded, the page
+    // above the grid a panel shorter, and the reader landed that far down from their recipe.
+    it('draws the filters open again where the reader left them open, the shell and the list it hands over', async () => {
+      const listingKey = marketplaceFiltersKey(INITIAL_FILTERS);
+      rememberMarketplaceFiltersOpen(listingKey, true);
+
+      const shell = backToListing();
+      const filters = screen.getByRole('button', { name: 'Filters' });
+      expect(filters).toHaveAttribute('aria-expanded', 'true');
+      expect(document.getElementById(filters.getAttribute('aria-controls') ?? '')).toHaveClass('block');
+      shell.unmount();
+
+      await browserCameInThisDocument();
+      rememberMarketplacePages(buildMarketplacePagesKey(listingKey, null), 4, createPage(16, true));
+      rememberMarketplaceFiltersOpen(listingKey, true);
+      backToListing();
+      expect(screen.getByTestId('interactive-marketplace-browser')).toBeInTheDocument();
+      expect(browserProps.last).toMatchObject({ initialFiltersOpen: true });
+    });
+
+    it("draws them folded for another listing's, or once they were folded", () => {
+      rememberMarketplaceFiltersOpen(marketplaceFiltersKey({ ...INITIAL_FILTERS, access: 'paid' }), true);
+
+      backToListing();
+
+      expect(screen.getByRole('button', { name: 'Filters' })).toHaveAttribute('aria-expanded', 'false');
     });
 
     // Owner's recording, 2026-11-16: signed in, Back drew the first page alone, because the page's
