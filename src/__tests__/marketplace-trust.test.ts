@@ -410,6 +410,39 @@ describe('marketplace trust helpers', () => {
     expect(notesListing.eligible).toBe(true);
     expect(remixListing.eligible).toBe(true);
   });
+
+  // Review of #853: a recipe on a post with no creation sells no Remix (owner, 2026-11-17), so a
+  // listing's kinds lose the Remix a Remix link made, and a recipe of a link alone read as holding
+  // nothing. The database's listing rule counts every labelled item. A listing read by its counts
+  // (a teaser holds no items) counts what it holds, but the mark of a Remix that comes with it.
+  describe('a listing read by its kinds and counts', () => {
+    const upload = { ...basePost, postFormat: 'media', category: 'image', generationId: null, hasMedia: true };
+    const listing = (itemCounts: Record<string, number>, post: Record<string, unknown> = upload) => assessMarketplaceListingQuality({
+      ...promptListingInput(),
+      resourceKinds: [],
+      itemCounts,
+      post,
+    });
+    const EVERY_USEFUL = 'Attach at least one useful prompt, workflow, file, note, or remix permission.';
+    const WITHOUT_REMIX = 'Attach at least one useful prompt, workflow, file, or note.';
+
+    it('counts a Remix link the creator added, whatever kinds it is sold with', () => {
+      expect(listing({ remix_link: 1 }).eligible).toBe(true);
+      expect(listing({ reference_image: 2 }).eligible).toBe(true);
+    });
+
+    it('counts no Remix access mark, nor nothing, and offers a post with no creation no remix permission', () => {
+      expect(listing({ remix_access: 1 })).toMatchObject({
+        eligible: false,
+        issues: [{ code: 'missing_resources', field: 'resources', message: WITHOUT_REMIX }],
+      });
+      expect(listing({}).issues[0]?.message).toBe(WITHOUT_REMIX);
+      // A creation's post, a text post, and a post read without its creation keep the words.
+      expect(listing({}, { ...upload, generationId: 'generation-1' }).issues[0]?.message).toBe(EVERY_USEFUL);
+      expect(listing({}, { ...basePost, generationId: null }).issues[0]?.message).toBe(EVERY_USEFUL);
+      expect(listing({}, basePost).issues[0]?.message).toBe(EVERY_USEFUL);
+    });
+  });
 });
 
 function promptListingInput() {

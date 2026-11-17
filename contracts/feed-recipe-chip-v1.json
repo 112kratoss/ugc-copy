@@ -58,6 +58,23 @@
       }
     },
     {
+      "name": "a free recipe on a post with no creation, whose read still offers Remix: no Remix, so the chip",
+      "asset": {
+        "accessMode": "free",
+        "priceUsdCents": 0
+      },
+      "remix": true,
+      "creation": false,
+      "chip": {
+        "tone": "free",
+        "kind": "free",
+        "label": {
+          "web": "Free recipe",
+          "mobile": "Free recipe"
+        }
+      }
+    },
+    {
       "name": "a paid recipe beside Remix",
       "asset": {
         "accessMode": "paid",

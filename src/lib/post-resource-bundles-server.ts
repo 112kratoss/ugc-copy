@@ -3265,6 +3265,7 @@ async function getMarketplaceResourceListFallback(options: {
         accessMode: item.accessMode,
         priceUsdCents: item.priceUsdCents,
         resourceKinds: item.resourceKinds,
+        itemCounts: item.lockedPreview.itemCounts,
         post: storedPost ?? item.post,
         seller: item.seller,
       });
@@ -3399,6 +3400,8 @@ async function getMarketplaceResourceListBase(
 
     // Judged on the post as stored, as the database's listing gate judged it;
     // matched on the post as shown, as its search document holds it.
+    // Graded on what the recipe holds as well as the kinds it is sold with: a Remix link on a post that
+    // sells no Remix is still the creator's link (review of #853), as the database's rule counts it.
     const quality = assessMarketplaceListingQuality({
       title: item.title,
       summary: item.summary,
@@ -3406,6 +3409,7 @@ async function getMarketplaceResourceListBase(
       accessMode: item.accessMode,
       priceUsdCents: item.priceUsdCents,
       resourceKinds: item.resourceKinds,
+      itemCounts: item.lockedPreview.itemCounts,
       post: hydrated?.storedPost ?? item.post,
       seller: item.seller,
     });
@@ -3910,6 +3914,8 @@ export function assessOwnerListingQuality(input: {
     accessMode: PersistedPostResourceBundleAccessMode;
     priceUsdCents: number;
     resourceKinds: PostResourceKind[];
+    /** What the recipe holds by item type, where the read knows it (`MarketplaceQualityInput.itemCounts`). */
+    itemCounts?: PostResourceItemCounts | null;
   };
   post: MarketplaceQualityInput['post'];
 }): MarketplaceQualityAssessment {
@@ -3924,6 +3930,7 @@ export function assessOwnerListingQuality(input: {
     accessMode: input.bundle.accessMode,
     priceUsdCents: input.bundle.priceUsdCents,
     resourceKinds: input.bundle.resourceKinds,
+    itemCounts: input.bundle.itemCounts,
     post: input.post,
     seller: toSellerSummary(input.ownerUserId, profilesMap),
   });
@@ -4215,6 +4222,7 @@ export async function getSellerPostResourceBundleDashboard(
       accessMode: bundle.accessMode,
       priceUsdCents: bundle.priceUsdCents,
       resourceKinds: bundle.resourceKinds,
+      itemCounts: bundle.lockedPreview.itemCounts,
       post: bundle.post,
       seller: bundle.seller,
     }),

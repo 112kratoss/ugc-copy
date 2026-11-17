@@ -867,6 +867,46 @@ describe('owner posts', () => {
       expect(kindsOf('text-switch-on')).toEqual(['prompt', 'remix']);
     });
 
+    // Review of #853: such a recipe of a Remix link alone holds the creator's link, which the
+    // marketplace lists (the database counts every labelled item); with no Remix among its kinds it
+    // was graded as holding nothing. One of a Remix access mark or the stored switch alone holds
+    // nothing now, and its creator is not told to add a remix permission, which such a post can't.
+    it.each([
+      ['the compact summary RPC', true],
+      ['the bundle select fallback', false],
+    ])('grades a recipe of a Remix link alone on a post with no creation as listable, through %s', async (_label, rpcEnabled) => {
+      compactSummaryRpc.enabled = rpcEnabled;
+      postRows.value = [
+        ...postRows.value,
+        listingPost('upload-link', '2026-07-05T00:00:00.000Z'),
+        listingPost('upload-access', '2026-07-06T00:00:00.000Z'),
+        listingPost('upload-switch', '2026-07-07T00:00:00.000Z'),
+      ] as unknown as typeof postRows.value;
+      bundleRows.value = [
+        recipe('upload-link', {
+          prompt_text: null,
+          resource_items: [{ id: 'link-1', type: 'remix_link', title: 'Remix link', externalUrl: 'https://example.com/remix' }],
+        }),
+        recipe('upload-access', {
+          prompt_text: null,
+          resource_items: [{ id: 'access-1', type: 'remix_access', title: 'Remix access' }],
+        }),
+        recipe('upload-switch', { prompt_text: null, allow_remix: true }),
+      ];
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      const listings = await getOwnerPostList('user-1', { includeArchived: true, visibility: 'all', listingsOnly: true });
+      const bundleOf = (postId: string) => listings.find((post) => post.id === postId)?.bundle;
+
+      expect(bundleOf('upload-link')).toMatchObject({ resourceKinds: [], quality: { eligible: true, message: null } });
+      for (const postId of ['upload-access', 'upload-switch']) {
+        expect(bundleOf(postId), postId).toMatchObject({
+          resourceKinds: [],
+          quality: { eligible: false, message: 'Attach at least one useful prompt, workflow, file, or note.' },
+        });
+      }
+    });
+
     it('names no Remix on the editor’s own read of such a post, whatever its unlock counts', async () => {
       postRows.value = [
         ...postRows.value,

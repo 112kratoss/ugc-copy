@@ -1384,6 +1384,50 @@ describe('post resource bundle server access', () => {
       expect((await getMarketplaceResourceList({ resource: 'files' })).items.map((item) => item.postId)).toEqual(['post-1']);
     });
 
+    // Review of #853: a recipe of a Remix link alone holds the creator's link, which every reader still
+    // gets, and the database lists it (it counts every labelled item). With no Remix among its kinds
+    // it read as holding nothing: the marketplace dropped it and its seller read it as not listable.
+    it('lists a recipe of a Remix link alone, and its seller reads it as listable', async () => {
+      bundleRow = {
+        ...(bundleRow as BundleRow),
+        allow_remix: false,
+        resource_items: [{ id: 'link-1', type: 'remix_link', title: 'Remix link', externalUrl: 'https://example.com/remix' }],
+      };
+      const { getMarketplaceResourceList, getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+
+      const [tile] = (await getMarketplaceResourceList()).items;
+      expect(tile).toMatchObject({ postId: 'post-1', allowRemix: false, resourceKinds: [] });
+      expect(tile.lockedPreview.itemCounts).toEqual({ remix_link: 1 });
+      expect((await getMarketplaceResourceList({ resource: 'remix' })).items).toEqual([]);
+      const [listing] = (await getSellerPostResourceBundleDashboard('owner-1')).bundles;
+      expect(listing.quality).toEqual({ eligible: true, issues: [] });
+    });
+
+    it('lists no recipe of a Remix access mark or the stored switch alone, and offers its seller no remix permission', async () => {
+      const { getMarketplaceResourceList, getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+
+      for (const [allowRemix, items] of [[false, [ACCESS]], [true, []]] as const) {
+        bundleRow = {
+          ...(bundleRow as BundleRow),
+          allow_remix: allowRemix,
+          resource_items: [...items],
+          prompt_text: null,
+          notes_markdown: null,
+        };
+        const what = items.length > 0 ? 'Remix access' : 'the switch';
+        expect((await getMarketplaceResourceList()).items, what).toEqual([]);
+        const [listing] = (await getSellerPostResourceBundleDashboard('owner-1')).bundles;
+        expect(listing.quality, what).toEqual({
+          eligible: false,
+          issues: [{
+            code: 'missing_resources',
+            field: 'resources',
+            message: 'Attach at least one useful prompt, workflow, file, or note.',
+          }],
+        });
+      }
+    });
+
     it('leaves the recipe of a text post as it was', async () => {
       postRow = { ...(postRow as Record<string, unknown>), post_format: 'text', category: 'text', source_kind: 'manual' };
       bundleRow = { ...(bundleRow as BundleRow), resource_items: [PROMPT] };
