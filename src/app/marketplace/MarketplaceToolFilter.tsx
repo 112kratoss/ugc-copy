@@ -129,7 +129,8 @@ export default function MarketplaceToolFilter({
             nothing in the real world appears out of nothing. */}
         <div className="ui-enter-pop absolute left-0 right-0 z-30 mt-2 origin-top overflow-hidden rounded-2xl border border-white/12 bg-[#0b0b0f] shadow-[0_24px_60px_rgba(0,0,0,0.6)]">
           {enhanced ? (
-            <div className="flex items-center gap-2 border-b border-white/8 px-3 py-2.5">
+            // A label, so a tap anywhere in the box (the icon, the padding) focuses the input.
+            <label className="flex cursor-text items-center gap-2 border-b border-white/8 px-3 py-2.5">
               <Search className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />
               <input
                 ref={searchRef}
@@ -139,7 +140,7 @@ export default function MarketplaceToolFilter({
                 aria-label="Filter tools"
                 className="w-full bg-transparent text-sm text-white outline-none placeholder:text-zinc-600"
               />
-            </div>
+            </label>
           ) : null}
 
           <div className="max-h-72 overflow-y-auto p-1.5">

@@ -98,7 +98,7 @@ export default function LoginClient({
     const inFlightRef = useRef<SignInInFlight>(null);
     const emailRef = useRef<HTMLInputElement>(null);
     const passwordRef = useRef<HTMLInputElement>(null);
-    const emailTitleRef = useRef<HTMLHeadingElement>(null);
+    const emailTitleRef = useRef<HTMLDivElement & HTMLHeadingElement>(null);
     const emailLinkRef = useRef<HTMLAnchorElement>(null);
     // What the fields hold before this script runs, typed or filled in by the browser, is
     // taken in as the page mounts. Else the sign-in sends empty values, and its render writes
@@ -106,6 +106,10 @@ export default function LoginClient({
     useFieldValueBeforeHydration(emailRef, { drawn: email, onValue: setEmail });
     useFieldValueBeforeHydration(passwordRef, { drawn: password, onValue: setPassword });
     const onEmail = half === 'email';
+    // One <h1> at a time: the half that is away (inert, and drawn invisible) is a plain block, so the
+    // page never holds a hidden second heading. Same box either way, so the layout does not move.
+    const Heading = onEmail ? 'div' : 'h1';
+    const EmailHeading = onEmail ? 'h1' : 'div';
     const returnNote = creatorReturnNote(redirectTo);
     // The welcome credits, unless an account has signed in on this browser (owner, 2026-11-09).
     const welcomePromise = useWelcomePromise();
@@ -310,14 +314,14 @@ export default function LoginClient({
 
                     {/* The headline runs on into the wordmark (owner, 2026-11-08: like "Start working
                         in", with the name below it), and is read as the one line it is. */}
-                    <h1
+                    <Heading
                         id="sign-in-title"
                         className={clsx(displayFont.className, 'mt-5 font-extrabold text-[52px] leading-[56px] tracking-[-0.023em] text-white md:mt-0 md:text-center md:text-[64px] md:leading-[68px]')}
                     >
                         <span className="block md:inline">Start</span>{' '}
                         <span className="block md:inline">filling your</span>{' '}
                         <BrandWordmark className="mt-2 text-[38px] leading-[44px] tracking-[-0.02em] md:mt-3 md:flex md:justify-center md:text-[52px] md:leading-[60px]" />
-                    </h1>
+                    </Heading>
 
                     <div className="min-h-6 flex-1 md:h-12 md:flex-none" />
 
@@ -376,14 +380,14 @@ export default function LoginClient({
 
                     <div className="mt-4 md:mt-0">
                         <BrandWordmark className="text-[22px] leading-7" />
-                        <h1
+                        <EmailHeading
                             id="sign-in-email-title"
                             ref={emailTitleRef}
                             tabIndex={-1}
                             className={clsx(displayFont.className, 'mt-5 font-extrabold text-[32px] leading-[38px] tracking-[-0.02em] text-white outline-none md:text-[36px] md:leading-[42px]')}
                         >
                             Sign in with email
-                        </h1>
+                        </EmailHeading>
                         {returnNote ? <div className="mt-3 flex">{returnLine('start')}</div> : null}
                     </div>
 
