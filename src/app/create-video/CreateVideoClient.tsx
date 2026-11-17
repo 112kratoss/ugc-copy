@@ -1251,6 +1251,8 @@ type CreateVideoClientProps = {
     opening?: CreatorOpening | null;
     /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
     startPosts?: StartPostsSource;
+    /** Whether `/templates` lists a template: its ways in (the Templates tile, "Browse templates") are drawn only then. */
+    templatesLive?: boolean;
 };
 
 /**
@@ -1286,6 +1288,7 @@ function VideoCreator({
     visitorWelcomeCredits = null,
     opening = null,
     startPosts = null,
+    templatesLive = false,
     draft,
     form,
 }: CreateVideoClientProps & { draft: CreatorDraftOwner; form: CreatorForm }) {
@@ -6244,7 +6247,7 @@ function VideoCreator({
 
                                 <EnhancePromptButton
                                     variant="toolbar"
-                                    leading={<CreatorTemplatesTile />}
+                                    leading={templatesLive ? <CreatorTemplatesTile /> : null}
                                     prompt={prompt}
                                     onEnhanced={(text, result) => {
                                         setPrompt(text);
@@ -6954,6 +6957,7 @@ function VideoCreator({
                         ) : (
                             <CreatorEmptyCanvas
                                 source={startPosts}
+                                templatesLive={templatesLive}
                                 tool="video"
                                 icon={Video}
                                 title={isVisitor ? 'Try it before you sign up' : 'Your video will appear here'}

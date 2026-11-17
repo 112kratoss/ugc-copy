@@ -381,7 +381,11 @@ export function CreatorModelChip({
   );
 }
 
-/** The quiet tile beside Enhance: the templates, as the app's toolbar has them. */
+/**
+ * The quiet tile beside Enhance: the templates, as the app's toolbar has them. A creator
+ * draws it only while `/templates` lists one (`templatesLive`), so it never opens on
+ * "No templates are live yet"; Enhance takes the row alone then.
+ */
 export function CreatorTemplatesTile() {
   return (
     <Link

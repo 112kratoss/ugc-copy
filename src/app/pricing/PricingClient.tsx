@@ -13,6 +13,7 @@ import { CREDIT_CHECKOUT_STATUS_COPY, useCreditPackCheckout } from "@/components
 import { supabase } from "@/lib/supabase";
 import { useFieldValueBeforeHydration } from "@/lib/use-field-value-before-hydration";
 import { buildSoftwareApplicationSchema, siteConfig } from "@/lib/seo";
+import { formatFxRatesUpdatedAt } from "./fx-rates-updated";
 import {
     convertFromUsd,
     formatMoney,
@@ -339,6 +340,9 @@ export function PricingClient({
                 Number.isFinite(fxRates[selectedCurrency])));
 
     const locale = typeof navigator !== 'undefined' ? navigator.language : undefined;
+    // In the reader's language and zone. Only the browser has read the rates, so the server's
+    // HTML never holds this line and hydration has nothing to disagree on (fx-rates-updated.ts).
+    const fxRatesUpdated = fxUpdatedAt ? formatFxRatesUpdatedAt(fxUpdatedAt, { locale }) : null;
 
     return (
         <div className="ui-page ui-page-ambient min-h-screen">
@@ -396,8 +400,8 @@ export function PricingClient({
                                     ? 'Updating FX...'
                                     : fxStatus === 'unavailable'
                                         ? 'FX unavailable'
-                                        : fxUpdatedAt
-                                            ? `Updated ${fxUpdatedAt}`
+                                        : fxRatesUpdated
+                                            ? `Rates updated ${fxRatesUpdated}`
                                             : null}
                             </span>
                         </div>

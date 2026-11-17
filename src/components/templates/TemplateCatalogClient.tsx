@@ -77,10 +77,17 @@ export default function TemplateCatalogClient({
   mode = 'public',
   initialTemplates,
   initialNextCursor = null,
+  templatesLive = false,
 }: {
   mode?: 'public' | 'owner';
   initialTemplates?: MediaTemplate[];
   initialNextCursor?: string | null;
+  /**
+   * Whether the public catalog lists a template (`loadTemplatesLive`, read by the owner's
+   * page): the owner's "Browse templates" is drawn only then, as it opened "No templates are
+   * live yet" (review of #840). The public catalog shows what it lists itself.
+   */
+  templatesLive?: boolean;
 }) {
   const { session, isLoading: isAuthLoading } = useAuth();
   const hasInitialPublicTemplates = mode === 'public' && initialTemplates !== undefined;
@@ -199,7 +206,7 @@ export default function TemplateCatalogClient({
           </div>
           <div className="flex flex-wrap gap-3">
             {isOwnerMode ? (
-              <Button href="/templates" variant="secondary" icon={ArrowRight}>Browse templates</Button>
+              templatesLive ? <Button href="/templates" variant="secondary" icon={ArrowRight}>Browse templates</Button> : null
             ) : session?.user ? (
               <Button href="/templates/mine" variant="secondary" icon={LayoutTemplate}>My templates</Button>
             ) : null}

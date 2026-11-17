@@ -400,6 +400,8 @@ type CreateImageClientProps = {
     opening?: CreatorOpening | null;
     /** The shelf's posts for the empty canvas, still on their way; none for a remix. */
     startPosts?: StartPostsSource;
+    /** Whether `/templates` lists a template: its ways in (the Templates tile, "Browse templates") are drawn only then. */
+    templatesLive?: boolean;
 };
 
 /**
@@ -435,6 +437,7 @@ function ImageCreator({
     visitorWelcomeCredits = null,
     opening = null,
     startPosts = null,
+    templatesLive = false,
     draft,
     form,
 }: CreateImageClientProps & { draft: CreatorDraftOwner; form: CreatorForm }) {
@@ -2414,7 +2417,7 @@ function ImageCreator({
 
                         <EnhancePromptButton
                             variant="toolbar"
-                            leading={<CreatorTemplatesTile />}
+                            leading={templatesLive ? <CreatorTemplatesTile /> : null}
                             prompt={prompt}
                             onEnhanced={setPrompt}
                             onCreditsUpdate={updateCredits}
@@ -2616,6 +2619,7 @@ function ImageCreator({
                             <CreatorEmptyCanvas
                                 source={startPosts}
                                 tool="image"
+                                templatesLive={templatesLive}
                                 icon={ImageIcon}
                                 title={isVisitor ? 'Try it before you sign up' : 'Your image will appear here'}
                                 hint={`${isVisitor ? CREATOR_VISITOR_CANVAS_HINT : emptyCanvasHint} Or remix a post below.`}

@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Archive, CheckCircle2, Clock, Copy, Download, ExternalLink, Eye, Film, Flag, Globe, ImageIcon, Loader2, PencilLine, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
+import { Archive, CheckCircle2, ChevronDown, ChevronUp, Clock, Copy, Download, ExternalLink, Eye, Film, Flag, Globe, ImageIcon, Loader2, PencilLine, RotateCcw, Trash2, UserRound, Volume2, Wand2, Zap } from 'lucide-react';
 import { useAuth } from '@/components/AuthProvider';
+import { Button } from '@/components/DesignSystem';
 import MediaDetailsPreviewModal, {
     type MediaDetailsStatusNote,
     type MediaDetailsType,
@@ -32,6 +33,7 @@ import {
     buildCreationComposerPath,
     buildPostRecipeManagementPath,
     getCreationMediaFilters,
+    getStudioCreationCounts,
     resolveCreationWorkspaceCardState,
     type CreationMediaFilter,
     type CreationWorkspaceCardState,
@@ -168,6 +170,11 @@ interface CreationsWorkspaceCache {
     generations: Generation[];
     posts: OwnerPost[];
     profile: ProfileApiResponse | null;
+    /**
+     * Whether `generations` held the whole library, the list's last page loaded: a return to
+     * Studio draws the media filters' totals at once rather than when the refresh lands.
+     */
+    generationsComplete: boolean;
 }
 
 interface GenerationsApiResponse {
@@ -192,6 +199,10 @@ const CREATIONS_GENERATIONS_PAGE_SIZE = 36;
 const CREATIONS_POSTS_PAGE_SIZE = 36;
 const SIGNED_MEDIA_URL_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const GENERATION_HIGHLIGHT_MS = 4000;
+// The portfolio setup card's name, and its parts that Steps shows and hides on a phone.
+const PORTFOLIO_SETUP_LABEL_ID = 'studio-portfolio-setup-label';
+const PORTFOLIO_SETUP_MORE_ID = 'studio-portfolio-setup-more';
+const PORTFOLIO_SETUP_STEPS_ID = 'studio-portfolio-setup-steps';
 
 function getGenerationCardAnchorId(generationId: string): string {
     return `studio-generation-${generationId}`;
@@ -247,6 +258,8 @@ function readCreationsWorkspaceCache(userId: string | null): CreationsWorkspaceC
             generations: Array.isArray(parsed.generations) ? parsed.generations as Generation[] : [],
             posts: Array.isArray(parsed.posts) ? parsed.posts as OwnerPost[] : [],
             profile: isRecord(parsed.profile) ? parsed.profile as unknown as ProfileApiResponse : null,
+            // A snapshot written before the flag, or by a list with pages still to load, says no.
+            generationsComplete: parsed.generationsComplete === true,
         };
     } catch {
         return null;
@@ -459,6 +472,25 @@ function getNextGenerationCursor(payload: GenerationsApiResponse): string | null
     return typeof nextCursor === 'string' && nextCursor.length > 0 ? nextCursor : null;
 }
 
+/**
+ * A finished creation, archived or not: a succeeded run with an output, or one whose only source
+ * is gone (its tile stays, with a note). Studio's grid and the server's library total
+ * (`owner_profile_counts`) count these, the active ones.
+ */
+function isFinishedCreation(generation: Generation): boolean {
+    return generation.status === 'succeeded' && Boolean(generation.output_url || generation.source_unavailable_at);
+}
+
+/**
+ * The list's next cursor one row earlier, after a row before it was deleted here. The owner
+ * list's cursor is the offset of its next row (`buildPagination` in
+ * owner-generations-route-service.ts); one in any other form is left as it is.
+ */
+function stepGenerationsCursorBack(cursor: string | null): string | null {
+    if (cursor === null || !/^\d+$/.test(cursor)) return cursor;
+    return String(Math.max(0, Number(cursor) - 1));
+}
+
 function mergeGenerationRefresh(
     previousGenerations: Generation[],
     incomingGenerations: Generation[],
@@ -609,7 +641,27 @@ export default function CreationsPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [generationsNextCursor, setGenerationsNextCursor] = useState<string | null>(null);
+    // Whether the list has answered at all, from the server or from the snapshot of an earlier
+    // visit: until then Studio knows no count, and says none.
+    const [generationsAnswered, setGenerationsAnswered] = useState(false);
+    // Whether the loaded creations are the whole library: the list's last page is loaded, as the
+    // server said, or as the snapshot recorded. Kept in a ref too, for the snapshot's writers.
+    const [generationsComplete, setGenerationsCompleteState] = useState(false);
+    const generationsCompleteRef = useRef(false);
+    const setGenerationsComplete = useCallback((complete: boolean) => {
+        generationsCompleteRef.current = complete;
+        setGenerationsCompleteState(complete);
+    }, []);
+    // The setup card's Steps, on a phone (it shows them all from 640px).
+    const [setupStepsShown, setSetupStepsShown] = useState(false);
     const [isLoadingMoreGenerations, setIsLoadingMoreGenerations] = useState(false);
+    // The list's cursor counts rows, so a delete steps it back a row (handleGenerationDelete), and
+    // the two must not cross (review of #836): a delete waits for the Load more under way, whose
+    // cursor would land after the step back and undo it, and Load more waits while deletes are
+    // under way, as the page it asked for could be counted without the deleted row.
+    const loadMoreInFlightRef = useRef<Promise<void> | null>(null);
+    const [deletesInFlight, setDeletesInFlight] = useState(0);
+    const deletesInFlightRef = useRef(0);
     const [generationsLoadMoreError, setGenerationsLoadMoreError] = useState<string | null>(null);
     const [postsNextOffset, setPostsNextOffset] = useState<number | null>(null);
     const [isLoadingMorePosts, setIsLoadingMorePosts] = useState(false);
@@ -711,6 +763,7 @@ export default function CreationsPage() {
             generations: nextGenerations,
             posts: nextPosts,
             profile: profileRef.current,
+            generationsComplete: generationsCompleteRef.current,
         });
     }, [userId]);
 
@@ -736,10 +789,27 @@ export default function CreationsPage() {
             generations: nextGenerations,
             posts: nextPosts,
             profile: profileRef.current,
+            generationsComplete: generationsCompleteRef.current,
         });
     }, [userId]);
 
+    // The server's library total this page holds, moved by a change made here to a finished
+    // creation, so the loaded list and it still agree, and the refresh after only confirms them:
+    // the counts believe the server over a list it disagrees with (getStudioCreationCounts), and
+    // drew the old total, with no kind numbers, until the refresh landed, or for good when it failed.
+    const moveHeldCreationsTotal = useCallback((delta: number) => {
+        const moved = (current: ProfileApiResponse | null) => (current?.stats
+            ? { ...current, stats: { ...current.stats, creations: Math.max(0, current.stats.creations + delta) } }
+            : current);
+        profileRef.current = moved(profileRef.current);
+        setProfile(moved);
+    }, []);
+
     const dropGeneration = useCallback((generationId: string) => {
+        const dropped = generationsRef.current.find((generation) => generation.id === generationId);
+        if (dropped && !dropped.archived_at && isFinishedCreation(dropped)) {
+            moveHeldCreationsTotal(-1);
+        }
         const nextGenerations = generationsRef.current.filter((generation) => generation.id !== generationId);
         generationsRef.current = nextGenerations;
         setGenerations(nextGenerations);
@@ -747,8 +817,30 @@ export default function CreationsPage() {
             generations: nextGenerations,
             posts: postsRef.current,
             profile: profileRef.current,
+            generationsComplete: generationsCompleteRef.current,
         });
-    }, [userId]);
+    }, [moveHeldCreationsTotal, userId]);
+
+    // Archived or restored on the server, so here too: the refresh that follows rereads only the
+    // first page, and keeps a later page's rows as they were (mergeGenerationRefresh), so a row
+    // from one would otherwise stay in its old section, and in the counts.
+    const setGenerationArchivedAt = useCallback((generationId: string, archivedAt: string | null) => {
+        const changed = generationsRef.current.find((generation) => generation.id === generationId);
+        if (changed && isFinishedCreation(changed) && Boolean(changed.archived_at) !== Boolean(archivedAt)) {
+            moveHeldCreationsTotal(archivedAt ? -1 : 1);
+        }
+        const nextGenerations = generationsRef.current.map((generation) => (
+            generation.id === generationId ? { ...generation, archived_at: archivedAt } : generation
+        ));
+        generationsRef.current = nextGenerations;
+        setGenerations(nextGenerations);
+        writeCreationsWorkspaceCache(userId, {
+            generations: nextGenerations,
+            posts: postsRef.current,
+            profile: profileRef.current,
+            generationsComplete: generationsCompleteRef.current,
+        });
+    }, [moveHeldCreationsTotal, userId]);
 
     // A name and handle given on the way to making a post public: the
     // profile this page holds shows them from then on.
@@ -796,8 +888,10 @@ export default function CreationsPage() {
         setGenerations(cachedWorkspace.generations);
         setPosts(cachedWorkspace.posts);
         setProfile(cachedWorkspace.profile);
+        setGenerationsComplete(cachedWorkspace.generationsComplete);
+        setGenerationsAnswered(true);
         setIsLoading(false);
-    }, [userId]);
+    }, [setGenerationsComplete, userId]);
 
     const fetchCreations = useCallback(async () => {
         if (!accessToken || !userId) {
@@ -841,7 +935,9 @@ export default function CreationsPage() {
                 if (!keepsLaterPages) {
                     loadedGenerationPagesRef.current = 1;
                     setGenerationsNextCursor(freshCursor);
+                    setGenerationsComplete(freshCursor === null);
                 }
+                setGenerationsAnswered(true);
                 setGenerationsLoadMoreError(null);
             } else {
                 setLoadError('Could not load your creations. Check your connection and try again.');
@@ -872,6 +968,7 @@ export default function CreationsPage() {
                     generations: nextGenerations,
                     posts: nextPosts,
                     profile: nextProfile,
+                    generationsComplete: generationsCompleteRef.current,
                 });
             }
         } catch (err) {
@@ -881,7 +978,7 @@ export default function CreationsPage() {
         } finally {
             setIsLoading(false);
         }
-    }, [accessToken, redirectToSignIn, userId]);
+    }, [accessToken, redirectToSignIn, setGenerationsComplete, userId]);
 
     const loadMoreGenerations = useCallback(async () => {
         if (!accessToken || !userId) {
@@ -889,41 +986,53 @@ export default function CreationsPage() {
             return;
         }
 
-        if (!generationsNextCursor || isLoadingMoreGenerations) {
+        // A delete under way moves the cursor this would ask from (handleGenerationDelete).
+        if (!generationsNextCursor || isLoadingMoreGenerations || deletesInFlightRef.current > 0) {
             return;
         }
 
         setIsLoadingMoreGenerations(true);
         setGenerationsLoadMoreError(null);
 
-        try {
-            const response = await fetch(buildGenerationsPageUrl(generationsNextCursor), {
-                headers: { 'Authorization': `Bearer ${accessToken}` },
-            });
-            const data = await response.json() as GenerationsApiResponse;
+        const load = (async () => {
+            try {
+                const response = await fetch(buildGenerationsPageUrl(generationsNextCursor), {
+                    headers: { 'Authorization': `Bearer ${accessToken}` },
+                });
+                const data = await response.json() as GenerationsApiResponse;
 
-            if (!response.ok) {
-                throw new Error('Failed to load more creations.');
+                if (!response.ok) {
+                    throw new Error('Failed to load more creations.');
+                }
+
+                const loadedGenerations = Array.isArray(data.generations) ? data.generations : [];
+                const nextGenerations = mergeGenerationAppend(generationsRef.current, loadedGenerations);
+                const nextCursor = getNextGenerationCursor(data);
+                generationsRef.current = nextGenerations;
+                loadedGenerationPagesRef.current += 1;
+                setGenerations(nextGenerations);
+                setGenerationsNextCursor(nextCursor);
+                setGenerationsComplete(nextCursor === null);
+                writeCreationsWorkspaceCache(userId, {
+                    generations: nextGenerations,
+                    posts: postsRef.current,
+                    profile: profileRef.current,
+                    generationsComplete: generationsCompleteRef.current,
+                });
+            } catch (error) {
+                console.error('Failed to load more creations:', error);
+                setGenerationsLoadMoreError(error instanceof Error ? error.message : 'Failed to load more creations.');
+            } finally {
+                setIsLoadingMoreGenerations(false);
             }
-
-            const loadedGenerations = Array.isArray(data.generations) ? data.generations : [];
-            const nextGenerations = mergeGenerationAppend(generationsRef.current, loadedGenerations);
-            generationsRef.current = nextGenerations;
-            loadedGenerationPagesRef.current += 1;
-            setGenerations(nextGenerations);
-            setGenerationsNextCursor(getNextGenerationCursor(data));
-            writeCreationsWorkspaceCache(userId, {
-                generations: nextGenerations,
-                posts,
-                profile,
-            });
-        } catch (error) {
-            console.error('Failed to load more creations:', error);
-            setGenerationsLoadMoreError(error instanceof Error ? error.message : 'Failed to load more creations.');
+        })();
+        loadMoreInFlightRef.current = load;
+        try {
+            await load;
         } finally {
-            setIsLoadingMoreGenerations(false);
+            if (loadMoreInFlightRef.current === load) loadMoreInFlightRef.current = null;
         }
-    }, [accessToken, generationsNextCursor, isLoadingMoreGenerations, posts, profile, redirectToSignIn, userId]);
+    }, [accessToken, generationsNextCursor, isLoadingMoreGenerations, redirectToSignIn, setGenerationsComplete, userId]);
 
     const refreshProcessingGenerationStatuses = useCallback(async () => {
         if (!accessToken || generationStatusRefreshInFlightRef.current) return;
@@ -1001,6 +1110,7 @@ export default function CreationsPage() {
                 generations: generationsRef.current,
                 posts: nextPosts,
                 profile,
+                generationsComplete: generationsCompleteRef.current,
             });
         } catch (error) {
             console.error('Failed to load more posts:', error);
@@ -1017,6 +1127,7 @@ export default function CreationsPage() {
             generations: nextGenerations,
             posts,
             profile,
+            generationsComplete: generationsCompleteRef.current,
         });
     }, [posts, profile, userId]);
 
@@ -1340,6 +1451,7 @@ export default function CreationsPage() {
                 throw new Error(data.error || 'Failed to archive creation.');
             }
 
+            setGenerationArchivedAt(generationId, new Date().toISOString());
             await fetchCreations();
         } catch (error) {
             console.error('Failed to archive creation:', error);
@@ -1365,6 +1477,7 @@ export default function CreationsPage() {
                 throw new Error(data.error || 'Failed to restore creation.');
             }
 
+            setGenerationArchivedAt(generationId, null);
             await fetchCreations();
         } catch (error) {
             console.error('Failed to restore creation:', error);
@@ -1388,27 +1501,39 @@ export default function CreationsPage() {
             return;
         }
 
+        // A Load more under way lands first: the cursor it sets is the one this delete steps back.
+        await loadMoreInFlightRef.current;
+        deletesInFlightRef.current += 1;
+        setDeletesInFlight((count) => count + 1);
         try {
-            const response = await fetch(`/api/generations/${generationId}`, {
-                method: 'DELETE',
-                headers: {
-                    Authorization: `Bearer ${session.access_token}`,
-                },
-            });
-            const data = await response.json();
-            if (!response.ok || !data.success) {
-                throw new Error(data.error || 'Failed to delete creation.');
+            try {
+                const response = await fetch(`/api/generations/${generationId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        Authorization: `Bearer ${session.access_token}`,
+                    },
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Failed to delete creation.');
+                }
+            } catch (error) {
+                console.error('Failed to delete creation:', error);
+                pushToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not delete the creation.' });
+                return;
             }
-        } catch (error) {
-            console.error('Failed to delete creation:', error);
-            pushToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not delete the creation.' });
-            return;
-        }
 
-        // Gone on the server, so gone here: from the grid, from the snapshot a
-        // reload draws first, and from an open preview, whatever the refresh
-        // below brings back.
-        dropGeneration(generationId);
+            // Gone on the server, so gone here: from the grid, from the snapshot a
+            // reload draws first, and from an open preview, whatever the refresh
+            // below brings back.
+            dropGeneration(generationId);
+            // The list's cursor counts rows, and this one sat before it: with it gone, the next page
+            // starts a row earlier, or Load more would skip the row that moved up into its place.
+            setGenerationsNextCursor(stepGenerationsCursorBack);
+        } finally {
+            deletesInFlightRef.current -= 1;
+            setDeletesInFlight((count) => count - 1);
+        }
         deletedGenerationIdsRef.current.add(generationId);
         setPreviewGen((current) => (current?.id === generationId ? null : current));
         // Only while Studio is the page: one the reader went on to may name it too.
@@ -1818,7 +1943,7 @@ export default function CreationsPage() {
     // A creation whose only source is gone keeps its place in the grid with an
     // explicit note: the API withholds its address, so `output_url` alone
     // would silently hide it, which reads as deletion.
-    const successfulGenerations = activeGenerations.filter(g => g.status === 'succeeded' && (g.output_url || g.source_unavailable_at));
+    const successfulGenerations = activeGenerations.filter(isFinishedCreation);
     const processingGenerations = activeGenerations.filter(g => isActiveGenerationStatus(g.status));
     const failedGenerations = activeGenerations.filter(g => g.status === 'failed');
 
@@ -1830,9 +1955,24 @@ export default function CreationsPage() {
         return true;
     });
 
-    const imageCount = successfulGenerations.filter(g => getMediaKind(g) === 'image').length;
-    const videoCount = successfulGenerations.filter(g => getMediaKind(g) === 'video').length;
-    const audioCount = successfulGenerations.filter(g => getMediaKind(g) === 'audio').length;
+    const loadedCreationCounts = {
+        all: successfulGenerations.length,
+        images: successfulGenerations.filter(g => getMediaKind(g) === 'image').length,
+        videos: successfulGenerations.filter(g => getMediaKind(g) === 'video').length,
+        audio: successfulGenerations.filter(g => getMediaKind(g) === 'audio').length,
+    };
+    // The header's total and the filters' numbers, by one rule so they agree (creation-workspace.ts).
+    const creationCounts = getStudioCreationCounts({
+        loaded: loadedCreationCounts,
+        listAnswered: generationsAnswered,
+        listComplete: generationsComplete,
+        serverTotal: profile?.stats?.creations ?? null,
+    });
+    // "—" until something has answered, as the profile draws a count it does not know: never 0.
+    // A screen reader hears "Counting" in its place.
+    const creationTotalLabel = creationCounts.total === null
+        ? <><span aria-hidden="true">—</span><span className="sr-only">Counting</span></>
+        : `${creationCounts.total}${creationCounts.totalIsAtLeast ? '+' : ''}`;
     const visiblePosts = useMemo(() => {
         if (postVisibilityFilter === 'archived') {
             return posts.filter((post) => Boolean(post.archivedAt));
@@ -1870,6 +2010,20 @@ export default function CreationsPage() {
         successfulGenerations.length === 0 ||
         activePortfolioPostCount === 0 ||
         isProfileIncomplete
+    );
+    // The setup card's line under its title and its way to the portfolio, drawn in one of two
+    // places by the width (the card's comment below).
+    const portfolioSetupDetail = hasPortfolioProof
+        ? 'Your creation and public proof are in place. Add the remaining identity details so visitors and buyers know who is behind the work.'
+        : 'New creators have three jobs here: shape the profile, create proof, then publish the strongest result with an optional recipe.';
+    const renderPortfolioLink = (className: string) => (
+        <Link
+            href={publicProfileUsername ? `/creators/${publicProfileUsername}` : '/profile'}
+            className={`inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08] ${className}`}
+        >
+            <ExternalLink className="h-4 w-4" />
+            {publicProfileUsername ? 'View portfolio' : 'Preview profile setup'}
+        </Link>
     );
 
     // One colour per meaning, shared with the visibility menu: sky is public,
@@ -1919,33 +2073,42 @@ export default function CreationsPage() {
                 className="hidden"
                 onChange={(event) => void handlePreviewRestoreFile(event)}
             />
-            <div className="studio-shell relative z-10 py-8">
+            {/* Below 640px (sm) everything above the grid is drawn tighter, so the first creations
+                show in a phone's first screen: the header, the section tabs and the setup card used to
+                fill it (live sweep, 2026-11-17, 375 × 812). From 640px it is as it was. */}
+            <div className="studio-shell relative z-10 py-6 sm:py-8">
                 {/* Header. Generate and Post are the top bar's Create menu, and
                     Profile is in the navigation. */}
-                <div className="mb-8">
+                <div className="mb-5 sm:mb-8">
                     <h1 className="text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)]">
                         Studio
                     </h1>
                     <p className="text-sm text-zinc-500 font-medium tracking-wide">
                         {activeView === 'creations'
-                            ? `${profile?.stats?.creations ?? `${successfulGenerations.length}${generationsNextCursor ? '+' : ''}`} CREATION${(profile?.stats?.creations ?? successfulGenerations.length) !== 1 ? 'S' : ''} TOTAL`
+                            ? <>{creationTotalLabel} CREATION{creationCounts.total !== 1 ? 'S' : ''} TOTAL</>
                             : activeView === 'posts'
                                 ? `${activePostCount} POST${activePostCount !== 1 ? 'S' : ''}${archivedPostCount > 0 ? ` · ${archivedPostCount} ARCHIVED` : ''}`
                                 : 'UNLOCKED RECIPES'}
                     </p>
                 </div>
 
-                <div className="mb-6 flex flex-wrap items-center gap-3">
+                <div className="mb-5 sm:mb-6 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
                     {/* Links, not buttons: each section has its own URL, so the
-                        browser's history and a shared link both know which one. */}
-                    <nav aria-label="Studio sections" className="flex flex-wrap items-center gap-3">
+                        browser's history and a shared link both know which one.
+                        On a phone they keep to one row, which scrolls to the screen's
+                        edges where it is too narrow, with room kept for the focus ring
+                        (as `.home-shelf-track`); they wrapped onto two lines. */}
+                    <nav
+                        aria-label="Studio sections"
+                        className="hide-scrollbar -mx-4 -my-1 flex items-center gap-2 overflow-x-auto px-4 py-1 sm:mx-0 sm:my-0 sm:flex-wrap sm:gap-3 sm:overflow-visible sm:px-0 sm:py-0"
+                    >
                         {WORKSPACE_TABS.map((tab) => (
                             <Link
                                 key={tab.key}
                                 href={buildWorkspacePath(tab.key, postVisibilityFilter, filter)}
                                 scroll={false}
                                 aria-current={activeView === tab.key ? 'page' : undefined}
-                                className={`ui-focus-ring rounded-full border px-4 py-2.5 text-sm font-semibold transition ${
+                                className={`ui-focus-ring shrink-0 whitespace-nowrap rounded-full border px-4 py-2.5 text-sm font-semibold transition ${
                                     activeView === tab.key
                                         ? 'border-white/20 bg-white/10 text-white'
                                         : 'border-white/8 bg-zinc-900/50 text-zinc-400 hover:border-white/14 hover:bg-zinc-800 hover:text-zinc-200'
@@ -1955,7 +2118,8 @@ export default function CreationsPage() {
                             </Link>
                         ))}
                     </nav>
-                    <div className="text-sm text-zinc-500">
+                    {/* What the open section holds: the tabs say enough on a phone. */}
+                    <div className="hidden text-sm text-zinc-500 sm:block">
                         {WORKSPACE_TABS.find((tab) => tab.key === activeView)?.lede}
                     </div>
                 </div>
@@ -1969,42 +2133,61 @@ export default function CreationsPage() {
                 {activeView === 'unlocks' ? <UnlockLibrary /> : null}
 
                 {shouldShowPortfolioStarter ? (
-                    <section className="mb-8 rounded-3xl border border-[rgba(255,122,89,0.2)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
-                        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+                    // On a phone the card is its title and its first step, with the rest behind
+                    // Steps, which opens it below itself: the line under the title and the
+                    // portfolio come after the button there, so the button stays under the finger
+                    // and a screen reader meets them next. From 640px the card shows everything
+                    // where it always stood, with no disclosure.
+                    <section
+                        aria-labelledby={PORTFOLIO_SETUP_LABEL_ID}
+                        className="mb-5 rounded-3xl border border-[rgba(255,122,89,0.2)] bg-[var(--ui-surface-1)] p-4 shadow-[var(--ui-shadow-panel)] sm:mb-8 sm:p-6"
+                    >
+                        <div className="flex flex-col gap-4 sm:gap-5 lg:flex-row lg:items-center lg:justify-between">
                             <div>
-                                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-300">
+                                <div id={PORTFOLIO_SETUP_LABEL_ID} className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-300">
                                     <UserRound className="h-3.5 w-3.5 text-[var(--ui-primary)]" />
                                     Portfolio setup
                                 </div>
-                                <h2 className="mt-4 max-w-2xl text-2xl font-semibold tracking-tight text-white">
+                                <h2 className="mt-3 max-w-2xl text-lg font-semibold tracking-tight text-white sm:mt-4 sm:text-2xl">
                                     {hasPortfolioProof
                                         ? 'Finish the profile behind your published work.'
                                         : 'Turn the first output into a profile-ready portfolio piece.'}
                                 </h2>
-                                <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-300">
-                                    {hasPortfolioProof
-                                        ? 'Your creation and public proof are in place. Add the remaining identity details so visitors and buyers know who is behind the work.'
-                                        : 'New creators have three jobs here: shape the profile, create proof, then publish the strongest result with an optional recipe.'}
+                                <p className="mt-3 max-w-3xl text-sm leading-6 text-zinc-300 max-sm:hidden">
+                                    {portfolioSetupDetail}
                                 </p>
                             </div>
-                            <div className="flex flex-col gap-2 sm:flex-row lg:justify-end">
+                            <div className="flex flex-wrap gap-2 sm:flex-nowrap lg:justify-end">
                                 <Link
                                     href={profileSetupHref}
-                                    className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200"
+                                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 sm:flex-initial"
                                 >
                                     <UserRound className="h-4 w-4" />
                                     {profileReadiness.publicPublishReady ? 'Complete profile' : 'Set up profile'}
                                 </Link>
-                                <Link
-                                    href={publicProfileUsername ? `/creators/${publicProfileUsername}` : '/profile'}
-                                    className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08]"
-                                >
-                                    <ExternalLink className="h-4 w-4" />
-                                    {publicProfileUsername ? 'View portfolio' : 'Preview profile setup'}
-                                </Link>
+                                {/* A wrapper hides it from 640px: `.ui-button`'s display is unlayered, and outranks `sm:hidden`. */}
+                                <div className="sm:hidden">
+                                    <Button
+                                        variant="secondary"
+                                        icon={setupStepsShown ? ChevronUp : ChevronDown}
+                                        ariaExpanded={setupStepsShown}
+                                        ariaControls={`${PORTFOLIO_SETUP_MORE_ID} ${PORTFOLIO_SETUP_STEPS_ID}`}
+                                        onClick={() => setSetupStepsShown((shown) => !shown)}
+                                    >
+                                        Steps
+                                    </Button>
+                                </div>
+                                {renderPortfolioLink('max-sm:hidden')}
                             </div>
                         </div>
-                        <div className="mt-5 grid gap-3 md:grid-cols-3">
+                        <div id={PORTFOLIO_SETUP_MORE_ID} className={`mt-4 sm:hidden ${setupStepsShown ? '' : 'hidden'}`}>
+                            <p className="text-sm leading-6 text-zinc-300">{portfolioSetupDetail}</p>
+                            {renderPortfolioLink('mt-3 w-full')}
+                        </div>
+                        <div
+                            id={PORTFOLIO_SETUP_STEPS_ID}
+                            className={`mt-5 grid gap-3 md:grid-cols-3 ${setupStepsShown ? '' : 'max-sm:hidden'}`}
+                        >
                             {[
                                 {
                                     title: profileReadiness.profileComplete
@@ -2053,11 +2236,8 @@ export default function CreationsPage() {
 
                 {/* Filter Tabs */}
                 {activeView === 'creations' && !isLoading && successfulGenerations.length > 0 && (
-                    <div className="mb-8 flex gap-2 overflow-x-auto pb-1">
-                        {getCreationMediaFilters(
-                            { all: successfulGenerations.length, images: imageCount, videos: videoCount, audio: audioCount },
-                            filter,
-                        ).map(tab => (
+                    <div className="mb-5 flex gap-2 overflow-x-auto pb-1 sm:mb-8">
+                        {getCreationMediaFilters(loadedCreationCounts, filter, creationCounts.filterTotals).map(tab => (
                             // As the post filters below: a refinement of the section, so it
                             // replaces the history entry, and Back and a refresh keep it.
                             <Link
@@ -2206,19 +2386,21 @@ export default function CreationsPage() {
                 {/* Processing */}
                 {activeView === 'creations' && processingGenerations.length > 0 && (
                     <div className="mb-10">
-                        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                        {/* On a phone one row, the heading and Refresh now, so the runs come into
+                            the first screen; each card says when it started. */}
+                        <div className="mb-4 flex items-center justify-between gap-2 sm:items-end">
                             <div>
                                 <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-yellow-400/80">
                                     <Loader2 className="h-4 w-4 animate-spin" /> Processing ({processingGenerations.length})
                                 </h2>
-                                <p className="mt-2 max-w-2xl text-sm text-zinc-500">
+                                <p className="mt-2 hidden max-w-2xl text-sm text-zinc-500 sm:block">
                                     Longer provider queues keep running in the background. Each card shows when the run started, and finished outputs move into Completed automatically.
                                 </p>
                             </div>
                             <button
                                 type="button"
                                 onClick={() => void fetchCreations()}
-                                className="inline-flex items-center gap-2 self-start rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                                className="inline-flex shrink-0 items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-200 transition hover:bg-white/[0.08] hover:text-white sm:self-start"
                             >
                                 <Loader2 className="h-3.5 w-3.5" />
                                 Refresh now
@@ -2655,7 +2837,7 @@ export default function CreationsPage() {
                         <button
                             type="button"
                             onClick={() => void loadMoreGenerations()}
-                            disabled={isLoadingMoreGenerations}
+                            disabled={isLoadingMoreGenerations || deletesInFlight > 0}
                             className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                             {isLoadingMoreGenerations ? (

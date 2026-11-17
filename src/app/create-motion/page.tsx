@@ -1,6 +1,7 @@
 import { RequestHintedOptionalAuth, RequireAuth } from '@/components/RouteAuthBoundary';
 import type { CreatorOpening } from '@/lib/creator-opening';
 import { loadCreatorOpening, loadCreatorStartPostsForRequest, loadVisitorWelcomeCredits, readCreatorReturn } from '@/lib/creator-page-server';
+import { loadTemplatesLive } from '@/lib/live-media-templates';
 
 import CreateMotionClient, { type CreateMotionPrefill } from './CreateMotionClient';
 
@@ -34,7 +35,10 @@ export default async function CreateMotionPage({
   // The shelf's posts, for the empty canvas (owner, 2026-10-28): left unawaited, so the
   // creator draws without waiting on them. A remix opens on its own post instead.
   const startPosts = prefill.remixId ? null : loadCreatorStartPostsForRequest();
-  const client = (visitorWelcomeCredits: number | null, opening: CreatorOpening | null) => (
+  // Whether /templates lists anything, from the creators' shared cache: the ways into it are drawn
+  // only then, so a reader is never sent to an empty catalog.
+  const templatesLiveRead = loadTemplatesLive();
+  const client = (visitorWelcomeCredits: number | null, opening: CreatorOpening | null, templatesLive: boolean) => (
     <CreateMotionClient
       // A Remix from this page lands on the same route, which keeps the client: a
       // new remix starts a new one, so it loads as a remix opened anywhere else does.
@@ -46,6 +50,7 @@ export default async function CreateMotionPage({
       visitorWelcomeCredits={visitorWelcomeCredits}
       opening={opening}
       startPosts={startPosts}
+      templatesLive={templatesLive}
     />
   );
 
@@ -53,10 +58,11 @@ export default async function CreateMotionPage({
   // else), so a signed-out remix signs in first and comes back to it. Everything
   // else works signed out up to Generate, which asks for an account. A remix
   // opens on its own run, which the page reads once it is in.
-  if (prefill.remixId) return <RequireAuth returnTo={returnTo}>{client(null, null)}</RequireAuth>;
-  const [visitorWelcomeCredits, opening] = await Promise.all([
+  if (prefill.remixId) return <RequireAuth returnTo={returnTo}>{client(null, null, await templatesLiveRead)}</RequireAuth>;
+  const [visitorWelcomeCredits, opening, templatesLive] = await Promise.all([
     loadVisitorWelcomeCredits(),
     loadCreatorOpening('motion', prefill),
+    templatesLiveRead,
   ]);
-  return <RequestHintedOptionalAuth>{client(visitorWelcomeCredits, opening)}</RequestHintedOptionalAuth>;
+  return <RequestHintedOptionalAuth>{client(visitorWelcomeCredits, opening, templatesLive)}</RequestHintedOptionalAuth>;
 }

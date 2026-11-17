@@ -196,8 +196,23 @@ describe('E2E smoke job', () => {
     expect(start).toBeGreaterThan(run);
     expect(upload).toContain('if: ${{ failure() }}');
     expect(upload).toContain('path: test-results/');
-    // A second attempt of the same run must not collide with the first one's upload.
-    expect(upload).toContain('name: e2e-test-results-attempt-${{ github.run_attempt }}');
+    // Neither the other shard's upload nor a second attempt of the same run may collide with it.
+    expect(upload).toContain('name: e2e-test-results-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}');
+  });
+
+  // One runner's dev server, compiling every route for about 55 minutes, restarted on its memory
+  // threshold once or twice a run and failed the test in flight (2026-11-17). Two shards, each a runner
+  // with a server of its own, take half the routes and half the time; neither cancels the other.
+  it('splits the suite across two runners that run every shard to the end', () => {
+    const workflow = read('.github/workflows/quality.yml');
+    const start = workflow.indexOf('\n  e2e:');
+    // The job, up to the job that follows it.
+    const job = workflow.slice(start, workflow.indexOf('\n  mobile:', start));
+
+    expect(start).toBeGreaterThan(-1);
+    expect(job).toContain('name: E2E smoke (${{ matrix.shard }}/2)');
+    expect(job).toMatch(/strategy:\n\s+fail-fast: false\n\s+matrix:\n\s+shard: \[1, 2\]/);
+    expect(job).toContain('run: npm run test:e2e -- --shard=${{ matrix.shard }}/2');
   });
 
   // The dev server answers the server-side Supabase reads of the pages specs draw (the creator

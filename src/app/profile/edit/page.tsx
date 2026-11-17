@@ -1,9 +1,18 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowLeft, Sparkles } from 'lucide-react';
+
+import { createNoIndexMetadata } from '@/lib/seo';
 
 import DeferredCreatorProfileCard from '../DeferredCreatorProfileCard';
 import { loadOwnerProfile } from '../load-owner-profile';
 import ConnectedApps from './ConnectedApps';
+
+/** The tab says what the page's heading says, not its layout's "Profile". */
+export const metadata: Metadata = createNoIndexMetadata(
+  'Edit profile',
+  'Edit your Magic Booklet creator name, handle, photo, bio and links, and the apps connected to your account.'
+);
 
 export default async function EditProfilePage() {
   const { initialProfile, loadError } = await loadOwnerProfile('/profile/edit');

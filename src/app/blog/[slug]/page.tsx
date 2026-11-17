@@ -21,8 +21,10 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
         );
 
         return createMetadata({
+            // `seoTitle` picks the words search shows; the brand follows them as on every
+            // other page. Passed as an absolute title, it took the brand off the two posts
+            // that set it, though each repeats its title word for word (web sweep, 2026-11-17).
             title: post.seoTitle ?? post.title,
-            absoluteTitle: post.seoTitle,
             description: post.seoDescription ?? post.excerpt,
             path: `/blog/${resolvedParams.slug}`,
             // null hands the card to `opengraph-image.tsx` for this route.

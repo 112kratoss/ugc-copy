@@ -31,48 +31,55 @@ function LinePlaceholder({ lineClassName, barClassName }: { lineClassName: strin
  * The wait draws Explore's own outline with no words (owner, 2026-11-14: the
  * shared tab card's "Community" and "Loading Explore" were not needed). Each
  * box repeats the page's own (ShowcaseBootstrapClient, then ShowcaseClient):
- * the header with its eyebrow, title and two-to-three-line blurb at their
- * line heights and the "Browse recipes" pill (under the text below 1024px),
- * the filter bar's two rows below 1024px and one above, and cards of a 4:5
- * picture over a title and byline, so the page lands where its placeholders
- * stood at every width. The status region keeps the tab's name for screen
- * readers in a hidden line, which is what a live region reads out.
+ * from 640px the header with its eyebrow, title and two-line blurb at their
+ * line heights and the "Browse recipes" pill (under the text below 1024px);
+ * below 640px no header, the pill beside the search bar instead; the filter
+ * bar's two rows below 1024px and one above, and cards of a 4:5 picture over
+ * a title and byline, so the page lands where its placeholders stood at every
+ * width. The status region keeps the tab's name for screen readers in a
+ * hidden line, which is what a live region reads out.
  */
 export default function ShowcaseLoading() {
   return (
-    <div className="ui-page ui-page-ambient min-h-screen py-5 sm:py-7">
+    <div className="ui-page ui-page-ambient min-h-screen pt-3 pb-5 sm:py-7">
       <ReelHostMark />
       <section role="status" aria-live="polite" aria-label="Loading Explore" className="studio-shell relative z-10">
         <span className="sr-only">Loading Explore</span>
         {/* Explore opens on its search bar below 1024px: the loading state draws it
-            too, so the bar does not arrive with the page and push it down. */}
-        <SearchEntryLink className="mb-5 lg:hidden" />
+            too, so the bar does not arrive with the page and push it down. Below
+            640px "Browse recipes" shares its row. */}
+        <div className="mb-3 flex items-center gap-2 sm:mb-5 lg:hidden">
+          <SearchEntryLink className="min-w-0 flex-1" />
+          <SkeletonBlock className="h-12 w-36 shrink-0 sm:hidden" />
+        </div>
 
-        <div className="mb-7 flex flex-col gap-5 border-b border-[var(--ui-border-subtle)] pb-7 lg:flex-row lg:items-end lg:justify-between">
+        <div className="mb-7 hidden flex-col gap-5 border-b border-[var(--ui-border-subtle)] pb-7 sm:flex lg:flex-row lg:items-end lg:justify-between">
           <div className="min-w-0 flex-1">
             {/* Eyebrow: an inline-flex text-xs row, which the page's 16px/1.5 text sets in
                 a 21px line box (measured, 2026-11-14). */}
             <LinePlaceholder lineClassName="mb-3 h-[21px]" barClassName="h-3 w-40" />
             {/* Title: text-4xl (40px line), sm:text-5xl (48px line). */}
             <LinePlaceholder lineClassName="h-10 sm:h-12" barClassName="h-8 w-44 sm:h-10 sm:w-52" />
-            {/* Blurb: 24px lines, three on a phone and two from 640px. */}
+            {/* Blurb: 24px lines, two from 640px (the header is not drawn below it). */}
             <div className="mt-3 max-w-2xl">
               <LinePlaceholder lineClassName="h-6" barClassName="h-3.5 w-full" />
-              <LinePlaceholder lineClassName="h-6" barClassName="h-3.5 w-full sm:w-3/4" />
-              <LinePlaceholder lineClassName="h-6 sm:hidden" barClassName="h-3.5 w-1/2" />
+              <LinePlaceholder lineClassName="h-6" barClassName="h-3.5 w-3/4" />
             </div>
           </div>
           {/* "Browse recipes". */}
           <SkeletonBlock className="h-12 w-40 shrink-0" />
         </div>
 
-        <div className="mb-7 rounded-4xl border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-3 sm:p-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            {/* Media type: All posts, Images, Videos. */}
+        <div
+          data-explore-filter-bar=""
+          className="mb-3 rounded-4xl border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-2 sm:mb-7 sm:p-4"
+        >
+          <div className="flex flex-col gap-2 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
+            {/* Media type: All posts, Images, Videos (44px chips on a phone). */}
             <div className="flex gap-2 pb-1 sm:pb-0">
-              <SkeletonBlock className="h-12 w-24" />
-              <SkeletonBlock className="h-12 w-24" />
-              <SkeletonBlock className="h-12 w-24" />
+              <SkeletonBlock className="h-11 w-24 sm:h-12" />
+              <SkeletonBlock className="h-11 w-24 sm:h-12" />
+              <SkeletonBlock className="h-11 w-24 sm:h-12" />
             </div>
             {/* Sort (and Filters once the full page runs). */}
             <div className="flex gap-2">

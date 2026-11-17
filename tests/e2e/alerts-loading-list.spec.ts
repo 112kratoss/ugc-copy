@@ -109,12 +109,15 @@ type Frame = {
   rowTops: number[];
   signInCard: boolean;
   markAll: 'none' | 'enabled' | 'disabled';
+  /** The parser is past the page: the shell's bottom navigation, drawn after `#main-content`, exists. */
+  parsed: boolean;
 };
 
 /**
  * Records, from the document's first frame, every frame whose drawing of Alerts differs from the
- * last: the header's height and subtitle, the rows of the list and of its placeholder, and Mark all
- * read. A row of the list is an alert's button; a placeholder's row is marked for this reading.
+ * last: the header's height and subtitle, the rows of the list and of its placeholder, Mark all
+ * read, and whether the parser has passed the page yet. A row of the list is an alert's button; a
+ * placeholder's row is marked for this reading.
  */
 const RECORDER = `(() => {
   const frames = [];
@@ -142,6 +145,7 @@ const RECORDER = `(() => {
         signInCard: [...document.querySelectorAll('#main-content h3')]
           .some((title) => title.textContent.trim() === 'Sign in required' && drawn(title)),
         markAll: markAll ? (markAll.disabled ? 'disabled' : 'enabled') : 'none',
+        parsed: Boolean(document.querySelector('nav.app-shell-bottom-nav')),
       };
       const key = JSON.stringify(frame);
       if (key !== last) {
@@ -179,8 +183,15 @@ async function resetRecording(page: Page) {
   });
 }
 
-/** What the frames say once the list is drawn, and every frame from the page's first. */
-function expectListArrivedInPlace(frames: Frame[]) {
+/**
+ * What the frames say once the list is drawn, and every frame from the page's first. A full load
+ * can paint while the parser is still inside the page's HTML: on CI on 2026-11-17 a frame at 85 ms
+ * held the heading without the subtitle or the list after it. Such a frame shows how far the
+ * parser had read, not what the page draws, so frames count from the first one painted after the
+ * parser passed `#main-content`. A click draws every frame from a parsed document.
+ */
+function expectListArrivedInPlace(recorded: Frame[]) {
+  const frames = recorded.filter((frame) => frame.parsed);
   expect(frames.length, 'the page was drawn').toBeGreaterThan(0);
   const final = frames[frames.length - 1];
   expect(final.rows, JSON.stringify(final)).toBe(6);

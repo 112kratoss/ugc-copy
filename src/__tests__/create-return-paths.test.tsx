@@ -10,6 +10,12 @@ const state = vi.hoisted(() => ({
   hasAuthHint: false,
   clientProps: {} as Record<string, Record<string, unknown>>,
   mounts: {} as Record<string, number>,
+  /** What the pages' read of the catalog answers (its own failures answer no: live-media-templates.test.ts). */
+  templatesLive: false,
+}));
+
+vi.mock('@/lib/live-media-templates', () => ({
+  loadTemplatesLive: async () => state.templatesLive,
 }));
 
 vi.mock('@/components/RouteAuthBoundary', () => ({
@@ -79,6 +85,24 @@ describe('creator auth return paths', () => {
     state.hasAuthHint = false;
     state.clientProps = {};
     state.mounts = {};
+    state.templatesLive = false;
+  });
+
+  // The creators' ways into /templates led to "No templates are live yet" (web sweep, 2026-11-17).
+  it('tells each creator whether a template is live, a remix too', async () => {
+    const pages = [['image', CreateImagePage], ['video', CreateVideoPage], ['motion', CreateMotionPage]] as const;
+    const addresses = [{}, { remix: 'gen-1', remixPost: 'post-1' }];
+    for (const templatesLive of [true, false]) {
+      state.templatesLive = templatesLive;
+      for (const [kind, Page] of pages) {
+        for (const params of addresses) {
+          state.clientProps = {};
+          render(await Page({ searchParams: Promise.resolve(params) }));
+          expect(state.clientProps[kind], `${kind} ${JSON.stringify(params)}`).toMatchObject({ templatesLive });
+          cleanup();
+        }
+      }
+    }
   });
 
   it('carries the remix pair through sign-in on every media tool', async () => {
