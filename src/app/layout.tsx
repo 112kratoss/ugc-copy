@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import { Geist } from "next/font/google";
 import Script from "next/script";
 import { Suspense } from "react";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 
+import { geistSans } from "@/lib/geist-font";
 import { siteConfig } from "@/lib/seo";
 import { TYPED_BEFORE_HYDRATION_CAPTURE } from "@/lib/typed-before-hydration";
 import { buildAppShellAccountRestore } from "@/lib/app-shell-account-restore";
@@ -21,15 +21,6 @@ import FeedbackViewport from "@/components/FeedbackViewport";
 import NavigationProgress from "@/components/NavigationProgress";
 import ReelOpeningCover from "@/components/ReelOpeningCover";
 import AddressFirstPaintRelease from "@/components/AddressFirstPaintRelease";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-  // Slow first visits can keep the metric-compatible fallback instead of
-  // repainting the page when the custom font arrives.
-  display: "optional",
-  preload: false,
-});
 
 function getSpeedInsightsSampleRate(): number {
   const configured = Number(process.env.NEXT_PUBLIC_SPEED_INSIGHTS_SAMPLE_RATE ?? '1');
