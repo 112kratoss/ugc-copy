@@ -373,8 +373,8 @@ The app's one sign-in page (`ugc-mobile/components/sign-in-wall.tsx`, #731) on t
 
   Each page names its own steps heading, so the pages don't read as duplicates.
 - **Also on the public sheet:** `/models`, `/blog`, `/alternatives` and the legal pages. All are public, so they stay on `globals.css`.
-  - A cost table keeps every column in sight on a phone (sweep of 2026-11-17, where a phone saw the Model column alone): below 640px `/models` folds its three cost columns into one beside the model, "Per run" (credits, ₹ and $ stacked), and a model page's settings and cost-at-scale tables are as wide as the column, their values wrapping.
-  - A blog card is the `article`, and its title's link covers it (the link's `::after`), so the link is named by the title and the card draws its focus ring (`.blog-post-card`): a link around an article has no name in Chrome.
+  - A cost table keeps every column in sight on a phone (sweep of 2026-11-17, where a phone saw the Model column alone): where its table's box is under 600px `/models` folds its three cost columns into one beside the model, "Per run" (credits, ₹ and $ stacked), a container query, since a tablet's window also holds the side navigation, and a model page's settings and cost-at-scale tables are as wide as the column, their values wrapping.
+  - A blog card is the `article`, and its title's link covers it (the link's `::after`), so the link is named by the title and the card draws its focus ring (`.blog-post-card`, an outline under forced colours, which drop shadows): a link around an article has no name in Chrome.
   - A value a person copies on the MCP setup pages (`CopyableCode`) wraps at its box's edge, so it reads whole at every width; a grid that holds one is `grid-cols-1` below its breakpoint, since an implicit column grows to its widest line.
 
 ## Avoid Checklist

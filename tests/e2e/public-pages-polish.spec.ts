@@ -108,6 +108,21 @@ async function rowsInSight(page: Page, header?: string) {
   return rows.map((row) => row.filter((piece) => piece.inSight).map((piece) => piece.text).join(' '));
 }
 
+/**
+ * What one column of the first table with a column headed `header` shows in sight, one string per
+ * body row: that column's cell alone, so text elsewhere in the row (a model's description holds a
+ * dash) never stands in for it.
+ */
+async function columnInSight(page: Page, header: string) {
+  const table = page.locator('main table').filter({ has: page.getByRole('columnheader', { name: header, exact: true }) }).first();
+  const index = await table.locator('thead th').evaluateAll((cells, name) => (
+    cells.findIndex((cell) => cell.textContent?.trim() === name)
+  ), header);
+  expect(index, `a column headed ${header}`).toBeGreaterThanOrEqual(0);
+  const cells = await drawnText(table.locator(`tbody tr > :nth-child(${index + 1})`));
+  return cells.map((cell) => cell.filter((piece) => piece.inSight).map((piece) => piece.text).join(' '));
+}
+
 test.describe('the MCP pages on a phone', () => {
   for (const path of ['/developers/mcp/posting', '/developers/mcp']) {
     for (const width of PHONE_WIDTHS) {
@@ -142,18 +157,28 @@ test.describe('the MCP pages on a phone', () => {
 });
 
 test.describe('/models on a phone', () => {
-  for (const width of PHONE_WIDTHS) {
+  // The phones, and the tablets whose window also holds the side navigation (from 768px): there the
+  // table's box is 518-581px wide, which cut the four columns as a phone did (review of #861).
+  for (const width of [...PHONE_WIDTHS, 768, 820]) {
     test(`at ${width}px every model shows its cost per run, and nothing is cut`, async ({ page }) => {
       await page.setViewportSize({ width, height: 812 });
       await open(page, '/models');
       expect(await pageOverflow(page), 'the page scrolls sideways by').toBe(0);
-      const rows = await rowsInSight(page);
+      // Every table's Per run cell, by itself: credits, ₹ and $ stacked, or a dash for no price.
+      const tables = await page.locator('main table').count();
+      const costs: string[] = [];
+      for (let table = 0; table < tables; table += 1) {
+        const cells = await drawnText(page.locator('main table').nth(table).locator('tbody tr > td:nth-child(2)'));
+        costs.push(...cells.map((cell) => cell.filter((piece) => piece.inSight).map((piece) => piece.text).join(' ')));
+      }
       // The code catalog's models, each one row: video, image and motion.
-      expect(rows.length).toBeGreaterThan(20);
-      const missing = rows.filter((row) => !(
-        /\d[\d,]* credits?|—/.test(row) && /₹[\d,]+\.\d\d|—/.test(row) && /\$[\d,]+\.\d\d|—/.test(row)
+      expect(costs.length).toBeGreaterThan(20);
+      const missing = costs.filter((cost) => !(
+        cost === '—' || /^\d[\d,]* credits? ₹[\d,]+\.\d\d \$[\d,]+\.\d\d$/.test(cost)
       ));
-      expect(missing, 'rows that show no cost in sight').toEqual([]);
+      expect(missing, 'Per run cells that show no whole cost in sight').toEqual([]);
+      await expect(page.locator('main table').first().locator('thead th').filter({ visible: true }))
+        .toHaveText(['Model', 'Per run']);
       expect(await textOutOfSight(page)).toEqual([]);
     });
   }
@@ -206,9 +231,11 @@ test.describe('a model page on a phone', () => {
       problems.push(...(await textOutOfSight(page)).map((line) => `${href}: ${line}`));
       if (await page.locator('main th', { hasText: 'Default' }).count()) {
         settingsTables += 1;
-        // Each setting's default is drawn in sight, a dash where it has none.
-        const settings = await rowsInSight(page, 'Default');
-        for (const row of settings) if (row.split(' ').length < 3) problems.push(`${href}: a setting row shows only "${row}"`);
+        // Each setting's default is drawn in sight, a dash where it has none: its own cell, read alone.
+        const defaults = await columnInSight(page, 'Default');
+        defaults.forEach((shown, row) => {
+          if (!shown) problems.push(`${href}: setting row ${row + 1} shows no Default in sight`);
+        });
       }
     }
     expect(problems).toEqual([]);
