@@ -53,6 +53,14 @@ import { describe, expect, it } from 'vitest';
  * that module. A default or a whole module imported under a helper's name, an
  * export that gives anything else one, and a binding renamed to one all fail.
  *
+ * A helper is never reached through an optional chain (`deps.helper?.()`,
+ * `deps?.helper()`), which skips the invalidation when the dependency is
+ * absent, unless the chain falls back to the helper itself
+ * (`deps?.helper ?? helper`). Nor is it taken as a positional parameter
+ * (`function finish(invalidateShowcaseFeedCache = …)`), which any argument can
+ * fill by position; an option destructured under its name is checked where
+ * the option is given.
+ *
  * A file whose uses change fails until its row is brought up to date, with
  * what the new use is for; a hand-on under another name fails outright.
  */
@@ -425,6 +433,31 @@ function analyse(file: string, source: string): Analysis {
     return false;
   };
 
+  /** Whether a node is part of a type, where nothing runs. */
+  const inType = (node: ts.Node): boolean => {
+    for (let ancestor: ts.Node | undefined = node.parent; ancestor; ancestor = ancestor.parent) {
+      if (ts.isTypeNode(ancestor)) return true;
+    }
+    return false;
+  };
+
+  /**
+   * A helper reached through an optional chain, as a read in one or the callee
+   * of an optional call: absent, the chain skips the invalidation. Allowed only
+   * when the chain falls back to the helper itself (`deps?.helper ?? helper`).
+   */
+  const checkOptionalChain = (reference: ts.Node, helper: Name) => {
+    if (!isHelper(helper)) return;
+    const target = outermost(reference);
+    const parent = target.parent;
+    const optionalCall = ts.isCallExpression(parent) && parent.expression === target && Boolean(parent.questionDotToken);
+    if (!ts.isOptionalChain(reference) && !optionalCall) return;
+    if (!optionalCall && ts.isBinaryExpression(parent) && parent.left === target
+      && (parent.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || parent.operatorToken.kind === ts.SyntaxKind.BarBarToken)
+      && isTheHelper(parent.right, helper)) return;
+    violations.push(`${at(reference)} reaches ${helper} through an optional chain`);
+  };
+
   // Keys named after a helper must hold it: anything else would turn the
   // invalidation of whatever reads that key off. The cache modules declare them.
   const keys = (node: ts.Node) => {
@@ -436,7 +469,12 @@ function analyse(file: string, source: string): Analysis {
     if (ts.isPropertyAssignment(node)) holds(keyOf(node.name), node.initializer, (key) => `gives the property ${key}`);
     if (ts.isShorthandPropertyAssignment(node)) holds(node.name.text, node.objectAssignmentInitializer, (key) => `defaults ${key} to`);
     if (ts.isBindingElement(node)) holds(keyOf(node.propertyName ?? node.name), node.initializer, (key) => `defaults ${key} to`);
-    if (ts.isParameter(node) || ts.isPropertyDeclaration(node)) holds(keyOf(node.name), node.initializer, (key) => `defaults ${key} to`);
+    const positional = ts.isParameter(node) && ts.isIdentifier(node.name) && isHelper(node.name.text) ? node.name.text : null;
+    if (positional && !inType(node)) {
+      violations.push(`${at(node)} takes ${positional} by position`);
+    } else if (ts.isParameter(node) || ts.isPropertyDeclaration(node)) {
+      holds(keyOf(node.name), node.initializer, (key) => `defaults ${key} to`);
+    }
     if (ts.isVariableDeclaration(node)) holds(keyOf(node.name), node.initializer, (key) => `binds ${key} to`);
     if (ts.isBinaryExpression(node) && [
       ts.SyntaxKind.EqualsToken,
@@ -527,6 +565,7 @@ function analyse(file: string, source: string): Analysis {
     if (keyed && isName(keyed)) {
       count(keyed);
       if (!isCacheModule || !(NEXT_INVALIDATORS as readonly string[]).includes(keyed)) checkHandOn(node, keyed);
+      if (!isCacheModule) checkOptionalChain(node, keyed);
     }
     if (ts.isIdentifier(node)) {
       const helper = isName(node.text) ? node.text : aliases.get(node.text);
@@ -537,6 +576,7 @@ function analyse(file: string, source: string): Analysis {
         if (!isCacheModule || !(NEXT_INVALIDATORS as readonly string[]).includes(helper)) {
           checkHandOn(memberName ? parent : node, helper);
         }
+        if (!isCacheModule) checkOptionalChain(memberName ? parent : node, helper);
       }
     }
     ts.forEachChild(node, references);
@@ -672,6 +712,28 @@ describe('every write that invalidates a cached feed or public page is classifie
         },
         violations: [],
       });
+    });
+
+    // Review, 2026-11-17: an optional chain skips the wipe when the dependency
+    // is absent, and a positional parameter takes any argument.
+    it.each([
+      ['a helper called by an optional call', "export function f(dependencies: { invalidateShowcaseFeedCache?: () => void }) { dependencies.invalidateShowcaseFeedCache?.(); }", /reaches invalidateShowcaseFeedCache through an optional chain/],
+      ['a helper read off an optional chain', "export function f(dependencies?: { invalidateShowcaseFeedCache: () => void }) { dependencies?.invalidateShowcaseFeedCache(); }", /reaches invalidateShowcaseFeedCache through an optional chain/],
+      ['a helper read by a string key off an optional chain', "export function f(dependencies?: Record<string, () => void>) { dependencies?.['invalidateShowcaseFeedCacheOnly'](); }", /reaches invalidateShowcaseFeedCacheOnly through an optional chain/],
+      ['a helper itself called optionally', "import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';\nexport const f = () => invalidateShowcaseFeedCache?.();", /reaches invalidateShowcaseFeedCache through an optional chain/],
+      ['a positional parameter spelled like a helper, with a default', "export function finish(invalidateShowcaseFeedCache = () => {}) { invalidateShowcaseFeedCache(); }", /takes invalidateShowcaseFeedCache by position/],
+      ['a positional parameter spelled like a helper', "export function finish(invalidateShowcaseFeedCacheOnly: () => void) { invalidateShowcaseFeedCacheOnly(); }", /takes invalidateShowcaseFeedCacheOnly by position/],
+    ])('refuses %s', (_name, source, refusal) => {
+      expect(analyse('src/lib/probe.ts', source).violations).toEqual([expect.stringMatching(refusal)]);
+    });
+
+    it('lets an optional chain fall back to the helper, and a type name a parameter after one', () => {
+      expect(analyse('src/lib/probe.ts', lines(
+        "import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';",
+        'type Finish = (invalidateShowcaseFeedCache: () => void) => void;',
+        'export const f = (dependencies?: { invalidateShowcaseFeedCache?: () => void }) =>',
+        '  (dependencies?.invalidateShowcaseFeedCache ?? invalidateShowcaseFeedCache)();',
+      ))).toEqual({ uses: { invalidateShowcaseFeedCache: 2 }, violations: [] });
     });
 
     it('refuses a non-helper assigned to a helper’s key, and the read that makes it', () => {
