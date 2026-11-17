@@ -237,7 +237,10 @@ export default function PayoutPanel({
             line is held by a blank at its loaded size and the rails line
             invisible at its own
             (the minimum is the server's to say, so no figure is shown). */}
-        <Text as="p" variant="metric" className="mt-4" aria-hidden="true">{'\u00a0'}</Text>
+        {/* `Text` passes no aria attributes on, so the blank is hidden by its own box. */}
+        <div aria-hidden="true" className="mt-4">
+          <Text as="p" variant="metric">{'\u00a0'}</Text>
+        </div>
         <Text variant="caption" className="mt-1">
           <span role="status" className="flex items-center gap-2">
             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
@@ -247,7 +250,9 @@ export default function PayoutPanel({
         <div className="mt-auto pt-4" aria-hidden="true">
           <div className="h-1.5 rounded-full bg-[var(--ui-surface-inset)]" />
           <p className="invisible mt-2 text-xs font-semibold leading-5">
-            {creatorPayoutRailsLine('$000.00')}
+            {/* The current minimum's text, for its width only: the line is invisible, and the
+                loaded tile says the server's own figure. */}
+            {creatorPayoutRailsLine('$100.00')}
           </p>
         </div>
       </Surface>

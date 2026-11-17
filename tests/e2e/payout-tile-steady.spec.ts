@@ -54,6 +54,8 @@ test('/marketplace/sell: the Earnings tile does not grow when the balance arrive
     (window as unknown as { __mark: number }).__mark = performance.now();
   });
   const loadingHeight = (await tile.boundingBox())!.height;
+  // Measured while the read is still held, or the test would compare the loaded tile with itself.
+  expect(answered, 'the balance had already been answered when the loading tile was measured').toBe(0);
 
   await expect(tile.getByText('$0.00')).toBeVisible(COLD_PAGE);
   expect(answered).toBeGreaterThan(0);
