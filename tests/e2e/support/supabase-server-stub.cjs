@@ -18,7 +18,8 @@
 // whose free recipe brings its Remix, by a third creator (fixtures/creation-post-free-recipe.json),
 // and one whose paid recipe locks its Remix at the recipe's price, by a fourth
 // (fixtures/creation-post-paid-recipe.json), and a picture made elsewhere whose free recipe does not
-// include the post's Remix, by a fifth (fixtures/upload-post-recipe-without-remix.json).
+// include the post's Remix, by a fifth (fixtures/upload-post-recipe-without-remix.json), and another
+// of theirs whose recipe's stored remix switch is on (fixtures/upload-post-recipe-remix-switch-on.json).
 // And one post editor's: an image post of
 // the E2E user's with one picture and no recipe (fixtures/post-composer-saved-twice.json). And
 // Pricing's referral terms: no active program, which Pricing drew from the failed read too. And
@@ -77,6 +78,12 @@ const paidRecipePost = require('../fixtures/creation-post-paid-recipe.json');
 // creator and for another reader.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const uploadRecipePost = require('../fixtures/upload-post-recipe-without-remix.json');
+// Another picture of that creator's made elsewhere, its free recipe a reference picture with its
+// stored remix switch on, which no read takes for a Remix since 2026-11-17 (the owner: "Yes, hide
+// it"). post-page-no-remix-without-creation.spec.ts draws both for a visitor, a reader who has the
+// recipe and their creator. Its creator's reads are the one above's.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const uploadRecipeSwitchOnPost = require('../fixtures/upload-post-recipe-remix-switch-on.json');
 // The E2E user's two free recipes, each on a text post of theirs: the older one unlocked five times,
 // the newer one never. Recipe sales, /marketplace/sell, reads them in
 // getSellerPostResourceBundleDashboard (src/lib/post-resource-bundles-server.ts).
@@ -423,6 +430,45 @@ const READS = [
     path: '/rest/v1/posts',
     filters: { id: `in.(${uploadRecipePost.post.id})` },
     answer: () => json([uploadRecipePost.post], { 'content-range': '0-0/1' }),
+  },
+  {
+    // fetchPublicPostRow: the second picture made elsewhere, its recipe's stored switch on. Its creator
+    // is the one above, whose two profile reads answer for it too.
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: `eq.${uploadRecipeSwitchOnPost.post.id}` },
+    answer: ({ wantsObject }) => json(
+      wantsObject ? uploadRecipeSwitchOnPost.post : [uploadRecipeSwitchOnPost.post],
+      { 'content-range': '0-0/1' },
+    ),
+  },
+  {
+    // loadPostMediaItemsMap: its one picture, in the public bucket.
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: `in.(${uploadRecipeSwitchOnPost.post.id})` },
+    answer: () => json(
+      uploadRecipeSwitchOnPost.media,
+      { 'content-range': `0-${uploadRecipeSwitchOnPost.media.length - 1}/${uploadRecipeSwitchOnPost.media.length}` },
+    ),
+  },
+  {
+    // getPostResourceBundleDetailByPostId: its free recipe, a reference picture, its switch on.
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { post_id: `eq.${uploadRecipeSwitchOnPost.post.id}` },
+    answer: ({ wantsObject }) => json(
+      wantsObject ? uploadRecipeSwitchOnPost.bundle : [uploadRecipeSwitchOnPost.bundle],
+      { 'content-range': '0-0/1' },
+    ),
+  },
+  {
+    // ...and the post it belongs to (loadLinkedPostMap; loadNsfwPostIds when the recipe is read
+    // through its route).
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: `in.(${uploadRecipeSwitchOnPost.post.id})` },
+    answer: () => json([uploadRecipeSwitchOnPost.post], { 'content-range': '0-0/1' }),
   },
   {
     // fetchOwnerPostRow: the post by id and owner. maybeSingle() asks for a list.

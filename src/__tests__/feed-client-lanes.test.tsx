@@ -1134,6 +1134,8 @@ describe('FeedClient lanes and card actions', () => {
     // Remix takes it in the same tap, and the Home card's now does (01-4).
     const freeUnlockFeed = page([{
         ...item('post-1', 'First'),
+        // Made from a creation: a post with none has no Remix (owner, 2026-11-17).
+        generationId: 'generation-1',
         canRemix: false,
         remixCapability: 'unlock_required',
         remixTarget: 'image',

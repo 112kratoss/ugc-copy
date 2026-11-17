@@ -6,9 +6,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { ADMIN_SESSION_COOKIE, createAdminSessionToken, deriveAdminCredentialVersion } from '@/lib/admin-session-token';
 import { insertAdminSession } from '@/lib/admin-session-store';
 import { postAdminPostReportDecision, postAdminPostModeration } from '@/lib/admin-moderation-route-adapter-service';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { invalidateShowcaseFeedAndRefreshEveryPage, invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 
-vi.mock('@/lib/showcase-feed-cache', () => ({ invalidateShowcaseFeedCache: vi.fn() }));
+// Every helper the moderation paths call: a hide or a take-down expires every
+// cached page at once, a restore refreshes them in the background and drops
+// the not-found at the post's addresses (admin-moderation-service.ts).
+vi.mock('@/lib/showcase-feed-cache', () => ({ invalidateShowcaseFeedCache: vi.fn(), invalidateShowcaseFeedAndRefreshEveryPage: vi.fn() }));
 const configPath = process.env.AUDIT_STORAGE_CONFIG, connectionString = process.env.SUPABASE_TEST_DB_URL;
 
 
@@ -48,7 +51,7 @@ describe.skipIf(!configPath || !connectionString)('moderation take-down through 
   });
   afterAll(async () => { await db?.end(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
   beforeEach(async () => {
-    intercept = null; objects = []; vi.mocked(invalidateShowcaseFeedCache).mockClear();
+    intercept = null; objects = []; vi.mocked(invalidateShowcaseFeedCache).mockClear(); vi.mocked(invalidateShowcaseFeedAndRefreshEveryPage).mockClear();
     fixtureUsers = []; postIds = []; generationIds = []; contactIds = []; postReportIds = []; subjectReportIds = [];
     expectedActions = {posts:0,generations:0,sanctions:0};
     const made = await admin.auth.admin.createUser({ email: `admin-moderation-audit-${randomUUID()}@example.invalid`, password: randomUUID()+'aZ7!', email_confirm: true });
@@ -198,12 +201,28 @@ describe.skipIf(!configPath || !connectionString)('moderation take-down through 
   it('preserves media for provisional hide/restore and permits later escalation',async()=>{
     const fixture=await makePost(flows[0]); expectedActions.posts=3;
     const invoke=async(action:string)=>postAdminPostModeration(request(flows[0].path,JSON.stringify({...fixture.body,action,idempotencyKey:randomUUID()})));
-    expect((await invoke('hide')).status).toBe(200);
+    expect((await invoke('hide')).status).toBe(200); expect(invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
     expect((await admin.storage.from(objects[0].bucket).download(objects[0].path)).error).toBeNull();
     expect((await invoke('restore')).status).toBe(200);
+    // A text post has one address: its own id.
+    expect(vi.mocked(invalidateShowcaseFeedAndRefreshEveryPage).mock.calls).toEqual([[{postIds:[fixture.id]}]]); expect(invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
     expect((await stableDecision(fixture.id)).review_status).toBe('visible');
     expect((await admin.storage.from(objects[0].bucket).download(objects[0].path)).error).toBeNull();
-    expect((await invoke('take_down')).status).toBe(200); await assertRemoved();
+    expect((await invoke('take_down')).status).toBe(200); await assertRemoved(); expect(invalidateShowcaseFeedCache).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes every page in the background on a restore and drops the not-found at both of its post\'s addresses',async()=>{
+    const fixture=await makePost(flows[0],false); expectedActions.posts=2;
+    const generationId=randomUUID(); generationIds.push(generationId);
+    await db.query("insert into public.generations(id,user_id,status,model,category,cost,is_public) values($1,$2,'succeeded','audit-inert','image',0,true)",[generationId,reviewerId]);
+    await db.query('update public.posts set generation_id=$2 where id=$1',[fixture.id,generationId]);
+    const invoke=async(action:string)=>postAdminPostModeration(request(flows[0].path,JSON.stringify({...fixture.body,action,idempotencyKey:randomUUID()})));
+    expect((await invoke('hide')).status).toBe(200);
+    expect(invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1); expect(invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
+    expect((await invoke('restore')).status).toBe(200); expect((await stableDecision(fixture.id)).review_status).toBe('visible');
+    // The post's page, and its legacy address: the creation's id, read from the post as it stands.
+    expect(vi.mocked(invalidateShowcaseFeedAndRefreshEveryPage).mock.calls).toEqual([[{postIds:[fixture.id,generationId]}]]);
+    expect(invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
   it('checks generation ownership before revoking a showcase generation path',async()=>{

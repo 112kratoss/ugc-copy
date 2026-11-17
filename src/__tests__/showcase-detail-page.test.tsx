@@ -1311,9 +1311,10 @@ describe('Showcase detail page', () => {
       });
 
       // Review of #847's third round: the Remix of a post with no creation (a picture made elsewhere)
-      // is a dead end, "Only generation-backed posts can be remixed", so its creator gets none, never
-      // the page's, which offers anyone else the recipe to take.
-      it("gives the creator of a post with no creation no Remix, while their cookie is checked and once named", async () => {
+      // is a dead end, "Only generation-backed posts can be remixed", so its creator gets none. Owner,
+      // 2026-11-17 ("Yes, hide it"): nor does anyone else, and its recipe names none, whatever the
+      // page's read says (here one from before, which still offered a Remix behind the free recipe).
+      it("gives nobody a Remix on a post with no creation, its creator included, and its recipe names none", async () => {
         const detail = await getPublicPostDetailMock(POST_ID);
         getPublicPostDetailMock.mockResolvedValue({
           ...detail,
@@ -1334,20 +1335,30 @@ describe('Showcase detail page', () => {
         rerender(await openPost());
         expect(row()).toHaveTextContent(`${POST_ID}:false`);
         expect(row()).toHaveAttribute('data-recipe-remix', '');
-        // Their recipe still says what it gives anyone who takes it, as it does in the server's HTML.
-        expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({ remixIncluded: true }));
+        expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({ remixIncluded: false }));
         unmount();
 
-        // Anyone else is still offered it, as before (a separate fix): the server's HTML hands the
-        // row the creator's none beside it, for the page's rule.
+        // Anyone else is offered none either, and the server's HTML hands the row the creator's none.
         holdSessionCookieOf('user-2');
         clientAuth.current = { session: null, user: null, isLoading: true };
         const other = render(await openPost());
-        expect(row()).toHaveAttribute('data-recipe-remix', 'free:Free');
+        expect(row()).toHaveTextContent(`${POST_ID}:false`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({ remixIncluded: false }));
         other.unmount();
         const html = renderToString(await openPost());
-        expect(html).toContain('data-recipe-remix="free:Free"');
+        expect(html).toContain('data-recipe-remix=""');
         expect(html).toContain('data-creator-remix="user-1:none"');
+
+        // Nor someone who has the recipe, whose own read says they may open it.
+        stubPageFetch({}, { viewerBundle: { ...freeRecipe, allowRemix: true, viewerCanAccess: true, viewerHasPurchased: true } });
+        signInAs('user-2');
+        render(await openPost());
+        await waitFor(() => expect(requestsTo(RECIPE_READ)).toHaveLength(1));
+        await waitFor(() => expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({ viewerCanAccess: true })));
+        expect(row()).toHaveTextContent(`${POST_ID}:false`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({ remixIncluded: false }));
       });
 
       // The page is drawn ahead of time for every viewer, and no cookie can be read on the server.

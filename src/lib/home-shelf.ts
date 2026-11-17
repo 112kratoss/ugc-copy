@@ -128,7 +128,7 @@ export function buildHomeShelfMakeHref(tool: RemixTool, generationId: string, po
  * it can do the same for someone who signs up from it (`loadHomeShelfForApi`).
  */
 export function homeShelfPostTakesFreeRecipe(
-  item: Pick<ShowcaseFeedItem, 'canRemix' | 'remixCapability' | 'remixTarget' | 'asset'>,
+  item: Pick<ShowcaseFeedItem, 'generationId' | 'canRemix' | 'remixCapability' | 'remixTarget' | 'asset'>,
 ): boolean {
   return item.remixCapability === 'unlock_required'
     && getPostFeedRemixAccess({ ...item, asset: item.asset ?? null }) === 'free-unlock';

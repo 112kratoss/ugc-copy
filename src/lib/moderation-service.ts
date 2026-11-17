@@ -11,7 +11,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { getCreatorDisplayName } from '@/lib/profile';
-import { invalidateShowcaseFeedCacheOnly } from '@/lib/showcase-feed-cache';
+import { invalidateShowcaseFeedCacheOnly as defaultInvalidateShowcaseFeedCacheOnly } from '@/lib/showcase-feed-cache';
 
 const USER_REPORT_REASONS = new Set([
   'spam',
@@ -310,13 +310,13 @@ export async function setUserBlockForRoute({
   shouldBlock,
   // The feeds only: the cached public pages are drawn for no one, and each
   // applies a block in the browser.
-  invalidateFeedCache = invalidateShowcaseFeedCacheOnly,
+  invalidateShowcaseFeedCacheOnly = defaultInvalidateShowcaseFeedCacheOnly,
 }: {
   actorUserId: string;
   adminSupabase: SupabaseClient;
   blockedUserId: string;
   shouldBlock: boolean;
-  invalidateFeedCache?: typeof invalidateShowcaseFeedCacheOnly;
+  invalidateShowcaseFeedCacheOnly?: typeof defaultInvalidateShowcaseFeedCacheOnly;
 }): Promise<ModerationRouteResult> {
   const blockedUserId = normalizeUuid(rawBlockedUserId);
   if (!blockedUserId || blockedUserId === actorUserId) {
@@ -383,7 +383,7 @@ export async function setUserBlockForRoute({
     }
   }
 
-  invalidateFeedCache();
+  invalidateShowcaseFeedCacheOnly();
   return { ok: true, body: { success: true, blocked: shouldBlock } };
 }
 

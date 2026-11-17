@@ -55,7 +55,7 @@ import {
 } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
-import { formatCompactCount } from '@/lib/post-feed-presentation';
+import { formatCompactCount, getPostFeedRemixAccess } from '@/lib/post-feed-presentation';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import { trackProductEvent } from '@/lib/product-analytics';
 import {
@@ -964,14 +964,14 @@ export default function ShowcaseReelViewer({
   const bundleCountSummary = item.asset
     ? formatPostResourceBundleCountSummary(item.asset.lockedPreview ?? null)
     : '';
-  // A remix the creator sells with the recipe: offered here as in the app,
-  // behind the unlock until the reader has it. Workflow and text-template
-  // remixes are left out, as the server's own `canRemix` leaves them out.
-  const remixNeedsUnlock = !item.canRemix
-    && item.remixCapability === 'unlock_required'
-    && item.remixTarget !== 'workflow'
-    && item.remixTarget !== 'text_template'
-    && Boolean(item.asset?.allowRemix);
+  // The feed card's rule (`getPostFeedRemixAccess`), the app's too: open, or a
+  // remix the creator sells with the recipe, offered behind the unlock until
+  // the reader has it. Workflow and text-template remixes are left out, as the
+  // server's own `canRemix` leaves them out, and so is any Remix of a post with
+  // no creation, which has nothing to remix (owner, 2026-11-17).
+  const reelRemixAccess = getPostFeedRemixAccess(item);
+  const offersRemix = reelRemixAccess !== null;
+  const remixNeedsUnlock = reelRemixAccess === 'free-unlock' || reelRemixAccess === 'paid-unlock';
   const remixIsLocked = remixNeedsUnlock && !hasReelUnlockAccess;
   // Nothing to pay for: Remix takes the recipe itself and carries on.
   const remixTakesFreeRecipe = remixIsLocked && isFreeUnlock;
@@ -1910,7 +1910,7 @@ export default function ShowcaseReelViewer({
             </button>
           ) : null}
 
-          {item.canRemix || remixNeedsUnlock ? (
+          {offersRemix ? (
             <button
               type="button"
               // Until the reader has the recipe: a paid one opens its checkout
@@ -2135,7 +2135,7 @@ export default function ShowcaseReelViewer({
                         postId: item.id,
                         mediaItems,
                         displayTitle: item.title,
-                        remixIncluded: Boolean(item.asset.allowRemix) && (item.canRemix || remixNeedsUnlock),
+                        remixIncluded: Boolean(item.asset.allowRemix) && offersRemix,
                         returnPath: buildDetailPath(item.id),
                       })}
                       announceUnlock={justUnlockedItemId === item.id}

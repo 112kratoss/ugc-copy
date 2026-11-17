@@ -32,7 +32,7 @@ import {
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { createPostMediaRendition, type PostMediaTeaserOutcome } from '@/lib/post-media-rendition';
 import type { VideoProbeResult } from '@/lib/video-rendition';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { invalidateShowcaseFeedAndRefreshPostPages } from '@/lib/showcase-feed-cache';
 import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import {
   getPublicUgcRecipeTextFields,
@@ -765,7 +765,14 @@ export async function publishPreparedPost({
     };
   } finally {
     if (didMutateSharedFeed) {
-      invalidateShowcaseFeedCache();
+      // A post new to everyone: its page, its creator's page and the
+      // storefront, in the background (no remix can credit it yet).
+      await invalidateShowcaseFeedAndRefreshPostPages(adminSupabase, {
+        postId: post.postId,
+        creatorId: ownerUserId,
+        arrived: true,
+        isNew: true,
+      });
     }
   }
 }

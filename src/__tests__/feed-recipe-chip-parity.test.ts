@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import contract from '../../contracts/feed-recipe-chip-v1.json';
-import { getPostFeedRecipeChip } from '../lib/post-feed-presentation';
+import { getPostFeedRecipeChip, getPostFeedRemixAccess } from '../lib/post-feed-presentation';
 import { POST_RESOURCE_WEB_CASH_MIN_TOKENS } from '../lib/post-resource-commerce';
 import type { ShowcaseAssetSummary } from '../lib/showcase';
 import {
@@ -38,11 +38,13 @@ describe("a feed card's recipe chip, on the web and in the app", () => {
     const { asset: fields, remix, chip } = entry;
     // The owner is the viewer's to know, not the post's: the card passes it.
     const viewerIsOwner = 'viewerIsOwner' in entry && entry.viewerIsOwner === true;
-    const drawn = getPostFeedRecipeChip(
-      { asset: fields ? asset(fields) : null, canRemix: remix },
-      { isOwner: viewerIsOwner },
-    );
+    // `remix` is what the post's read says; a post with no creation (`creation: false`) is drawn no
+    // Remix whatever it says (owner, 2026-11-17), as the app draws none.
+    const withoutCreation = 'creation' in entry && entry.creation === false;
+    const post = { asset: fields ? asset(fields) : null, generationId: withoutCreation ? null : 'generation-1', canRemix: remix };
+    const drawn = getPostFeedRecipeChip(post, { isOwner: viewerIsOwner });
 
+    expect(getPostFeedRemixAccess(post) !== null).toBe(remix && !withoutCreation);
     expect(drawn).toEqual(chip ? { tone: chip.tone, kind: chip.kind, label: chip.label.web } : null);
   });
 
@@ -91,7 +93,7 @@ describe("a feed card's recipe chip, on the web and in the app", () => {
     const summary = { ...asset({ accessMode: 'paid', priceUsdCents }), priceQuote } as ShowcaseAssetSummary;
 
     expect(getAssetAccessLabel(summary)).toBe(label);
-    expect(getPostFeedRecipeChip({ asset: summary, canRemix: false })).toEqual({ tone: 'paid', kind: 'price', label });
+    expect(getPostFeedRecipeChip({ asset: summary, generationId: 'generation-1', canRemix: false })).toEqual({ tone: 'paid', kind: 'price', label });
   });
 
   it('is asked the same cases by the app', () => {
@@ -99,6 +101,9 @@ describe("a feed card's recipe chip, on the web and in the app", () => {
 
     expect(appTest).toContain("from '../../contracts/feed-recipe-chip-v1.json'");
     expect(appTest).toContain('it.each(feedRecipeChipContract.cases)');
+    // And reads a case's post with no creation as one, which a case can say since 2026-11-17.
+    expect(contract.cases.some((entry) => 'creation' in entry && entry.creation === false)).toBe(true);
+    expect(appTest).toContain("'creation' in entry && entry.creation === false");
   });
 
   it('calls a recipe that costs nothing by one name on both', () => {

@@ -241,16 +241,16 @@ export function useShowcasePostViewer({
   // (`resolveRemixAccess`), so it opens for them as soon as they are known, before their own read of
   // the recipe lands. Until then they were offered it to claim or to unlock (review of #847). A post
   // with no creation (a picture made elsewhere) has nothing to remix: the server answers its Remix
-  // "Only generation-backed posts can be remixed" (`remixShowcasePostForRoute`), so its creator gets
-  // none, never the page's, which would offer them their own recipe to take.
+  // "Only generation-backed posts can be remixed" (`remixShowcasePostForRoute`), so nobody gets one,
+  // its creator included, whatever the page or a read of the recipe says (owner, 2026-11-17).
   const creatorRemix = useMemo(
     () => (hasCreation ? remixForViewer(pageRemix, CREATORS_RECIPE_ACCESS) : NO_REMIX),
     [hasCreation, pageRemix],
   );
   const viewerIsCreator = ownership === 'owner' || ownership === 'owner-checking';
   const remix = useMemo(
-    () => (viewerIsCreator ? creatorRemix : remixForViewer(pageRemix, bundle)),
-    [bundle, creatorRemix, pageRemix, viewerIsCreator],
+    () => (!hasCreation ? NO_REMIX : viewerIsCreator ? creatorRemix : remixForViewer(pageRemix, bundle)),
+    [bundle, creatorRemix, hasCreation, pageRemix, viewerIsCreator],
   );
 
   const params = useMemo(() => new URLSearchParams(search ?? ''), [search]);

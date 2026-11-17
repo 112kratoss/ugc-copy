@@ -22,7 +22,7 @@ if (process.env.AUDIT_MANAGED === 'true') {
   BACKEND_JOBS_BY_NAME['feed-maintenance'].lockTtlSeconds = 2;
   task = runFeedMaintenanceBackendJob({ serviceClient: client, requestId: process.env.AUDIT_REQUEST_ID, startedAtMs: new Date('2005-01-02T00:06:00Z').getTime() });
 } else {
-  task = maintainFeedPersonalization(client, { now: new Date('2005-01-02T00:00:00Z'), invalidateFeedCache: () => {} });
+  task = maintainFeedPersonalization(client, { now: new Date('2005-01-02T00:00:00Z'), invalidateShowcaseFeedCacheOnly: () => {} });
 }
 task.then(() => process.send?.({ stage: 'unexpected-completion' }))
   .catch(() => { process.send?.({ stage: 'unexpected-failure' }); process.exitCode = 1; });

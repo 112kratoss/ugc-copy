@@ -1313,6 +1313,133 @@ describe('post resource bundle server access', () => {
     });
   });
 
+  // Owner, 2026-11-17 ("Yes, hide it"): the recipe of a post with no creation (a picture made
+  // elsewhere) was read as including Remix while its stored switch was on, or with a Remix access
+  // item among its items, and its reference picture offered whoever had it a Remix, which the remix
+  // route refuses on any post with no creation. Read-time only: what it stores is not changed.
+  describe('a recipe on a post with no creation', () => {
+    const PROMPT = { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'Public prompt text' };
+    const REFERENCE = {
+      id: 'reference-1',
+      type: 'reference_image',
+      title: 'Reference picture',
+      storagePath: 'owner-1/reference.png',
+      contentType: 'image/png',
+    };
+    const ACCESS = { id: 'access-1', type: 'remix_access', title: 'Remix access' };
+
+    beforeEach(() => {
+      postRow = {
+        ...(postRow as Record<string, unknown>),
+        generation_id: null,
+        source_kind: 'external',
+        source_tool: 'Midjourney',
+        source_tool_slug: 'midjourney',
+      };
+      bundleRow = { ...(bundleRow as BundleRow), allow_remix: true, resource_items: [PROMPT, REFERENCE, ACCESS] };
+    });
+
+    it('names no Remix and offers none, to a visitor, someone without it, its buyer or its owner', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      for (const [viewerUserId, purchased] of [[null, false], ['viewer-1', false], ['viewer-1', true], ['owner-1', false]] as const) {
+        viewerHasPurchased = purchased;
+        const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId });
+        const who = `${viewerUserId ?? 'visitor'}${purchased ? ' (has it)' : ''}`;
+        expect(detail?.allowRemix, who).toBe(false);
+        expect(detail?.resourceKinds, who).toEqual(['prompt', 'files']);
+        expect(detail?.lockedPreview, who).toMatchObject({ resourceKinds: ['prompt', 'files'], hasRemix: false });
+        expect(detail?.lockedPreview.itemCounts, who).toEqual({ prompt: 1, reference_image: 1 });
+        expect(detail?.remixCapability, who).toBe('unsupported');
+        expect(detail?.remixTarget, who).toBeNull();
+      }
+    });
+
+    // The editor round-trips the recipe as stored, so reading it changes nothing a save would write.
+    it('hands its owner the stored switch and items as they are', async () => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'owner-1' });
+
+      expect(detail?.resources?.allowRemix).toBe(true);
+      expect(detail?.resources?.items?.map((item) => item.type)).toEqual(['prompt', 'reference_image', 'remix_access']);
+    });
+
+    it('is listed with no Remix, and the Remix filter leaves it out', async () => {
+      const { getMarketplaceResourceList } = await import('@/lib/post-resource-bundles-server');
+
+      const [tile] = (await getMarketplaceResourceList()).items;
+      expect(tile).toMatchObject({
+        postId: 'post-1',
+        allowRemix: false,
+        resourceKinds: ['prompt', 'files'],
+        remixCapability: 'unsupported',
+        remixTarget: null,
+      });
+      expect(tile.lockedPreview).toMatchObject({ resourceKinds: ['prompt', 'files'], hasRemix: false });
+      expect(tile.lockedPreview.itemCounts).toEqual({ prompt: 1, reference_image: 1 });
+      // The list's SQL still finds it under Remix: its projection reads the stored switch. The page
+      // it is served on does not.
+      expect((await getMarketplaceResourceList({ resource: 'remix' })).items).toEqual([]);
+      expect((await getMarketplaceResourceList({ resource: 'files' })).items.map((item) => item.postId)).toEqual(['post-1']);
+    });
+
+    // Review of #853: a recipe of a Remix link alone holds the creator's link, which every reader still
+    // gets, and the database lists it (it counts every labelled item). With no Remix among its kinds
+    // it read as holding nothing: the marketplace dropped it and its seller read it as not listable.
+    it('lists a recipe of a Remix link alone, and its seller reads it as listable', async () => {
+      bundleRow = {
+        ...(bundleRow as BundleRow),
+        allow_remix: false,
+        resource_items: [{ id: 'link-1', type: 'remix_link', title: 'Remix link', externalUrl: 'https://example.com/remix' }],
+      };
+      const { getMarketplaceResourceList, getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+
+      const [tile] = (await getMarketplaceResourceList()).items;
+      expect(tile).toMatchObject({ postId: 'post-1', allowRemix: false, resourceKinds: [] });
+      expect(tile.lockedPreview.itemCounts).toEqual({ remix_link: 1 });
+      expect((await getMarketplaceResourceList({ resource: 'remix' })).items).toEqual([]);
+      const [listing] = (await getSellerPostResourceBundleDashboard('owner-1')).bundles;
+      expect(listing.quality).toEqual({ eligible: true, issues: [] });
+    });
+
+    it('lists no recipe of a Remix access mark or the stored switch alone, and offers its seller no remix permission', async () => {
+      const { getMarketplaceResourceList, getSellerPostResourceBundleDashboard } = await import('@/lib/post-resource-bundles-server');
+
+      for (const [allowRemix, items] of [[false, [ACCESS]], [true, []]] as const) {
+        bundleRow = {
+          ...(bundleRow as BundleRow),
+          allow_remix: allowRemix,
+          resource_items: [...items],
+          prompt_text: null,
+          notes_markdown: null,
+        };
+        const what = items.length > 0 ? 'Remix access' : 'the switch';
+        expect((await getMarketplaceResourceList()).items, what).toEqual([]);
+        const [listing] = (await getSellerPostResourceBundleDashboard('owner-1')).bundles;
+        expect(listing.quality, what).toEqual({
+          eligible: false,
+          issues: [{
+            code: 'missing_resources',
+            field: 'resources',
+            message: 'Attach at least one useful prompt, workflow, file, or note.',
+          }],
+        });
+      }
+    });
+
+    it('leaves the recipe of a text post as it was', async () => {
+      postRow = { ...(postRow as Record<string, unknown>), post_format: 'text', category: 'text', source_kind: 'manual' };
+      bundleRow = { ...(bundleRow as BundleRow), resource_items: [PROMPT] };
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+
+      expect(detail?.allowRemix).toBe(true);
+      expect(detail?.resourceKinds).toEqual(['prompt', 'remix']);
+    });
+  });
+
   // Recipe audit S-F8: "Include creation references" stores copies of the
   // creation's inputs as `reference-<input id>` items, and a remix-included
   // recipe merged the same inputs again at read time.

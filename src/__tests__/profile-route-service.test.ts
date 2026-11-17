@@ -595,7 +595,7 @@ describe('profile route service', () => {
         credits: 25,
       }],
     });
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
     const result = await updateProfileForRoute({
       userId: user.id,
@@ -605,7 +605,7 @@ describe('profile route service', () => {
         bio: 'UGC creator for product demos.',
       },
       client: client.client,
-      invalidateFeedCache,
+      invalidateShowcaseFeedAndRefreshEveryPage,
     });
 
     expect(client.upserts[0]).toMatchObject({
@@ -624,7 +624,7 @@ describe('profile route service', () => {
         credits: 25,
       },
     });
-    expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledOnce();
   });
 
   // The app reads a 409 as the handle's only when it names the field: the
@@ -635,7 +635,7 @@ describe('profile route service', () => {
     const client = createClient({
       upsertError: { code: '23505', message: 'duplicate key' },
     });
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
     await expect(updateProfileForRoute({
       userId: user.id,
@@ -644,21 +644,21 @@ describe('profile route service', () => {
         displayName: 'Creator Name',
       },
       client: client.client,
-      invalidateFeedCache,
+      invalidateShowcaseFeedAndRefreshEveryPage,
     })).resolves.toEqual({
       ok: false,
       status: usernameTaken.status,
       error: usernameTaken.response.error,
       fieldErrors: usernameTaken.response.fieldErrors,
     });
-    expect(invalidateFeedCache).not.toHaveBeenCalled();
+    expect(invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
   });
 
   it('names the field when another profile already holds the handle', async () => {
     const client = createClient({
       profiles: [storedProfile(), { ...emptyProfileRow('22222222-2222-2222-2222-222222222222'), username: 'creator-name' }],
     });
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
     await expect(updateProfileForRoute({
       userId: user.id,
@@ -667,7 +667,7 @@ describe('profile route service', () => {
         displayName: 'Creator Name',
       },
       client: client.client,
-      invalidateFeedCache,
+      invalidateShowcaseFeedAndRefreshEveryPage,
     })).resolves.toEqual({
       ok: false,
       status: usernameTaken.status,
@@ -675,7 +675,7 @@ describe('profile route service', () => {
       fieldErrors: usernameTaken.response.fieldErrors,
     });
     expect(client.upserts).toEqual([]);
-    expect(invalidateFeedCache).not.toHaveBeenCalled();
+    expect(invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
   });
 
   it('writes only the fields a save carries, so a bio edit keeps the stored links', async () => {
@@ -692,7 +692,7 @@ describe('profile route service', () => {
       userId: user.id,
       body: { username: 'luna', bio: 'Painting with light.' },
       client: client.client,
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     });
 
     // Absent keys never reach the write, so the database keeps those columns.
@@ -718,7 +718,7 @@ describe('profile route service', () => {
       userId: user.id,
       body: { username: 'luna', websiteUrl: null },
       client: client.client,
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     });
 
     expect(client.upserts).toEqual([{ id: user.id, username: 'luna', website_url: null }]);
@@ -746,7 +746,7 @@ describe('profile route service', () => {
         location: ' Bengaluru ',
       },
       client: client.client,
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     });
 
     expect(client.upserts).toEqual([{
@@ -782,7 +782,7 @@ describe('profile route service', () => {
       userId: user.id,
       body: { username: 'luna', instagramHandle: 'https://evil.example/luna' },
       client: client.client,
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     })).resolves.toEqual({
       ok: false,
       status: 400,
@@ -794,13 +794,13 @@ describe('profile route service', () => {
 
   it('refuses a newly claimed reserved handle before any write', async () => {
     const client = createClient({ profiles: [storedProfile()] });
-    const invalidateFeedCache = vi.fn();
+    const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
 
     await expect(updateProfileForRoute({
       userId: user.id,
       body: { username: 'Support', displayName: 'Luna Dreams' },
       client: client.client,
-      invalidateFeedCache,
+      invalidateShowcaseFeedAndRefreshEveryPage,
     })).resolves.toEqual({
       ok: false,
       status: 400,
@@ -808,7 +808,7 @@ describe('profile route service', () => {
       fieldErrors: { username: 'That handle is reserved.' },
     });
     expect(client.upserts).toHaveLength(0);
-    expect(invalidateFeedCache).not.toHaveBeenCalled();
+    expect(invalidateShowcaseFeedAndRefreshEveryPage).not.toHaveBeenCalled();
   });
 
   it('lets an account that already holds a reserved handle keep it through an unrelated edit', async () => {
@@ -818,7 +818,7 @@ describe('profile route service', () => {
       userId: user.id,
       body: { username: 'support', bio: 'Answers within a day.' },
       client: client.client,
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     });
 
     expect(result).toMatchObject({ ok: true, response: { username: 'support', bio: 'Answers within a day.' } });
@@ -833,7 +833,7 @@ describe('profile route service', () => {
       userId: user.id,
       body: { username: 'luna', avatarUrl: avatar.url, coverUrl: cover.url },
       client: client.client,
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     });
 
     const avatarCopy = new RegExp(`^${PUBLIC_PROFILES}${user.id}/avatar-${AVATAR_UPLOAD_ID}-photo\\.normalized\\.[0-9a-f]{16}\\.webp$`);
@@ -882,7 +882,7 @@ describe('profile route service', () => {
       userId: user.id,
       body: { username: 'luna', avatarUrl: avatar.url },
       client: client.client,
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     });
 
     expect(result).toMatchObject({ ok: true, response: { avatarUrl: avatar.url } });
@@ -906,7 +906,7 @@ describe('profile route service', () => {
       userId: user.id,
       body: { username: 'luna', avatarUrl: avatar.url },
       client: client.client,
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     });
 
     expect(result).toMatchObject({ ok: true, response: { avatarUrl: avatar.url } });
@@ -923,7 +923,7 @@ describe('profile route service', () => {
       userId: user.id,
       body: { username: 'luna', avatarUrl: avatar.url },
       client: client.client,
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     });
     const copyUrl = String(client.upserts[0].avatar_url);
     client.storageApi.download.mockClear();
@@ -934,7 +934,7 @@ describe('profile route service', () => {
       userId: user.id,
       body: { username: 'luna', bio: 'Painting with light.', avatarUrl: copyUrl },
       client: client.client,
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     });
 
     expect(result).toMatchObject({ ok: true, response: { avatarUrl: copyUrl, bio: 'Painting with light.' } });
@@ -970,7 +970,7 @@ describe('profile route service', () => {
         userId: user.id,
         body: { username: 'luna', avatarUrl: avatar.url },
         client: client.client,
-        invalidateFeedCache: vi.fn(),
+        invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
       });
 
       expect(result).toMatchObject({ ok: true });
@@ -997,7 +997,7 @@ describe('profile route service', () => {
         userId: user.id,
         body: { username: 'luna', avatarUrl: null },
         client: client.client,
-        invalidateFeedCache: vi.fn(),
+        invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
       })).resolves.toMatchObject({ ok: true, response: { avatarUrl: null } });
 
       expect(client.storageApi.remove).not.toHaveBeenCalled();
@@ -1020,7 +1020,7 @@ describe('profile route service', () => {
           userId: user.id,
           body: { username: 'luna', bio: 'Painting with light.', avatarUrl: PUBLIC_PROFILES + earlierAvatarPath },
           client: client.client,
-          invalidateFeedCache: vi.fn(),
+          invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
         });
 
         expect(result).toMatchObject({
@@ -1054,7 +1054,7 @@ describe('profile route service', () => {
           userId: user.id,
           body: { username: 'luna', bio: 'Painting with light.', avatarUrl: earlier.url },
           client: client.client,
-          invalidateFeedCache: vi.fn(),
+          invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
         });
 
         expect(result).toMatchObject({ ok: true, response: { avatarUrl: PUBLIC_PROFILES + shownPath } });
@@ -1074,7 +1074,7 @@ describe('profile route service', () => {
           userId: user.id,
           body: { username: 'luna', avatarUrl: PUBLIC_PROFILES + earlierAvatarPath },
           client: client.client,
-          invalidateFeedCache: vi.fn(),
+          invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
         })).resolves.toMatchObject({ ok: false, status: 500 });
         expect(client.upserts).toEqual([]);
       });
@@ -1092,7 +1092,7 @@ describe('profile route service', () => {
           userId: user.id,
           body: { username: 'luna', avatarUrl: google },
           client: client.client,
-          invalidateFeedCache: vi.fn(),
+          invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
         });
 
         expect(result).toMatchObject({ ok: true, response: { avatarUrl: google } });
@@ -1114,7 +1114,7 @@ describe('profile route service', () => {
           userId: user.id,
           body: { username: 'luna', avatarUrl: google },
           client: client.client,
-          invalidateFeedCache: vi.fn(),
+          invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
         })).resolves.toMatchObject({ ok: true });
 
         expect(client.storageApi.remove).not.toHaveBeenCalled();
@@ -1130,7 +1130,7 @@ describe('profile route service', () => {
           userId: user.id,
           body: { username: 'luna', avatarUrl: upload.url },
           client: client.client,
-          invalidateFeedCache: vi.fn(),
+          invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
         });
       }
 
@@ -1139,7 +1139,7 @@ describe('profile route service', () => {
           userId: user.id,
           body: { username: 'luna', bio: 'From the web.', avatarUrl: PUBLIC_PROFILES + earlierAvatarPath },
           client: client.client,
-          invalidateFeedCache: vi.fn(),
+          invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
         });
       }
 
@@ -1185,7 +1185,7 @@ describe('profile route service', () => {
         userId: user.id,
         body: { username: 'luna', avatarUrl: avatar.url },
         client: client.client,
-        invalidateFeedCache: vi.fn(),
+        invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
       });
 
       expect(client.storageApi.remove).not.toHaveBeenCalled();
@@ -1206,7 +1206,7 @@ describe('profile route service', () => {
         userId: user.id,
         body: { username: 'luna', avatarUrl: avatar.url },
         client: client.client,
-        invalidateFeedCache: vi.fn(),
+        invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
       });
 
       expect(client.storageApi.remove).not.toHaveBeenCalled();
@@ -1227,7 +1227,7 @@ describe('profile route service', () => {
         userId: user.id,
         body: { username: 'luna', avatarUrl: avatar.url },
         client: client.client,
-        invalidateFeedCache: vi.fn(),
+        invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
       });
 
       expect(client.storageApi.remove).not.toHaveBeenCalled();
@@ -1246,7 +1246,7 @@ describe('profile route service', () => {
         userId: user.id,
         body: { username: 'luna', avatarUrl: avatar.url },
         client: client.client,
-        invalidateFeedCache: vi.fn(),
+        invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
       })).resolves.toMatchObject({ ok: true });
 
       expect(client.storageApi.remove).not.toHaveBeenCalled();
@@ -1266,7 +1266,7 @@ describe('profile route service', () => {
         userId: user.id,
         body: { username: 'luna', avatarUrl: avatar.url },
         client: client.client,
-        invalidateFeedCache: vi.fn(),
+        invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
       });
 
       expect(client.storageApi.remove).not.toHaveBeenCalled();
@@ -1286,7 +1286,7 @@ describe('profile route service', () => {
         userId: user.id,
         body: { username: 'luna', avatarUrl: avatar.url },
         client: client.client,
-        invalidateFeedCache: vi.fn(),
+        invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
       })).resolves.toMatchObject({ ok: true });
     });
 
@@ -1301,7 +1301,7 @@ describe('profile route service', () => {
         userId: user.id,
         body: { username: 'luna', bio: 'New bio' },
         client: client.client,
-        invalidateFeedCache: vi.fn(),
+        invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
       });
 
       expect(client.referenceReads).toEqual([]);
@@ -1322,7 +1322,7 @@ describe('profile route service', () => {
       userId: user.id,
       body: { username: 'luna', avatarUrl: avatar.url },
       client: client.client,
-      invalidateFeedCache: vi.fn(),
+      invalidateShowcaseFeedAndRefreshEveryPage: vi.fn(),
     })).resolves.toMatchObject({ ok: false, status: 409 });
 
     expect(client.reservations[0]).toMatchObject({ finalization_status: 'finalized', consumption_disposition: null });

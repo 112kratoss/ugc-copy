@@ -31,6 +31,16 @@ The resource bundle is the reusable "how".
   reports such a recipe with `allowRemix: true` and `remix` among its kinds,
   whatever its stored switch says (2026-10-27); a post without a recipe, an
   upload and a template result are unchanged
+- a post with media and no creation (an upload, an agent's media, a creation
+  deleted since) offers no Remix to anyone, and its recipe includes none
+  (owner, 2026-11-17: "Yes, hide it"): a Remix starts from a creation, and the
+  remix route refuses every other post. Every read reports its recipe with
+  `allowRemix: false` and no `remix` among its kinds, whatever its stored
+  switch, a reference picture or a Remix access item says, and its post with
+  no Remix capability (`isMediaPostWithoutCreation`). Read-time only: nothing
+  stored changes. A text post's recipe is unchanged. The marketplace's SQL
+  projections still read the stored switch, so its Remix filter is checked
+  again on the page served
 - the creation's saved inputs (reference media) are another matter: they can
   be personal, so they reach the people who unlock a recipe -- merged into it
   at read time, or restored into their remix -- only where the creator's

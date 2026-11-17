@@ -1,6 +1,7 @@
 import {
   formatPostResourceCompactPriceLabel,
   getPostResourceKinds,
+  isMediaPostWithoutCreation,
   normalizePostResourceAttachments,
   normalizePostResourceItems,
   POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
@@ -9,6 +10,7 @@ import {
   type PersistedPostResourceBundleAccessMode,
   type PostResourceBundleAccessMode,
   type PostResourceBundleResources,
+  type PostResourceItemCounts,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import { getCreatorProfileReadiness } from '@/lib/profile';
@@ -55,10 +57,24 @@ export interface MarketplaceQualityInput {
   priceUsdCents?: number | null;
   resources?: Partial<PostResourceBundleResources> | null;
   resourceKinds?: PostResourceKind[] | null;
+  /**
+   * What the recipe holds, by item type, for a read that has its counts but not its items (a listed
+   * recipe's teaser). An item the creator added counts even where its kind is not sold, as a Remix
+   * link on a post that sells no Remix (owner, 2026-11-17), as the database's listing rule counts every
+   * labelled item. The mark of a Remix that comes with the recipe ("remix access") is no item of the
+   * creator's and does not count.
+   */
+  itemCounts?: PostResourceItemCounts | null;
   post?: {
     title?: string | null;
     body?: string | null;
     postFormat?: string | null;
+    category?: string | null;
+    /**
+     * The post's creation, where the caller read it: null for a post with none, whose recipe can be
+     * given no remix permission (owner, 2026-11-17). Left out, nothing is assumed.
+     */
+    generationId?: string | null;
     visibility?: string | null;
     archivedAt?: string | null;
     reviewStatus?: string | null;
@@ -198,11 +214,15 @@ export function assessMarketplaceListingQuality(input: MarketplaceQualityInput):
     });
   }
 
-  if (!hasMeaningfulResources(input.resources, input.resourceKinds)) {
+  if (!hasMeaningfulResources(input.resources, input.resourceKinds, input.itemCounts)) {
     issues.push({
       code: 'missing_resources',
       field: 'resources',
-      message: 'Attach at least one useful prompt, workflow, file, note, or remix permission.',
+      // A post with media and no creation can be given no Remix (owner, 2026-11-17), so its creator
+      // is not told to add a remix permission.
+      message: offersNoRemixPermission(post)
+        ? 'Attach at least one useful prompt, workflow, file, or note.'
+        : 'Attach at least one useful prompt, workflow, file, note, or remix permission.',
     });
   }
 
@@ -308,12 +328,20 @@ function hasUsefulPublicProof(post: NonNullable<MarketplaceQualityInput['post']>
   return title.length >= 12 && !isPlaceholderText(title);
 }
 
+/** A post with media read with no creation behind it: only a caller that read its creation says so. */
+function offersNoRemixPermission(post: MarketplaceQualityInput['post']): boolean {
+  return post?.generationId === null
+    && isMediaPostWithoutCreation({ generationId: null, postFormat: post.postFormat, category: post.category });
+}
+
 function hasMeaningfulResources(
   resources: Partial<PostResourceBundleResources> | null | undefined,
-  resourceKinds: PostResourceKind[] | null | undefined
+  resourceKinds: PostResourceKind[] | null | undefined,
+  itemCounts?: PostResourceItemCounts | null,
 ): boolean {
   if (!resources) {
-    return Array.isArray(resourceKinds) && resourceKinds.length > 0;
+    return (Array.isArray(resourceKinds) && resourceKinds.length > 0)
+      || Object.entries(itemCounts ?? {}).some(([type, count]) => type !== 'remix_access' && (count ?? 0) > 0);
   }
 
   const attachments = normalizePostResourceAttachments(resources.attachments);

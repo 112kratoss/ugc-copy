@@ -191,10 +191,15 @@ export interface PostFeedRecipeChip {
 export type PostFeedRemixAccess = 'open' | 'free-unlock' | 'paid-unlock';
 
 export function getPostFeedRemixAccess(
-    item: Pick<ShowcaseFeedItem, 'canRemix' | 'remixCapability' | 'remixTarget'> & {
+    item: Pick<ShowcaseFeedItem, 'generationId' | 'canRemix' | 'remixCapability' | 'remixTarget'> & {
         asset: Pick<NonNullable<ShowcaseFeedItem['asset']>, 'allowRemix' | 'accessMode'> | null;
     },
 ): PostFeedRemixAccess | null {
+    // Only a creation has a prompt and settings to start from, and the remix
+    // route refuses any other post: one with none (a picture made elsewhere, a
+    // text post) offers no Remix, whatever a read says of it (owner,
+    // 2026-11-17), as the app's has never offered one.
+    if (!item.generationId) return null;
     if (item.canRemix) return 'open';
     if (item.remixCapability !== 'unlock_required' || !item.asset?.allowRemix) return null;
     // Workflow and text-template remixes stay out, as the server's own
@@ -224,7 +229,7 @@ export function getPostFeedRemixAccess(
  * `contracts/feed-recipe-chip-v1.json` holds both to the same cases.
  */
 export function getPostFeedRecipeChip(
-    item: Pick<ShowcaseFeedItem, 'asset' | 'canRemix' | 'remixCapability' | 'remixTarget'>,
+    item: Pick<ShowcaseFeedItem, 'asset' | 'generationId' | 'canRemix' | 'remixCapability' | 'remixTarget'>,
     viewer: { isOwner?: boolean } = {},
 ): PostFeedRecipeChip | null {
     if (!item.asset) return null;

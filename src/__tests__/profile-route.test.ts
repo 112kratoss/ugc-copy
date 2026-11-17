@@ -4,8 +4,10 @@ const showcaseCacheMocks = vi.hoisted(() => ({
   invalidate: vi.fn(),
 }));
 
+// A profile is drawn on every page of the creator's, on remix credits and on
+// the storefront: a save refreshes every public page in the background.
 vi.mock('@/lib/showcase-feed-cache', () => ({
-  invalidateShowcaseFeedCache: showcaseCacheMocks.invalidate,
+  invalidateShowcaseFeedAndRefreshEveryPage: showcaseCacheMocks.invalidate,
 }));
 
 type ProfileRow = {
@@ -320,7 +322,25 @@ describe('/api/profile route', () => {
       p_window_seconds: 600,
     });
     expect(profilesState[0].username).toBe('creator-name');
-    expect(showcaseCacheMocks.invalidate).toHaveBeenCalledOnce();
+    // The handle is new to this account: a page drawn for it before, a
+    // not-found, is dropped at once.
+    expect(showcaseCacheMocks.invalidate.mock.calls).toEqual([[{ handles: ['creator-name'] }]]);
+  });
+
+  it('refreshes every page in the background, and expires no handle, for a save that keeps the handle', async () => {
+    profilesState[0] = { ...profilesState[0], username: 'creator-name' };
+    const { PATCH } = await import('@/app/api/profile/route');
+    const response = await PATCH(
+      new Request('http://localhost/api/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'Creator-Name', displayName: 'A New Name' }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(profilesState[0].display_name).toBe('A New Name');
+    expect(showcaseCacheMocks.invalidate.mock.calls).toEqual([[{}]]);
   });
 
   it('rate limits profile updates before validation and persistence', async () => {

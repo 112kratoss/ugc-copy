@@ -7,7 +7,10 @@ import {
   POST_MUTATION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import {
+  invalidateShowcaseFeedAndRefreshPostPages,
+  invalidateShowcaseFeedCache,
+} from '@/lib/showcase-feed-cache';
 
 type ArchivedPostRow = {
   id: string;
@@ -127,6 +130,7 @@ export async function archiveOwnerPostForRoute({
     };
   }
 
+  // A removal: every cached page that showed the post is dropped at once.
   invalidateShowcaseFeedCache();
 
   // Bundle exposure changes in the same transaction as the post. A separate
@@ -226,7 +230,15 @@ export async function restoreOwnerPostForRoute({
     return explainUnrestoredPost(adminSupabase, ownerUserId, postId);
   }
 
-  invalidateShowcaseFeedCache();
+  // Nothing is removed: the post's pages are refreshed in the background, and
+  // the not-found its page may hold since the archive is dropped at once
+  // (a private post's page stays a not-found either way).
+  await invalidateShowcaseFeedAndRefreshPostPages(adminSupabase, {
+    postId: post.id,
+    generationId: post.generation_id ?? null,
+    creatorId: ownerUserId,
+    arrived: post.visibility !== 'private',
+  });
 
   // Clearing archived_at put the linked generation back on show in that same
   // statement, from the post's own visibility and the showcase path the post
