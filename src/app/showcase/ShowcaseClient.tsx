@@ -1433,6 +1433,10 @@ export default function ShowcaseClient({
 
                     personalizedRefreshPendingRef.current = false;
                     personalizedRefreshLandedRef.current = true;
+                    // A Load More waited on this feed (`loadMore`, For you's first page): its
+                    // loading row goes below, and a row of what follows takes its place in the
+                    // same commit, as a page Load More reads does.
+                    const loadMoreWaited = isLoadingMoreRef.current;
                     const visiblePersonalizedItems = filterSessionHiddenItems(
                         personalizedFeed.items,
                         sessionHiddenPostIdsRef.current,
@@ -1472,7 +1476,10 @@ export default function ShowcaseClient({
                     }
                     setItems(nextItems);
                     setRenderedItemCount((currentCount) => Math.min(
-                        Math.max(SHOWCASE_INITIAL_RENDER_COUNT, currentCount),
+                        Math.max(
+                            SHOWCASE_INITIAL_RENDER_COUNT,
+                            currentCount + (loadMoreWaited ? getShowcaseDeferredRevealBatchSize() : 0)
+                        ),
                         nextItems.length
                     ));
                     setPageInfo(personalizedFeed.pageInfo);
@@ -1674,7 +1681,19 @@ export default function ShowcaseClient({
                 sessionHiddenPostIdsRef.current,
                 sessionHiddenCreatorIdsRef.current
             );
+            const drawnItemIds = new Set(feedItemsForEventsRef.current.map((item) => item.id));
+            const newTileCount = visibleNextItems.filter((item) => (
+                !drawnItemIds.has(item.id) && !isTextOnlyPost(item)
+            )).length;
 
+            // The page takes the loading row's place in one commit: its first row is drawn as the
+            // row goes (`finally`, below), and the rest follows on the reveal's ticks. Drawn on a
+            // tick instead, the grid lost the loading row and Load More's block first and got
+            // shorter, and a reader at its bottom was moved up with it (the owner's report of
+            // 2026-11-17, explore-load-more-steady.spec.ts).
+            if (newTileCount > 0) {
+                setRenderedItemCount((count) => count + Math.min(getShowcaseDeferredRevealBatchSize(), newTileCount));
+            }
             setItems((currentItems) => [
                 ...currentItems,
                 ...visibleNextItems.filter((item) => !currentItems.some((current) => current.id === item.id)),
