@@ -4,7 +4,7 @@ import { Check, Loader2, Share2 } from 'lucide-react';
 
 import { ShareLinkSheet } from '@/components/PublicShareButton';
 import { SHARE_BUSY_STYLE, useShareAction } from '@/components/useShareAction';
-import { copyCreatorProfileLink, shareCreatorProfile } from '@/lib/share-client';
+import { shareCreatorProfile } from '@/lib/share-client';
 import type { ProfileShareSourceSurface } from '@/lib/share';
 
 interface ProfileShareButtonProps {
@@ -32,6 +32,7 @@ export default function ProfileShareButton({
     runShareAction,
     refusedLink,
     copyRefusedLink,
+    countRefusedLinkCopiedByHand,
     dismissRefusedLink,
   } = useShareAction({
     label,
@@ -42,7 +43,6 @@ export default function ProfileShareButton({
         sourceSurface,
         accessToken,
       }),
-    onCopyLink: (url) => copyCreatorProfileLink({ url, username, sourceSurface, accessToken }),
   });
 
   return (
@@ -68,7 +68,14 @@ export default function ProfileShareButton({
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {statusMessage}
       </span>
-      {refusedLink ? <ShareLinkSheet link={refusedLink} onCopy={copyRefusedLink} onClose={dismissRefusedLink} /> : null}
+      {refusedLink ? (
+        <ShareLinkSheet
+          link={refusedLink}
+          onCopy={copyRefusedLink}
+          onCopiedByHand={countRefusedLinkCopiedByHand}
+          onClose={dismissRefusedLink}
+        />
+      ) : null}
     </>
   );
 }

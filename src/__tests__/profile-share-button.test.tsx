@@ -174,6 +174,36 @@ describe('ProfileShareButton', () => {
     });
   });
 
+  it('counts the person\'s own copy of the profile link once, where Copy link is refused too', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    writeTextMock.mockRejectedValue(new DOMException('Write permission denied.', 'NotAllowedError'));
+    Object.defineProperty(navigator, 'share', { configurable: true, value: undefined });
+
+    render(
+      <ProfileShareButton
+        username="creator-name"
+        displayName="Creator Name"
+        sourceSurface="creator-profile"
+        className="inline-flex"
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /share profile/i }));
+    const sheet = await screen.findByRole('dialog', { name: 'Copy the link' });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Copy link' }));
+    await within(sheet).findByText('Copying is blocked here too. Select the link and copy it yourself.');
+    expect(readProfileShareCall()).toBeNull();
+
+    fireEvent.copy(within(sheet).getByRole('textbox', { name: 'Link' }));
+    fireEvent.copy(within(sheet).getByRole('textbox', { name: 'Link' }));
+
+    await waitFor(() => {
+      expect(readProfileShareCall()).toMatchObject({
+        body: { username: 'creator-name', sourceSurface: 'creator-profile', channel: 'copy-link' },
+      });
+    });
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/profile/share')).toHaveLength(1);
+  });
+
   it('stays focusable while it shares, busy, and takes no second press meanwhile', async () => {
     shareMock.mockImplementation(() => new Promise<void>(() => undefined));
     Object.defineProperty(navigator, 'share', { configurable: true, value: shareMock });

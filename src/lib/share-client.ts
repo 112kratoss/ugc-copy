@@ -27,21 +27,29 @@ export function withSharersInvite(url: string): string {
  * so did the clipboard, or it has neither. By the time the sheet says no it has spent the click's
  * activation, and a clipboard that wants one refuses the write too ("Write permission denied" in
  * an embedded Chromium; in-app browsers and webviews alike), so trying again ends the same way.
- * The link rides on the error for the person to copy by hand (`ShareLinkSheet`), whose Copy link
- * is a press of its own (`copyPublicGenerationLink`, `copyCreatorProfileLink`). Nothing was shared,
- * so nothing is counted.
+ * The link rides on the error for the person to copy by hand (`ShareLinkSheet`): with Copy link,
+ * a press of its own (`copyLinkToClipboard`), or with their own copy of the field. Nothing was
+ * shared, so nothing is counted until then.
  */
 export class ShareLinkRefusedError extends Error {
   readonly url: string;
+  /**
+   * Counts the share as a copied link once the person has the link, for what it was shared for as
+   * the share was made: the button that asked may be showing another post by then (the reel moves
+   * on), and the count goes with the link in the sheet.
+   */
+  readonly countCopy: () => Promise<void>;
 
-  constructor(url: string, cause: unknown) {
+  constructor(url: string, countCopy: () => Promise<void>, cause: unknown) {
     super('The browser refused both its share sheet and the clipboard', { cause });
     this.name = 'ShareLinkRefusedError';
     this.url = url;
+    this.countCopy = countCopy;
   }
 }
 
-async function writeLinkToClipboard(url: string) {
+/** The link onto the clipboard; throws where the browser has none or refuses the write. */
+export async function copyLinkToClipboard(url: string): Promise<void> {
   if (!navigator.clipboard?.writeText) {
     throw new Error('Clipboard sharing is not supported in this browser');
   }
@@ -49,11 +57,11 @@ async function writeLinkToClipboard(url: string) {
 }
 
 /** The share's last way out: the clipboard, or the link handed back for a copy by hand. */
-async function copyLinkOrHandBack(url: string) {
+async function copyLinkOrHandBack(url: string, countCopy: () => Promise<void>) {
   try {
-    await writeLinkToClipboard(url);
+    await copyLinkToClipboard(url);
   } catch (error) {
-    throw new ShareLinkRefusedError(url, error);
+    throw new ShareLinkRefusedError(url, countCopy, error);
   }
 }
 
@@ -178,35 +186,15 @@ export async function sharePublicGeneration({
     }
   }
 
-  await copyLinkOrHandBack(url);
-  await postShareClick({
+  const countCopy = () => postShareClick({
     generationId,
     sourceSurface,
     channel: 'copy-link',
     accessToken,
   });
+  await copyLinkOrHandBack(url, countCopy);
+  await countCopy();
   return 'copy-link';
-}
-
-/**
- * Copy link on the link a refused share handed back (`ShareLinkRefusedError`): a press of its own,
- * which the browser may allow where the share's spent click was not. Throws where the clipboard
- * refuses it even so, and the link stays in its field for a copy by hand. Counted as a copied link
- * once it is on the clipboard, behind the copy: the person has the link then and waits for nothing.
- */
-export async function copyPublicGenerationLink({
-  url,
-  generationId,
-  sourceSurface,
-  accessToken,
-}: {
-  url: string;
-  generationId: string;
-  sourceSurface: GenerationShareSourceSurface;
-  accessToken?: string | null;
-}): Promise<void> {
-  await writeLinkToClipboard(url);
-  void postShareClick({ generationId, sourceSurface, channel: 'copy-link', accessToken });
 }
 
 export async function shareCreatorProfile({
@@ -258,28 +246,13 @@ export async function shareCreatorProfile({
     }
   }
 
-  await copyLinkOrHandBack(url);
-  await postProfileShareClick({
+  const countCopy = () => postProfileShareClick({
     username,
     sourceSurface,
     channel: 'copy-link',
     accessToken,
   });
+  await copyLinkOrHandBack(url, countCopy);
+  await countCopy();
   return 'copy-link';
-}
-
-/** `copyPublicGenerationLink`, for a creator profile's link. */
-export async function copyCreatorProfileLink({
-  url,
-  username,
-  sourceSurface,
-  accessToken,
-}: {
-  url: string;
-  username: string;
-  sourceSurface: ProfileShareSourceSurface;
-  accessToken?: string | null;
-}): Promise<void> {
-  await writeLinkToClipboard(url);
-  void postProfileShareClick({ username, sourceSurface, channel: 'copy-link', accessToken });
 }

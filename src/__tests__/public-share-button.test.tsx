@@ -266,6 +266,42 @@ describe('PublicShareButton', () => {
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     });
 
+    // Where Copy link is refused too, the person's own copy (Cmd or Ctrl+C on the selected link,
+    // the field's menu) is the only way the link leaves: it is the share, counted once a sheet,
+    // and Copy link after it counts nothing more (review of #842).
+    it('counts the person\'s own copy of the link once, and Copy link after it nothing more', async () => {
+      const onShared = vi.fn();
+      const sheet = await refusedShare(onShared);
+      const field = within(sheet).getByRole('textbox', { name: 'Link' });
+
+      fireEvent.copy(field);
+      fireEvent.copy(field);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+        generationId: 'gen-4',
+        sourceSurface: 'feed',
+        channel: 'copy-link',
+      });
+      expect(onShared).toHaveBeenCalledTimes(1);
+      // Nothing written: the person copied it.
+      expect(writeTextMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('dialog', { name: 'Copy the link' })).toBe(sheet);
+
+      writeTextMock.mockReset();
+      writeTextMock.mockResolvedValue(undefined);
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Copy link' }));
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(writeTextMock).toHaveBeenCalledWith(link);
+      expect(screen.getByRole('button', { name: 'Copied link' })).toBeInTheDocument();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(onShared).toHaveBeenCalledTimes(1);
+    });
+
     it('counts nothing when the sheet is put away, and Share is Share again', async () => {
       const sheet = await refusedShare();
 
@@ -276,30 +312,80 @@ describe('PublicShareButton', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
+    // The sheet holds the link of the post the share was for; the button can be given another
+    // post meanwhile (a load moves the reel on). The count and `onShared` go with the link.
+    it('counts the post whose link the sheet holds, though the button has been given another since', async () => {
+      const onSharedFirst = vi.fn();
+      const onSharedSecond = vi.fn();
+      const { rerender } = render(
+        <PublicShareButton generationId="gen-4" title="Public creation" sourceSurface="showcase-reel" onShared={onSharedFirst} />
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+      const sheet = await screen.findByRole('dialog', { name: 'Copy the link' });
+
+      rerender(
+        <PublicShareButton generationId="gen-9" title="Another creation" sourceSurface="showcase-reel" onShared={onSharedSecond} />
+      );
+      writeTextMock.mockReset();
+      writeTextMock.mockResolvedValue(undefined);
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Copy link' }));
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      expect(writeTextMock).toHaveBeenCalledWith(`${window.location.origin}/showcase/gen-4?s=showcase-reel`);
+      expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({ generationId: 'gen-4' });
+      expect(onSharedFirst).toHaveBeenCalledTimes(1);
+      expect(onSharedSecond).not.toHaveBeenCalled();
+    });
+
     // A share button sits inside things that act on a press or a swipe of their own: a feed card
-    // opens its post, the reel moves to another post. The sheet is drawn in <body>, but React's
-    // events cross a portal, so none of the sheet's may reach them.
+    // opens its post (a middle-click in a new tab), the reel moves to another post. The sheet is
+    // drawn in <body>, but React's events cross a portal, so none of the sheet's may reach them.
     it('keeps the sheet\'s presses and swipes from what the button sits in', async () => {
-      const onCardClick = vi.fn();
+      const onCardPress = vi.fn();
       const onReelSwipe = vi.fn();
       render(
-        <div onClick={onCardClick} onTouchStart={onReelSwipe} onTouchEnd={onReelSwipe} onWheel={onReelSwipe}>
+        <div
+          onClick={onCardPress}
+          onAuxClick={onCardPress}
+          onDoubleClick={onCardPress}
+          onContextMenu={onCardPress}
+          onPointerDown={onCardPress}
+          onPointerUp={onCardPress}
+          onMouseDown={onCardPress}
+          onMouseUp={onCardPress}
+          onTouchStart={onReelSwipe}
+          onTouchMove={onReelSwipe}
+          onTouchEnd={onReelSwipe}
+          onWheel={onReelSwipe}
+        >
           <PublicShareButton generationId="gen-4" title="Public creation" sourceSurface="feed" />
         </div>
       );
       fireEvent.click(screen.getByRole('button', { name: 'Share' }));
       const sheet = await screen.findByRole('dialog', { name: 'Copy the link' });
+      onCardPress.mockClear();
       const field = within(sheet).getByRole('textbox', { name: 'Link' });
+      const backdrop = sheet.parentElement as HTMLElement;
 
+      fireEvent.pointerDown(field);
+      fireEvent.mouseDown(field);
+      fireEvent.pointerUp(field);
+      fireEvent.mouseUp(field);
       fireEvent.click(field);
+      fireEvent.doubleClick(field);
+      fireEvent.contextMenu(field);
       fireEvent.touchStart(field);
+      fireEvent.touchMove(field);
       fireEvent.touchEnd(field);
       fireEvent.wheel(field);
+      // A middle-click on the backdrop: a feed card would open its post in a new tab. (Testing
+      // Library has no `auxClick`, so the browser's event is dispatched as it is.)
+      fireEvent(backdrop, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
       // The backdrop's own press puts the sheet away, and goes no further either.
-      fireEvent.click(sheet.parentElement as HTMLElement);
+      fireEvent.click(backdrop);
 
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-      expect(onCardClick).not.toHaveBeenCalled();
+      expect(onCardPress).not.toHaveBeenCalled();
       expect(onReelSwipe).not.toHaveBeenCalled();
     });
   });

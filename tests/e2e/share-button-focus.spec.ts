@@ -186,13 +186,44 @@ test.describe('a post\'s Share', () => {
     await allowTheClipboard(page);
     await copy.click();
     await expect(sheet).toBeHidden();
+    // Back on Share, which says the link is on the clipboard (for 2.2 seconds, so read at once).
+    await expect(share).toBeFocused();
+    await expect(share).toHaveAccessibleName('Copied link');
     expect((await sharing(page)).writes).toEqual([link]);
     await expect.poll(() => recorded).toEqual([
       { generationId: creationPost.post.id, sourceSurface: 'detail-page', channel: 'copy-link' },
     ]);
-    // Back on Share, which says the link is on the clipboard.
+  });
+
+  // Where Copy link is refused too, the person's own copy of the selected link is the only way it
+  // leaves, and it was counted nowhere (review of #842): it is the share, counted once a sheet.
+  test('counts a copy made by hand in the sheet, once', async ({ page }) => {
+    const recorded = await visitSignedOut(page, '**/api/showcase/share');
+    await standInSharing(page);
+    await page.goto(`/showcase/${creationPost.post.id}`);
+    const share = page.getByRole('button', { name: POST_SHARE });
+    await expect(share).toBeVisible(COLD_PAGE);
+
+    await pressShareFromKeyboard(page, share);
+    await refuseTheShare(page);
+    const sheet = page.getByRole('dialog', { name: 'Copy the link' });
+    const field = sheet.getByRole('textbox', { name: 'Link' });
+    await expect(field).toBeFocused();
+
+    // Cmd or Ctrl+C on the selected link, as the browser announces it to the page (a real key
+    // press would put the test's link on this machine's own clipboard).
+    await field.dispatchEvent('copy');
+    await field.dispatchEvent('copy');
+    await expect.poll(() => recorded).toEqual([
+      { generationId: creationPost.post.id, sourceSurface: 'detail-page', channel: 'copy-link' },
+    ]);
+    // Nothing written for it: the person copied it.
+    expect((await sharing(page)).writes).toEqual([]);
+
+    await page.keyboard.press('Escape');
+    await expect(sheet).toBeHidden();
     await expect(share).toBeFocused();
-    await expect(share).toHaveAccessibleName('Copied link');
+    expect(recorded).toHaveLength(1);
   });
 });
 

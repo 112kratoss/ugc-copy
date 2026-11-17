@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ShareLinkRefusedError,
-  copyCreatorProfileLink,
-  copyPublicGenerationLink,
+  copyLinkToClipboard,
   shareCreatorProfile,
   sharePublicGeneration,
 } from '@/lib/share-client';
@@ -16,15 +15,12 @@ const ORIGIN = window.location.origin;
 // refuses the link both ways (an in-app browser's or a webview's sheet that fails, after which the
 // clipboard refuses a write whose click the sheet has spent: "Write permission denied" in an
 // embedded Chromium, 2026-11-17), the link comes back on the error for the person to copy by hand,
-// and the copy's own press is counted once it has put the link on the clipboard.
+// with the count of what it was shared for, made once they have it.
 describe.each([
   {
     kind: 'a post',
     share: () => sharePublicGeneration({
       generationId: 'post-1', title: 'Shared creation', sourceSurface: 'feed', accessToken: 'token',
-    }),
-    copyByHand: (url: string) => copyPublicGenerationLink({
-      url, generationId: 'post-1', sourceSurface: 'feed', accessToken: 'token',
     }),
     link: `${ORIGIN}/showcase/post-1?s=feed`,
     countPath: '/api/showcase/share',
@@ -35,14 +31,11 @@ describe.each([
     share: () => shareCreatorProfile({
       username: 'creator-name', displayName: 'Creator Name', sourceSurface: 'creator-profile', accessToken: 'token',
     }),
-    copyByHand: (url: string) => copyCreatorProfileLink({
-      url, username: 'creator-name', sourceSurface: 'creator-profile', accessToken: 'token',
-    }),
     link: `${ORIGIN}/creators/creator-name?s=creator-profile`,
     countPath: '/api/profile/share',
     count: (channel: string) => ({ username: 'creator-name', sourceSurface: 'creator-profile', channel }),
   },
-])('sharing $kind', ({ share, copyByHand, link, countPath, count }) => {
+])('sharing $kind', ({ share, link, countPath, count }) => {
   const shareSheet = vi.fn<(data: ShareData) => Promise<void>>();
   const writeText = vi.fn<(text: string) => Promise<void>>();
   const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
@@ -143,28 +136,50 @@ describe.each([
     expect(counted()).toEqual([]);
   });
 
-  describe('copied by hand', () => {
-    it('puts the link on the clipboard, then counts a copied link', async () => {
-      await copyByHand(link);
+  // The refusal carries its own count, made with what the share was made with: whatever the
+  // button that asked has been given since, the copied link is counted for this one.
+  it('counts a copied link of what was shared, once the person has the link a refusal handed back', async () => {
+    shareSheet.mockRejectedValue(refusedBy('NotAllowedError'));
+    writeText.mockRejectedValue(refusedBy('NotAllowedError'));
+    const refusal = await share().then(() => null, (error: unknown) => error);
+    expect(counted()).toEqual([]);
 
-      expect(writeText).toHaveBeenCalledWith(link);
-      await vi.waitFor(() => expect(counted()).toEqual([{ path: countPath, body: count('copy-link') }]));
-    });
+    await (refusal as ShareLinkRefusedError).countCopy();
 
-    it('throws, counting nothing, where the clipboard refuses even a press of its own', async () => {
-      writeText.mockRejectedValue(refusedBy('NotAllowedError'));
+    expect(counted()).toEqual([{ path: countPath, body: count('copy-link') }]);
+  });
+});
 
-      await expect(copyByHand(link)).rejects.toThrow();
+// The copy-by-hand sheet's Copy link: a press of its own, which the browser may allow where the
+// share's spent click was not.
+describe('copyLinkToClipboard', () => {
+  const writeText = vi.fn<(text: string) => Promise<void>>();
 
-      expect(counted()).toEqual([]);
-    });
+  beforeEach(() => {
+    writeText.mockReset();
+    writeText.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+  });
 
-    it('throws, counting nothing, where the browser has no clipboard', async () => {
-      Reflect.deleteProperty(navigator, 'clipboard');
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'clipboard');
+  });
 
-      await expect(copyByHand(link)).rejects.toThrow();
+  it('puts the link on the clipboard', async () => {
+    await copyLinkToClipboard(`${ORIGIN}/showcase/post-1?s=feed`);
 
-      expect(counted()).toEqual([]);
-    });
+    expect(writeText).toHaveBeenCalledWith(`${ORIGIN}/showcase/post-1?s=feed`);
+  });
+
+  it('throws where the clipboard refuses even a press of its own', async () => {
+    writeText.mockRejectedValue(new DOMException('Write permission denied.', 'NotAllowedError'));
+
+    await expect(copyLinkToClipboard(`${ORIGIN}/showcase/post-1?s=feed`)).rejects.toThrow('Write permission denied.');
+  });
+
+  it('throws where the browser has no clipboard', async () => {
+    Reflect.deleteProperty(navigator, 'clipboard');
+
+    await expect(copyLinkToClipboard(`${ORIGIN}/showcase/post-1?s=feed`)).rejects.toThrow();
   });
 });

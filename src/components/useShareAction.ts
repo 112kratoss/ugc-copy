@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import type { GenerationShareChannel } from '@/lib/share';
-import { ShareLinkRefusedError } from '@/lib/share-client';
+import { copyLinkToClipboard, ShareLinkRefusedError } from '@/lib/share-client';
 
 export type ShareActionState = 'idle' | 'loading' | 'copied' | 'shared' | 'error';
 
@@ -11,11 +11,17 @@ interface UseShareActionOptions {
   label: string;
   disabled?: boolean;
   onAction: () => Promise<GenerationShareChannel | null>;
-  /**
-   * Copy link on a link the browser refused both ways (`ShareLinkRefusedError`): puts it on the
-   * clipboard and counts the share, or throws where the clipboard refuses it even then.
-   */
-  onCopyLink: (url: string) => Promise<void>;
+  onShared?: () => void;
+}
+
+/**
+ * A share the browser refused both ways, in the sheet to copy by hand: its link, and the count and
+ * `onShared` of what it was shared for, kept from the press that shared it. The button can be
+ * given another post while the sheet is up (a load moves the reel on); they go with the link.
+ */
+interface RefusedShare {
+  url: string;
+  countCopy: () => Promise<void>;
   onShared?: () => void;
 }
 
@@ -62,16 +68,17 @@ export function useShareAction({
   label,
   disabled = false,
   onAction,
-  onCopyLink,
   onShared,
 }: UseShareActionOptions) {
   const [state, setState] = useState<ShareActionState>('idle');
-  // The link the browser refused both ways, offered to copy by hand while it is set.
-  const [refusedLink, setRefusedLink] = useState<string | null>(null);
+  const [refused, setRefused] = useState<RefusedShare | null>(null);
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A share under way. The button takes presses while it shares, so they are turned away here,
   // not by the state: a press can come before React has drawn the share as under way.
   const sharingRef = useRef(false);
+  // Whether the share in the sheet has been counted: once, by the person's own copy of the link or
+  // by Copy link, whichever comes first.
+  const refusedCountedRef = useRef(false);
 
   const clearResetTimer = () => {
     if (resetTimerRef.current) {
@@ -115,7 +122,8 @@ export function useShareAction({
       if (error instanceof ShareLinkRefusedError) {
         // Not a failure to try again: a second try is refused the same way. The link, to copy.
         setState('idle');
-        setRefusedLink(error.url);
+        refusedCountedRef.current = false;
+        setRefused({ url: error.url, countCopy: error.countCopy, onShared });
         return;
       }
       console.error('Failed to share:', error);
@@ -126,22 +134,34 @@ export function useShareAction({
     }
   };
 
-  /** The sheet's Copy link: true once the link is on the clipboard, the share done and counted. */
+  /** The person has the link the sheet holds: the share, counted once a sheet. */
+  const markRefusedLinkCopied = () => {
+    if (!refused) {
+      return;
+    }
+    if (!refusedCountedRef.current) {
+      refusedCountedRef.current = true;
+      void refused.countCopy();
+      refused.onShared?.();
+    }
+    setState('copied');
+    queueReset();
+  };
+
+  /** The sheet's Copy link: true once the link is on the clipboard. */
   const copyRefusedLink = async () => {
-    if (!refusedLink) {
+    if (!refused) {
       return false;
     }
 
     try {
-      await onCopyLink(refusedLink);
+      await copyLinkToClipboard(refused.url);
     } catch (error) {
       console.error('Failed to copy the link:', error);
       return false;
     }
 
-    setState('copied');
-    onShared?.();
-    queueReset();
+    markRefusedLinkCopied();
     return true;
   };
 
@@ -151,8 +171,10 @@ export function useShareAction({
     resolvedLabel: getShareActionLabel(state, label),
     statusMessage: getShareActionStatus(state),
     runShareAction,
-    refusedLink,
+    refusedLink: refused?.url ?? null,
     copyRefusedLink,
-    dismissRefusedLink: () => setRefusedLink(null),
+    /** The person's own copy of the sheet's link (Cmd or Ctrl+C, the field's menu): nothing written. */
+    countRefusedLinkCopiedByHand: markRefusedLinkCopied,
+    dismissRefusedLink: () => setRefused(null),
   };
 }

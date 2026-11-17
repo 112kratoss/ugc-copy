@@ -1,12 +1,12 @@
 'use client';
 
 import { Check, Copy, Loader2, Share2 } from 'lucide-react';
-import { useRef, useState, type SyntheticEvent } from 'react';
+import { useRef, useState, type DOMAttributes, type SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
 
 import { ModalSheet } from '@/components/ModalSheet';
 import { SHARE_BUSY_STYLE, useShareAction } from '@/components/useShareAction';
-import { copyPublicGenerationLink, sharePublicGeneration } from '@/lib/share-client';
+import { sharePublicGeneration } from '@/lib/share-client';
 import type { GenerationShareSourceSurface } from '@/lib/share';
 
 interface PublicShareButtonProps {
@@ -29,6 +29,26 @@ const COPY_REFUSED = 'Copying is blocked here too. Select the link and copy it y
 
 const keepInSheet = (event: SyntheticEvent) => event.stopPropagation();
 
+/**
+ * Every press, swipe and wheel the sheet takes, kept from what the button sits in: a feed card
+ * opens its post on a click and in a new tab on a middle-click (`onAuxClick`), and the reel moves
+ * to another post on a swipe or a wheel.
+ */
+const KEEP_IN_SHEET = {
+  onClick: keepInSheet,
+  onAuxClick: keepInSheet,
+  onDoubleClick: keepInSheet,
+  onContextMenu: keepInSheet,
+  onPointerDown: keepInSheet,
+  onPointerUp: keepInSheet,
+  onMouseDown: keepInSheet,
+  onMouseUp: keepInSheet,
+  onTouchStart: keepInSheet,
+  onTouchMove: keepInSheet,
+  onTouchEnd: keepInSheet,
+  onWheel: keepInSheet,
+} satisfies DOMAttributes<HTMLSpanElement>;
+
 function selectWholeLink(field: HTMLInputElement) {
   field.setSelectionRange(0, field.value.length);
 }
@@ -37,23 +57,25 @@ function selectWholeLink(field: HTMLInputElement) {
  * The link of a share the browser refused both ways (`ShareLinkRefusedError`), to copy by hand,
  * for this button and `ProfileShareButton`: selected in a read-only field as the sheet comes up,
  * so a keyboard copies it at once, and Copy link, a press of its own, which the browser may allow
- * where the share's spent click was not. The share is counted only once the link is on the
- * clipboard. On the app's sheet (`ModalSheet`, drawn in <body> as it expects), because the share
- * buttons sit in action rows, Explore's tiles and the reel's column, with no room for a field.
+ * where the share's spent click was not. The share is counted once the person has the link, by
+ * Copy link or their own copy of the field, and once only. On the app's sheet (`ModalSheet`, drawn
+ * in <body> as it expects), because the share buttons sit in action rows, Explore's tiles and the
+ * reel's column, with no room for a field.
  *
- * React's events cross a portal: a press on the sheet's backdrop would reach a feed card's own
- * click and open the post, and a swipe or a wheel over it the reel's, which moves to another post.
- * The span between the button and the portal keeps them in the sheet; it draws no box.
+ * React's events cross a portal, so the span between the button and the portal keeps the sheet's
+ * presses, swipes and wheels in it (`KEEP_IN_SHEET`); it draws no box.
  */
-export function ShareLinkSheet({ link, onCopy, onClose }: {
+export function ShareLinkSheet({ link, onCopy, onCopiedByHand, onClose }: {
   link: string;
   /** True once the link is on the clipboard. */
   onCopy: () => Promise<boolean>;
+  /** The person copied the field's link themselves (Cmd or Ctrl+C, the field's menu). */
+  onCopiedByHand: () => void;
   onClose: () => void;
 }) {
   const fieldRef = useRef<HTMLInputElement>(null);
   const [copyRefused, setCopyRefused] = useState(false);
-  // A second press while the clipboard answers the first would count the share twice.
+  // A second press while the clipboard answers the first writes and closes once.
   const copyingRef = useRef(false);
 
   const copy = async () => {
@@ -71,7 +93,7 @@ export function ShareLinkSheet({ link, onCopy, onClose }: {
   };
 
   return (
-    <span className="contents" onClick={keepInSheet} onTouchStart={keepInSheet} onTouchEnd={keepInSheet} onWheel={keepInSheet}>
+    <span className="contents" {...KEEP_IN_SHEET}>
       {createPortal(
         <ModalSheet
           title="Copy the link"
@@ -87,6 +109,8 @@ export function ShareLinkSheet({ link, onCopy, onClose }: {
             aria-label="Link"
             onFocus={(event) => selectWholeLink(event.currentTarget)}
             onClick={(event) => selectWholeLink(event.currentTarget)}
+            // Where Copy link is refused too, this is how the link leaves, and it is the share.
+            onCopy={onCopiedByHand}
             className="ui-focus-ring mt-5 block min-h-12 w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 text-base text-[var(--ui-text-primary)] sm:text-sm"
           />
           <p role="status" className={copyRefused ? 'mt-3 text-sm leading-6 text-[var(--ui-text-secondary)]' : 'sr-only'}>
@@ -127,6 +151,7 @@ export default function PublicShareButton({
     runShareAction,
     refusedLink,
     copyRefusedLink,
+    countRefusedLinkCopiedByHand,
     dismissRefusedLink,
   } = useShareAction({
     label,
@@ -141,7 +166,6 @@ export default function PublicShareButton({
         accessToken,
         viewerIsOwner,
       }),
-    onCopyLink: (url) => copyPublicGenerationLink({ url, generationId, sourceSurface, accessToken }),
   });
 
   return (
@@ -174,7 +198,14 @@ export default function PublicShareButton({
       <span className="sr-only" aria-live="polite" aria-atomic="true">
         {statusMessage}
       </span>
-      {refusedLink ? <ShareLinkSheet link={refusedLink} onCopy={copyRefusedLink} onClose={dismissRefusedLink} /> : null}
+      {refusedLink ? (
+        <ShareLinkSheet
+          link={refusedLink}
+          onCopy={copyRefusedLink}
+          onCopiedByHand={countRefusedLinkCopiedByHand}
+          onClose={dismissRefusedLink}
+        />
+      ) : null}
     </>
   );
 }
