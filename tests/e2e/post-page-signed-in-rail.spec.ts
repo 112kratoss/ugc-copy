@@ -492,6 +492,26 @@ const rail = (page: Page) => page.getByTestId('canonical-post-actions');
 const composer = (page: Page) => rail(page).getByRole('textbox', { name: 'Write a comment' });
 
 /**
+ * Loads the post once, unmeasured and with the session check answered at once, before the load
+ * whose frames are read: `next dev` then has the page and supabase-js compiled, and the measured
+ * load starts its check as a built page does, as soon as it has drawn. The check is timed from
+ * supabase-js's arrival (SESSION_CHECK_START_DEADLINE_MS, 8 s, for one not yet begun; then
+ * SESSION_CHECK_DEADLINE_MS, 4.5 s, from its start), and supabase-js is a client chunk `next dev`
+ * compiles on its first use: on CI that compile outlasted the deadline, and the page drew the
+ * reader's own parts as a visitor's (their composer's place offering sign-in, the report rows with
+ * no composer) before the held check was released, which the frame checks rejected (#864's and
+ * #865's runs, 2026-11-17; #855's took 8.2 s). Built for production, the chunk comes with the page,
+ * as the reel's did (explore-reel-open.spec.ts, #850). The reader's composer is the sign the check
+ * has named them, so supabase-js has loaded. Not for the tests that hold the check past its
+ * deadline on purpose; the tests that open the post from the Marketplace have supabase-js from the
+ * Marketplace's own load, whose top bar is waited for before the check is held.
+ */
+async function warmSessionCheck(page: Page, path: string) {
+  await page.goto(path);
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+}
+
+/**
  * Whether the document's React root has committed its hydration, which only the page's script
  * does: its router then takes a navigation (login-typed-before-script.spec.ts says why the root's
  * record, and not a `__reactFiber$` key, is the sign).
@@ -589,8 +609,9 @@ test('a post opened from the Marketplace draws a signed-in reader\'s composer an
 test('a signed-in reader who loads a post draws its composer and rail from the first frame, while the session is checked', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const { checks } = await signIn(context);
-  checks.hold();
   await answerApi(page);
+  await warmSessionCheck(page, POST_PATH);
+  checks.hold();
   await page.addInitScript(RECORDER);
 
   await page.goto(POST_PATH);
@@ -665,8 +686,9 @@ test("a post page's HTML, which every visitor and crawler gets, carries no owner
 test("the post's creator, loading their own post, has Owner tools from the first frame and never a report row", async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const { checks } = await signIn(context, postCreator);
-  checks.hold();
   await answerApi(page);
+  await warmSessionCheck(page, POST_PATH);
+  checks.hold();
   await page.addInitScript(RECORDER);
 
   await page.goto(POST_PATH);
@@ -739,8 +761,9 @@ function roomUnderThePost(page: Page) {
 test("the post's creator, loading their own post below 1180px, reads their recipe as theirs and is offered no bar for it, from the first frame", async ({ page, context }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   const { checks } = await signIn(context, postCreator);
-  checks.hold();
   await answerApi(page);
+  await warmSessionCheck(page, POST_PATH);
+  checks.hold();
   await page.addInitScript(RECORDER);
 
   await page.goto(POST_PATH);
@@ -783,8 +806,9 @@ test("the post's creator, loading their own post below 1180px, reads their recip
 test('a signed-in reader below 1180px is offered the free recipe in the rail and along the bottom edge in every frame', async ({ page, context }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   const { checks } = await signIn(context);
-  checks.hold();
   await answerApi(page);
+  await warmSessionCheck(page, POST_PATH);
+  checks.hold();
   await page.addInitScript(RECORDER);
 
   await page.goto(POST_PATH);
@@ -819,8 +843,9 @@ const PAID_RECIPE_BAR = 'Unlock recipe for $9.00 · 900 credits';
 test("the post's creator, loading their own post with a paid recipe below 1180px, reads it as theirs and remixes it openly, from the first frame", async ({ page, context }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   const { checks } = await signIn(context, paidPostCreator);
-  checks.hold();
   await answerApi(page, [], PAID_POST);
+  await warmSessionCheck(page, PAID_POST.path);
+  checks.hold();
   await page.addInitScript(RECORDER);
 
   await page.goto(PAID_POST.path);
@@ -842,8 +867,9 @@ test("the post's creator, loading their own post with a paid recipe below 1180px
 test('a signed-in reader below 1180px is offered a paid recipe at its price, in the rail, in Remix and along the bottom edge, in every frame', async ({ page, context }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   const { checks } = await signIn(context);
-  checks.hold();
   await answerApi(page, [], PAID_POST);
+  await warmSessionCheck(page, PAID_POST.path);
+  checks.hold();
   await page.addInitScript(RECORDER);
 
   await page.goto(PAID_POST.path);
@@ -873,8 +899,9 @@ test('a signed-in reader below 1180px is offered a paid recipe at its price, in 
 test("the post's creator, on a post with no creation, has no Remix in any frame, as nobody else does", async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const { checks } = await signIn(context, uploadPostCreator);
-  checks.hold();
   await answerApi(page, [], UPLOAD_POST);
+  await warmSessionCheck(page, UPLOAD_POST.path);
+  checks.hold();
   await page.addInitScript(RECORDER);
 
   await page.goto(UPLOAD_POST.path);
@@ -895,8 +922,9 @@ test("the post's creator, on a post with no creation, has no Remix in any frame,
 test('a signed-in reader is offered no Remix in any frame where the recipe does not include it', async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const { checks } = await signIn(context);
-  checks.hold();
   await answerApi(page, [], UPLOAD_POST);
+  await warmSessionCheck(page, UPLOAD_POST.path);
+  checks.hold();
   await page.addInitScript(RECORDER);
 
   await page.goto(UPLOAD_POST.path);
@@ -1026,8 +1054,10 @@ const OWN_RECIPE_READ = {
 test("the post's creator holds their recipe as theirs until their own read of it lands, a failed one included, and is offered it in no frame", async ({ page, context }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   const { checks } = await signIn(context, postCreator);
-  checks.hold();
   await answerApi(page);
+  // Before the read's own answers below, which the warm-up's read would otherwise spend.
+  await warmSessionCheck(page, POST_PATH);
+  checks.hold();
   // Their read of the recipe: refused the first time, answered after Try again.
   const recipeReads: string[] = [];
   await page.route(`**/api/posts/${POST_ID}/resource-bundle**`, (route) => {
