@@ -639,7 +639,10 @@ function FilterGroup({
   onNavigate?: (href: string) => (event: MouseEvent<HTMLAnchorElement>) => void;
 }) {
   return (
-    <div>
+    // `min-w-0`, as the shell's group has it: below 1024px the filters are one column whose track
+    // grows to its widest item, and Kind's six chips made the open panel 445px wide on a 375px phone
+    // once this list had taken over from the shell (2026-11-17). The chips scroll in their row instead.
+    <div className="min-w-0">
       <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
         {label}
       </div>

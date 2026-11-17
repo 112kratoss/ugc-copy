@@ -143,7 +143,10 @@ export default function PostingConnectorGuide({ claudeClientId }: { claudeClient
               title="Connect it"
               description="You need a Magic Booklet account. A guest session is asked to sign in or create one first."
             />
-            <div className="grid gap-6 md:grid-cols-2">
+            {/* One column of `minmax(0, 1fr)` below 768px: the grid's own implicit column was as wide
+                as its widest line, so the server URL made both cards 473px wide and the page 489px on a
+                375px phone, its bottom bar partly off the screen (2026-11-17). */}
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
               <Surface as="article" variant="card" padding="lg" className="space-y-5">
                 <Text as="h3" variant="cardTitle">From Claude’s connectors</Text>
                 <StepList steps={steps.directory} />

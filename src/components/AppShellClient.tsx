@@ -604,8 +604,17 @@ const AppShellFrame = memo(function AppShellFrame({
                   <span className="inline-block whitespace-nowrap sm:block sm:truncate">{title}</span>
                 </div>
                 {activeItem ? (
+                  // Cut between words, never inside one: each word is an atomic inline, which the line's
+                  // ellipsis hides whole (CSS Overflow 3), where a line of plain text was cut mid-word
+                  // ("…and workflo…", 2026-11-17). A word carries the space before it, so none is left
+                  // before the ellipsis, and a screen reader reads the line as one.
                   <div className="hidden truncate text-xs text-[var(--ui-text-faint)] lg:block">
-                    {activeItem.description}
+                    <span className="sr-only">{activeItem.description}</span>
+                    <span aria-hidden="true">
+                      {activeItem.description.split(' ').map((word, index) => (
+                        <span key={index} className="inline-block">{index === 0 ? word : `\u00a0${word}`}</span>
+                      ))}
+                    </span>
                   </div>
                 ) : null}
               </div>

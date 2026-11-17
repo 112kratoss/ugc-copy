@@ -243,8 +243,17 @@ export function getAppShellTitle(pathname: string): string | null {
   if (pathname.startsWith('/ai-image-generator')) return 'AI image generator';
   if (pathname.startsWith('/ai-video-generator')) return 'AI video generator';
   if (pathname.startsWith('/ai-motion-transfer')) return 'Motion transfer';
+  // A page about the canvas, as its three neighbours are about the creators; Workflow Canvas still
+  // marks it in the navigation and lends it its line, but the bar named it "Workflow Canvas".
+  if (pathname.startsWith('/ai-workflow-builder')) return 'AI workflow builder';
   if (pathname.startsWith('/blog')) return 'Blog';
   if (pathname.startsWith('/contact')) return 'Contact';
+  // The policy pages, by the names the footer gives them: no section claims them, so the bar read
+  // "Workspace", the fallback below (2026-11-17).
+  if (isExactOrChild(pathname, '/terms')) return 'Terms';
+  if (isExactOrChild(pathname, '/privacy')) return 'Privacy';
+  if (isExactOrChild(pathname, '/cancellation')) return 'Cancellation';
+  if (isExactOrChild(pathname, '/delete-account')) return 'Delete account';
   if (pathname.startsWith('/login')) return 'Sign in';
   if (pathname.startsWith('/signup')) return 'Sign up';
   if (pathname.startsWith('/templates/new')) return 'Create Template';

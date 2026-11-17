@@ -139,14 +139,22 @@ export default async function ModelsIndexPage() {
                             actionHref={MODEL_KIND_FEATURE_PATHS[group.kind]}
                             actionLabel="How it works"
                         />
-                        <div className="overflow-x-auto">
-                            <table className="w-full min-w-[600px] border-collapse text-left">
+                        <div className="@container overflow-x-auto">
+                            {/* Where the table's box is under 600px, the three cost columns fold into one
+                                beside the model, "Per run", so every cost is in sight: at its 600px the
+                                table showed a phone the Model column alone, its costs scrolled out of
+                                view with nothing to say so, and its descriptions ran past the box's edge
+                                (2026-11-17). The box's own width decides, not the window's: a tablet's
+                                window holds the side navigation too, and a 768-853px one cut the four
+                                columns as a phone did. */}
+                            <table className="w-full border-collapse text-left">
                                 <thead>
                                     <tr className="border-b border-[var(--ui-border-default)]">
                                         <th className="py-3 pr-4 text-xs font-bold uppercase tracking-[0.1em] text-[var(--ui-text-faint)]">Model</th>
-                                        <th className="py-3 pr-4 text-right text-xs font-bold uppercase tracking-[0.1em] text-[var(--ui-text-faint)]">Credits</th>
-                                        <th className="py-3 pr-4 text-right text-xs font-bold uppercase tracking-[0.1em] text-[var(--ui-text-faint)]">₹ per run</th>
-                                        <th className="py-3 text-right text-xs font-bold uppercase tracking-[0.1em] text-[var(--ui-text-faint)]">$ per run</th>
+                                        <th className="py-3 text-right text-xs font-bold uppercase tracking-[0.1em] text-[var(--ui-text-faint)] @min-[600px]:hidden">Per run</th>
+                                        <th className="hidden py-3 pr-4 text-right text-xs font-bold uppercase tracking-[0.1em] text-[var(--ui-text-faint)] @min-[600px]:table-cell">Credits</th>
+                                        <th className="hidden py-3 pr-4 text-right text-xs font-bold uppercase tracking-[0.1em] text-[var(--ui-text-faint)] @min-[600px]:table-cell">₹ per run</th>
+                                        <th className="hidden py-3 text-right text-xs font-bold uppercase tracking-[0.1em] text-[var(--ui-text-faint)] @min-[600px]:table-cell">$ per run</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -163,13 +171,24 @@ export default async function ModelsIndexPage() {
                                                     {model.description}
                                                 </span>
                                             </td>
-                                            <td className="py-3 pr-4 text-right align-top text-sm tabular-nums text-[var(--ui-text-primary)]">
+                                            <td className="py-3 text-right align-top text-sm tabular-nums @min-[600px]:hidden">
+                                                {cost ? (
+                                                    <>
+                                                        <span className="block whitespace-nowrap text-[var(--ui-text-primary)]">
+                                                            {`${cost.credits} ${cost.credits === 1 ? 'credit' : 'credits'}`}
+                                                        </span>
+                                                        <span className="block whitespace-nowrap text-[var(--ui-text-muted)]">{`₹${cost.inr.toFixed(2)}`}</span>
+                                                        <span className="block whitespace-nowrap text-[var(--ui-text-muted)]">{`$${cost.usd.toFixed(2)}`}</span>
+                                                    </>
+                                                ) : '—'}
+                                            </td>
+                                            <td className="hidden py-3 pr-4 text-right align-top text-sm tabular-nums text-[var(--ui-text-primary)] @min-[600px]:table-cell">
                                                 {cost ? cost.credits : '—'}
                                             </td>
-                                            <td className="py-3 pr-4 text-right align-top text-sm tabular-nums text-[var(--ui-text-muted)]">
+                                            <td className="hidden py-3 pr-4 text-right align-top text-sm tabular-nums text-[var(--ui-text-muted)] @min-[600px]:table-cell">
                                                 {cost ? `₹${cost.inr.toFixed(2)}` : '—'}
                                             </td>
-                                            <td className="py-3 text-right align-top text-sm tabular-nums text-[var(--ui-text-muted)]">
+                                            <td className="hidden py-3 text-right align-top text-sm tabular-nums text-[var(--ui-text-muted)] @min-[600px]:table-cell">
                                                 {cost ? `$${cost.usd.toFixed(2)}` : '—'}
                                             </td>
                                         </tr>

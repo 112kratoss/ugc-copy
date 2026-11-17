@@ -73,6 +73,23 @@ describe('app shell navigation', () => {
     expect(getAppShellTitle('/templates/ghost-rider')).toBe('Templates');
   });
 
+  // The sweep of 2026-11-17 read "Workspace", the bar's fallback, over the policy pages, and
+  // "Workflow Canvas" over the workflow builder's landing, a page about the canvas.
+  it('names the policy pages and the feature landings by their own names, never the fallback', () => {
+    expect(getAppShellTitle('/terms')).toBe('Terms');
+    expect(getAppShellTitle('/privacy')).toBe('Privacy');
+    expect(getAppShellTitle('/cancellation')).toBe('Cancellation');
+    expect(getAppShellTitle('/delete-account')).toBe('Delete account');
+    expect(getAppShellTitle('/ai-image-generator')).toBe('AI image generator');
+    expect(getAppShellTitle('/ai-video-generator')).toBe('AI video generator');
+    expect(getAppShellTitle('/ai-motion-transfer')).toBe('Motion transfer');
+    expect(getAppShellTitle('/ai-workflow-builder')).toBe('AI workflow builder');
+    // The landing still sits in the canvas's section, which marks it in the navigation.
+    expect(getActiveAppNavItem('/ai-workflow-builder')?.id).toBe('workflow');
+    // Only a whole segment names a policy page.
+    expect(getAppShellTitle('/termsheet')).toBe('Workspace');
+  });
+
   it('no longer has a separate Feed section: /feed sends its visitors Home', () => {
     expect(getActiveAppNavItem('/feed')).toBeNull();
   });

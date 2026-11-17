@@ -239,8 +239,11 @@ export default async function ModelPage({ params }: ModelPageProps) {
                             title={`${model.displayName} settings and limits`}
                             description="Read directly from the generation catalog, so these are the values the model will actually accept."
                         />
+                        {/* As wide as the column, its values wrapping: at a minimum of 520px a phone's
+                            343px showed no Default (2026-11-17). The scroller stays for a value that
+                            cannot wrap. */}
                         <div className="max-w-3xl overflow-x-auto">
-                            <table className="w-full min-w-[520px] border-collapse text-left">
+                            <table className="w-full border-collapse text-left">
                                 <thead>
                                     <tr className="border-b border-[var(--ui-border-default)]">
                                         <th className="py-3 pr-4 text-xs font-bold uppercase tracking-[0.1em] text-[var(--ui-text-faint)]">Setting</th>
@@ -275,8 +278,10 @@ export default async function ModelPage({ params }: ModelPageProps) {
                             title={`What a testing cycle on ${model.displayName} costs`}
                             description="Creative testing is a volume exercise, so the number that matters is rarely the cost of one run."
                         />
+                        {/* As wide as the column: at a minimum of 380px a phone's 343px cut "Approx.
+                            cost" to a lone "₹" (2026-11-17). Three short columns fit a 320px phone. */}
                         <div className="max-w-2xl overflow-x-auto">
-                            <table className="w-full min-w-[380px] border-collapse text-left">
+                            <table className="w-full border-collapse text-left">
                                 <thead>
                                     <tr className="border-b border-[var(--ui-border-default)]">
                                         <th className="py-3 pr-4 text-xs font-bold uppercase tracking-[0.1em] text-[var(--ui-text-faint)]">Generations</th>
