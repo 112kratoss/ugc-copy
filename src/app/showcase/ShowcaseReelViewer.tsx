@@ -833,6 +833,9 @@ export default function ShowcaseReelViewer({
     let cancelled = false;
     const readsAsViewer = Boolean(session?.access_token);
     const postId = item.id;
+    // A read is out again for this post, however the reel came to it (its arrows, Back on the page,
+    // a page loaded on): its last failure is not said while it is.
+    setAccessReadFailedItemId((failed) => (failed === postId ? null : failed));
 
     void fetchBundleForItem(postId)
       .then((bundle) => {
@@ -1021,12 +1024,12 @@ export default function ShowcaseReelViewer({
   const commentCount = commentCounts[item.id] ?? item.commentCount;
   const isFollowingCreator = followKey !== null && followStates[followKey] === true;
   // Signed out, Follow leads to sign-in; signed in, it waits for the answer.
-  const showFollow = Boolean(item.creator.id) && !isOwnPost && (!user || isFollowStateKnown);
+  const showFollow = Boolean(item.creator.id) && !viewerIsCreator && (!user || isFollowStateKnown);
   // Meanwhile its place is held, from the reel's first frame, so neither it nor what is under it
   // pops in when the answer arrives (owner's recording, 2026-11-16). A failed read holds none.
   const followAwaitsAnswer = !showFollow
     && Boolean(item.creator.id)
-    && !isOwnPost
+    && !viewerIsCreator
     && hasSessionToken
     && followKey !== null
     && !unreadFollowKeys.has(followKey);
@@ -1634,7 +1637,7 @@ export default function ShowcaseReelViewer({
             dateLabel={dateLabel}
             saveCount={item.saveCount}
             remixCount={item.remixCount}
-            unlockLabel={item.asset ? getAssetAccessLabel(item.asset, { isOwner: isOwnPost }) : null}
+            unlockLabel={item.asset ? getAssetAccessLabel(item.asset, { isOwner: viewerIsCreator }) : null}
             resourceKinds={resourceKinds}
             showStats={false}
             className="w-full max-w-xl border-white/10 bg-zinc-950/90"
@@ -2000,7 +2003,9 @@ export default function ShowcaseReelViewer({
                   else if (claim.message) setRemixError(claim.message);
                 });
               }}
-              disabled={remixWorkingItemId !== null || (remixIsLocked && unlockWorkingAction !== null)}
+              // The creator's own Remix waits for their session: a press while it is read would be
+              // taken as a visitor's (the creator page sends one to sign in).
+              disabled={remixWorkingItemId !== null || (remixIsLocked && unlockWorkingAction !== null) || ownerChecking}
               className="ui-focus-ring inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary)] text-xs font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-60 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
             >
               {remixWorkingItemId === item.id
@@ -2158,72 +2163,69 @@ export default function ShowcaseReelViewer({
                   </div>
                 ) : null}
 
-                {item.asset && awaitsHeldRecipe ? (
-                  // A recipe the viewer holds, while its read is out: in the frame its panel
-                  // opens in, under its name and the viewer's word for it, never at its price.
+                {item.asset && (awaitsHeldRecipe || (hasReelUnlockAccess && unlockedBundle)) ? (
+                  // One frame for a recipe the viewer holds while its read is out and for the recipe
+                  // itself (the post page's own panel, whole, B-F1), so a focus given to it (Try
+                  // again's) stays when the recipe takes the held lines' place. Held, it says the
+                  // recipe's name and the viewer's word for it, never its price.
                   <div
                     ref={recipePanelRef}
-                    // Try again's own button goes when it is pressed: the focus comes here.
                     tabIndex={-1}
-                    aria-busy={accessReadFailed ? undefined : true}
+                    aria-busy={awaitsHeldRecipe && !accessReadFailed ? true : undefined}
                     className="mt-5 scroll-mt-4 rounded-2xl border border-emerald-300/20 bg-black/30 p-4 outline-none"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Recipe</div>
-                        <h3 className="mt-2 text-base font-semibold text-white">{item.asset.title}</h3>
-                      </div>
-                      <span className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-300 px-2.5 py-1 text-xs font-bold text-slate-950">
-                        {getAssetAccessLabel(item.asset, { isOwner: viewerIsCreator })}
-                      </span>
-                    </div>
-                    {accessReadFailed ? (
-                      <div role="alert" className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-sm leading-6 text-zinc-300">The recipe could not be opened.</p>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAccessReadFailedItemId(null);
-                            setAccessReadAttempt((attempt) => attempt + 1);
-                            recipePanelRef.current?.focus({ preventScroll: true });
-                          }}
-                          className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/12 bg-white/[0.05] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.09]"
-                        >
-                          <RefreshCw className="h-4 w-4" aria-hidden />
-                          Try again
-                        </button>
-                      </div>
+                    {hasReelUnlockAccess && unlockedBundle ? (
+                      <PostResourceBundlePanel
+                        key={item.id}
+                        {...buildRecipePanelProps(toReelRecipeSource(item.asset, unlockedBundle), {
+                          postId: item.id,
+                          mediaItems,
+                          displayTitle: item.title,
+                          remixIncluded: Boolean(item.asset.allowRemix) && offersRemix,
+                          returnPath: buildDetailPath(item.id),
+                        })}
+                        announceUnlock={justUnlockedItemId === item.id}
+                      />
                     ) : (
-                      <p className="mt-3 inline-flex items-center gap-2 text-sm leading-6 text-emerald-50/80">
-                        <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden />
-                        Opening your recipe…
-                      </p>
+                      <>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Recipe</div>
+                            <h3 className="mt-2 text-base font-semibold text-white">{item.asset.title}</h3>
+                          </div>
+                          <span className="shrink-0 rounded-full border border-emerald-300/20 bg-emerald-300 px-2.5 py-1 text-xs font-bold text-slate-950">
+                            {getAssetAccessLabel(item.asset, { isOwner: viewerIsCreator })}
+                          </span>
+                        </div>
+                        {accessReadFailed ? (
+                          <div role="alert" className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                            <p className="text-sm leading-6 text-zinc-300">The recipe could not be opened.</p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAccessReadFailedItemId(null);
+                                setAccessReadAttempt((attempt) => attempt + 1);
+                                recipePanelRef.current?.focus({ preventScroll: true });
+                              }}
+                              className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/12 bg-white/[0.05] px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.09]"
+                            >
+                              <RefreshCw className="h-4 w-4" aria-hidden />
+                              Try again
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="mt-3 inline-flex items-center gap-2 text-sm leading-6 text-emerald-50/80">
+                            <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden />
+                            Opening your recipe…
+                          </p>
+                        )}
+                      </>
                     )}
                   </div>
                 ) : null}
 
                 {item.asset && isUnlockCheckoutOpen && !hasReelUnlockAccess ? (
                   renderCompactUnlockCard()
-                ) : null}
-
-                {item.asset && hasReelUnlockAccess && unlockedBundle ? (
-                  // The post page's own panel, whole (B-F1): every item, files
-                  // to open and save, links to follow, settings as keys and
-                  // values. The partial card it replaces showed the first
-                  // prompt and note alone.
-                  <div ref={recipePanelRef} className="mt-5 scroll-mt-4 rounded-2xl border border-emerald-300/20 bg-black/30 p-4">
-                    <PostResourceBundlePanel
-                      key={item.id}
-                      {...buildRecipePanelProps(toReelRecipeSource(item.asset, unlockedBundle), {
-                        postId: item.id,
-                        mediaItems,
-                        displayTitle: item.title,
-                        remixIncluded: Boolean(item.asset.allowRemix) && offersRemix,
-                        returnPath: buildDetailPath(item.id),
-                      })}
-                      announceUnlock={justUnlockedItemId === item.id}
-                    />
-                  </div>
                 ) : null}
 
                 {item.body.trim() ? (

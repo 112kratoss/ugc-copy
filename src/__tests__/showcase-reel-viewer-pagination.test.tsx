@@ -1852,6 +1852,17 @@ describe('ShowcaseReelViewer pagination', () => {
         expect(reads).toEqual([null, 'Bearer token-1']);
       });
 
+      it("keeps the creator's Remix inert and offers no Follow while their session is read", async () => {
+        authState.isLoading = true;
+        authState.cookieUserId = 'creator-1';
+        stubRequests();
+        render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ id: 'post-1', asset: freeAsset, canRemix: true, remixCapability: 'public' })] })} />);
+
+        expect(await screen.findByText('Opening your recipe…')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^Remix/ })).toBeDisabled();
+        expect(screen.queryByRole('button', { name: /^Follow/ })).toBeNull();
+      });
+
       it('offers the recipe once the session is read and is not the creator\'s', async () => {
         authState.isLoading = true;
         authState.cookieUserId = 'creator-1';

@@ -186,6 +186,7 @@ test("a creator opening their own post in the reel never has its recipe offered 
   let releaseRead: () => void = () => {};
   const readHeld = new Promise<void>((resolve) => { releaseRead = resolve; });
   let bundleReads = 0;
+  const readAuthorizations: Array<string | null> = [];
   // Anything else the page asks of the API goes on to the dev server without the made-up token.
   await page.route('**/api/**', (route) => {
     const headers = { ...route.request().headers() };
@@ -195,6 +196,7 @@ test("a creator opening their own post in the reel never has its recipe offered 
   await page.route(`**/api/showcase/posts/${POST_ID}`, (route) => route.fulfill({ json: { item: ownPost } }));
   await page.route(`**/api/posts/${POST_ID}/resource-bundle`, async (route) => {
     bundleReads += 1;
+    readAuthorizations.push(route.request().headers().authorization ?? null);
     // Without a token the server answers as for anyone: no access, and no recipe.
     if (!route.request().headers().authorization) {
       return route.fulfill({ json: { bundle: { ...ownBundle, viewerCanAccess: false, viewerIsOwner: false, resources: null } } });
@@ -222,8 +224,10 @@ test("a creator opening their own post in the reel never has its recipe offered 
   releaseRead();
 
   await expect(reel.getByText('A tiny bookshop in a rainy alley', { exact: false })).toBeVisible(COLD_PAGE);
-  // The read that brought it carried the session.
-  expect(bundleReads).toBeGreaterThan(1);
+  // The reel drew, and read the recipe, before the session was known; the read that brought the
+  // recipe carried it.
+  expect(readAuthorizations[0], 'the first read was made before the session was known').toBeNull();
+  expect(readAuthorizations.some(Boolean), 'a read carried the session').toBe(true);
   // A frame drawn since: the recorder runs on the next animation frame.
   await expect.poll(async () => (await frames(page)).at(-1)).toEqual({ offer: false, held: false, recipe: true });
   const drawn = await frames(page);
