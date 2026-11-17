@@ -103,24 +103,29 @@ function remixWords(post: CreatorStartPost) {
   };
 }
 
-/** How many of a place's first pictures are asked for ahead of the rest: the canvas's first row at its narrowest. */
+/**
+ * How many of a place's first pictures are asked for with the page: the canvas's first row at its
+ * narrowest, and what a phone's strip shows before it is scrolled.
+ */
 const FIRST_PICTURES = 3;
 
 /**
- * A post's picture. Where it is on screen as the page opens (the empty canvas, the strip) it is
- * asked for as the page's HTML is read, the first row first. Lazy, it waited until its part of the
- * page was shown and laid out: on magicbooklet.com the posts' pictures were asked for at about 1.7 s
- * and were the page's LCP at 1.84 s (the web sweep of 2026-11-17). And it is asked for once:
- * `OptimizedPreviewImage` hands next/image an `onError`, and next/image sets every picture's `src`
- * again once the page has hydrated, to replay an error React never saw, which asks for the picture
- * again where the browser has not kept it and draws it blank until it is back. Here an error before
- * hydration is read off the element as React attaches to it. A media worker's preview
- * (`isGeneratedPreviewImage`) skipped the optimizer already; any other source still goes through it.
+ * A post's picture. The first ones of the empty canvas and of the strip (`eager`) are asked for as the
+ * page's HTML is read, ahead of the rest: lazy, they waited until their part of the page was shown and
+ * laid out, and on magicbooklet.com they were asked for at about 1.7 s and were the page's LCP at
+ * 1.84 s (the web sweep of 2026-11-17). Every other one stays lazy: React's server render preloads
+ * every picture that is not, in the page's head, an off-screen card of a phone's sideways strip
+ * included. And each is asked for once: `OptimizedPreviewImage` hands next/image an `onError`, and
+ * next/image sets every picture's `src` again once the page has hydrated, to replay an error React
+ * never saw, which asks for the picture again where the browser has not kept it and draws it blank
+ * until it is back. Here an error before hydration is read off the element as React attaches to it.
+ * A media worker's preview (`isGeneratedPreviewImage`) skipped the optimizer already; any other source
+ * still goes through it, lazy as before, since each place asks the optimizer for its own width of it.
  */
-function PostPicture({ src, sizes, eager, first }: { src: string; sizes: string; eager: boolean; first: boolean }) {
+function PostPicture({ src, sizes, eager }: { src: string; sizes: string; eager: boolean }) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   if (!isGeneratedPreviewImage(src)) {
-    return <OptimizedPreviewImage previewSrc={src} alt="" sizes={sizes} className="object-cover" loading={eager ? 'eager' : 'lazy'} />;
+    return <OptimizedPreviewImage previewSrc={src} alt="" sizes={sizes} className="object-cover" />;
   }
   if (failedSrc === src) return null;
   return (
@@ -133,7 +138,7 @@ function PostPicture({ src, sizes, eager, first }: { src: string; sizes: string;
       src={src}
       alt=""
       loading={eager ? 'eager' : 'lazy'}
-      fetchPriority={eager && first ? 'high' : undefined}
+      fetchPriority={eager ? 'high' : undefined}
       decoding="async"
       onError={() => setFailedSrc(src)}
       className="absolute inset-0 h-full w-full object-cover"
@@ -146,17 +151,16 @@ function PostPicture({ src, sizes, eager, first }: { src: string; sizes: string;
  * post's link: mounted only then, so a row of posts fetches no clip nobody looks at, and
  * never where the viewer asked for less motion or data, as on Home's shelf.
  */
-function PostThumb({ post, playing, badge, sizes, eager, first }: {
+function PostThumb({ post, playing, badge, sizes, eager }: {
   post: CreatorStartPost;
   playing: boolean;
   badge?: string | null;
   sizes: string;
   eager: boolean;
-  first: boolean;
 }) {
   return (
     <span className="relative block aspect-[3/4] overflow-hidden rounded-ui-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)]">
-      <PostPicture src={post.posterUrl} sizes={sizes} eager={eager} first={first} />
+      <PostPicture src={post.posterUrl} sizes={sizes} eager={eager} />
       {playing && post.clipUrl ? (
         <HoverVideo key={post.clipUrl} src={post.clipUrl} autoPlay className="absolute inset-0 h-full w-full object-cover" />
       ) : null}
@@ -214,8 +218,7 @@ const StartPostCard = memo(function StartPostCard({ post, compact = false, watch
           playing={hovered && !prefersReducedMotion && !saveData}
           badge={compact ? null : post.modelName}
           sizes={compact ? '132px' : '(min-width: 1440px) 200px, 160px'}
-          eager={!watchOnly}
-          first={index < FIRST_PICTURES}
+          eager={!watchOnly && index < FIRST_PICTURES}
         />
         <span className="truncate text-sm font-bold text-[var(--ui-text-primary)] group-hover:underline">{post.title}</span>
       </Link>

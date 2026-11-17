@@ -238,7 +238,8 @@ import {
     type GenerationTiming,
 } from '@/lib/generation-timing';
 import { useCreatorQuote } from '@/lib/use-creator-quote';
-import { openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-opening';
+import { openingSetting, type CreatorOpening } from '@/lib/creator-opening';
+import { useOpeningCost } from '@/lib/use-opening-cost';
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
@@ -2086,18 +2087,22 @@ function VideoCreator({
         setCatalogNotice('Model settings changed. Review the refreshed options before generating.');
         refetchModelCatalog();
     }, [refetchModelCatalog, quoteState.error?.code]);
+    // The server's price for the run the page opened on, until the page's own first quote is in or a
+    // start is refused (`useOpeningCost`). Only the page's first form has it: another owner's form,
+    // drawn anew later in the page's life, waits for its own.
+    const openingPrice = useOpeningCost(form.key === 0 ? opening : null, {
+        run: { modelId: selectedModel, settings: runSettings, inputs: runInputs },
+        quoteStatus: quoteState.status,
+        confirmedRevision: modelCatalog.isCheckingRevision ? null : modelCatalog.revision,
+        catalogFailed: Boolean(modelCatalog.error) || modelCatalog.missingIds.includes(selectedModel),
+    });
     const quoteUi = resolveWebGenerationQuoteUi({
         hasCatalog: Boolean(modelCatalog.catalog && modelCatalog.detailsReady),
         catalogLoading: !modelCatalog.detailsReady && !modelCatalog.error && !modelCatalog.missingIds.includes(selectedModel),
         quoteStatus: quoteState.status,
         quotedCost: quoteState.quote?.costCredits,
         quoteErrorMessage: quoteState.error?.message,
-        openingCost: openingCost(opening, {
-            run: { modelId: selectedModel, settings: runSettings, inputs: runInputs },
-            quoteStatus: quoteState.status,
-            confirmedRevision: modelCatalog.isCheckingRevision ? null : modelCatalog.revision,
-            catalogFailed: Boolean(modelCatalog.error) || modelCatalog.missingIds.includes(selectedModel),
-        }),
+        openingCost: openingPrice.cost,
     });
     const estimatedCost = quoteUi.costCredits;
     // The price the bar names, on Generate and under it: the page's own, or until it is in, the
@@ -4793,6 +4798,9 @@ function VideoCreator({
 
         clearPendingWebStart('video');
         setUnconfirmedStart(null);
+        // From here on the page names only its own quotes: a price asked again after a refusal
+        // (`cost_changed`) is on its way, never the one the page opened on.
+        openingPrice.settle();
         const message = startError instanceof Error && startError.message ? startError.message : 'Could not start generation.';
         const code = startError instanceof WebCatalogRequestError ? startError.code : undefined;
         if (code === 'insufficient_credits') {
@@ -5825,7 +5833,7 @@ function VideoCreator({
         <CreatorPendingStartNotice
             message={START_UNCONFIRMED_MESSAGE}
             costLabel={quoteUi.costLabel}
-            hasPrice={notedCost !== null}
+            hasPrice={estimatedCost !== null}
             disabled={quotePending || runHeld}
             onStartNew={startNewRunInstead}
         />
@@ -5898,6 +5906,7 @@ function VideoCreator({
             disabled={(!isVisitor && quotePending) || runHeld || canvasPublish.inFlight}
             costLabel={quoteUi.costLabel}
             hasPrice={notedCost !== null}
+            checkingPrice={quoteUi.checkingPrice}
             onGenerate={() => void handleGenerate()}
             signUp={isVisitor}
         />

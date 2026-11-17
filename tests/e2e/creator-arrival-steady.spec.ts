@@ -40,7 +40,7 @@ test.use({ viewport: { width: 1440, height: 900 } });
 
 type Frame = {
   chip: string | null;
-  generate: { face: string; name: string | null; disabled: boolean } | null;
+  generate: { face: string; name: string | null; disabled: boolean; busy: boolean } | null;
   posts: { cards: number; places: number; pictures: number; drawn: number } | null;
 };
 /** A run of identical frames: what they showed, and from when to when (ms since the navigation began). */
@@ -87,7 +87,7 @@ async function recordFrames(page: Page) {
   await page.addInitScript(() => {
     type Read = {
       chip: string | null;
-      generate: { face: string; name: string | null; disabled: boolean } | null;
+      generate: { face: string; name: string | null; disabled: boolean; busy: boolean } | null;
       posts: { cards: number; places: number; pictures: number; drawn: number } | null;
     };
     const stretches: Array<Read & { from: number; to: number; count: number }> = [];
@@ -105,7 +105,12 @@ async function recordFrames(page: Page) {
       return {
         chip: text(document.querySelector('[data-testid="creator-settings-summary"]')),
         generate: button
-          ? { face: text(button) ?? '', name: button.getAttribute('aria-label'), disabled: (button as HTMLButtonElement).disabled }
+          ? {
+            face: text(button) ?? '',
+            name: button.getAttribute('aria-label'),
+            disabled: (button as HTMLButtonElement).disabled,
+            busy: button.getAttribute('aria-busy') === 'true',
+          }
           : null,
         posts: canvas
           ? {
@@ -213,16 +218,48 @@ async function arrive(page: Page, address: string, costCredits: number | null, n
 function describeStretches(stretches: Stretch[]): string {
   return stretches.map((stretch) => (
     `${stretch.from}–${stretch.to} ms (${stretch.count} frames): chip ${JSON.stringify(stretch.chip)}, Generate ${JSON.stringify(stretch.generate?.face ?? null)}`
+    + (stretch.generate ? ` (${JSON.stringify(stretch.generate.name)}${stretch.generate.disabled ? ', held' : ''}${stretch.generate.busy ? ', busy' : ''})` : '')
     + (stretch.posts ? `, posts ${stretch.posts.cards} cards, ${stretch.posts.places} places, ${stretch.posts.drawn}/${stretch.posts.pictures} pictures drawn` : '')
   )).join('\n');
 }
 
-/** What every frame that draws the bar shows: one chip and one Generate, from the first such frame to the last. */
-function expectSteadyBar(arrival: Arrival, expected: { chip: string; generate: string }) {
+/** The frames that draw the bar. */
+function barFrames(arrival: Arrival): Stretch[] {
   const drawn = arrival.stretches.filter((stretch) => stretch.chip !== null || stretch.generate !== null);
   expect(drawn.length, 'the bar is drawn').toBeGreaterThan(0);
-  const unsteady = drawn.filter((stretch) => stretch.chip !== expected.chip || stretch.generate?.face !== expected.generate);
+  return drawn;
+}
+
+/** What every frame that draws the bar shows: one chip and one Generate, from the first such frame to the last. */
+function expectSteadyBar(arrival: Arrival, expected: { chip: string; generate: string }) {
+  const unsteady = barFrames(arrival).filter((stretch) => stretch.chip !== expected.chip || stretch.generate?.face !== expected.generate);
   expect.soft(unsteady, `every frame shows "${expected.chip}" and "${expected.generate}":\n${describeStretches(arrival.stretches)}`).toEqual([]);
+}
+
+/**
+ * Generate's hand-over to the page's own quote: while the server's price stands in, Generate is held and
+ * busy, its name saying the price is being checked; once the page's own price is in, its name is the
+ * price alone and it is busy no more. `enabledAtLast`: the video creator takes a press with an empty
+ * prompt (it refuses one in `handleGenerate`), so its last frame is enabled.
+ */
+function expectHandOver(arrival: Arrival, { enabledAtLast }: { enabledAtLast: boolean }) {
+  const generate = barFrames(arrival).map((stretch) => stretch.generate);
+  const standingIn = generate.filter((frame) => frame?.busy);
+  const lines = describeStretches(arrival.stretches);
+  expect.soft(standingIn.length, `the server's price stands in, busy, before the page's own is in:\n${lines}`).toBeGreaterThan(0);
+  const unexplained = standingIn.filter((frame) => !frame!.disabled || frame!.name !== `${frame!.face} · Checking the price`);
+  expect.soft(unexplained, `a price standing in is held, and named as being checked:\n${lines}`).toEqual([]);
+  const last = generate.at(-1);
+  expect.soft(last?.busy, `the last frame has the page's own price:\n${lines}`).toBe(false);
+  expect.soft(last?.name, `the last frame's name is its price alone:\n${lines}`).toBe(last?.face);
+  if (enabledAtLast) expect.soft(last?.disabled, `the last frame takes a press:\n${lines}`).toBe(false);
+}
+
+/** Generate's faces in the order the frames show them, each once in a row. */
+function generateFaces(arrival: Arrival): string[] {
+  return barFrames(arrival)
+    .map((stretch) => stretch.generate?.face ?? '')
+    .filter((face, index, faces) => index === 0 || face !== faces[index - 1]);
 }
 
 const SHELF_PICTURES = ['giraffe.preview.e2e5f0b1.webp', 'kite.preview.e2e5f0b3.webp', 'mug.preview.e2e5f0b2.webp'];
@@ -260,13 +297,25 @@ test.describe('signed in, a creator arrives steady', () => {
   test('the image creator: one chip and one price from the first frame, and its posts with the page', async ({ page }) => {
     const arrival = await arrive(page, '/create-image', 8, 'create-image');
     expectSteadyBar(arrival, { chip: '1K · AUTO · JPG', generate: 'Generate · 8 credits' });
+    // An empty prompt holds the image creator's Generate.
+    expectHandOver(arrival, { enabledAtLast: false });
     expectPostsWithThePage(arrival);
   });
 
   test('the video creator: one chip and one price from the first frame, and its posts with the page', async ({ page }) => {
     const arrival = await arrive(page, '/create-video', 19, 'create-video');
     expectSteadyBar(arrival, { chip: '480P · 16:9 · 5s · Sound off', generate: 'Generate · 19 credits' });
+    expectHandOver(arrival, { enabledAtLast: true });
     expectPostsWithThePage(arrival);
+  });
+
+  test('a creator whose own quote answers another price moves to it, straight from the server\'s', async ({ page }) => {
+    // The page's own quote is the price a start goes at: the server's stands in only until it is in.
+    const arrival = await arrive(page, '/create-video', 21, 'create-video-own-price');
+    expect.soft(generateFaces(arrival), describeStretches(arrival.stretches)).toEqual(['Generate · 19 credits', 'Generate · 21 credits']);
+    expectHandOver(arrival, { enabledAtLast: true });
+    expect.soft(barFrames(arrival).filter((stretch) => stretch.generate?.face === 'Generate · 21 credits' && stretch.generate.busy))
+      .toEqual([]);
   });
 
   test('the motion creator: one chip and "Add both inputs" from the first frame, and its posts with the page', async ({ page }) => {

@@ -784,7 +784,8 @@ function creditsLabel(credits: number): string {
 /**
  * What a creator's bar says of the run's price. `costCredits` is the page's own quote of the run,
  * the one price a start goes at, and Generate is held (`blocksGenerate`) until it is in.
- * `shownCost` is the price the page names: its own quote, or until that is in, `openingCost`.
+ * `shownCost` is the price the page names: its own quote, or until that is in, `openingCost`, which
+ * `checkingPrice` marks as standing in while the page checks it.
  */
 export function resolveWebGenerationQuoteUi({
   hasCatalog,
@@ -800,18 +801,24 @@ export function resolveWebGenerationQuoteUi({
   quotedCost: number | null | undefined;
   quoteErrorMessage: string | null | undefined;
   /**
-   * The server's price for the run the page opened on, while the run is still that one and the
-   * page's own quote has not answered (`openingCost`, creator-opening.ts). The page names it while
-   * its catalog and its own quote are on their way, which on arrival come back at the same price:
-   * Generate read "Loading settings…", then "Calculating...", then that price (the web sweep of
-   * 2026-11-17). Generate stays held until the page's own quote is in.
+   * The server's price for the run the page opened on, until the page's own first quote is in
+   * (`useOpeningCost`). The page names it while its catalog and its own quote are on their way, which
+   * on arrival come back at the same price: Generate read "Loading settings…", then "Calculating...",
+   * then that price (the web sweep of 2026-11-17). Generate stays held until the page's own quote is in.
    */
   openingCost?: number | null;
 }) {
   const knownCost = typeof openingCost === 'number' ? openingCost : null;
   const whileUnquoted = (placeholder: { costLabel: string; message: string }) => (knownCost === null
-    ? { costCredits: null, shownCost: null, blocksGenerate: true, ...placeholder }
-    : { costCredits: null, shownCost: knownCost, costLabel: creditsLabel(knownCost), blocksGenerate: true, message: placeholder.message });
+    ? { costCredits: null, shownCost: null, checkingPrice: false, blocksGenerate: true, ...placeholder }
+    : {
+      costCredits: null,
+      shownCost: knownCost,
+      checkingPrice: true,
+      costLabel: creditsLabel(knownCost),
+      blocksGenerate: true,
+      message: placeholder.message,
+    });
 
   if (!hasCatalog) {
     if (catalogLoading) {
@@ -820,6 +827,7 @@ export function resolveWebGenerationQuoteUi({
     return {
       costCredits: null,
       shownCost: null,
+      checkingPrice: false,
       costLabel: 'Unavailable',
       blocksGenerate: true,
       message: 'Model settings are unavailable. Retry before generating.',
@@ -830,6 +838,7 @@ export function resolveWebGenerationQuoteUi({
     return {
       costCredits: quotedCost,
       shownCost: quotedCost,
+      checkingPrice: false,
       costLabel: creditsLabel(quotedCost),
       blocksGenerate: false,
       message: null,
@@ -840,6 +849,7 @@ export function resolveWebGenerationQuoteUi({
     return {
       costCredits: null,
       shownCost: null,
+      checkingPrice: false,
       costLabel: 'Unavailable',
       blocksGenerate: true,
       message: quoteErrorMessage ?? 'Could not calculate generation cost.',

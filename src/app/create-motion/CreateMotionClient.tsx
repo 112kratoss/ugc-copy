@@ -1509,6 +1509,7 @@ function MotionCreator({
         ? {
             costCredits: null,
             shownCost: null,
+            checkingPrice: false,
             costLabel: hasCharacterImage && hasReferenceVideo ? 'Calculating...' : 'Add both inputs',
             blocksGenerate: true,
             message: hasCharacterImage && hasReferenceVideo ? 'Reading the motion clip’s length…' : MOTION_INPUTS_HINT,

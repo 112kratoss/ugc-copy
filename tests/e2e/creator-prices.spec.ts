@@ -78,9 +78,11 @@ test('every setting and every model is priced against the balance, and a picked 
   await answerQuotes(page, pricesNearProduction);
 
   await page.goto('/create-video', COLD_PAGE);
-  // The prompt box takes in what was typed before the page's script ran. Generate names the server's
-  // price from the first paint, so its name is no sign of the script: only the script enables it, once
-  // it holds the prompt and the page's own price. Pressed before that, the settings chip did nothing.
+  // The prompt box takes in what was typed before the page's script ran. Generate shows the server's
+  // price from the first paint, held: only the page's script enables it, once the page has hydrated and
+  // its own quote is in, which is all it proves here (this creator refuses an empty prompt only when
+  // Generate is pressed), and by then the prompt box has taken in what was typed. Pressed before that,
+  // the settings chip did nothing.
   await page.getByRole('textbox', { name: 'Prompt' }).fill(PROMPT);
   await expect(page.getByRole('button', { name: 'Generate · 19 credits' })).toBeEnabled(COLD_PAGE);
   const note = page.locator('[data-creator-bar-note]');

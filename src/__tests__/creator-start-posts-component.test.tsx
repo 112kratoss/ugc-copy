@@ -19,7 +19,10 @@ vi.mock('@/components/HoverVideo', () => ({
 
 // next/image needs the Next runtime; the poster's own markup is not under test.
 vi.mock('@/components/OptimizedPreviewImage', () => ({
-  OptimizedPreviewImage: ({ previewSrc }: { previewSrc: string }) => <span data-testid="poster" data-src={previewSrc} />,
+  OptimizedPreviewImage: ({ previewSrc, loading }: { previewSrc: string; loading?: 'eager' | 'lazy' }) => (
+    // Its own default is lazy.
+    <span data-testid="poster" data-src={previewSrc} data-loading={loading ?? 'lazy'} />
+  ),
 }));
 
 // A media worker's preview, as `isGeneratedPreviewImage` reads one on the project's own storage, which
@@ -229,8 +232,10 @@ describe('the posts the page was handed', () => {
     expect(within(section).getAllByRole('link', { name: /^Remix “/ })).toHaveLength(2);
   });
 
-  it('asks for the pictures on screen with the page, the first row first, and those under a run once near the screen', () => {
-    const posts = ['a', 'b', 'c', 'd'].map(preview);
+  // Lazy beyond the first: React's server render preloads every picture that is not, in the page's head,
+  // a phone strip's cards off its edge included (PR #859's review).
+  it('asks for the first pictures of each place with the page, and the rest only once near the screen', () => {
+    const posts = ['a', 'b', 'c', 'd', 'e'].map(preview);
     render(
       <>
         <CreatorStartPostsStrip source={posts} tool="image" />
@@ -238,11 +243,11 @@ describe('the posts the page was handed', () => {
         <CreatorWhileYouWait source={posts} tool="image" />
       </>,
     );
-    const firstRow = [['eager', 'high'], ['eager', 'high'], ['eager', 'high'], ['eager', null]];
+    const firstRow = [['eager', 'high'], ['eager', 'high'], ['eager', 'high'], ['lazy', null], ['lazy', null]];
     expect(pictureLoading(screen.getByTestId('creator-start-posts'))).toEqual(firstRow);
     const [strip] = screen.getAllByRole('region', { name: 'Start from a post' });
     expect(pictureLoading(strip)).toEqual(firstRow);
-    expect(pictureLoading(screen.getByRole('region', { name: 'While you wait' }))).toEqual(Array(4).fill(['lazy', null]));
+    expect(pictureLoading(screen.getByRole('region', { name: 'While you wait' }))).toEqual(Array(5).fill(['lazy', null]));
     // Straight from storage, as next/image left a worker's preview: no second request at hydration.
     expect(screen.getByTestId('creator-start-posts').querySelector('img')).toHaveAttribute('src', posts[0].posterUrl);
   });
@@ -267,10 +272,12 @@ describe('the posts the page was handed', () => {
     expect(view.container.querySelector('img')).toBeNull();
   });
 
-  it('keeps any other source on the optimizer', () => {
+  // Each place asks the optimizer for its own width of it, so neither asks with the page.
+  it('keeps any other source on the optimizer, lazy', () => {
     render(<CreatorEmptyCanvas source={[post('cats')]} tool="video" icon={Video} title="t" hint="h" frame={FRAME} />);
     expect(screen.getByTestId('creator-start-posts').querySelector('img')).toBeNull();
-    expect(screen.getByTestId('creator-start-posts').querySelector('[data-testid="poster"]'))
-      .toHaveAttribute('data-src', 'https://cdn.example/cats.webp');
+    const poster = screen.getByTestId('creator-start-posts').querySelector('[data-testid="poster"]');
+    expect(poster).toHaveAttribute('data-src', 'https://cdn.example/cats.webp');
+    expect(poster).toHaveAttribute('data-loading', 'lazy');
   });
 });

@@ -1342,6 +1342,27 @@ describe('CreateImageClient generation pipeline', () => {
       expect(startKey(next)).not.toBe(startKey(refused));
     });
 
+    // PR #859's review: the server's price for the run the page opened on stood in again whenever a
+    // later quote of a run like it was on its way, here beside the refusal of that very price.
+    it('names no price of the opening\'s while it asks again after a cost_changed refusal', async () => {
+      quoteStandIn.answers = [8, 'pending'];
+      const opening: CreatorOpening = { revision: 'test-catalog-rev', modelId: 'nano-banana-2', settings: {}, costCredits: 8 };
+      installFetch({
+        starts: [{ status: 409, body: { code: 'cost_changed', error: 'The price of this run changed. Check the updated cost and generate again.' } }],
+      });
+      render(<CreateImageClient prefill={{}} opening={opening} />);
+      typePrompt('A lighthouse at dawn');
+      expect(costShown()).toBe('8 credits');
+      pressGenerate();
+
+      expect(await screen.findByText('The price of this run changed. Check the updated cost and generate again.')).toBeInTheDocument();
+      expect(quoteStandIn.lastAttempt()).toBe(1);
+      // Asked again, and on its way: never the price the server has just refused.
+      expect(costShown()).toBe('Calculating...');
+      expect(generateButton()).toHaveTextContent(/^Calculating\.\.\.$/);
+      expect(generateButton()).toBeDisabled();
+    });
+
     it('keeps Retry quote in reach when it cannot be read again after it changed', async () => {
       quoteStandIn.answers = [8, 'error', 10];
       const fetchMock = installFetch({
@@ -3495,11 +3516,12 @@ describe('CreateImageClient opening', () => {
     expect(modelChip(view.container)).toHaveTextContent('GPT Image 2');
     expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName('Generation settings: 2K · 4:5');
     expect(view.container.querySelector('[data-creator-bar-note]')).toHaveTextContent('Balance 10000Leaves 9986');
-    // Generate names the same price (it read "Loading settings…" until the 2026-11-17 sweep), and is
-    // held until the page's own quote of the run is in.
+    // Generate names the same price (it read "Loading settings…" until the 2026-11-17 sweep), held
+    // until the page's own quote of the run is in, and busy, its name saying the price is being checked.
     fireEvent.change(screen.getByPlaceholderText(PROMPT_PLACEHOLDER), { target: { value: 'A lighthouse at dawn' } });
-    expect(costShown()).toBe('14 credits');
-    expect(generateButton()).toHaveTextContent('Generate · 14 credits');
+    expect(costShown()).toBe('14 credits · Checking the price');
+    expect(generateButton()).toHaveTextContent(/^Generate · 14 credits$/);
+    expect(generateButton()).toHaveAttribute('aria-busy', 'true');
     expect(generateButton()).toBeDisabled();
   });
 
