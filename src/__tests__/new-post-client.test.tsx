@@ -2603,6 +2603,22 @@ describe('NewPostClient', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), { target: { value } });
   }
 
+  /**
+   * Waits for a creation the composer was opened from to be in it: its title,
+   * then the exact prompt its recipe holds. The composer adds that card from an
+   * effect once the creation has rendered, a render after the title, and
+   * setup.ts's wait runs the title's effects but not the render they start. On
+   * a loaded runner a test that went on at the title found no card, or pressed a
+   * Publish that refused the empty recipe (CI, 2026-11-03 to 11-17). Only for a
+   * creation whose recipe gets the card: one with a prompt, not a template result.
+   */
+  async function waitForCreationPrompt(title: string) {
+    const titleInput = screen.getByRole('textbox', { name: /^title/i });
+    await waitFor(() => expect(titleInput).toHaveValue(title));
+    await screen.findByText('Exact generation prompt');
+    return titleInput;
+  }
+
   // S8: five of the nine item types wait behind "More types" in the picker.
   function chooseItemType(name: RegExp) {
     const picker = within(screen.getByRole('dialog'));
@@ -4782,7 +4798,7 @@ describe('NewPostClient', () => {
       });
 
       render(<NewPostClient />);
-      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('A described creation'));
+      await waitForCreationPrompt('A described creation');
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
@@ -4986,7 +5002,7 @@ describe('NewPostClient', () => {
       });
 
       render(<NewPostClient />);
-      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('A creation behind a gateway'));
+      await waitForCreationPrompt('A creation behind a gateway');
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
       const alert = await screen.findByRole('alert');
@@ -5563,9 +5579,7 @@ describe('NewPostClient', () => {
       });
 
       render(<NewPostClient />);
-      await waitFor(() => {
-        expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
-      });
+      await waitForCreationPrompt('Window display still');
 
       expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
       expect(screen.getByText('Exact generation prompt')).toBeInTheDocument();
@@ -6536,11 +6550,8 @@ describe('NewPostClient', () => {
         searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
         enqueueCreation({ input_media: [] });
       };
-      const titleField = async () => {
-        const titleInput = screen.getByRole('textbox', { name: /^title/i });
-        await waitFor(() => expect(titleInput).toHaveValue('Window display still'));
-        return titleInput;
-      };
+      // The creation's only item is its exact prompt, which a Publish needs.
+      const titleField = () => waitForCreationPrompt('Window display still');
       const refusalAlert = async () => (await screen.findByText(RECIPE_TITLE_TOO_SHORT_REFUSAL)).closest('[role="alert"]') as HTMLElement;
 
       it('says the minimum by the title while a free or paid recipe has a shorter title, and nowhere else', async () => {
