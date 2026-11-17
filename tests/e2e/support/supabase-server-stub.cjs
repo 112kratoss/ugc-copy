@@ -42,7 +42,10 @@
 // "Make this" shelf's pins, which the image, video and motion creators draw as "Start from a post"
 // and the signed-out Home as its shelf: three pictures made in the app by a creator of their own
 // (fixtures/creator-start-posts.json), with what a signed-in viewer's shelf reads of the E2E user
-// (none of them hidden, reported or blocked).
+// (none of them hidden, reported or blocked). And a second creator page, /creators/e2e-recipe-page-creator:
+// four pictures made elsewhere by a creator of their own, three with a recipe, two free and one paid
+// (fixtures/creator-page-recipes.json), which creator-page-own-recipe-chips.spec.ts draws for that
+// creator, another reader and a visitor.
 // A page added here brings each of its reads, matched by method, path and the filters that name
 // its own rows: a whole table answered with no rows would change what every other page draws.
 //
@@ -196,6 +199,13 @@ const marketplaceRecipes = require('../fixtures/marketplace-recipes.json');
 // creator-arrival-steady.spec.ts draws the posts and their pictures.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const startPosts = require('../fixtures/creator-start-posts.json');
+// A creator page with recipes on it: four pictures made elsewhere (no creation, so no creation is
+// read), three of them with a published recipe, by a creator who is not the E2E user. The page
+// reads its creator by handle, the posts and the totals, then hydrates the posts as a feed does
+// (src/lib/creator-profile.ts, resolvePostRowsToFeedItems); creator-page-own-recipe-chips.spec.ts
+// draws it for its creator, another reader and a visitor.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const recipePage = require('../fixtures/creator-page-recipes.json');
 // In the order the page asks for them: its recipes' posts as its read lists the recipes, newest
 // first, and the posts' covers as that read answers (the fixture's posts are in the same order).
 const sellerPostIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.post_id).join(',')})`;
@@ -209,6 +219,8 @@ const marketplaceBundleIds = `in.(${marketplaceRecipes.bundles.map((bundle) => b
 const startPostPinIds = `in.(${startPosts.pinnedPostIds.join(',')})`;
 const startPostIds = `in.(${startPosts.posts.map(({ id }) => id).join(',')})`;
 const startPostGenerationIds = `in.(${startPosts.generations.map(({ id }) => id).join(',')})`;
+// The creator page's posts, newest first, as its read answers them and the hydration names them.
+const recipePagePostIds = `in.(${recipePage.posts.map(({ id }) => id).join(',')})`;
 
 const HOST = 'example.supabase.co';
 
@@ -955,6 +967,65 @@ const READS = [
     path: '/rest/v1/user_blocks',
     filters: { blocked_user_id: 'eq.workflow-user', blocker_user_id: `in.(${startPosts.creator.id})` },
     answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // The second creator page (loadCreatorProfileRow): its creator by handle. maybeSingle() asks for
+    // a list.
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { username: `eq.${recipePage.creator.username}` },
+    answer: ({ wantsObject }) => json(wantsObject ? recipePage.creator : [recipePage.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // fetchCreatorPostRows: the four posts, newest first, and a head count of them.
+    methods: ['GET', 'HEAD'],
+    path: '/rest/v1/posts',
+    filters: { user_id: `eq.${recipePage.creator.id}`, visibility: 'eq.public' },
+    answer: ({ method }) => (method === 'HEAD'
+      ? new Response(null, { status: 200, headers: { 'content-range': `*/${recipePage.posts.length}` } })
+      : json(recipePage.posts, { 'content-range': `0-${recipePage.posts.length - 1}/${recipePage.posts.length}` })),
+  },
+  {
+    // loadCreatorStats: the page's totals.
+    methods: ['POST'],
+    path: '/rest/v1/rpc/get_creator_profile_stats',
+    body: { p_creator_id: recipePage.creator.id },
+    answer: () => json(recipePage.stats),
+  },
+  {
+    // resolvePostRowsToFeedItems: their pictures, one each, with a grid preview...
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: recipePagePostIds },
+    answer: () => json(recipePage.media, { 'content-range': `0-${recipePage.media.length - 1}/${recipePage.media.length}` }),
+  },
+  {
+    // ...their creator...
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `in.(${recipePage.creator.id})` },
+    answer: () => json([recipePage.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // ...no Made with rows...
+    methods: ['GET'],
+    path: '/rest/v1/post_source_tools',
+    filters: { post_id: recipePagePostIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // ...none marked NSFW...
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: recipePagePostIds, select: 'id,is_nsfw' },
+    answer: () => json(recipePage.posts.map(({ id }) => ({ id, is_nsfw: false }))),
+  },
+  {
+    // ...and three recipes, in the public summaries (getMarketplaceAssetSummaryHydration).
+    methods: ['POST'],
+    path: '/rest/v1/rpc/get_public_post_resource_bundle_summaries',
+    body: { p_post_ids: recipePage.posts.map(({ id }) => id) },
+    answer: () => json(recipePage.bundles),
   },
 ];
 

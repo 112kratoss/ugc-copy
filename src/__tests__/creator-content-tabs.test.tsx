@@ -22,6 +22,8 @@ const routerReplace = routerMock.replace;
 const authState = vi.hoisted(() => ({
   session: null as { access_token: string } | null,
   user: null as { id: string } | null,
+  /** The provider is still checking a session cookie. */
+  isLoading: false,
 }));
 // The query is the address bar's, as Next's follows the page's own pushState
 // and replaceState: a reel opened from a tile has `?post=` in the query the
@@ -38,7 +40,7 @@ vi.mock('next/navigation', async () => {
 });
 
 vi.mock('@/components/AuthProvider', () => ({
-  useAuth: () => ({ session: authState.session, user: authState.user }),
+  useAuth: () => ({ session: authState.session, user: authState.user, isLoading: authState.isLoading }),
 }));
 
 vi.mock('@/app/showcase/ShowcaseMediaCarousel', () => ({
@@ -210,6 +212,7 @@ describe('CreatorContentTabs', () => {
     routerReplace.mockReset();
     authState.session = null;
     authState.user = null;
+    authState.isLoading = false;
     resetFeedbackState();
     window.history.replaceState(null, '', '/creators/creator-name');
   });
@@ -1035,5 +1038,147 @@ describe('CreatorContentTabs', () => {
       root?.unmount();
     });
     container.remove();
+  });
+});
+
+// Sweep of 2026-11-17 (build 988d55079): a full load of /creators/magicbooklet, signed in as its
+// creator, drew the tiles' chips "Free recipe" from the first paint until the page's session check
+// named them, about half a second later, then "Your recipe".
+describe("CreatorContentTabs: the creator's own recipes", () => {
+  const AUTH_COOKIE = 'sb-project-ref-auth-token';
+  // A free recipe beside the paid one of `items`.
+  const freeRecipe: ShowcaseFeedItem = {
+    ...items[1],
+    id: 'item-3',
+    title: 'Free Breakdown',
+    asset: { ...items[1].asset!, id: 'bundle-3', postId: 'item-3', accessMode: 'free', priceUsdCents: 0 },
+  };
+  const pageData: CreatorProfilePageData = { ...initialData, items: [...items, freeRecipe] };
+  const tabs = <CreatorContentTabs initialData={pageData} profilePath="/creators/creator-name" />;
+
+  /** A session cookie as @supabase/ssr writes it, naming its account. */
+  function holdSessionCookieOf(userId: string) {
+    const session = Buffer.from(JSON.stringify({ access_token: 'cookie-token', user: { id: userId } }))
+      .toString('base64url');
+    document.cookie = `${AUTH_COOKIE}=base64-${session}; Path=/`;
+  }
+
+  /** What a browser shows of an element: its text, less whatever a style rule hides. */
+  function shownText(element: Element): string {
+    if (window.getComputedStyle(element).display === 'none') return '';
+    return Array.from(element.childNodes)
+      .map((node) => (node instanceof Element ? shownText(node) : node.textContent ?? ''))
+      .join('');
+  }
+
+  /** The recipe tiles' chips, in the grid's order, as a browser shows them. */
+  function chips(root: ParentNode = document) {
+    return Array.from(root.querySelectorAll('[data-creator-card][data-creator-recipe]')).map((card) => {
+      const chip = card.querySelector('.lucide-lock-keyhole')?.parentElement;
+      return chip ? shownText(chip) : null;
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project-ref.supabase.co');
+    authState.session = null;
+    authState.user = null;
+    authState.isLoading = false;
+    window.history.replaceState(null, '', '/creators/creator-name');
+  });
+
+  afterEach(() => {
+    document.cookie = `${AUTH_COOKIE}=; Max-Age=0; Path=/`;
+    document.documentElement.removeAttribute('data-auth-user');
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('reads them as theirs while a cookie naming them is checked, and once the check names them', () => {
+    holdSessionCookieOf('creator-1');
+    authState.isLoading = true;
+    const { rerender } = render(tabs);
+    expect(chips()).toEqual(['Your recipe', 'Your recipe']);
+    expect(document.body.textContent).not.toMatch(/Free recipe|900 credits/);
+
+    authState.session = { access_token: 'live-token' };
+    authState.user = { id: 'creator-1' };
+    authState.isLoading = false;
+    rerender(tabs);
+    expect(chips()).toEqual(['Your recipe', 'Your recipe']);
+  });
+
+  it('prices them for anyone else while their cookie is checked, and once named', () => {
+    holdSessionCookieOf('user-2');
+    authState.isLoading = true;
+    const { rerender } = render(tabs);
+    expect(chips()).toEqual(['900 credits', 'Free recipe']);
+
+    authState.session = { access_token: 'live-token' };
+    authState.user = { id: 'user-2' };
+    authState.isLoading = false;
+    rerender(tabs);
+    expect(chips()).toEqual(['900 credits', 'Free recipe']);
+    expect(document.body.textContent).not.toContain('Your recipe');
+  });
+
+  it("prices them for a visitor, and for a creator whose check ended with no one", () => {
+    const { unmount } = render(tabs);
+    expect(chips()).toEqual(['900 credits', 'Free recipe']);
+    unmount();
+
+    // The cookie names the creator, but the provider's check ended with no session.
+    holdSessionCookieOf('creator-1');
+    render(tabs);
+    expect(chips()).toEqual(['900 credits', 'Free recipe']);
+  });
+
+  // The page is drawn ahead of time for every viewer, and no cookie can be read on the server.
+  it("draws both in the server's HTML: the root element's mark shows the creator theirs and anyone else the price, before the first paint, and hydrates as drawn", async () => {
+    const root = document.documentElement;
+    const container = document.createElement('div');
+    container.innerHTML = renderToString(tabs);
+    document.body.appendChild(container);
+
+    // A visitor, and another account.
+    expect(chips(container)).toEqual(['900 credits', 'Free recipe']);
+    root.setAttribute('data-auth-user', 'user-2');
+    expect(chips(container)).toEqual(['900 credits', 'Free recipe']);
+    // The creator.
+    root.setAttribute('data-auth-user', 'creator-1');
+    expect(chips(container)).toEqual(['Your recipe', 'Your recipe']);
+
+    const recoverableErrors: unknown[] = [];
+    const consoleError = vi.spyOn(console, 'error');
+    let hydrated: ReturnType<typeof hydrateRoot> | null = null;
+    await act(async () => {
+      hydrated = hydrateRoot(container, tabs, { onRecoverableError: (error) => recoverableErrors.push(error) });
+    });
+    expect(recoverableErrors).toEqual([]);
+    expect(consoleError).not.toHaveBeenCalled();
+    // Once hydrated, the page draws a visitor's chips alone (no cookie here), whatever the mark says.
+    root.removeAttribute('data-auth-user');
+    expect(chips(container)).toEqual(['900 credits', 'Free recipe']);
+    expect(container.querySelector('[data-creator-recipe-owner]')).toBeNull();
+
+    await act(async () => {
+      hydrated?.unmount();
+    });
+    container.remove();
+  });
+
+  it("draws everyone's chips alone in the server's HTML for a creator a style rule cannot name", () => {
+    const unnameable = 'creator"] *{display:none} [x="';
+    const withCreator = (item: ShowcaseFeedItem): ShowcaseFeedItem => ({ ...item, creator: { ...item.creator, id: unnameable } });
+    const html = renderToString(
+      <CreatorContentTabs
+        initialData={{ ...pageData, profile: { ...pageData.profile, id: unnameable }, items: pageData.items.map(withCreator) }}
+        profilePath="/creators/creator-name"
+      />
+    );
+
+    expect(html).toContain('900 credits');
+    expect(html).not.toContain('Your recipe');
+    expect(html).not.toContain('<style');
   });
 });

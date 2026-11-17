@@ -230,18 +230,29 @@ type Frame = {
 type RemixFrame = { path: string; remix: string };
 
 /**
+ * A frame of the recipe panel under the post: what is shown of it, as one line (null while it is not
+ * laid out, as in the dev server's first frames), and whether its HTML has all arrived (the rail,
+ * which comes after it, is in).
+ */
+type RecipeFrame = { path: string; whole: boolean; text: string | null };
+
+/**
  * Records every frame whose drawing of the post's rail differs from the last, from the document's
  * first frame on: its first frames are the server's HTML under the stylesheet and the pre-paint
  * script, before the page's own scripts have run. The engagement row's Remix, which the HTML draws
- * before the rail, is recorded apart from its own first frame (`__remixFrames`).
+ * before the rail, is recorded apart from its own first frame (`__remixFrames`), and so is the
+ * recipe panel under the post (`__recipeFrames`).
  */
 const RECORDER = `(() => {
   const frames = [];
   window.__railFrames = frames;
   const remixFrames = [];
   window.__remixFrames = remixFrames;
+  const recipeFrames = [];
+  window.__recipeFrames = recipeFrames;
   let last = '';
   let lastRemix = '';
+  let lastRecipe = '';
   const shown = (element) => Boolean(element && element.getClientRects().length > 0);
   // What a shown element reads: the text of what is shown of it, as one line.
   const reads = (element) => (shown(element) ? element.innerText.replace(/\\s+/g, ' ').trim() : null);
@@ -261,6 +272,19 @@ const RECORDER = `(() => {
       if (remixKey !== lastRemix) {
         lastRemix = remixKey;
         remixFrames.push(remixFrame);
+      }
+    }
+    const recipe = document.querySelector('[data-testid="canonical-post-recipe"]');
+    if (recipe) {
+      const recipeFrame = {
+        path: location.pathname,
+        whole: Boolean(document.querySelector('[data-testid="canonical-post-actions"]')),
+        text: reads(recipe),
+      };
+      const recipeKey = JSON.stringify(recipeFrame);
+      if (recipeKey !== lastRecipe) {
+        lastRecipe = recipeKey;
+        recipeFrames.push(recipeFrame);
       }
     }
     const rail = document.querySelector('[data-testid="canonical-post-actions"]');
@@ -330,6 +354,48 @@ function expectRemixInEveryFrame(frames: RemixFrame[], remix: string) {
   const all = JSON.stringify(frames);
   expect(frames.length, all).toBeGreaterThan(0);
   expect(frames.filter((frame) => frame.remix !== remix), all).toEqual([]);
+}
+
+/** The recipe panel's frames recorded so far; read after `recordedFrames`, which stops the recorder. */
+async function recordedRecipeFrames(page: Page, { path = POST_PATH } = {}): Promise<RecipeFrame[]> {
+  const frames = await page.evaluate(() => (window as unknown as { __recipeFrames: RecipeFrame[] }).__recipeFrames);
+  return frames.filter((frame) => frame.path === path);
+}
+
+/**
+ * What the recipe panel says to a reader it offers the recipe to: its price or "Free recipe" on its
+ * badge, what an unlock gives them, and the ways to get it.
+ */
+const RECIPE_OFFER = /Free recipe|Get free recipe|Get the full recipe|Unlock the full recipe|Pay \$|Use [\d,]+ credits|Sign in to see your credit balance/;
+/** The free recipe's offer in the panel: its badge, then its button. */
+const FREE_RECIPE_OFFER = /Free recipe[\s\S]*Get free recipe/;
+/** The paid recipe's offer in the panel: its badge, then its two ways to pay. */
+const PAID_RECIPE_OFFER = /\$9\.00 · 900 credits[\s\S]*Pay \$9\.00[\s\S]*Use 900 credits/;
+/** The creator's own words in the panel: their recipe, held until their own read of it lands. */
+const OWN_RECIPE_PANEL = /^RECIPE Your recipe\b/;
+
+/**
+ * The recipe panel as anyone but its creator reads it: offered in every frame it is drawn whole in,
+ * and never in the creator's words in any frame.
+ */
+function expectRecipeOfferedInEveryFrame(frames: RecipeFrame[], offer: RegExp) {
+  const all = JSON.stringify(frames);
+  const whole = frames.filter((frame) => frame.whole && frame.text !== null);
+  expect(whole.length, all).toBeGreaterThan(0);
+  expect(whole.filter((frame) => !offer.test(frame.text ?? '')), all).toEqual([]);
+  expect(frames.filter((frame) => /Your recipe|Opening your recipe/.test(frame.text ?? '')), all).toEqual([]);
+}
+
+/**
+ * The creator's own recipe in the panel, in every frame: theirs ("Your recipe"), offered to them in
+ * none (no price, "Free recipe" or way to get it), its body held while their own read of it is out.
+ */
+function expectOwnRecipeInEveryFrame(frames: RecipeFrame[]) {
+  const all = JSON.stringify(frames);
+  const whole = frames.filter((frame) => frame.whole && frame.text !== null);
+  expect(whole.length, all).toBeGreaterThan(0);
+  expect(whole.filter((frame) => !OWN_RECIPE_PANEL.test(frame.text ?? '')), all).toEqual([]);
+  expect(frames.filter((frame) => RECIPE_OFFER.test(frame.text ?? '')), all).toEqual([]);
 }
 
 /** Lets two frames pass, so what the page has committed has been drawn, and recorded. */
@@ -517,6 +583,7 @@ test('a post opened from the Marketplace draws a signed-in reader\'s composer an
   expect(frames.at(-1)?.composerShown, JSON.stringify(frames)).toBe(true);
   expectSteadyRail(frames, 'signed in');
   expectRemixInEveryFrame(await recordedRemixFrames(page), FREE_REMIX);
+  expectRecipeOfferedInEveryFrame(await recordedRecipeFrames(page), FREE_RECIPE_OFFER);
 });
 
 test('a signed-in reader who loads a post draws its composer and rail from the first frame, while the session is checked', async ({ page, context }) => {
@@ -543,6 +610,7 @@ test('a signed-in reader who loads a post draws its composer and rail from the f
   expect(frames.at(-1)?.composerShown, JSON.stringify(frames)).toBe(true);
   expectSteadyRail(frames, 'signed in');
   expectRemixInEveryFrame(await recordedRemixFrames(page), FREE_REMIX);
+  expectRecipeOfferedInEveryFrame(await recordedRecipeFrames(page), FREE_RECIPE_OFFER);
 });
 
 test('a signed-out reader is offered sign-in where the composer goes, and no Report user, in every frame', async ({ page }) => {
@@ -557,12 +625,14 @@ test('a signed-out reader is offered sign-in where the composer goes, and no Rep
   await expect(rail(page).getByText(COMMENT)).toBeVisible(COLD_PAGE);
   await expect(rail(page).getByRole('link', { name: 'Sign in to join the conversation' })).toBeVisible();
   expectSteadyRail(await recordedFrames(page), 'signed out');
+  expectRecipeOfferedInEveryFrame(await recordedRecipeFrames(page), FREE_RECIPE_OFFER);
 
   await page.goto('/marketplace');
   await openPostByClientNavigation(page);
   await expect(rail(page).getByText(COMMENT)).toBeVisible(COLD_PAGE);
   await expect(rail(page).getByRole('link', { name: 'Sign in to join the conversation' })).toBeVisible();
   expectSteadyRail(await recordedFrames(page), 'signed out');
+  expectRecipeOfferedInEveryFrame(await recordedRecipeFrames(page), FREE_RECIPE_OFFER);
 });
 
 /** Opens Owner tools, which only the real row does once the session has named its creator. */
@@ -613,6 +683,9 @@ test("the post's creator, loading their own post, has Owner tools from the first
   await expectOwnerToolsOpen(page);
   // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
   expectRemixInEveryFrame(await recordedRemixFrames(page), OPEN_REMIX);
+  // Their recipe under the post, theirs in every frame (sweep of 2026-11-17: "Free recipe" and
+  // "Get free recipe" until their own read landed).
+  expectOwnRecipeInEveryFrame(await recordedRecipeFrames(page));
   expectOwnerRail(frames);
 });
 
@@ -640,6 +713,7 @@ test("the post's creator, opening their own post from the Marketplace, has Owner
   await expectOwnerToolsOpen(page);
   // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
   expectRemixInEveryFrame(await recordedRemixFrames(page), OPEN_REMIX);
+  expectOwnRecipeInEveryFrame(await recordedRecipeFrames(page));
   expectOwnerRail(frames);
 });
 
@@ -685,6 +759,7 @@ test("the post's creator, loading their own post below 1180px, reads their recip
   const frames = await recordedFrames(page);
   // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
   expectRemixInEveryFrame(await recordedRemixFrames(page), OPEN_REMIX);
+  expectOwnRecipeInEveryFrame(await recordedRecipeFrames(page));
   expectOwnerRail(frames);
   // No room is kept under the post for a bar that is never drawn.
   expect(await roomUnderThePost(page)).toBeLessThan(40);
@@ -724,6 +799,7 @@ test('a signed-in reader below 1180px is offered the free recipe in the rail and
   const all = JSON.stringify(frames);
   expectSteadyRail(frames, 'signed in');
   expectRemixInEveryFrame(await recordedRemixFrames(page), FREE_REMIX);
+  expectRecipeOfferedInEveryFrame(await recordedRecipeFrames(page), FREE_RECIPE_OFFER);
   // The bar comes with the end of the page's HTML, and once drawn it stays as it reads.
   const firstBar = frames.findIndex((frame) => frame.recipeBar !== null);
   expect(firstBar, all).toBeGreaterThanOrEqual(0);
@@ -758,6 +834,7 @@ test("the post's creator, loading their own post with a paid recipe below 1180px
   const frames = await recordedFrames(page, { path: PAID_POST.path });
   // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
   expectRemixInEveryFrame(await recordedRemixFrames(page, { path: PAID_POST.path }), OPEN_REMIX);
+  expectOwnRecipeInEveryFrame(await recordedRecipeFrames(page, { path: PAID_POST.path }));
   expectOwnerRail(frames);
   expect(await roomUnderThePost(page)).toBeLessThan(40);
 });
@@ -780,6 +857,7 @@ test('a signed-in reader below 1180px is offered a paid recipe at its price, in 
   const frames = await recordedFrames(page, { path: PAID_POST.path });
   const all = JSON.stringify(frames);
   expectRemixInEveryFrame(await recordedRemixFrames(page, { path: PAID_POST.path }), PAID_REMIX);
+  expectRecipeOfferedInEveryFrame(await recordedRecipeFrames(page, { path: PAID_POST.path }), PAID_RECIPE_OFFER);
   expectSteadyRail(frames, 'signed in', PAID_RECIPE_LINK);
   const firstBar = frames.findIndex((frame) => frame.recipeBar !== null);
   expect(firstBar, all).toBeGreaterThanOrEqual(0);
@@ -810,6 +888,7 @@ test("the post's creator, on a post with no creation, has no Remix in any frame,
   const frames = await recordedFrames(page, { path: UPLOAD_POST.path });
   // No Remix in any frame: asked first, as a failure of the rail's would hide it.
   expectRemixInEveryFrame(await recordedRemixFrames(page, { path: UPLOAD_POST.path }), '');
+  expectOwnRecipeInEveryFrame(await recordedRecipeFrames(page, { path: UPLOAD_POST.path }));
   expectOwnerRail(frames);
 });
 
@@ -830,6 +909,7 @@ test('a signed-in reader is offered no Remix in any frame where the recipe does 
   await expect(rail(page).getByText(COMMENT)).toBeVisible();
   const frames = await recordedFrames(page, { path: UPLOAD_POST.path });
   expectRemixInEveryFrame(await recordedRemixFrames(page, { path: UPLOAD_POST.path }), '');
+  expectRecipeOfferedInEveryFrame(await recordedRecipeFrames(page, { path: UPLOAD_POST.path }), FREE_RECIPE_OFFER);
   expectSteadyRail(frames, 'signed in');
 });
 
@@ -900,8 +980,99 @@ test("the post's creator keeps their Remix, Owner tools and recipe in every fram
   const frames = await recordedFrames(page);
   // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
   expectRemixInEveryFrame(await recordedRemixFrames(page), OPEN_REMIX);
+  expectOwnRecipeInEveryFrame(await recordedRecipeFrames(page));
   expectCreatorsOwnRail(frames);
   await expectOwnerToolsOpen(page);
+});
+
+// Sweep of 2026-11-17 (build 988d55079), signed in as @magicbooklet: on their own post the recipe
+// panel under it read "Free recipe", with "Get free recipe" under it, for 0.4 to 1.6 s, until their
+// own read of the recipe landed and the panel started again from it as "Your recipe" with "Owner
+// preview". The page knew them from the first frame (the rail's pointer and Owner tools follow it
+// since #847 and #855); the panel drew the recipe the page holds, a visitor's, until that read.
+/** The creator's own read of their free recipe: all of it, theirs. */
+const OWN_RECIPE_READ = {
+  success: true,
+  bundle: {
+    id: freeRecipePost.bundle.id,
+    postId: POST_ID,
+    title: freeRecipePost.bundle.title,
+    summary: '',
+    previewText: '',
+    accessMode: 'free',
+    priceUsdCents: 0,
+    priceQuote: { currency: 'USD', amountSubunits: 0, formatted: 'Free', note: null },
+    status: 'published',
+    allowRemix: true,
+    resourceKinds: ['prompt', 'remix'],
+    lockedPreview: null,
+    salesCount: 0,
+    freeUnlockCount: 0,
+    viewerCanAccess: true,
+    viewerIsOwner: true,
+    viewerHasPurchased: false,
+    resources: {
+      promptText: freeRecipePost.bundle.prompt_text,
+      notesMarkdown: null,
+      workflowShareUrl: null,
+      workflowSnapshot: null,
+      attachments: [],
+      allowRemix: true,
+    },
+    purchasedRevision: null,
+  },
+};
+
+test("the post's creator holds their recipe as theirs until their own read of it lands, a failed one included, and is offered it in no frame", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const { checks } = await signIn(context, postCreator);
+  checks.hold();
+  await answerApi(page);
+  // Their read of the recipe: refused the first time, answered after Try again.
+  const recipeReads: string[] = [];
+  await page.route(`**/api/posts/${POST_ID}/resource-bundle**`, (route) => {
+    recipeReads.push(route.request().headers().authorization ?? '');
+    return recipeReads.length === 1
+      ? route.fulfill({ status: 503, json: { error: 'Not answered offline' } })
+      : route.fulfill({ json: OWN_RECIPE_READ });
+  });
+  await page.addInitScript(RECORDER);
+  const recipe = page.getByTestId('canonical-post-recipe');
+
+  await page.goto(POST_PATH);
+  await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  await twoFrames(page);
+  // While the check runs: theirs, held, and nothing to get. Soft, so the frames below say what was
+  // drawn instead.
+  await expect.soft(recipe.getByText('Opening your recipe…')).toBeVisible({ timeout: 1_000 });
+  await expect.soft(recipe.getByRole('button', { name: 'Get free recipe' })).toHaveCount(0);
+
+  checks.release();
+  // Their read goes out once the check names them, and fails: still theirs, with a way to ask again.
+  await expect.poll(() => recipeReads.length, COLD_PAGE).toBe(1);
+  const tryAgain = recipe.getByRole('button', { name: 'Try again' });
+  await expect(tryAgain).toBeVisible(COLD_PAGE);
+  await expect(recipe.getByText('The recipe could not be opened.')).toBeVisible();
+
+  await tryAgain.click();
+  await expect(recipe.getByText(/^Owner preview\./)).toBeVisible(COLD_PAGE);
+  await expect(recipe.getByText(freeRecipePost.bundle.prompt_text)).toBeVisible();
+  expect(recipeReads).toHaveLength(2);
+  expect(new Set(recipeReads).size, 'both read with the creator\'s session').toBe(1);
+  expect(recipeReads[0]).toMatch(/^Bearer /);
+
+  await recordedFrames(page);
+  const frames = await recordedRecipeFrames(page);
+  const all = JSON.stringify(frames);
+  expectOwnRecipeInEveryFrame(frames);
+  // Held, then the read's failure, then the recipe, which stays.
+  const shows = (frame: RecipeFrame, words: string) => (frame.text ?? '').includes(words);
+  const held = frames.findIndex((frame) => frame.whole && shows(frame, 'Opening your recipe…'));
+  const failed = frames.findIndex((frame) => shows(frame, 'The recipe could not be opened.'));
+  const opened = frames.findIndex((frame) => shows(frame, 'Owner preview.'));
+  expect([held >= 0, failed > held, opened > failed], all).toEqual([true, true, true]);
+  expect(frames.slice(opened).filter((frame) => !shows(frame, 'Owner preview.')), all).toEqual([]);
 });
 
 // Sweep of 2026-11-17 (build 941e2a55b), signed in as @magicbooklet: the composer's avatar read "I",
