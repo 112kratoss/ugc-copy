@@ -138,7 +138,10 @@ test('the post page\'s link to its recipe rings the recipe, so the click shows',
     await jump.click({ timeout: 2_000 });
     expect(await ringing()).toBe(true);
   }).toPass({ timeout: 45_000 });
-  await expect(page).toHaveURL(/#recipe$/);
+  // The link is the router's: `next dev` prefetches nothing, so the hash lands in the address only
+  // once the dev server has drawn the page again, about as slowly as the first time offline (it
+  // outlasted 10 seconds on main's run of 2026-11-17). On the live site it lands with the click.
+  await expect(page).toHaveURL(/#recipe$/, COLD_PAGE);
 });
 
 // A post as the reel reads it (`/api/showcase/posts/<id>`): made in the app, its Remix behind a
