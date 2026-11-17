@@ -39,13 +39,21 @@ const profile: EditableCreatorProfile = {
 
 describe('DeferredCreatorProfileCard', () => {
   // Between the idle wait and the editor's code arriving the page drew
-  // nothing at all (`dynamic` had no loading component).
-  it('keeps the skeleton up while the editor code downloads, then draws the editor', async () => {
-    render(<DeferredCreatorProfileCard initialProfile={profile} loadError={null} />);
+  // nothing at all (`dynamic` had no loading component). And what the page
+  // draws under the editor (Connected apps on /profile/edit) was drawn under
+  // the much shorter skeleton, then pushed off the screen by the editor
+  // (2026-11-17): it is drawn with the editor now, never before it.
+  it('keeps the skeleton up while the editor code downloads, then draws the editor and what comes under it', async () => {
+    render(
+      <DeferredCreatorProfileCard initialProfile={profile} loadError={null}>
+        <section aria-label="Connected apps" />
+      </DeferredCreatorProfileCard>
+    );
 
     const skeleton = await screen.findByRole('region', { name: 'Loading the profile editor' });
     expect(skeleton).toHaveAttribute('aria-busy', 'true');
     expect(skeleton).toHaveTextContent('Test Creator');
+    expect(screen.queryByRole('region', { name: 'Connected apps' })).not.toBeInTheDocument();
     // Past the idle wait (jsdom has no requestIdleCallback: 650 ms), the
     // editor's code is asked for and the skeleton stays while it downloads.
     await act(async () => {
@@ -53,12 +61,16 @@ describe('DeferredCreatorProfileCard', () => {
     });
     expect(screen.getByRole('region', { name: 'Loading the profile editor' })).toHaveTextContent('Test Creator');
     expect(screen.queryByRole('form', { name: 'Profile editor' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Connected apps' })).not.toBeInTheDocument();
 
     await act(async () => {
       editorDownload.finish();
     });
 
-    expect(await screen.findByRole('form', { name: 'Profile editor' })).toHaveTextContent('Test Creator');
+    const editor = await screen.findByRole('form', { name: 'Profile editor' });
+    expect(editor).toHaveTextContent('Test Creator');
     expect(screen.queryByRole('region', { name: 'Loading the profile editor' })).not.toBeInTheDocument();
+    const below = screen.getByRole('region', { name: 'Connected apps' });
+    expect(editor.compareDocumentPosition(below) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

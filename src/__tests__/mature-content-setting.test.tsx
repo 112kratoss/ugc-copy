@@ -1,5 +1,5 @@
 import { StrictMode } from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MatureContentSetting from '@/app/profile/MatureContentSetting';
@@ -136,5 +136,145 @@ describe('MatureContentSetting', () => {
     const toggle = await screen.findByRole('switch', { name: 'Mature content' });
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+
+  // The profile reads the setting with the page: the row read "Loading your
+  // setting…" for up to a second after the page was drawn (2026-11-17).
+  describe('with the setting the server read', () => {
+    it('draws it from the first render, and its read only checks it', async () => {
+      storedShowMature = true;
+      render(<MatureContentSetting initialShowMature />);
+
+      const toggle = screen.getByRole('switch', { name: 'Mature content' });
+      expect(toggle).toHaveAttribute('aria-checked', 'true');
+      expect(toggle).toBeEnabled();
+      expect(toggle).not.toHaveAttribute('aria-busy');
+      expect(screen.getByText('On. NSFW posts stay covered until you reveal one.')).toBeInTheDocument();
+      expect(screen.queryByText('Loading your setting…')).not.toBeInTheDocument();
+
+      await waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0].init).toMatchObject({ cache: 'no-store' });
+      expect(toggle).toHaveAttribute('aria-checked', 'true');
+    });
+
+    // Back draws the page's first render from the router's cache, setting and
+    // all: the read redraws a setting changed since.
+    it('takes the read where the drawn setting has changed since', async () => {
+      storedShowMature = true;
+      render(<MatureContentSetting initialShowMature={false} />);
+
+      const toggle = screen.getByRole('switch', { name: 'Mature content' });
+      expect(toggle).toHaveAttribute('aria-checked', 'false');
+      await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
+    });
+
+    it('keeps the drawn setting, and says nothing, when its read fails', async () => {
+      failNextRead = true;
+      render(<MatureContentSetting initialShowMature={false} />);
+
+      await waitFor(() => expect(sent).toHaveLength(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      const toggle = screen.getByRole('switch', { name: 'Mature content' });
+      expect(toggle).toHaveAttribute('aria-checked', 'false');
+      expect(toggle).toBeEnabled();
+      expect(screen.queryByText('Your setting did not load.')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    });
+
+    /**
+     * The quiet read is held until the test answers it, with `readAnswer` (the
+     * setting as it was when the read was asked), and answers whether or not
+     * it was stopped: what the row draws of it is the row's own doing. A change
+     * is stored and answered at once.
+     */
+    function holdTheRead(readAnswer: boolean) {
+      let answerRead: () => void = () => undefined;
+      const readAnswered = new Promise<void>((resolve) => {
+        answerRead = resolve;
+      });
+      const json = (body: unknown) => new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        sent.push({ url: String(input), init });
+        if (init?.method === 'POST') {
+          storedShowMature = (JSON.parse(String(init.body)) as { showMature: boolean }).showMature;
+          return json({ showMature: storedShowMature });
+        }
+        await readAnswered;
+        return json({ showMature: readAnswer });
+      }));
+      return async () => {
+        await act(async () => {
+          answerRead();
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+      };
+    }
+
+    it('never lets a read asked before turning it off draw over it', async () => {
+      const answerRead = holdTheRead(true);
+      render(<MatureContentSetting initialShowMature />);
+      const toggle = screen.getByRole('switch', { name: 'Mature content' });
+      await waitFor(() => expect(sent).toHaveLength(1));
+
+      // Off needs no question.
+      fireEvent.click(toggle);
+      await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'));
+      expect(storedShowMature).toBe(false);
+
+      await answerRead();
+      expect(toggle).toHaveAttribute('aria-checked', 'false');
+    });
+
+    it('never lets a read asked before turning it on draw over it', async () => {
+      const answerRead = holdTheRead(false);
+      render(
+        <>
+          <MatureContentSetting initialShowMature={false} />
+          <FeedbackViewport />
+        </>
+      );
+      const toggle = screen.getByRole('switch', { name: 'Mature content' });
+      await waitFor(() => expect(sent).toHaveLength(1));
+
+      fireEvent.click(toggle);
+      const question = await screen.findByRole('alertdialog', { name: 'Turn on mature content?' });
+      fireEvent.click(within(question).getByRole('button', { name: 'I’m 18 or older' }));
+      await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
+      expect(storedShowMature).toBe(true);
+
+      await answerRead();
+      expect(toggle).toHaveAttribute('aria-checked', 'true');
+    });
+
+    // Back drew "Off" from the router's cache while the account is on. A tap
+    // to turn it on stopped the read that would put it right, before the 18+
+    // question, so "Not now" left it drawn off (review of #841).
+    it('lets the read put a stale setting right when the 18+ question is declined', async () => {
+      storedShowMature = true;
+      const answerRead = holdTheRead(true);
+      render(
+        <>
+          <MatureContentSetting initialShowMature={false} />
+          <FeedbackViewport />
+        </>
+      );
+      const toggle = screen.getByRole('switch', { name: 'Mature content' });
+      await waitFor(() => expect(sent).toHaveLength(1));
+
+      fireEvent.click(toggle);
+      const question = await screen.findByRole('alertdialog', { name: 'Turn on mature content?' });
+      fireEvent.click(within(question).getByRole('button', { name: 'Not now' }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+      expect(toggle).toHaveAttribute('aria-checked', 'false');
+
+      await answerRead();
+      expect(toggle).toHaveAttribute('aria-checked', 'true');
+      expect(posts()).toHaveLength(0);
+    });
   });
 });
