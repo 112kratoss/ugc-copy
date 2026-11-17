@@ -266,12 +266,21 @@ const CHECK_ASKED = { ...COLD_PAGE, intervals: [50] };
 function expectSteadyRail(frames: Frame[], reader: 'signed in' | 'signed out') {
   const all = JSON.stringify(frames);
   expect(frames.length, 'frames of the rail').toBeGreaterThan(0);
+  // A frame painted from part of the page's HTML, before the rail's rows have streamed in, has no
+  // Comments yet and shows none of the rows: CI's dev server sends the page in pieces and Chrome
+  // paints what it has (CI run of 2026-11-17, #838). What a frame must show is asked of the frames
+  // with Comments drawn; what no frame may show is asked of every frame.
+  const drawn = frames.filter((frame) => frame.commentsOffset !== null);
+  expect(drawn.length, all).toBeGreaterThan(0);
   // A signed-in reader is never offered sign-in, and a signed-out one always is.
-  expect(frames.filter((frame) => frame.signInShown !== (reader === 'signed out')), all).toEqual([]);
+  expect(frames.filter((frame) => reader === 'signed in' && frame.signInShown), all).toEqual([]);
+  expect(drawn.filter((frame) => reader === 'signed out' && !frame.signInShown), all).toEqual([]);
   // Report user and Block user are a signed-in reader's who is not the post's creator.
-  expect(frames.filter((frame) => frame.reportUserShown !== (reader === 'signed in')), all).toEqual([]);
+  expect(frames.filter((frame) => reader === 'signed out' && frame.reportUserShown), all).toEqual([]);
+  expect(drawn.filter((frame) => reader === 'signed in' && !frame.reportUserShown), all).toEqual([]);
   // Anyone but the creator may report the post, and only the creator has Owner tools.
-  expect(frames.filter((frame) => !frame.reportPostShown || frame.ownerToolsShown), all).toEqual([]);
+  expect(frames.filter((frame) => frame.ownerToolsShown), all).toEqual([]);
+  expect(drawn.filter((frame) => !frame.reportPostShown), all).toEqual([]);
   // Nothing drawn late above Comments moved it.
   const offsets = new Set(frames.map((frame) => frame.commentsOffset).filter((offset) => offset !== null));
   expect([...offsets], all).toHaveLength(1);
