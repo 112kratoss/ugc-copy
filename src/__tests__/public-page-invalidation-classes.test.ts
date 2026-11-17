@@ -46,6 +46,13 @@ import { describe, expect, it } from 'vitest';
  * write's invalidation off unseen, and fails outright. A member read by a
  * string key (`options['invalidateShowcaseFeedCache']`) counts as one by name.
  *
+ * And a helper's name comes from the helper's own module (review, 2026-11-17):
+ * an import, a re-export or a destructured binding under a helper's name (or
+ * a Next invalidator's) must be that same name, from its cache module (or
+ * Next's), and a member read of one off a whole-module import must be off
+ * that module. A default or a whole module imported under a helper's name, an
+ * export that gives anything else one, and a binding renamed to one all fail.
+ *
  * A file whose uses change fails until its row is brought up to date, with
  * what the new use is for; a hand-on under another name fails outright.
  */
@@ -210,6 +217,35 @@ function isNextInvalidationModule(specifier: string, file: string): boolean {
   return resolved !== null && NEXT_INVALIDATION_MODULES.has(resolved);
 }
 
+/** The module each helper is declared in. */
+const HELPER_MODULES: Record<Helper, string> = {
+  invalidateShowcaseFeedCache: 'src/lib/showcase-feed-cache.ts',
+  invalidateShowcaseFeedAndRefreshPostPages: 'src/lib/showcase-feed-cache.ts',
+  invalidateShowcaseFeedAndRefreshEveryPage: 'src/lib/showcase-feed-cache.ts',
+  invalidateShowcaseFeedCacheOnly: 'src/lib/showcase-feed-cache.ts',
+  invalidateMarketplaceResourceListCache: 'src/lib/marketplace-resource-list-cache.ts',
+};
+
+/** The repository file a module specifier names (`@/…` or a relative path, with or without its extension), or null. */
+function sourceModule(specifier: string, file: string): string | null {
+  const base = specifier.startsWith('@/')
+    ? path.join(ROOT, 'src', specifier.slice(2))
+    : specifier.startsWith('.') ? path.resolve(path.dirname(path.join(ROOT, file)), specifier) : null;
+  if (!base) return null;
+  const stem = base.replace(/\.(js|jsx|ts|tsx|mjs|cjs)$/, '');
+  for (const candidate of [base, `${stem}.ts`, `${stem}.tsx`, path.join(base, 'index.ts')]) {
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+      return path.relative(ROOT, candidate).split(path.sep).join('/');
+    }
+  }
+  return null;
+}
+
+/** Whether a name comes from where it is declared: a helper from its cache module, Next's own from Next's. */
+function isOwnModule(name: Name, specifier: string, file: string): boolean {
+  return isHelper(name) ? sourceModule(specifier, file) === HELPER_MODULES[name] : isNextInvalidationModule(specifier, file);
+}
+
 /** The text of a member read's string key: `options['invalidateShowcaseFeedCache']`. */
 function elementKey(node: ts.Node): string | null {
   return ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression)
@@ -251,6 +287,20 @@ function analyse(file: string, source: string): Analysis {
   const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, kind);
   // Local names that stand for a helper under another name: renamed imports and bindings.
   const aliases = new Map<string, Name>();
+  // Local names bound to a whole module (`import * as`, `require`, `await import`), with its specifier.
+  const namespaces = new Map<string, string>();
+  /** The module an expression is: a whole-module binding, `require('…')` or `await import('…')`. */
+  const moduleOf = (expression: ts.Expression | undefined): string | null => {
+    let inner = expression;
+    while (inner && (ts.isParenthesizedExpression(inner) || ts.isAwaitExpression(inner))) inner = inner.expression;
+    if (!inner) return null;
+    if (ts.isIdentifier(inner)) return namespaces.get(inner.text) ?? null;
+    if (ts.isCallExpression(inner) && inner.arguments.length > 0 && ts.isStringLiteral(inner.arguments[0])
+      && ((ts.isIdentifier(inner.expression) && inner.expression.text === 'require') || inner.expression.kind === ts.SyntaxKind.ImportKeyword)) {
+      return inner.arguments[0].text;
+    }
+    return null;
+  };
 
   const refuseNextCache = (node: ts.Node, how: string, specifier: string) => {
     if (!isCacheModule) violations.push(`${at(node)} ${how} '${specifier}' outside the two cache modules`);
@@ -265,7 +315,25 @@ function analyse(file: string, source: string): Analysis {
       if (fromNextCache && clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
         refuseNextCache(node, 'imports the whole of', specifier);
       }
+      // A helper's name comes from its own module, under its own name.
+      if (clause?.name && isName(clause.name.text)) {
+        violations.push(`${at(clause.name)} imports the default of '${specifier}' as ${clause.name.text}`);
+      }
+      if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
+        const local = clause.namedBindings.name.text;
+        if (isName(local)) violations.push(`${at(clause.namedBindings)} imports the whole of '${specifier}' as ${local}`);
+        namespaces.set(local, specifier);
+      }
       if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+        for (const element of clause.namedBindings.elements) {
+          const imported = (element.propertyName ?? element.name).text;
+          const local = element.name.text;
+          if (isName(local) && imported !== local) {
+            violations.push(`${at(element)} imports ${imported} as ${local}`);
+          } else if (isName(imported) && !isOwnModule(imported, specifier, file)) {
+            violations.push(`${at(element)} imports ${imported} from '${specifier}', not from its own module`);
+          }
+        }
         for (const element of clause.namedBindings.elements) {
           const original = (element.propertyName ?? element.name).text;
           if (!isName(original)) continue;
@@ -284,13 +352,47 @@ function analyse(file: string, source: string): Analysis {
         && isNextInvalidationModule(node.moduleSpecifier.text, file)) {
         refuseNextCache(node, 're-exports from', node.moduleSpecifier.text);
       }
+      const from = node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier) ? node.moduleSpecifier.text : null;
+      if (node.exportClause && ts.isNamespaceExport(node.exportClause) && isName(node.exportClause.name.text)) {
+        violations.push(`${at(node)} exports the whole of '${from}' as ${node.exportClause.name.text}`);
+      }
       if (node.exportClause && ts.isNamedExports(node.exportClause)) {
+        for (const element of node.exportClause.elements) {
+          const original = (element.propertyName ?? element.name).text;
+          const exported = element.name.text;
+          // An export under a helper's name must be that helper: no other binding, no other module's.
+          if (isName(exported)) {
+            if (from && original === exported && !isOwnModule(exported, from, file)) {
+              violations.push(`${at(element)} exports ${exported} from '${from}', not from its own module`);
+            } else if (original !== exported && (from || aliases.get(original) !== exported)) {
+              violations.push(`${at(element)} exports ${original} as ${exported}`);
+            }
+          }
+        }
         for (const element of node.exportClause.elements) {
           const original = (element.propertyName ?? element.name).text;
           const helper = isName(original) ? original : aliases.get(original);
           if (!helper) continue;
           count(helper);
           if (element.name.text !== helper) violations.push(`${at(element)} re-exports ${helper} as ${element.name.text}`);
+        }
+      }
+    }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      const whole = moduleOf(node.initializer);
+      if (whole) namespaces.set(node.name.text, whole);
+    }
+    if (ts.isBindingElement(node) && ts.isIdentifier(node.name)) {
+      const local = node.name.text;
+      const pattern = node.parent;
+      const source = ts.isArrayBindingPattern(pattern) ? null : keyOf(node.propertyName ?? node.name);
+      if (isName(local) && source !== local) {
+        violations.push(`${at(node)} binds ${source ?? 'a list item'} as ${local}`);
+      } else if (source && isName(source) && ts.isObjectBindingPattern(pattern)) {
+        const declaration = pattern.parent;
+        const whole = ts.isVariableDeclaration(declaration) ? moduleOf(declaration.initializer) : null;
+        if (whole && !isOwnModule(source, whole, file)) {
+          violations.push(`${at(node)} takes ${source} from '${whole}', not from its own module`);
         }
       }
     }
@@ -356,7 +458,8 @@ function analyse(file: string, source: string): Analysis {
   /** Whether a reference is a declaration, an import or export name, a type or an object key. */
   const isDeclarationName = (node: ts.Identifier): boolean => {
     const parent = node.parent;
-    if (ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent) || ts.isExportSpecifier(parent)) return true;
+    if (ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent)
+      || ts.isExportSpecifier(parent) || ts.isNamespaceExport(parent)) return true;
     if ((ts.isFunctionDeclaration(parent) || ts.isVariableDeclaration(parent) || ts.isParameter(parent)
       || ts.isPropertySignature(parent) || ts.isPropertyDeclaration(parent) || ts.isMethodDeclaration(parent)
       || ts.isPropertyAssignment(parent) || ts.isBindingElement(parent)) && parent.name === node) return true;
@@ -405,7 +508,20 @@ function analyse(file: string, source: string): Analysis {
     violations.push(`${at(reference)} hands ${helper} on (${ts.SyntaxKind[parent.kind]})`);
   };
 
+  /** A member read of a name off a whole-module binding of another module: not that name. */
+  const checkNamespaceRead = (read: ts.PropertyAccessExpression | ts.ElementAccessExpression, name: Name) => {
+    const whole = ts.isIdentifier(read.expression) ? namespaces.get(read.expression.text) : undefined;
+    if (whole && !isOwnModule(name, whole, file)) {
+      violations.push(`${at(read)} reads ${name} from '${whole}', not from its own module`);
+    }
+  };
+
   const references = (node: ts.Node) => {
+    if (ts.isPropertyAccessExpression(node) && isName(node.name.text)) checkNamespaceRead(node, node.name.text);
+    if (ts.isElementAccessExpression(node)) {
+      const key = elementKey(node);
+      if (key && isName(key)) checkNamespaceRead(node, key);
+    }
     // `options['invalidateShowcaseFeedCache']`, read as the member read by name it is.
     const keyed = elementKey(node);
     if (keyed && isName(keyed)) {
@@ -511,6 +627,51 @@ describe('every write that invalidates a cached feed or public page is classifie
       ['the ESM module behind next/cache through require', "const { revalidatePath } = require('next/dist/esm/server/web/spec-extension/revalidate');\nexports.f = () => revalidatePath('/');", /requires 'next\/dist\/esm\/server\/web\/spec-extension\/revalidate'/],
     ])('refuses %s', (_name, source, refusal) => {
       expect(analyse('src/lib/probe.ts', source).violations).toEqual([expect.stringMatching(refusal)]);
+    });
+
+    // Review, 2026-11-17: a helper's name must come from its own module, as that same name.
+    it.each([
+      ['another module’s export imported under a helper’s name', "import { noop as invalidateShowcaseFeedCache } from '@/lib/backend-logger';\nexport const f = () => invalidateShowcaseFeedCache();", /imports noop as invalidateShowcaseFeedCache/],
+      ['one helper imported under another’s name', "import { invalidateShowcaseFeedCacheOnly as invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';\nexport const f = () => invalidateShowcaseFeedCache();", /imports invalidateShowcaseFeedCacheOnly as invalidateShowcaseFeedCache/],
+      ['a helper’s name imported from another module', "import { invalidateShowcaseFeedCache } from '@/lib/backend-logger';\nexport const f = () => invalidateShowcaseFeedCache();", /imports invalidateShowcaseFeedCache from '@\/lib\/backend-logger', not from its own module/],
+      ['a helper renamed from another module', "import { invalidateShowcaseFeedCache as wipe } from '@/lib/backend-logger';\nexport const f = () => wipe();", /imports invalidateShowcaseFeedCache from '@\/lib\/backend-logger', not from its own module/],
+      ['a Next invalidator’s name from another module', "import { revalidateTag } from 'some-cache-library';\nexport const f = () => revalidateTag('x');", /imports revalidateTag from 'some-cache-library', not from its own module/],
+      ['a default imported under a helper’s name', "import invalidateShowcaseFeedCache from '@/lib/backend-logger';\nexport const f = () => invalidateShowcaseFeedCache();", /imports the default of '@\/lib\/backend-logger' as invalidateShowcaseFeedCache/],
+      ['a whole module imported under a helper’s name', "import * as invalidateShowcaseFeedCacheOnly from '@/lib/backend-logger';", /imports the whole of '@\/lib\/backend-logger' as invalidateShowcaseFeedCacheOnly/],
+      ['a helper’s name read off another module', "import * as logger from '@/lib/backend-logger';\nexport const f = () => logger.invalidateShowcaseFeedCache();", /reads invalidateShowcaseFeedCache from '@\/lib\/backend-logger', not from its own module/],
+      ['a helper’s name read off another module by a string key', "import * as logger from '@/lib/backend-logger';\nexport const f = () => logger['invalidateShowcaseFeedCacheOnly']();", /reads invalidateShowcaseFeedCacheOnly from '@\/lib\/backend-logger', not from its own module/],
+      ['another binding exported under a helper’s name', "const noop = () => {};\nexport { noop as invalidateShowcaseFeedCache };", /exports noop as invalidateShowcaseFeedCache/],
+      ['another module’s export re-exported under a helper’s name', "export { noop as invalidateShowcaseFeedAndRefreshEveryPage } from '@/lib/backend-logger';", /exports noop as invalidateShowcaseFeedAndRefreshEveryPage/],
+      ['a helper’s name re-exported from another module', "export { invalidateShowcaseFeedCache } from '@/lib/backend-logger';", /exports invalidateShowcaseFeedCache from '@\/lib\/backend-logger', not from its own module/],
+      ['a whole module exported under a helper’s name', "export * as invalidateMarketplaceResourceListCache from '@/lib/backend-logger';", /exports the whole of '@\/lib\/backend-logger' as invalidateMarketplaceResourceListCache/],
+      ['a key destructured under a helper’s name', "export function f(dependencies: { noop: () => void }) { const { noop: invalidateShowcaseFeedCache } = dependencies; invalidateShowcaseFeedCache(); }", /binds noop as invalidateShowcaseFeedCache/],
+      ['a helper’s name destructured from another module', "const { invalidateShowcaseFeedCache } = require('./backend-logger');\nexports.f = () => invalidateShowcaseFeedCache();", /takes invalidateShowcaseFeedCache from '\.\/backend-logger', not from its own module/],
+      ['a list item bound under a helper’s name', "export function f(list: Array<() => void>) { const [invalidateShowcaseFeedCache] = list; invalidateShowcaseFeedCache(); }", /binds a list item as invalidateShowcaseFeedCache/],
+    ])('refuses %s', (_name, source, refusal) => {
+      expect(analyse('src/lib/probe.ts', source).violations).toEqual([expect.stringMatching(refusal)]);
+    });
+
+    it('takes a helper from its own module by any path to it, whole or by name', () => {
+      expect(analyse('src/lib/probe.ts', lines(
+        "import { invalidateShowcaseFeedCache } from './showcase-feed-cache';",
+        "import { invalidateMarketplaceResourceListCache as defaultInvalidateMarketplaceResourceListCache } from '@/lib/marketplace-resource-list-cache';",
+        "import * as cacheModule from '@/lib/showcase-feed-cache';",
+        'export async function f() {',
+        '  invalidateShowcaseFeedCache();',
+        '  defaultInvalidateMarketplaceResourceListCache();',
+        '  cacheModule.invalidateShowcaseFeedCacheOnly();',
+        "  const { invalidateShowcaseFeedAndRefreshEveryPage } = await import('@/lib/showcase-feed-cache');",
+        '  invalidateShowcaseFeedAndRefreshEveryPage();',
+        '}',
+      ))).toEqual({
+        uses: {
+          invalidateShowcaseFeedCache: 1,
+          invalidateMarketplaceResourceListCache: 2,
+          invalidateShowcaseFeedCacheOnly: 1,
+          invalidateShowcaseFeedAndRefreshEveryPage: 1,
+        },
+        violations: [],
+      });
     });
 
     it('refuses a non-helper assigned to a helper’s key, and the read that makes it', () => {
