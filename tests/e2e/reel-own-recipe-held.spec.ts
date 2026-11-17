@@ -54,7 +54,7 @@ const session = {
   user,
 };
 
-async function signIn(context: BrowserContext) {
+async function signIn(context: BrowserContext, sessionCheckAnswers: Promise<void>) {
   const cookie = `sb-example-auth-token=base64-${base64url(JSON.stringify(session))}`;
   await context.addInitScript((value) => {
     document.cookie = `${value}; path=/; SameSite=Lax`;
@@ -62,8 +62,9 @@ async function signIn(context: BrowserContext) {
   await context.route('https://example.supabase.co/**', async (route) => {
     const { pathname } = new URL(route.request().url());
     if (pathname === '/auth/v1/user') {
-      // The session is still being read while the reel draws.
-      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      // The session is still being read while the reel draws and asks for the recipe: the check
+      // answers only after that (a fixed delay was outlasted by CI's first compile of the reel).
+      await sessionCheckAnswers;
       return route.fulfill({ json: user });
     }
     if (pathname === '/auth/v1/token') return route.fulfill({ json: session });
@@ -180,7 +181,9 @@ function frames(page: Page) {
 
 test("a creator opening their own post in the reel never has its recipe offered to them, and it opens once read", async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await signIn(context);
+  let answerSessionCheck: () => void = () => {};
+  const sessionCheckAnswers = new Promise<void>((resolve) => { answerSessionCheck = resolve; });
+  await signIn(context, sessionCheckAnswers);
   await recordFrames(page);
 
   let releaseRead: () => void = () => {};
@@ -215,12 +218,15 @@ test("a creator opening their own post in the reel never has its recipe offered 
   const reel = page.getByRole('dialog', { name: /reel viewer$/ });
   await expect(reel).toBeVisible(COLD_PAGE);
   await expect(reel.getByRole('heading', { name: 'Bookshop in the rain' })).toBeVisible(COLD_PAGE);
-  // The read is out, and held while the reel is drawn.
+  // The reel has asked for the recipe before the session is known.
   await expect.poll(() => bundleReads).toBeGreaterThan(0);
   // The rail's Recipe (its name is its `aria-label`, whatever it says) never asks to unlock the
   // creator's own recipe.
   await reel.locator('button[aria-label="View recipe"], button[aria-label="Get free recipe"]').click();
-  await page.waitForTimeout(2_500);
+  // The session is known a moment later, and the read it makes is held a moment more.
+  await page.waitForTimeout(1_500);
+  answerSessionCheck();
+  await page.waitForTimeout(1_500);
   releaseRead();
 
   await expect(reel.getByText('A tiny bookshop in a rainy alley', { exact: false })).toBeVisible(COLD_PAGE);
