@@ -48,7 +48,21 @@ const { mockPush, mockUpdateCredits, mockVerifyCheckout, mockGetSession, authSta
     credits: null as number | null,
     marketplaceSpendableCredits: null as number | null,
     user: null as { id: string } | null,
+    isLoading: false,
+    // The sign-in cookie the browser holds, as `useSupabaseAuthCookieHint` and
+    // `readSupabaseAuthCookieUserId` read it.
+    cookieUserId: null as string | null,
   },
+}));
+
+vi.mock('@/components/useSupabaseAuthCookieHint', () => ({
+  useSupabaseAuthCookieHint: () => authState.cookieUserId !== null,
+  useHasHydratedSupabaseAuthCookieHint: () => true,
+}));
+
+vi.mock('@/lib/supabase-auth-cookie', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase-auth-cookie')>()),
+  readSupabaseAuthCookieUserId: () => authState.cookieUserId,
 }));
 
 vi.mock('@/lib/razorpay-checkout-client', async (importOriginal) => ({
@@ -74,6 +88,7 @@ vi.mock('@/components/AuthProvider', () => ({
     credits: authState.credits,
     marketplaceSpendableCredits: authState.marketplaceSpendableCredits,
     user: authState.user,
+    isLoading: authState.isLoading,
     updateCredits: mockUpdateCredits,
   }),
 }));
@@ -378,6 +393,8 @@ describe('ShowcaseReelViewer pagination', () => {
     authState.credits = null;
     authState.marketplaceSpendableCredits = null;
     authState.user = null;
+    authState.isLoading = false;
+    authState.cookieUserId = null;
     window.sessionStorage.clear();
     vi.unstubAllGlobals();
     resetShowcaseFeedEventQueueForTests();
@@ -1677,6 +1694,273 @@ describe('ShowcaseReelViewer pagination', () => {
         ...fields,
       };
     }
+
+    // The owner's own post opened in the reel offered "Get free recipe" for about a second, until
+    // the recipe's read came back with their access (live sweep, 2026-11-17), and a press there
+    // asked the server to unlock it for them. A recipe the viewer is known to hold, their own or
+    // one the listing says they have, is held where it opens instead, never offered.
+    describe('a recipe the viewer holds, while its read is out', () => {
+      function holdBundleRead() {
+        let answer: (response: Response) => void = () => {};
+        const reads: string[] = [];
+        const fetchMock = stubRequests({
+          '/api/posts/post-1/resource-bundle': () => {
+            reads.push('read');
+            return new Promise<Response>((resolve) => { answer = resolve; });
+          },
+        });
+        return { fetchMock, reads, answer: (response: Response) => act(async () => { answer(response); }) };
+      }
+
+      function renderReelOf(asset: NonNullable<ShowcaseFeedItem['asset']>) {
+        return render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ id: 'post-1', title: 'Own Frame', asset })] })} />);
+      }
+
+      it("holds the creator's own recipe where it opens, and opens it when the read is in", async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'creator-1' };
+        const { fetchMock, answer } = holdBundleRead();
+
+        renderReelOf(freeAsset);
+
+        expect(await screen.findByText('Opening your recipe…')).toBeInTheDocument();
+        expect(screen.getAllByText('Your recipe').length).toBeGreaterThan(0);
+        expect(screen.queryByRole('button', { name: /get free recipe/i })).toBeNull();
+        expect(screen.queryByText('Get the reusable prompt and notes free.')).toBeNull();
+        // The rail's Recipe goes to the recipe; it never asks for a free unlock.
+        const railRecipe = screen.getByRole('button', { name: 'View recipe' });
+        fireEvent.click(railRecipe);
+        expect(fetchMock).not.toHaveBeenCalledWith('/api/posts/post-1/resource-bundle/unlock-free', expect.anything());
+
+        await answer(new Response(JSON.stringify({
+          bundle: unlockedBundle(
+            [item({ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'own recipe prompt' })],
+            { accessMode: 'free', priceUsdCents: 0, viewerIsOwner: true },
+          ),
+        })));
+
+        expect(await screen.findByText('own recipe prompt')).toBeInTheDocument();
+        expect(screen.queryByText('Opening your recipe…')).toBeNull();
+        expect(screen.queryByRole('button', { name: /get free recipe/i })).toBeNull();
+      });
+
+      it('holds a recipe the listing says the reader has, as Unlocked, not at its price', async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'reader-1' };
+        const { answer } = holdBundleRead();
+
+        renderReelOf({ ...paidAsset, viewerHasUnlocked: true });
+
+        expect(await screen.findByText('Opening your recipe…')).toBeInTheDocument();
+        expect(screen.getAllByText('Unlocked').length).toBeGreaterThan(0);
+        expect(screen.queryByRole('button', { name: /unlock for/i })).toBeNull();
+
+        await answer(new Response(JSON.stringify({
+          bundle: unlockedBundle([item({ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'bought recipe prompt' })]),
+        })));
+
+        expect(await screen.findByText('bought recipe prompt')).toBeInTheDocument();
+      });
+
+      it('offers the recipe after all when its read finds the reader does not have it', async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'reader-1' };
+        const { answer } = holdBundleRead();
+
+        renderReelOf({ ...paidAsset, viewerHasUnlocked: true });
+        expect(await screen.findByText('Opening your recipe…')).toBeInTheDocument();
+
+        await answer(new Response(JSON.stringify({ bundle: { viewerCanAccess: false, viewerIsOwner: false, resources: null } })));
+
+        expect((await screen.findAllByRole('button', { name: /unlock for \$9\.00/i })).length).toBeGreaterThan(0);
+        expect(screen.queryByText('Opening your recipe…')).toBeNull();
+      });
+
+      it('says when the read fails, and asks again on Try again', async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'creator-1' };
+        let reads = 0;
+        stubRequests({
+          '/api/posts/post-1/resource-bundle': () => {
+            reads += 1;
+            return reads === 1
+              ? new Response(JSON.stringify({ error: 'Service unavailable' }), { status: 503 })
+              : new Response(JSON.stringify({
+                bundle: unlockedBundle(
+                  [item({ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'own recipe prompt' })],
+                  { viewerIsOwner: true },
+                ),
+              }));
+          },
+        });
+
+        renderReelOf(freeAsset);
+
+        expect(await screen.findByText('The recipe could not be opened.')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /get free recipe/i })).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+        expect(await screen.findByText('own recipe prompt')).toBeInTheDocument();
+        expect(reads).toBe(2);
+      });
+
+      it('still offers a recipe to a reader the listing does not say has it', async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'reader-1' };
+        holdBundleRead();
+
+        renderReelOf(freeAsset);
+
+        expect((await screen.findAllByRole('button', { name: /get free recipe/i })).length).toBeGreaterThan(0);
+        expect(screen.queryByText('Opening your recipe…')).toBeNull();
+      });
+
+      // Review of #863: a reload of the creator's own page on a post's address draws the reel before
+      // the session is read. The sign-in cookie already names them, as the post page reads it.
+      it('holds the recipe for the creator whose session is still being read, and opens it with their read', async () => {
+        authState.isLoading = true;
+        authState.cookieUserId = 'creator-1';
+        const reads: Array<string | null> = [];
+        stubRequests({
+          '/api/posts/post-1/resource-bundle': (init) => {
+            const authorization = new Headers(init?.headers).get('Authorization');
+            reads.push(authorization);
+            // The read made before the session is known is answered as anyone's: no access.
+            return new Response(JSON.stringify({
+              bundle: authorization
+                ? unlockedBundle([item({ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'own recipe prompt' })], { viewerIsOwner: true })
+                : { viewerCanAccess: false, viewerIsOwner: false, resources: null },
+            }));
+          },
+        });
+
+        const view = render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ id: 'post-1', asset: freeAsset })] })} />);
+
+        expect(await screen.findByText('Opening your recipe…')).toBeInTheDocument();
+        await waitFor(() => expect(reads).toEqual([null]));
+        // The session-less answer is not the creator's: the recipe stays held, never offered.
+        expect(screen.getByText('Opening your recipe…')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /get free recipe/i })).toBeNull();
+        expect(screen.getByRole('button', { name: 'View recipe' })).toBeInTheDocument();
+
+        authState.isLoading = false;
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'creator-1' };
+        view.rerender(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ id: 'post-1', asset: freeAsset })] })} />);
+
+        expect(await screen.findByText('own recipe prompt')).toBeInTheDocument();
+        expect(reads).toEqual([null, 'Bearer token-1']);
+      });
+
+      it("keeps the creator's Remix inert and offers no Follow while their session is read", async () => {
+        authState.isLoading = true;
+        authState.cookieUserId = 'creator-1';
+        stubRequests();
+        render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ id: 'post-1', asset: freeAsset, canRemix: true, remixCapability: 'public' })] })} />);
+
+        expect(await screen.findByText('Opening your recipe…')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /^Remix/ })).toBeDisabled();
+        expect(screen.queryByRole('button', { name: /^Follow/ })).toBeNull();
+      });
+
+      it('offers the recipe once the session is read and is not the creator\'s', async () => {
+        authState.isLoading = true;
+        authState.cookieUserId = 'creator-1';
+        stubRequests();
+        const view = render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ id: 'post-1', asset: freeAsset })] })} />);
+        expect(await screen.findByText('Opening your recipe…')).toBeInTheDocument();
+
+        // The cookie was not good: the check ends with nobody signed in.
+        authState.isLoading = false;
+        authState.cookieUserId = null;
+        view.rerender(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ id: 'post-1', asset: freeAsset })] })} />);
+
+        expect((await screen.findAllByRole('button', { name: /get free recipe/i })).length).toBeGreaterThan(0);
+        expect(screen.queryByText('Opening your recipe…')).toBeNull();
+      });
+
+      it('reads a post again when the reel comes back to it after a failed read, without saying the old failure', async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'creator-1' };
+        let firstReads = 0;
+        let releaseSecond: (() => void) | null = null;
+        stubRequests({
+          '/api/posts/post-1/resource-bundle': () => {
+            firstReads += 1;
+            if (firstReads === 1) return new Response(JSON.stringify({ error: 'Service unavailable' }), { status: 503 });
+            return new Promise<Response>((resolve) => {
+              releaseSecond = () => resolve(new Response(JSON.stringify({
+                bundle: unlockedBundle([item({ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'own recipe prompt' })], { viewerIsOwner: true }),
+              })));
+            });
+          },
+          '/api/posts/post-2/resource-bundle': () => new Promise<Response>(() => {}),
+        });
+        const items = [
+          createShowcaseItem({ id: 'post-1', title: 'First Frame', asset: freeAsset }),
+          createShowcaseItem({ id: 'post-2', title: 'Second Frame', asset: { ...freeAsset, id: 'bundle-free-2' } }),
+        ];
+        let selected = 'post-1';
+        const props = () => reelProps({ items, selectedItemId: selected, onSelectItemId: (id: string) => { selected = id; } });
+        const view = render(<ShowcaseReelViewer {...props()} />);
+
+        expect(await screen.findByText('The recipe could not be opened.')).toBeInTheDocument();
+        fireEvent.keyDown(window, { key: 'ArrowDown' });
+        view.rerender(<ShowcaseReelViewer {...props()} />);
+        expect((await screen.findAllByText('Second Frame', { selector: 'h2' })).length).toBeGreaterThan(0);
+        fireEvent.keyDown(window, { key: 'ArrowUp' });
+        view.rerender(<ShowcaseReelViewer {...props()} />);
+
+        expect(await screen.findByText('Opening your recipe…')).toBeInTheDocument();
+        expect(screen.queryByText('The recipe could not be opened.')).toBeNull();
+        await waitFor(() => expect(firstReads).toBe(2));
+        await act(async () => { releaseSecond?.(); });
+        expect(await screen.findByText('own recipe prompt')).toBeInTheDocument();
+      });
+
+      it('keeps offering each recipe a session read found no access to, whatever post comes between', async () => {
+        authState.session = { access_token: 'token-1' };
+        authState.user = { id: 'reader-1' };
+        const denied = () => new Response(JSON.stringify({ bundle: { viewerCanAccess: false, viewerIsOwner: false, resources: null } }));
+        let firstPostReads = 0;
+        stubRequests({
+          // Read again when the reel comes back to it, and held: only its first denial can decide.
+          '/api/posts/post-1/resource-bundle': () => {
+            firstPostReads += 1;
+            return firstPostReads === 1 ? denied() : new Promise<Response>(() => {});
+          },
+          '/api/posts/post-2/resource-bundle': denied,
+        });
+        const items = [
+          createShowcaseItem({ id: 'post-1', title: 'First Frame', asset: { ...paidAsset, viewerHasUnlocked: true } }),
+          createShowcaseItem({ id: 'post-2', title: 'Second Frame', asset: { ...paidAsset, id: 'bundle-2', viewerHasUnlocked: true } }),
+        ];
+        let selected = 'post-1';
+        const props = () => reelProps({ items, selectedItemId: selected, onSelectItemId: (id: string) => { selected = id; } });
+        const view = render(<ShowcaseReelViewer {...props()} />);
+        expect((await screen.findAllByRole('button', { name: /unlock for \$9\.00/i })).length).toBeGreaterThan(0);
+
+        fireEvent.keyDown(window, { key: 'ArrowDown' });
+        view.rerender(<ShowcaseReelViewer {...props()} />);
+        expect((await screen.findAllByText('Second Frame', { selector: 'h2' })).length).toBeGreaterThan(0);
+        expect((await screen.findAllByRole('button', { name: /unlock for \$9\.00/i })).length).toBeGreaterThan(0);
+
+        fireEvent.keyDown(window, { key: 'ArrowUp' });
+        view.rerender(<ShowcaseReelViewer {...props()} />);
+        expect((await screen.findAllByText('First Frame', { selector: 'h2' })).length).toBeGreaterThan(0);
+        // Its denial stands: offered at once, never held again while it is read again.
+        await waitFor(() => expect(firstPostReads).toBe(2));
+        expect(screen.queryByText('Opening your recipe…')).toBeNull();
+        expect(screen.getAllByRole('button', { name: /unlock for \$9\.00/i }).length).toBeGreaterThan(0);
+      });
+
+      it('offers a recipe the listing marked for a reader who has signed out since', async () => {
+        stubRequests();
+        renderReelOf({ ...paidAsset, viewerHasUnlocked: true });
+        expect((await screen.findAllByRole('button', { name: /unlock for \$9\.00/i })).length).toBeGreaterThan(0);
+        expect(screen.queryByText('Opening your recipe…')).toBeNull();
+      });
+    });
 
     it('shows a recipe of settings alone', async () => {
       authState.session = { access_token: 'token-1' };
