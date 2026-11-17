@@ -390,6 +390,13 @@ test('a tile opens its reel in one step: no "Opening preview", the tile\'s pictu
 // .spec.ts, src/lib/reel-opening-restore.ts), as before.
 test("Explore loaded on a post's reel address covers the page with the reel's stage until the reel draws", async ({ page, context }) => {
   await answerOffline(page, context);
+  // The address once, unmeasured, so `next dev` has compiled the lane and the reel's chunk before
+  // the load the frames are read from. A first compile of the reel outlasted the stage's 10-second
+  // limit for a reel that never comes (`REEL_OPENING_COVER_MAX_MS`) on main's run of 2026-11-17:
+  // the reel drew 16 s after the load, so the stage had given the page back. Built for production,
+  // the chunk is ready with the page.
+  await page.goto(`${LANE}&post=${OPENED.id}`, COLD_PAGE);
+  await expect(reel(page).getByRole('heading', { level: 2, name: OPENED.title })).toBeVisible(COLD_PAGE);
   // What each frame drew until the reel's dialog was there: the stage, or the grid uncovered.
   await page.addInitScript(() => {
     const seen = { stage: false, gridUncovered: false };
