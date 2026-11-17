@@ -394,18 +394,32 @@ function expectOwnRecipe(frames: Frame[]) {
 }
 
 /**
- * The rail as the post's creator keeps it on their own post: Owner tools, or their place, in every
- * frame, and never a report of their own post or of themselves; Comments where it stays.
+ * What only the post's creator gets on their own post, the same in every frame: Owner tools, or their
+ * place, and never a report of their own post or of themselves; their recipe as theirs, with no bar
+ * offering it; Comments where it stays.
  */
-function expectOwnerRail(frames: Frame[]) {
+function expectCreatorsOwnRail(frames: Frame[]) {
   const all = JSON.stringify(frames);
   expect(frames.length, 'frames of the rail').toBeGreaterThan(0);
+  // As in `expectSteadyRail`: a frame painted from part of the page's HTML has no Comments yet and
+  // can end between the recipe link and Owner tools (#852's CI run of 2026-11-17 painted one), so
+  // what a frame must show is asked of the frames with Comments drawn.
+  const drawn = frames.filter((frame) => frame.commentsOffset !== null);
+  expect(drawn.length, all).toBeGreaterThan(0);
   expect(frames.filter((frame) => frame.reportPostShown || frame.reportUserShown), all).toEqual([]);
-  expect(frames.filter((frame) => !frame.ownerToolsShown), all).toEqual([]);
-  expect(frames.filter((frame) => frame.signInShown), all).toEqual([]);
+  expect(drawn.filter((frame) => !frame.ownerToolsShown), all).toEqual([]);
   const offsets = new Set(frames.map((frame) => frame.commentsOffset).filter((offset) => offset !== null));
   expect([...offsets], all).toHaveLength(1);
   expectOwnRecipe(frames);
+}
+
+/**
+ * The rail as the post's creator keeps it on their own post while their session is checked within
+ * its deadline: their own parts, and never an offer to sign in.
+ */
+function expectOwnerRail(frames: Frame[]) {
+  expectCreatorsOwnRail(frames);
+  expect(frames.filter((frame) => frame.signInShown), JSON.stringify(frames)).toEqual([]);
 }
 
 const rail = (page: Page) => page.getByTestId('canonical-post-actions');
@@ -846,6 +860,48 @@ test('a session check that outlasts its deadline draws the reader as a visitor u
   await expect(rail(page).getByRole('button', { name: 'Report user' })).toBeEnabled();
   await expect.poll(() => reads).toEqual([null, `Bearer ${accessToken}`]);
   await expect(rail(page).getByText(COMMENT)).toBeVisible();
+});
+
+// CI run of 2026-11-17 (PR #853, E2E shard 2): the creator's test above that loads their own post
+// recorded their Remix as "Remix", "Remix · Free", then "Remix". The dev server had served supabase-js
+// 8.2 s after the page's script ran, past the 8 s a check that has not begun is waited for
+// (SESSION_CHECK_START_DEADLINE_MS), and the page drew the deadline's fallback until the held check
+// named the creator: a visitor's Remix, "Free recipe" and "Report post or recipe" in place of their
+// own, then theirs again. The deadline stops the page waiting for the reader's own parts (the thread
+// and the composer's place, as the test above holds), never for the creator's: only the check's
+// answer says the cookie is not theirs. Here the check outlasts its 4.5 s deadline instead, which
+// the dev server's speed cannot change. Below 1180px, so the recipe's bar would show too.
+test("the post's creator keeps their Remix, Owner tools and recipe in every frame while a session check outlasts its deadline, and has them once a late answer names them", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const { checks, accessToken } = await signIn(context, postCreator);
+  checks.hold();
+  const reads: Array<string | null> = [];
+  await answerApi(page, reads);
+  await page.addInitScript(RECORDER);
+
+  await page.goto(POST_PATH);
+  await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  // Past the deadline the reader's own parts fall back, as for any reader: the thread is read as a
+  // visitor's and the composer's place offers sign-in.
+  await expect(rail(page).getByRole('link', { name: 'Sign in to join the conversation' })).toBeVisible({ timeout: 15_000 });
+  await expect(rail(page).getByText(COMMENT)).toBeVisible();
+  expect(reads).toEqual([null]);
+  await twoFrames(page);
+  // Their Remix still waits for the check, as their Owner tools do. Soft, so the frames below say
+  // what was drawn instead.
+  const ownRemix = page.getByTestId('media-detail-document').getByRole('button', { name: 'Remix', exact: true });
+  await expect.soft(ownRemix).toBeDisabled({ timeout: 1_000 });
+
+  checks.release();
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect.poll(() => reads).toEqual([null, `Bearer ${accessToken}`]);
+  await expect(ownRemix).toBeEnabled();
+  const frames = await recordedFrames(page);
+  // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
+  expectRemixInEveryFrame(await recordedRemixFrames(page), OPEN_REMIX);
+  expectCreatorsOwnRail(frames);
+  await expectOwnerToolsOpen(page);
 });
 
 // Sweep of 2026-11-17 (build 941e2a55b), signed in as @magicbooklet: the composer's avatar read "I",

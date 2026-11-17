@@ -9,7 +9,11 @@ import { coverNsfwContent } from '@/lib/nsfw-content';
 import { clearOwnerPageEditsForTests, rememberOwnerPostVisibility } from '@/lib/owner-page-edits';
 import { asksAbsentRecipeAsNone, postRecipeReadPath } from '@/lib/post-recipe-read';
 import { PUBLIC_PAGE_REVALIDATE_SECONDS } from '@/lib/public-page-cache';
-import { SESSION_CHECK_DEADLINE_MS } from '@/lib/viewer-session-check';
+import {
+  SESSION_CHECK_DEADLINE_MS,
+  SESSION_CHECK_START_DEADLINE_MS,
+  useViewerSessionCheck,
+} from '@/lib/viewer-session-check';
 
 const { default: ShowcaseDetailPage, generateMetadata } = pageModule;
 
@@ -1076,25 +1080,51 @@ describe('Showcase detail page', () => {
       expect(reportRow()).toBeInTheDocument();
     });
 
-    it("draws a check that outlasts its deadline as a visitor's rail, and the tools once a late answer names the creator", async () => {
+    // CI run of 2026-11-17 (PR #853): the dev server served supabase-js 8.2 s after the page's script
+    // ran, past the start deadline, and the creator's rail was a visitor's, the report row in their
+    // tools' place, until the late answer named them. The deadline is the reader's (the thread and the
+    // composer's place fall back on it); the creator's own parts wait for the check's answer.
+    it.each([
+      { check: 'a check that outlasts its deadline', startedAt: () => performance.now(), deadline: SESSION_CHECK_DEADLINE_MS },
+      { check: 'a check that has not begun by its start deadline', startedAt: () => null, deadline: SESSION_CHECK_START_DEADLINE_MS },
+    ])("keeps the creator's tools, inert, and no report row through $check, and readies them once a late answer names them", async ({ startedAt, deadline }) => {
       holdSessionCookieOf('user-1');
       const page = await openPost();
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-      clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: performance.now() };
-      const { rerender } = render(page);
+      clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: startedAt() };
+      // What the reader's own parts are told (PostComments is a stand-in here).
+      function ReaderCheck() {
+        return <span data-testid="reader-check">{useViewerSessionCheck()}</span>;
+      }
+      const { rerender } = render(<>{page}<ReaderCheck /></>);
       expect(ownerTools()).toBe('checking');
 
       act(() => {
-        vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS);
+        vi.advanceTimersByTime(deadline);
       });
-      expect(ownerTools()).toBe('none');
-      expect(reportRow()).toBeInTheDocument();
+      // The deadline has passed for the reader's parts...
+      expect(screen.getByTestId('reader-check')).toHaveTextContent('visitor');
+      // ...and the creator's own wait on.
+      expect(ownerTools()).toBe('checking');
+      expect(reportRow()).not.toBeInTheDocument();
 
       vi.useRealTimers();
       signInAs('user-1');
-      rerender(await openPost());
+      rerender(<>{await openPost()}<ReaderCheck /></>);
       expect(ownerTools()).toBe('ready');
       expect(reportRow()).not.toBeInTheDocument();
+    });
+
+    it("draws a visitor's rail once the check ends with no one behind a cookie naming the creator", async () => {
+      holdSessionCookieOf('user-1');
+      const { rerender } = render(await openPost());
+      expect(ownerTools()).toBe('checking');
+
+      // A refused or lapsed session: the provider's check ends with no one.
+      clientAuth.current = { session: null, user: null, isLoading: false };
+      rerender(await openPost());
+      expect(ownerTools()).toBe('none');
+      expect(reportRow()).toBeInTheDocument();
     });
 
     // The page is drawn ahead of time for every viewer, and no cookie can be read on the server.
@@ -1248,6 +1278,36 @@ describe('Showcase detail page', () => {
         const html = renderToString(await openPost());
         expect(html).toContain('data-recipe-remix="free:Free"');
         expect(html).toContain('data-creator-remix="user-1:open"');
+      });
+
+      // CI run of 2026-11-17 (PR #853): past the session check's deadline the creator's Remix read
+      // "Remix · Free" and the rail "Free recipe", until the late answer named them.
+      it("keeps the creator's Remix open and held, and their recipe theirs with no bar, past the check's deadline", async () => {
+        const detail = await getPublicPostDetailMock(POST_ID);
+        getPublicPostDetailMock.mockResolvedValue({
+          ...detail,
+          canRemix: false,
+          remixCapability: 'unlock_required',
+          remixTarget: 'image',
+          resourceBundle: { ...freeRecipe, allowRemix: true },
+        });
+        const row = () => screen.getByTestId('showcase-detail-engagement-row');
+        vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+        holdSessionCookieOf('user-1');
+        const page = await openPost();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: performance.now() };
+        render(page);
+
+        act(() => {
+          vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS);
+        });
+        expect(row()).toHaveTextContent(`${POST_ID}:true`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        expect(row()).toHaveAttribute('data-remix-held', 'true');
+        expect(recipeLink()).toHaveTextContent(/^Your recipeView$/);
+        expect(recipeBar()).not.toBeInTheDocument();
+        expect(barRoom()).toBeNull();
       });
 
       // Review of #847's third round: the Remix of a post with no creation (a picture made elsewhere)
