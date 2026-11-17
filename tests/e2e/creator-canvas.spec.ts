@@ -224,9 +224,16 @@ test('a failed run is said in the bar on a phone, and See why brings the canvas 
   });
 
   await startRun(page);
-  // Drawn from the press; in view only once the start is answered and the reveal has run, so the
-  // scroll below is the last.
-  await expect(canvas(page).getByRole('heading', { name: 'Making your video' })).toBeInViewport();
+  await expect(canvas(page).getByRole('heading', { name: 'Making your video' })).toBeVisible();
+  // "Making your video" is drawn from the press. The canvas says the credits are held only once the
+  // start is answered, in the commit that asks for the reveal, and the reveal is done, or was not
+  // needed, once the canvas's top is in the window's top 40%, where the reveal leaves it. Only then
+  // is the scroll below the last.
+  await expect(canvas(page).getByText(/^19 credits are held for this run\./)).toBeVisible();
+  await expect.poll(() => canvas(page).evaluate((section) => {
+    const { top } = section.getBoundingClientRect();
+    return top >= 0 && top <= window.innerHeight * 0.4;
+  })).toBe(true);
   // Back at the prompt, typing the next run, while this one works.
   const prompt = page.getByRole('textbox', { name: 'Prompt' });
   await prompt.focus();
