@@ -91,8 +91,9 @@ test.describe('on a phone', () => {
   // Explore is drawn three times on its way in: the loading outline ((feed)/loading.tsx, which is all
   // a page shows before a script swaps the streamed page in), the server's shell
   // (ShowcaseBootstrapClient) and the full client (ShowcaseClient), which loads after it. Each draws
-  // the phone's header alike, so the filter bar never moves on arrival. (The lane's row of active
-  // filters is the full client's alone, so only the shell's grid is held to the outline's.)
+  // the phone's header alike, so the filter bar never moves on arrival, and each draws the lane's row
+  // of active filters (the outline its place), so neither does the grid
+  // (explore-filter-row-steady.spec.ts holds every width and the hand-over's frames).
   test('draws the header alike in the loading outline, the server\'s shell and the full page', async ({ browser, page, context, baseURL }) => {
     const withoutScript = await browser.newContext({ ...PHONE_DEVICE, javaScriptEnabled: false });
     await answerOffline(withoutScript, baseURL!);
@@ -124,6 +125,7 @@ test.describe('on a phone', () => {
     expect(shell.bar).toBe(outline.bar);
     expect(full.bar).toBe(outline.bar);
     expect(shell.grid).toBe(outline.grid);
+    expect(full.grid).toBe(outline.grid);
   });
 });
 

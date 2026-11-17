@@ -4,10 +4,17 @@
 
 import type { ComponentType, MouseEvent as ReactMouseEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { TrendingUp, X } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
 // A type alone: the full client's module is loaded with `import()` below, on demand.
 import type { ShowcaseClientProps } from '@/app/showcase/ShowcaseClient';
+import {
+    EXPLORE_ACTIVE_FILTER_PILL_CLASS,
+    EXPLORE_ACTIVE_FILTER_ROW_CLASS,
+    exploreActiveFilters,
+    type ExploreActiveFilter,
+} from '@/app/showcase/explore-active-filters';
 import { SHOWCASE_FEED_GRID_CLASS } from '@/app/showcase/showcase-layout';
 import ReelHostMark from '@/components/ReelHostMark';
 import { SearchEntryLink } from '@/components/search/SearchEntryLink';
@@ -64,17 +71,19 @@ function setNonDefaultParam(
     }
 }
 
+/** The lane with another kind or sort, or with one of its other filters taken off (`cleared`). */
 function buildFilterHref(
     props: ShowcaseBootstrapClientProps,
     nextCategory: ShowcaseCategory,
-    nextSort: ShowcaseSort
+    nextSort: ShowcaseSort,
+    cleared?: ExploreActiveFilter['key']
 ): string {
     const params = new URLSearchParams();
     setNonDefaultParam(params, 'category', nextCategory, 'all');
     setNonDefaultParam(params, 'sort', nextSort, 'for-you');
-    setNonDefaultParam(params, 'tool', props.initialTool, 'all');
-    setNonDefaultParam(params, 'unlock', props.initialUnlock, 'all');
-    setNonDefaultParam(params, 'resource', props.initialResource, 'all');
+    setNonDefaultParam(params, 'tool', cleared === 'tool' ? null : props.initialTool, 'all');
+    setNonDefaultParam(params, 'unlock', cleared === 'unlock' ? null : props.initialUnlock, 'all');
+    setNonDefaultParam(params, 'resource', cleared === 'resource' ? null : props.initialResource, 'all');
     return params.size > 0 ? `/showcase?${params.toString()}` : '/showcase';
 }
 
@@ -456,6 +465,11 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
         getShowcaseItemMediaItems(item).length > 0
     ))?.id ?? null;
     const priorityPoster = props.initialPriorityPoster ?? null;
+    const activeFilters = exploreActiveFilters({
+        tool: props.initialTool,
+        unlock: props.initialUnlock,
+        resource: props.initialResource,
+    }, props.sourceToolOptions);
 
     return (
         <div
@@ -473,8 +487,10 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                 </div>
                 <header className="ui-enter flex flex-col gap-5 border-[var(--ui-border-subtle)] sm:mb-7 sm:border-b sm:pb-7 lg:flex-row lg:items-end lg:justify-between">
                     <div>
+                        {/* The full page's icon: the eyebrow's line box takes its height from its
+                            first item (a smaller dot drew it 3px taller). */}
                         <div className="mb-3 hidden items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-primary)] sm:inline-flex">
-                            <span className="h-2 w-2 rounded-full bg-current" aria-hidden="true" />
+                            <TrendingUp className="h-3.5 w-3.5" />
                             Creator community
                         </div>
                         <h1 className="sr-only text-4xl font-extrabold tracking-[-0.035em] text-[var(--ui-text-primary)] sm:not-sr-only sm:text-5xl">
@@ -538,6 +554,24 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                             })}
                         </div>
                     </div>
+                    {/* The lane's filters past its kind and sort, as the full page draws them under its
+                        controls, each a link to the lane without it: drawn when it takes over, the row
+                        moved the grid down under a reader's scroll (web sweep, 2026-11-17). */}
+                    {activeFilters.length > 0 ? (
+                        <div data-explore-active-filters="" className={EXPLORE_ACTIVE_FILTER_ROW_CLASS}>
+                            {activeFilters.map((filter) => (
+                                <a
+                                    key={filter.key}
+                                    href={buildFilterHref(props, props.initialCategory, props.initialSort, filter.key)}
+                                    data-showcase-static-link="true"
+                                    className={EXPLORE_ACTIVE_FILTER_PILL_CLASS}
+                                >
+                                    {filter.label}
+                                    <X className="h-3.5 w-3.5" />
+                                </a>
+                            ))}
+                        </div>
+                    ) : null}
                 </nav>
 
                 {bootstrapItems.length > 0 ? (
