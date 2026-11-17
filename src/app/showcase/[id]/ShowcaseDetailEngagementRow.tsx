@@ -62,13 +62,12 @@ export default function ShowcaseDetailEngagementRow({
   recipeRemix?: { access: 'paid' | 'free'; priceLabel: string } | null;
   /**
    * The post's creator, in the server's HTML and the render that hydrates it only, where no cookie
-   * can be read: wherever their Remix is the open one and everyone else's is not, the open Remix of
-   * their own creation is drawn beside what everyone else gets (a Remix locked behind the recipe, or
-   * none), and the page's rule (`ownerFirstPaintRules`) shows each their own. Their own creation is
-   * theirs to remix, never to claim or to unlock.
+   * can be read: wherever their Remix and everyone else's differ, both are drawn and the page's rule
+   * (`ownerFirstPaintRules`) shows each their own. Their own creation is theirs to remix, never to
+   * claim or to unlock, and a post with no creation gives them no Remix at all.
    */
   creatorRemixMark?: string;
-  /** The creator's own Remix is the open one (`creatorRemix` in useShowcasePostViewer). */
+  /** The creator's own Remix is the open one (`creatorRemix` in useShowcasePostViewer); else they have none. */
   creatorCanRemix?: boolean;
   /**
    * The open Remix waits for the session check: the post's creator while it runs on their cookie
@@ -156,13 +155,16 @@ export default function ShowcaseDetailEngagementRow({
   };
 
   const lockedRemix = !canRemix && recipeRemix && nsfwRevealed !== false ? recipeRemix : null;
-  // Where the server's HTML draws the creator's open Remix beside what everyone else gets, both are
-  // marked for the page's rule: everyone else may get the locked Remix or none at all (a recipe that
-  // gates the Remix without including it), and in neither case may the creator's appear late, moving
-  // Save, Comment and Share along the row (review of #847).
-  const creatorsRemixMark = creatorRemixMark && creatorCanRemix && !canRemix ? creatorRemixMark : undefined;
-  // Inert while the creator is not yet named: in the server's HTML, and while their check runs.
-  const openRemixWaits = remixHeld || Boolean(creatorsRemixMark);
+  // In the server's HTML, what everyone else gets (a Remix locked behind the recipe, the open one, or
+  // none) and the creator's own (the open Remix of their creation, or none on a post with no
+  // creation) are both drawn wherever they differ, each marked for the page's rule, so that neither
+  // appears nor goes after the page's script, moving Save, Comment and Share along the row (review of
+  // #847).
+  const othersRemix = lockedRemix ? 'locked' : canRemix ? 'open' : 'none';
+  const creatorsRemix = creatorRemixMark ? (creatorCanRemix ? 'open' : 'none') : othersRemix;
+  const pitchMark = creatorsRemix !== othersRemix ? creatorRemixMark : undefined;
+  // The creator's open Remix where everyone else's is not open: inert until the page names them.
+  const creatorsOpenRemixMark = pitchMark && creatorsRemix === 'open' ? pitchMark : undefined;
 
   return (
     <div className="mt-6 border-y border-white/8 py-1 text-xs font-semibold text-zinc-400">
@@ -172,7 +174,7 @@ export default function ShowcaseDetailEngagementRow({
           <a
             href="#recipe"
             onClick={() => showRecipeJump()}
-            data-post-recipe-pitch={creatorsRemixMark}
+            data-post-recipe-pitch={pitchMark}
             aria-label={`Unlock the recipe to remix ${title}, ${lockedRemix.priceLabel}`}
             className="ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/[0.08] px-4 text-xs font-extrabold text-amber-100 transition hover:border-amber-300/35"
           >
@@ -186,7 +188,7 @@ export default function ShowcaseDetailEngagementRow({
             type="button"
             onClick={() => void handleRemix({ takeFreeRecipe: true })}
             disabled={isRemixing}
-            data-post-recipe-pitch={creatorsRemixMark}
+            data-post-recipe-pitch={pitchMark}
             aria-label={`Get the free recipe and remix ${title}`}
             className="ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 px-4 text-xs font-extrabold text-[var(--ui-primary)] transition hover:bg-[var(--ui-primary)]/20 disabled:opacity-60"
           >
@@ -194,13 +196,15 @@ export default function ShowcaseDetailEngagementRow({
             {`Remix · ${lockedRemix.priceLabel}`}
           </button>
         ) : null}
-        {canRemix || creatorsRemixMark ? (
-          // Dimmed only while a remix is on its way: one waiting for the session looks as it will.
+        {canRemix || creatorsOpenRemixMark ? (
+          // Everyone's open Remix, or in the server's HTML the creator's alone. Dimmed only while a
+          // remix is on its way: one waiting for the session looks as it will.
           <button
             type="button"
             onClick={() => void handleRemix()}
-            disabled={isRemixing || openRemixWaits}
-            data-post-remix-owner={creatorsRemixMark}
+            disabled={isRemixing || remixHeld || Boolean(creatorsOpenRemixMark)}
+            data-post-recipe-pitch={canRemix ? pitchMark : undefined}
+            data-post-remix-owner={creatorsOpenRemixMark}
             className={`ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 px-4 text-xs font-extrabold text-[var(--ui-primary)] transition hover:bg-[var(--ui-primary)]/20${
               isRemixing ? ' opacity-60' : ''
             }`}

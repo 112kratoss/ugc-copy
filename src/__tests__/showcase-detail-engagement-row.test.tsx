@@ -429,6 +429,42 @@ describe('ShowcaseDetailEngagementRow', () => {
       expect(consoleError).not.toHaveBeenCalled();
     });
 
+    // Review of #847's third round: a post with no creation has nothing to remix (the server answers
+    // its Remix "Only generation-backed posts can be remixed"), so its creator gets no Remix, while
+    // anyone else may still be offered one; theirs must not show to the creator, nor go late.
+    it.each([
+      ['a free recipe\'s locked Remix', { canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } } as const, ['Remix · Free']],
+      ['the open Remix', { canRemix: true, recipeRemix: null }, ['Remix']],
+    ])("keeps %s from the creator of a post with no creation, before the first paint, and hydrates as drawn", (_offer, offer, others) => {
+      const props = rowProps({ ...offer, remixCount: 0, creatorRemixMark: 'user-1', creatorCanRemix: false });
+      const rules = document.createElement('style');
+      rules.textContent = ownerFirstPaintRules('user-1');
+      document.head.appendChild(rules);
+      const root = document.documentElement;
+      const container = document.createElement('div');
+      container.innerHTML = renderToString(<ShowcaseDetailEngagementRow {...props} />);
+      document.body.appendChild(container);
+      onTestFinished(() => {
+        rules.remove();
+        container.remove();
+        root.removeAttribute('data-auth-user');
+      });
+      const remixes = () => Array.from(container.querySelectorAll('a, button'))
+        .filter((control) => window.getComputedStyle(control).display !== 'none')
+        .map((control) => control.textContent?.trim() ?? '')
+        .filter((text) => /^Remix\b/.test(text));
+
+      expect(remixes()).toEqual(others);
+      root.setAttribute('data-auth-user', 'user-2');
+      expect(remixes()).toEqual(others);
+      root.setAttribute('data-auth-user', 'user-1');
+      expect(remixes()).toEqual([]);
+
+      const consoleError = vi.spyOn(console, 'error');
+      render(<ShowcaseDetailEngagementRow {...props} />, { container, hydrate: true });
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
     it('draws one Remix once the viewer is known, and none twice where both would read the same', () => {
       const { unmount } = render(
         <ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } })} />,

@@ -17,8 +17,8 @@
 // another creator of its own (fixtures/creation-post.json), and an image post made from a creation
 // whose free recipe brings its Remix, by a third creator (fixtures/creation-post-free-recipe.json),
 // and one whose paid recipe locks its Remix at the recipe's price, by a fourth
-// (fixtures/creation-post-paid-recipe.json), and a picture made elsewhere whose free recipe gates a
-// Remix it does not include, by a fifth (fixtures/upload-post-recipe-without-remix.json).
+// (fixtures/creation-post-paid-recipe.json), and a picture made elsewhere whose free recipe does not
+// include the post's Remix, by a fifth (fixtures/upload-post-recipe-without-remix.json).
 // And one post editor's: an image post of
 // the E2E user's with one picture and no recipe (fixtures/post-composer-saved-twice.json). And
 // Pricing's referral terms: no active program, which Pricing drew from the failed read too. And
@@ -72,9 +72,9 @@ const freeRemixPost = require('../fixtures/creation-post-free-recipe.json');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const paidRecipePost = require('../fixtures/creation-post-paid-recipe.json');
 // A picture made elsewhere (no creation), whose free recipe holds a reference picture and does not
-// include the post's Remix (`allow_remix` off): the recipe gates a Remix only its creator gets, and
-// nobody else has one to unlock. post-page-signed-in-rail.spec.ts draws it for that creator and for
-// another reader.
+// include the post's Remix (`allow_remix` off): with no creation there is nothing to remix, and nobody
+// is offered a Remix, its creator included. post-page-signed-in-rail.spec.ts draws it for that
+// creator and for another reader.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const uploadRecipePost = require('../fixtures/upload-post-recipe-without-remix.json');
 // The E2E user's two free recipes, each on a text post of theirs: the older one unlocked five times,

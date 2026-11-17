@@ -46,8 +46,9 @@ const PAID_POST: DrawnPost = {
   creatorId: paidRecipePost.creator.id,
 };
 /**
- * A picture made elsewhere whose free recipe gates a Remix it does not include
- * (fixtures/upload-post-recipe-without-remix.json): its creator's own, and nobody else's.
+ * A picture made elsewhere whose free recipe does not include the post's Remix
+ * (fixtures/upload-post-recipe-without-remix.json): with no creation, nobody has a Remix, its creator
+ * included.
  */
 const UPLOAD_POST: DrawnPost = {
   id: uploadRecipePost.post.id,
@@ -658,10 +659,15 @@ test("the post's creator, loading their own post below 1180px, reads their recip
   await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
   await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
   await twoFrames(page);
+  // Review of #847's second round: while the check runs their Remix waits for it, as their Owner
+  // tools do; a press would have sent them to sign in. Soft, so the frames below still say the rest.
+  const ownRemix = page.getByTestId('media-detail-document').getByRole('button', { name: 'Remix', exact: true });
+  await expect.soft(ownRemix).toBeDisabled({ timeout: 1_000 });
 
   checks.release();
   await expect(composer(page)).toBeVisible(COLD_PAGE);
   await expect(rail(page).getByText(COMMENT)).toBeVisible();
+  await expect(ownRemix).toBeEnabled();
   const frames = await recordedFrames(page);
   // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
   expectRemixInEveryFrame(await recordedRemixFrames(page), OPEN_REMIX);
@@ -680,7 +686,7 @@ test("the post's creator, loading their own post below 1180px, reads their recip
     remixes.push(route.request().postData());
     return route.fulfill({ json: { success: true, redirectTo: '#remix-started' } });
   });
-  await page.getByTestId('media-detail-document').getByRole('button', { name: 'Remix', exact: true }).click();
+  await ownRemix.click();
   await expect.poll(() => remixes).toEqual([JSON.stringify({ postId: POST_ID })]);
   expect(claims).toEqual([]);
 });
@@ -767,11 +773,12 @@ test('a signed-in reader below 1180px is offered a paid recipe at its price, in 
   expect(await roomUnderThePost(page)).toBeGreaterThan(90);
 });
 
-// Review of #847's second round: a recipe that gates the post's Remix without including it (its
-// `allow_remix` off, as here on a picture made elsewhere whose recipe holds a reference picture)
-// gives everyone else no Remix at all, and the server's HTML drew none for the creator either: their
-// open Remix came in after the page's script, moving Save, Comment and Share along the row.
-test("the post's creator, where nobody else gets a Remix, has their own open Remix from the first frame", async ({ page, context }) => {
+// Review of #847's second and third rounds: a post with no creation (here a picture made elsewhere,
+// whose free recipe holds a reference picture and does not include the post's Remix) has nothing
+// to remix: the server answers its Remix "Only generation-backed posts can be remixed". Its creator
+// gets no Remix, as nobody else does, in any frame: round 3 drew them a dead-end open Remix, and
+// before that it came in after the page's script, moving Save, Comment and Share along the row.
+test("the post's creator, on a post with no creation, has no Remix in any frame, as nobody else does", async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const { checks } = await signIn(context, uploadPostCreator);
   checks.hold();
@@ -782,17 +789,13 @@ test("the post's creator, where nobody else gets a Remix, has their own open Rem
   await expect(page.getByRole('heading', { level: 1, name: UPLOAD_POST.title })).toBeVisible(COLD_PAGE);
   await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
   await twoFrames(page);
-  // While the check runs, it waits for it: a press would have sent the creator to sign in. Soft, so
-  // a Remix drawn late still reaches the frames below, which say when it came.
-  await expect.soft(page.getByTestId('media-detail-document').getByRole('button', { name: 'Remix', exact: true })).toBeDisabled({ timeout: 1_000 });
 
   checks.release();
   await expect(composer(page)).toBeVisible(COLD_PAGE);
   await expect(rail(page).getByText(COMMENT)).toBeVisible();
-  await expect(page.getByTestId('media-detail-document').getByRole('button', { name: 'Remix', exact: true })).toBeEnabled();
   const frames = await recordedFrames(page, { path: UPLOAD_POST.path });
-  // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
-  expectRemixInEveryFrame(await recordedRemixFrames(page, { path: UPLOAD_POST.path }), OPEN_REMIX);
+  // No Remix in any frame: asked first, as a failure of the rail's would hide it.
+  expectRemixInEveryFrame(await recordedRemixFrames(page, { path: UPLOAD_POST.path }), '');
   expectOwnerRail(frames);
 });
 

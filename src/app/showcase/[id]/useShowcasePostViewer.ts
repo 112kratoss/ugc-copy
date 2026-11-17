@@ -160,6 +160,9 @@ export function remixForViewer(
 /** The recipe as its creator holds it, for `remixForViewer`. */
 const CREATORS_RECIPE_ACCESS = { viewerCanAccess: true, viewerIsOwner: true } as const;
 
+/** No Remix at all. */
+const NO_REMIX: ShowcasePostRemix = { canRemix: false, remixCapability: 'none', remixTarget: null };
+
 /**
  * Whether a visitor's read of the recipe would price it differently from the
  * page's: only a cash price has a currency (`buildPriceQuote` quotes rupees in
@@ -181,6 +184,7 @@ export function useShowcasePostViewer({
   pageBundle,
   pageRemix,
   pageRemixCredit = null,
+  hasCreation,
 }: {
   postId: string;
   creatorId: string | null;
@@ -191,6 +195,8 @@ export function useShowcasePostViewer({
   pageRemix: ShowcasePostRemix;
   /** The remix credit the page was drawn with, for everyone. */
   pageRemixCredit?: RemixCredit | null;
+  /** The post was made from a creation (`generationId`), the only kind a Remix can start from. */
+  hasCreation: boolean;
 }): ShowcasePostViewer {
   const { session, user, isLoading } = useAuth();
   const hasAuthCookie = useSupabaseAuthCookieHint();
@@ -228,8 +234,14 @@ export function useShowcasePostViewer({
   const lockedViewer = Boolean(bundle && !bundle.viewerCanAccess && !bundle.viewerIsOwner);
   // The creator remixes their own creation as its owner: the server lets them whatever the recipe
   // (`resolveRemixAccess`), so it opens for them as soon as they are known, before their own read of
-  // the recipe lands. Until then they were offered it to claim or to unlock (review of #847).
-  const creatorRemix = useMemo(() => remixForViewer(pageRemix, CREATORS_RECIPE_ACCESS), [pageRemix]);
+  // the recipe lands. Until then they were offered it to claim or to unlock (review of #847). A post
+  // with no creation (a picture made elsewhere) has nothing to remix: the server answers its Remix
+  // "Only generation-backed posts can be remixed" (`remixShowcasePostForRoute`), so its creator gets
+  // none, never the page's, which would offer them their own recipe to take.
+  const creatorRemix = useMemo(
+    () => (hasCreation ? remixForViewer(pageRemix, CREATORS_RECIPE_ACCESS) : NO_REMIX),
+    [hasCreation, pageRemix],
+  );
   const viewerIsCreator = ownership === 'owner' || ownership === 'owner-checking';
   const remix = useMemo(
     () => (viewerIsCreator ? creatorRemix : remixForViewer(pageRemix, bundle)),

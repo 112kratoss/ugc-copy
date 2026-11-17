@@ -1250,6 +1250,46 @@ describe('Showcase detail page', () => {
         expect(html).toContain('data-creator-remix="user-1:open"');
       });
 
+      // Review of #847's third round: the Remix of a post with no creation (a picture made elsewhere)
+      // is a dead end, "Only generation-backed posts can be remixed", so its creator gets none, never
+      // the page's, which offers anyone else the recipe to take.
+      it("gives the creator of a post with no creation no Remix, while their cookie is checked and once named", async () => {
+        const detail = await getPublicPostDetailMock(POST_ID);
+        getPublicPostDetailMock.mockResolvedValue({
+          ...detail,
+          generationId: null,
+          canRemix: false,
+          remixCapability: 'unlock_required',
+          remixTarget: 'image',
+          resourceBundle: { ...freeRecipe, allowRemix: true },
+        });
+        const row = () => screen.getByTestId('showcase-detail-engagement-row');
+        vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+
+        holdSessionCookieOf('user-1');
+        const { rerender, unmount } = render(await openPost());
+        expect(row()).toHaveTextContent(`${POST_ID}:false`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        signInAs('user-1');
+        rerender(await openPost());
+        expect(row()).toHaveTextContent(`${POST_ID}:false`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        // Their recipe still says what it gives anyone who takes it, as it does in the server's HTML.
+        expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({ remixIncluded: true }));
+        unmount();
+
+        // Anyone else is still offered it, as before (a separate fix): the server's HTML hands the
+        // row the creator's none beside it, for the page's rule.
+        holdSessionCookieOf('user-2');
+        clientAuth.current = { session: null, user: null, isLoading: true };
+        const other = render(await openPost());
+        expect(row()).toHaveAttribute('data-recipe-remix', 'free:Free');
+        other.unmount();
+        const html = renderToString(await openPost());
+        expect(html).toContain('data-recipe-remix="free:Free"');
+        expect(html).toContain('data-creator-remix="user-1:none"');
+      });
+
       // The page is drawn ahead of time for every viewer, and no cookie can be read on the server.
       it("draws both in the server's HTML: the root element's mark shows the creator theirs and anyone else the pitch, before the first paint", async () => {
         const root = document.documentElement;

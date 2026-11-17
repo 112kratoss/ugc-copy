@@ -161,18 +161,20 @@ export default function ShowcaseDetailBody({
   // Block, Owner tools) and the engagement row stay, as the app keeps them.
   const isNsfwCovered = Boolean(detail.isNsfw && !detail.nsfwRevealed);
   const layoutRef = useRef<HTMLDivElement | null>(null);
+  const pageRemix = {
+    canRemix: detail.canRemix,
+    remixCapability: detail.remixCapability,
+    remixTarget: detail.remixTarget,
+  };
   const viewer = useShowcasePostViewer({
     postId: detail.id,
     creatorId: detail.creator.id,
     visibility: detail.visibility,
     isNsfwCovered,
     pageBundle: detail.resourceBundle,
-    pageRemix: {
-      canRemix: detail.canRemix,
-      remixCapability: detail.remixCapability,
-      remixTarget: detail.remixTarget,
-    },
+    pageRemix,
     pageRemixCredit: detail.remixCredit ?? null,
+    hasCreation: Boolean(detail.generationId),
   });
   // For the owner, the visibility they just saved here: the cached page may not have caught up.
   const { bundle, lockedViewer, ownership, deliveryId, returnContext, visibility } = viewer;
@@ -266,6 +268,10 @@ export default function ShowcaseDetailBody({
     ...viewer.remix,
     bundle,
   });
+  // Whether the recipe includes the Remix is the recipe's to say, whoever is looking: read from the
+  // page's own offer, it reads the same for the creator of a post with no creation, who has no Remix
+  // of their own, and the same as before for everyone else.
+  const recipeIncludesRemix = getRecipeRemixOffer({ ...pageRemix, bundle }).remixIncluded;
   const resourceBundlePanel = bundle ? (
     <PostResourceBundlePanel
       // Starts again from the viewer's own read of the recipe when it lands;
@@ -275,7 +281,7 @@ export default function ShowcaseDetailBody({
         postId: detail.id,
         mediaItems: detailMediaItems,
         displayTitle,
-        remixIncluded: remixOffer.remixIncluded,
+        remixIncluded: recipeIncludesRemix,
       })}
       onAccessChange={viewer.applyBundleAccess}
     />
