@@ -1,11 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderToString } from 'react-dom/server';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import {
   ShowcaseDetailCommentCountProvider,
   ShowcaseDetailComments,
 } from '@/app/showcase/[id]/ShowcaseDetailCommentCount';
 import ShowcaseDetailEngagementRow from '@/app/showcase/[id]/ShowcaseDetailEngagementRow';
+import { ownerFirstPaintRules } from '@/app/showcase/[id]/owner-first-paint';
 import NsfwPostReveal from '@/components/NsfwPostReveal';
 import { dismissToast, readFeedbackSnapshot, resetFeedbackState, subscribeToFeedback } from '@/components/feedback-state';
 import { SAVER_NOTICE_MESSAGE, resetSaverNoticeForTests } from '@/components/saver-notice';
@@ -373,6 +375,130 @@ describe('ShowcaseDetailEngagementRow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reveal post' }));
 
     expect(await screen.findByRole('link', { name: /unlock the recipe to remix/i })).toHaveAttribute('href', '#recipe');
+  });
+
+  // Review of #847: the post's creator was offered their own creation's Remix to claim ("Remix ·
+  // Free") or to unlock ("Remix · 900 credits") until their own read of the recipe landed. The
+  // server's HTML draws their open Remix beside it, and the page's rule shows each its own.
+  describe("the creator's open Remix in the server's HTML", () => {
+    // Third case, review of #847's second round: a recipe that gates the Remix without including it
+    // (`allowRemix` false, as a recipe of reference pictures on an upload reads) gives everyone else
+    // no Remix at all, and the creator's appeared only after hydration, moving Save along the row.
+    it.each([
+      ['free', { access: 'free', priceLabel: 'Free' } as const, ['Remix · Free']],
+      ['paid', { access: 'paid', priceLabel: '900 credits' } as const, ['Remix · 900 credits']],
+      ['no-Remix', null, []],
+    ])("is shown to the creator in place of a %s recipe's Remix for everyone else, before the first paint, inert, and hydrates as drawn", (_kind, recipeRemix, others) => {
+      const props = rowProps({
+        canRemix: false,
+        recipeRemix,
+        remixCount: 0,
+        creatorRemixMark: 'user-1',
+        creatorCanRemix: true,
+      });
+      const rules = document.createElement('style');
+      rules.textContent = ownerFirstPaintRules('user-1');
+      document.head.appendChild(rules);
+      const root = document.documentElement;
+      const container = document.createElement('div');
+      container.innerHTML = renderToString(<ShowcaseDetailEngagementRow {...props} />);
+      document.body.appendChild(container);
+      onTestFinished(() => {
+        rules.remove();
+        container.remove();
+        root.removeAttribute('data-auth-user');
+      });
+      // The Remix controls a browser shows.
+      const remixes = () => Array.from(container.querySelectorAll('a, button'))
+        .filter((control) => window.getComputedStyle(control).display !== 'none')
+        .map((control) => control.textContent?.trim() ?? '')
+        .filter((text) => /^Remix\b/.test(text));
+
+      // A visitor, and another account.
+      expect(remixes()).toEqual(others);
+      root.setAttribute('data-auth-user', 'user-2');
+      expect(remixes()).toEqual(others);
+      // The creator: their own creation, to remix and nothing to take or pay, inert until the
+      // page's script has named them.
+      root.setAttribute('data-auth-user', 'user-1');
+      expect(remixes()).toEqual(['Remix']);
+      expect(container.querySelector('[data-post-remix-owner="user-1"]')).toBeDisabled();
+
+      const consoleError = vi.spyOn(console, 'error');
+      render(<ShowcaseDetailEngagementRow {...props} />, { container, hydrate: true });
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    // Review of #847's third round: a post with no creation has nothing to remix (the server answers
+    // its Remix "Only generation-backed posts can be remixed"), so its creator gets no Remix, while
+    // anyone else may still be offered one; theirs must not show to the creator, nor go late.
+    it.each([
+      ['a free recipe\'s locked Remix', { canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } } as const, ['Remix · Free']],
+      ['the open Remix', { canRemix: true, recipeRemix: null }, ['Remix']],
+    ])("keeps %s from the creator of a post with no creation, before the first paint, and hydrates as drawn", (_offer, offer, others) => {
+      const props = rowProps({ ...offer, remixCount: 0, creatorRemixMark: 'user-1', creatorCanRemix: false });
+      const rules = document.createElement('style');
+      rules.textContent = ownerFirstPaintRules('user-1');
+      document.head.appendChild(rules);
+      const root = document.documentElement;
+      const container = document.createElement('div');
+      container.innerHTML = renderToString(<ShowcaseDetailEngagementRow {...props} />);
+      document.body.appendChild(container);
+      onTestFinished(() => {
+        rules.remove();
+        container.remove();
+        root.removeAttribute('data-auth-user');
+      });
+      const remixes = () => Array.from(container.querySelectorAll('a, button'))
+        .filter((control) => window.getComputedStyle(control).display !== 'none')
+        .map((control) => control.textContent?.trim() ?? '')
+        .filter((text) => /^Remix\b/.test(text));
+
+      expect(remixes()).toEqual(others);
+      root.setAttribute('data-auth-user', 'user-2');
+      expect(remixes()).toEqual(others);
+      root.setAttribute('data-auth-user', 'user-1');
+      expect(remixes()).toEqual([]);
+
+      const consoleError = vi.spyOn(console, 'error');
+      render(<ShowcaseDetailEngagementRow {...props} />, { container, hydrate: true });
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    it('draws one Remix once the viewer is known, and none twice where both would read the same', () => {
+      const { unmount } = render(
+        <ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } })} />,
+      );
+      expect(screen.getAllByRole('button', { name: /remix/i }).map((button) => button.textContent?.trim()))
+        .toEqual(['Remix · Free', '2 remixes']);
+      unmount();
+
+      // A post whose Remix is open to everyone: the creator's is the same one.
+      render(<ShowcaseDetailEngagementRow {...rowProps({ creatorRemixMark: 'user-1', creatorCanRemix: true })} />);
+      const remix = screen.getByRole('button', { name: 'Remix' });
+      expect(remix).not.toHaveAttribute('data-post-remix-owner');
+    });
+
+    // Review of #847's second round: while the session check ran on the creator's cookie their open
+    // Remix took a press, and with no account named yet it sent them to sign in.
+    it('holds the open Remix inert, and undimmed, while the session check runs, then lets it start the remix', async () => {
+      useAuthMock.mockReturnValue({ user: null, session: null });
+      const { rerender } = render(<ShowcaseDetailEngagementRow {...rowProps({ remixHeld: true })} />);
+      const remix = screen.getByRole('button', { name: 'Remix' });
+      expect(remix).toBeDisabled();
+      expect(remix).not.toHaveClass('opacity-60');
+      fireEvent.click(remix);
+      expect(pushMock).not.toHaveBeenCalled();
+      expect(requestShowcaseRemix).not.toHaveBeenCalled();
+
+      // The check names the creator.
+      useAuthMock.mockReturnValue({ user: { id: 'user-1' }, session: { access_token: 'token-1' } });
+      rerender(<ShowcaseDetailEngagementRow {...rowProps({ remixHeld: false })} />);
+      expect(remix).toBeEnabled();
+      fireEvent.click(remix);
+      await waitFor(() => expect(requestShowcaseRemix).toHaveBeenCalledWith({ accessToken: 'token-1', postId: 'post-1' }));
+      await waitFor(() => expect(pushMock).toHaveBeenCalledWith('/create-image?remix=1'));
+    });
   });
 });
 

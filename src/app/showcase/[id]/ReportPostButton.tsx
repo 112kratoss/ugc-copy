@@ -196,10 +196,11 @@ export default function ReportPostButton({
   return (
     <>
       <div className="border-t border-white/8 px-5 py-3.5 sm:px-6">
+        {/* A 24px target: 2px more above and below its 20px line, which the margin takes back out of the layout. */}
         <button
           type="button"
           onClick={() => setIsOpen((current) => !current)}
-          className="inline-flex items-center gap-2 text-sm font-medium text-zinc-400 transition hover:text-white"
+          className="-my-0.5 inline-flex items-center gap-2 py-0.5 text-sm font-medium text-zinc-400 transition hover:text-white"
         >
           <Flag className="h-4 w-4" />
           Report post or recipe
