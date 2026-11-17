@@ -6,6 +6,7 @@ import {
   filterMarketplaceItemsForViewer,
   isMarketplaceCreatorBlockedForViewer,
   isPostResourceBundleBuyWithheld,
+  readMarketplaceViewerBlocks,
 } from '@/lib/marketplace-viewer-filter';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 
@@ -101,6 +102,87 @@ describe('filterMarketplaceItemsForViewer', () => {
       }),
     })).resolves.toEqual([]);
     expect(records.map((record) => record.msg)).toContain('marketplace_viewer_block_filter_failed');
+  });
+});
+
+// The list route reads the viewer's whole set beside the page (live sweep, 2026-11-17: waiting for
+// the page's creators cost every signed-in read a round trip of its own).
+describe('filterMarketplaceItemsForViewer, with the viewer\'s blocks read beside the page', () => {
+  const page = [item('bundle-1', 'creator-1'), item('bundle-2', 'creator-blocked'), item('bundle-3', 'viewer-1')];
+
+  it('takes out the recipes of anyone in the set, and asks nothing more', async () => {
+    const loadBlockedCreatorIds = vi.fn();
+
+    const visible = await filterMarketplaceItemsForViewer(page, 'viewer-1', { loadBlockedCreatorIds }, {
+      viewerBlocks: { ok: true, blockedUserIds: new Set(['creator-blocked', 'creator-elsewhere']), truncated: false },
+    });
+
+    expect(visible.map((entry) => entry.id)).toEqual(['bundle-1', 'bundle-3']);
+    expect(loadBlockedCreatorIds).not.toHaveBeenCalled();
+  });
+
+  it("never takes out the viewer's own recipes", async () => {
+    const visible = await filterMarketplaceItemsForViewer(page, 'viewer-1', {}, {
+      viewerBlocks: { ok: true, blockedUserIds: new Set(['viewer-1']), truncated: false },
+    });
+
+    expect(visible.map((entry) => entry.id)).toEqual(['bundle-1', 'bundle-2', 'bundle-3']);
+  });
+
+  // Past its cap the set is incomplete, and an incomplete set shows a viewer someone they blocked.
+  it("reads the page's own creators when the set ran past its cap", async () => {
+    const records = captureLogs();
+    const loadBlockedCreatorIds = vi.fn(async () => new Set(['creator-blocked']));
+
+    const visible = await filterMarketplaceItemsForViewer(page, 'viewer-1', {
+      createServiceClient: () => adminSupabase,
+      loadBlockedCreatorIds,
+    }, {
+      viewerBlocks: { ok: true, blockedUserIds: new Set(['creator-elsewhere']), truncated: true },
+    });
+
+    expect(visible.map((entry) => entry.id)).toEqual(['bundle-1', 'bundle-3']);
+    expect(loadBlockedCreatorIds).toHaveBeenCalledWith({
+      adminSupabase,
+      creatorIds: ['creator-1', 'creator-blocked', 'viewer-1'],
+      viewerUserId: 'viewer-1',
+    });
+    expect(records.map((record) => record.msg)).toContain('marketplace_viewer_block_set_truncated');
+  });
+
+  it('shows nothing rather than an unchecked page when the set could not be read', async () => {
+    const records = captureLogs();
+    const loadBlockedCreatorIds = vi.fn();
+
+    await expect(filterMarketplaceItemsForViewer(page, 'viewer-1', { loadBlockedCreatorIds }, {
+      viewerBlocks: { ok: false, error: new Error('user_blocks unavailable') },
+    })).resolves.toEqual([]);
+    expect(loadBlockedCreatorIds).not.toHaveBeenCalled();
+    expect(records.map((record) => record.msg)).toContain('marketplace_viewer_block_filter_failed');
+  });
+});
+
+describe('readMarketplaceViewerBlocks', () => {
+  it("reads the viewer's whole set, both ways, in one call", async () => {
+    const loadViewerBlockRelationships = vi.fn(async () => ({ blockedUserIds: new Set(['creator-blocked']), truncated: false }));
+
+    await expect(readMarketplaceViewerBlocks('viewer-1', {
+      createServiceClient: () => adminSupabase,
+      loadViewerBlockRelationships,
+    })).resolves.toEqual({ ok: true, blockedUserIds: new Set(['creator-blocked']), truncated: false });
+    expect(loadViewerBlockRelationships).toHaveBeenCalledWith({ adminSupabase, viewerUserId: 'viewer-1' });
+  });
+
+  // Read beside the page, so a failure must never reject on its own: the filter answers it.
+  it('answers a failed read instead of rejecting', async () => {
+    const error = new Error('user_blocks unavailable');
+
+    await expect(readMarketplaceViewerBlocks('viewer-1', {
+      createServiceClient: () => adminSupabase,
+      loadViewerBlockRelationships: vi.fn(async () => {
+        throw error;
+      }),
+    })).resolves.toEqual({ ok: false, error });
   });
 });
 

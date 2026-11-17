@@ -14,6 +14,11 @@ import imagePost from './fixtures/creation-post-free-recipe.json';
 // - A recipe whose picture had not come yet was solid black.
 // (The fourth, the side navigation's slow press, is a prefetch, which `next dev` never makes:
 // app-shell-client.test.tsx holds it.)
+// And as the live sweep of 2026-11-17 found it:
+// - The first press of "Load more recipes" on the first screen did nothing: it only brought the
+//   interactive list in ("Opening buyer tools…"), which drew the same four recipes, and the reader
+//   had to press again.
+// - On a phone the first screen held no recipe: the hero and the open filter panel filled it.
 //
 // The dev server draws the storefront's first page from fixtures/marketplace-recipes.json
 // (support/supabase-server-stub.cjs); the list API's pages and the covers are answered here, and
@@ -22,7 +27,6 @@ import imagePost from './fixtures/creation-post-free-recipe.json';
 // E2E bypass's: the page's auth provider asks Supabase who that is on every mount, as production's
 // does, and the answer comes after a delay.
 
-const ORIGIN = 'http://127.0.0.1:3100';
 const COLD_PAGE = { timeout: 45_000 };
 const USER_ID = 'e2e-market-reader';
 const FIRST_PAGE = market.bundles.length - 1;
@@ -34,6 +38,12 @@ const LOADED = FIRST_PAGE + 2 * MORE_PAGE;
 const OPENED = 22;
 
 test.describe.configure({ timeout: 180_000 });
+
+/** The dev server's own origin, the config's base URL, so a cookie reaches it on whatever port the run uses. */
+const origin = () => String(test.info().project.use.baseURL);
+
+/** The listing's first page as the page's own script asks for it once it knows who is looking. */
+const isFirstPageRead = (request: { url: () => string }) => request.url().includes('/api/marketplace/resources?sort=recent&offset=0&limit=4');
 
 function base64Url(text: string) {
   return Buffer.from(text).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -65,11 +75,29 @@ function moreRecipe(template: ListItem, index: number): ListItem {
   };
 }
 
+/** The recipe a signed-in reader's own first page leaves out, as the creator's block would. */
+const BLOCKED_TITLE = market.bundles[1].title;
+
 /**
  * The list API's pages: the first as the dev server answers it (read once, as a visitor), the
  * rest made from it; and the covers, a picture each, each after `coverDelayMs(its recipe's number)`.
+ * `firstPageHeld`: the page's own read of its first page is answered only once it settles, as a
+ * slow production read is. `blockedForReader`: that read, made with a session, leaves out
+ * `BLOCKED_TITLE`, as the list API takes out the recipes of a creator the reader blocks (and the
+ * next page still starts where the cached first page ended). `morePagesDelayMs`: each later page is
+ * answered after it.
  */
-async function answerListing(page: Page, { coverDelayMs = () => 120 }: { coverDelayMs?: (index: number) => number } = {}) {
+async function answerListing(page: Page, {
+  coverDelayMs = () => 120,
+  firstPageHeld,
+  blockedForReader = false,
+  morePagesDelayMs = 0,
+}: {
+  coverDelayMs?: (index: number) => number;
+  firstPageHeld?: Promise<void>;
+  blockedForReader?: boolean;
+  morePagesDelayMs?: number;
+} = {}) {
   const context = page.context();
   // Whatever else the page asks the API offline is answered as it fails there.
   await context.route('**/api/**', (route) => route.fulfill({ status: 503, json: { error: 'Not answered offline' } }));
@@ -79,15 +107,26 @@ async function answerListing(page: Page, { coverDelayMs = () => 120 }: { coverDe
   expect(firstPage.items.map((item) => item.title)).toEqual(market.bundles.slice(0, FIRST_PAGE).map((bundle) => bundle.title));
   const more = Array.from({ length: TOTAL - FIRST_PAGE }, (_, offset) => moreRecipe(firstPage.items[0], FIRST_PAGE + offset + 1));
 
-  await context.route('**/api/marketplace/resources?**', (route) => {
+  const readersFirstPage = { ...firstPage, items: firstPage.items.filter((item) => item.title !== BLOCKED_TITLE) };
+
+  await context.route('**/api/marketplace/resources?**', async (route) => {
     const url = new URL(route.request().url());
     const offset = Number(url.searchParams.get('offset') ?? 0);
     const limit = Number(url.searchParams.get('limit') ?? FIRST_PAGE);
-    if (offset === 0) return route.fulfill({ json: firstPage });
+    const first = blockedForReader && route.request().headers().authorization ? readersFirstPage : firstPage;
+    if (offset === 0 && firstPageHeld) {
+      await firstPageHeld;
+      // A read the page gave up on meanwhile (React's development double effect) has nobody to answer.
+      return route.fulfill({ json: first }).catch(() => undefined);
+    }
+    if (offset === 0) return route.fulfill({ json: first });
+    if (morePagesDelayMs) await new Promise((resolve) => setTimeout(resolve, morePagesDelayMs));
     const items = more.slice(offset - FIRST_PAGE, offset - FIRST_PAGE + limit);
     const nextOffset = offset + items.length;
     const hasMore = nextOffset < TOTAL;
-    return route.fulfill({ json: { items, pageInfo: { hasMore, nextOffset: hasMore ? nextOffset : null, offset, limit } } });
+    // A page the list gave up on while it was on its way has nobody to answer.
+    return route.fulfill({ json: { items, pageInfo: { hasMore, nextOffset: hasMore ? nextOffset : null, offset, limit } } })
+      .catch(() => undefined);
   });
   await context.route('**/api/me/unlocked-recipes', (route) => route.fulfill({ json: { bundleIds: [] } }));
   // The covers, from the storage CDN as production serves them (kept by the browser an hour).
@@ -136,8 +175,8 @@ async function signIn(page: Page) {
     user,
   };
   await page.context().addCookies([
-    { name: 'sb-example-auth-token', value: `base64-${base64Url(JSON.stringify(session))}`, url: ORIGIN },
-    { name: 'mb_name_step_shown', value: USER_ID, url: ORIGIN },
+    { name: 'sb-example-auth-token', value: `base64-${base64Url(JSON.stringify(session))}`, url: origin() },
+    { name: 'mb_name_step_shown', value: USER_ID, url: origin() },
   ]);
   await page.context().route('https://example.supabase.co/auth/v1/user*', async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -376,3 +415,294 @@ for (const viewer of ['signed in', 'signed out'] as const) {
     });
   }
 }
+
+/** Every request the page makes for the listing's second page (offset 4), as it finished or failed. */
+function watchSecondPageRequests(page: Page) {
+  const seen = { finished: [] as string[], failed: [] as string[], startedAt: [] as number[] };
+  const isSecondPage = (url: string) => url.includes('/api/marketplace/resources?')
+    && new URL(url).searchParams.get('offset') === String(FIRST_PAGE);
+  page.on('request', (request) => {
+    if (isSecondPage(request.url())) seen.startedAt.push(Date.now());
+  });
+  page.on('requestfinished', (request) => {
+    if (isSecondPage(request.url())) seen.finished.push(new URL(request.url()).search);
+  });
+  page.on('requestfailed', (request) => {
+    if (isSecondPage(request.url())) seen.failed.push(new URL(request.url()).search);
+  });
+  return seen;
+}
+
+const recipeTitles = (page: Page) => tiles(page).evaluateAll((links) => links.map((link) => link.getAttribute('aria-label')?.replace(/^View free recipe: /, '')));
+
+// Live sweep, 2026-11-17: on a fresh Marketplace the first screen's "Load more recipes" stood in
+// view without a scroll, and its first press only brought the interactive list in ("Opening buyer
+// tools…"), which drew the same four recipes: the reader had to press again. (The list is brought
+// in on its own once the page is scrolled towards its end, which a press made without a scroll never
+// does.) One press opens the list and brings the next twelve, asked for once.
+test.describe('one press of the first screen\'s "Load more recipes"', () => {
+  for (const viewer of ['signed out', 'signed in'] as const) {
+    test(`${viewer}, opens the list and brings the next recipes`, async ({ page }) => {
+      // The button in the first screen with no scroll, as the live page drew it at 1440 × 900 (offline
+      // it sits just below 900, so the window is taller).
+      await page.setViewportSize({ width: 1440, height: 1200 });
+      await answerListing(page);
+      if (viewer === 'signed in') await signIn(page);
+      const secondPage = watchSecondPageRequests(page);
+      const firstRead = page.waitForRequest(isFirstPageRead, COLD_PAGE);
+      await page.goto('/marketplace', COLD_PAGE);
+      // The page's own read of its first page is made by its script, once the reader is known: it has hydrated.
+      await firstRead;
+      await expect(tiles(page)).toHaveCount(FIRST_PAGE, COLD_PAGE);
+
+      const loadMore = page.getByRole('button', { name: 'Load more recipes' });
+      await expect(loadMore).toBeInViewport({ ratio: 1 });
+      expect(await page.evaluate(() => window.scrollY)).toBe(0);
+      await page.screenshot({ path: test.info().outputPath('before-the-press.png') });
+      await loadMore.click();
+
+      // The interactive list's module comes in, compiled on its first request, then the page after.
+      await expect(tiles(page)).toHaveCount(FIRST_PAGE + MORE_PAGE, COLD_PAGE);
+      await page.screenshot({ path: test.info().outputPath('after-one-press.png') });
+      expect(await recipeTitles(page)).toEqual([
+        ...market.bundles.slice(0, FIRST_PAGE).map((bundle) => bundle.title),
+        ...Array.from({ length: MORE_PAGE }, (_, index) => `Recipe ${FIRST_PAGE + index + 1}`),
+      ]);
+      await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0);
+      // Asked for once, and the list goes on from where that page ended.
+      expect(secondPage.finished).toEqual([`?offset=${FIRST_PAGE}&limit=${MORE_PAGE}`]);
+      expect(secondPage.failed).toEqual([]);
+      await loadMore.click();
+      await expect(tiles(page)).toHaveCount(FIRST_PAGE + 2 * MORE_PAGE);
+    });
+  }
+
+  // Signed in, the page reads its first page again for the reader, their blocks taken out, and on
+  // the live site that read took 1.5 s. A press made before it lands waits for it, and reads on from
+  // the reader's own page: the read starts the list again, which cut short, and asked again for, a
+  // page asked before it, and a page appended to the cached page it replaces brought a blocked
+  // creator's recipe back (review of #837). The reader's page here leaves one recipe out.
+  const readersListing = [
+    ...market.bundles.slice(0, FIRST_PAGE).map((bundle) => bundle.title).filter((title) => title !== BLOCKED_TITLE),
+    ...Array.from({ length: MORE_PAGE }, (_, index) => `Recipe ${FIRST_PAGE + index + 1}`),
+  ];
+
+  for (const press of ['the first screen\'s button', 'the list\'s own button, after a scroll brought the list in'] as const) {
+    test(`signed in, a press of ${press} made while the reader's first page is read waits for it, then reads on from it once`, async ({ page }) => {
+      const fromTheList = press !== 'the first screen\'s button';
+      // The list's own button is reached by a scroll, which brings the list in; the first screen's
+      // stands in view with no scroll.
+      await page.setViewportSize(fromTheList ? { width: 1280, height: 800 } : { width: 1440, height: 1200 });
+      let settleFirstPage = () => undefined as void;
+      const firstPageHeld = new Promise<void>((resolve) => {
+        settleFirstPage = resolve;
+      });
+      // Each later page takes a while, so that one asked too early is still on its way when the
+      // reader's first page lands.
+      await answerListing(page, { firstPageHeld, blockedForReader: true, morePagesDelayMs: 1500 });
+      await signIn(page);
+      const secondPage = watchSecondPageRequests(page);
+      let firstPageAnsweredAt = 0;
+      page.on('requestfinished', (request) => {
+        if (isFirstPageRead(request)) firstPageAnsweredAt = Date.now();
+      });
+      const firstRead = page.waitForRequest(isFirstPageRead, COLD_PAGE);
+      await page.goto('/marketplace', COLD_PAGE);
+      await firstRead;
+      // The cached page, the blocked recipe on it, while the reader's own is read.
+      await expect(tiles(page)).toHaveCount(FIRST_PAGE, COLD_PAGE);
+
+      if (fromTheList) {
+        await page.mouse.move(640, 400);
+        await expect(async () => {
+          await page.mouse.wheel(0, 2000);
+          await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0, { timeout: 1000 });
+        }).toPass(COLD_PAGE);
+      }
+      await page.getByRole('button', { name: 'Load more recipes' }).click();
+      // The list is in and says it is loading; nothing is asked for while the reader's page is read.
+      await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0, COLD_PAGE);
+      await expect(page.getByRole('button', { name: 'Loading' })).toBeVisible();
+      await page.waitForTimeout(1000);
+      expect(secondPage.startedAt).toEqual([]);
+      await expect(tiles(page)).toHaveCount(FIRST_PAGE);
+
+      settleFirstPage();
+      await expect(tiles(page)).toHaveCount(readersListing.length, COLD_PAGE);
+      expect(await recipeTitles(page)).toEqual(readersListing);
+      expect(secondPage.finished).toEqual([`?offset=${FIRST_PAGE}&limit=${MORE_PAGE}`]);
+      expect(secondPage.failed).toEqual([]);
+      expect(secondPage.startedAt[0]).toBeGreaterThanOrEqual(firstPageAnsweredAt);
+      expect(firstPageAnsweredAt).toBeGreaterThan(0);
+      await expect(page.getByRole('button', { name: 'Load more recipes' })).toBeEnabled();
+    });
+  }
+});
+
+type FirstScreen = {
+  scrollY: number;
+  topBarBottom: number;
+  bottomNavTop: number;
+  cover: { top: number; bottom: number } | null;
+  tiles: Array<{ title: string | null; documentTop: number }>;
+};
+
+/** Where the first recipe's cover stands in the window, and where every recipe stands on the page. */
+function readFirstScreen(page: Page): Promise<FirstScreen> {
+  return page.evaluate(() => {
+    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('main a[aria-label^="View free recipe: "]'));
+    const cover = links[0]?.firstElementChild?.getBoundingClientRect() ?? null;
+    return {
+      scrollY: Math.round(window.scrollY),
+      topBarBottom: Math.round(document.querySelector('header')?.getBoundingClientRect().bottom ?? 0),
+      bottomNavTop: Math.round(document.querySelector('nav[aria-label="Primary mobile navigation"]')?.getBoundingClientRect().top ?? window.innerHeight),
+      cover: cover && { top: Math.round(cover.top), bottom: Math.round(cover.bottom) },
+      tiles: links.map((link) => ({
+        title: link.getAttribute('aria-label'),
+        documentTop: Math.round(link.getBoundingClientRect().top + window.scrollY),
+      })),
+    };
+  });
+}
+
+/** How much of the first recipe's cover shows between the top bar and the bottom navigation. */
+function coverShownShare({ cover, topBarBottom, bottomNavTop }: FirstScreen) {
+  if (!cover) return 0;
+  const shown = Math.min(cover.bottom, bottomNavTop) - Math.max(cover.top, topBarBottom);
+  return Math.max(0, shown) / (cover.bottom - cover.top);
+}
+
+// Live sweep, 2026-11-17: at 375 × 812 the "RECIPES · Buy the reusable parts behind community posts"
+// card and the open filter panel (the search, Access, Kind, Tool and the four orders) filled the first
+// screen, and the first recipe started a screen below it. The card is compact on a phone and the
+// filters wait behind a Filters button, as the interactive list already kept them and Explore does.
+test.describe('the first screen', () => {
+  test('on a phone, shows the first recipe, with the filters behind a Filters button', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await answerListing(page);
+    const firstRead = page.waitForRequest(isFirstPageRead, COLD_PAGE);
+    await page.goto('/marketplace', COLD_PAGE);
+    await firstRead;
+    await expect(tiles(page)).toHaveCount(FIRST_PAGE, COLD_PAGE);
+    await expect.poll(() => page.evaluate(() => {
+      const image = document.querySelector<HTMLImageElement>('main a[aria-label^="View free recipe: "] img');
+      return Boolean(image?.complete && image.naturalWidth > 0);
+    })).toBe(true);
+
+    const firstScreen = await readFirstScreen(page);
+    await page.screenshot({ path: test.info().outputPath('phone-first-screen.png') });
+    expect(firstScreen.scrollY).toBe(0);
+    // Most of the first recipe's cover shows, above the bottom navigation.
+    expect(coverShownShare(firstScreen), JSON.stringify(firstScreen)).toBeGreaterThanOrEqual(0.5);
+
+    // The search stays out; Access, Kind, Tool and the order wait behind Filters.
+    await expect(page.getByRole('searchbox', { name: 'Search marketplace recipes' })).toBeVisible();
+    const filters = page.getByRole('button', { name: 'Filters' });
+    await expect(filters).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByRole('link', { name: 'Paid' })).toBeHidden();
+    await expect(page.getByRole('link', { name: 'Top sales' })).toBeHidden();
+    await filters.click();
+    await expect(filters).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByRole('link', { name: 'Paid' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Top sales' })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('phone-filters-open.png') });
+    await filters.click();
+    await expect(page.getByRole('link', { name: 'Paid' })).toBeHidden();
+  });
+
+  // The first screen's list hands over to the interactive one once the reader scrolls towards its
+  // end; the two must draw the panel above the recipes alike, or every recipe jumps under the finger.
+  for (const panel of ['closed', 'open'] as const) {
+    test(`on a phone, the list taken over on a scroll moves no recipe, the filters ${panel}`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      await answerListing(page);
+      const firstRead = page.waitForRequest(isFirstPageRead, COLD_PAGE);
+      await page.goto('/marketplace', COLD_PAGE);
+      await firstRead;
+      await expect(tiles(page)).toHaveCount(FIRST_PAGE, COLD_PAGE);
+      if (panel === 'open') await page.getByRole('button', { name: 'Filters' }).click();
+      const before = await readFirstScreen(page);
+
+      await page.mouse.move(187, 400);
+      await expect(async () => {
+        await page.mouse.wheel(0, 1500);
+        await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0, { timeout: 1000 });
+      }).toPass(COLD_PAGE);
+      const after = await readFirstScreen(page);
+      expect(after.tiles).toEqual(before.tiles);
+      await expect(page.getByRole('button', { name: 'Filters' })).toHaveAttribute('aria-expanded', panel === 'open' ? 'true' : 'false');
+    });
+  }
+
+  test('on a laptop, keeps the filters open with no Filters button', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await answerListing(page);
+    const firstRead = page.waitForRequest(isFirstPageRead, COLD_PAGE);
+    await page.goto('/marketplace', COLD_PAGE);
+    await firstRead;
+    await expect(tiles(page)).toHaveCount(FIRST_PAGE, COLD_PAGE);
+    await expect(page.getByRole('link', { name: 'Paid' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Top sales' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Filters' })).toBeHidden();
+    await page.screenshot({ path: test.info().outputPath('laptop-first-screen.png') });
+  });
+
+  // Review of #837: on a phone `?sort=price-low` said nothing of the order, folded behind Filters with
+  // the rest, and the line under "Buyer filters" left it out; only Clear showed anything was set.
+  for (const viewport of [{ width: 375, height: 812 }, { width: 1440, height: 900 }]) {
+    test(`at ${viewport.width} px, says an order other than Recent where it can be seen`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await answerListing(page);
+      const read = page.waitForRequest((request) => request.url().includes('/api/marketplace/resources?sort=price-low&offset=0&limit=4'), COLD_PAGE);
+      await page.goto('/marketplace?sort=price-low', COLD_PAGE);
+      await read;
+      await expect(tiles(page)).toHaveCount(FIRST_PAGE, COLD_PAGE);
+      const filters = page.getByRole('button', { name: 'Filters, 1 set' });
+      if (viewport.width < 1024) {
+        await expect(page.getByText('Sorted by Price low')).toBeVisible();
+        await expect(filters).toBeVisible();
+        await expect(page.getByRole('link', { name: 'Price low' })).toBeHidden();
+      } else {
+        // A laptop's order chips say it, and the line is the one it always was.
+        await expect(page.getByRole('link', { name: 'Price low' })).toHaveAttribute('aria-current', 'page');
+        await expect(page.getByText('All quality-checked public recipes from community posts.')).toBeVisible();
+        await expect(page.getByText('Sorted by Price low')).toBeHidden();
+        await expect(filters).toBeHidden();
+      }
+      await page.screenshot({ path: test.info().outputPath(`order-said-${viewport.width}.png`) });
+    });
+  }
+
+  // Review of #837: Back to a listing a phone had left with its filters open drew them folded, so the
+  // page above the grid was a panel shorter and the reader landed that far down from their recipe.
+  test('on a phone, Back to a listing left with its filters open lands on the recipe it left', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await answerListing(page);
+    const firstRead = page.waitForRequest(isFirstPageRead, COLD_PAGE);
+    await page.goto('/marketplace', COLD_PAGE);
+    await firstRead;
+    await expect(tiles(page)).toHaveCount(FIRST_PAGE, COLD_PAGE);
+    await page.getByRole('button', { name: 'Filters' }).click();
+    await page.getByRole('button', { name: 'Load more recipes' }).click();
+    await expect(tiles(page)).toHaveCount(FIRST_PAGE + MORE_PAGE, COLD_PAGE);
+    await expect(page.getByRole('button', { name: 'Filters' })).toHaveAttribute('aria-expanded', 'true');
+
+    const opened = tile(page, 9);
+    await opened.scrollIntoViewIfNeeded();
+    await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBeGreaterThan(2000);
+    await coversInView(page);
+    const before = { scrollY: await page.evaluate(() => Math.round(window.scrollY)), top: Math.round((await opened.boundingBox())!.y) };
+    await opened.click();
+    await page.waitForURL(`**/showcase/${imagePost.post.id}?**`, COLD_PAGE);
+    await expect(page.getByRole('link', { name: 'Back to Marketplace' })).toBeVisible(COLD_PAGE);
+
+    await page.goBack();
+    await page.waitForURL('**/marketplace', COLD_PAGE);
+    await expect(page.getByRole('button', { name: 'Filters' })).toHaveAttribute('aria-expanded', 'true');
+    await expect(tiles(page)).toHaveCount(FIRST_PAGE + MORE_PAGE);
+    await expect(tile(page, 9)).toBeInViewport();
+    await expect.poll(async () => Math.round((await tile(page, 9).boundingBox())!.y)).toBe(before.top);
+    expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(before.scrollY);
+    await page.screenshot({ path: test.info().outputPath('phone-back-filters-open.png') });
+  });
+});

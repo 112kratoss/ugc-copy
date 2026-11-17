@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 
@@ -127,6 +127,108 @@ describe('marketplace resource list route adapter service', () => {
       creatorIds: ['creator-1', 'creator-blocked', 'creator-2'],
       viewerUserId: 'viewer-1',
     }));
+  });
+
+  // Live sweep, 2026-11-17: a signed-in list read took about 1.5 s. The viewer's blocks were read
+  // only once the page had come, so every signed-in read paid that round trip after the page's own.
+  // They are the viewer's, not the page's: read beside the page, under the same latency both reads end
+  // together, and the page is filtered by them with nothing more asked.
+  it("reads a signed-in viewer's blocks beside the page, not after it, and filters the page by them", async () => {
+    const LATENCY_MS = 40;
+    const events: string[] = [];
+    const settle = <T,>(name: string, value: T) => {
+      events.push(`${name} started`);
+      return new Promise<T>((resolve) => setTimeout(() => {
+        events.push(`${name} answered`);
+        resolve(value);
+      }, LATENCY_MS));
+    };
+    const readMarketplaceViewerBlocks = vi.fn((viewerUserId: string) => settle('blocks', {
+      ok: true as const,
+      blockedUserIds: new Set(['creator-blocked', viewerUserId === 'viewer-1' ? 'someone-else' : 'unexpected']),
+      truncated: false,
+    }));
+    const loadBlockedCreatorIds = vi.fn(async () => new Set<string>());
+
+    const response = await getMarketplaceResourceListRouteResponse({
+      request: createRequest('?sort=recent&offset=4&limit=12', { Authorization: 'Bearer viewer-token' }),
+      dependencies: {
+        createUserClient: vi.fn(() => createUserClient('viewer-1')),
+        getMarketplaceResourceList: vi.fn(() => settle('page', storefrontPage())),
+        readMarketplaceViewerBlocks,
+        filterMarketplaceItemsForViewer: ((items, viewerUserId, _dependencies, options) => filterMarketplaceItemsForViewer(
+          items,
+          viewerUserId,
+          { createServiceClient: () => ({ service: 'admin' }) as unknown as SupabaseClient, loadBlockedCreatorIds },
+          options,
+        )) as typeof filterMarketplaceItemsForViewer,
+      },
+    });
+
+    expect(events).toEqual(['page started', 'blocks started', 'page answered', 'blocks answered']);
+    expect(readMarketplaceViewerBlocks).toHaveBeenCalledWith('viewer-1');
+    const body = await response.json() as { items: MarketplaceResourceListItem[] };
+    expect(body.items.map((item) => item.id)).toEqual(['resource-1', 'resource-3']);
+    expect(loadBlockedCreatorIds).not.toHaveBeenCalled();
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('reads no blocks for a signed-out caller', async () => {
+    const readMarketplaceViewerBlocks = vi.fn();
+
+    const response = await getMarketplaceResourceListRouteResponse({
+      request: createRequest(''),
+      dependencies: {
+        getMarketplaceResourceList: vi.fn(async () => storefrontPage()),
+        readMarketplaceViewerBlocks,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(readMarketplaceViewerBlocks).not.toHaveBeenCalled();
+  });
+
+  // What a signed-in read spends its time on, for the production monitor alone, as the feed says it.
+  describe('timings', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    const signedInRead = (headers: Record<string, string>) => getMarketplaceResourceListRouteResponse({
+      request: createRequest('?sort=recent&offset=4&limit=12', { Authorization: 'Bearer viewer-token', ...headers }),
+      dependencies: {
+        createUserClient: vi.fn(() => createUserClient('viewer-1')),
+        getMarketplaceResourceList: vi.fn(async () => storefrontPage()),
+        readMarketplaceViewerBlocks: vi.fn(async () => ({ ok: true as const, blockedUserIds: new Set<string>(), truncated: false })),
+      },
+    });
+
+    it("say the proxy's admission and each of the route's reads to the performance monitor", async () => {
+      const response = await signedInRead({
+        'x-performance-monitor': 'warmup',
+        'x-magicbooklet-proxy-timing': 'proxy-identity;dur=812.40, proxy-verify;dur=1.10, proxy-lifecycle;dur=810.90',
+      });
+
+      const timing = response.headers.get('Server-Timing') ?? '';
+      expect(timing).toMatch(/^proxy-identity;dur=812\.40, proxy-verify;dur=1\.10, proxy-lifecycle;dur=810\.90, /);
+      for (const phase of ['route-viewer', 'route-blocks', 'route-list', 'route-filter']) {
+        expect(timing).toMatch(new RegExp(`${phase};dur=\\d+\\.\\d{2}`));
+      }
+      expect(response.headers.get('x-scaling-certification-timing')).toBe(timing);
+    });
+
+    it('say nothing on an ordinary read, signed in or not', async () => {
+      const signedIn = await signedInRead({ 'x-magicbooklet-proxy-timing': 'proxy-identity;dur=812.40' });
+      const signedOut = await getMarketplaceResourceListRouteResponse({
+        request: createRequest('', { 'x-performance-monitor': 'warmup' }),
+        dependencies: { getMarketplaceResourceList: vi.fn(async () => storefrontPage()) },
+      });
+
+      for (const response of [signedIn, signedOut]) {
+        expect(response.headers.get('Server-Timing')).toBeNull();
+        expect(response.headers.get('x-scaling-certification-timing')).toBeNull();
+      }
+    });
   });
 
   it('drops nothing for a signed-out caller and reads no identity', async () => {
