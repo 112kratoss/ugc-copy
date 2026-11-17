@@ -13,6 +13,8 @@ import { expect, test, type Page } from '@playwright/test';
 
 const WIDTHS = [320, 360, 375, 390, 414];
 const WIDE_WIDTHS = [640, 768, 1024, 1180, 1280, 1440];
+/** The least room in which a truncated 15px title shows anything: about an ellipsis' width. */
+const ELLIPSIS_ROOM = 8;
 const COLD_PAGE = { timeout: 45_000 };
 
 test.describe.configure({ timeout: 180_000 });
@@ -159,9 +161,11 @@ for (const signedIn of [false, true]) {
         if (phone) {
           if (!read.whole && !read.gone) problems.push(`${path}: "${read.text}" is cut off (${read.scrollWidth}px of ${read.clientWidth}px)`);
           if (path === '/contact') wholeOnContact = read.whole;
-        } else if (read.gone && read.clientWidth > 0 && read.text) {
+        } else if (read.gone && read.clientWidth >= ELLIPSIS_ROOM && read.text) {
           // Before this change the title showed from 640px, truncated where it had no room: it is
-          // never dropped there, even when the cluster leaves it a few pixels.
+          // never dropped there while the cluster leaves it room for at least an ellipsis. With less
+          // it shows nothing on main either: on CI, /creators/magicbooklet at 1024px signed out left
+          // it under a pixel (2026-11-17).
           problems.push(`${path}: "${read.text}" is dropped (${read.clientWidth}px of room)`);
         }
       }
