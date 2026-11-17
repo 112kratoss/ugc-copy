@@ -6,6 +6,7 @@ import { logBackendError } from '@/lib/backend-logger';
 import {
   addPostResourceItemCountKinds,
   getPostResourceKinds,
+  isMediaPostWithoutCreation,
   resolveRecipeAllowRemix,
   stripDerivedGenerationReferenceItems,
   normalizePostResourceAttachments,
@@ -699,6 +700,8 @@ async function toOwnerPostListItem(
       storedAllowRemix: bundleRow.allow_remix,
       status: bundleRow.status,
       generationId: row.generation_id,
+      postFormat: row.post_format,
+      category: row.category,
       remixesAllowed: row.remixes_allowed,
     })
     ? [...storedResourceKinds, 'remix']
@@ -712,8 +715,15 @@ async function toOwnerPostListItem(
   // A post whose creator turned "Allow remixes" off sells no Remix with its
   // recipe (the review of phase 2), whatever its stored switch, the summary's
   // kinds or a Remix link among its items say: Studio and Your Sales name and
-  // grade the listing as the marketplace lists it (20261105152921).
-  const resourceKinds = row.remixes_allowed === false
+  // grade the listing as the marketplace lists it (20261105152921). Nor does a
+  // post with media and no creation, which has nothing to remix (owner,
+  // 2026-11-17).
+  const sellsNoRemix = row.remixes_allowed === false || isMediaPostWithoutCreation({
+    generationId: row.generation_id,
+    postFormat: row.post_format,
+    category: row.category,
+  });
+  const resourceKinds = sellsNoRemix
     ? withoutRemixKind(countedResourceKinds)
     : countedResourceKinds;
   const title =

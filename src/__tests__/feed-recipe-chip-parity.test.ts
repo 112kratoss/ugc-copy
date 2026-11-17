@@ -38,8 +38,9 @@ describe("a feed card's recipe chip, on the web and in the app", () => {
     const { asset: fields, remix, chip } = entry;
     // The owner is the viewer's to know, not the post's: the card passes it.
     const viewerIsOwner = 'viewerIsOwner' in entry && entry.viewerIsOwner === true;
+    // A post with a Remix is a creation's, as the app's cases are: one with none offers no Remix.
     const drawn = getPostFeedRecipeChip(
-      { asset: fields ? asset(fields) : null, canRemix: remix },
+      { asset: fields ? asset(fields) : null, generationId: 'generation-1', canRemix: remix },
       { isOwner: viewerIsOwner },
     );
 
@@ -91,7 +92,7 @@ describe("a feed card's recipe chip, on the web and in the app", () => {
     const summary = { ...asset({ accessMode: 'paid', priceUsdCents }), priceQuote } as ShowcaseAssetSummary;
 
     expect(getAssetAccessLabel(summary)).toBe(label);
-    expect(getPostFeedRecipeChip({ asset: summary, canRemix: false })).toEqual({ tone: 'paid', kind: 'price', label });
+    expect(getPostFeedRecipeChip({ asset: summary, generationId: 'generation-1', canRemix: false })).toEqual({ tone: 'paid', kind: 'price', label });
   });
 
   it('is asked the same cases by the app', () => {

@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { isMediaPostWithoutCreation } from '@/lib/post-resource-bundles';
+
 /**
  * A post as an agent may read it (`get_post`, and the checks before `publish_post` and
  * `delete_post`): the caller's own post in any state, or anyone's post while it is live, which is
@@ -139,7 +141,13 @@ export function toAgentPostView(row: PostRow, viewerUserId: string, resource: Re
     visibility: row.visibility === 'public' ? 'public' : 'private',
     state: agentPostState(row),
     isNsfw: row.is_nsfw === true,
-    remixesAllowed: row.remixes_allowed !== false,
+    // A post with media and no creation has nothing to remix, whatever its stored switch says
+    // (owner, 2026-11-17): its answer says so, as every page and the app do.
+    remixesAllowed: row.remixes_allowed !== false && !isMediaPostWithoutCreation({
+      generationId: row.generation_id,
+      postFormat: row.post_format,
+      category: row.category,
+    }),
     counts: {
       saves: count(row.save_count),
       comments: count(row.comment_count),

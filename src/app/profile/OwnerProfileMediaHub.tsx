@@ -199,7 +199,9 @@ function mapOwnerPostToFeedItem(post: OwnerPost, creator: ShowcaseCreator): Show
       allowRemix: resourceKinds.includes('remix'),
       resourceKinds,
     } : null,
-    canRemix: Boolean(post.generationId) || resourceKinds.includes('remix'),
+    // Only a creation can be remixed: a post with none (a picture made elsewhere, a text post) has no
+    // Remix, whatever its recipe's kinds say (owner, 2026-11-17).
+    canRemix: Boolean(post.generationId),
   };
 }
 

@@ -31,6 +31,7 @@ import {
 } from '@/lib/post-resource-bundles-server';
 import {
   addPostResourceItemCountsToLockedPreview,
+  isMediaPostWithoutCreation,
   resolvePostRemixCapability,
 } from '@/lib/post-resource-bundles';
 import {
@@ -766,8 +767,17 @@ export async function resolvePostRowsToFeedItems(
   // counted on the page a caller serves (addCreationReferenceCountsToFeedItems).
   // A post whose creator turned "Allow remixes" off sells no Remix with its
   // recipe (the review of phase 2): its card's chips, its reel line and the
-  // Remix filter leave it out, as the marketplace does.
-  const remixesClosedPostIds = new Set(rowsToHydrate.flatMap((row) => (row.remixes_allowed === false ? [row.id] : [])));
+  // Remix filter leave it out, as the marketplace does. Nor does a post with
+  // media and no creation, which has nothing to remix (owner, 2026-11-17).
+  const remixesClosedPostIds = new Set(rowsToHydrate.flatMap((row) => (
+    row.remixes_allowed === false || isMediaPostWithoutCreation({
+      generationId: row.generation_id,
+      postFormat: row.post_format,
+      category: row.category,
+    })
+      ? [row.id]
+      : []
+  )));
   const assetHydrationPromise = timed('hydrate_bundles', () =>
     getMarketplaceAssetSummaryHydration(postIds, adminSupabase, { remixesClosedPostIds }));
   // Every read still starts together. Only the preview signing inside

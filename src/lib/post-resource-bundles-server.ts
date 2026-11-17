@@ -44,6 +44,7 @@ import {
   addPostResourceItemCountsToLockedPreview,
   buildPostResourceBundleLockedPreview,
   getPostResourceItemCounts,
+  isMediaPostWithoutCreation,
   normalizePostResourceAttachments,
   normalizePostResourceItems,
   normalizePostResourceSections,
@@ -2710,11 +2711,14 @@ async function hydrateRecipes(
       const post = (scope !== 'owner' && row.access_mode === 'paid' ? read?.underPaidRecipe : read?.post) ?? null;
       // A creation post's published recipe includes its Remix, whatever its
       // stored switch says (2026-10-27): reported as such on every read, so its
-      // kinds, chips and remix gate agree.
+      // kinds, chips and remix gate agree. A post with media and no creation
+      // includes none, whatever its stored switch says (owner, 2026-11-17).
       const allowRemix = resolveRecipeAllowRemix({
         storedAllowRemix: row.allow_remix,
         status: row.status,
         generationId: post?.generationId ?? null,
+        postFormat: post?.postFormat ?? null,
+        category: post?.category ?? null,
         remixesAllowed: post?.remixesAllowed,
       });
       const normalizedResources = { ...(storedResourcesByBundleId.get(row.id) ?? normalizeResources(row)), allowRemix };
@@ -2761,8 +2765,15 @@ async function hydrateRecipes(
       }, creationReferenceCounts.get(row.post_id));
       // A post whose creator turned "Allow remixes" off sells no Remix with its recipe (the review of
       // phase 2), whatever a Remix link or access among its items says: its kinds and its teaser say
-      // none, as the marketplace's listing and search do (20261105152921).
-      const item = post?.remixesAllowed === false ? withoutRecipeRemix(counted) : counted;
+      // none, as the marketplace's listing and search do (20261105152921). Nor does a post with media
+      // and no creation, which has nothing to remix (owner, 2026-11-17), a read-time rule the
+      // listing's SQL projection does not hold: its Remix filter is checked again on the page served.
+      const sellsNoRemix = post?.remixesAllowed === false || isMediaPostWithoutCreation({
+        generationId: post?.generationId,
+        postFormat: post?.postFormat,
+        category: post?.category,
+      });
+      const item = sellsNoRemix ? withoutRecipeRemix(counted) : counted;
 
       return { item, storedPost: read?.post ?? null };
     })
@@ -3399,7 +3410,11 @@ async function getMarketplaceResourceListBase(
       seller: item.seller,
     });
 
+    // The list's SQL finds a recipe under Remix by what its row stores (`has_remix`), and a recipe on
+    // a post with no creation sells no Remix whatever it stores (owner, 2026-11-17): the page leaves
+    // out a row the Remix filter found whose recipe is served with none, as the fallback's check does.
     const isEligible = quality.eligible
+      && (resource !== 'remix' || item.resourceKinds.includes('remix'))
       && (searchMatchedIds === null || searchMatchedIds.has(item.id));
     if (isEligible && pageItems.length >= limit) {
       // This is an eligible lookahead row that has not been returned. Leave

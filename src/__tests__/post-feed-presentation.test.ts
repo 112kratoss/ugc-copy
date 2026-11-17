@@ -305,6 +305,27 @@ describe('post feed presentation', () => {
             expect(getPostFeedRemixAccess(locked({ remixCapability: 'none' }))).toBeNull();
             expect(getPostFeedRemixAccess(locked({ remixCapability: undefined }))).toBeNull();
         });
+
+        // Owner, 2026-11-17 ("Yes, hide it"): a post with no creation has nothing to remix, and the
+        // remix route refuses it. The card asks first, as the app's does, so a read that still
+        // offers one (a page cached before, a server from before) draws no dead-end Remix.
+        it('offers no Remix on a post with no creation, whatever its read says', () => {
+            const upload = { generationId: null, sourceKind: 'external' } as const;
+
+            expect(getPostFeedRemixAccess(item({ ...upload, asset: recipe }))).toBeNull();
+            expect(getPostFeedRemixAccess(locked(upload))).toBeNull();
+            expect(getPostFeedRemixAccess(locked({ ...upload, asset: paidRecipe }))).toBeNull();
+            expect(getPostFeedRemixAccess(textItem({ generationId: null, canRemix: true }))).toBeNull();
+            // Its recipe is sold on its own chip instead, free or at its price.
+            expect(buildPostFeedCard(locked(upload))).toMatchObject({
+                remixAccess: null,
+                recipeChip: { label: 'Free recipe', tone: 'free', kind: 'free' },
+            });
+            expect(buildPostFeedCard(locked({ ...upload, asset: paidRecipe }))).toMatchObject({
+                remixAccess: null,
+                recipeChip: { label: '900 credits', tone: 'paid', kind: 'price' },
+            });
+        });
     });
 
     describe('labels', () => {
