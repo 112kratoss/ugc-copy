@@ -17,15 +17,19 @@ const connectionString = process.env.SUPABASE_TEST_DB_URL;
 
 /**
  * The local stack's gateway (Kong) now and then answers a PostgREST request with its own 502, "An
- * invalid response was received from the upstream server", having handed it a connection PostgREST
- * had closed. Five runs of this job failed that way on 2026-11-16 and 17, and every time it was the
- * credit history: the one RPC, and so the one POST, among a user detail's parallel reads, a method
- * the gateway does not send again by itself. Every PostgREST request in this file only reads, so
- * one more try is safe; a second 502 still fails the test, and Auth's requests are never repeated.
+ * invalid response was received from the upstream server". Six runs of this job failed that way on
+ * 2026-11-16 and 17, every time on the credit history: the one RPC, and so the one POST, among a
+ * user detail's parallel GET reads. That fits a connection PostgREST had closed being handed to a
+ * request, which the gateway sends again by itself only for a GET; the cause is not confirmed. So a
+ * GET or an RPC (the RPCs these collectors call are all STABLE) that gets a 502 is sent once more:
+ * a second 502 still fails the test, and a table write or an Auth request is never repeated.
  */
 const throughGateway: typeof fetch = async (input, init) => {
   const response = await fetch(input, init);
-  if (response.status !== 502 || !new URL(String(input)).pathname.startsWith('/rest/v1/')) return response;
+  const { pathname } = new URL(String(input));
+  const method = (init?.method ?? 'GET').toUpperCase();
+  const read = method === 'GET' || method === 'HEAD' || pathname.startsWith('/rest/v1/rpc/');
+  if (response.status !== 502 || !pathname.startsWith('/rest/v1/') || !read) return response;
   await response.body?.cancel();
   return fetch(input, init);
 };
