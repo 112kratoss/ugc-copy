@@ -442,6 +442,22 @@ async function expectOwnerToolsOpen(page: Page) {
   await expect(rail(page).getByRole('link', { name: 'Edit post' })).toBeVisible();
 }
 
+// Review of #838: the page's HTML is drawn once for every visitor and crawler, and Owner tools are in
+// it for the creator's browser to show before the first paint. Hidden, a link is still a link: every
+// post page carried its /post/<id>/edit links, the visibility menu, Archive and Delete, and each crawl
+// of an edit link is a function invocation that redirects to sign-in. The HTML holds the row alone.
+test("a post page's HTML, which every visitor and crawler gets, carries no owner link or action", async ({ page }) => {
+  const response = await page.request.get(POST_PATH, { timeout: 0 });
+  expect(response.status()).toBe(200);
+  const html = await response.text();
+  // Drawn for the creator's browser to show before the first paint: the row alone.
+  expect(html).toContain('Owner tools');
+  expect(html).not.toContain(`/post/${POST_ID}/edit`);
+  for (const action of ['Edit post', 'Manage recipe', `Visibility of ${TITLE}`]) {
+    expect(html).not.toContain(action);
+  }
+});
+
 // Review of #833: the server draws Report user and Block user for any browser with a session
 // cookie, and on the creator's own post the row showed until the page's script found whose cookie it
 // was, then went, and Comments jumped up. Before #833 the creator never saw it.

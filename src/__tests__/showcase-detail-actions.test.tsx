@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const routerMocks = vi.hoisted(() => ({
@@ -225,10 +226,18 @@ describe('ShowcaseDetailActions owner tools', () => {
     expect(details).toHaveAttribute('inert');
     // Only the server's HTML is marked for the page's rule.
     expect(details).not.toHaveAttribute('data-post-owner-tools');
+    // The row alone: what it opens onto comes with the session.
+    expect(details.querySelector('summary')).not.toBeNull();
+    expect(details.querySelectorAll('a, button')).toHaveLength(0);
 
     rerender(tools('ready'));
     expect(container.querySelector('details')).toBe(details);
     expect(details).not.toHaveAttribute('inert');
+    expect(within(details).getByRole('link', { name: 'Edit post' })).toHaveAttribute('href', '/post/post-1/edit');
+    expect(within(details).getByRole('link', { name: 'Manage recipe' })).toHaveAttribute('href', '/post/post-1/edit#recipe');
+    expect(within(details).getByRole('button', { name: /^Visibility of Sunset study/ })).toBeInTheDocument();
+    expect(within(details).getByRole('button', { name: 'Archive' })).toBeInTheDocument();
+    expect(within(details).getByRole('button', { name: 'Delete' })).toBeInTheDocument();
   });
 
   it("marks the server's HTML for the page's rule, which shows the tools to the creator only, inert", () => {
@@ -236,5 +245,33 @@ describe('ShowcaseDetailActions owner tools', () => {
     const tools = container.querySelector('details') as HTMLDetailsElement;
     expect(tools).toHaveAttribute('data-post-owner-tools', 'owner-1');
     expect(tools).toHaveAttribute('inert');
+  });
+
+  // Review of #838: the server's HTML is every visitor's and every crawler's (ISR), and a hidden link is
+  // still a link: each post page carried its /post/<id>/edit links, the visibility menu, Archive and
+  // Delete, and each crawl of an edit link is a function invocation that redirects to sign-in.
+  it("draws only the row in the server's HTML: no link, menu or action, for anyone", () => {
+    for (const ownerTools of ['unread', 'checking'] as const) {
+      const html = renderToString(
+        <ShowcaseDetailActions
+          postId="post-1"
+          generationId="gen-1"
+          title="Sunset study"
+          creatorUsername="creator"
+          visibility="public"
+          ownerTools={ownerTools}
+          ownerToolsMark="owner-1"
+          hasResourceBundle
+          bundle={{ accessMode: 'paid', status: 'published', salesCount: 0 }}
+        />,
+      );
+
+      expect(html).toContain('Owner tools');
+      expect(html).toMatch(/<details[^>]*inert=""/);
+      expect(html).not.toContain('/post/post-1/edit');
+      for (const action of ['Edit post', 'Manage recipe', 'Visibility of', 'Archive', 'Delete']) {
+        expect(html).not.toContain(action);
+      }
+    }
   });
 });
