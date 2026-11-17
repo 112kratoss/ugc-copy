@@ -599,7 +599,7 @@ const AppShellFrame = memo(function AppShellFrame({
                     ellipsis left "Crea…" beside the sign-in pill. Every page has a heading of its own. From
                     640px the bar's left cluster shares its row with the search field and is often a few
                     pixels wide, so the title keeps its ellipsis there and is never dropped. */}
-                <div data-app-shell-title className="h-5 overflow-hidden text-[15px] font-extrabold leading-5 text-[var(--ui-text-primary)]">
+                <div data-app-shell-title className="h-5 overflow-hidden text-[15px] font-extrabold leading-5 text-[var(--ui-text-primary)] sm:h-auto sm:leading-[inherit]">
                   <span aria-hidden="true" className="sm:hidden">&#8203;</span>
                   <span className="inline-block whitespace-nowrap sm:block sm:truncate">{title}</span>
                 </div>

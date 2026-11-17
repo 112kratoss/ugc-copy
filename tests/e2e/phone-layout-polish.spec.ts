@@ -55,7 +55,18 @@ function readTitle(page: Page): Promise<TitleRead | null> {
   });
 }
 
-const TITLE_PAGES = ['/creators/magicbooklet', '/contact', '/blog', '/alternatives', '/ai-image-generator', '/ai-video-generator', '/ai-motion-transfer', '/marketplace/not-a-page'];
+/** Every page the sweep reads, with the title its top bar names: each must be read, at every width. */
+const TITLES: Record<string, string> = {
+  '/creators/magicbooklet': 'Creator',
+  '/contact': 'Contact',
+  '/blog': 'Blog',
+  '/alternatives': 'Compare',
+  '/ai-image-generator': 'AI image generator',
+  '/ai-video-generator': 'AI video generator',
+  '/ai-motion-transfer': 'Motion transfer',
+  '/marketplace/not-a-page': 'Marketplace',
+};
+const TITLE_PAGES = Object.keys(TITLES);
 
 const base64Url = (text: string) => Buffer.from(text).toString('base64url');
 
@@ -90,8 +101,9 @@ async function signInReader(page: Page, origin: string) {
 
 /**
  * The page's own script has run and the fonts are in, so the row has its final widths: the signed-in
- * credits pill (drawn once the session check answers) or the visitor's "Sign in" link with React's
- * fiber on it, then the fonts, then two reads of the title's box a moment apart that agree.
+ * credits pill (drawn once the session check answers), or, for a visitor, hydration's commit and then
+ * the "Sign in" pill (the shell draws a narrower placeholder until the session check answers); then
+ * the fonts, then two reads of the bar's pieces a moment apart that agree.
  */
 async function settle(page: Page, signedIn: boolean) {
   await page.locator('header.app-shell-header').waitFor(COLD_PAGE);
@@ -106,6 +118,8 @@ async function settle(page: Page, signedIn: boolean) {
       const root = key ? (document as unknown as Record<string, HostRoot>)[key] : undefined;
       return root?.stateNode?.current?.memoizedState?.isDehydrated === false;
     }).catch(() => false), COLD_PAGE).toBe(true);
+    // The pill ("Sign in" or "Sign in for 25 free credits"), which replaces the pending placeholder.
+    await page.locator('header a[aria-label^="Sign in"]').first().waitFor(COLD_PAGE);
   }
   await page.evaluate(() => document.fonts.ready);
   // Two reads of the bar's pieces 250ms apart that agree: nothing is still moving (a dev-server
@@ -130,11 +144,17 @@ for (const signedIn of [false, true]) {
       await page.setViewportSize({ width, height: 812 });
       const problems: string[] = [];
       let wholeOnContact = false;
+      const readPages: string[] = [];
       for (const path of TITLE_PAGES) {
         await page.goto(path, { waitUntil: 'domcontentloaded', ...COLD_PAGE });
         await settle(page, signedIn);
         const read = await readTitle(page);
-        if (!read) continue;
+        if (!read) {
+          problems.push(`${path}: the top bar has no title box`);
+          continue;
+        }
+        readPages.push(path);
+        if (read.text !== TITLES[path]) problems.push(`${path}: the title reads "${read.text}", not "${TITLES[path]}"`);
         if (read.docOverflow > 0) problems.push(`${path}: page scrolls sideways by ${read.docOverflow}px`);
         if (phone) {
           if (!read.whole && !read.gone) problems.push(`${path}: "${read.text}" is cut off (${read.scrollWidth}px of ${read.clientWidth}px)`);
@@ -146,6 +166,8 @@ for (const signedIn of [false, true]) {
         }
       }
       expect(problems).toEqual([]);
+      // Every page was read: none dropped out unmeasured.
+      expect(readPages).toEqual(TITLE_PAGES);
       // Dropping the title is for a bar with no room: on a phone wide enough, it stays.
       if (phone && width >= 414) expect(wholeOnContact).toBe(true);
     });
