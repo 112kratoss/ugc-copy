@@ -62,6 +62,12 @@ test('"Report post or recipe" is a target at least 24px tall, and nothing around
   await page.goto(POST_PATH);
   const report = page.getByTestId('canonical-post-actions').getByRole('button', { name: 'Report post or recipe' });
   await expect(report).toBeVisible(COLD_PAGE);
+  // Comments' read is answered 503, so its panel ends on the error row with Retry, the rail's last
+  // change: after hydration, the viewer check and the failed read. Two reads that agree prove only
+  // that nothing changed for 300 ms, and the server's HTML can hold still longer than that.
+  await expect(
+    page.getByTestId('canonical-post-comments').first().getByRole('button', { name: 'Retry', exact: true }),
+  ).toBeVisible(COLD_PAGE);
 
   const drawn = await settledMeasure(report);
   expect(drawn.targetHeight, JSON.stringify(drawn)).toBeGreaterThanOrEqual(24);
