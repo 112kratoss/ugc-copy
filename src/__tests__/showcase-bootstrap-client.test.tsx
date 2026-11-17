@@ -213,6 +213,9 @@ describe('ShowcaseBootstrapClient', () => {
 
     // A press on one is its own page load, as on the shell's other filter links: it does not wake the full page.
     fireEvent.pointerDown(pills[0], { button: 0 });
+    // The shell marks itself busy in the same task a hand-over starts, before the full page's
+    // module is asked for, so this fails at once where a hand-over began.
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
     await act(async () => Promise.resolve());
     expect(fullClientModuleLoaded).not.toHaveBeenCalled();
   });

@@ -54,7 +54,7 @@ describe('Explore loading state', () => {
     expect(row!.getAttribute('aria-hidden')).toBe('true');
     // Under the bar's controls.
     expect(row!.parentElement?.hasAttribute('data-explore-filter-bar')).toBe(true);
-    expect([...row!.children].map((pill) => pill.className.includes('h-[34px]'))).toEqual([true, true]);
+    expect([...row!.children].map((pill) => pill.className.includes('h-[calc(2rem+2px)]'))).toEqual([true, true]);
     expect(visibleTextOf(html)).toBe('Search');
   });
 
