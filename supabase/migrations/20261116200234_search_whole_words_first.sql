@@ -45,6 +45,11 @@
 --   10  title, model or tool         -20  a word of the title, model or tool starts with it ("Gothic cathedral")
 --    0  caption or prompt            -30  the rest ("delicate", a near-miss title)
 --
+-- A title starts with the query when what follows it is no letter, digit or
+-- hyphen: a hyphen joins a compound, so "Cat-eye sunglasses" does not start
+-- with "cat" and holds it only as the parser splits the compound (10), under
+-- "Cat on a windowsill" (20).
+--
 -- Every tier is still 10 from the next and the parts inside one add 8.8 at
 -- most, so every whole-word match ranks before every partial one, and the
 -- partial matches of a word still being typed ("portr") keep the order they
@@ -54,15 +59,16 @@
 -- still scores 30 or more and nothing else does (search_blended_posts'
 -- c_exact_title_score).
 --
--- RELATED SEARCHES read only the posts of the page that hold the query's
--- words whole, as the posts were read (corrected where they were); while no
--- post of the page holds them whole (a word still being typed), the posts
--- that hold them with the last one as a prefix. Once a post of the page holds
--- the words, a post found only inside a longer word, by a near-miss or by
--- meaning alone is never read; a page none of whose posts holds them (a
--- blended answer found by meaning alone) is read whole, as before. And a
--- phrase that holds the query ("black cat" for "cat") is offered before one
--- that leads away from it. Everything else is as 20261115105944 made it.
+-- RELATED SEARCHES leave out, once a post of the page holds the query's words
+-- whole (as the posts were read, corrected where they were), the posts search
+-- found only by a part of a word, a run of characters or a near-miss: their
+-- phrases say nothing of the search. A post that matches no word is one a
+-- blended answer brought by meaning and is still read ("sea after sunset":
+-- its title post and the seascapes found by meaning). While no post of the
+-- page holds the words whole (a word still being typed, or a page found by
+-- meaning alone) every post is read, as before. And a phrase that holds the
+-- query ("black cat" for "cat") is offered before one that leads away from
+-- it. Everything else is as 20261115105944 made it.
 --
 -- WHAT IS RE-CREATED. search_query_whole_tsquery is new (the query with no
 -- word a prefix, in the readings search_query_tsquery makes). search_post_score
@@ -89,8 +95,9 @@
 -- 0.7837 to 0.7863, a relevant post in the top five by words 0.7286 to
 -- 0.7429, wrong posts in the top ten and posts for queries about nothing
 -- unchanged. On the set extended with "cat", "car" and four posts that hold
--- "cat" inside other words: by words 0.5376 to 0.5449, blended 0.7736 to
--- 0.7793; "cat" 0.4784 to 0.6003, "car" 0.3589 to 0.4738, "studio light"
+-- "cat" inside other words: by words 0.5376 to 0.5468, blended 0.7736 to
+-- 0.7813; "cat" 0.4784 to 0.7375 (0.6003 without the hyphen rule, which
+-- moves no other query of either set), "car" 0.3589 to 0.4738, "studio light"
 -- 0.3358 to 0.5293 by words and 0.4316 to 0.4887 blended, "city night" 0.1064
 -- to 0.2076 and 0.2219 to 0.3429. No query scores lower in either order. The
 -- cost: post search took 1.4 to 5.5 ms more (median, 5 to 14%, two
@@ -471,10 +478,14 @@ BEGIN
           shown.title = v_query AS title_is_query,
           shown.title LIKE v_like || '%' AS title_starts,
           -- The title starts with the query and goes on, if at all, after a
-          -- character that is no letter or digit: 'cat on a sill' and
-          -- 'cat-eye' start with 'cat', 'catwalk' only with its letters.
+          -- character that is no letter, digit or hyphen: 'cat on a sill' and
+          -- 'cat''s toy' start with 'cat'; 'catwalk' only with its letters,
+          -- and 'cat-eye' with the first part of a word of its own (a hyphen
+          -- joins a compound: cat-eye sunglasses are no cat). Such a title
+          -- still holds 'cat' among its words, as the parser splits it
+          -- (title holds the words, 10), under 'cat on a sill'.
           shown.title LIKE v_like || '%'
-            AND substr(shown.title, char_length(v_query) + 1, 1) !~ '[[:alnum:]]' AS title_starts_whole,
+            AND substr(shown.title, char_length(v_query) + 1, 1) !~ '[[:alnum:]-]' AS title_starts_whole,
           -- The title and the models are the vector's A lexemes, the tool
           -- names its C; the caption and the prompt are B and do not count.
           documents.tool_normalized = v_query OR shown.headline @@ v_tsquery AS headline_holds,
@@ -589,17 +600,20 @@ DECLARE
   v_limit integer := least(greatest(coalesce(p_limit, 6), 0), 10);
   -- The words the search already says, as typed and as corrected.
   v_said text[];
-  -- The query as the posts were read (corrected where they were), whole and
-  -- with its last word a prefix, and whether it has a word to read them by.
+  -- The query as the posts were read (corrected where they were), as a LIKE
+  -- pattern, whole and with its last word a prefix, and whether it has a
+  -- word to read them by.
+  v_read text;
+  v_like text;
   v_whole tsquery;
   v_typing tsquery;
   v_has_words boolean;
-  -- The page's posts this reads: those that hold the query's words whole, or,
-  -- when none does, those that hold it as a word still being typed, or, when
-  -- none holds its words at all, every post of the page.
+  -- The page's posts this reads: once one holds the query's words whole,
+  -- every post but those search found only by a part of a word, a run of
+  -- characters or a near-miss; while none does, every post of the page.
   v_page_ids uuid[];
   v_whole_ids uuid[];
-  v_typing_ids uuid[];
+  v_kept_ids uuid[];
   v_read_ids uuid[];
   v_candidate record;
   v_words text[];
@@ -619,26 +633,39 @@ BEGIN
   v_said := string_to_array(v_query, ' ')
     || string_to_array(public.search_split_terms(v_query), ' ')
     || coalesce(string_to_array(v_corrected, ' '), ARRAY[]::text[]);
-  v_whole := public.search_query_whole_tsquery(coalesce(v_corrected, v_query));
-  v_typing := public.search_query_tsquery(coalesce(v_corrected, v_query), true);
+  v_read := coalesce(v_corrected, v_query);
+  v_like := replace(replace(replace(v_read, '\', '\\'), '%', '\%'), '_', '\_');
+  v_whole := public.search_query_whole_tsquery(v_read);
+  v_typing := public.search_query_tsquery(v_read, true);
   v_has_words := numnode(v_typing) > 0;
 
   -- The result page's posts, each read again as search reads one (a
-  -- document, unlabelled, neither side of a block with the viewer), and of
-  -- them the ones about what was searched: those that hold the query's words
-  -- whole, or, while no post of the page does, those that hold them with the
-  -- last one still being typed. Once a post of the page holds the words, a
-  -- post found only inside a longer word ('delicate' for 'cat'), by a
-  -- near-miss title or by meaning alone is never read: its phrases say
-  -- nothing of the search. A page none of whose posts holds the words (a
-  -- blended answer found by meaning alone) is read whole, as before.
+  -- document, unlabelled, neither side of a block with the viewer), and
+  -- whether each holds the query's words whole, or matches them only as
+  -- search_public_posts' partial reading does (a word still being typed, a
+  -- run of characters, a near-miss title or tool). Once a post of the page
+  -- holds the words whole, a post found only that way ('delicate' for 'cat')
+  -- is never read: its phrases say nothing of the search. A post that
+  -- matches no word at all is a post a blended answer brought by meaning,
+  -- and is read beside the whole-word ones ("sea after sunset": its title
+  -- post and the seascapes found by meaning). While no post of the page
+  -- holds the words whole (a word still being typed, or a page found by
+  -- meaning alone) every post is read, as before.
   SELECT
     coalesce(array_agg(documents.post_id), ARRAY[]::uuid[]),
-    coalesce(array_agg(documents.post_id) FILTER (WHERE CASE WHEN v_has_words THEN documents.search_vector @@ v_whole ELSE false END), ARRAY[]::uuid[]),
-    coalesce(array_agg(documents.post_id) FILTER (WHERE CASE WHEN v_has_words THEN documents.search_vector @@ v_typing ELSE false END), ARRAY[]::uuid[])
-  INTO v_page_ids, v_whole_ids, v_typing_ids
+    coalesce(array_agg(documents.post_id) FILTER (WHERE matched.whole), ARRAY[]::uuid[]),
+    coalesce(array_agg(documents.post_id) FILTER (WHERE matched.whole OR NOT matched.lexical), ARRAY[]::uuid[])
+  INTO v_page_ids, v_whole_ids, v_kept_ids
   FROM public.post_search_documents AS documents
   JOIN public.posts AS posts ON posts.id = documents.post_id
+  CROSS JOIN LATERAL (
+    SELECT
+      CASE WHEN v_has_words THEN documents.search_vector @@ v_whole ELSE false END AS whole,
+      CASE WHEN v_has_words THEN documents.search_vector @@ v_typing ELSE false END
+        OR documents.search_text ILIKE ('%' || v_like || '%')
+        OR documents.title_normalized OPERATOR(extensions.%) v_read
+        OR documents.tool_normalized OPERATOR(extensions.%) v_read AS lexical
+  ) AS matched
   WHERE documents.post_id = ANY (p_post_ids[1:c_posts])
     AND posts.is_nsfw = false
     AND NOT EXISTS (
@@ -653,11 +680,7 @@ BEGIN
       WHERE blocks.blocker_user_id = documents.creator_user_id
         AND blocks.blocked_user_id = p_viewer_user_id
     );
-  v_read_ids := CASE
-    WHEN cardinality(v_whole_ids) > 0 THEN v_whole_ids
-    WHEN cardinality(v_typing_ids) > 0 THEN v_typing_ids
-    ELSE v_page_ids
-  END;
+  v_read_ids := CASE WHEN cardinality(v_whole_ids) > 0 THEN v_kept_ids ELSE v_page_ids END;
   IF cardinality(v_read_ids) < c_min_posts THEN
     RETURN;
   END IF;
@@ -738,7 +761,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION public.search_related_searches(text, uuid, uuid[], text, integer) IS
-  'Related searches for a result page (/api/search?relatedSearches=1): the phrases and model or tool names (search_phrases) that at least two of p_post_ids hold, each post read again as search reads one for p_viewer_user_id (a document, unlabelled, neither side of a block; at most 30), and of them only those that hold the query''s words whole (as corrected by p_corrected_query), or, when none does, with the last word as a prefix, or, when none holds them at all, every one: never a post found only inside a longer word, by a near-miss or by meaning beside one that holds the words. What the posts write first, a phrase holding the query first, most-held first, then at most two names. Never the query or its corrected reading, one whose every word the query says, one holding a withdrawn word, or one that only widens or narrows another offered. Each is held by two posts the viewer may see, which its own search then finds. None while the last rebuild of search_phrases is over three hours old. At most 10. Service role only.';
+  'Related searches for a result page (/api/search?relatedSearches=1): the phrases and model or tool names (search_phrases) that at least two of p_post_ids hold, each post read again as search reads one for p_viewer_user_id (a document, unlabelled, neither side of a block; at most 30), and, once one of them holds the query''s words whole (as corrected by p_corrected_query), none that search_public_posts found only by a part of a word, a run of characters or a near-miss; a post that matches no word (found by meaning) is read, and while none holds the words whole every post is. What the posts write first, a phrase holding the query first, most-held first, then at most two names. Never the query or its corrected reading, one whose every word the query says, one holding a withdrawn word, or one that only widens or narrows another offered. Each is held by two posts the viewer may see, which its own search then finds. None while the last rebuild of search_phrases is over three hours old. At most 10. Service role only.';
 
 REVOKE ALL ON FUNCTION public.search_related_searches(text, uuid, uuid[], text, integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.search_related_searches(text, uuid, uuid[], text, integer) TO service_role;

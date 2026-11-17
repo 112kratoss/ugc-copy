@@ -1389,25 +1389,17 @@ export default function SearchClient({
   }, [emptyKindTab, keepTopAnswer, normalizedQuery, readExact, topForEmptyTab]);
   const emptyTabPointer = emptyKindTab ? searchEmptyTabPointer(emptyKindTab, topForEmptyTab) : null;
 
-  // Where the page draws the starter (SearchStarter.tsx): before a search (the box empty, or half
-  // a word that found no creator) and under a search that found nothing anywhere. And whose
-  // pictures it lends: a model's or tool's card among the results that no answer has given one
-  // (entityPictures), since a search's own answer carries none. It is asked for when the page
-  // first comes to one of those, and kept for the page's life (useSearchStarterState asks once per
-  // account), so a page opened on a search the address names asks for it only after that search's
-  // answer, and only if the answer has a card it pictures, finds nothing, or the box is emptied.
-  // Until 2026-11-17 every opening asked for it, beside the search's own request (2.7 s on
-  // production, signed in), and on most searches its answer went nowhere.
-  const settledOnNothing = canSearch && !pending && !(currentFailure && !currentAnswer) && (!shownAnswer || resultCount === 0);
-  // As SearchEntityCard reads it: an entity that carries a picture, or says it has none (null), is
-  // drawn by its own word.
-  const unpicturedEntity = canSearch && !pending && entities.some((entity) => (
-    entity.thumbnail === undefined && !entityPictures[searchEntityId(entity)]
-  ));
-  const starterWanted = !canSearch || unpicturedEntity || (settledOnNothing && (
-    !searchSaysNoResults(gatedQueryLength)
-    || (!emptyTabPointer && !hasPublicSearchFilters(activeFilters) && (activeType === 'top' || topForEmptyTab !== null))
-  ));
+  // What to start a search from (SearchStarter.tsx): drawn under the empty box and under a search
+  // that found nothing anywhere, and lending its pictures to a model's or tool's card among the
+  // results that no answer has given one (entityPictures; a search's own answer carries none). Asked
+  // for as the page opens on an empty box; on a page opened on a search, as soon as that search's
+  // first answer (or its failure) is in. So it comes after the search, never beside it, and is in
+  // hand by the time the person empties the box, which then shows the starter at once (owner,
+  // 2026-11-16: a click on a search field shows something, nothing flashes). Kept for the page's
+  // life (useSearchStarterState asks once per account). Until 2026-11-17 it was asked as the page
+  // opened, beside the search's own request (2.7 s on production, signed in), and an earlier
+  // version of this change asked only when the box was emptied, which left it blank meanwhile.
+  const starterWanted = !canSearch || !pending;
   const [starterAsked, setStarterAsked] = useState(starterWanted);
   if (starterWanted && !starterAsked) setStarterAsked(true);
   // What to start a search from, and whether that question is settled: until it is, the idle page

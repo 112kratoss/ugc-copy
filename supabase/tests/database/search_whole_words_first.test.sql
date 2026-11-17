@@ -44,7 +44,11 @@ from (values
   ('22', '02', 'Category winners', 'Minnal murali fan art, cinematic lighting', 0, interval '0'),
   ('23', '03', 'Gothic cathedral', 'Stained glass, cinematic lighting', 0, interval '0'),
   ('24', '01', 'Monsoon girl sticker', 'A delicate paper umbrella, minnal murali style', 5000, interval '0'),
-  ('25', '02', 'Minnal Vanitha in the rain', 'Intricate suit, scattered sparks, cinematic lighting', 0, interval '0')
+  ('25', '02', 'Minnal Vanitha in the rain', 'Intricate suit, scattered sparks, cinematic lighting', 0, interval '0'),
+  -- A title that starts with a hyphenated compound of the word, new and
+  -- saved, and an older one that starts with the word itself (review of #839).
+  ('26', '02', 'Dog-ear notebook', 'Pages folded at the corners', 500, interval '0'),
+  ('27', '03', 'Dog on a porch', 'A sleepy hound in the afternoon', 0, interval '60 days')
 ) as post(suffix, creator, title, body, saves, age);
 
 select public.rebuild_search_terms();
@@ -77,6 +81,12 @@ select ok(to_tsvector('simple', public.search_term_variants('veo-3.1')) @@ publi
   'a model''s name split as search_query_tsquery splits it');
 select ok(not (to_tsvector('simple', 'black cat') @@ public.search_query_whole_tsquery('black cats window')),
   'every word is required');
+-- Malayalam and Tamil words are read whole as the parser reads them (no
+-- stemmer: an inflected form is another word).
+select ok(to_tsvector('simple', 'മിന്നൽ മുരളി') @@ public.search_query_whole_tsquery('മിന്നൽ'),
+  'a Malayalam word holds itself');
+select ok(to_tsvector('simple', 'பூனை படம்') @@ public.search_query_whole_tsquery('பூனை'),
+  'and a Tamil one');
 
 -- ─── Whole words first ───────────────────────────────────────────────────────
 
@@ -100,6 +110,14 @@ select is(
 
 select is(pg_temp.posts_found('catc'), array['21'], 'a word still being typed finds what holds it as a prefix, as before');
 select is(pg_temp.posts_found('cath'), array['23'], 'and a title word that starts with it');
+
+-- A hyphen goes on with the word: 'dog-ear' is no title starting with 'dog'.
+-- It still holds 'dog' among its words, as the parser splits the compound.
+select is(
+  pg_temp.posts_found('dog'),
+  array['27', '26'],
+  'a title that starts with the word leads one that starts with a hyphenated compound of it, new and saved as that one is'
+);
 
 -- Among posts that hold the query only inside longer words, the tiers keep
 -- their order (title starts with it, a title word starts with it, the rest).
@@ -165,7 +183,14 @@ select ok(
 );
 select ok(
   'minnal murali' = any (pg_temp.related('minn', array['21', '22', '24', '25'])),
-  'while no post of the page holds the query whole (a word still being typed), the posts that hold it as a prefix are read'
+  'while no post of the page holds the query whole (a word still being typed), every post of the page is read'
+);
+-- A blended answer: one post holds the words whole, the others match none of
+-- them and were found by meaning (review of #839: they were dropped too, and
+-- a page of one whole-word post had no related search).
+select ok(
+  'black cat' = any (pg_temp.related('white cat', array['13', '11', '12'])),
+  'beside a post that holds the words whole, the posts found by meaning alone are read'
 );
 select is(
   pg_temp.related('cat', array['11', '21', '22', '23', '24', '25']),

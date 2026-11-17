@@ -159,16 +159,23 @@ they rank under every post that holds the query's words whole (each a word of it
 english stem: "cats" holds "cat"): `search_post_score` takes `p_whole_words`, and a partial match
 falls 30 under the tier its match would have had, so its best (a title starting with the letters,
 -10) is a whole tier under the least whole match (a caption, 0), and the partial tiers keep the order
-they had among themselves (a word still being typed, "portr", is ranked as before). Before it a
-one-word search, which is never blended, put a new or saved post that said "delicate", or a title
-"Category winners", above older posts about a cat: inside a tier freshness (up to 1.0) and engagement
-(up to 2.5) outweigh the text rank of one word in a long prompt. A title that is the query still
-scores 30 or more and nothing else does, which is what `c_exact_title_score` reads.
+they had among themselves (a word still being typed, "portr", is ranked as before). A title starts
+with the query only where what follows it is no letter, digit or hyphen: a hyphen joins a compound,
+so "Cat-eye sunglasses" holds "cat" as a word of its title (10, the parser splits the compound) and
+ranks under "Cat on a windowsill" (20). Before it a one-word search, which is never blended, put a
+new or saved post that said "delicate", or a title "Category winners", above older posts about a
+cat: inside a tier freshness (up to 1.0) and engagement (up to 2.5) outweigh the text rank of one
+word in a long prompt. A title that is the query still scores 30 or more and nothing else does,
+which is what `c_exact_title_score` reads.
 
-Related searches (`search_related_searches`) read only the page's posts that hold the query whole,
-or, while none does, those that hold it with the last word as a prefix (a page none of whose posts
-holds the words, found by meaning alone, is read whole as before), and offer a phrase that holds the
-query first (`docs/production-deployment-runbook.md`, "Search Suggestions").
+Related searches (`search_related_searches`), once a post of the page holds the query's words whole,
+leave out the posts search found only by a part of a word, a run of characters or a near-miss (they
+pass the query read with its last word as a prefix, the `ILIKE` or the trigram match, and not the
+whole reading). A post that matches no word of the query, which a blended answer brought by
+meaning, is still read, so a blended page with one whole-word post keeps its related searches. While
+no post of the page holds the words whole (a word still being typed, a page found by meaning alone)
+every post of the page is read, as before. A phrase that holds the query is offered first
+(`docs/production-deployment-runbook.md`, "Search Suggestions").
 `supabase/tests/database/search_whole_words_first.test.sql` holds both on the defect's fixture.
 
 ## The relevance check
@@ -249,31 +256,33 @@ Recorded with whole words first (`20261116200234`) on the set with "cat", "car" 
 
 | | Words | Blended |
 |---|---|---|
-| nDCG@10, mean of 72 queries | 0.5449 | 0.7793 |
+| nDCG@10, mean of 72 queries | 0.5468 | 0.7813 |
 | a relevant post in the top 5 | 0.7500 | 0.9722 |
 | relevant posts in the top 5, mean | 1.28 | 2.18 |
 | wrong posts in the top 10, mean | 0.43 | 2.00 |
 | posts returned for 5 queries about nothing | 0 | 0 |
 
 nDCG@10 by kind: exact 0.7394 to 0.8190, model 0.9315 to 0.9743, paraphrase 0.0596 to 0.6978, mixed
-0.6784 to 0.7980, noisy 0.4051 to 0.5445, trap 0.9477 to 0.9588, one-word unchanged (0.5537). All 15
+0.6784 to 0.7980, noisy 0.4051 to 0.5445, trap 0.9477 to 0.9588, one-word unchanged (0.5879). All 15
 title matches keep first place. One query scores lower blended than by words, "studio light"
 (0.5293 to 0.4887): whole words first lifted its word order (0.3358 before) past its blend (0.4316
 before), and no query of either order scores lower than before the change. On the set as it was
 recorded on 2026-11-15 the change moved nDCG@10 by words from 0.5410 to 0.5452 and blended from
-0.7837 to 0.7863, and nothing else; on the extended set by words from 0.5376 to 0.5449 and blended
-from 0.7736 to 0.7793 ("cat" 0.4784 to 0.6003, "car" 0.3589 to 0.4738). The runs are in
+0.7837 to 0.7863, and nothing else; on the extended set by words from 0.5376 to 0.5468 and blended
+from 0.7736 to 0.7813 ("cat" 0.4784 to 0.7375, "car" 0.3589 to 0.4738). Of that, "cat" 0.6003 to
+0.7375 is the hyphen rule's ("Cat-eye sunglasses" no longer leads it), the only query a title
+starting with a query and a hyphen touches in either set. The runs are in
 `archive/web-sweep-fixes-2026-11-17/search/` of the parent folder.
 
 By similarity floor, at meaning weight 0.9:
 
 | Floor | nDCG@10 | Relevant in top 5 | Wrong in top 10 | Posts for queries about nothing |
 |---|---|---|---|---|
-| 0.80 | 0.8439 | 1.0000 | 3.81 | 1 |
-| 0.81 | 0.8180 | 1.0000 | 2.78 | 0 |
-| **0.82** | **0.7793** | **0.9722** | **2.00** | **0** |
-| 0.83 | 0.7541 | 0.9722 | 1.22 | 0 |
-| 0.84 | 0.6705 | 0.8889 | 0.74 | 0 |
+| 0.80 | 0.8458 | 1.0000 | 3.81 | 1 |
+| 0.81 | 0.8199 | 1.0000 | 2.78 | 0 |
+| **0.82** | **0.7813** | **0.9722** | **2.00** | **0** |
+| 0.83 | 0.7560 | 0.9722 | 1.22 | 0 |
+| 0.84 | 0.6724 | 0.8889 | 0.74 | 0 |
 
 What the blend costs is in that table: `gte-small` scores short texts that share vocabulary high,
 whatever their subject, so at 0.82 almost two of the first ten posts are wrong for the query ("Sea
@@ -281,8 +290,8 @@ of clouds" brings seascapes behind the post of that name). They rank behind the 
 `matchedBy: "meaning"`. 0.83 is the cautious setting (about one wrong post in ten, 0.025 less nDCG); 0.81
 leaves a margin of 0.005 over the nearest post to a query about nothing (0.805), which is none.
 
-The weight barely moves the result on this set (at 0.82, weights 0.5 to 0.95 score 0.7776 to 0.7794;
-1.0 scores 0.7792): word lists of several words are short on a small corpus. 0.9 is set by a rule
+The weight barely moves the result on this set (at 0.82, weights 0.5 to 0.95 score 0.7795 to 0.7813;
+1.0 scores 0.7811): word lists of several words are short on a small corpus. 0.9 is set by a rule
 instead: a meaning-only post at rank *m* outranks a word-only post at rank *r* when
 *r* > 5.56 + 1.11 *m*, so the first six word matches, the number under which the product already
 calls an answer thin, are never displaced by a post that holds no word of the query. The meaning

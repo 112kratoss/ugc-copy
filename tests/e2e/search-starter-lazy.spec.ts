@@ -1,8 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 
-// A page opened on a search asks for the starter only where it draws it (2026-11-17): a live
-// sweep found /search?q=cat asking /api/search/starter beside its own search (2.7 s on production,
-// signed in) for an answer it drew nowhere. Answers are this file's (page.route).
+// A page opened on a search asks for the starter after its own search, never beside it, and has it
+// in hand when the box is emptied (2026-11-17): a live sweep found /search?q=cat asking
+// /api/search/starter beside its search (2.7 s on production, signed in), and the first fix, which
+// asked only once the box was emptied, left the page blank under the box meanwhile (review of
+// #839; owner, 2026-11-16: a click on a search field shows something). Answers are this file's
+// (page.route); the starter's takes two seconds, as it can over a network.
 
 const emptyPage = { items: [], nextCursor: null };
 const json = (body: unknown, status = 200) => ({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -31,39 +34,52 @@ function searchAnswer(query: string, type: string) {
   };
 }
 
-async function answerSearch(page: Page) {
+async function answerSearch(page: Page, { starterDelayMs = 0 }: { starterDelayMs?: number } = {}) {
   const searches: string[] = [];
   const starters: string[] = [];
+  // When each request reached the browser's router, and when the search was answered.
+  const asked: Array<{ kind: 'search' | 'starter' | 'search answered'; at: number }> = [];
   await page.route((url) => url.pathname === '/api/search', async (route) => {
     const url = new URL(route.request().url());
     searches.push(url.search);
+    asked.push({ kind: 'search', at: Date.now() });
     await route.fulfill(json(searchAnswer(url.searchParams.get('q') ?? '', url.searchParams.get('type') ?? 'top')));
+    asked.push({ kind: 'search answered', at: Date.now() });
   });
   await page.route((url) => url.pathname === '/api/search/suggest', (route) => route.fulfill(json({
     query: '', normalizedQuery: '', creators: [], entities: [], completions: [],
   })));
   await page.route((url) => url.pathname === '/api/search/starter', async (route) => {
     starters.push(route.request().url());
+    asked.push({ kind: 'starter', at: Date.now() });
+    if (starterDelayMs) await new Promise((resolve) => setTimeout(resolve, starterDelayMs));
     await route.fulfill(json(STARTER));
   });
-  return { searches, starters };
+  return { searches, starters, asked };
 }
 
 test.describe.configure({ retries: 2 });
 
-test.describe('the search starter is asked for where it is drawn', () => {
-  test('a page opened on a search that finds something asks for none, and asks once the box is emptied', async ({ page }) => {
-    const { searches, starters } = await answerSearch(page);
+test.describe('the search starter comes after the search, never beside it', () => {
+  test('a page opened on a search asks for the starter after its answer, and shows it at once when the box is emptied', async ({ page }) => {
+    const { starters, asked } = await answerSearch(page, { starterDelayMs: 2_000 });
+    const starterAnswered = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/search/starter');
     await page.goto('/search?q=cat');
     await expect(page.getByText('Cat piece 3')).toBeVisible();
-    // The old page asked for it as it mounted, beside the search: by now it would have.
-    await page.waitForTimeout(1_000);
-    expect(searches.length).toBeGreaterThan(0);
-    expect(starters).toEqual([]);
+    // Asked once, and only after the search was answered: never beside it.
+    await expect.poll(() => starters.length).toBe(1);
+    const searchAnsweredAt = asked.find((entry) => entry.kind === 'search answered')!.at;
+    const starterAskedAt = asked.find((entry) => entry.kind === 'starter')!.at;
+    expect(starterAskedAt).toBeGreaterThanOrEqual(searchAnsweredAt);
+    // Nothing of it over the results.
     await expect(page.getByRole('region', { name: 'Ideas to start a search' })).toHaveCount(0);
 
+    // The person reads the results while the slow starter comes in, then empties the box: the
+    // starter is there at once, with no request of its own and no blank wait.
+    await starterAnswered;
     await page.getByRole('button', { name: 'Clear search' }).first().click();
-    await expect(page.getByRole('region', { name: 'Ideas to start a search' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Ideas to start a search' })).toBeVisible({ timeout: 500 });
+    await expect(page.getByText('Find creators, posts and recipes')).toHaveCount(0);
     expect(starters).toHaveLength(1);
   });
 

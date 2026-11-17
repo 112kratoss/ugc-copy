@@ -278,10 +278,12 @@ describe('the recorded run', () => {
     expect(verdict.failures).toEqual([]);
     expect(verdict.queries).toBe(set.queries.length);
     // The numbers of the recording (2026-11-17, real gte-small vectors: whole words first,
-    // 20261116200234, on the set with "cat", "car" and their traps). A re-recording changes them
-    // here, in the same change that changed the ranking. "studio light" is listed because its word
-    // order got better than its blend (0.3358 to 0.5293 by words, 0.4316 to 0.4887 blended): no
-    // query of either order scored lower than in the recording before (docs/search-ranking-operations.md).
+    // 20261116200234, on the set with "cat", "car" and their traps; recorded again once a title
+    // starting with a hyphenated compound of the query no longer started with it, which moved only
+    // "cat": 0.6003 to 0.7375). A re-recording changes them here, in the same change that changed
+    // the ranking. "studio light" is listed because its word order got better than its blend
+    // (0.3358 to 0.5293 by words, 0.4316 to 0.4887 blended): no query of either order scored lower
+    // than in the recording before (docs/search-ranking-operations.md).
     expect({
       judged: verdict.judged,
       words: {
@@ -297,8 +299,8 @@ describe('the recorded run', () => {
       worse: verdict.worse.map((entry) => entry.id),
     }).toEqual({
       judged: 72,
-      words: { ndcg: 0.5449, topHitRate: 0.75, relevantInTop: 1.2778, wrongInDepth: 0.4306, offCorpusPosts: 0 },
-      blended: { ndcg: 0.7793, topHitRate: 0.9722, relevantInTop: 2.1806, wrongInDepth: 2, offCorpusPosts: 0 },
+      words: { ndcg: 0.5468, topHitRate: 0.75, relevantInTop: 1.2778, wrongInDepth: 0.4306, offCorpusPosts: 0 },
+      blended: { ndcg: 0.7813, topHitRate: 0.9722, relevantInTop: 2.1806, wrongInDepth: 2, offCorpusPosts: 0 },
       worse: ['q55'],
     });
   });
@@ -307,10 +309,12 @@ describe('the recorded run', () => {
     // The defect of 2026-11-17: "cat" put posts about no cat among its first four. Here
     // "Category winners", "Catching the bus", "Gothic cathedral" and two captions that say
     // "delicate", "intricate" or "scattered" hold its letters, not the word; for "car" a caption
-    // says "cargo", a title "supercar", others "skincare", "headscarf" and "scarlet".
+    // says "cargo", a title "supercar", others "skincare", "headscarf" and "scarlet". A hyphen goes
+    // on with the word: "Cat-eye sunglasses" (fas-07) holds "cat" as a word of its title, under
+    // "Cat on a windowsill" (pet-03), which starts with it (review of #839: it led).
     const wordsOf = (id: string) => recorded.queries.find((entry) => entry.id === id)?.words ?? [];
     const cat = wordsOf('q76');
-    expect(cat.map(([key]) => key)).toEqual(['fas-07', 'pet-03', 'ani-05', 'mis-11', 'pet-08', 'trp-03', 'trp-04', 'arc-09', 'trp-01', 'trp-02']);
+    expect(cat.map(([key]) => key)).toEqual(['pet-03', 'fas-07', 'ani-05', 'mis-11', 'pet-08', 'trp-03', 'trp-04', 'arc-09', 'trp-01', 'trp-02']);
     // Every whole match scores 0 or more, every partial one under 0.
     expect(cat.slice(0, 5).every(([, score]) => score >= 0)).toBe(true);
     expect(cat.slice(5).every(([, score]) => score < 0)).toBe(true);

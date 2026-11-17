@@ -136,7 +136,8 @@ describe('search whole words first migration', () => {
     // Where the post holds the query: as typed, and whole.
     expect(posts).toContain('shown.title = v_query AS title_is_query');
     expect(posts).toContain("shown.title LIKE v_like || '%' AS title_starts");
-    expect(posts).toMatch(/shown\.title LIKE v_like \|\| '%'\s+AND substr\(shown\.title, char_length\(v_query\) \+ 1, 1\) !~ '\[\[:alnum:\]\]' AS title_starts_whole/);
+    // A hyphen goes on with the word: 'cat-eye' does not start with 'cat' (review of #839).
+    expect(posts).toMatch(/shown\.title LIKE v_like \|\| '%'\s+AND substr\(shown\.title, char_length\(v_query\) \+ 1, 1\) !~ '\[\[:alnum:\]-\]' AS title_starts_whole/);
     expect(posts).toContain('documents.tool_normalized = v_query OR shown.headline @@ v_tsquery AS headline_holds');
     expect(posts).toContain('documents.tool_normalized = v_query OR shown.headline @@ v_whole AS headline_whole');
     expect(posts).toContain('documents.search_vector @@ v_whole AS body_whole');
@@ -165,16 +166,22 @@ describe('search whole words first migration', () => {
   it('reads related searches from the posts about the search, a phrase holding the query first', () => {
     const related = definitionOf('search_related_searches');
     const before = previousDefinition(PREVIOUS_RELATED, 'search_related_searches');
-    // The query as the posts were read, whole and as typed; a query with no word tests no post by it.
-    expect(related).toContain('v_whole := public.search_query_whole_tsquery(coalesce(v_corrected, v_query));');
-    expect(related).toContain('v_typing := public.search_query_tsquery(coalesce(v_corrected, v_query), true);');
+    // The query as the posts were read (corrected where they were): as a LIKE pattern, whole and as typed.
+    expect(related).toContain('v_read := coalesce(v_corrected, v_query);');
+    expect(related).toContain(String.raw`v_like := replace(replace(replace(v_read, '\', '\\'), '%', '\%'), '_', '\_');`);
+    expect(related).toContain('v_whole := public.search_query_whole_tsquery(v_read);');
+    expect(related).toContain('v_typing := public.search_query_tsquery(v_read, true);');
     expect(related).toContain('v_has_words := numnode(v_typing) > 0;');
-    // The posts that hold it whole, or, when none does, as typed, or, when none holds its words at
-    // all, the page as before: never a run of characters or a near-miss beside a post that holds them.
-    expect(related).toMatch(/array_agg\(documents\.post_id\) FILTER \(WHERE CASE WHEN v_has_words THEN documents\.search_vector @@ v_whole ELSE false END\)/);
-    expect(related).toMatch(/array_agg\(documents\.post_id\) FILTER \(WHERE CASE WHEN v_has_words THEN documents\.search_vector @@ v_typing ELSE false END\)/);
-    expect(related).toMatch(/v_read_ids := CASE\s+WHEN cardinality\(v_whole_ids\) > 0 THEN v_whole_ids\s+WHEN cardinality\(v_typing_ids\) > 0 THEN v_typing_ids\s+ELSE v_page_ids\s+END;/);
-    expect(related).not.toMatch(/ILIKE|OPERATOR\(extensions\.%\)/);
+    // Each post: whole, or matched only by search_public_posts' partial reading (the word typed, the
+    // run of characters, the near-miss title or tool), which is that function's own match.
+    expect(related).toMatch(/CASE WHEN v_has_words THEN documents\.search_vector @@ v_whole ELSE false END AS whole/);
+    expect(related).toMatch(/CASE WHEN v_has_words THEN documents\.search_vector @@ v_typing ELSE false END\s+OR documents\.search_text ILIKE \('%' \|\| v_like \|\| '%'\)\s+OR documents\.title_normalized OPERATOR\(extensions\.%\) v_read\s+OR documents\.tool_normalized OPERATOR\(extensions\.%\) v_read AS lexical/);
+    // Once a post holds the words whole: those, and the posts that match no word (found by meaning);
+    // while none does, the whole page. Never a partial match beside a whole one (review of #839:
+    // dropping the meaning posts too left "sea after sunset" with none).
+    expect(related).toMatch(/array_agg\(documents\.post_id\) FILTER \(WHERE matched\.whole\)/);
+    expect(related).toMatch(/array_agg\(documents\.post_id\) FILTER \(WHERE matched\.whole OR NOT matched\.lexical\)/);
+    expect(related).toContain('v_read_ids := CASE WHEN cardinality(v_whole_ids) > 0 THEN v_kept_ids ELSE v_page_ids END;');
     expect(related).toMatch(/IF cardinality\(v_read_ids\) < c_min_posts THEN\s+RETURN;/);
     expect(related).toContain('WHERE documents.post_id = ANY (v_read_ids)');
     // Read as search reads a post, as before: the first 30 of the page, unlabelled, neither side of a block.
