@@ -15,6 +15,21 @@ import { collectBackendHealth } from '@/lib/backend-health';
 const configPath = process.env.AUDIT_STORAGE_CONFIG;
 const connectionString = process.env.SUPABASE_TEST_DB_URL;
 
+/**
+ * The local stack's gateway (Kong) now and then answers a PostgREST request with its own 502, "An
+ * invalid response was received from the upstream server", having handed it a connection PostgREST
+ * had closed. Five runs of this job failed that way on 2026-11-16 and 17, and every time it was the
+ * credit history: the one RPC, and so the one POST, among a user detail's parallel reads, a method
+ * the gateway does not send again by itself. Every PostgREST request in this file only reads, so
+ * one more try is safe; a second 502 still fails the test, and Auth's requests are never repeated.
+ */
+const throughGateway: typeof fetch = async (input, init) => {
+  const response = await fetch(input, init);
+  if (response.status !== 502 || !new URL(String(input)).pathname.startsWith('/rest/v1/')) return response;
+  await response.body?.cancel();
+  return fetch(input, init);
+};
+
 describe.skipIf(!configPath || !connectionString)('admin collectors through real PostgREST and SQL', () => {
   let db: Client;
   let admin: SupabaseClient;
@@ -50,7 +65,7 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
     const config = JSON.parse(readFileSync(configPath!, 'utf8'));
     expect(['127.0.0.1', 'localhost']).toContain(new URL(config.API_URL).hostname);
     expect(['127.0.0.1', 'localhost']).toContain(new URL(connectionString!).hostname);
-    const options = { auth: { persistSession: false, autoRefreshToken: false } };
+    const options = { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: throughGateway } };
     admin = createClient(config.API_URL, config.SERVICE_ROLE_KEY, options);
     anon = createClient(config.API_URL, config.ANON_KEY, options);
     db = new Client({ connectionString, statement_timeout: 10000 });
@@ -163,7 +178,7 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
         if (url.pathname === '/rest/v1/transactions' && url.searchParams.get('offset') === '1000') {
           return Response.json({ code: 'XX000', message: 'Isolated second-page outage' }, { status: 503 });
         }
-        return fetch(input, init);
+        return throughGateway(input, init);
       } },
     });
     await expect(collectAdminRevenueReport(failing, { now })).rejects.toMatchObject({ message: 'Isolated second-page outage' });
@@ -322,7 +337,7 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
         if (new URL(String(input)).pathname === '/rest/v1/rpc/admin_creator_wallet_totals') {
           return Response.json({ code: 'XX000', message: 'Isolated wallet aggregate outage' }, { status: 503 });
         }
-        return fetch(input, init);
+        return throughGateway(input, init);
       } },
     });
     await expect(collectAdminRevenueReport(failing, { now })).rejects.toMatchObject({ message: 'Isolated wallet aggregate outage' });
@@ -348,7 +363,7 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
         if (url.pathname === pathname && (!parameter || url.searchParams.has(parameter))) {
           return Response.json({ code: '42501', message: 'Isolated user-detail read denied' }, { status: 403 });
         }
-        return fetch(input, init);
+        return throughGateway(input, init);
       } },
     });
     // The credit history's own reader prefixes the database's words with its name.
@@ -363,7 +378,7 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
         if (new URL(String(input)).pathname === '/auth/v1/admin/users/' + owner) {
           return Response.json({ code: 'unexpected_failure', msg: 'Isolated user Auth read failed' }, { status: 403 });
         }
-        return fetch(input, init);
+        return throughGateway(input, init);
       } },
     });
     await expect(getAdminUserDetail(failing, owner)).rejects.toMatchObject({ message: 'Isolated user Auth read failed' });
@@ -384,7 +399,7 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
         if (new URL(String(input)).pathname === pathname) {
           return Response.json({ code: '42501', message: 'Isolated partial collector read denied' }, { status: 403 });
         }
-        return fetch(input, init);
+        return throughGateway(input, init);
       } },
     });
     await expect(collect(failing)).rejects.toMatchObject({ message: 'Isolated partial collector read denied' });
@@ -420,7 +435,7 @@ describe.skipIf(!configPath || !connectionString)('admin collectors through real
     const incomplete = createClient(config.API_URL, config.SERVICE_ROLE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false },
       global: { fetch: async (input, init) => {
-        const response = await fetch(input, init);
+        const response = await throughGateway(input, init);
         const url = new URL(String(input));
         if (url.pathname === '/rest/v1/generations' && url.searchParams.get('select') === 'status,created_at,cost') {
           const headers = new Headers(response.headers);
