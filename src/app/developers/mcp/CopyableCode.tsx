@@ -52,12 +52,17 @@ export default function CopyableCode({ code, label }: { code: string; label: str
   return (
     <div onBlur={clearFailureOnLeave}>
       <div className="flex items-start gap-2 rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] py-1 pl-4 pr-1">
-        {/* A long command scrolls sideways on a phone, so the keyboard can reach and scroll it too. */}
+        {/* A value wraps at the box's edge, at a space where it has one and anywhere in a URL or an
+            ID, so it reads whole at every width: a phone cut nearly every value mid-character
+            ("https://magicbooklet.c") and left the rest to a sideways scroll, and a laptop cut the two
+            long commands (2026-11-17). The breaks are the box's, not the value's, so Copy and a
+            selection by hand take it as it is. A browser without `overflow-wrap: anywhere` scrolls a
+            long value instead, which the keyboard can reach and scroll too. */}
         <pre
           tabIndex={0}
           role="region"
           aria-label={label}
-          className="ui-focus-ring min-w-0 flex-1 overflow-x-auto rounded-lg py-3"
+          className="ui-focus-ring min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap rounded-lg py-3 [overflow-wrap:anywhere]"
         >
           <Text as="code" variant="code">{code}</Text>
         </pre>

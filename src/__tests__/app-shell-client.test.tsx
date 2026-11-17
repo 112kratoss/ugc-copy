@@ -372,6 +372,33 @@ describe('AppShellClient', () => {
     expect(html).toContain('Canvas content');
   });
 
+  // A laptop's bar cut the section line mid-word ("…and workflo…", 2026-11-17). Each word is drawn
+  // as an atomic inline, which the line's ellipsis hides whole, carrying the space before it; a
+  // screen reader reads one copy of the line, as one line. The cut itself is measured in a browser
+  // (tests/e2e/public-pages-polish.spec.ts).
+  it('draws the section line as whole words, and reads it as one line', () => {
+    mockedPathname = '/create-image';
+    const description = APP_NAV_ITEMS.find((item) => item.id === 'create')!.description;
+
+    render(
+      <AppShellClient>
+        <div>Creator content</div>
+      </AppShellClient>
+    );
+
+    const copy = within(screen.getByRole('banner')).getByText(description);
+    expect(copy).toHaveClass('sr-only');
+    const line = copy.parentElement!;
+    expect(line).toHaveClass('truncate');
+    const drawn = copy.nextElementSibling!;
+    expect(drawn).toHaveAttribute('aria-hidden', 'true');
+    const words = [...drawn.children];
+    expect(words.map((word) => word.textContent)).toEqual(
+      description.split(' ').map((word, index) => (index === 0 ? word : `\u00a0${word}`)),
+    );
+    for (const word of words) expect(word).toHaveClass('inline-block');
+  });
+
   it('shows the mounted pathname title and selected navigation state', () => {
     mockedPathname = '/create-workflow';
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, ArrowRight, Check, Crown, Gift, History, Loader2, Sparkles, Wallet, Zap, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, ChevronDown, Crown, Gift, History, Loader2, Sparkles, Wallet, Zap, type LucideIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { Button, Surface, Text, getAccentClasses } from "@/components/DesignSystem";
@@ -381,13 +381,20 @@ export function PricingClient({
                         >
                             Currency
                         </label>
-                        <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-200">
+                        {/* The select is the whole capsule, its arrow drawn over it and passing presses
+                            through, so a press anywhere on it opens the picker, as the workflow library's
+                            Sort box does: only its 50 × 19 words did, in a 305 × 37 capsule. It is as wide
+                            as its widest option whichever is chosen, and the rates' line stands under it
+                            on a line of its own, held from the first paint: beside the select in the
+                            capsule, "Updating FX..." and then the rates' date grew it from 92px to 307px
+                            as they came (2026-11-17). */}
+                        <div className="relative">
                             <select
                                 ref={currencySelectRef}
                                 id="pricing-currency"
                                 value={selectedCurrency}
                                 onChange={(event) => chooseCurrency(event.target.value)}
-                                className="bg-transparent text-zinc-100 outline-none"
+                                className="ui-focus-ring block cursor-pointer appearance-none rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] py-2 pl-4 pr-10 text-sm text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-3)]"
                             >
                                 {currencyOptions.map((option) => (
                                     <option key={option.value} value={option.value} className="bg-zinc-950">
@@ -395,16 +402,17 @@ export function PricingClient({
                                     </option>
                                 ))}
                             </select>
-                            <span className="text-xs text-zinc-500">
-                                {fxStatus === 'loading'
-                                    ? 'Updating FX...'
-                                    : fxStatus === 'unavailable'
-                                        ? 'FX unavailable'
-                                        : fxRatesUpdated
-                                            ? `Rates updated ${fxRatesUpdated}`
-                                            : null}
-                            </span>
+                            <ChevronDown aria-hidden className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
                         </div>
+                        <p className="min-h-4 text-xs leading-4 text-zinc-500">
+                            {fxStatus === 'loading'
+                                ? 'Updating FX...'
+                                : fxStatus === 'unavailable'
+                                    ? 'FX unavailable'
+                                    : fxRatesUpdated
+                                        ? `Rates updated ${fxRatesUpdated}`
+                                        : null}
+                        </p>
                     </div>
                 </div>
 
