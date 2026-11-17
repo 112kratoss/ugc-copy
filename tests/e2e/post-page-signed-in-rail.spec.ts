@@ -1,6 +1,7 @@
 import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test';
 
 import freeRecipePost from './fixtures/creation-post-free-recipe.json';
+import paidRecipePost from './fixtures/creation-post-paid-recipe.json';
 import plainCreationPost from './fixtures/creation-post.json';
 
 // The owner's screen recording of the live site, 2026-11-16 (build 24ac32b80, signed in, Chrome on a
@@ -35,6 +36,13 @@ const PLAIN_POST: DrawnPost = {
   path: `/showcase/${plainCreationPost.post.id}`,
   title: plainCreationPost.post.title,
   creatorId: plainCreationPost.creator.id,
+};
+/** A picture post whose paid recipe locks its Remix (fixtures/creation-post-paid-recipe.json), by a creator of its own. */
+const PAID_POST: DrawnPost = {
+  id: paidRecipePost.post.id,
+  path: `/showcase/${paidRecipePost.post.id}`,
+  title: paidRecipePost.post.title,
+  creatorId: paidRecipePost.creator.id,
 };
 
 test.describe.configure({ timeout: 180_000 });
@@ -88,6 +96,14 @@ const postCreator = {
   id: freeRecipePost.creator.id,
   email: 'free-remix-creator@example.com',
   user_metadata: { name: freeRecipePost.creator.display_name },
+};
+
+/** The paid recipe's creator. */
+const paidPostCreator = {
+  ...user,
+  id: paidRecipePost.creator.id,
+  email: 'paid-recipe-creator@example.com',
+  user_metadata: { name: paidRecipePost.creator.display_name },
 };
 
 /** The account's profile row, which the top bar reads its name, picture and balance from. */
@@ -190,19 +206,43 @@ type Frame = {
   recipeBar: string | null;
 };
 
+/** A frame of the post's column: the engagement row's Remix as it reads ("Remix · Free"), "" for none. */
+type RemixFrame = { path: string; remix: string };
+
 /**
  * Records every frame whose drawing of the post's rail differs from the last, from the document's
  * first frame on: its first frames are the server's HTML under the stylesheet and the pre-paint
- * script, before the page's own scripts have run.
+ * script, before the page's own scripts have run. The engagement row's Remix, which the HTML draws
+ * before the rail, is recorded apart from its own first frame (`__remixFrames`).
  */
 const RECORDER = `(() => {
   const frames = [];
   window.__railFrames = frames;
+  const remixFrames = [];
+  window.__remixFrames = remixFrames;
   let last = '';
+  let lastRemix = '';
   const shown = (element) => Boolean(element && element.getClientRects().length > 0);
   // What a shown element reads: the text of what is shown of it, as one line.
   const reads = (element) => (shown(element) ? element.innerText.replace(/\\s+/g, ' ').trim() : null);
   function sample() {
+    // The engagement row closes the post's own column (the post, its writing, then the row), its
+    // Remix ahead of Save: once Save is in the page, so is the Remix the row draws.
+    const column = document.querySelector('[data-testid="media-detail-document"], [data-testid="text-detail-note"]');
+    const save = column && Array.from(column.querySelectorAll('button'))
+      .find((button) => /^(Save|Remove save from) /.test(button.getAttribute('aria-label') || ''));
+    if (save) {
+      const remix = Array.from(column.querySelectorAll('a, button'))
+        .map(reads)
+        .filter((text) => text !== null && /^Remix\\b/.test(text))
+        .join(' | ');
+      const remixFrame = { path: location.pathname, remix };
+      const remixKey = JSON.stringify(remixFrame);
+      if (remixKey !== lastRemix) {
+        lastRemix = remixKey;
+        remixFrames.push(remixFrame);
+      }
+    }
     const rail = document.querySelector('[data-testid="canonical-post-actions"]');
     if (rail) {
       const comments = rail.querySelector('[data-testid="canonical-post-comments"]');
@@ -232,9 +272,7 @@ const RECORDER = `(() => {
           : null,
         comments: rail.querySelectorAll('ol[aria-label="Comment thread"] > li').length,
         recipeLink: reads(rail.querySelector('[data-testid="recipe-jump-link"]')),
-        // The bar is the page's other link to the recipe, outside the rail.
-        recipeBar: reads(Array.from(document.querySelectorAll('a[href="#recipe"]'))
-          .find((link) => !rail.contains(link) && shown(link))),
+        recipeBar: reads(document.querySelector('[data-testid="recipe-bar"]')),
       };
       const key = JSON.stringify(frame);
       if (key !== last) {
@@ -261,6 +299,19 @@ async function recordedFrames(page: Page, { stop = true, path = POST_PATH } = {}
   return frames.filter((frame) => frame.path === path);
 }
 
+/** The engagement row's frames recorded so far; read after `recordedFrames`, which stops the recorder. */
+async function recordedRemixFrames(page: Page, { path = POST_PATH } = {}): Promise<RemixFrame[]> {
+  const frames = await page.evaluate(() => (window as unknown as { __remixFrames: RemixFrame[] }).__remixFrames);
+  return frames.filter((frame) => frame.path === path);
+}
+
+/** The engagement row's Remix, read the same in every frame from the row's first. */
+function expectRemixInEveryFrame(frames: RemixFrame[], remix: string) {
+  const all = JSON.stringify(frames);
+  expect(frames.length, all).toBeGreaterThan(0);
+  expect(frames.filter((frame) => frame.remix !== remix), all).toEqual([]);
+}
+
 /** Lets two frames pass, so what the page has committed has been drawn, and recorded. */
 async function twoFrames(page: Page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -276,9 +327,13 @@ const CHECK_ASKED = { ...COLD_PAGE, intervals: [50] };
 const FREE_RECIPE_LINK = 'Free recipe View';
 /** The same pointer as the recipe's creator reads it. */
 const OWN_RECIPE_LINK = 'Your recipe View';
+/** The post's Remix for anyone without its free recipe: taking the recipe on the way. */
+const FREE_REMIX = 'Remix · Free';
+/** The open Remix, the creator's of their own creation: nothing to take or unlock. */
+const OPEN_REMIX = 'Remix';
 
 /** The rail as the reader keeps it: the same in every frame it was drawn in. */
-function expectSteadyRail(frames: Frame[], reader: 'signed in' | 'signed out') {
+function expectSteadyRail(frames: Frame[], reader: 'signed in' | 'signed out', recipeLink = FREE_RECIPE_LINK) {
   const all = JSON.stringify(frames);
   expect(frames.length, 'frames of the rail').toBeGreaterThan(0);
   // A frame painted from part of the page's HTML, before the rail's rows have streamed in, has no
@@ -303,8 +358,8 @@ function expectSteadyRail(frames: Frame[], reader: 'signed in' | 'signed out') {
   const firstDrawn = frames.findIndex((frame) => frame.comments > 0);
   expect(firstDrawn, all).toBeGreaterThanOrEqual(0);
   expect(frames.slice(firstDrawn).filter((frame) => frame.comments === 0), all).toEqual([]);
-  // The free recipe is offered to anyone but its creator, in every frame the rail is drawn in.
-  expect(drawn.filter((frame) => frame.recipeLink !== FREE_RECIPE_LINK), all).toEqual([]);
+  // The recipe is offered to anyone but its creator, in every frame the rail is drawn in.
+  expect(drawn.filter((frame) => frame.recipeLink !== recipeLink), all).toEqual([]);
 }
 
 /**
@@ -427,6 +482,7 @@ test('a post opened from the Marketplace draws a signed-in reader\'s composer an
   expect(frames.some((frame) => !frame.composerShown), JSON.stringify(frames)).toBe(true);
   expect(frames.at(-1)?.composerShown, JSON.stringify(frames)).toBe(true);
   expectSteadyRail(frames, 'signed in');
+  expectRemixInEveryFrame(await recordedRemixFrames(page), FREE_REMIX);
 });
 
 test('a signed-in reader who loads a post draws its composer and rail from the first frame, while the session is checked', async ({ page, context }) => {
@@ -452,6 +508,7 @@ test('a signed-in reader who loads a post draws its composer and rail from the f
   expect(frames.some((frame) => !frame.composerShown), JSON.stringify(frames)).toBe(true);
   expect(frames.at(-1)?.composerShown, JSON.stringify(frames)).toBe(true);
   expectSteadyRail(frames, 'signed in');
+  expectRemixInEveryFrame(await recordedRemixFrames(page), FREE_REMIX);
 });
 
 test('a signed-out reader is offered sign-in where the composer goes, and no Report user, in every frame', async ({ page }) => {
@@ -520,6 +577,8 @@ test("the post's creator, loading their own post, has Owner tools from the first
   await expect(rail(page).getByText(COMMENT)).toBeVisible();
   const frames = await recordedFrames(page);
   await expectOwnerToolsOpen(page);
+  // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
+  expectRemixInEveryFrame(await recordedRemixFrames(page), OPEN_REMIX);
   expectOwnerRail(frames);
 });
 
@@ -545,6 +604,8 @@ test("the post's creator, opening their own post from the Marketplace, has Owner
   await expect(rail(page).getByText(COMMENT)).toBeVisible();
   const frames = await recordedFrames(page);
   await expectOwnerToolsOpen(page);
+  // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
+  expectRemixInEveryFrame(await recordedRemixFrames(page), OPEN_REMIX);
   expectOwnerRail(frames);
 });
 
@@ -583,9 +644,26 @@ test("the post's creator, loading their own post below 1180px, reads their recip
   await expect(composer(page)).toBeVisible(COLD_PAGE);
   await expect(rail(page).getByText(COMMENT)).toBeVisible();
   const frames = await recordedFrames(page);
+  // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
+  expectRemixInEveryFrame(await recordedRemixFrames(page), OPEN_REMIX);
   expectOwnerRail(frames);
   // No room is kept under the post for a bar that is never drawn.
   expect(await roomUnderThePost(page)).toBeLessThan(40);
+
+  // Their Remix starts the remix as its owner, with no recipe to take on the way.
+  const claims: string[] = [];
+  const remixes: Array<string | null> = [];
+  await page.route(`**/api/posts/${POST_ID}/resource-bundle/unlock-free`, (route) => {
+    claims.push(route.request().url());
+    return route.fulfill({ status: 500, json: { error: 'Not answered offline' } });
+  });
+  await page.route('**/api/showcase/remix', (route) => {
+    remixes.push(route.request().postData());
+    return route.fulfill({ json: { success: true, redirectTo: '#remix-started' } });
+  });
+  await page.getByTestId('media-detail-document').getByRole('button', { name: 'Remix', exact: true }).click();
+  await expect.poll(() => remixes).toEqual([JSON.stringify({ postId: POST_ID })]);
+  expect(claims).toEqual([]);
 });
 
 test('a signed-in reader below 1180px is offered the free recipe in the rail and along the bottom edge in every frame', async ({ page, context }) => {
@@ -606,11 +684,67 @@ test('a signed-in reader below 1180px is offered the free recipe in the rail and
   const frames = await recordedFrames(page);
   const all = JSON.stringify(frames);
   expectSteadyRail(frames, 'signed in');
+  expectRemixInEveryFrame(await recordedRemixFrames(page), FREE_REMIX);
   // The bar comes with the end of the page's HTML, and once drawn it stays as it reads.
   const firstBar = frames.findIndex((frame) => frame.recipeBar !== null);
   expect(firstBar, all).toBeGreaterThanOrEqual(0);
   expect(frames.slice(firstBar).filter((frame) => !frame.recipeBar?.startsWith('View free recipe')), all).toEqual([]);
   // The post's end scrolls clear of the bar.
+  expect(await roomUnderThePost(page)).toBeGreaterThan(90);
+});
+
+// Review of #847: the paid recipe's words differ from the creator's in both halves of the rail's
+// pointer ("$9.00 · 900 credits · Unlock" against "Your recipe · View"), and its locked Remix is a
+// link to the recipe ("Remix · 900 credits") where the free one's takes it on the way.
+/** The paid recipe's pointer, its locked Remix and its bar, as anyone but its creator reads them. */
+const PAID_RECIPE_LINK = '$9.00 · 900 credits Unlock';
+const PAID_REMIX = 'Remix · 900 credits';
+const PAID_RECIPE_BAR = 'Unlock recipe for $9.00 · 900 credits';
+
+test("the post's creator, loading their own post with a paid recipe below 1180px, reads it as theirs and remixes it openly, from the first frame", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const { checks } = await signIn(context, paidPostCreator);
+  checks.hold();
+  await answerApi(page, [], PAID_POST);
+  await page.addInitScript(RECORDER);
+
+  await page.goto(PAID_POST.path);
+  await expect(page.getByRole('heading', { level: 1, name: PAID_POST.title })).toBeVisible(COLD_PAGE);
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  await twoFrames(page);
+
+  checks.release();
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect(rail(page).getByText(COMMENT)).toBeVisible();
+  const frames = await recordedFrames(page, { path: PAID_POST.path });
+  // Their own Remix, open in every frame: asked first, as a failure of the rail's would hide it.
+  expectRemixInEveryFrame(await recordedRemixFrames(page, { path: PAID_POST.path }), OPEN_REMIX);
+  expectOwnerRail(frames);
+  expect(await roomUnderThePost(page)).toBeLessThan(40);
+});
+
+test('a signed-in reader below 1180px is offered a paid recipe at its price, in the rail, in Remix and along the bottom edge, in every frame', async ({ page, context }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const { checks } = await signIn(context);
+  checks.hold();
+  await answerApi(page, [], PAID_POST);
+  await page.addInitScript(RECORDER);
+
+  await page.goto(PAID_POST.path);
+  await expect(page.getByRole('heading', { level: 1, name: PAID_POST.title })).toBeVisible(COLD_PAGE);
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  await twoFrames(page);
+
+  checks.release();
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect(rail(page).getByText(COMMENT)).toBeVisible();
+  const frames = await recordedFrames(page, { path: PAID_POST.path });
+  const all = JSON.stringify(frames);
+  expectRemixInEveryFrame(await recordedRemixFrames(page, { path: PAID_POST.path }), PAID_REMIX);
+  expectSteadyRail(frames, 'signed in', PAID_RECIPE_LINK);
+  const firstBar = frames.findIndex((frame) => frame.recipeBar !== null);
+  expect(firstBar, all).toBeGreaterThanOrEqual(0);
+  expect(frames.slice(firstBar).filter((frame) => !frame.recipeBar?.startsWith(PAID_RECIPE_BAR)), all).toEqual([]);
   expect(await roomUnderThePost(page)).toBeGreaterThan(90);
 });
 

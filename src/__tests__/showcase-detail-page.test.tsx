@@ -140,14 +140,17 @@ vi.mock('@/components/PostComments', () => ({
 }));
 
 vi.mock('@/app/showcase/[id]/ShowcaseDetailEngagementRow', () => ({
-  default: ({ postId, canRemix, recipeRemix }: {
+  default: ({ postId, canRemix, recipeRemix, creatorRemixMark, creatorCanRemix }: {
     postId: string;
     canRemix: boolean;
     recipeRemix?: { access: string; priceLabel: string } | null;
+    creatorRemixMark?: string;
+    creatorCanRemix?: boolean;
   }) => (
     <div
       data-testid="showcase-detail-engagement-row"
       data-recipe-remix={recipeRemix ? `${recipeRemix.access}:${recipeRemix.priceLabel}` : ''}
+      data-creator-remix={creatorRemixMark ? `${creatorRemixMark}:${creatorCanRemix ? 'open' : 'none'}` : ''}
     >
       {`${postId}:${canRemix}`}
     </div>
@@ -1199,6 +1202,46 @@ describe('Showcase detail page', () => {
         expect(recipeLink()).toHaveTextContent(/^Free recipeView$/);
         await waitFor(() => expect(recipeLink()).toHaveTextContent(/^UnlockedView$/));
         expect(recipeBar()).not.toBeInTheDocument();
+      });
+
+      // Review of #847: a creation post whose Remix the recipe brings offered its creator their own
+      // creation's Remix to claim ("Remix · Free") until their own read of the recipe landed.
+      it("opens the creator's own Remix from the first frame they are known, and hands the server's HTML both", async () => {
+        const detail = await getPublicPostDetailMock(POST_ID);
+        getPublicPostDetailMock.mockResolvedValue({
+          ...detail,
+          canRemix: false,
+          remixCapability: 'unlock_required',
+          remixTarget: 'image',
+          resourceBundle: { ...freeRecipe, allowRemix: true },
+        });
+        const row = () => screen.getByTestId('showcase-detail-engagement-row');
+        // Their own read of the recipe is never answered here.
+        vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+
+        holdSessionCookieOf('user-1');
+        const { rerender, unmount } = render(await openPost());
+        expect(row()).toHaveTextContent(`${POST_ID}:true`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        signInAs('user-1');
+        rerender(await openPost());
+        expect(row()).toHaveTextContent(`${POST_ID}:true`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        unmount();
+
+        // Anyone else is offered it with the free recipe.
+        holdSessionCookieOf('user-2');
+        clientAuth.current = { session: null, user: null, isLoading: true };
+        const other = render(await openPost());
+        expect(row()).toHaveTextContent(`${POST_ID}:false`);
+        expect(row()).toHaveAttribute('data-recipe-remix', 'free:Free');
+        expect(row()).toHaveAttribute('data-creator-remix', '');
+        other.unmount();
+
+        // The server's HTML: everyone else's, with the creator's own open Remix for the page's rule.
+        const html = renderToString(await openPost());
+        expect(html).toContain('data-recipe-remix="free:Free"');
+        expect(html).toContain('data-creator-remix="user-1:open"');
       });
 
       // The page is drawn ahead of time for every viewer, and no cookie can be read on the server.

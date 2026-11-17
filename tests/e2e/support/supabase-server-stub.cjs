@@ -15,7 +15,9 @@
 // two post pages': a text post with a free recipe, by a creator of its own
 // (fixtures/post-with-recipe.json), and an image post made from a creation, with no recipe, by
 // another creator of its own (fixtures/creation-post.json), and an image post made from a creation
-// whose free recipe brings its Remix, by a third creator (fixtures/creation-post-free-recipe.json).
+// whose free recipe brings its Remix, by a third creator (fixtures/creation-post-free-recipe.json),
+// and one whose paid recipe locks its Remix at the recipe's price, by a fourth
+// (fixtures/creation-post-paid-recipe.json).
 // And one post editor's: an image post of
 // the E2E user's with one picture and no recipe (fixtures/post-composer-saved-twice.json). And
 // Pricing's referral terms: no active program, which Pricing drew from the failed read too. And
@@ -63,6 +65,10 @@ const creationPost = require('../fixtures/creation-post.json');
 // creator of its own: the post page draws "Remix · Free" for a viewer who has not taken the recipe.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const freeRemixPost = require('../fixtures/creation-post-free-recipe.json');
+// The same kind of post with a paid recipe, which locks its Remix at the recipe's price, by a creator
+// of its own: post-page-signed-in-rail.spec.ts draws it for that creator and for another reader.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const paidRecipePost = require('../fixtures/creation-post-paid-recipe.json');
 // The E2E user's two free recipes, each on a text post of theirs: the older one unlocked five times,
 // the newer one never. Recipe sales, /marketplace/sell, reads them in
 // getSellerPostResourceBundleDashboard (src/lib/post-resource-bundles-server.ts).
@@ -318,6 +324,55 @@ const READS = [
     path: '/rest/v1/generations',
     filters: { id: `eq.${freeRemixPost.post.generation_id}` },
     answer: ({ wantsObject }) => json(wantsObject ? freeRemixPost.generation : [freeRemixPost.generation], { 'content-range': '0-0/1' }),
+  },
+  {
+    // fetchPublicPostRow: the creation post with a paid recipe, by id.
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: `eq.${paidRecipePost.post.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? paidRecipePost.post : [paidRecipePost.post], { 'content-range': '0-0/1' }),
+  },
+  {
+    // loadPostMediaItemsMap: its one picture, in the public bucket.
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: `in.(${paidRecipePost.post.id})` },
+    answer: () => json(paidRecipePost.media, { 'content-range': `0-${paidRecipePost.media.length - 1}/${paidRecipePost.media.length}` }),
+  },
+  {
+    // loadPublicPostCreator.
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `eq.${paidRecipePost.creator.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? paidRecipePost.creator : [paidRecipePost.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // getPostResourceBundleDetailByPostId: its paid recipe.
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { post_id: `eq.${paidRecipePost.post.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? paidRecipePost.bundle : [paidRecipePost.bundle], { 'content-range': '0-0/1' }),
+  },
+  {
+    // hydrateBundleRows: the recipe's seller (loadProfileMap)...
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `in.(${paidRecipePost.creator.id})` },
+    answer: () => json([paidRecipePost.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // ...and the post it belongs to (loadLinkedPostMap).
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: `in.(${paidRecipePost.post.id})` },
+    answer: () => json([paidRecipePost.post], { 'content-range': '0-0/1' }),
+  },
+  {
+    // loadPublicPostGeneration: the creation's model and settings.
+    methods: ['GET'],
+    path: '/rest/v1/generations',
+    filters: { id: `eq.${paidRecipePost.post.generation_id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? paidRecipePost.generation : [paidRecipePost.generation], { 'content-range': '0-0/1' }),
   },
   {
     // fetchOwnerPostRow: the post by id and owner. maybeSingle() asks for a list.

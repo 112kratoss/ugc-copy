@@ -1,11 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderToString } from 'react-dom/server';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import {
   ShowcaseDetailCommentCountProvider,
   ShowcaseDetailComments,
 } from '@/app/showcase/[id]/ShowcaseDetailCommentCount';
 import ShowcaseDetailEngagementRow from '@/app/showcase/[id]/ShowcaseDetailEngagementRow';
+import { ownerFirstPaintRules } from '@/app/showcase/[id]/owner-first-paint';
 import NsfwPostReveal from '@/components/NsfwPostReveal';
 import { dismissToast, readFeedbackSnapshot, resetFeedbackState, subscribeToFeedback } from '@/components/feedback-state';
 import { SAVER_NOTICE_MESSAGE, resetSaverNoticeForTests } from '@/components/saver-notice';
@@ -373,6 +375,67 @@ describe('ShowcaseDetailEngagementRow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reveal post' }));
 
     expect(await screen.findByRole('link', { name: /unlock the recipe to remix/i })).toHaveAttribute('href', '#recipe');
+  });
+
+  // Review of #847: the post's creator was offered their own creation's Remix to claim ("Remix ·
+  // Free") or to unlock ("Remix · 900 credits") until their own read of the recipe landed. The
+  // server's HTML draws their open Remix beside it, and the page's rule shows each its own.
+  describe("the creator's open Remix in the server's HTML", () => {
+    it.each([
+      ['free', { access: 'free', priceLabel: 'Free' } as const, 'Remix · Free'],
+      ['paid', { access: 'paid', priceLabel: '900 credits' } as const, 'Remix · 900 credits'],
+    ])("is shown to the creator in place of a %s recipe's locked Remix, before the first paint, and hydrates as drawn", (_kind, recipeRemix, locked) => {
+      const props = rowProps({
+        canRemix: false,
+        recipeRemix,
+        remixCount: 0,
+        creatorRemixMark: 'user-1',
+        creatorCanRemix: true,
+      });
+      const rules = document.createElement('style');
+      rules.textContent = ownerFirstPaintRules('user-1');
+      document.head.appendChild(rules);
+      const root = document.documentElement;
+      const container = document.createElement('div');
+      container.innerHTML = renderToString(<ShowcaseDetailEngagementRow {...props} />);
+      document.body.appendChild(container);
+      onTestFinished(() => {
+        rules.remove();
+        container.remove();
+        root.removeAttribute('data-auth-user');
+      });
+      // The Remix controls a browser shows.
+      const remixes = () => Array.from(container.querySelectorAll('a, button'))
+        .filter((control) => window.getComputedStyle(control).display !== 'none')
+        .map((control) => control.textContent?.trim() ?? '')
+        .filter((text) => /^Remix\b/.test(text));
+
+      // A visitor, and another account.
+      expect(remixes()).toEqual([locked]);
+      root.setAttribute('data-auth-user', 'user-2');
+      expect(remixes()).toEqual([locked]);
+      // The creator: their own creation, to remix and nothing to take or pay.
+      root.setAttribute('data-auth-user', 'user-1');
+      expect(remixes()).toEqual(['Remix']);
+
+      const consoleError = vi.spyOn(console, 'error');
+      render(<ShowcaseDetailEngagementRow {...props} />, { container, hydrate: true });
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    it('draws one Remix once the viewer is known, and none twice where both would read the same', () => {
+      const { unmount } = render(
+        <ShowcaseDetailEngagementRow {...rowProps({ canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } })} />,
+      );
+      expect(screen.getAllByRole('button', { name: /remix/i }).map((button) => button.textContent?.trim()))
+        .toEqual(['Remix · Free', '2 remixes']);
+      unmount();
+
+      // A post whose Remix is open to everyone: the creator's is the same one.
+      render(<ShowcaseDetailEngagementRow {...rowProps({ creatorRemixMark: 'user-1', creatorCanRemix: true })} />);
+      const remix = screen.getByRole('button', { name: 'Remix' });
+      expect(remix).not.toHaveAttribute('data-post-remix-owner');
+    });
   });
 });
 

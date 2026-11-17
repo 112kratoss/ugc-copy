@@ -99,7 +99,13 @@ export interface ShowcasePostViewer {
   bundlePanelKey: string;
   /** The viewer has not got the recipe: the page pitches it. */
   lockedViewer: boolean;
+  /**
+   * The post's Remix as this viewer has it: for the creator, from the first frame they are known
+   * (`ownership`), the open Remix of their own creation, never one locked behind its recipe.
+   */
   remix: ShowcasePostRemix;
+  /** The creator's own Remix, which the server's HTML draws beside everyone else's (`ownership` 'unread'). */
+  creatorRemix: ShowcasePostRemix;
   /** A block either way between the viewer and the creator: the post is not shown. */
   blocked: boolean;
   /**
@@ -150,6 +156,9 @@ export function remixForViewer(
     remixTarget: pageRemix.remixTarget,
   };
 }
+
+/** The recipe as its creator holds it, for `remixForViewer`. */
+const CREATORS_RECIPE_ACCESS = { viewerCanAccess: true, viewerIsOwner: true } as const;
 
 /**
  * Whether a visitor's read of the recipe would price it differently from the
@@ -217,7 +226,15 @@ export function useShowcasePostViewer({
   const ownBundle = viewerBundle && viewerBundle.viewerKey === viewerKey ? viewerBundle : null;
   const bundle = ownBundle ? ownBundle.bundle : pageBundle;
   const lockedViewer = Boolean(bundle && !bundle.viewerCanAccess && !bundle.viewerIsOwner);
-  const remix = useMemo(() => remixForViewer(pageRemix, bundle), [bundle, pageRemix]);
+  // The creator remixes their own creation as its owner: the server lets them whatever the recipe
+  // (`resolveRemixAccess`), so it opens for them as soon as they are known, before their own read of
+  // the recipe lands. Until then they were offered it to claim or to unlock (review of #847).
+  const creatorRemix = useMemo(() => remixForViewer(pageRemix, CREATORS_RECIPE_ACCESS), [pageRemix]);
+  const viewerIsCreator = ownership === 'owner' || ownership === 'owner-checking';
+  const remix = useMemo(
+    () => (viewerIsCreator ? creatorRemix : remixForViewer(pageRemix, bundle)),
+    [bundle, creatorRemix, pageRemix, viewerIsCreator],
+  );
 
   const params = useMemo(() => new URLSearchParams(search ?? ''), [search]);
   const returnContext = useMemo(() => getShowcaseReturnContext({
@@ -367,6 +384,7 @@ export function useShowcasePostViewer({
     bundlePanelKey: `${viewerKey ?? 'unknown'}:${ownBundle?.panelStart ?? 'page'}`,
     lockedViewer,
     remix,
+    creatorRemix,
     blocked: Boolean(viewerUserId && blockedFor === viewerUserId),
     remixCredit,
     returnContext,

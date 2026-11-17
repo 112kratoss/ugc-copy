@@ -35,6 +35,8 @@ export default function ShowcaseDetailEngagementRow({
   shareVisitCount,
   showComments,
   recipeRemix = null,
+  creatorRemixMark,
+  creatorCanRemix = false,
 }: {
   postId: string;
   generationId: string | null;
@@ -57,6 +59,15 @@ export default function ShowcaseDetailEngagementRow({
    * is none.
    */
   recipeRemix?: { access: 'paid' | 'free'; priceLabel: string } | null;
+  /**
+   * The post's creator, in the server's HTML and the render that hydrates it only, where no cookie
+   * can be read: the open Remix of their own creation is drawn beside the Remix locked behind the
+   * recipe, and the page's rule (`ownerFirstPaintRules`) shows the creator theirs and everyone else
+   * the locked one. Their own creation is theirs to remix, never to claim or to unlock.
+   */
+  creatorRemixMark?: string;
+  /** The creator's own Remix is the open one (`creatorRemix` in useShowcasePostViewer). */
+  creatorCanRemix?: boolean;
 }) {
   const router = useRouter();
   const { session, user } = useAuth();
@@ -137,6 +148,9 @@ export default function ShowcaseDetailEngagementRow({
   };
 
   const lockedRemix = !canRemix && recipeRemix && nsfwRevealed !== false ? recipeRemix : null;
+  // Where the server's HTML draws the creator's open Remix beside the locked one, each is marked
+  // for the page's rule.
+  const creatorsRemixMark = creatorRemixMark && lockedRemix && creatorCanRemix ? creatorRemixMark : undefined;
 
   return (
     <div className="mt-6 border-y border-white/8 py-1 text-xs font-semibold text-zinc-400">
@@ -146,6 +160,7 @@ export default function ShowcaseDetailEngagementRow({
           <a
             href="#recipe"
             onClick={() => showRecipeJump()}
+            data-post-recipe-pitch={creatorsRemixMark}
             aria-label={`Unlock the recipe to remix ${title}, ${lockedRemix.priceLabel}`}
             className="ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full border border-amber-300/20 bg-amber-400/[0.08] px-4 text-xs font-extrabold text-amber-100 transition hover:border-amber-300/35"
           >
@@ -159,6 +174,7 @@ export default function ShowcaseDetailEngagementRow({
             type="button"
             onClick={() => void handleRemix({ takeFreeRecipe: true })}
             disabled={isRemixing}
+            data-post-recipe-pitch={creatorsRemixMark}
             aria-label={`Get the free recipe and remix ${title}`}
             className="ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 px-4 text-xs font-extrabold text-[var(--ui-primary)] transition hover:bg-[var(--ui-primary)]/20 disabled:opacity-60"
           >
@@ -166,11 +182,12 @@ export default function ShowcaseDetailEngagementRow({
             {`Remix · ${lockedRemix.priceLabel}`}
           </button>
         ) : null}
-        {canRemix ? (
+        {canRemix || creatorsRemixMark ? (
           <button
             type="button"
             onClick={() => void handleRemix()}
             disabled={isRemixing}
+            data-post-remix-owner={creatorsRemixMark}
             className="ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 px-4 text-xs font-extrabold text-[var(--ui-primary)] transition hover:bg-[var(--ui-primary)]/20 disabled:opacity-60"
           >
             {isRemixing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Repeat2 className="h-4 w-4" aria-hidden="true" />}
