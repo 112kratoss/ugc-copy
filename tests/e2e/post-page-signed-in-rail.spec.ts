@@ -1105,7 +1105,9 @@ test("the post's creator, whose session check outlasts its deadline, is told the
   expect(recipeReads).toEqual([]);
 
   // Try again asks the check again, and the recipe is opening while it runs.
+  const checksBefore = checks.held();
   await tryAgain.click();
+  await expect.poll(checks.held, 'Try again asked the session check again').toBeGreaterThan(checksBefore);
   await expect(recipe.getByText('Opening your recipe…')).toBeVisible();
 
   // The check answers: their read goes out, and their recipe opens.

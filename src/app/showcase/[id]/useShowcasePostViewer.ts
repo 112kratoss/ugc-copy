@@ -324,6 +324,15 @@ export function useShowcasePostViewer({
   // Try again, which asks the check again; their Owner tools and Remix still wait for its answer.
   // While the check asked again runs, the recipe is drawn opening, for at most another deadline.
   const [creatorCheckRetry, setCreatorCheckRetry] = useState<number | null>(null);
+  // Whether this page is still the one on screen when a retry's failure lands: its reload is for
+  // this page alone, never for one the creator went on to.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   useEffect(() => {
     if (creatorCheckRetry === null) return undefined;
     const deadline = setTimeout(() => setCreatorCheckRetry(null), SESSION_CHECK_DEADLINE_MS);
@@ -339,7 +348,9 @@ export function useShowcasePostViewer({
     setCreatorCheckRetry(startedAt);
     void refreshSessionState()
       // supabase-js itself would not load (a deploy renamed its chunk): only a new page has it.
-      .catch(() => window.location.reload())
+      .catch(() => {
+        if (mountedRef.current) window.location.reload();
+      })
       .finally(() => setCreatorCheckRetry((current) => (current === startedAt ? null : current)));
   }, [creatorCheckOverdue, refreshSessionState, retryBundleRead]);
 
