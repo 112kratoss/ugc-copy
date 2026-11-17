@@ -369,10 +369,15 @@ test('a visitor is offered each recipe at its price in every frame, loaded and o
 
   await page.goto(PAGE_PATH);
   await expect(creatorHeading(page)).toBeVisible(COLD_PAGE);
-  // Once the page's script has run (it has hydrated), and a little after.
-  await expect.poll(() => hydrationCommitted(page), COLD_PAGE).toBe(true);
+  // The page's own render has drawn the chips. The server's HTML draws each recipe tile's creator
+  // words beside the price for the page's rule, and only the page's script, which knows who is
+  // looking, takes them out: so the tiles are in, then their creator words are gone. The root's
+  // commit is no sign here (review of #866): the page's loading.tsx sets it in a Suspense boundary
+  // of its own, which hydrates apart from the root (.claude/rules/e2e.md), and the chips read the
+  // same in the server's HTML.
+  await expect(page.locator('[data-creator-grid] [data-creator-card][data-creator-recipe]')).toHaveCount(OFFERED_CHIPS.length, COLD_PAGE);
+  await expect(page.locator('[data-creator-recipe-owner]')).toHaveCount(0, COLD_PAGE);
   await twoFrames(page);
-  await page.waitForTimeout(500);
   await expect.poll(() => chipsNow(page)).toEqual(OFFERED_CHIPS);
   expectChipsInEveryFrame(await recordedFrames(page), OFFERED_CHIPS);
 

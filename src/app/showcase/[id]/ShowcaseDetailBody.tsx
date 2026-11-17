@@ -200,11 +200,12 @@ export default function ShowcaseDetailBody({
   // The unlock bar and the room kept for it under the post, for a viewer who has not got the recipe.
   const pitchesRecipe = Boolean(bundle && lockedViewer && !viewerIsCreator);
   // The panel under the post, while the page holds the recipe everyone else reads: theirs for the
-  // creator too, offering nothing, its body held until their own read brings the recipe ('failed'
-  // once that read failed, with a way to ask again). It drew the page's, "Free recipe" and "Get free
-  // recipe", until their read landed (sweep of 2026-11-17).
+  // creator too, offering nothing, its body held until their own read brings the recipe ('failed',
+  // with a way to ask again, once that read failed or the session check it waits for has outlasted
+  // its deadline). It drew the page's, "Free recipe" and "Get free recipe", until their read landed
+  // (sweep of 2026-11-17).
   const creatorHold = viewerIsCreator && bundle && !bundle.viewerIsOwner
-    ? viewer.bundleReadFailed ? 'failed' : 'opening'
+    ? viewer.bundleReadFailed || viewer.creatorCheckOverdue ? 'failed' : 'opening'
     : null;
   // The rail ends inside the window: it is told where its top is.
   usePostRailTop(layoutRef, `${detail.id}:${viewer.blocked ? 'blocked' : 'drawn'}`);
@@ -292,7 +293,7 @@ export default function ShowcaseDetailBody({
         remixIncluded: recipeIncludesRemix,
       })}
       creatorHold={creatorHold}
-      onRetryCreatorRead={viewer.retryBundleRead}
+      onRetryCreatorRead={viewer.retryCreatorRecipe}
       // The server's HTML and the render that hydrates it: the creator's held recipe beside the
       // offer, for the page's rule to show each their own (`ownerFirstPaintRules`).
       creatorMark={recipeMark}

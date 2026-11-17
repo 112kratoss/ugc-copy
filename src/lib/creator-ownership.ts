@@ -50,8 +50,15 @@ export function resolveCreatorOwnership({
   return checkedCookieUserId === creatorId ? 'owner-checking' : 'other';
 }
 
-/** `resolveCreatorOwnership` for this browser's viewer. */
-export function useCreatorOwnership(creatorId: string | null): CreatorOwnership {
+/**
+ * `resolveCreatorOwnership` for this browser's viewer, with the session check it was read from
+ * (`useViewerSessionCheck`), for a page that also says when a check of the creator's cookie has
+ * outlasted its deadline (the post page's held recipe).
+ */
+export function useCreatorOwnershipAndSessionCheck(creatorId: string | null): {
+  ownership: CreatorOwnership;
+  viewerCheck: ViewerSessionCheck;
+} {
   const { session, user, isLoading } = useAuth();
   const hasAuthCookie = useSupabaseAuthCookieHint();
   const viewerCheck = useViewerSessionCheck();
@@ -61,5 +68,13 @@ export function useCreatorOwnership(creatorId: string | null): CreatorOwnership 
   const checkedCookieUserId = creatorId && !viewerUserId && viewerCheck !== 'unread' && hasAuthCookie && isLoading
     ? readSupabaseAuthCookieUserId()
     : null;
-  return resolveCreatorOwnership({ creatorId, viewerUserId, viewerCheck, checkedCookieUserId });
+  return {
+    ownership: resolveCreatorOwnership({ creatorId, viewerUserId, viewerCheck, checkedCookieUserId }),
+    viewerCheck,
+  };
+}
+
+/** `resolveCreatorOwnership` for this browser's viewer. */
+export function useCreatorOwnership(creatorId: string | null): CreatorOwnership {
+  return useCreatorOwnershipAndSessionCheck(creatorId).ownership;
 }

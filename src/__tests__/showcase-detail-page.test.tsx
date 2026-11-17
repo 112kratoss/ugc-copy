@@ -62,6 +62,8 @@ const clientAuth = vi.hoisted(() => ({
     isLoading?: boolean;
     /** When the provider began that check (`performance.now()`). */
     sessionCheckStartedAt?: number | null;
+    /** Asks the provider to check the session again. */
+    refreshSessionState?: () => Promise<void>;
   },
 }));
 // The address the page was opened at, as the browser's router reads it: the
@@ -1288,6 +1290,71 @@ describe('Showcase detail page', () => {
           });
           expect(panelProps()).toMatchObject({ viewerIsOwner: true, creatorHold: null });
           expect(recipeLink()).toHaveTextContent(/^Your recipeView$/);
+        });
+
+        // Review of #866: their read goes out only once the check names them, so a check that never
+        // ends (supabase-js failing to load after a deploy, `getUser` hanging) held the recipe at
+        // "Opening your recipe…" for good, with nothing to press.
+        it("says it could not be opened once the check of their cookie outlasts its deadline, and Try again asks the check again", async () => {
+          vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+          holdSessionCookieOf('user-1');
+          // The check asked again hangs too.
+          const refreshSessionState = vi.fn(() => new Promise<void>(() => {}));
+          const page = await openPost();
+          vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+          clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: performance.now(), refreshSessionState };
+          render(page);
+          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: 'opening' });
+
+          act(() => {
+            vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS);
+          });
+          expect(panelProps()).toMatchObject({ creatorHold: 'failed' });
+          // Their Owner tools and Remix still wait for the check's answer, as before.
+          expect(ownerTools()).toBe('checking');
+          expect(screen.getByTestId('showcase-detail-engagement-row')).toHaveAttribute('data-remix-held', 'true');
+          // No read went out: the check has not named them.
+          expect(requestsTo(RECIPE_READ)).toHaveLength(0);
+
+          // Try again asks the check again, and the recipe is opening while it runs...
+          act(() => panelProps().onRetryCreatorRead?.());
+          expect(refreshSessionState).toHaveBeenCalledTimes(1);
+          expect(panelProps()).toMatchObject({ creatorHold: 'opening' });
+          // ...for at most another deadline.
+          act(() => {
+            vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS);
+          });
+          expect(panelProps()).toMatchObject({ creatorHold: 'failed' });
+          expect(requestsTo(RECIPE_READ)).toHaveLength(0);
+        });
+
+        it('asks the check again, not the read, and opens the recipe once the check asked again names them', async () => {
+          holdSessionCookieOf('user-1');
+          let named = () => {};
+          const refreshSessionState = vi.fn(() => new Promise<void>((resolve) => {
+            named = resolve;
+          }));
+          stubPageFetch({}, { viewerBundle: ownRead });
+          const page = await openPost();
+          vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+          clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: performance.now(), refreshSessionState };
+          const { rerender } = render(page);
+          act(() => {
+            vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS);
+          });
+          expect(panelProps()).toMatchObject({ creatorHold: 'failed' });
+
+          act(() => panelProps().onRetryCreatorRead?.());
+          expect(refreshSessionState).toHaveBeenCalledTimes(1);
+          vi.useRealTimers();
+          // The provider's check names them.
+          signInAs('user-1');
+          await act(async () => {
+            named();
+            rerender(await openPost());
+          });
+          await waitFor(() => expect(panelProps()).toMatchObject({ viewerIsOwner: true, creatorHold: null }));
+          expect(requestsTo(RECIPE_READ)).toHaveLength(1);
         });
 
         it("is held through a read whose answer names no recipe and no none, which the page keeps its own over", async () => {

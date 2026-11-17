@@ -1075,6 +1075,48 @@ test("the post's creator holds their recipe as theirs until their own read of it
   expect(frames.slice(opened).filter((frame) => !shows(frame, 'Owner preview.')), all).toEqual([]);
 });
 
+// Review of #866: the creator's read of their recipe goes out only once the session check names
+// them, and a check that never ends (supabase-js failing to load after a deploy, `getUser`
+// hanging) held their recipe at "Opening your recipe…" for good, with nothing to press. Here the
+// check is held past its deadline (SESSION_CHECK_DEADLINE_MS, 4.5 s from when it began).
+test("the post's creator, whose session check outlasts its deadline, is told their recipe could not be opened, and Try again asks the check again", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const { checks } = await signIn(context, postCreator);
+  checks.hold();
+  await answerApi(page);
+  const recipeReads: string[] = [];
+  await page.route(`**/api/posts/${POST_ID}/resource-bundle**`, (route) => {
+    recipeReads.push(route.request().url());
+    return route.fulfill({ json: OWN_RECIPE_READ });
+  });
+  await page.addInitScript(RECORDER);
+  const recipe = page.getByTestId('canonical-post-recipe');
+  const ownRemix = page.getByTestId('media-detail-document').getByRole('button', { name: 'Remix', exact: true });
+
+  await page.goto(POST_PATH);
+  await expect(page.getByRole('heading', { level: 1, name: TITLE })).toBeVisible(COLD_PAGE);
+  await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+  // Past the deadline: their recipe says it could not be opened, with a way to ask again...
+  const tryAgain = recipe.getByRole('button', { name: 'Try again' });
+  await expect(tryAgain).toBeVisible({ timeout: 15_000 });
+  await expect(recipe.getByText('The recipe could not be opened.')).toBeVisible();
+  // ...while their Remix still waits for the check's answer, as their Owner tools do.
+  await expect(ownRemix).toBeDisabled();
+  expect(recipeReads).toEqual([]);
+
+  // Try again asks the check again, and the recipe is opening while it runs.
+  await tryAgain.click();
+  await expect(recipe.getByText('Opening your recipe…')).toBeVisible();
+
+  // The check answers: their read goes out, and their recipe opens.
+  checks.release();
+  await expect(recipe.getByText(/^Owner preview\./)).toBeVisible(COLD_PAGE);
+  await expect(ownRemix).toBeEnabled();
+  expect(recipeReads).toHaveLength(1);
+  await recordedFrames(page);
+  expectOwnRecipeInEveryFrame(await recordedRecipeFrames(page));
+});
+
 // Sweep of 2026-11-17 (build 941e2a55b), signed in as @magicbooklet: the composer's avatar read "I",
 // the first letter of the sign-in email (the account has no name in Supabase's user_metadata), where
 // the top bar read "MB", from the profile's name, "Magic Booklet".

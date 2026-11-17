@@ -194,11 +194,12 @@ export interface PostResourceBundlePanelProps {
    * The post page only: the recipe's creator, whom the page knows before their own read of the
    * recipe has brought it (`ownership` in useShowcasePostViewer), while the recipe it holds is the
    * one everyone else reads, locked. Their recipe reads "Your recipe" and offers nothing, and its
-   * body is held: 'opening' while that read is out or still to be asked, 'failed' once it failed,
-   * with Try again (`onRetryCreatorRead`). The read that lands starts the panel again from it.
+   * body is held: 'opening' while that read is out or still to be asked, 'failed' once it failed
+   * or the session check it waits for outlasted its deadline, with Try again
+   * (`onRetryCreatorRead`). The read that lands starts the panel again from it.
    */
   creatorHold?: 'opening' | 'failed' | null;
-  /** Asks the creator's own read of the recipe again, after `creatorHold` 'failed'. */
+  /** Try again on `creatorHold` 'failed': the page asks again what held it, the read or the check. */
   onRetryCreatorRead?: () => void;
   /**
    * The post page's server HTML and the render that hydrates it only, where no cookie can be read:

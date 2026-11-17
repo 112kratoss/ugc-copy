@@ -8,7 +8,7 @@ import {
   useHasHydratedSupabaseAuthCookieHint,
   useSupabaseAuthCookieHint,
 } from '@/components/useSupabaseAuthCookieHint';
-import { useCreatorOwnership, type CreatorOwnership } from '@/lib/creator-ownership';
+import { useCreatorOwnershipAndSessionCheck, type CreatorOwnership } from '@/lib/creator-ownership';
 import type { PostRemixCapability, PostRemixTarget } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import type { StoredInviteHandoff } from '@/lib/invite-handoff';
@@ -23,6 +23,7 @@ import {
   type ShowcaseReturnContext,
 } from '@/lib/share';
 import { fetchShowcaseViewerExclusions } from '@/lib/showcase-viewer-exclusions-client';
+import { SESSION_CHECK_DEADLINE_MS } from '@/lib/viewer-session-check';
 import {
   remixCreditUserIds,
   withoutBlockedRemixCredit,
@@ -97,8 +98,20 @@ export interface ShowcasePostViewer {
    * it, says so (`creatorHold` in ShowcaseDetailBody).
    */
   bundleReadFailed: boolean;
-  /** Asks the viewer's own read of the recipe again. */
-  retryBundleRead: () => void;
+  /**
+   * The check of a session cookie naming the creator has outlasted its deadline (`owner-checking`
+   * while `useViewerSessionCheck` reads `visitor`): their Owner tools and Remix still wait for its
+   * answer, but their recipe, held for a read only that answer lets go out, says it could not be
+   * opened, with Try again (`retryCreatorRecipe`), where it waited for good when supabase-js never
+   * loaded or Supabase never answered (review of #866).
+   */
+  creatorCheckOverdue: boolean;
+  /**
+   * The creator's held recipe's Try again: the session check asked again while it is overdue
+   * (`refreshSessionState`), drawn as opening for at most a check's deadline; else their read of the
+   * recipe asked again.
+   */
+  retryCreatorRecipe: () => void;
   /** The viewer has not got the recipe: the page pitches it. */
   lockedViewer: boolean;
   /**
@@ -200,7 +213,7 @@ export function useShowcasePostViewer({
   /** The post was made from a creation (`generationId`), the only kind a Remix can start from. */
   hasCreation: boolean;
 }): ShowcasePostViewer {
-  const { session, user, isLoading } = useAuth();
+  const { session, user, isLoading, refreshSessionState } = useAuth();
   const hasAuthCookie = useSupabaseAuthCookieHint();
   const hydrated = useHasHydratedSupabaseAuthCookieHint();
   const accessToken = session?.access_token ?? null;
@@ -210,7 +223,7 @@ export function useShowcasePostViewer({
   // is being checked, so a signed-in viewer is never first read as a visitor.
   const viewerKey = viewerUserId ?? (!hydrated || (hasAuthCookie && isLoading) ? null : VISITOR);
   const viewerIsOwner = Boolean(viewerUserId && creatorId && viewerUserId === creatorId);
-  const ownership: ShowcasePostOwnership = useCreatorOwnership(creatorId);
+  const { ownership, viewerCheck } = useCreatorOwnershipAndSessionCheck(creatorId);
   const effectiveVisibility = useOwnerPostVisibility(postId, viewerIsOwner) ?? visibility;
 
   // `null` until `ShowcaseSearchParamsReporter` has read the address.
@@ -304,6 +317,31 @@ export function useShowcasePostViewer({
     setBundleReadFailedFor(null);
     setBundleReadAttempt((attempt) => attempt + 1);
   }, []);
+
+  // The creator's read of their recipe goes out only once the check names them, and a check that
+  // never ends (supabase-js failing to load after a deploy, `getUser` hanging) held their recipe at
+  // "Opening your recipe…" for good. Past the check's deadline it says it could not be opened, with
+  // Try again, which asks the check again; their Owner tools and Remix still wait for its answer.
+  // While the check asked again runs, the recipe is drawn opening, for at most another deadline.
+  const [creatorCheckRetry, setCreatorCheckRetry] = useState<number | null>(null);
+  useEffect(() => {
+    if (creatorCheckRetry === null) return undefined;
+    const deadline = setTimeout(() => setCreatorCheckRetry(null), SESSION_CHECK_DEADLINE_MS);
+    return () => clearTimeout(deadline);
+  }, [creatorCheckRetry]);
+  const creatorCheckOverdue = ownership === 'owner-checking' && viewerCheck === 'visitor' && creatorCheckRetry === null;
+  const retryCreatorRecipe = useCallback(() => {
+    if (!creatorCheckOverdue) {
+      retryBundleRead();
+      return;
+    }
+    const startedAt = performance.now();
+    setCreatorCheckRetry(startedAt);
+    void refreshSessionState()
+      // supabase-js itself would not load (a deploy renamed its chunk): only a new page has it.
+      .catch(() => window.location.reload())
+      .finally(() => setCreatorCheckRetry((current) => (current === startedAt ? null : current)));
+  }, [creatorCheckOverdue, refreshSessionState, retryBundleRead]);
 
   // A block either way hides the post, as the app's by-id read does and as
   // blocking promises ("You will stop seeing their posts"). A check that could
@@ -408,7 +446,8 @@ export function useShowcasePostViewer({
     bundle,
     bundlePanelKey: `${viewerKey ?? 'unknown'}:${ownBundle?.panelStart ?? 'page'}`,
     bundleReadFailed: viewerKey !== null && bundleReadFailedFor === viewerKey,
-    retryBundleRead,
+    creatorCheckOverdue,
+    retryCreatorRecipe,
     lockedViewer,
     remix,
     creatorRemix,
