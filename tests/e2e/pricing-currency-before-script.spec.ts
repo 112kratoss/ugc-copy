@@ -11,15 +11,17 @@ import { expect, test, type Page } from '@playwright/test';
  * chose that over the visitor's pick, which was never saved either (as /contact's subject,
  * contact-typed-before-script.spec.ts).
  *
- * The page's own chunk is held until the currency is picked. The FX line's "Updated" date is the
- * sign the script ran: only the page's mount effect asks for the rates.
+ * The page's own chunk is held until the currency is picked. The FX line's "Rates updated" date is
+ * the sign the script ran: only the page's mount effect asks for the rates.
  */
 
 const COLD_PAGE = { timeout: 45_000 };
 const STORAGE_KEY = 'magicbooklet_currency';
-const FX = { base: 'INR', rates: { USD: 0.012, EUR: 0.011, GBP: 0.0095 }, updatedAt: '2026-11-06' };
+const FX = { base: 'INR', rates: { USD: 0.012, EUR: 0.011, GBP: 0.0095 }, updatedAt: 'Fri, 06 Nov 2026 00:02:31 +0000' };
+// The FX line under the picker, in this run's language and zone (fx-rates-updated.ts).
+const FX_LINE = 'Rates updated Nov 6, 2026, 12:02 AM';
 
-test.use({ locale: 'en-US' });
+test.use({ locale: 'en-US', timezoneId: 'UTC' });
 
 /** Holds the page's own script chunk until `release`; every request for it waits. */
 async function holdPageChunk(page: Page) {
@@ -66,7 +68,7 @@ test(`/pricing: a currency picked before the page's script runs prices the packs
   await select.selectOption('EUR');
   chunk.release();
 
-  await expect(page.getByText(`Updated ${FX.updatedAt}`)).toBeVisible(COLD_PAGE);
+  await expect(page.getByText(FX_LINE, { exact: true })).toBeVisible(COLD_PAGE);
 
   await expect(select).toHaveValue('EUR');
   await expect(starterPrice(page)).toContainText('EUR');
@@ -74,7 +76,7 @@ test(`/pricing: a currency picked before the page's script runs prices the packs
 
   // Back on the page, the saved choice opens it, as a choice made after the script does.
   await page.reload({ ...COLD_PAGE, waitUntil: 'load' });
-  await expect(page.getByText(`Updated ${FX.updatedAt}`)).toBeVisible(COLD_PAGE);
+  await expect(page.getByText(FX_LINE, { exact: true })).toBeVisible(COLD_PAGE);
   await expect(select).toHaveValue('EUR');
 });
 
@@ -88,7 +90,7 @@ test(`/pricing: a visitor who picks nothing before the script runs gets the brow
   await expect.poll(chunk.requests, { ...COLD_PAGE, message: 'the page asks for its own chunk, which is held' }).toBeGreaterThan(0);
   chunk.release();
 
-  await expect(page.getByText(`Updated ${FX.updatedAt}`)).toBeVisible(COLD_PAGE);
+  await expect(page.getByText(FX_LINE, { exact: true })).toBeVisible(COLD_PAGE);
   await expect(page.locator('#pricing-currency')).toHaveValue('USD');
   await expect(starterPrice(page)).toContainText('USD');
   expect(await savedCurrency(page)).toBeNull();

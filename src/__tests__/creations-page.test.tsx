@@ -545,6 +545,428 @@ describe('CreationsPage', () => {
     });
   });
 
+  // Live sweep of 2026-11-17: "54 CREATIONS TOTAL" over "All (29)" and "Images (29)", the filters
+  // counting the one page of 36 loaded. The rule is getStudioCreationCounts (creation-workspace.ts);
+  // studio-counts-and-first-screen.spec.ts draws the sweep's own numbers in a browser.
+  it('says the same totals in the header and the media filters, and a number only where it is a total', async () => {
+    stubStudioFetch((url) => {
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [
+            makeGeneration({ id: 'gen-picture-1', title: 'Picture one' }),
+            makeGeneration({ id: 'gen-picture-2', title: 'Picture two' }),
+          ],
+          pagination: { limit: 36, hasMore: true, nextCursor: '36' },
+        }));
+      }
+      if (url === NEXT_GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [
+            makeGeneration({
+              id: 'gen-clip-1',
+              title: 'Clip one',
+              category: 'video',
+              model: 'veo3_fast',
+              output_url: 'https://example.com/clip.mp4',
+              created_at: '2026-05-31T10:00:00.000Z',
+            }),
+          ],
+          pagination: { limit: 36, hasMore: false, nextCursor: null },
+        }));
+      }
+      if (url === '/api/profile') {
+        // owner_profile_counts: the library holds three finished creations.
+        return Promise.resolve(jsonResponse({
+          username: 'creator-user1',
+          stats: { creations: 3, posts: 0, archivedPosts: 0, saved: 0 },
+        }));
+      }
+      return null;
+    });
+    const filters = () => within(screen.getByRole('link', { name: /^All\b/ }).parentElement!)
+      .getAllByRole('link')
+      .map((link) => link.textContent);
+
+    render(<CreationsPage />);
+
+    expect(await screen.findByText('Picture one')).toBeInTheDocument();
+    expect(await screen.findByText('3 CREATIONS TOTAL')).toBeInTheDocument();
+    // The page loaded holds two pictures of the three: All says the library's three, Images no number.
+    expect(filters()).toEqual(['All (3)', 'Images']);
+
+    fireEvent.click(screen.getByRole('button', { name: /load more creations/i }));
+    expect(await screen.findByText('Clip one')).toBeInTheDocument();
+
+    // Every page loaded: each number is a total.
+    expect(screen.getByText('3 CREATIONS TOTAL')).toBeInTheDocument();
+    expect(filters()).toEqual(['All (3)', 'Images (2)', 'Videos (1)']);
+    // And the snapshot a return to Studio draws first says so.
+    const snapshot = JSON.parse(
+      window.sessionStorage.getItem('magicbooklet:creations-cache:v1:user-1') ?? '{}',
+    ) as { generationsComplete?: boolean };
+    expect(snapshot.generationsComplete).toBe(true);
+  });
+
+  // Review of #836 (findings 3 and 4): before anything had answered the header read "0+ CREATIONS
+  // TOTAL", and a return to Studio drew a whole library's media filters with no numbers until the
+  // refresh landed, the snapshot not saying the library was whole.
+  describe('before the refresh answers', () => {
+    const studioFilters = () => within(screen.getByRole('link', { name: /^All\b/ }).parentElement!)
+      .getAllByRole('link')
+      .map((link) => link.textContent);
+    const wholeLibrarySnapshot = (generationsComplete?: boolean) => JSON.stringify({
+      fetchedAt: Date.now(),
+      generations: [
+        makeGeneration({ id: 'gen-picture-1', title: 'Picture one' }),
+        makeGeneration({ id: 'gen-picture-2', title: 'Picture two' }),
+        makeGeneration({ id: 'gen-clip-1', title: 'Clip one', category: 'video', model: 'veo3_fast', output_url: 'https://example.com/clip.mp4' }),
+      ],
+      posts: [],
+      profile: { username: 'creator-user1', stats: { creations: 3, posts: 0, archivedPosts: 0, saved: 0 } },
+      ...(generationsComplete === undefined ? {} : { generationsComplete }),
+    });
+
+    it('says no number while nothing has answered, never 0', async () => {
+      vi.stubGlobal('fetch', vi.fn(() => new Promise(() => undefined)));
+
+      render(<CreationsPage />);
+
+      const total = await screen.findByText(/CREATIONS TOTAL$/);
+      // "—" to the eye, "Counting" to a screen reader.
+      expect(within(total).getByText('—')).toHaveAttribute('aria-hidden', 'true');
+      expect(within(total).getByText('Counting')).toHaveClass('sr-only');
+      expect(total).toHaveTextContent(/^—Counting CREATIONS TOTAL$/);
+      expect(screen.queryByText(/\d\+? CREATIONS TOTAL/)).not.toBeInTheDocument();
+    });
+
+    it("draws a whole library's filter totals from the snapshot at once", async () => {
+      window.sessionStorage.setItem('magicbooklet:creations-cache:v1:user-1', wholeLibrarySnapshot(true));
+      vi.stubGlobal('fetch', vi.fn(() => new Promise(() => undefined)));
+
+      render(<CreationsPage />);
+
+      expect(await screen.findByText('Clip one')).toBeInTheDocument();
+      expect(screen.getByText('3 CREATIONS TOTAL')).toBeInTheDocument();
+      expect(studioFilters()).toEqual(['All (3)', 'Images (2)', 'Videos (1)']);
+    });
+
+    it('draws no kind number from a snapshot that does not say its library was whole', async () => {
+      window.sessionStorage.setItem('magicbooklet:creations-cache:v1:user-1', wholeLibrarySnapshot());
+      vi.stubGlobal('fetch', vi.fn(() => new Promise(() => undefined)));
+
+      render(<CreationsPage />);
+
+      expect(await screen.findByText('Clip one')).toBeInTheDocument();
+      expect(studioFilters()).toEqual(['All (3)', 'Images', 'Videos']);
+    });
+  });
+
+  // Review of #836 (finding 1): with every page loaded, a creation of the second page archived
+  // stayed active here, as the refresh rereads only the first page and keeps the later rows as
+  // they were, and the header said 3 where the server, read in the same refresh, said 2.
+  it('counts a creation of a later page out as soon as it is archived, with every page loaded', async () => {
+    let creationsTotal = 3;
+    const archivedIds = new Set<string>();
+    stubStudioFetch((url, init) => {
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [
+            makeGeneration({ id: 'gen-picture-1', title: 'Picture one' }),
+            makeGeneration({ id: 'gen-picture-2', title: 'Picture two' }),
+          ],
+          pagination: { limit: 36, hasMore: true, nextCursor: '36' },
+        }));
+      }
+      if (url === NEXT_GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [makeGeneration({
+            id: 'gen-clip-1',
+            title: 'Clip one',
+            category: 'video',
+            model: 'veo3_fast',
+            output_url: 'https://example.com/clip.mp4',
+            created_at: '2026-05-31T10:00:00.000Z',
+            archived_at: archivedIds.has('gen-clip-1') ? '2026-06-02T10:00:00.000Z' : null,
+          })],
+          pagination: { limit: 36, hasMore: false, nextCursor: null },
+        }));
+      }
+      if (url === '/api/generations/gen-clip-1/archive' && init?.method === 'POST') {
+        archivedIds.add('gen-clip-1');
+        creationsTotal = 2;
+        return Promise.resolve(jsonResponse({ success: true, archived: true }));
+      }
+      if (url === '/api/profile') {
+        return Promise.resolve(jsonResponse({
+          username: 'creator-user1',
+          stats: { creations: creationsTotal, posts: 0, archivedPosts: 0, saved: 0 },
+        }));
+      }
+      return null;
+    });
+    const filters = () => within(screen.getByRole('link', { name: /^All\b/ }).parentElement!)
+      .getAllByRole('link')
+      .map((link) => link.textContent);
+
+    render(<><CreationsPage /><FeedbackViewport /></>);
+
+    expect(await screen.findByText('3 CREATIONS TOTAL')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /load more creations/i }));
+    expect(await screen.findByText('Clip one')).toBeInTheDocument();
+    expect(filters()).toEqual(['All (3)', 'Images (2)', 'Videos (1)']);
+
+    await chooseCardAction('Clip one', 'Archive creation');
+    fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Archive this creation?' }))
+      .getByRole('button', { name: 'Archive' }));
+
+    expect(await screen.findByText('2 CREATIONS TOTAL')).toBeInTheDocument();
+    await waitFor(() => expect(filters()).toEqual(['All (2)', 'Images (2)']));
+    expect(screen.queryByTestId('creation-card-gen-clip-1')).not.toBeInTheDocument();
+    expect(screen.getByTestId('archived-card-gen-clip-1')).toBeInTheDocument();
+  });
+
+  // Review of #836 (finding 1): the list's cursor counts rows, so after a delete with more pages
+  // to load, Load more asked for the next page one row too far on and skipped a creation.
+  it('asks for the next page a row earlier after a creation is deleted while more pages wait', async () => {
+    const fetchMock = stubStudioFetch((url, init) => {
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [makeGeneration({ id: 'gen-page-1', title: 'First page creation' })],
+          pagination: { limit: 36, hasMore: true, nextCursor: '36' },
+        }));
+      }
+      if (url === NEXT_GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [makeGeneration({ id: 'gen-page-2', title: 'Second page creation', created_at: '2026-05-31T10:00:00.000Z' })],
+          pagination: { limit: 36, hasMore: true, nextCursor: '72' },
+        }));
+      }
+      if (url === '/api/generations/gen-page-2' && init?.method === 'DELETE') {
+        return Promise.resolve(jsonResponse({ success: true, deleted: true }));
+      }
+      if (url.startsWith(`${GENERATIONS_PAGE_URL}&cursor=7`)) {
+        return Promise.resolve(jsonResponse({
+          generations: [makeGeneration({ id: 'gen-page-3', title: 'Third page creation', created_at: '2026-05-30T10:00:00.000Z' })],
+          pagination: { limit: 36, hasMore: false, nextCursor: null },
+        }));
+      }
+      return null;
+    });
+
+    render(<><CreationsPage /><FeedbackViewport /></>);
+
+    expect(await screen.findByText('First page creation')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /load more creations/i }));
+    expect(await screen.findByText('Second page creation')).toBeInTheDocument();
+
+    await chooseCardAction('Second page creation', 'Delete creation');
+    fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this creation?' }))
+      .getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(firstPageReads(fetchMock)).toBe(2));
+    await act(flushPromises);
+    expect(screen.queryByText('Second page creation')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /load more creations/i }));
+    expect(await screen.findByText('Third page creation')).toBeInTheDocument();
+    const pageReads = fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.startsWith(`${GENERATIONS_PAGE_URL}&cursor=`));
+    expect(pageReads).toEqual([NEXT_GENERATIONS_PAGE_URL, `${GENERATIONS_PAGE_URL}&cursor=71`]);
+  });
+
+  // Review of #836, second round: a Load more under way set the cursor from its own answer after
+  // a delete sent meanwhile had stepped it back, undoing the step, and the next page skipped a row.
+  it('waits for a Load more under way before it sends a delete, so the next page still starts a row earlier', async () => {
+    let answerSecondPage!: () => void;
+    const secondPageAnswered = new Promise<void>((resolve) => {
+      answerSecondPage = resolve;
+    });
+    let firstPage = [makeGeneration({ id: 'gen-page-1', title: 'First page creation' })];
+    const fetchMock = stubStudioFetch((url, init) => {
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: firstPage,
+          pagination: { limit: 36, hasMore: true, nextCursor: '36' },
+        }));
+      }
+      if (url === NEXT_GENERATIONS_PAGE_URL) {
+        return secondPageAnswered.then(() => jsonResponse({
+          generations: [makeGeneration({ id: 'gen-page-2', title: 'Second page creation', created_at: '2026-05-31T10:00:00.000Z' })],
+          pagination: { limit: 36, hasMore: true, nextCursor: '72' },
+        }));
+      }
+      if (url === '/api/generations/gen-page-1' && init?.method === 'DELETE') {
+        firstPage = [];
+        return Promise.resolve(jsonResponse({ success: true, deleted: true }));
+      }
+      if (url.startsWith(`${GENERATIONS_PAGE_URL}&cursor=7`)) {
+        return Promise.resolve(jsonResponse({
+          generations: [makeGeneration({ id: 'gen-page-3', title: 'Third page creation', created_at: '2026-05-30T10:00:00.000Z' })],
+          pagination: { limit: 36, hasMore: false, nextCursor: null },
+        }));
+      }
+      return null;
+    });
+    const deletesSent = () => fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE').length;
+
+    render(<><CreationsPage /><FeedbackViewport /></>);
+
+    expect(await screen.findByText('First page creation')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /load more creations/i }));
+    await chooseCardAction('First page creation', 'Delete creation');
+    fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this creation?' }))
+      .getByRole('button', { name: 'Delete' }));
+    await act(flushPromises);
+    // Held until the page under way has landed.
+    expect(deletesSent()).toBe(0);
+
+    await act(async () => {
+      answerSecondPage();
+    });
+    expect(await screen.findByText('Second page creation')).toBeInTheDocument();
+    await waitFor(() => expect(deletesSent()).toBe(1));
+    await waitFor(() => expect(firstPageReads(fetchMock)).toBe(2));
+    await act(flushPromises);
+    expect(screen.queryByText('First page creation')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /load more creations/i }));
+    expect(await screen.findByText('Third page creation')).toBeInTheDocument();
+    const pageReads = fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.startsWith(`${GENERATIONS_PAGE_URL}&cursor=`));
+    expect(pageReads).toEqual([NEXT_GENERATIONS_PAGE_URL, `${GENERATIONS_PAGE_URL}&cursor=71`]);
+  });
+
+  it('holds Load more while a delete is under way', async () => {
+    let answerDelete!: () => void;
+    const deleteAnswered = new Promise<void>((resolve) => {
+      answerDelete = resolve;
+    });
+    let firstPage = [
+      makeGeneration({ id: 'gen-page-1', title: 'First page creation' }),
+      makeGeneration({ id: 'gen-page-1b', title: 'Another first page creation' }),
+    ];
+    stubStudioFetch((url, init) => {
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: firstPage,
+          pagination: { limit: 36, hasMore: true, nextCursor: '36' },
+        }));
+      }
+      if (url === '/api/generations/gen-page-1' && init?.method === 'DELETE') {
+        return deleteAnswered.then(() => {
+          firstPage = firstPage.slice(1);
+          return jsonResponse({ success: true, deleted: true });
+        });
+      }
+      return null;
+    });
+    const loadMore = () => screen.getByRole('button', { name: /load more creations/i });
+
+    render(<><CreationsPage /><FeedbackViewport /></>);
+
+    expect(await screen.findByText('First page creation')).toBeInTheDocument();
+    expect(loadMore()).toBeEnabled();
+    await chooseCardAction('First page creation', 'Delete creation');
+    fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this creation?' }))
+      .getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(loadMore()).toBeDisabled());
+
+    await act(async () => {
+      answerDelete();
+    });
+    await waitFor(() => expect(loadMore()).toBeEnabled());
+    expect(screen.queryByText('First page creation')).not.toBeInTheDocument();
+  });
+
+  // Review of #836, second round: with every page loaded, a delete, an archive or a restore changed
+  // the list at once and the server total held here not, so the counts said the old total, with
+  // no kind numbers, until the refresh landed, and for good when it failed.
+  describe('the total it holds, moved by a change made here', () => {
+    const library = [
+      makeGeneration({ id: 'gen-picture-1', title: 'Picture one' }),
+      makeGeneration({ id: 'gen-picture-2', title: 'Picture two' }),
+      makeGeneration({
+        id: 'gen-clip-1',
+        title: 'Clip one',
+        category: 'video',
+        model: 'veo3_fast',
+        output_url: 'https://example.com/clip.mp4',
+        created_at: '2026-05-31T10:00:00.000Z',
+      }),
+    ];
+    const studioFilters = () => within(screen.getByRole('link', { name: /^All\b/ }).parentElement!)
+      .getAllByRole('link')
+      .map((link) => link.textContent);
+    /** A whole library of three, and a refresh that fails from the first change on. */
+    const stubLibrary = () => {
+      const state = { refreshFails: false };
+      stubStudioFetch((url, init) => {
+        if (url === GENERATIONS_PAGE_URL) {
+          if (state.refreshFails) return Promise.reject(new TypeError('Failed to fetch'));
+          return Promise.resolve(jsonResponse({
+            generations: library,
+            pagination: { limit: 36, hasMore: false, nextCursor: null },
+          }));
+        }
+        if (url === '/api/generations/gen-clip-1' && init?.method === 'DELETE') {
+          state.refreshFails = true;
+          return Promise.resolve(jsonResponse({ success: true, deleted: true }));
+        }
+        if (url === '/api/generations/gen-clip-1/archive' && init?.method === 'POST') {
+          state.refreshFails = true;
+          return Promise.resolve(jsonResponse({ success: true, archived: true }));
+        }
+        if (url === '/api/generations/gen-clip-1/restore' && init?.method === 'POST') {
+          return Promise.resolve(jsonResponse({ success: true, restored: true }));
+        }
+        if (url === '/api/profile') {
+          return Promise.resolve(jsonResponse({
+            username: 'creator-user1',
+            stats: { creations: 3, posts: 0, archivedPosts: 0, saved: 0 },
+          }));
+        }
+        return null;
+      });
+    };
+
+    it('keeps the counts right after a delete when the refresh after it fails', async () => {
+      stubLibrary();
+      render(<><CreationsPage /><FeedbackViewport /></>);
+
+      expect(await screen.findByText('3 CREATIONS TOTAL')).toBeInTheDocument();
+      expect(studioFilters()).toEqual(['All (3)', 'Images (2)', 'Videos (1)']);
+
+      await chooseCardAction('Clip one', 'Delete creation');
+      fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this creation?' }))
+        .getByRole('button', { name: 'Delete' }));
+
+      expect(await screen.findByText('2 CREATIONS TOTAL')).toBeInTheDocument();
+      expect(studioFilters()).toEqual(['All (2)', 'Images (2)']);
+      // The refresh failed, and the counts still agree with the grid.
+      expect(await screen.findByText('Could not load your creations. Check your connection and try again.')).toBeInTheDocument();
+      expect(screen.getByText('2 CREATIONS TOTAL')).toBeInTheDocument();
+      expect(studioFilters()).toEqual(['All (2)', 'Images (2)']);
+    });
+
+    it('keeps the counts right after an archive and a restore when the refresh after them fails', async () => {
+      stubLibrary();
+      render(<><CreationsPage /><FeedbackViewport /></>);
+
+      expect(await screen.findByText('3 CREATIONS TOTAL')).toBeInTheDocument();
+
+      await chooseCardAction('Clip one', 'Archive creation');
+      fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Archive this creation?' }))
+        .getByRole('button', { name: 'Archive' }));
+      expect(await screen.findByText('2 CREATIONS TOTAL')).toBeInTheDocument();
+      expect(studioFilters()).toEqual(['All (2)', 'Images (2)']);
+
+      fireEvent.click(within(screen.getByTestId('archived-card-gen-clip-1')).getByRole('button', { name: 'Restore' }));
+      expect(await screen.findByText('3 CREATIONS TOTAL')).toBeInTheDocument();
+      expect(studioFilters()).toEqual(['All (3)', 'Images (2)', 'Videos (1)']);
+    });
+  });
+
   it('loads the next creations page without refetching the whole history', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPostRecipeManagementPath,
   getCreationMediaFilters,
+  getStudioCreationCounts,
   resolveCreationWorkspaceCardState,
 } from '@/lib/creation-workspace';
 
@@ -256,5 +257,76 @@ describe('getCreationMediaFilters', () => {
 
   it('always offers All, with nothing in it too', () => {
     expect(labels(getCreationMediaFilters({ all: 0, images: 0, videos: 0, audio: 0 }, 'all'))).toEqual(['All (0)']);
+  });
+
+  it('draws a filter with no number where its total is not known', () => {
+    expect(labels(getCreationMediaFilters(
+      { all: 29, images: 29, videos: 0, audio: 0 },
+      'all',
+      { all: 54, images: null, videos: null, audio: null },
+    ))).toEqual(['All (54)', 'Images']);
+    // Which filters there are still follows what is loaded: a kind with nothing loaded has none.
+    expect(labels(getCreationMediaFilters(
+      { all: 29, images: 29, videos: 0, audio: 0 },
+      'videos',
+      { all: null, images: null, videos: null, audio: null },
+    ))).toEqual(['All', 'Images', 'Videos']);
+  });
+});
+
+// The live sweep of 2026-11-17: "54 CREATIONS TOTAL" over "All (29)" and "Images (29)", the 29
+// counting the finished creations of the one page of 36 loaded.
+describe('getStudioCreationCounts', () => {
+  const firstPage = { all: 29, images: 29, videos: 0, audio: 0 };
+  const unknown = { all: null, images: null, videos: null, audio: null };
+
+  it("says the server's total in the header and on All while pages wait, and no number for a kind", () => {
+    expect(getStudioCreationCounts({ loaded: firstPage, listAnswered: true, listComplete: false, serverTotal: 54 })).toEqual({
+      total: 54,
+      totalIsAtLeast: false,
+      filterTotals: { ...unknown, all: 54 },
+    });
+  });
+
+  it('counts what is loaded once every page is and the server counts as many, the whole library', () => {
+    const everyPage = { all: 54, images: 47, videos: 7, audio: 0 };
+    expect(getStudioCreationCounts({ loaded: everyPage, listAnswered: true, listComplete: true, serverTotal: 54 })).toEqual({
+      total: 54,
+      totalIsAtLeast: false,
+      filterTotals: everyPage,
+    });
+    // The server could not count: nothing says the list is behind.
+    expect(getStudioCreationCounts({ loaded: everyPage, listAnswered: true, listComplete: true, serverTotal: null }))
+      .toMatchObject({ total: 54, filterTotals: everyPage });
+  });
+
+  // Review of #836: with every page loaded, a creation of the second page archived since stayed
+  // active in the list, as a reread of the first page keeps a later page's rows as they were, and
+  // the header said 54 where the server, read in the same refresh, said 53.
+  it("believes the server over a loaded list it disagrees with, and then says no kind's number", () => {
+    const everyPage = { all: 54, images: 47, videos: 7, audio: 0 };
+    expect(getStudioCreationCounts({ loaded: everyPage, listAnswered: true, listComplete: true, serverTotal: 53 })).toEqual({
+      total: 53,
+      totalIsAtLeast: false,
+      filterTotals: { ...unknown, all: 53 },
+    });
+  });
+
+  it('says what is loaded with a "+" when the server could not count, and no filter number', () => {
+    expect(getStudioCreationCounts({ loaded: firstPage, listAnswered: true, listComplete: false, serverTotal: null })).toEqual({
+      total: 29,
+      totalIsAtLeast: true,
+      filterTotals: unknown,
+    });
+  });
+
+  // Review of #836: "0+ CREATIONS TOTAL" in the server's HTML and until the list answered.
+  it('says no number at all before anything has answered', () => {
+    expect(getStudioCreationCounts({
+      loaded: { all: 0, images: 0, videos: 0, audio: 0 },
+      listAnswered: false,
+      listComplete: false,
+      serverTotal: null,
+    })).toEqual({ total: null, totalIsAtLeast: false, filterTotals: unknown });
   });
 });
