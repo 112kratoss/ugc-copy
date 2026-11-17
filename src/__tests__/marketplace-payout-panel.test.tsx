@@ -71,6 +71,27 @@ describe('PayoutPanel', () => {
     vi.unstubAllGlobals();
   });
 
+  // The loading tile has the settled zero-balance tile's shape, so the recipes under it do not move
+  // when the balance lands (sweep of 2026-11-17, a 0.0137 shift): the balance's line held blank, the
+  // loading line in the caption's place, and the payout rails line laid out but never shown.
+  it("holds the balance tile's lines while the balance is read", () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+
+    const { container } = render(<PayoutPanel />);
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading your balance…');
+    const section = container.querySelector('section')!;
+    // The balance's line, at its size, empty and hidden.
+    const blanks = [...section.querySelectorAll('[aria-hidden="true"] > p')].filter((line) => line.textContent === '\u00a0');
+    expect(blanks).toHaveLength(1);
+    // The rails line, laid out and invisible: no figure is shown before the server says it.
+    const rails = section.querySelector('p.invisible');
+    expect(rails).not.toBeNull();
+    expect(rails!.closest('[aria-hidden="true"]')).not.toBeNull();
+    // Any figure there is in the hidden line alone.
+    expect(screen.queryByText(/\$\d/, { ignore: '[aria-hidden="true"] p, script, style' })).toBeNull();
+  });
+
   // A failed balance read was a dead end: the text, and no way to read again.
   it('offers a retry when the balance cannot be read, and shows it once a retry reads it', async () => {
     const sent = answerPayoutRequests([
