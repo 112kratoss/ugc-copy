@@ -424,6 +424,8 @@ function expectRecipeHeldForReader(frames: RecipeFrame[], then: RegExp) {
   const whole = frames.filter((frame) => frame.whole && frame.text !== null);
   expectStepsInOrder(whole.map((frame) => frame.text), [CHECKING_RECIPE_PANEL, then], all);
   expect(frames.filter((frame) => /Your recipe|Opening your recipe/.test(frame.text ?? '')), all).toEqual([]);
+  // Held means offering nothing: no frame both holds the recipe and offers it.
+  expect(frames.filter((frame) => /Checking…/.test(frame.text ?? '') && RECIPE_OFFER.test(frame.text ?? '')), all).toEqual([]);
   if (then === UNLOCKED_RECIPE_PANEL) {
     expect(frames.filter((frame) => RECIPE_OFFER.test(frame.text ?? '')), all).toEqual([]);
   }

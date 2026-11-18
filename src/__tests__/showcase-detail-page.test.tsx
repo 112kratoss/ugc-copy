@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import * as pageModule from '@/app/showcase/[id]/page';
 import ReportPostButton from '@/app/showcase/[id]/ReportPostButton';
+import { READER_RECIPE_READ_DEADLINE_MS } from '@/app/showcase/[id]/useShowcasePostViewer';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import { coverNsfwContent } from '@/lib/nsfw-content';
 import { clearOwnerPageEditsForTests, rememberOwnerPostVisibility } from '@/lib/owner-page-edits';
@@ -1263,6 +1264,45 @@ describe('Showcase detail page', () => {
         expect(recipeBar()).toBeInTheDocument();
       });
 
+      // Review of #873: a read whose function hung was answered only at its maximum duration, minutes
+      // on, and the recipe could be neither got nor opened meanwhile.
+      it('is offered once their read has been out past its deadline, and drawn as theirs if the read lands after', async () => {
+        let answerRead: (response: Response) => void = () => {};
+        vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
+          String(input) === RECIPE_READ
+            ? new Promise<Response>((resolve) => {
+              answerRead = resolve;
+            })
+            : Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true }) } as Response)
+        )));
+        signInAs('user-2');
+        const page = await openPost();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        render(page);
+        expect(requestsTo(RECIPE_READ)).toHaveLength(1);
+        act(() => {
+          vi.advanceTimersByTime(READER_RECIPE_READ_DEADLINE_MS - 100);
+        });
+        expect(recipeLink()).toHaveTextContent(/^RecipeView$/);
+        expect(recipeBar()).not.toBeInTheDocument();
+
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+        expect(recipeLink()).toHaveTextContent(/^Free recipeView$/);
+        expect(recipeBar()).toBeInTheDocument();
+
+        await act(async () => {
+          answerRead({
+            ok: true,
+            status: 200,
+            json: async () => ({ success: true, bundle: { ...freeRecipe, viewerCanAccess: true, viewerHasPurchased: true } }),
+          } as Response);
+        });
+        expect(recipeLink()).toHaveTextContent(/^UnlockedView$/);
+        expect(recipeBar()).not.toBeInTheDocument();
+      });
+
       it('is offered as before once the check of their cookie outlasts its deadline', async () => {
         vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
         holdSessionCookieOf('user-2');
@@ -1515,6 +1555,56 @@ describe('Showcase detail page', () => {
         expect(html).toContain('data-creator-remix="user-1:open"');
       });
 
+      // Review of #873: the reader's held Remix is let go with the recipe, whatever lets it go.
+      it.each([
+        ['their read failing', 'read'],
+        ['their read outlasting its deadline', 'read deadline'],
+        ['the check of their cookie outlasting its deadline', 'check deadline'],
+      ])("offers anyone else signed in the Remix the recipe locks once its hold ends with %s", async (_end, end) => {
+        const detail = await getPublicPostDetailMock(POST_ID);
+        getPublicPostDetailMock.mockResolvedValue({
+          ...detail,
+          canRemix: false,
+          remixCapability: 'unlock_required',
+          remixTarget: 'image',
+          resourceBundle: { ...freeRecipe, allowRemix: true },
+        });
+        const row = () => screen.getByTestId('showcase-detail-engagement-row');
+        let failRead = () => {};
+        vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
+          String(input) === RECIPE_READ
+            ? new Promise<Response>((resolve) => {
+              failRead = () => resolve({ ok: false, status: 503, json: async () => ({ error: 'Down' }) } as Response);
+            })
+            : Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true }) } as Response)
+        )));
+        if (end === 'check deadline') holdSessionCookieOf('user-2');
+        else signInAs('user-2');
+        const page = await openPost();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        if (end === 'check deadline') {
+          clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: performance.now() };
+        }
+        render(page);
+        // Held: the open Remix, inert, neither priced nor taking the recipe on the way.
+        expect(row()).toHaveTextContent(`${POST_ID}:true`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        expect(row()).toHaveAttribute('data-remix-held', 'true');
+
+        if (end === 'read') {
+          await act(async () => {
+            failRead();
+          });
+        } else {
+          act(() => {
+            vi.advanceTimersByTime(end === 'read deadline' ? READER_RECIPE_READ_DEADLINE_MS : SESSION_CHECK_DEADLINE_MS);
+          });
+        }
+        expect(row()).toHaveTextContent(`${POST_ID}:false`);
+        expect(row()).toHaveAttribute('data-recipe-remix', 'free:Free');
+        expect(row()).toHaveAttribute('data-remix-held', 'false');
+      });
+
       // CI run of 2026-11-17 (PR #853): past the session check's deadline the creator's Remix read
       // "Remix · Free" and the rail "Free recipe", until the late answer named them.
       it("keeps the creator's Remix open and held, and their recipe theirs with no bar, past the check's deadline", async () => {
@@ -1597,16 +1687,24 @@ describe('Showcase detail page', () => {
       });
 
       // The page is drawn ahead of time for every viewer, and no cookie can be read on the server.
-      it("draws both in the server's HTML: the root element's mark shows the creator theirs and anyone else the pitch, before the first paint", async () => {
+      it.each([
+        ['free', {}, 'Free recipe · View'],
+        ['paid', { accessMode: 'paid', priceUsdCents: 900, priceQuote: { formatted: '$9.00', note: null } }, '$9.00 · 900 credits · Unlock'],
+      ])("draws a %s recipe three ways in the server's HTML: the root element's marks show the creator theirs, anyone else signed in the recipe held and a visitor the pitch, before the first paint", async (_kind, recipe, pitch) => {
+        const detail = await getPublicPostDetailMock(POST_ID);
+        getPublicPostDetailMock.mockResolvedValue({ ...detail, resourceBundle: { ...freeRecipe, ...recipe } });
         const root = document.documentElement;
-        onTestFinished(() => root.removeAttribute('data-auth-user'));
+        onTestFinished(() => {
+          root.removeAttribute('data-auth-user');
+          root.removeAttribute('data-auth-hint');
+        });
         const page = await openPost();
         const container = document.createElement('div');
         container.innerHTML = renderToString(page);
         document.body.appendChild(container);
         onTestFinished(() => container.remove());
         const link = within(container).getByTestId('recipe-jump-link');
-        const bar = within(container).getByText('View free recipe').closest('a') as HTMLElement;
+        const bar = within(container).getByTestId('recipe-bar');
         const room = container.querySelector('.canonical-post-cta-room') as HTMLElement;
         // What is shown of each: the words the pointer reads, and whether the bar and its room are drawn.
         const reads = () => Array.from(link.querySelectorAll('span'))
@@ -1615,10 +1713,15 @@ describe('Showcase detail page', () => {
           .join(' · ');
         const pitched = () => [bar, room].map((element) => window.getComputedStyle(element).display !== 'none');
 
-        // A visitor, and another account.
-        expect([reads(), pitched()]).toEqual(['Free recipe · View', [true, true]]);
+        // A visitor.
+        expect([reads(), pitched()]).toEqual([pitch, [true, true]]);
+        // Another account, held until their own read of the recipe says (owner, 2026-11-18: "Yes, hold it").
+        root.setAttribute('data-auth-hint', 'signed-in');
         root.setAttribute('data-auth-user', 'user-2');
-        expect([reads(), pitched()]).toEqual(['Free recipe · View', [true, true]]);
+        expect([reads(), pitched()]).toEqual(['Recipe · View', [false, false]]);
+        // A session cookie the root element could not name an account from: held the same way.
+        root.removeAttribute('data-auth-user');
+        expect([reads(), pitched()]).toEqual(['Recipe · View', [false, false]]);
         // The creator.
         root.setAttribute('data-auth-user', 'user-1');
         expect([reads(), pitched()]).toEqual(['Your recipe · View', [false, false]]);
@@ -2852,8 +2955,13 @@ describe('Showcase detail page', () => {
 
       await waitFor(() => expect(requestTo(RECIPE_READ)).toBeDefined());
       expect(screen.getByTestId('canonical-post-recipe')).toBeInTheDocument();
-      // Held while the read is out, offered once it has failed.
+      // Held while the read is out, offered once it has failed...
       await waitFor(() => expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Unlock'));
+      // ...with the Remix it locks, which was held open and inert meanwhile.
+      const row = screen.getByTestId('showcase-detail-engagement-row');
+      expect(row).toHaveTextContent(`${POST_ID}:false`);
+      expect(row).toHaveAttribute('data-recipe-remix', 'paid:900 credits');
+      expect(row).toHaveAttribute('data-remix-held', 'false');
     });
 
     it('opens Remix and drops the bottom bar when the panel unlocks the recipe', async () => {
