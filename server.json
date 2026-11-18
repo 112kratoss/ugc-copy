@@ -3,12 +3,12 @@
   "name": "com.magicbooklet/mcp",
   "title": "Magic Booklet",
   "description": "Create AI images and videos with your Magic Booklet credits, each run quoted first, and post them.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "websiteUrl": "https://magicbooklet.com/developers/mcp",
   "repository": {
-    "url": "https://github.com/112kratoss/ugc-copy",
+    "url": "https://github.com/112kratoss/magicbooklet-claude-plugin",
     "source": "github",
-    "id": "1158582882"
+    "id": "1463305349"
   },
   "remotes": [
     {

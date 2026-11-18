@@ -24,6 +24,7 @@ import {
   isPendingClientId,
 } from '@/lib/mcp-client-directory';
 import { MCP_TOOLS } from '@/lib/mcp-server-service';
+import { findPrivateContent, mirrorDifference, mirrorFiles, mirrorRepository } from '../../scripts/ops/plugin-mirror.mjs';
 import {
   POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH,
   POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
@@ -32,9 +33,11 @@ import {
 } from '@/lib/post-resource-bundles';
 
 /**
- * The Claude Code plugin marketplace this repository serves: `.claude-plugin/marketplace.json`
- * and its one plugin, `plugins/magicbooklet/`. JSON and Markdown cannot import the client
- * directory, so this holds them to it; `claude plugin validate --strict` checks their shape.
+ * The Claude Code plugin marketplace: `.claude-plugin/marketplace.json` and its one plugin,
+ * `plugins/magicbooklet/`, kept here and published to a public repository of their own by
+ * `scripts/ops/plugin-mirror.mjs`. JSON and Markdown cannot import the client directory, so this
+ * holds them to it, and holds what is published to a list; `claude plugin validate --strict`
+ * checks their shape.
  */
 
 const ROOT = process.cwd();
@@ -270,5 +273,69 @@ describe('the Claude Code plugin marketplace', () => {
     expect(readme).toContain(MCP_SERVER_URL);
     expect(readme).toContain(`port ${CLAUDE_CODE_CALLBACK_PORT}`);
     expect(readme).toContain(MCP_DEVELOPERS_PAGE_URL.replace('https://', ''));
+  });
+});
+
+describe('the plugin marketplace’s public repository', () => {
+  const files: Map<string, Buffer> = mirrorFiles(ROOT);
+
+  it('is published to the repository the setup page’s command adds', () => {
+    expect(mirrorRepository(ROOT)).toBe(MCP_PLUGIN_REPOSITORY);
+    // A marketplace of its own, not the app's repository: an install must not need that one public.
+    expect(MCP_PLUGIN_REPOSITORY).not.toBe('112kratoss/ugc-copy');
+  });
+
+  it('publishes these files and no others', () => {
+    // A file added under either folder is published with the next push, so it is named here first.
+    expect([...files.keys()]).toEqual([
+      '.claude-plugin/marketplace.json',
+      'README.md',
+      'plugins/magicbooklet/.claude-plugin/plugin.json',
+      'plugins/magicbooklet/README.md',
+      'plugins/magicbooklet/skills/create-ugc-ad/SKILL.md',
+      'plugins/magicbooklet/skills/post-outside-media/SKILL.md',
+      'plugins/magicbooklet/skills/publish-creation/SKILL.md',
+      'plugins/magicbooklet/skills/share-a-skill/SKILL.md',
+    ]);
+    // The public repository's front page is the plugin's own README.
+    expect(files.get('README.md')?.equals(files.get('plugins/magicbooklet/README.md') as Buffer)).toBe(true);
+  });
+
+  it('holds nothing private, and nothing that names the app’s repository or its files', () => {
+    expect(findPrivateContent(files)).toEqual([]);
+    for (const [file, bytes] of files) {
+      const text = bytes.toString('utf8');
+      expect(text, file).not.toMatch(/ugc-copy/);
+      // A reader of the public repository has no `src/`, `docs/` or `scripts/` to open.
+      expect(text, file).not.toMatch(/\b(?:src|docs|scripts)\/[\w.-]/);
+    }
+  });
+
+  it('refuses a tree that holds a secret, a secrets file, a private address or a machine’s path', () => {
+    const tree = (file: string, text: string) => new Map([[file, Buffer.from(text)]]);
+    const refused: Array<[string, Map<string, Buffer>]> = [
+      ['a private key', tree('plugins/magicbooklet/skills/x/SKILL.md', '-----BEGIN PRIVATE KEY-----')],
+      ['a signed token', tree('plugins/magicbooklet/README.md', `${'eyJ'}hbGciOiJIUzI1NiJ9.${'eyJ'}zdWIiOiIxMjM0NTY3ODkwIn0.sig`)],
+      ['a provider key', tree('plugins/magicbooklet/README.md', `key ${'sk_'}live_abc123`)],
+      ['the service role', tree('plugins/magicbooklet/README.md', 'the service_role key')],
+      ['a Supabase project host', tree('plugins/magicbooklet/README.md', 'https://abcdefghijklmnopqrst.supabase.co')],
+      ['a path on someone’s machine', tree('plugins/magicbooklet/README.md', 'see /Users/someone/notes.md')],
+      ['an email address that is not the public one', tree('plugins/magicbooklet/README.md', 'write to someone@example.com')],
+      ['a secrets file', tree('plugins/magicbooklet/.env.local', 'NAME=value')],
+      ['a secrets file', tree('plugins/magicbooklet/.mcp.json', '{}')],
+    ];
+    for (const [label, files] of refused) {
+      const [file] = files.keys();
+      expect(findPrivateContent(files), label).toEqual([`${file}: ${label}`]);
+    }
+    // The public address and the install command's `name@marketplace` are not findings.
+    expect(findPrivateContent(tree('README.md', `info@magicbooklet.com, ${MCP_PLUGIN_INSTALL_COMMAND}.`))).toEqual([]);
+  });
+
+  it('says what a push would add, change and remove', () => {
+    const published = new Map([['README.md', Buffer.from('old')], ['gone.md', Buffer.from('x')], ['same.md', Buffer.from('y')]]);
+    const wanted = new Map([['README.md', Buffer.from('new')], ['same.md', Buffer.from('y')], ['added.md', Buffer.from('z')]]);
+    expect(mirrorDifference(published, wanted)).toEqual({ added: ['added.md'], changed: ['README.md'], removed: ['gone.md'], same: false });
+    expect(mirrorDifference(wanted, wanted)).toMatchObject({ same: true });
   });
 });

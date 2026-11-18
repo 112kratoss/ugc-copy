@@ -113,8 +113,8 @@ A browser-only operator console under `src/app/admin/(console)/`, gated twice (a
 
 Distribution (runbook, "Distribution"): `/developers/mcp` is the public setup page, its client ids, ports and commands from `src/lib/mcp-client-directory.ts` (a `CLIENT_ID_PENDING_<SURFACE>` id shows that client as coming soon), and `server.json` at the root is the MCP registry entry, `com.magicbooklet/mcp`, proven by `/.well-known/mcp-registry-auth`. Two top-level folders serve Claude Code users, not this repository's agents:
 
-- `.claude-plugin/` — the plugin marketplace this public repository serves (`claude plugin marketplace add 112kratoss/ugc-copy`).
-- `plugins/` — its plugins: `plugins/magicbooklet/`, the MCP server and four skills, held to the client directory by `mcp-distribution-manifests.test.ts`.
+- `.claude-plugin/` — the plugin marketplace. People install it from a public repository of its own (`claude plugin marketplace add 112kratoss/magicbooklet-claude-plugin`), which `npm run ops:plugin-mirror` publishes from these two folders (`scripts/ops/plugin-mirror.mjs`: `check`, `push`, and `push --confirm` only on the owner's word, since it is publication), so installs do not depend on this repository being public (moved 2026-11-19).
+- `plugins/` — its plugins: `plugins/magicbooklet/`, the MCP server and four skills, held to the client directory by `mcp-distribution-manifests.test.ts`, which also lists the files that are published.
 
 ### Background jobs
 

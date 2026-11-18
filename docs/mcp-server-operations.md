@@ -897,8 +897,10 @@ draws both states of every block.
 
 ### The Claude Code plugin marketplace
 
-This public repository is a Claude Code plugin marketplace: `.claude-plugin/marketplace.json`
-(name `magicbooklet`) lists one plugin, `plugins/magicbooklet/`, which declares the server with
+The marketplace is `.claude-plugin/marketplace.json` (name `magicbooklet`) and people install it
+from a public repository of its own, `112kratoss/magicbooklet-claude-plugin`, which is published
+from this one ("Publishing the plugin", below). It lists one plugin, `plugins/magicbooklet/`,
+which declares the server with
 the Claude Code client and port 8976, and four skills: `create-ugc-ad` (models, quote, the
 person's yes, `create_media` with `expected_cost_credits` and one `idempotency_key`, the wait,
 an offer to publish), `publish-creation` (a finished creation, a title that is no placeholder,
@@ -911,15 +913,14 @@ the person asks to sell it, and then only at a price they named and said yes to)
 installs it with:
 
 ```bash
-claude plugin marketplace add 112kratoss/ugc-copy
+claude plugin marketplace add 112kratoss/magicbooklet-claude-plugin
 ```
 
 ```bash
 claude plugin install magicbooklet@magicbooklet
 ```
 
-and signs in with `/mcp`. Adding the marketplace clones this repository; `--sparse .claude-plugin
-plugins` on the first command checks out only those two folders.
+and signs in with `/mcp`.
 
 - The server is declared in `plugin.json`'s `mcpServers`, not in a `.mcp.json`: this
   repository's agent guard refuses every `.mcp.json` to its agents, which would leave the file
@@ -931,11 +932,57 @@ plugins` on the first command checks out only those two folders.
 - `claude plugin validate --strict .` checks the marketplace and `claude plugin validate --strict
   plugins/magicbooklet` the plugin and its skills; both passed on Claude Code 2.1.302.
 
+#### Publishing the plugin
+
+The two folders stay in this repository, beside the server, so the manifest test can hold the
+skills to the server's tools and limits and a plugin change lands in the PR of the server change
+it describes. The public repository is output only: the tracked files of `.claude-plugin/` and
+`plugins/` at the same paths, the plugin's README again at the root, a history of its own and no
+workflows. `scripts/ops/plugin-mirror.mjs` writes it, and reads the repository's name from the
+plugin manifest's `repository`, which the test holds to `MCP_PLUGIN_REPOSITORY`.
+
+1. Change the plugin and raise `version` in `plugin.json`, in a PR like any other. A file added
+   under either folder is named in the test's list of published files first.
+2. Once it is merged, from a checkout of `main`: `npm run ops:plugin-mirror -- check` says what
+   the public repository lacks (exit 1 when it differs), and `npm run ops:plugin-mirror -- push`
+   shows the same and stops.
+3. `npm run ops:plugin-mirror -- push --confirm` commits and pushes it, as `Magic Booklet
+   <info@magicbooklet.com>`. A push is publication: only on the owner's word. It refuses a tree
+   that holds anything that reads as a secret, a secrets file, an address other than the public
+   one or a path on someone's machine, and one whose two folders have uncommitted changes.
+4. Prove an install from it with a config of its own, which leaves the operator's untouched:
+
+   ```bash
+   export CLAUDE_CONFIG_DIR="$(mktemp -d)"; claude plugin marketplace add 112kratoss/magicbooklet-claude-plugin && claude plugin install magicbooklet@magicbooklet && claude plugin list
+   ```
+
+Until a push, an installed copy stays at the version the public repository holds: merging here
+reaches nobody.
+
+The marketplace moved there on 2026-11-19 (plugin 1.1.1), so that this repository can go private
+without breaking installs. It was served from this repository before, and what was measured then
+on Claude Code 2.1.302 says what earlier installs do:
+
+- Someone who added the marketplace from this repository runs the new first command once. A
+  marketplace is known by its name, so Claude Code answers that `magicbooklet` "was already added
+  from github:… and now points at" the new source, and the plugin installed from it updates from
+  there (`claude plugin update magicbooklet@magicbooklet`).
+- Someone who does nothing keeps a working plugin. While this repository is public their
+  marketplace still updates from it, since the folders are still here. Once it is private,
+  `claude plugin marketplace update` fails for them ("Could not read from remote repository")
+  and the plugin stays installed and enabled at its version, signing in to the same server; they
+  get no later version until they run the new command.
+
+So the order is: the public repository holds the plugin and an install from it is proven, then
+the release that names it on `/developers/mcp` is live, and only later does this repository go
+private. Nothing about the plugin has to change on that day.
+
 ### MCP registry
 
 `server.json` at the repository root is the official MCP registry entry,
 `com.magicbooklet/mcp`: the remote `streamable-http` server at `https://magicbooklet.com/api/mcp`,
-its website `/developers/mcp` and this repository, in the registry's 2025-12-11 schema. The
+its website `/developers/mcp` and the plugin's public repository (`repository`, the one public
+place a reader of the entry can open), in the registry's 2025-12-11 schema. The
 namespace is proven by the domain: `/.well-known/mcp-registry-auth` serves
 `v=MCPv1; k=ed25519; p=<public key>` as plain text (`src/lib/mcp-registry-auth.ts` holds the
 public key). The private key is not in the repository, the app's environment or Vercel: the
@@ -995,6 +1042,13 @@ and still true. 1.2.0 was published on 2026-11-10 at 16:57 UTC by the steps abov
 release that carries it was live and the production checks under "Media made elsewhere" and
 "Text posts, resources and prices" had passed: the registry answers 1.2.0 `status: active` and
 `isLatest`, and 1.1.0 no longer latest.
+
+1.2.1 (2026-11-19) changes one thing, `repository`: from this repository to
+`112kratoss/magicbooklet-claude-plugin` (GitHub id 1463305349), so the entry's link still opens
+once this repository is private. A published version cannot be edited, which is why the change
+is a version. Nothing installs from that link, so the publish is not urgent, and 1.2.0 stays the
+registry's latest until 1.2.1 is published by the steps above, after the release that carries it
+is live. Record the publish here when it is done.
 
 The DNS alternative needs no deploy: a TXT record on the apex, `magicbooklet.com`, never under
 a selector such as `_mcp-auth.magicbooklet.com`:

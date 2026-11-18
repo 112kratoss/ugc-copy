@@ -50,10 +50,12 @@ export const MCP_PROTECTED_RESOURCE_METADATA_URL = `${MCP_SERVER_ORIGIN}/.well-k
 export const MCP_POSTS_PROTECTED_RESOURCE_METADATA_URL = `${MCP_SERVER_ORIGIN}/.well-known/oauth-protected-resource${MCP_POSTS_ROUTE_PATH}`;
 
 /**
- * The Claude Code plugin marketplace this public repository serves (`.claude-plugin/marketplace.json`)
- * and its one plugin (`plugins/magicbooklet/`): the marketplace and the plugin share the name.
+ * The Claude Code plugin marketplace (`.claude-plugin/marketplace.json`) and its one plugin
+ * (`plugins/magicbooklet/`): the marketplace and the plugin share the name. Both are kept in this
+ * repository and published to the public one named here by `npm run ops:plugin-mirror`
+ * (`scripts/ops/plugin-mirror.mjs`), so an install does not depend on this repository being public.
  */
-export const MCP_PLUGIN_REPOSITORY = '112kratoss/ugc-copy';
+export const MCP_PLUGIN_REPOSITORY = '112kratoss/magicbooklet-claude-plugin';
 export const MCP_PLUGIN_MARKETPLACE_NAME = 'magicbooklet';
 export const MCP_PLUGIN_NAME = 'magicbooklet';
 export const MCP_PLUGIN_MARKETPLACE_ADD_COMMAND = `claude plugin marketplace add ${MCP_PLUGIN_REPOSITORY}`;
