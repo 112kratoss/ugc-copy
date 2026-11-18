@@ -10,6 +10,7 @@ import { buildAppShellAccountRestore } from "@/lib/app-shell-account-restore";
 import { APP_SHELL_SIDEBAR_RESTORE } from "@/lib/app-shell-sidebar-restore";
 import { WELCOME_PROMISE_RESTORE } from "@/lib/welcome-promise-restore";
 import { REEL_OPENING_RESTORE } from "@/lib/reel-opening-restore";
+import { SCROLLBAR_ROOM_RESTORE } from "@/lib/scrollbar-room-restore";
 import { ADDRESS_FIRST_PAINT_RESTORE } from "@/lib/address-first-paint";
 import { RELOAD_OPENS_AT_TOP } from "@/lib/reload-opens-at-top";
 
@@ -104,6 +105,8 @@ export default function RootLayout({
           builds the root layout again, so React never makes it in the browser.
         */}
         <script dangerouslySetInnerHTML={{ __html: TYPED_BEFORE_HYDRATION_CAPTURE }} />
+        {/* A browser whose scrollbars take room beside the page, marked on the root element before the first paint, so every page keeps that room open and never moves when its scrollbar comes (`src/lib/scrollbar-room-restore.ts`). */}
+        <script dangerouslySetInnerHTML={{ __html: SCROLLBAR_ROOM_RESTORE }} />
         {/* The sidebar hidden in this browser, marked on the root element before the shell is drawn (`src/lib/app-shell-sidebar-restore.ts`). */}
         <script dangerouslySetInnerHTML={{ __html: APP_SHELL_SIDEBAR_RESTORE }} />
         {/* No promise of the welcome credits where an account has signed in on this browser, from the first paint (`src/lib/welcome-promise-restore.ts`). */}

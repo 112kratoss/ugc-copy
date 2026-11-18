@@ -89,8 +89,15 @@ export function CreatorToolCard({
   // beside that one rather than inside it. The card draws the launch link's
   // focus ring (`.creator-tool-card` in globals.css): the link fills it, and
   // the card's overflow would clip a ring the link drew itself.
+  //
+  // The card is the article, and the link is named by its title and its call
+  // to action ("Create Image Start with image"): an <article> inside the link
+  // gave it no name at all, since Chrome takes no link's name from inside one
+  // (web sweep, 2026-11-17), and its whole text would make a long one.
+  const titleId = `creator-tool-${tool.id}-title`;
+  const launchId = `creator-tool-${tool.id}-launch`;
   return (
-    <div
+    <article
       className={clsx(
         'creator-tool-card ui-card ui-card-interactive group relative flex h-full min-h-[318px] flex-col overflow-hidden rounded-3xl bg-[var(--ui-surface-1)]',
         theme.border
@@ -100,9 +107,10 @@ export function CreatorToolCard({
       <Link
         href={tool.href}
         prefetch={prefetch}
+        aria-labelledby={`${titleId} ${launchId}`}
         className="group flex flex-1 cursor-pointer flex-col rounded-3xl p-4 outline-none sm:p-5"
       >
-        <article className="flex h-full flex-col">
+        <div className="flex h-full flex-col">
           <MediaFrame className="relative rounded-3xl">
             {preview ? (
               <div className="h-44 w-full bg-black sm:h-48">
@@ -139,6 +147,7 @@ export function CreatorToolCard({
               <Text
                 as="h3"
                 variant="cardTitle"
+                id={titleId}
                 className="mt-2 text-2xl leading-8"
               >
                 {tool.label}
@@ -156,11 +165,11 @@ export function CreatorToolCard({
                 theme.button
               )}
             >
-              {tool.launchLabel}
+              <span id={launchId}>{tool.launchLabel}</span>
               <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5 group-focus-visible:translate-x-0.5" />
             </div>
           </div>
-        </article>
+        </div>
       </Link>
       {starter ? (
         <div className="border-t border-[var(--ui-border-subtle)] px-4 py-1 sm:px-5">
@@ -175,7 +184,7 @@ export function CreatorToolCard({
           </Link>
         </div>
       ) : null}
-    </div>
+    </article>
   );
 }
 
