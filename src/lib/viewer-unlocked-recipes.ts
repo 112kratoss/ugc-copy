@@ -35,6 +35,8 @@ function readUnlockedRecipes(userId: string, token: string) {
   const answer = answers.get(userId);
   if ((answer && Date.now() - answer.readAt < FRESH_FOR_MS) || reading.has(userId)) return;
   reading.add(userId);
+  // A recipe that becomes the viewer's while this read is out may be missing from its answer.
+  const askedAt = unlockedSince;
   void fetch('/api/me/unlocked-recipes', { headers: { Authorization: `Bearer ${token}` } })
     .then(async (response) => {
       if (!response.ok) return;
@@ -42,12 +44,15 @@ function readUnlockedRecipes(userId: string, token: string) {
       const ids = Array.isArray(data.bundleIds)
         ? data.bundleIds.filter((id): id is string => typeof id === 'string')
         : [];
-      answers.set(userId, { ids: new Set(ids), readAt: Date.now() });
+      answers.set(userId, { ids: new Set(ids), readAt: askedAt === unlockedSince ? Date.now() : 0 });
       for (const listener of listeners) listener();
     })
     .catch(() => undefined)
     .finally(() => {
       reading.delete(userId);
+      // Asked before a recipe became theirs (`forgetViewerUnlockedRecipes` while it was out): read
+      // again, for an answer that has it (review of #868).
+      if (askedAt !== unlockedSince) readUnlockedRecipes(userId, token);
     });
 }
 

@@ -138,6 +138,24 @@ describe('useViewerRecipeState', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  // Taken while the read was out: that answer may not have it, so it is read again (review of #868).
+  it('reads again when a recipe became the viewer\'s while their read was out', async () => {
+    signIn('buyer-9');
+    let answerFirst: (value: unknown) => void = () => {};
+    fetchMock.mockImplementationOnce(() => new Promise((resolve) => {
+      answerFirst = resolve;
+    }));
+    const { result } = renderHook(() => useViewerRecipeState());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    fetchMock.mockResolvedValueOnce(answer(['b1', 'b2']));
+    act(() => forgetViewerUnlockedRecipes());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    answerFirst(answer(['b1']));
+    await waitFor(() => expect(result.current.unlockedBundleIds.has('b2')).toBe(true));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('asks nothing for a page with no recipe on it', () => {
     signIn('buyer-8');
     fetchMock.mockResolvedValue(answer(['b1']));
