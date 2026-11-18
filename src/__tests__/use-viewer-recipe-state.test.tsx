@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -6,6 +6,7 @@ const authState = vi.hoisted(() => ({ session: null as { access_token: string } 
 vi.mock('@/components/AuthProvider', () => ({ useAuth: () => authState }));
 
 import { useViewerRecipeState } from '@/app/marketplace/useViewerRecipeState';
+import { forgetViewerUnlockedRecipes, useViewerUnlockedRecipeIds } from '@/lib/viewer-unlocked-recipes';
 
 function answer(ids: unknown[]) {
   return { ok: true, json: async () => ({ success: true, bundleIds: ids }) };
@@ -119,5 +120,29 @@ describe('useViewerRecipeState', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     await Promise.resolve();
     expect(result.current.unlockedBundleIds.size).toBe(0);
+  });
+
+  // A recipe taken while a list of cards is open (in the reel over a creator page, or on its post
+  // page and back within the answer's freshness): the list reads the viewer's recipes again, and its
+  // tiles say "Unlocked" once the read lands, drawing the last answer until then (review of #868).
+  it('reads again once a recipe has become the viewer\'s, whatever the last answer\'s age', async () => {
+    signIn('buyer-7');
+    fetchMock.mockResolvedValueOnce(answer(['b1']));
+    const { result } = renderHook(() => useViewerRecipeState());
+    await waitFor(() => expect(result.current.unlockedBundleIds.has('b1')).toBe(true));
+
+    fetchMock.mockResolvedValueOnce(answer(['b1', 'b2']));
+    act(() => forgetViewerUnlockedRecipes());
+    expect(result.current.unlockedBundleIds.has('b1')).toBe(true);
+    await waitFor(() => expect(result.current.unlockedBundleIds.has('b2')).toBe(true));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks nothing for a page with no recipe on it', () => {
+    signIn('buyer-8');
+    fetchMock.mockResolvedValue(answer(['b1']));
+    const { result } = renderHook(() => useViewerUnlockedRecipeIds({ enabled: false }));
+    expect(result.current.size).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

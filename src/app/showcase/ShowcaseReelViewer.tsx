@@ -74,6 +74,7 @@ import { getCurrentInternalPath } from '@/lib/share';
 import { displaySourceToolLabel } from '@/lib/source-tools';
 import { type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
 import { noteFollowChange } from '@/lib/follow-changes';
+import { forgetViewerUnlockedRecipes } from '@/lib/viewer-unlocked-recipes';
 import { tilePictureStandIn } from '@/app/showcase/tile-pictures';
 import { returnFocus, showsKeyboardFocus } from '@/app/showcase/reel-focus-return';
 
@@ -1064,6 +1065,9 @@ export default function ShowcaseReelViewer({
   // An unlock made in the reel: the post page's panel opens in the details,
   // saying so and where the recipe is kept.
   const applyReelUnlock = (postId: string, bundle: ReelBundle) => {
+    // The recipe is the viewer's now: the page's cards under the reel (a creator page's tiles, the
+    // Marketplace's) read their recipes again and say "Unlocked" (viewer-unlocked-recipes.ts).
+    forgetViewerUnlockedRecipes();
     setUnlockSuccessItemId(postId);
     setUnlockedBundle(bundle);
     setJustUnlockedItemId(postId);

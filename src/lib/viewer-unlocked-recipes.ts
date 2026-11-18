@@ -20,6 +20,9 @@ const NO_RECIPES: ReadonlySet<string> = new Set();
 const answers = new Map<string, { ids: ReadonlySet<string>; readAt: number }>();
 const reading = new Set<string>();
 const listeners = new Set<() => void>();
+// Moves on each time a recipe may have become the viewer's (`forgetViewerUnlockedRecipes`): every
+// list of cards on the page reads their recipes again then, whatever its last answer's age.
+let unlockedSince = 0;
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
@@ -49,25 +52,39 @@ function readUnlockedRecipes(userId: string, token: string) {
 }
 
 /**
+ * A recipe has just become the viewer's (taken free, bought with credits or paid for): every list of
+ * cards on the page reads their recipes again, and one that mounts later reads them too, so a tile
+ * under the reel it was taken in says "Unlocked" once its read lands, and a list returned to within
+ * `FRESH_FOR_MS` does not draw the answer from before. The last answer stands until then.
+ */
+export function forgetViewerUnlockedRecipes() {
+  unlockedSince += 1;
+  for (const answer of answers.values()) answer.readAt = 0;
+  for (const listener of listeners) listener();
+}
+
+/**
  * The recipes the signed-in viewer has, bought or opened free, by id, from `/api/me/unlocked-recipes`:
  * for the cards of a page drawn once for everyone, which cannot say "Unlocked" (the Marketplace's
  * catalog, a creator page's first posts). A signed-out viewer is asked nothing; a failed read leaves
  * the price on the cards, and the post page still says "Unlocked". Empty on the server and in the
  * render that hydrates: the page is hydrated as it was drawn, and the viewer's recipes arrive after.
+ * `enabled: false` asks nothing, for a page with no recipe on it.
  */
-export function useViewerUnlockedRecipeIds(): ReadonlySet<string> {
+export function useViewerUnlockedRecipeIds({ enabled = true }: { enabled?: boolean } = {}): ReadonlySet<string> {
   const { session, user } = useAuth();
-  const userId = user?.id ?? null;
+  const userId = enabled ? user?.id ?? null : null;
   const token = session?.access_token ?? null;
   const unlockedBundleIds = useSyncExternalStore(
     subscribe,
     () => (userId ? answers.get(userId)?.ids : undefined) ?? NO_RECIPES,
     () => NO_RECIPES,
   );
+  const readAgainAfter = useSyncExternalStore(subscribe, () => unlockedSince, () => 0);
 
   useEffect(() => {
     if (userId && token) readUnlockedRecipes(userId, token);
-  }, [userId, token]);
+  }, [userId, token, readAgainAfter]);
 
   return unlockedBundleIds;
 }

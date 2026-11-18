@@ -157,8 +157,9 @@ function CreatorContentTabsView({
   // The first page is the server's, drawn once for every viewer, so it cannot say which recipes a
   // signed-in reader has: a buyer's read their price or "Free recipe" on the tiles and in the reel for
   // as long as the page was open (sweep of 2026-11-17), while a later page, read with their session,
-  // said "Unlocked". Their own recipes are read apart, as the Marketplace reads them, and marked here.
-  const unlockedRecipeIds = useViewerUnlockedRecipeIds();
+  // said "Unlocked". Their own recipes are read apart, as the Marketplace reads them, and marked here;
+  // a creator with no recipe has none to mark, and nothing is asked.
+  const unlockedRecipeIds = useViewerUnlockedRecipeIds({ enabled: initialData.stats.unlocks > 0 });
   const items = useMemo(
     () => withViewerUnlockedRecipes(loadedItems, unlockedRecipeIds),
     [loadedItems, unlockedRecipeIds],

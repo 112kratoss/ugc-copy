@@ -71,6 +71,7 @@ import {
   type RecipeReadingGroup,
 } from '@/app/showcase/recipe-reading';
 import { forgetKeptSearchPages } from '@/lib/search-kept-pages';
+import { forgetViewerUnlockedRecipes } from '@/lib/viewer-unlocked-recipes';
 import RecipeMediaGallery from './RecipeMediaGallery';
 import {
   clearRazorpayCheckoutIntentKey,
@@ -585,7 +586,10 @@ export default function PostResourceBundlePanel({
     // The recipe has just become the viewer's: a search Back would redraw from
     // what it kept still prices it (search-kept-pages.ts). A refresh that
     // changes nothing keeps them.
-    if (nowHasAccess && !hasAccess) forgetKeptSearchPages();
+    if (nowHasAccess && !hasAccess) {
+      forgetKeptSearchPages();
+      forgetViewerUnlockedRecipes();
+    }
     setHasAccess(nowHasAccess);
     setResources(bundle.resources);
 

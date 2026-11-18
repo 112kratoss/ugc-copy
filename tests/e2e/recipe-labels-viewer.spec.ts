@@ -170,8 +170,11 @@ type TileFrame = { path: string; tiles: Array<string | null> };
  * Records every frame whose recipe tiles read differently from the last, from the document's first
  * frame on, as the words shown of each, upper-cased (the chips are drawn in capitals): the
  * storefront's tiles ("VIEW FREE RECIPE + FREE RECIPE"), a creator page's chips ("FREE RECIPE",
- * "900 CREDITS", "UNLOCKED"). A tile is null where it is not drawn: its HTML has not all arrived
- * (its title, after the chip, is not in yet), or the page is not laid out yet.
+ * "900 CREDITS", "UNLOCKED"). A tile is null where it is not drawn: the page is not laid out yet,
+ * or Chrome drew the frame from part of the page's HTML with the parser still inside the tile, which
+ * it does on a time budget, the whole document in or not (a storefront tile's title comes before its
+ * chip, and a frame between them would read its action alone). Nothing follows a tile in the
+ * document until the parser has left it.
  */
 const RECORDER = `(() => {
   const frames = [];
@@ -179,15 +182,22 @@ const RECORDER = `(() => {
   let last = '';
   const words = /VIEW FREE RECIPE|VIEW RECIPE|YOUR RECIPE|FREE RECIPE|UNLOCKED|UNLOCK FOR|[\\d,]+ CREDITS?/g;
   const drawn = (element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility === 'visible';
-  const read = (tile, title) => {
-    if (!tile.querySelector(title) || !drawn(tile)) return null;
+  const parsed = (element) => {
+    if (document.readyState !== 'loading') return true;
+    for (let node = element; node && node !== document.documentElement; node = node.parentNode) {
+      if (node.nextSibling) return true;
+    }
+    return false;
+  };
+  const read = (tile) => {
+    if (!parsed(tile) || !drawn(tile)) return null;
     const found = tile.innerText.toUpperCase().match(words);
     return found ? found.join(' + ') : '';
   };
   function sample() {
     const storefront = Array.from(document.querySelectorAll('main a')).filter((link) => link.querySelector('h2') && link.querySelector('time'));
     const creatorPage = Array.from(document.querySelectorAll('[data-creator-grid] [data-creator-card][data-creator-recipe]'));
-    const tiles = storefront.length > 0 ? storefront.map((tile) => read(tile, 'h2')) : creatorPage.map((tile) => read(tile, 'h3'));
+    const tiles = (storefront.length > 0 ? storefront : creatorPage).map(read);
     if (tiles.length > 0) {
       const frame = { path: location.pathname, tiles };
       const key = JSON.stringify(frame);
@@ -348,6 +358,25 @@ test.describe('a seller\'s own recipes on the storefront', () => {
     await twoFrames(page);
     await expect.poll(() => storefrontNow(page)).toEqual(Array(FIRST_PAGE).fill(OWN_TILE));
     expectTilesInEveryFrame(await recordedFrames(page, STOREFRONT), Array(FIRST_PAGE).fill(OWN_TILE));
+  });
+
+  test('another signed-in reader is offered every recipe in every frame, while the session is checked', async ({ page, context }) => {
+    // Their session cookie names someone else: the seller's words are never theirs.
+    const checks = await signIn(context, buyer);
+    checks.hold();
+    const readsWithSession = await answerApi(page);
+    await page.addInitScript(RECORDER);
+
+    await page.goto(STOREFRONT);
+    await expect.poll(() => storefrontNow(page), COLD_PAGE).toHaveLength(FIRST_PAGE);
+    await expect.poll(checks.held, CHECK_ASKED).toBeGreaterThan(0);
+    await twoFrames(page);
+
+    checks.release();
+    await expect.poll(() => readsWithSession.length, COLD_PAGE).toBeGreaterThan(0);
+    await twoFrames(page);
+    await expect.poll(() => storefrontNow(page)).toEqual(Array(FIRST_PAGE).fill(OFFERED_TILE));
+    expectTilesInEveryFrame(await recordedFrames(page, STOREFRONT), Array(FIRST_PAGE).fill(OFFERED_TILE));
   });
 
   test('a visitor is offered every recipe in every frame, and never reads the seller\'s words', async ({ page, context }) => {
