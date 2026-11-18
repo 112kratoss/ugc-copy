@@ -368,7 +368,8 @@ function Brand({
       prefetch={false}
       aria-current={active ? 'page' : undefined}
       data-app-nav-tab={HOME_NAV_ITEM.id}
-      // The mark plays its sting as the page opens, and again when a mouse comes onto the brand.
+      // The sidebar's mark plays its sting as the page opens, and again when a mouse comes onto
+      // the brand; the drawer's (`compact`) is drawn still, since it mounts on every open.
       onPointerEnter={(event) => {
         if (event.pointerType === 'mouse') replayBrandMark(markRef.current);
       }}
@@ -378,7 +379,7 @@ function Brand({
       }}
       className="ui-focus-ring flex items-center gap-3 rounded-2xl text-[var(--ui-text-primary)]"
     >
-      <BrandMark ref={markRef} />
+      <BrandMark ref={markRef} still={compact} />
       <span className="min-w-0">
         <span className="block truncate text-[15px] font-extrabold tracking-tight">Magic Booklet</span>
         {!compact ? (

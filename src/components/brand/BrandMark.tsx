@@ -1,7 +1,11 @@
+import type { StaticImageData } from 'next/image';
 import type { CSSProperties, Ref } from 'react';
+import { preload } from 'react-dom';
 
-import brandIcon from './magic-booklet-icon.png';
+import { mulberry32 } from '@/lib/feed-thompson';
+
 import brandDot from './magic-booklet-dot.png';
+import brandIcon from './magic-booklet-icon.png';
 import brandStar from './magic-booklet-star.png';
 
 /**
@@ -10,16 +14,17 @@ import brandStar from './magic-booklet-star.png';
  * icon breathes, its star pops with a warm glow and throws a burst of sparkles, the dot
  * pulses, and everything settles back to the still icon in 1.15 s. The timings and curves
  * are the script's, as `.brand-mark` keyframes in globals.css, so the sting plays from the
- * first paint of a page load, before any script runs. Transforms and opacity only, so the
- * browser composites every frame; nothing under reduced motion. The layers are made by
- * scripts/build/make-brand-mark-layers.mjs, which prints the two centres below.
+ * first paint of a page load, before any script runs; brand-mark.test.tsx holds both to
+ * the script. Transforms and opacity only, so the browser composites every frame; nothing
+ * under reduced motion. The layers are made by scripts/build/make-brand-mark-layers.mjs,
+ * which prints the two centres below.
  */
 
 /** Tile size in px; the sparkles' reach is set in px against it. */
 export const BRAND_MARK_SIZE = 40;
 /** Where the star and the dot sit, as percentages of the tile. */
-const STAR_CENTRE = { x: 72.67, y: 29.36 };
-const DOT_CENTRE = { x: 82.51, y: 18.72 };
+export const STAR_CENTRE = { x: 72.67, y: 29.36 };
+export const DOT_CENTRE = { x: 82.51, y: 18.72 };
 /** The script's gaussian glow (sigma 85 of its 640 px canvas), as a share of the tile. */
 const GLOW_SIGMA = (85 / 640) * 100;
 
@@ -46,16 +51,6 @@ export type BrandMarkSpark = {
   spin: number;
   colour: string;
 };
-
-function mulberry32(seed: number) {
-  return () => {
-    seed |= 0;
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 const round = (value: number) => Math.round(value * 100) / 100;
 const degrees = (radians: number) => round((radians * 180) / Math.PI);
@@ -87,11 +82,20 @@ export function brandMarkSparks(): BrandMarkSpark[] {
 
 const SPARKS = brandMarkSparks();
 
+/** A static image import is an object in a build and a bare path under vitest. */
+function imageSrc(image: StaticImageData | string) {
+  return typeof image === 'string' ? image : image.src;
+}
+
+const ICON_SRC = imageSrc(brandIcon);
+const STAR_SRC = imageSrc(brandStar);
+const DOT_SRC = imageSrc(brandDot);
+
 /**
  * Plays the sting again, from the start, unless it is playing now. Its animations keep
  * their last frame (`animation-fill-mode: both`), the still icon, so they stay listed by
- * getAnimations() after the first play and can be rewound; under reduced motion there are
- * none, and a browser without the Web Animations API keeps the still icon.
+ * getAnimations() after the first play and can be rewound; a still mark, reduced motion,
+ * or a browser without the Web Animations API has none, and keeps the still icon.
  */
 export function replayBrandMark(mark: HTMLElement | null) {
   if (!mark || typeof mark.getAnimations !== 'function') return;
@@ -103,67 +107,84 @@ export function replayBrandMark(mark: HTMLElement | null) {
   }
 }
 
-export default function BrandMark({ ref }: { ref?: Ref<HTMLSpanElement> }) {
+/**
+ * `still` draws the icon alone, for a copy that mounts again and again (the phone
+ * drawer's, on every open): the sting belongs to the page's opening.
+ */
+export default function BrandMark({ ref, still = false }: { ref?: Ref<HTMLSpanElement>; still?: boolean }) {
+  // Asked for in the head, ahead of the body that draws them: the sting starts at the
+  // first paint, and on a cold load it should play over the icon, not over its ground.
+  preload(ICON_SRC, { as: 'image', fetchPriority: 'high' });
+  if (!still) {
+    preload(STAR_SRC, { as: 'image' });
+    preload(DOT_SRC, { as: 'image' });
+  }
   const glowSize = GLOW_SIGMA * 6;
   return (
-    <span ref={ref} aria-hidden className="brand-mark">
-      <span className="brand-mark-tile">
-        {/* Plain images: fixed files sized for the tile, never sent through the image optimizer. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={brandIcon.src} width={BRAND_MARK_SIZE} height={BRAND_MARK_SIZE} alt="" decoding="async" className="brand-mark-layer" />
-        <span
-          className="brand-mark-glow"
-          style={{
-            left: `${round(STAR_CENTRE.x - glowSize / 2)}%`,
-            top: `${round(STAR_CENTRE.y - glowSize / 2)}%`,
-            width: `${round(glowSize)}%`,
-            height: `${round(glowSize)}%`,
-          }}
-        />
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={brandStar.src}
-          width={BRAND_MARK_SIZE}
-          height={BRAND_MARK_SIZE}
-          alt=""
-          decoding="async"
-          className="brand-mark-layer brand-mark-star"
-          style={{ transformOrigin: `${STAR_CENTRE.x}% ${STAR_CENTRE.y}%` }}
-        />
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={brandDot.src}
-          width={BRAND_MARK_SIZE}
-          height={BRAND_MARK_SIZE}
-          alt=""
-          decoding="async"
-          className="brand-mark-layer brand-mark-dot"
-          style={{ transformOrigin: `${DOT_CENTRE.x}% ${DOT_CENTRE.y}%` }}
-        />
-      </span>
-      <span className="brand-mark-burst" style={{ left: `${STAR_CENTRE.x}%`, top: `${STAR_CENTRE.y}%` }}>
-        {SPARKS.map((spark, index) => (
-          <span
-            key={index}
-            className="brand-mark-spark"
-            style={{ '--spark-x': `${spark.x}px`, '--spark-y': `${spark.y}px`, '--spark-delay': `${spark.delay}s` } as CSSProperties}
-          >
-            <span
-              className={spark.shape === 'star' ? 'brand-mark-spark-star' : 'brand-mark-spark-dot'}
-              style={
-                {
-                  width: round(spark.radius * 2),
-                  height: round(spark.radius * 2),
-                  marginLeft: -spark.radius,
-                  marginTop: -spark.radius,
-                  background: spark.colour,
-                  '--spark-rotate': `${spark.rotate}deg`,
-                  '--spark-spin': `${spark.spin}deg`,
-                } as CSSProperties
-              }
-            />
+    <span ref={ref} aria-hidden className="brand-mark" data-still={still ? '' : undefined}>
+      <span className="brand-mark-breath">
+        <span className="brand-mark-tile">
+          {/* Plain images: fixed files sized for the tile, never sent through the image optimizer. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={ICON_SRC} width={BRAND_MARK_SIZE} height={BRAND_MARK_SIZE} alt="" className="brand-mark-layer" />
+          {still ? null : (
+            <>
+              <span
+                className="brand-mark-glow"
+                style={{
+                  left: `${round(STAR_CENTRE.x - glowSize / 2)}%`,
+                  top: `${round(STAR_CENTRE.y - glowSize / 2)}%`,
+                  width: `${round(glowSize)}%`,
+                  height: `${round(glowSize)}%`,
+                }}
+              />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={STAR_SRC}
+                width={BRAND_MARK_SIZE}
+                height={BRAND_MARK_SIZE}
+                alt=""
+                className="brand-mark-layer brand-mark-star"
+                style={{ transformOrigin: `${STAR_CENTRE.x}% ${STAR_CENTRE.y}%` }}
+              />
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={DOT_SRC}
+                width={BRAND_MARK_SIZE}
+                height={BRAND_MARK_SIZE}
+                alt=""
+                className="brand-mark-layer brand-mark-dot"
+                style={{ transformOrigin: `${DOT_CENTRE.x}% ${DOT_CENTRE.y}%` }}
+              />
+            </>
+          )}
+        </span>
+        {still ? null : (
+          <span className="brand-mark-burst" style={{ left: `${STAR_CENTRE.x}%`, top: `${STAR_CENTRE.y}%` }}>
+            {SPARKS.map((spark, index) => (
+              <span
+                key={index}
+                className="brand-mark-spark"
+                style={{ '--spark-x': `${spark.x}px`, '--spark-y': `${spark.y}px`, '--spark-delay': `${spark.delay}s` } as CSSProperties}
+              >
+                <span
+                  className={spark.shape === 'star' ? 'brand-mark-spark-star' : 'brand-mark-spark-dot'}
+                  style={
+                    {
+                      width: round(spark.radius * 2),
+                      height: round(spark.radius * 2),
+                      marginLeft: -spark.radius,
+                      marginTop: -spark.radius,
+                      background: spark.colour,
+                      '--spark-rotate': `${spark.rotate}deg`,
+                      '--spark-spin': `${spark.spin}deg`,
+                    } as CSSProperties
+                  }
+                />
+              </span>
+            ))}
           </span>
-        ))}
+        )}
       </span>
     </span>
   );
