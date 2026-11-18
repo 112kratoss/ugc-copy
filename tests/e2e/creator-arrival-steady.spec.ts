@@ -242,9 +242,22 @@ function describeStretches(stretches: Stretch[]): string {
   )).join('\n');
 }
 
+/**
+ * How long, in all, the bar may be drawn with the parser still inside it. The parser's stops are a
+ * frame or two each (the CI run's was one frame); a page that held the bar half-drawn for longer is
+ * a fault of its own, and frames the guard leaves out must not hide one (review of #869).
+ */
+const PARSER_INSIDE_BAR_MS = 250;
+
 /** The frames that draw the bar, once the parser has left the part of it they show (`recordFrames`). */
 function barFrames(arrival: Arrival): Stretch[] {
-  const drawn = arrival.stretches.filter((stretch) => !stretch.parsing && (stretch.chip !== null || stretch.generate !== null));
+  const showsBar = (stretch: Stretch) => stretch.chip !== null || stretch.generate !== null;
+  const insideMs = arrival.stretches
+    .filter((stretch) => stretch.parsing && showsBar(stretch))
+    .reduce((total, stretch) => total + stretch.to - stretch.from, 0);
+  expect.soft(insideMs, `the bar is drawn with the parser inside it for moments only:\n${describeStretches(arrival.stretches)}`)
+    .toBeLessThan(PARSER_INSIDE_BAR_MS);
+  const drawn = arrival.stretches.filter((stretch) => !stretch.parsing && showsBar(stretch));
   expect(drawn.length, 'the bar is drawn').toBeGreaterThan(0);
   return drawn;
 }
