@@ -1,3 +1,6 @@
+import { act } from 'react';
+import { hydrateRoot } from 'react-dom/client';
+import { renderToString } from 'react-dom/server';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -358,6 +361,59 @@ describe('PostResourceBundlePanel', () => {
     window.sessionStorage.clear();
     vi.unstubAllGlobals();
     document.getElementById('post-resource-bundle-razorpay-checkout')?.remove();
+  });
+
+  // The post page is drawn on the server (UTC) and hydrated in the reader's zone. A recipe updated
+  // after 18:30 UTC read "Nov 4" in India against the server's "Nov 3", and React threw the server's
+  // HTML away (production's error #418, sweep of 2026-11-18): the date is the server's day in both.
+  it("dates the recipe in the server's zone, so a reader in India hydrates the page the server drew", async () => {
+    const eveningUpdate = { ...promptOnlyPreview, updatedAt: '2026-11-03T20:00:00.000Z' };
+    const panel = (
+      <PostResourceBundlePanel
+        postId="post-1"
+        title="Prompt unlock"
+        summary="Unlock the prompt attached to this post."
+        previewText=""
+        priceLabel="$0.00"
+        priceUsdCents={0}
+        priceNote={null}
+        isFree
+        viewerCanAccess={false}
+        viewerIsOwner={false}
+        resourceKinds={['prompt']}
+        lockedPreview={eveningUpdate}
+        salesCount={0}
+        freeUnlockCount={0}
+        initialResources={null}
+      />
+    );
+    const serverTimeZone = process.env.TZ;
+    const container = document.createElement('div');
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let root: ReturnType<typeof hydrateRoot> | null = null;
+    try {
+      process.env.TZ = 'UTC';
+      container.innerHTML = renderToString(panel);
+      document.body.appendChild(container);
+      expect(container).toHaveTextContent('Updated Nov 3, 2026');
+
+      process.env.TZ = 'Asia/Kolkata';
+      expect(new Date(eveningUpdate.updatedAt).toLocaleDateString('en-US', { day: 'numeric' })).toBe('4');
+      const recoverableErrors: unknown[] = [];
+      await act(async () => {
+        root = hydrateRoot(container, panel, { onRecoverableError: (error) => recoverableErrors.push(error) });
+      });
+      expect(recoverableErrors).toEqual([]);
+      expect(container).toHaveTextContent('Updated Nov 3, 2026');
+    } finally {
+      await act(async () => {
+        root?.unmount();
+      });
+      container.remove();
+      consoleError.mockRestore();
+      if (serverTimeZone === undefined) delete process.env.TZ;
+      else process.env.TZ = serverTimeZone;
+    }
   });
 
   it('keeps locked prompt-only unlocks compact with one open action', () => {
