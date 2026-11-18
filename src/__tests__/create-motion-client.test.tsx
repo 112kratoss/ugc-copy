@@ -2671,7 +2671,9 @@ describe('CreateMotionClient a remix kept open past its links’ hour', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use as reference video' }));
 
     expect(await screen.findByRole('button', { name: 'Using original result' })).toBeDisabled();
-    expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
+    // The clip's length is read again for the fresh link, after the button has changed: waited for,
+    // not read at once (CI failed it twice on a slow runner, #815 and #870).
+    expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
     expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer test-token', 'Bearer test-token']);
   });
 
