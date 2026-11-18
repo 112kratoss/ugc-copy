@@ -6,10 +6,10 @@ import {
   Menu,
   PanelLeft,
   Plus,
-  WandSparkles,
   X,
 } from 'lucide-react';
 import Link from 'next/link';
+import BrandMark, { replayBrandMark } from './brand/BrandMark';
 import { usePathname, useRouter, useSelectedLayoutSegment } from 'next/navigation';
 import {
   memo,
@@ -361,21 +361,24 @@ function Brand({
   onClick?: () => void;
   onNavigate: AppNavClickHandler;
 }) {
+  const markRef = useRef<HTMLSpanElement>(null);
   return (
     <Link
       href={HOME_NAV_ITEM.href}
       prefetch={false}
       aria-current={active ? 'page' : undefined}
       data-app-nav-tab={HOME_NAV_ITEM.id}
+      // The mark plays its sting as the page opens, and again when a mouse comes onto the brand.
+      onPointerEnter={(event) => {
+        if (event.pointerType === 'mouse') replayBrandMark(markRef.current);
+      }}
       onClick={(event) => {
         onClick?.();
         onNavigate(event, HOME_NAV_ITEM);
       }}
       className="ui-focus-ring flex items-center gap-3 rounded-2xl text-[var(--ui-text-primary)]"
     >
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--ui-primary)] text-[var(--ui-primary-on)] shadow-[0_10px_24px_rgba(255,122,89,0.18)]">
-        <WandSparkles className="h-5 w-5" strokeWidth={2.4} aria-hidden />
-      </span>
+      <BrandMark ref={markRef} />
       <span className="min-w-0">
         <span className="block truncate text-[15px] font-extrabold tracking-tight">Magic Booklet</span>
         {!compact ? (

@@ -96,6 +96,7 @@ const LAZY_SUPPLEMENT_BOUNDARIES = new Set([
   'notifications/SignedInAlerts.tsx',
 ]);
 const SOURCE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+const STATIC_MEDIA_FILE = /\.(?:png|jpe?g|webp|avif|gif|svg|ico)$/i;
 const DYNAMIC_UTILITY_STRING = /['"`](?:[^'"`]*\s)?(?:from|via|to|bg|text|border|ring|shadow)-(?:\[[^\]]+\]|[a-z]+-\d{2,3})(?:\s+[^'"`]*)?['"`]/;
 
 function walkFiles(directory: string): string[] {
@@ -156,7 +157,9 @@ function collectImportClosure(entryFiles: string[], lazyBoundaries: ReadonlySet<
     const importPattern = /(from\s*|import\s*\()\s*['"]([^'"]+)['"]/g;
     for (const match of source.matchAll(importPattern)) {
       const importedFile = resolveLocalImport(match[2], file);
-      if (!importedFile || visitedFiles.has(importedFile)) {
+      // A picture imported for its URL (the shell's brand icon) holds no class names
+      // and imports nothing, so neither sheet has a reason to scan it.
+      if (!importedFile || visitedFiles.has(importedFile) || STATIC_MEDIA_FILE.test(importedFile)) {
         continue;
       }
       const onDemand = match[1].startsWith('import') && lazyBoundaries.has(importedFile);

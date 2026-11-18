@@ -132,6 +132,7 @@
 @source "../components/useShareAction.ts";
 @source "../components/useSupabaseAuthCookieHint.ts";
 @source "../components/useUnreadAlertsCount.ts";
+@source "../components/brand/BrandMark.tsx";
 
 /* Home composes model badge gradients from data rather than JSX literals. */
 @source "../lib/client-generation-models.ts";
@@ -1425,6 +1426,190 @@ button:disabled,
 
 .app-shell-sidebar {
   display: none;
+}
+
+/* The shell's brand mark (src/components/brand/BrandMark.tsx): the app icon with the app's
+   launch sting played over it, on ugc-mobile/scripts/make-splash-sting.mjs's timings. A
+   keyframe's percentage is the script's time in seconds over its 1.15 s; outCubic is
+   cubic-bezier(0.33, 1, 0.68, 1), inOutCubic cubic-bezier(0.65, 0, 0.35, 1) and outBack
+   cubic-bezier(0.34, 1.56, 0.64, 1). Each animation holds its first and last frames (fill
+   both), which are the still icon, so it stays rewindable for replayBrandMark. */
+.brand-mark {
+  position: relative;
+  display: block;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+}
+
+.brand-mark-tile {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  box-shadow: 0 10px 24px rgba(91, 28, 140, 0.28);
+  animation: brand-mark-breathe 1.15s both;
+}
+
+.brand-mark-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* The script's gaussian (peak 0.30, sigma a sixth of this box), drawn under the star. */
+.brand-mark-glow {
+  position: absolute;
+  opacity: 0;
+  background: radial-gradient(
+    closest-side,
+    rgb(255 158 115 / 0.3),
+    rgb(255 158 115 / 0.18) 33.3%,
+    rgb(255 158 115 / 0.04) 66.7%,
+    rgb(255 158 115 / 0)
+  );
+  animation: brand-mark-glow 1.15s both;
+}
+
+.brand-mark-star {
+  animation: brand-mark-star 1.15s both;
+}
+
+.brand-mark-dot {
+  animation: brand-mark-dot 1.15s both;
+}
+
+.brand-mark-burst {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* A sparkle's reach (outer, outCubic) and its fade, shrink and turn (inner, linear). */
+.brand-mark-spark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  animation: brand-mark-spark-reach 0.77s cubic-bezier(0.33, 1, 0.68, 1) calc(0.28s + var(--spark-delay)) both;
+}
+
+.brand-mark-spark-star,
+.brand-mark-spark-dot {
+  position: absolute;
+  display: block;
+  opacity: 0;
+  animation: brand-mark-spark-life 0.77s linear calc(0.28s + var(--spark-delay)) both;
+}
+
+/* The script's four-point star, |u|^0.6 + |v|^0.6 = 1: tips at the box's edges, waist at 0.315. */
+.brand-mark-spark-star {
+  clip-path: polygon(50% 0, 65.75% 34.25%, 100% 50%, 65.75% 65.75%, 50% 100%, 34.25% 65.75%, 0 50%, 34.25% 34.25%);
+}
+
+.brand-mark-spark-dot {
+  border-radius: 50%;
+}
+
+@keyframes brand-mark-breathe {
+  0%,
+  10.43% {
+    transform: scale(1);
+    animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  }
+  43.48% {
+    transform: scale(1.05);
+    animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+  }
+  86.96%,
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes brand-mark-star {
+  0%,
+  13.04% {
+    transform: scale(1);
+    animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  43.48% {
+    transform: scale(1.26);
+    animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+  }
+  91.3%,
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes brand-mark-glow {
+  0%,
+  10.43% {
+    opacity: 0;
+    animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  }
+  36.52% {
+    opacity: 1;
+    animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+  }
+  91.3%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes brand-mark-dot {
+  0%,
+  19.13% {
+    transform: scale(1);
+    animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  }
+  40% {
+    transform: scale(1.5);
+    animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1);
+  }
+  82.61%,
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes brand-mark-spark-reach {
+  from {
+    transform: translate(0, 0);
+  }
+  to {
+    transform: translate(var(--spark-x), var(--spark-y));
+  }
+}
+
+@keyframes brand-mark-spark-life {
+  0% {
+    opacity: 0;
+    transform: rotate(var(--spark-rotate)) scale(1);
+  }
+  8%,
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(calc(var(--spark-rotate) + var(--spark-spin))) scale(0.45);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-mark-tile,
+  .brand-mark-glow,
+  .brand-mark-star,
+  .brand-mark-dot,
+  .brand-mark-spark,
+  .brand-mark-spark-star,
+  .brand-mark-spark-dot {
+    animation: none;
+  }
 }
 
 .app-shell-main {
