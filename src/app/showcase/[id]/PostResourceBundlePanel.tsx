@@ -1023,11 +1023,17 @@ export default function PostResourceBundlePanel({
     }
   };
 
+  // In UTC, the server's zone, as the post's own date is (PostRelativeTime): the post page is drawn
+  // on the server and hydrated in the reader's zone, and a recipe updated after 18:30 UTC read a day
+  // later in India ("Nov 3" on the server, "Nov 4" in the browser), so React threw the server's HTML
+  // away and drew the whole page again, the marks set before the first paint with it (sweep of
+  // 2026-11-18).
   const formattedUpdatedAt = preview.updatedAt
     ? new Date(preview.updatedAt).toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
         year: 'numeric',
+        timeZone: 'UTC',
       })
     : null;
   // A Copy button that says "Copied" itself, for a moment, once it has.
