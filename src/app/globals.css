@@ -1701,19 +1701,23 @@ html:not([data-auth-hint='signed-in']) .app-shell-when-signed-in {
 }
 
 /* The balance before it is read (AppShellAccountPending.tsx): a soft bar as wide as the last
-   balance this browser showed, its digits counted into --app-shell-credits-digits by the same
-   script. 1ch is a digit's width, the balance's digits drawn tabular. */
+   balance this browser showed, its digits drawn as that many zeros (--app-shell-credits-zeros, from
+   the same script) in the balance's own tabular figures, which are all one width. A box of 1ch a
+   digit, the width of a plain "0", was 0.33px a digit wider than those figures, and the top bar's
+   controls moved when the balance came (a layout shift of 0.0002 on every signed-in load, sweep of
+   2026-11-18). */
 .app-shell-credits-pending {
   border-radius: 999px;
   background: rgba(255, 236, 190, 0.1);
   color: transparent;
   font-variant-numeric: tabular-nums;
   user-select: none;
+  /* Forced colours would draw its zeros and " credits" in the system's text colour. */
+  forced-color-adjust: none;
 }
 
-.app-shell-credits-pending-digits {
-  display: inline-block;
-  width: calc(var(--app-shell-credits-digits, 3) * 1ch);
+.app-shell-credits-pending-digits::before {
+  content: var(--app-shell-credits-zeros, "000");
 }
 
 .app-shell-content {

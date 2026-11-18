@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   APP_SHELL_AUTH_USER_ATTRIBUTE,
   APP_SHELL_CREDITS_DIGITS_STORAGE_KEY,
+  APP_SHELL_CREDITS_ZEROS_PROPERTY,
   buildAppShellAccountRestore,
   countCreditDigits,
   rememberAppShellCreditDigits,
@@ -48,7 +49,7 @@ afterEach(() => {
   clearCookies();
   delete root.dataset.authHint;
   root.removeAttribute(APP_SHELL_AUTH_USER_ATTRIBUTE);
-  root.style.removeProperty('--app-shell-credits-digits');
+  root.style.removeProperty(APP_SHELL_CREDITS_ZEROS_PROPERTY);
   window.localStorage.clear();
   vi.restoreAllMocks();
 });
@@ -126,16 +127,16 @@ describe('the account slot marked before the page draws', () => {
       .toEqual([]);
   });
 
-  it('gives the placeholder the width of the last balance this browser showed', () => {
+  it('gives the placeholder the width of the last balance this browser showed, as that many zeros', () => {
     window.localStorage.setItem(APP_SHELL_CREDITS_DIGITS_STORAGE_KEY, '4');
     restore();
-    expect(root.style.getPropertyValue('--app-shell-credits-digits')).toBe('4');
+    expect(root.style.getPropertyValue(APP_SHELL_CREDITS_ZEROS_PROPERTY)).toBe('"0000"');
   });
 
   it.each(['0', '10', '2.5', 'four', ''])('ignores a kept width of %j', (kept) => {
     window.localStorage.setItem(APP_SHELL_CREDITS_DIGITS_STORAGE_KEY, kept);
     restore();
-    expect(root.style.getPropertyValue('--app-shell-credits-digits')).toBe('');
+    expect(root.style.getPropertyValue(APP_SHELL_CREDITS_ZEROS_PROPERTY)).toBe('');
   });
 
   it('still marks the cookie where storage is refused', () => {
@@ -175,9 +176,10 @@ describe('the account slot marked before the page draws', () => {
     expect(rules).toEqual({
       "html[data-auth-hint='signed-in'] .app-shell-when-signed-out": { display: 'none' },
       "html:not([data-auth-hint='signed-in']) .app-shell-when-signed-in": { display: 'none' },
-      '.app-shell-credits-pending-digits': {
-        display: 'inline-block',
-        width: 'calc(var(--app-shell-credits-digits, 3) * 1ch)',
+      // Drawn as that many zeros in the balance's tabular figures: a box of 1ch a digit (a plain
+      // "0") was 0.33px a digit wider, and the controls beside it moved as the balance came.
+      '.app-shell-credits-pending-digits::before': {
+        content: `var(${APP_SHELL_CREDITS_ZEROS_PROPERTY}, "000")`,
       },
     });
   });
