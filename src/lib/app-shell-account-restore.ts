@@ -37,17 +37,17 @@ export function canStyleRuleNameAuthUser(userId: string): boolean {
 }
 
 /**
- * Where the browser keeps how many digits the last balance it showed had, so the placeholder is
- * as wide as the balance that replaces it (`APP_SHELL_CREDITS_ZEROS_PROPERTY`).
- */
-/**
  * The root element's property the placeholder draws its digits from: as many zeros as the last
- * balance had digits, as a CSS string (`'"617"'` has three: `'"000"'`). Drawn in the balance's own
+ * balance had digits, as a CSS string (617 has three: `'"000"'`). Drawn in the balance's own
  * tabular figures (`.app-shell-credits-pending-digits` in globals.css), they are as wide as any
  * balance of that many digits, to the pixel.
  */
 export const APP_SHELL_CREDITS_ZEROS_PROPERTY = '--app-shell-credits-zeros';
 
+/**
+ * Where the browser keeps how many digits the last balance it showed had, so the placeholder is
+ * as wide as the balance that replaces it (`APP_SHELL_CREDITS_ZEROS_PROPERTY`).
+ */
 export const APP_SHELL_CREDITS_DIGITS_STORAGE_KEY = 'magicbooklet.app-shell.credits-digits.v1';
 
 /** The digits a balance is drawn with: a negative balance never shows, and never more than nine. */

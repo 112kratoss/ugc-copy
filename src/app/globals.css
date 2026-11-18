@@ -1699,6 +1699,8 @@ html:not([data-auth-hint='signed-in']) .app-shell-when-signed-in {
   color: transparent;
   font-variant-numeric: tabular-nums;
   user-select: none;
+  /* Forced colours would draw its zeros and " credits" in the system's text colour. */
+  forced-color-adjust: none;
 }
 
 .app-shell-credits-pending-digits::before {

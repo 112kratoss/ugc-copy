@@ -143,8 +143,9 @@ test('a signed-in refresh of Pricing draws the top bar and the page where they s
   expect(final.avatar).toBe('WU');
   for (const frame of frames) {
     // The controls beside the balance stay put, from the placeholder (as many tabular zeros as the
-    // last balance had digits) to the figure.
-    expect(frame.rightX, JSON.stringify(frame)).toBe(final.rightX);
+    // last balance had digits) to the figure: a box of 1ch a digit put them 0.7px off. Within half
+    // a pixel, for a font that shapes the digits and the space after them as one run.
+    expect(Math.abs((frame.rightX ?? 0) - (final.rightX ?? 0)), JSON.stringify(frame)).toBeLessThanOrEqual(0.5);
     expect(frame.searchX, JSON.stringify(frame)).toBe(final.searchX);
     // The account's letters are its name's, or none while it is read: never the email's first.
     expect(['', final.avatar], JSON.stringify(frame)).toContain(frame.avatar ?? '');
