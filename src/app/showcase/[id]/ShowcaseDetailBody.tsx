@@ -71,6 +71,12 @@ type RecipeLinkWords = { label: string; action: string };
 const OWN_RECIPE_WORDS: RecipeLinkWords = { label: 'Your recipe', action: 'View' };
 
 /**
+ * A signed-in reader's words while their own read of the recipe is out (`recipeChecking`): neither
+ * its price nor "Unlocked", which only that read can tell apart.
+ */
+const CHECKING_RECIPE_WORDS: RecipeLinkWords = { label: 'Recipe', action: 'View' };
+
+/**
  * The pointer's words for a viewer whose recipe it is not: "Unlocked" once they have it, else
  * its price (or "Free recipe") and what the click does.
  */
@@ -88,24 +94,28 @@ function recipeLinkWords(bundle: PostResourceBundleDetail, lockedViewer: boolean
 
 /**
  * The words this render knows the viewer reads. The server's HTML, and the render that hydrates
- * it, know no viewer: there they are everyone else's, drawn beside the creator's, and the page's
- * rule shows one (`ownerFirstPaintRules`).
+ * it, know no viewer: there they are a visitor's, drawn beside the creator's and a signed-in
+ * reader's, and the page's rule shows one (`ownerFirstPaintRules`).
  */
 function RecipeWords({
   words,
   creators,
+  readers,
   mark,
 }: {
   words: string;
   creators: string;
+  /** A signed-in reader's while their own read of the recipe is out (`CHECKING_RECIPE_WORDS`). */
+  readers: string;
   /** The creator's account, in the server's HTML and the render that hydrates it only. */
   mark: string | undefined;
 }) {
-  if (!mark || words === creators) return words;
+  if (!mark || (words === creators && words === readers)) return words;
   return (
     <>
       <span data-post-recipe-pitch={mark}>{words}</span>
       <span data-post-recipe-owner={mark}>{creators}</span>
+      <span data-post-recipe-checking={mark}>{readers}</span>
     </>
   );
 }
@@ -196,9 +206,18 @@ export default function ShowcaseDetailBody({
   // In the server's HTML and the render that hydrates it, the creator's words are drawn beside
   // everyone else's, and the page's rule shows the creator theirs (`ownerFirstPaintRules`).
   const recipeMark = ownership === 'unread' && detail.creator.id ? detail.creator.id : undefined;
-  const recipeWords = !bundle ? null : viewerIsCreator ? OWN_RECIPE_WORDS : recipeLinkWords(bundle, lockedViewer);
+  // A signed-in reader's recipe while their own read of it is out: offered to them nowhere and called
+  // theirs nowhere, until that read says which (owner, 2026-11-18: "Yes, hold it").
+  const { recipeChecking } = viewer;
+  const recipeWords = !bundle
+    ? null
+    : viewerIsCreator
+      ? OWN_RECIPE_WORDS
+      : recipeChecking
+        ? CHECKING_RECIPE_WORDS
+        : recipeLinkWords(bundle, lockedViewer);
   // The unlock bar and the room kept for it under the post, for a viewer who has not got the recipe.
-  const pitchesRecipe = Boolean(bundle && lockedViewer && !viewerIsCreator);
+  const pitchesRecipe = Boolean(bundle && lockedViewer && !viewerIsCreator && !recipeChecking);
   // The panel under the post, while the page holds the recipe everyone else reads: theirs for the
   // creator too, offering nothing, its body held until their own read brings the recipe ('failed',
   // with a way to ask again, once that read failed or the session check it waits for has outlasted
@@ -293,6 +312,7 @@ export default function ShowcaseDetailBody({
         remixIncluded: recipeIncludesRemix,
       })}
       creatorHold={creatorHold}
+      readerChecking={recipeChecking}
       onRetryCreatorRead={viewer.retryCreatorRecipe}
       // The server's HTML and the render that hydrates it: the creator's held recipe beside the
       // offer, for the page's rule to show each their own (`ownerFirstPaintRules`).
@@ -353,6 +373,9 @@ export default function ShowcaseDetailBody({
       />
     </div>
   ) : null;
+  // A Remix the recipe locks, while a signed-in reader's own read of the recipe is out: the open one,
+  // inert, neither priced nor taking the recipe on the way, until that read says which.
+  const remixWaitsForRead = recipeChecking && remixOffer.recipeRemix !== null;
   const engagementRow = (
     <ShowcaseDetailEngagementRow
       postId={detail.id}
@@ -360,16 +383,16 @@ export default function ShowcaseDetailBody({
       creatorId={detail.creator.id}
       title={displayTitle}
       shareDescription={shareDescription}
-      canRemix={viewer.remix.canRemix}
+      canRemix={viewer.remix.canRemix || remixWaitsForRead}
       saveCount={detail.saveCount}
       commentCount={detail.commentCount}
       remixCount={detail.remixCount}
       shareVisitCount={detail.shareVisitCount}
       showComments={commentsAreOpen}
-      recipeRemix={remixOffer.recipeRemix}
+      recipeRemix={remixWaitsForRead ? null : remixOffer.recipeRemix}
       creatorRemixMark={recipeMark}
       creatorCanRemix={viewer.creatorRemix.canRemix}
-      remixHeld={ownership === 'owner-checking'}
+      remixHeld={ownership === 'owner-checking' || remixWaitsForRead}
     />
   );
 
@@ -562,11 +585,21 @@ export default function ShowcaseDetailBody({
                   <span className="inline-flex min-w-0 items-center gap-2">
                     <ShoppingBag className="h-4 w-4 shrink-0" aria-hidden="true" />
                     <span className="truncate">
-                      <RecipeWords words={recipeWords.label} creators={OWN_RECIPE_WORDS.label} mark={recipeMark} />
+                      <RecipeWords
+                        words={recipeWords.label}
+                        creators={OWN_RECIPE_WORDS.label}
+                        readers={CHECKING_RECIPE_WORDS.label}
+                        mark={recipeMark}
+                      />
                     </span>
                   </span>
                   <span className="shrink-0 text-xs font-medium text-emerald-200/70">
-                    <RecipeWords words={recipeWords.action} creators={OWN_RECIPE_WORDS.action} mark={recipeMark} />
+                    <RecipeWords
+                      words={recipeWords.action}
+                      creators={OWN_RECIPE_WORDS.action}
+                      readers={CHECKING_RECIPE_WORDS.action}
+                      mark={recipeMark}
+                    />
                   </span>
                 </Link>
               ) : null}

@@ -100,6 +100,7 @@ beforeEach(() => {
 
 afterEach(() => {
   document.documentElement.removeAttribute('data-auth-user');
+  document.documentElement.removeAttribute('data-auth-hint');
   vi.restoreAllMocks();
 });
 
@@ -184,10 +185,18 @@ describe("PostResourceBundlePanel: the creator's own recipe before their read la
       const root = document.documentElement;
       const section = () => container.querySelector('#recipe') as HTMLElement;
 
-      // A visitor, and another account: the offer, as before.
+      // A visitor: the offer, as before.
       expect(shownText(section())).toMatch(offered);
+      // Another account: held until their own read of the recipe says whether they have it, offered
+      // nothing and called theirs nowhere (owner, 2026-11-18: "Yes, hold it").
+      root.setAttribute('data-auth-hint', 'signed-in');
       root.setAttribute('data-auth-user', 'user-2');
-      expect(shownText(section())).toMatch(offered);
+      expect(shownText(section())).toMatch(/^Recipe Checking… .*Harbour recipe Checking your recipes…$/);
+      expect(shownText(section())).not.toMatch(OFFER);
+      expect(shownText(section())).not.toContain('Your recipe');
+      // A session cookie the root element could not name an account from: held the same way.
+      root.removeAttribute('data-auth-user');
+      expect(shownText(section())).toMatch(/^Recipe Checking… .*Harbour recipe Checking your recipes…$/);
       // The creator: theirs, offered nothing, held.
       root.setAttribute('data-auth-user', 'user-1');
       expect(shownText(section())).toMatch(/^Recipe Your recipe .*Harbour recipe Opening your recipe…$/);
@@ -212,8 +221,67 @@ describe("PostResourceBundlePanel: the creator's own recipe before their read la
 
       expect(html).toContain('Get free recipe');
       expect(html).not.toContain('Opening your recipe');
+      expect(html).not.toContain('Checking your recipes');
       expect(html).not.toContain('Your recipe');
       expect(html).not.toContain('data-post-recipe-');
     });
+  });
+});
+
+/**
+ * The recipe panel for anyone else signed in, before their own read of the recipe lands. The page is
+ * drawn with the recipe as a visitor reads it, and a reader who had it was offered it ("Free recipe",
+ * "Get free recipe") until that read said "Unlocked" (sweep of 2026-11-18). The page hands the panel
+ * `readerChecking` while the read is out (owner, 2026-11-18: "Yes, hold it").
+ */
+describe("PostResourceBundlePanel: a signed-in reader's recipe before their read lands", () => {
+  it.each([
+    ['free', freeRecipe],
+    ['paid', paidRecipe],
+  ])('holds a %s one, offered nowhere and called theirs nowhere', (_kind, recipe) => {
+    // Their session as the page knows it: any balance, which a paid offer would print.
+    authState.session = { access_token: 'token-2' };
+    authState.credits = 5;
+    authState.marketplaceSpendableCredits = 5;
+    const { container } = render(<PostResourceBundlePanel {...recipe} readerChecking />);
+
+    expect(screen.getByText('Checking…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Checking your recipes…');
+    expect(container.textContent).not.toMatch(OFFER);
+    expect(container.textContent).not.toMatch(/Your recipe|Unlocked|Opening your recipe/);
+    expect(container.textContent).not.toContain('credits available');
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    // Its name, as the page's other readers see it.
+    expect(screen.getByRole('heading', { name: 'Harbour recipe' })).toBeInTheDocument();
+  });
+
+  it('draws the recipe once their read brings it as theirs, the hold or not', () => {
+    render(
+      <PostResourceBundlePanel
+        {...freeRecipe}
+        viewerCanAccess
+        initialResources={{
+          promptText: 'Harbour at dawn, 35mm.',
+          notesMarkdown: null,
+          workflowShareUrl: null,
+          attachments: [],
+          allowRemix: false,
+        }}
+        readerChecking
+      />
+    );
+
+    expect(screen.getByText('Unlocked')).toBeInTheDocument();
+    expect(screen.getByText('Harbour at dawn, 35mm.')).toBeInTheDocument();
+    expect(screen.queryByText('Checking…')).not.toBeInTheDocument();
+    expect(screen.queryByText('Checking your recipes…')).not.toBeInTheDocument();
+  });
+
+  it("gives way to the creator's own hold", () => {
+    render(<PostResourceBundlePanel {...freeRecipe} creatorHold="opening" readerChecking />);
+
+    expect(screen.getByText('Your recipe')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Opening your recipe…');
+    expect(screen.queryByText('Checking your recipes…')).not.toBeInTheDocument();
   });
 });

@@ -384,11 +384,14 @@ describe('ShowcaseDetailEngagementRow', () => {
     // Third case, review of #847's second round: a recipe that gates the Remix without including it
     // (`allowRemix` false, as a recipe of reference pictures on an upload reads) gives everyone else
     // no Remix at all, and the creator's appeared only after hydration, moving Save along the row.
+    // A signed-in reader's own read of the recipe says whether they have it, so before the first paint
+    // they get the open Remix, inert, where a visitor's is locked behind the recipe, as the page then
+    // draws it until that read lands (owner, 2026-11-18: "Yes, hold it").
     it.each([
-      ['free', { access: 'free', priceLabel: 'Free' } as const, ['Remix · Free']],
-      ['paid', { access: 'paid', priceLabel: '900 credits' } as const, ['Remix · 900 credits']],
-      ['no-Remix', null, []],
-    ])("is shown to the creator in place of a %s recipe's Remix for everyone else, before the first paint, inert, and hydrates as drawn", (_kind, recipeRemix, others) => {
+      ['free', { access: 'free', priceLabel: 'Free' } as const, ['Remix · Free'], ['Remix']],
+      ['paid', { access: 'paid', priceLabel: '900 credits' } as const, ['Remix · 900 credits'], ['Remix']],
+      ['no-Remix', null, [], []],
+    ])("is shown to the creator in place of a %s recipe's Remix for everyone else, before the first paint, inert, and hydrates as drawn", (_kind, recipeRemix, visitors, readers) => {
       const props = rowProps({
         canRemix: false,
         recipeRemix,
@@ -407,6 +410,7 @@ describe('ShowcaseDetailEngagementRow', () => {
         rules.remove();
         container.remove();
         root.removeAttribute('data-auth-user');
+        root.removeAttribute('data-auth-hint');
       });
       // The Remix controls a browser shows.
       const remixes = () => Array.from(container.querySelectorAll('a, button'))
@@ -414,10 +418,13 @@ describe('ShowcaseDetailEngagementRow', () => {
         .map((control) => control.textContent?.trim() ?? '')
         .filter((text) => /^Remix\b/.test(text));
 
-      // A visitor, and another account.
-      expect(remixes()).toEqual(others);
+      // A visitor.
+      expect(remixes()).toEqual(visitors);
+      // Another account, inert until the page's script has their read of the recipe.
+      root.setAttribute('data-auth-hint', 'signed-in');
       root.setAttribute('data-auth-user', 'user-2');
-      expect(remixes()).toEqual(others);
+      expect(remixes()).toEqual(readers);
+      if (readers.length > 0) expect(container.querySelector('[data-post-remix-checking="user-1"]')).toBeDisabled();
       // The creator: their own creation, to remix and nothing to take or pay, inert until the
       // page's script has named them.
       root.setAttribute('data-auth-user', 'user-1');
@@ -431,7 +438,11 @@ describe('ShowcaseDetailEngagementRow', () => {
 
     // Review of #847's third round: a post with no creation has nothing to remix (the server answers
     // its Remix "Only generation-backed posts can be remixed"), so its creator gets no Remix, while
-    // anyone else may still be offered one; theirs must not show to the creator, nor go late.
+    // anyone else may still be offered one; theirs must not show to the creator, nor go late. (Since
+    // 2026-11-17 the page gives such a post no Remix for anyone, so it never draws this row. Another
+    // account is set here by the root's account mark alone, without the session hint a signed-in
+    // reader's browser also carries: that reader's rule of 2026-11-18 hides what is marked as everyone
+    // else's pitch, as this row's Remix is.)
     it.each([
       ['a free recipe\'s locked Remix', { canRemix: false, recipeRemix: { access: 'free', priceLabel: 'Free' } } as const, ['Remix · Free']],
       ['the open Remix', { canRemix: true, recipeRemix: null }, ['Remix']],

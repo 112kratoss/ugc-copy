@@ -115,6 +115,15 @@ export interface ShowcasePostViewer {
   /** The viewer has not got the recipe: the page pitches it. */
   lockedViewer: boolean;
   /**
+   * A signed-in reader's recipe while their own read of it is out: whether they have it is not known
+   * yet, so the page neither offers it to them nor calls it theirs, in the rail, the panel, Remix or
+   * the bar along the bottom edge, until that read says (owner, 2026-11-18: "Yes, hold it"). A buyer
+   * was offered "Get free recipe" for about a second on a post whose recipe they had (sweep of
+   * 2026-11-18). A visitor is offered it at once, as before, and so is a reader whose read failed or
+   * whose session check outlasted its deadline. The creator's own recipe is held as theirs instead.
+   */
+  recipeChecking: boolean;
+  /**
    * The post's Remix as this viewer has it: for the creator, from the first frame they are known
    * (`ownership`), the open Remix of their own creation, never one locked behind its recipe.
    */
@@ -313,6 +322,14 @@ export function useShowcasePostViewer({
     return () => controller.abort();
   }, [accessToken, bundleReadAttempt, postId, readsBundle, viewerKey]);
 
+  const recipeChecking = !viewerIsCreator
+    && ownership !== 'unread'
+    && !isNsfwCovered
+    && Boolean(pageBundle && !pageBundle.viewerCanAccess && !pageBundle.viewerIsOwner)
+    && (viewerCheck === 'checking' || viewerCheck === 'signed-in')
+    && !ownBundle
+    && !(viewerKey !== null && bundleReadFailedFor === viewerKey);
+
   const retryBundleRead = useCallback(() => {
     setBundleReadFailedFor(null);
     setBundleReadAttempt((attempt) => attempt + 1);
@@ -460,6 +477,7 @@ export function useShowcasePostViewer({
     creatorCheckOverdue,
     retryCreatorRecipe,
     lockedViewer,
+    recipeChecking,
     remix,
     creatorRemix,
     blocked: Boolean(viewerUserId && blockedFor === viewerUserId),

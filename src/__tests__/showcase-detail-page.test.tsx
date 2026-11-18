@@ -1212,12 +1212,71 @@ describe('Showcase detail page', () => {
         expect(recipeBar()).not.toBeInTheDocument();
       });
 
-      it('is offered to anyone else while their cookie is checked, with its bar', async () => {
-        holdSessionCookieOf('user-2');
+      it('is offered to a visitor from the first frame, with its bar', async () => {
         render(await openPost());
         expect(recipeLink()).toHaveTextContent(/^Free recipeView$/);
         expect(recipeBar()).toBeInTheDocument();
         expect(barRoom()).not.toBeNull();
+      });
+
+      // Sweep of 2026-11-18: a reader who had the recipe was offered it, "Free recipe · View" in the
+      // rail and "View free recipe" along the bottom edge, until their own read landed (owner: "Yes,
+      // hold it").
+      it("is held for anyone else signed in, with no bar, while their cookie is checked and their read is out, and offered once that read says it is not theirs", async () => {
+        let answerRead: (response: Response) => void = () => {};
+        vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
+          String(input) === RECIPE_READ
+            ? new Promise<Response>((resolve) => {
+              answerRead = resolve;
+            })
+            : Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true }) } as Response)
+        )));
+        holdSessionCookieOf('user-2');
+        const { rerender } = render(await openPost());
+        expect(recipeLink()).toHaveTextContent(/^RecipeView$/);
+        expect(recipeBar()).not.toBeInTheDocument();
+        expect(barRoom()).toBeNull();
+
+        signInAs('user-2');
+        rerender(await openPost());
+        await waitFor(() => expect(requestsTo(RECIPE_READ)).toHaveLength(1));
+        expect(recipeLink()).toHaveTextContent(/^RecipeView$/);
+        expect(recipeBar()).not.toBeInTheDocument();
+
+        await act(async () => {
+          answerRead({ ok: true, status: 200, json: async () => ({ success: true, bundle: freeRecipe }) } as Response);
+        });
+        expect(recipeLink()).toHaveTextContent(/^Free recipeView$/);
+        expect(recipeBar()).toBeInTheDocument();
+        expect(barRoom()).not.toBeNull();
+      });
+
+      it("is offered as before to a reader whose read failed, the page's recipe kept", async () => {
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (
+          String(input) === RECIPE_READ
+            ? { ok: false, status: 503, json: async () => ({ error: 'Down' }) } as Response
+            : { ok: true, status: 200, json: async () => ({ success: true }) } as Response
+        )));
+        signInAs('user-2');
+        render(await openPost());
+        await waitFor(() => expect(recipeLink()).toHaveTextContent(/^Free recipeView$/));
+        expect(recipeBar()).toBeInTheDocument();
+      });
+
+      it('is offered as before once the check of their cookie outlasts its deadline', async () => {
+        vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+        holdSessionCookieOf('user-2');
+        const page = await openPost();
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        clientAuth.current = { ...clientAuth.current, sessionCheckStartedAt: performance.now() };
+        render(page);
+        expect(recipeLink()).toHaveTextContent(/^RecipeView$/);
+
+        act(() => {
+          vi.advanceTimersByTime(SESSION_CHECK_DEADLINE_MS);
+        });
+        expect(recipeLink()).toHaveTextContent(/^Free recipeView$/);
+        expect(recipeBar()).toBeInTheDocument();
       });
 
       it("reads as theirs once their read lands, and as a buyer's once a buyer's does", async () => {
@@ -1232,8 +1291,10 @@ describe('Showcase detail page', () => {
         stubPageFetch({}, { viewerBundle: { ...freeRecipe, viewerCanAccess: true, viewerHasPurchased: true } });
         signInAs('user-2');
         render(await openPost());
-        // A buyer's "Unlocked" is their read's alone: the page offers the recipe until it lands.
-        expect(recipeLink()).toHaveTextContent(/^Free recipeView$/);
+        // A buyer's "Unlocked" is their read's alone: until it lands the page holds the recipe,
+        // offering it to them nowhere (owner, 2026-11-18: "Yes, hold it").
+        expect(recipeLink()).toHaveTextContent(/^RecipeView$/);
+        expect(recipeBar()).not.toBeInTheDocument();
         await waitFor(() => expect(recipeLink()).toHaveTextContent(/^UnlockedView$/));
         expect(recipeBar()).not.toBeInTheDocument();
       });
@@ -1364,15 +1425,33 @@ describe('Showcase detail page', () => {
           await waitFor(() => expect(panelProps()).toMatchObject({ creatorHold: 'failed' }));
         });
 
-        it('offers the recipe to anyone else as before, while their cookie is checked and once named', async () => {
-          vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+        it("holds it for anyone else signed in, not as theirs, while their cookie is checked and their read is out, and offers it once that read says", async () => {
+          let answerRead: (response: Response) => void = () => {};
+          vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
+            String(input) === RECIPE_READ
+              ? new Promise<Response>((resolve) => {
+                answerRead = resolve;
+              })
+              : Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true }) } as Response)
+          )));
           holdSessionCookieOf('user-2');
           const { rerender } = render(await openPost());
-          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: null, creatorMark: undefined });
+          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: null, readerChecking: true, creatorMark: undefined });
 
           signInAs('user-2');
           rerender(await openPost());
-          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: null, creatorMark: undefined });
+          await waitFor(() => expect(requestsTo(RECIPE_READ)).toHaveLength(1));
+          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: null, readerChecking: true, creatorMark: undefined });
+
+          await act(async () => {
+            answerRead({ ok: true, status: 200, json: async () => ({ success: true, bundle: freeRecipe }) } as Response);
+          });
+          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: null, readerChecking: false, creatorMark: undefined });
+        });
+
+        it('offers it to a visitor from the first frame', async () => {
+          render(await openPost());
+          expect(panelProps()).toMatchObject({ viewerIsOwner: false, creatorHold: null, readerChecking: false, creatorMark: undefined });
         });
 
         it("is drawn both ways in the server's HTML, for the page's rule, and held for no one there", async () => {
@@ -1409,15 +1488,26 @@ describe('Showcase detail page', () => {
         expect(row()).toHaveAttribute('data-remix-held', 'false');
         unmount();
 
-        // Anyone else is offered it with the free recipe.
+        // Anyone else signed in waits for their own read of the recipe: the open Remix, inert, in place
+        // of one the recipe locks (owner, 2026-11-18: "Yes, hold it").
         holdSessionCookieOf('user-2');
         clientAuth.current = { session: null, user: null, isLoading: true };
         const other = render(await openPost());
+        expect(row()).toHaveTextContent(`${POST_ID}:true`);
+        expect(row()).toHaveAttribute('data-recipe-remix', '');
+        expect(row()).toHaveAttribute('data-creator-remix', '');
+        expect(row()).toHaveAttribute('data-remix-held', 'true');
+        other.unmount();
+        document.cookie = `${AUTH_COOKIE}=; Max-Age=0; Path=/`;
+
+        // A visitor is offered it with the free recipe.
+        clientAuth.current = { session: null, user: null };
+        const visitor = render(await openPost());
         expect(row()).toHaveTextContent(`${POST_ID}:false`);
         expect(row()).toHaveAttribute('data-recipe-remix', 'free:Free');
         expect(row()).toHaveAttribute('data-creator-remix', '');
         expect(row()).toHaveAttribute('data-remix-held', 'false');
-        other.unmount();
+        visitor.unmount();
 
         // The server's HTML: everyone else's, with the creator's own open Remix for the page's rule.
         const html = renderToString(await openPost());
@@ -2762,14 +2852,17 @@ describe('Showcase detail page', () => {
 
       await waitFor(() => expect(requestTo(RECIPE_READ)).toBeDefined());
       expect(screen.getByTestId('canonical-post-recipe')).toBeInTheDocument();
-      expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Unlock');
+      // Held while the read is out, offered once it has failed.
+      await waitFor(() => expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Unlock'));
     });
 
     it('opens Remix and drops the bottom bar when the panel unlocks the recipe', async () => {
       await serveLockedRecipe();
+      // Their read says the recipe is not theirs, so it is offered.
+      stubPageFetch({}, { viewerBundle: lockedBundle });
       signInAs('user-2');
       render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
-      expect(screen.getByTestId('showcase-detail-engagement-row')).toHaveAttribute('data-recipe-remix', 'paid:900 credits');
+      await waitFor(() => expect(screen.getByTestId('showcase-detail-engagement-row')).toHaveAttribute('data-recipe-remix', 'paid:900 credits'));
 
       const { onAccessChange } = postResourceBundlePanelPropsMock.mock.lastCall?.[0] as {
         onAccessChange: (bundle: Record<string, unknown>) => void;
