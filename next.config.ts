@@ -72,7 +72,8 @@ const contentSecurityPolicyReportOnly = [
   // (src/lib/typed-before-hydration.ts), its sidebar restore
   // (src/lib/app-shell-sidebar-restore.ts), its welcome-promise restore
   // (src/lib/welcome-promise-restore.ts), its account restore
-  // (src/lib/app-shell-account-restore.ts) and its reload rule
+  // (src/lib/app-shell-account-restore.ts), its scrollbar room mark
+  // (src/lib/scrollbar-room-restore.ts) and its reload rule
   // (src/lib/reload-opens-at-top.ts), and the first sign-up intro's cover
   // on /onboarding (src/lib/first-sign-up-intro.ts) until a nonce pipeline exists. Next
   // gives a nonce only to its own scripts: the pipeline has to hand the

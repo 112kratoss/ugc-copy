@@ -42,6 +42,8 @@ type Frame = {
   chip: string | null;
   generate: { face: string; name: string | null; disabled: boolean; busy: boolean } | null;
   posts: { cards: number; places: number; pictures: number; drawn: number } | null;
+  /** The HTML parser had not left the chip or Generate when the frame was drawn (`recordFrames`). */
+  parsing: boolean;
 };
 /** A run of identical frames: what they showed, and from when to when (ms since the navigation began). */
 type Stretch = Frame & { from: number; to: number; count: number };
@@ -89,21 +91,37 @@ async function recordFrames(page: Page) {
       chip: string | null;
       generate: { face: string; name: string | null; disabled: boolean; busy: boolean } | null;
       posts: { cards: number; places: number; pictures: number; drawn: number } | null;
+      parsing: boolean;
     };
     const stretches: Array<Read & { from: number; to: number; count: number }> = [];
     const lcp: Array<{ startTime: number; element: string }> = [];
     (window as unknown as { __arrival: unknown }).__arrival = { stretches, lcp };
     const text = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
+    // Chrome's HTML parser stops to let the page be drawn on a time budget, whether or not the whole
+    // document is in, so a frame can be drawn from a part it has not finished: a CI run of
+    // 2026-11-17 drew Generate at 204 ms with its attributes and none of its words, 134 ms before
+    // DOMContentLoaded (the whole document was in at 126 ms), and the next frame whole. Nothing
+    // follows a part in the document until the parser has left it, so such a frame is marked, and
+    // the bar's checks leave it out: what the page draws, not where the parser stopped, is judged.
+    const unfinished = (element: Element | null | undefined) => {
+      if (!element || document.readyState !== 'loading') return false;
+      for (let node: Node | null = element; node && node !== document.documentElement; node = node.parentNode) {
+        if (node.nextSibling) return false;
+      }
+      return true;
+    };
     const read = (): Read => {
       const bar = document.querySelector('[data-creator-bar]');
       const button = bar
         ? [...bar.querySelectorAll('button')].find((candidate) => (candidate.getAttribute('aria-label') ?? '').startsWith('Generate · ')
           || text(candidate) === 'Sign up to generate')
         : undefined;
+      const chip = document.querySelector('[data-testid="creator-settings-summary"]');
       const canvas = document.querySelector('[data-testid="creator-start-posts"]');
       const pictures = canvas ? [...canvas.querySelectorAll('li img')] as HTMLImageElement[] : [];
       return {
-        chip: text(document.querySelector('[data-testid="creator-settings-summary"]')),
+        parsing: unfinished(chip) || unfinished(button),
+        chip: text(chip),
         generate: button
           ? {
             face: text(button) ?? '',
@@ -220,12 +238,13 @@ function describeStretches(stretches: Stretch[]): string {
     `${stretch.from}–${stretch.to} ms (${stretch.count} frames): chip ${JSON.stringify(stretch.chip)}, Generate ${JSON.stringify(stretch.generate?.face ?? null)}`
     + (stretch.generate ? ` (${JSON.stringify(stretch.generate.name)}${stretch.generate.disabled ? ', held' : ''}${stretch.generate.busy ? ', busy' : ''})` : '')
     + (stretch.posts ? `, posts ${stretch.posts.cards} cards, ${stretch.posts.places} places, ${stretch.posts.drawn}/${stretch.posts.pictures} pictures drawn` : '')
+    + (stretch.parsing ? ', the parser inside the bar' : '')
   )).join('\n');
 }
 
-/** The frames that draw the bar. */
+/** The frames that draw the bar, once the parser has left the part of it they show (`recordFrames`). */
 function barFrames(arrival: Arrival): Stretch[] {
-  const drawn = arrival.stretches.filter((stretch) => stretch.chip !== null || stretch.generate !== null);
+  const drawn = arrival.stretches.filter((stretch) => !stretch.parsing && (stretch.chip !== null || stretch.generate !== null));
   expect(drawn.length, 'the bar is drawn').toBeGreaterThan(0);
   return drawn;
 }

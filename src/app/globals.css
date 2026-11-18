@@ -234,6 +234,19 @@ body {
   color-scheme: dark;
 }
 
+/*
+ * Where this browser's scrollbars take room beside the page (a mouse on Windows or Linux, a Mac set
+ * to always show them; the root layout's pre-paint script measures it, scrollbar-room-restore.ts),
+ * the window keeps that room whether the page scrolls or not. A page moved sideways by half of it
+ * when its scrollbar came: Alerts, whose list arrives after its first paint, shifted 7.5px (sweep of
+ * 2026-11-17, a layout shift of 0.0054), every page moved going between a short page and a long one,
+ * and the page under a dialog that stops it scrolling (the reel, a lightbox) moved as the dialog
+ * opened. Scrollbars laid over the page (phones, a Mac's default) take no room and get no mark.
+ */
+html[data-scrollbar-room] {
+  scrollbar-gutter: stable;
+}
+
 ::selection {
   background: rgba(255, 122, 89, 0.26);
   color: var(--foreground);
