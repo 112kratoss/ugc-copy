@@ -24,7 +24,13 @@ claude plugin install magicbooklet@magicbooklet
 
 Then, in Claude Code, run `/mcp`, pick the magicbooklet server and choose **Authenticate**. Your browser opens on Magic Booklet; sign in if you need to and allow Claude Code. Signing in listens on port 8976, so keep that port free while you do it.
 
-Added the marketplace earlier, from another repository? Run the first command again: Claude Code points the marketplace at this repository, and the plugin you installed keeps updating.
+Added the marketplace earlier, from another repository? Claude Code keeps a marketplace under the source it was first added from, so remove it, which also removes the plugin:
+
+```bash
+claude plugin marketplace remove magicbooklet
+```
+
+Then run the two commands above and sign in again with `/mcp`.
 
 [magicbooklet.com/developers/mcp](https://magicbooklet.com/developers/mcp#claude-code) sets the server up without the plugin, and in the other clients it supports. Use the plugin or a server you added yourself, not both.
 

@@ -963,15 +963,20 @@ The marketplace moved there on 2026-11-19 (plugin 1.1.1), so that this repositor
 without breaking installs. It was served from this repository before, and what was measured then
 on Claude Code 2.1.302 says what earlier installs do:
 
-- Someone who added the marketplace from this repository runs the new first command once. A
-  marketplace is known by its name, so Claude Code answers that `magicbooklet` "was already added
-  from github:… and now points at" the new source, and the plugin installed from it updates from
-  there (`claude plugin update magicbooklet@magicbooklet`).
+- Someone who added the marketplace from this repository cannot re-point it: the new first
+  command is refused ("Cannot add marketplace "magicbooklet": its source doesn't match its
+  extraKnownMarketplaces entry"), because a marketplace is known by its name and that name is
+  declared in their settings from the old source. They run `claude plugin marketplace remove
+  magicbooklet`, which also uninstalls the plugin and deletes what it saved where it can, then
+  the two commands above: the marketplace then reads from the new repository and the plugin is
+  1.1.1. Signing in again after that was not tried. The plugin's README says the same. (A
+  marketplace added from a folder on disk does take over an existing name; a second GitHub
+  source does not.)
 - Someone who does nothing keeps a working plugin. While this repository is public their
   marketplace still updates from it, since the folders are still here. Once it is private,
   `claude plugin marketplace update` fails for them ("Could not read from remote repository")
-  and the plugin stays installed and enabled at its version, signing in to the same server; they
-  get no later version until they run the new command.
+  and the plugin stays installed and enabled at its version, declaring the same server; they
+  get no later version until they move over as above.
 
 So the order is: the public repository holds the plugin and an install from it is proven, then
 the release that names it on `/developers/mcp` is live, and only later does this repository go
