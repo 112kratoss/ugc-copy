@@ -52,7 +52,7 @@ import {
 } from '@/lib/post-resource-bundles';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import type { ShowcaseMediaItem } from '@/lib/showcase';
-import { FREE_RECIPE_LABEL, OWN_RECIPE_LABEL, RECIPE_UNLOCKED_LABEL } from '@/lib/showcase-asset-labels';
+import { FREE_RECIPE_LABEL, OWN_RECIPE_LABEL, RECIPE_CHECKING_LABEL, RECIPE_UNLOCKED_LABEL } from '@/lib/showcase-asset-labels';
 import { getCurrentInternalPath } from '@/lib/share';
 import { RECIPE_RETURN_ANCHOR } from '@/lib/pricing-return';
 import { trackProductEvent } from '@/lib/product-analytics';
@@ -203,6 +203,13 @@ export interface PostResourceBundlePanelProps {
   /** Try again on `creatorHold` 'failed': the page asks again what held it, the read or the check. */
   onRetryCreatorRead?: () => void;
   /**
+   * The post page only: a signed-in reader whose own read of the recipe is still out
+   * (`recipeChecking` in useShowcasePostViewer). Whether they have it is not known yet, so the recipe
+   * is held, offered to them nowhere and called theirs nowhere ("Checking…"), until that read starts
+   * the panel again from what it says (owner, 2026-11-18: "Yes, hold it").
+   */
+  readerChecking?: boolean;
+  /**
    * The post page's server HTML and the render that hydrates it only, where no cookie can be read:
    * the recipe's creator. Everyone else's offer and the creator's held recipe are both drawn, each
    * marked for the page's rule, which shows each their own before the first paint
@@ -312,6 +319,7 @@ export default function PostResourceBundlePanel({
   announceUnlock = false,
   creatorHold = null,
   onRetryCreatorRead,
+  readerChecking = false,
   creatorMark,
   onAccessChange,
 }: PostResourceBundlePanelProps) {
@@ -429,8 +437,10 @@ export default function PostResourceBundlePanel({
   const isRecipeVisible = hasAccess || viewerIsOwner;
   // The creator's own recipe before their read of it lands: theirs, held, never offered to them.
   const heldForCreator = !isRecipeVisible && creatorHold !== null;
+  // A signed-in reader's before their read of it lands: held, neither offered nor called theirs.
+  const checkingForReader = !isRecipeVisible && !heldForCreator && readerChecking;
   // Offered to this viewer: its price or "Free recipe", what an unlock gives and the ways to get it.
-  const offered = !isRecipeVisible && !heldForCreator;
+  const offered = !isRecipeVisible && !heldForCreator && !checkingForReader;
   // In the post page's server HTML: everyone else's offer, marked, beside the creator's held recipe.
   const offerMark = offered ? creatorMark : undefined;
   const basePriceCredits = Math.max(0, Math.round(priceUsdCents));
@@ -1238,14 +1248,17 @@ export default function PostResourceBundlePanel({
             ? (viewerIsOwner ? OWN_RECIPE_LABEL : RECIPE_UNLOCKED_LABEL)
             : heldForCreator
               ? OWN_RECIPE_LABEL
-              : offerMark
-                ? (
-                    <>
-                      <span data-post-recipe-pitch={offerMark}>{offerLabel}</span>
-                      <span data-post-recipe-owner={offerMark}>{OWN_RECIPE_LABEL}</span>
-                    </>
-                  )
-                : offerLabel}
+              : checkingForReader
+                ? RECIPE_CHECKING_LABEL
+                : offerMark
+                  ? (
+                      <>
+                        <span data-post-recipe-pitch={offerMark}>{offerLabel}</span>
+                        <span data-post-recipe-owner={offerMark}>{OWN_RECIPE_LABEL}</span>
+                        <span data-post-recipe-checking={offerMark}>{RECIPE_CHECKING_LABEL}</span>
+                      </>
+                    )
+                  : offerLabel}
         </span>
         {typeof activeUnlockCount === 'number' ? (
           <span>{formatUnlockCountLabel(activeIsFree ? 'free' : 'paid', activeUnlockCount)}</span>
@@ -1378,6 +1391,18 @@ export default function PostResourceBundlePanel({
               Opening your recipe…
             </p>
           )}
+        </div>
+      ) : null}
+
+      {checkingForReader || offerMark ? (
+        // A signed-in reader's recipe while their own read of it is out: neither offered nor theirs
+        // until it says which. In the server's HTML it is drawn beside the offer, for the page's rule
+        // to show a browser holding a session this and a visitor the offer (`ownerFirstPaintRules`).
+        <div data-post-recipe-checking={offerMark} className="mt-4">
+          <p role="status" className="inline-flex items-center gap-2 text-sm leading-6 text-zinc-400">
+            <Loader2 className="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
+            Checking your recipes…
+          </p>
         </div>
       ) : null}
 

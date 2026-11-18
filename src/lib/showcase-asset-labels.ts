@@ -13,6 +13,12 @@ export const RECIPE_UNLOCKED_LABEL = 'Unlocked';
 export const OWN_RECIPE_LABEL = 'Your recipe';
 
 /**
+ * A recipe on a post page while the signed-in reader's own read of it is out: neither its price nor
+ * "Unlocked" yet, which only that read can tell apart (owner, 2026-11-18).
+ */
+export const RECIPE_CHECKING_LABEL = 'Checking…';
+
+/**
  * Whether the recipe costs the viewer nothing. Branch for branch the question
  * `getAssetAccessLabel` answers with "Free recipe", so the two cannot disagree
  * about which posts are for sale. The credit price decides, as in the app

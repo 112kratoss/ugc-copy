@@ -221,8 +221,8 @@ function hydrationCommitted(page: Page) {
 /**
  * No Remix in any frame: none in the row, and no word of one in the recipe or on its bar. The row and
  * the recipe are asked to have been drawn, so that silence is not their absence. The bar is drawn for
- * whoever the page takes for someone without the recipe: a visitor, and a reader until their own read
- * of it lands.
+ * whoever the page takes for someone without the recipe: a visitor, and a reader whose own read of it
+ * says they have not got it (until that read lands the page holds a reader's recipe, owner 2026-11-18).
  */
 function expectNoRemixInAnyFrame(frames: Frame[], name: string) {
   const all = `${name}: ${JSON.stringify(frames)}`;

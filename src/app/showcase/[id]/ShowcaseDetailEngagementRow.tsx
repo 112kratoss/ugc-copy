@@ -165,6 +165,10 @@ export default function ShowcaseDetailEngagementRow({
   const pitchMark = creatorsRemix !== othersRemix ? creatorRemixMark : undefined;
   // The creator's open Remix where everyone else's is not open: inert until the page names them.
   const creatorsOpenRemixMark = pitchMark && creatorsRemix === 'open' ? pitchMark : undefined;
+  // Where everyone else's is locked behind the recipe, a signed-in reader's too before the first
+  // paint: their own read of the recipe says which, and until then the page holds it, open and inert
+  // (`ownerFirstPaintRules`, owner 2026-11-18).
+  const readersHeldRemixMark = creatorsOpenRemixMark && othersRemix === 'locked' ? creatorsOpenRemixMark : undefined;
 
   return (
     <div className="mt-6 border-y border-white/8 py-1 text-xs font-semibold text-zinc-400">
@@ -205,6 +209,7 @@ export default function ShowcaseDetailEngagementRow({
             disabled={isRemixing || remixHeld || Boolean(creatorsOpenRemixMark)}
             data-post-recipe-pitch={canRemix ? pitchMark : undefined}
             data-post-remix-owner={creatorsOpenRemixMark}
+            data-post-remix-checking={readersHeldRemixMark}
             className={`ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 px-4 text-xs font-extrabold text-[var(--ui-primary)] transition hover:bg-[var(--ui-primary)]/20${
               isRemixing ? ' opacity-60' : ''
             }`}

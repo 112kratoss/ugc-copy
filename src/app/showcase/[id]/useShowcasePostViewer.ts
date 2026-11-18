@@ -115,6 +115,17 @@ export interface ShowcasePostViewer {
   /** The viewer has not got the recipe: the page pitches it. */
   lockedViewer: boolean;
   /**
+   * A signed-in reader's recipe while their own read of it is out: whether they have it is not known
+   * yet, so the page neither offers it to them nor calls it theirs, in the rail, the panel, Remix or
+   * the bar along the bottom edge, until that read says (owner, 2026-11-18: "Yes, hold it"). A buyer
+   * was offered "Get free recipe" for about a second on a post whose recipe they had (sweep of
+   * 2026-11-18). A visitor is offered it at once, as before, and so is a reader whose read failed,
+   * whose read has been out past `READER_RECIPE_READ_DEADLINE_MS` (its answer is still drawn when it
+   * lands), or whose session check outlasted its deadline. The creator's own recipe is held as theirs
+   * instead.
+   */
+  recipeChecking: boolean;
+  /**
    * The post's Remix as this viewer has it: for the creator, from the first frame they are known
    * (`ownership`), the open Remix of their own creation, never one locked behind its recipe.
    */
@@ -175,6 +186,15 @@ export function remixForViewer(
 /** The recipe as its creator holds it, for `remixForViewer`. */
 const CREATORS_RECIPE_ACCESS = { viewerCanAccess: true, viewerIsOwner: true } as const;
 
+/**
+ * How long a signed-in reader's recipe is held for their own read of it (`recipeChecking`), from when
+ * the read is sent: past it the page offers the recipe it holds, as for a read that failed, and draws
+ * the read's answer if it still lands. A read whose function hung was answered only at the function's
+ * maximum duration, minutes on, and the recipe could be neither got nor opened until then (review of
+ * #873). Reads take 0.3 to 1.6 s.
+ */
+export const READER_RECIPE_READ_DEADLINE_MS = 4_500;
+
 /** No Remix at all. */
 const NO_REMIX: ShowcasePostRemix = { canRemix: false, remixCapability: 'none', remixTarget: null };
 
@@ -231,6 +251,8 @@ export function useShowcasePostViewer({
   const [viewerBundle, setViewerBundle] = useState<ViewerBundle | null>(null);
   // The viewer the read of the recipe last failed for, and how many times it has been asked again.
   const [bundleReadFailedFor, setBundleReadFailedFor] = useState<string | null>(null);
+  // The viewer whose read of the recipe has been out past READER_RECIPE_READ_DEADLINE_MS.
+  const [bundleReadOverdueFor, setBundleReadOverdueFor] = useState<string | null>(null);
   const [bundleReadAttempt, setBundleReadAttempt] = useState(0);
   const [blockedFor, setBlockedFor] = useState<string | null>(null);
   // The people the credit names that a block stands between, for the viewer it was asked for.
@@ -278,6 +300,8 @@ export function useShowcasePostViewer({
     const failed = () => {
       if (!controller.signal.aborted) setBundleReadFailedFor(viewerKey);
     };
+    // A reader's recipe is held for this read at most this long (`recipeChecking`).
+    const overdue = setTimeout(() => setBundleReadOverdueFor(viewerKey), READER_RECIPE_READ_DEADLINE_MS);
     // Asked on every post a signed-in reader opens, recipe or not: the cached page cannot say
     // whether one is held back for them. None for them is answered as none, not as a 404 the
     // browser logs as a failed load on every such post (`postRecipeReadPath`).
@@ -309,9 +333,22 @@ export function useShowcasePostViewer({
           ? current
           : { viewerKey, bundle: read, source: 'read', panelStart: 'read' }
       ));
-    }).catch(failed);
-    return () => controller.abort();
+    }).catch(failed).finally(() => clearTimeout(overdue));
+    return () => {
+      clearTimeout(overdue);
+      controller.abort();
+    };
   }, [accessToken, bundleReadAttempt, postId, readsBundle, viewerKey]);
+
+  // Held while the session check runs, and once it has named a reader, while the read it sends
+  // (`readsBundle`) is out: no read, no hold.
+  const recipeChecking = !viewerIsCreator
+    && ownership !== 'unread'
+    && !isNsfwCovered
+    && Boolean(pageBundle && !pageBundle.viewerCanAccess && !pageBundle.viewerIsOwner)
+    && (viewerCheck === 'checking' || (viewerCheck === 'signed-in' && readsBundle))
+    && !ownBundle
+    && !(viewerKey !== null && (bundleReadFailedFor === viewerKey || bundleReadOverdueFor === viewerKey));
 
   const retryBundleRead = useCallback(() => {
     setBundleReadFailedFor(null);
@@ -460,6 +497,7 @@ export function useShowcasePostViewer({
     creatorCheckOverdue,
     retryCreatorRecipe,
     lockedViewer,
+    recipeChecking,
     remix,
     creatorRemix,
     blocked: Boolean(viewerUserId && blockedFor === viewerUserId),
