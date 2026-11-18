@@ -270,11 +270,16 @@ describe('AppShellAccount', () => {
       const balance = await screen.findByRole('link', { name: 'Credits' });
       expect(balance.querySelector('.app-shell-credits-pending')).not.toBeNull();
       expect(balance).not.toHaveTextContent(/^Credits$/);
+      // No letters while the profile is read: the email's first stood in, then gave way to the
+      // name's (sweep of 2026-11-18).
+      const account = screen.getByRole('button', { name: /^Open account menu for / });
+      expect(account.textContent).toBe('');
 
       await act(async () => answerProfile({ data: { display_name: 'Test Creator', avatar_url: null, credits: 1295 } }));
 
       expect(await screen.findByRole('link', { name: '1295 credits' })).toBeInTheDocument();
       expect(window.localStorage.getItem(APP_SHELL_CREDITS_DIGITS_STORAGE_KEY)).toBe('4');
+      expect(screen.getByRole('button', { name: 'Open account menu for Test Creator' })).toHaveTextContent(/^TC$/);
     });
 
     it('says "Credits" when the profile was read without a balance', async () => {

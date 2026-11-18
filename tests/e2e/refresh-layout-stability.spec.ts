@@ -68,6 +68,8 @@ type Frame = {
   title: string | null;
   searchX: number | null;
   rightX: number | null;
+  /** The account button's letters, the placeholder's included (none). */
+  avatar: string | null;
   inviteY: number | null;
   balanceCard: boolean;
   authHint: string | null;
@@ -83,14 +85,21 @@ const RECORDER = `(() => {
   window.__layoutFrames = frames;
   let last = '';
   const x = (element) => (element ? Math.round(element.getBoundingClientRect().x) : null);
+  // To a tenth of a pixel: the balance's placeholder is as wide as the balance, and a fraction of a
+  // pixel moved the controls beside it (a layout shift of 0.0002 on every signed-in load, 2026-11-18).
+  const fineX = (element) => (element ? Math.round(element.getBoundingClientRect().x * 10) / 10 : null);
   function sample() {
     const header = document.querySelector('header.app-shell-header');
     if (header) {
       const invite = document.querySelector('section[aria-label="Invite and earn bonus credits"]');
+      const avatar = header.lastElementChild
+        ? Array.from(header.lastElementChild.querySelectorAll('span')).find((span) => span.className.includes('rounded-full') && span.className.includes('font-extrabold'))
+        : null;
       const frame = {
         title: header.firstElementChild ? header.firstElementChild.textContent.replace(/\\s+/g, ' ').trim() : null,
         searchX: x(header.querySelector('form.app-shell-search')),
-        rightX: x(header.lastElementChild),
+        rightX: fineX(header.lastElementChild),
+        avatar: avatar ? avatar.textContent.trim() : null,
         inviteY: invite ? Math.round(invite.getBoundingClientRect().y + window.scrollY) : null,
         balanceCard: Boolean(document.querySelector('#main-content')?.textContent.includes('Available balance')),
         authHint: document.documentElement.dataset.authHint || null,
@@ -131,10 +140,14 @@ test('a signed-in refresh of Pricing draws the top bar and the page where they s
   // The pre-paint script marked the session before the first frame.
   expect(frames[0].authHint).toBe('signed-in');
   const final = frames[frames.length - 1];
+  expect(final.avatar).toBe('WU');
   for (const frame of frames) {
-    // The controls beside the balance: one digit's width each from the placeholder to the figure.
-    expect(Math.abs((frame.rightX ?? 0) - (final.rightX ?? 0)), JSON.stringify(frame)).toBeLessThanOrEqual(2);
+    // The controls beside the balance stay put, from the placeholder (as many tabular zeros as the
+    // last balance had digits) to the figure.
+    expect(frame.rightX, JSON.stringify(frame)).toBe(final.rightX);
     expect(frame.searchX, JSON.stringify(frame)).toBe(final.searchX);
+    // The account's letters are its name's, or none while it is read: never the email's first.
+    expect(['', final.avatar], JSON.stringify(frame)).toContain(frame.avatar ?? '');
     if (frame.inviteY !== null) {
       // The balance card is drawn from the first frame the page is, so nothing below it moves.
       expect(frame.balanceCard, JSON.stringify(frame)).toBe(true);

@@ -38,8 +38,16 @@ export function canStyleRuleNameAuthUser(userId: string): boolean {
 
 /**
  * Where the browser keeps how many digits the last balance it showed had, so the placeholder is
- * as wide as the balance that replaces it (`--app-shell-credits-digits` in globals.css).
+ * as wide as the balance that replaces it (`APP_SHELL_CREDITS_ZEROS_PROPERTY`).
  */
+/**
+ * The root element's property the placeholder draws its digits from: as many zeros as the last
+ * balance had digits, as a CSS string (`'"617"'` has three: `'"000"'`). Drawn in the balance's own
+ * tabular figures (`.app-shell-credits-pending-digits` in globals.css), they are as wide as any
+ * balance of that many digits, to the pixel.
+ */
+export const APP_SHELL_CREDITS_ZEROS_PROPERTY = '--app-shell-credits-zeros';
+
 export const APP_SHELL_CREDITS_DIGITS_STORAGE_KEY = 'magicbooklet.app-shell.credits-digits.v1';
 
 /** The digits a balance is drawn with: a negative balance never shows, and never more than nine. */
@@ -73,6 +81,6 @@ export function buildAppShellAccountRestore(
   const markUser = cookiePrefix
     ? `(function(){try{var q=${prefix},w=null,k=[];document.cookie.split(";").forEach(function(c){var i=c.indexOf("=");if(i<0)return;var n=c.slice(0,i).trim(),v=c.slice(i+1).trim();if(n===q)w=v;else if(n.indexOf(q+".")===0){var x=Number(n.slice(q.length+1));x>=0&&x%1===0&&k.push([x,v])}});var r=w!==null?w:k.sort(function(a,b){return a[0]-b[0]}).map(function(e){return e[1]}).join("");if(r){var t=decodeURIComponent(r);if(t.indexOf("base64-")===0){var b=t.slice(7).replace(/-/g,"+").replace(/_/g,"/");t=atob(b+"===".slice((b.length+3)%4))}var u=JSON.parse(t);u=u&&u.user&&u.user.id;typeof u==="string"&&u&&document.documentElement.setAttribute(${JSON.stringify(APP_SHELL_AUTH_USER_ATTRIBUTE)},u)}}catch(e){}})();`
     : '';
-  const restoreDigits = `try{var d=Number(localStorage.getItem(${JSON.stringify(APP_SHELL_CREDITS_DIGITS_STORAGE_KEY)}));d>=1&&d<=9&&d===Math.floor(d)&&document.documentElement.style.setProperty("--app-shell-credits-digits",String(d))}catch(e){}`;
+  const restoreDigits = `try{var d=Number(localStorage.getItem(${JSON.stringify(APP_SHELL_CREDITS_DIGITS_STORAGE_KEY)}));d>=1&&d<=9&&d===Math.floor(d)&&document.documentElement.style.setProperty(${JSON.stringify(APP_SHELL_CREDITS_ZEROS_PROPERTY)},'"'+"0".repeat(d)+'"')}catch(e){}`;
   return markSignedIn + markUser + restoreDigits;
 }

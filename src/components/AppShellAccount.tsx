@@ -111,7 +111,11 @@ function AccountAvatar({ session, profile, size = 'md' }: AccountAvatarProps) {
     displayName: profile?.display_name ?? null,
     email: session?.user?.email ?? null,
   });
-  const initials = getUserInitials(label);
+  // None while the profile's read is on its way, as the placeholder before it draws none: the
+  // email's first letter stood in ("I" for info@…) and then gave way to the name's ("MB"), a change
+  // of letters in the bar on every signed-in load (sweep of 2026-11-18). A read that is not coming
+  // leaves UNREAD_PROFILE, and the email's letter then stays.
+  const initials = profile ? getUserInitials(label) : '';
   const className = size === 'sm' ? 'h-8 w-8 text-xs' : 'h-9 w-9 text-sm';
 
   return (
