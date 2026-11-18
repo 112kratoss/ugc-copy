@@ -379,7 +379,8 @@ function Brand({
       }}
       className="ui-focus-ring flex items-center gap-3 rounded-2xl text-[var(--ui-text-primary)]"
     >
-      <BrandMark ref={markRef} still={compact} />
+      {/* 768px: where globals.css shows `.app-shell-sidebar`. */}
+      <BrandMark ref={markRef} still={compact} shownWhen={compact ? undefined : '(min-width: 768px)'} />
       <span className="min-w-0">
         <span className="block truncate text-[15px] font-extrabold tracking-tight">Magic Booklet</span>
         {!compact ? (

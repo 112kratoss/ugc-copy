@@ -109,15 +109,25 @@ export function replayBrandMark(mark: HTMLElement | null) {
 
 /**
  * `still` draws the icon alone, for a copy that mounts again and again (the phone
- * drawer's, on every open): the sting belongs to the page's opening.
+ * drawer's, on every open): the sting belongs to the page's opening. `shownWhen` is the
+ * media query under which the playing mark is on screen (the sidebar's breakpoint).
  */
-export default function BrandMark({ ref, still = false }: { ref?: Ref<HTMLSpanElement>; still?: boolean }) {
+export default function BrandMark({
+  ref,
+  still = false,
+  shownWhen,
+}: {
+  ref?: Ref<HTMLSpanElement>;
+  still?: boolean;
+  shownWhen?: string;
+}) {
   // Asked for in the head, ahead of the body that draws them: the sting starts at the
   // first paint, and on a cold load it should play over the icon, not over its ground.
-  preload(ICON_SRC, { as: 'image', fetchPriority: 'high' });
+  // Only where the mark is on screen, so a phone's first picture never waits behind it.
   if (!still) {
-    preload(STAR_SRC, { as: 'image' });
-    preload(DOT_SRC, { as: 'image' });
+    preload(ICON_SRC, { as: 'image', fetchPriority: 'high', media: shownWhen });
+    preload(STAR_SRC, { as: 'image', media: shownWhen });
+    preload(DOT_SRC, { as: 'image', media: shownWhen });
   }
   const glowSize = GLOW_SIGMA * 6;
   return (

@@ -5,7 +5,6 @@ import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 
 import BrandMark, { brandMarkSparks, DOT_CENTRE, replayBrandMark, STAR_CENTRE } from '@/components/brand/BrandMark';
-import { mulberry32 } from '@/lib/feed-thompson';
 
 const ROOT = process.cwd();
 // The script that makes the app's launch clip: the web's sting is a copy of its motion.
@@ -28,14 +27,41 @@ function keyframes(name: string): string {
   return match[1];
 }
 
-/** The script's own burst, evaluated from its source with its seed. */
+/** One of the script's own one-line functions, evaluated from its source. */
+function scriptFunction<T>(name: string): T {
+  const source = scriptMatch(new RegExp(`^(?:function ${name}\\(|const ${name} = ).*$`, 'm'))[0];
+  return new Function(`${source}\nreturn ${name};`)() as T;
+}
+
+/** The script's own burst, evaluated from its source with its own generator and seed. */
 function scriptBurst() {
   const seed = Number(scriptMatch(/const rand = mulberry32\((\d+)\);/)[1]);
   const colours = JSON.parse(scriptMatch(/const COLORS = (\[[^;]+\]);/)[1]) as number[][];
   const burst = scriptMatch(/const burst = (Array\.from\(\{ length: \d+ \}, \(_, k\) => \{[\s\S]*?\n\}\));/)[1];
   type ScriptSpark = { star: boolean; ang: number; delay: number; dist: number; size: number; spin: number; rot: number; col: number[] };
   const evaluate = new Function('rand', 'TAU', 'COLORS', `return ${burst};`) as (rand: () => number, tau: number, colours: number[][]) => ScriptSpark[];
-  return evaluate(mulberry32(seed), Math.PI * 2, colours);
+  const scriptRandom = scriptFunction<(seed: number) => () => number>('mulberry32');
+  return evaluate(scriptRandom(seed), Math.PI * 2, colours);
+}
+
+/** A CSS cubic-bezier as a function of progress, solved for x by bisection. */
+function cubicBezier(x1: number, y1: number, x2: number, y2: number) {
+  const curve = (t: number, a: number, b: number) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
+  return (x: number) => {
+    let low = 0, high = 1;
+    for (let i = 0; i < 60; i++) {
+      const middle = (low + high) / 2;
+      if (curve(middle, x1, x2) < x) low = middle;
+      else high = middle;
+    }
+    return curve((low + high) / 2, y1, y2);
+  };
+}
+
+function largestGap(script: (x: number) => number, css: (x: number) => number) {
+  let gap = 0;
+  for (let i = 0; i <= 200; i++) gap = Math.max(gap, Math.abs(script(i / 200) - css(i / 200)));
+  return gap;
 }
 
 async function alphaCentre(file: string) {
@@ -109,6 +135,38 @@ describe('brand mark against the app launch sting', () => {
     expect(keyframes('brand-mark-spark-fade')).toContain(`${Math.round(fadeIn * 100)}%,\n  ${Math.round(fadeOut * 100)}% {`);
     const shrink = Number(scriptMatch(/s\.size \* \(1 - ([\d.]+) \* q\)/)[1]);
     expect(keyframes('brand-mark-spark-turn')).toContain(`scale(${Number((1 - shrink).toFixed(2))})`);
+  });
+
+  it('eases every layer on the script\'s curves, about the script\'s middle', () => {
+    const OUT_CUBIC = 'cubic-bezier(0.33, 1, 0.68, 1)';
+    const IN_OUT_CUBIC = 'cubic-bezier(0.65, 0, 0.35, 1)';
+    const OUT_BACK = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
+    const SMOOTHSTEP = 'cubic-bezier(0.3333, 0, 0.6667, 1)';
+    const smoothstep = (x: number) => scriptFunction<(a: number, b: number, v: number) => number>('smooth')(0, 1, x);
+    const curves: [(x: number) => number, string][] = [
+      [scriptFunction('outCubic'), OUT_CUBIC],
+      [scriptFunction('inOutCubic'), IN_OUT_CUBIC],
+      [scriptFunction('outBack'), OUT_BACK],
+      [smoothstep, SMOOTHSTEP],
+    ];
+    for (const [script, css] of curves) {
+      const [x1, y1, x2, y2] = css.match(/[\d.]+/g)!.map(Number);
+      expect(largestGap(script, cubicBezier(x1, y1, x2, y2)), css).toBeLessThan(0.015);
+    }
+
+    // Each rise is outCubic (outBack for the star) and each fall inOutCubic, in that order.
+    for (const [name, rise] of [['brand-mark-breathe', OUT_CUBIC], ['brand-mark-glow', OUT_CUBIC], ['brand-mark-dot', OUT_CUBIC], ['brand-mark-star', OUT_BACK]]) {
+      const block = keyframes(name);
+      expect(block.indexOf(rise), name).toBeGreaterThan(-1);
+      expect(block.indexOf(IN_OUT_CUBIC), name).toBeGreaterThan(block.indexOf(rise));
+    }
+    expect(keyframes('brand-mark-spark-fade').match(/cubic-bezier\(0\.3333, 0, 0\.6667, 1\)/g)).toHaveLength(2);
+    expect(GLOBALS_CSS).toContain(`brand-mark-spark-reach 0.77s ${OUT_CUBIC}`);
+
+    const [, middleX, middleY] = scriptMatch(/const IC = \[(\d+), (\d+)\]/).map(Number);
+    const canvas = Number(scriptMatch(/const S0 = (\d+);/)[1]);
+    const origin = `transform-origin: ${Number(((100 * middleX) / canvas).toFixed(2))}% ${Number(((100 * middleY) / canvas).toFixed(2))}%;`;
+    expect(GLOBALS_CSS).toContain(`.brand-mark-breath {\n  position: absolute;\n  inset: 0;\n  ${origin}`);
   });
 
   it('places the star and the dot where the layer files have them', async () => {
