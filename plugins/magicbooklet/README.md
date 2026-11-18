@@ -30,7 +30,7 @@ Added the marketplace earlier, from another repository? Claude Code keeps a mark
 claude plugin marketplace remove magicbooklet
 ```
 
-Then run the two commands above and sign in again with `/mcp`.
+Then run the two commands above, and sign in with `/mcp` again if Claude Code asks.
 
 [magicbooklet.com/developers/mcp](https://magicbooklet.com/developers/mcp#claude-code) sets the server up without the plugin, and in the other clients it supports. Use the plugin or a server you added yourself, not both.
 
