@@ -42,20 +42,50 @@ describe('For You candidates are planned for each call', () => {
     expect(named).toEqual(types);
   });
 
-  it('is not undone by a later migration that defines the function again without the setting', () => {
+  // A convenience at the text's level: it names the migration at fault before a
+  // replay does. The guard on what the database holds is the pgTAP file
+  // feed_candidates_custom_plans.test.sql, which reads the live function.
+  it('is not undone by a later migration that defines the function again without the setting, or resets it', () => {
     const later = fs.readdirSync(MIGRATIONS).filter((file) => file.endsWith('.sql') && file > MIGRATION).sort();
-    for (const file of later) {
-      const sql = statements(file);
-      let from = sql.indexOf(`FUNCTION ${FUNCTION_NAME}(`);
-      while (from !== -1) {
-        const isDefinition = /CREATE (OR REPLACE )?$/.test(sql.slice(Math.max(0, from - 18), from));
-        if (isDefinition) {
-          const header = sql.slice(from, sql.indexOf('AS $', from));
-          expect(header, `${file} defines the function without force_custom_plan`)
-            .toContain('SET plan_cache_mode = force_custom_plan');
-        }
-        from = sql.indexOf(`FUNCTION ${FUNCTION_NAME}(`, from + 1);
-      }
-    }
+    for (const file of later) expect(undoneBy(statements(file)), file).toEqual([]);
+  });
+
+  it('reads a definition or a reset however it is spelled', () => {
+    const header = 'p uuid)\nRETURNS void\nLANGUAGE plpgsql\nSET search_path = public, pg_temp\n';
+    const body = 'AS $$ begin end $$;';
+    expect(undoneBy(`CREATE OR REPLACE FUNCTION ${FUNCTION_NAME}(${header}${body}`)).toHaveLength(1);
+    expect(undoneBy(`create or replace\n  function get_ranked_feed_candidates_v4 (${header}${body}`)).toHaveLength(1);
+    expect(undoneBy(`create function "public"."get_ranked_feed_candidates_v4"(${header}as $fn$ begin end $fn$;`)).toHaveLength(1);
+    expect(undoneBy(`ALTER FUNCTION ${FUNCTION_NAME}(uuid) RESET plan_cache_mode;`)).toHaveLength(1);
+    expect(undoneBy(`alter function ${FUNCTION_NAME}(uuid) reset all;`)).toHaveLength(1);
+    expect(undoneBy(`ALTER FUNCTION ${FUNCTION_NAME}(uuid) SET plan_cache_mode = auto;`)).toHaveLength(1);
+    expect(undoneBy(
+      `CREATE OR REPLACE FUNCTION ${FUNCTION_NAME}(${header}SET plan_cache_mode = force_custom_plan\n${body}`,
+    )).toEqual([]);
+    expect(undoneBy(`ALTER FUNCTION ${FUNCTION_NAME}(uuid) SET plan_cache_mode TO 'force_custom_plan';`)).toEqual([]);
+    expect(undoneBy(`GRANT EXECUTE ON FUNCTION ${FUNCTION_NAME}(uuid) TO service_role;`)).toEqual([]);
+    expect(undoneBy('CREATE OR REPLACE FUNCTION public.get_ranked_feed_candidates_v40(p uuid) RETURNS void AS $$ $$;'))
+      .toEqual([]);
   });
 });
+
+const NAMED = String.raw`(?:"?public"?\s*\.\s*)?"?get_ranked_feed_candidates_v4"?\s*\(`;
+const KEEPS_SETTING = /\bset\s+plan_cache_mode\s*(?:=|\bto\b)\s*'?force_custom_plan\b/i;
+
+/** Each statement in `sql` that would leave the function without force_custom_plan. */
+function undoneBy(sql: string) {
+  const found: string[] = [];
+  for (const match of sql.matchAll(new RegExp(String.raw`\bcreate\s+(?:or\s+replace\s+)?function\s+${NAMED}`, 'gi'))) {
+    const rest = sql.slice(match.index);
+    const body = rest.search(/\bas\s+\$/i);
+    const header = body === -1 ? rest : rest.slice(0, body);
+    if (!KEEPS_SETTING.test(header)) found.push(`defined without the setting: ${match[0]}`);
+  }
+  for (const match of sql.matchAll(new RegExp(String.raw`\balter\s+function\s+${NAMED}[^;]*;`, 'gi'))) {
+    const statement = match[0];
+    const resets = /\breset\s+(?:all|plan_cache_mode)\b/i.test(statement);
+    const setsAnother = /\bset\s+plan_cache_mode\b/i.test(statement) && !KEEPS_SETTING.test(statement);
+    if (resets || setsAnother) found.push(`changed: ${statement.replace(/\s+/g, ' ')}`);
+  }
+  return found;
+}

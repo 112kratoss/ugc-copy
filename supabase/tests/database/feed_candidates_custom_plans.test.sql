@@ -22,8 +22,10 @@ select ok(
   'and it still runs as its caller with its search path pinned'
 );
 
--- Seven calls on one connection: the sixth is where a generic plan would be
--- built. Each must answer, and answer the same.
+-- A smoke check, not proof of the setting (a generic plan and a per-call plan
+-- return the same rows): with the setting on the function, seven calls on one
+-- connection, past the sixth where a generic plan used to be built, still
+-- answer, and answer the same.
 create temporary table candidate_calls as
 select call, (
   select count(*) from public.get_ranked_feed_candidates_v4(
@@ -35,7 +37,7 @@ from generate_series(1, 7) as call;
 select is(
   (select count(distinct returned) from candidate_calls),
   1::bigint,
-  'seven calls in a row on one connection answer alike'
+  'seven calls in a row on one connection still answer, and alike'
 );
 
 select * from finish();
