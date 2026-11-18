@@ -32,6 +32,10 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test';
  */
 
 const COLD_PAGE = { timeout: 45_000 };
+/** A frame at 60 Hz, the last stretch's length past its last frame. */
+const FRAME_MS = 17;
+/** How long, in all, the bar may be drawn with the parser inside it (`arrive`). */
+const PARSER_INSIDE_BAR_MS = 500;
 const BLUE_PNG = fs.readFileSync(path.join(__dirname, 'fixtures/blue.png'));
 /** Where the frames are written as well, for a run that keeps them (a local check). */
 const FRAMES_DIR = process.env.CREATOR_ARRIVAL_FRAMES_DIR;
@@ -224,6 +228,15 @@ async function arrive(page: Page, address: string, costCredits: number | null, n
   )), COLD_PAGE).toBe(3);
   await page.waitForTimeout(1_000);
   const arrival = await readArrival(page);
+  // The frames the bar's checks leave out (`recordFrames`) are the parser's stops, each on screen
+  // until the next frame: the CI run's stayed 96 ms, from 204 ms to the next at 300 ms. Together they
+  // stay short, or the page held the bar half-drawn, a fault of its own the guard must not hide
+  // (review of #869).
+  const parserInsideMs = arrival.stretches.reduce((total, stretch, index) => (
+    stretch.parsing ? total + (arrival.stretches[index + 1]?.from ?? stretch.to + FRAME_MS) - stretch.from : total
+  ), 0);
+  expect.soft(parserInsideMs, `the bar is drawn with the parser inside it for moments only:\n${describeStretches(arrival.stretches)}`)
+    .toBeLessThan(PARSER_INSIDE_BAR_MS);
   if (FRAMES_DIR) {
     fs.mkdirSync(FRAMES_DIR, { recursive: true });
     fs.writeFileSync(path.join(FRAMES_DIR, `${name}.json`), `${JSON.stringify(arrival, null, 1)}\n`);
@@ -242,22 +255,9 @@ function describeStretches(stretches: Stretch[]): string {
   )).join('\n');
 }
 
-/**
- * How long, in all, the bar may be drawn with the parser still inside it. The parser's stops are a
- * frame or two each (the CI run's was one frame); a page that held the bar half-drawn for longer is
- * a fault of its own, and frames the guard leaves out must not hide one (review of #869).
- */
-const PARSER_INSIDE_BAR_MS = 250;
-
 /** The frames that draw the bar, once the parser has left the part of it they show (`recordFrames`). */
 function barFrames(arrival: Arrival): Stretch[] {
-  const showsBar = (stretch: Stretch) => stretch.chip !== null || stretch.generate !== null;
-  const insideMs = arrival.stretches
-    .filter((stretch) => stretch.parsing && showsBar(stretch))
-    .reduce((total, stretch) => total + stretch.to - stretch.from, 0);
-  expect.soft(insideMs, `the bar is drawn with the parser inside it for moments only:\n${describeStretches(arrival.stretches)}`)
-    .toBeLessThan(PARSER_INSIDE_BAR_MS);
-  const drawn = arrival.stretches.filter((stretch) => !stretch.parsing && showsBar(stretch));
+  const drawn = arrival.stretches.filter((stretch) => !stretch.parsing && (stretch.chip !== null || stretch.generate !== null));
   expect(drawn.length, 'the bar is drawn').toBeGreaterThan(0);
   return drawn;
 }
