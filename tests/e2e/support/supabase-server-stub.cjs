@@ -187,7 +187,8 @@ const exploreLoadMoreMedia = exploreLoadMorePosts.map((post, index) => {
 });
 // The storefront's first page, newest first: four free recipes on picture posts and the fifth that
 // says more follow, by one creator. /marketplace reads them in getMarketplaceResourceList
-// (src/lib/post-resource-bundles-server.ts); marketplace-keeps-place.spec.ts draws it.
+// (src/lib/post-resource-bundles-server.ts); marketplace-keeps-place.spec.ts draws it, and
+// recipe-labels-viewer.spec.ts for its seller and a visitor.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const marketplaceRecipes = require('../fixtures/marketplace-recipes.json');
 // The "Make this" shelf's pinned posts (HOME_SHELF_PINS, src/lib/home-shelf-lineup.ts, which
@@ -203,7 +204,8 @@ const startPosts = require('../fixtures/creator-start-posts.json');
 // read), three of them with a published recipe, by a creator who is not the E2E user. The page
 // reads its creator by handle, the posts and the totals, then hydrates the posts as a feed does
 // (src/lib/creator-profile.ts, resolvePostRowsToFeedItems); creator-page-own-recipe-chips.spec.ts
-// draws it for its creator, another reader and a visitor.
+// draws it for its creator, another reader and a visitor, and recipe-labels-viewer.spec.ts for a
+// reader who has one of its recipes.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const recipePage = require('../fixtures/creator-page-recipes.json');
 // In the order the page asks for them: its recipes' posts as its read lists the recipes, newest

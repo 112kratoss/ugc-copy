@@ -1167,6 +1167,27 @@ describe("CreatorContentTabs: the creator's own recipes", () => {
     container.remove();
   });
 
+  // The first posts are the server's, drawn once for everyone: a buyer's recipe there read its
+  // price, or "Free recipe", for as long as the page was open (sweep of 2026-11-17).
+  it('reads a recipe the signed-in reader has as theirs once their recipes are read, among the first posts too', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => (
+      String(input) === '/api/me/unlocked-recipes'
+        ? { ok: true, json: async () => ({ success: true, bundleIds: ['bundle-3'] }) }
+        : { ok: false, json: async () => ({}) }
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      authState.session = { access_token: 'buyer-token' };
+      authState.user = { id: 'buyer-on-creator-page' };
+      render(tabs);
+      await waitFor(() => expect(chips()).toEqual(['900 credits', 'Unlocked']));
+      expect(fetchMock).toHaveBeenCalledWith('/api/me/unlocked-recipes', { headers: { Authorization: 'Bearer buyer-token' } });
+      expect(document.body.textContent).not.toContain('Your recipe');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("draws everyone's chips alone in the server's HTML for a creator a style rule cannot name", () => {
     const unnameable = 'creator"] *{display:none} [x="';
     const withCreator = (item: ShowcaseFeedItem): ShowcaseFeedItem => ({ ...item, creator: { ...item.creator, id: unnameable } });

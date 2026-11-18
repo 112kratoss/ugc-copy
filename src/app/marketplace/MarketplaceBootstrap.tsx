@@ -14,6 +14,7 @@ import {
 import { ArrowRight, Loader2, X } from 'lucide-react';
 
 import type MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
+import { marketplaceOwnRecipeRules } from '@/app/marketplace/marketplace-card-access';
 import MarketplaceFiltersButton, {
   MARKETPLACE_FILTERS_ID,
   MarketplaceFiltersSummary,
@@ -272,6 +273,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
   const activeFilterLabels = getActiveFilterLabels(initialFilters, sourceToolOptions);
   const hasActiveFilters = activeFilterLabels.length > 0 || initialFilters.sort !== 'recent';
   const bootstrapItems = initialPage.items.slice(0, MARKETPLACE_INITIAL_PAGE_SIZE);
+  const ownRecipeRules = marketplaceOwnRecipeRules(bootstrapItems, viewer);
   // A plain click on a filter or the search moves the listing in place; the
   // links and the form keep working as before without script.
   const navigateOnPlainClick = (href: string) => (event: MouseEvent<HTMLAnchorElement>) => {
@@ -475,6 +477,10 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
         )
       ) : (
         <>
+          {/* Ahead of the tiles, while the viewer cannot be read (the server's HTML, the same for
+              everyone, and the render that hydrates it): a seller's own tiles read "Your recipe" to
+              them from the first paint (`MarketplaceRecipeTile`). */}
+          {ownRecipeRules ? <style>{ownRecipeRules}</style> : null}
           <div className={MARKETPLACE_RECIPE_GRID_CLASS}>
             {bootstrapItems.map((asset) => (
               <MarketplaceRecipeTile

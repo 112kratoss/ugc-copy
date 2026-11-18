@@ -1,5 +1,7 @@
 'use client';
 
+import { useCallback } from 'react';
+
 import { useAuth } from '@/components/AuthProvider';
 import { useSupabaseAuthCookieHint } from '@/components/useSupabaseAuthCookieHint';
 import { canStyleRuleNameAuthUser } from '@/lib/app-shell-account-restore';
@@ -77,4 +79,24 @@ export function useCreatorOwnershipAndSessionCheck(creatorId: string | null): {
 /** `resolveCreatorOwnership` for this browser's viewer. */
 export function useCreatorOwnership(creatorId: string | null): CreatorOwnership {
   return useCreatorOwnershipAndSessionCheck(creatorId).ownership;
+}
+
+/**
+ * `resolveCreatorOwnership` for this browser's viewer and any creator, for a page that lists many
+ * creators' work (the Marketplace, whose tiles are each their seller's): the viewer and the account the
+ * session cookie names are read once for every tile. A new function only when what it answers changes.
+ */
+export function useCreatorOwnershipResolver(): (creatorId: string | null) => CreatorOwnership {
+  const { session, user, isLoading } = useAuth();
+  const hasAuthCookie = useSupabaseAuthCookieHint();
+  const viewerCheck = useViewerSessionCheck();
+  const viewerUserId = session?.access_token ? user?.id ?? null : null;
+  // As above: read only once hydrated, with no one named yet, while the provider checks a cookie.
+  const checkedCookieUserId = !viewerUserId && viewerCheck !== 'unread' && hasAuthCookie && isLoading
+    ? readSupabaseAuthCookieUserId()
+    : null;
+  return useCallback(
+    (creatorId: string | null) => resolveCreatorOwnership({ creatorId, viewerUserId, viewerCheck, checkedCookieUserId }),
+    [viewerUserId, viewerCheck, checkedCookieUserId],
+  );
 }

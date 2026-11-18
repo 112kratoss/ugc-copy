@@ -47,10 +47,10 @@ import { fetchShowcaseViewerExclusions } from '@/lib/showcase-viewer-exclusions-
 import ReelHostMark from '@/components/ReelHostMark';
 import { CREATOR_TAB_HASHES, CREATOR_TAB_MARK, type CreatorTab } from '@/lib/address-first-paint';
 import { useCreatorOwnership } from '@/lib/creator-ownership';
+import { ownRecipeFirstPaintRules } from '@/lib/own-recipe-first-paint';
 import { useFirstPaintMark } from '@/lib/use-first-paint-mark';
+import { useViewerUnlockedRecipeIds, withViewerUnlockedRecipes } from '@/lib/viewer-unlocked-recipes';
 import { itemsWithoutBlockedRemixCredits } from '../../../../ugc-mobile/lib/remix-credit/remix-credit';
-
-import { ownRecipeFirstPaintRules } from './own-recipe-first-paint';
 
 const PAGE_SIZE = 24;
 const tabHashes: Record<CreatorTab, string> = CREATOR_TAB_HASHES;
@@ -141,7 +141,7 @@ function CreatorContentTabsView({
   const reelHistoryModeRef = useRef<ReelHistoryMode>(null);
   const directPostRequestRef = useRef<string | null>(null);
   const {
-    items,
+    items: loadedItems,
     setItems,
     savedItemIds,
     addSavedItemIds,
@@ -154,6 +154,15 @@ function CreatorContentTabsView({
     onError: (error) => console.error('Creator profile save failed:', error),
     sourceSurface: 'creator-profile',
   });
+  // The first page is the server's, drawn once for every viewer, so it cannot say which recipes a
+  // signed-in reader has: a buyer's read their price or "Free recipe" on the tiles and in the reel for
+  // as long as the page was open (sweep of 2026-11-17), while a later page, read with their session,
+  // said "Unlocked". Their own recipes are read apart, as the Marketplace reads them, and marked here.
+  const unlockedRecipeIds = useViewerUnlockedRecipeIds();
+  const items = useMemo(
+    () => withViewerUnlockedRecipes(loadedItems, unlockedRecipeIds),
+    [loadedItems, unlockedRecipeIds],
+  );
 
   const unlockItems = useMemo(() => items.filter((item) => Boolean(item.asset)), [items]);
   const visibleItems = activeTab === 'unlocks' ? unlockItems : items;
