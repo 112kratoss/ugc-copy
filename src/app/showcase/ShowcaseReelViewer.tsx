@@ -74,6 +74,7 @@ import { getCurrentInternalPath } from '@/lib/share';
 import { displaySourceToolLabel } from '@/lib/source-tools';
 import { type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
 import { noteFollowChange } from '@/lib/follow-changes';
+import { forgetViewerUnlockedRecipes } from '@/lib/viewer-unlocked-recipes';
 import { tilePictureStandIn } from '@/app/showcase/tile-pictures';
 import { returnFocus, showsKeyboardFocus } from '@/app/showcase/reel-focus-return';
 
@@ -1072,7 +1073,11 @@ export default function ShowcaseReelViewer({
     setUnlockNotice(null);
   };
 
+  // The server has said the recipe is the viewer's: the page's cards under the reel (a creator
+  // page's tiles, the Marketplace's) read their recipes again and say "Unlocked"
+  // (viewer-unlocked-recipes.ts), whether or not the recipe's own read below lands.
   const finishReelUnlock = async () => {
+    forgetViewerUnlockedRecipes();
     applyReelUnlock(item.id, await fetchBundleForItem(item.id));
   };
 
@@ -1091,6 +1096,8 @@ export default function ShowcaseReelViewer({
   // A paid recipe opens on the post it was bought for. If the reader has moved
   // on meanwhile, the reel's own access check opens it when they come back.
   const showPaidRecipe = (postId: string, bundle: ReelBundle) => {
+    // Paid for, whichever post is on screen now: the cards under the reel say so too.
+    forgetViewerUnlockedRecipes();
     setAwaitingPaymentItemId((current) => (current === postId ? null : current));
     trackProductEvent('recipe_checkout_succeeded', { method: 'razorpay', post_id: postId });
     if (feedEventItemRef.current?.id === postId) {

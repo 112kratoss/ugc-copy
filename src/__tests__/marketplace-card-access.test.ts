@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { NO_VIEWER_STATE, getMarketplaceCardAccess } from '@/app/marketplace/marketplace-card-access';
+import { NO_VIEWER_STATE, getMarketplaceCardAccess, marketplaceOwnRecipeRules } from '@/app/marketplace/marketplace-card-access';
+import { ownRecipeFirstPaintRules } from '@/lib/own-recipe-first-paint';
 import { formatPostResourcePriceLabel } from '@/lib/post-resource-bundles';
 
 const paid = {
@@ -33,5 +34,48 @@ describe('a marketplace card and its viewer', () => {
     const viewer = { viewerUserId: 'seller-1', unlockedBundleIds: new Set(['bundle-1']) };
     expect(getMarketplaceCardAccess(paid, viewer)).toMatchObject({ accessLabel: 'Your recipe', unlockLabel: 'View recipe', isOwner: true });
     expect(getMarketplaceCardAccess(paid, { viewerUserId: null, unlockedBundleIds: new Set() }).isOwner).toBe(false);
+  });
+});
+
+// A seller's own cards at their first paint (sweep of 2026-11-17): the page's provider checks the
+// session afresh on every visit, and until it named the seller their cards read "Free recipe" and
+// "View free recipe". `ownershipOf` is what the page knows of whose a seller's recipe is at a render
+// (`useCreatorOwnershipResolver`).
+describe('a seller\'s own card before the page has named the viewer', () => {
+  const ownership = (bySeller: Record<string, 'owner' | 'owner-checking' | 'unread' | 'other'>) => (
+    (sellerId: string) => bySeller[sellerId] ?? 'other'
+  );
+
+  it('reads as theirs while their session cookie names them and the check is out', () => {
+    const viewer = { viewerUserId: null, unlockedBundleIds: new Set<string>(), ownershipOf: ownership({ 'seller-1': 'owner-checking' }) };
+    expect(getMarketplaceCardAccess(free, viewer)).toMatchObject({ accessLabel: 'Your recipe', unlockLabel: 'View recipe', isOwner: true, ownRecipeMark: undefined });
+    expect(getMarketplaceCardAccess(paid, viewer)).toMatchObject({ accessLabel: 'Your recipe', unlockLabel: 'View recipe', isOwner: true });
+  });
+
+  it('marks the seller where no one can be read yet, with their words beside everyone else\'s', () => {
+    const viewer = { viewerUserId: null, unlockedBundleIds: new Set<string>(), ownershipOf: ownership({ 'seller-1': 'unread' }) };
+    expect(getMarketplaceCardAccess(free, viewer)).toEqual(expect.objectContaining({
+      accessLabel: 'Free recipe',
+      unlockLabel: 'View free recipe',
+      isOwner: false,
+      ownRecipeMark: 'seller-1',
+      ownerAccessLabel: 'Your recipe',
+      ownerUnlockLabel: 'View recipe',
+    }));
+    expect(getMarketplaceCardAccess(paid, viewer)).toMatchObject({ accessLabel: '900 credits', ownRecipeMark: 'seller-1', ownerAccessLabel: 'Your recipe' });
+  });
+
+  it('offers it to anyone else, unmarked', () => {
+    const viewer = { viewerUserId: 'buyer-1', unlockedBundleIds: new Set<string>(), ownershipOf: ownership({}) };
+    expect(getMarketplaceCardAccess(free, viewer)).toMatchObject({ accessLabel: 'Free recipe', unlockLabel: 'View free recipe', isOwner: false, ownRecipeMark: undefined });
+  });
+
+  it('writes the first-paint rules once for each seller a card is marked for, and none once the viewer is read', () => {
+    const other = { ...free, id: 'bundle-3', seller: { id: 'seller-2', username: 'ari', name: 'Ari', avatar: null } };
+    const unread = { viewerUserId: null, unlockedBundleIds: new Set<string>(), ownershipOf: ownership({ 'seller-1': 'unread', 'seller-2': 'unread' }) };
+    const rules = marketplaceOwnRecipeRules([paid, free, other], unread);
+    expect(rules).toBe(ownRecipeFirstPaintRules('seller-1') + ownRecipeFirstPaintRules('seller-2'));
+    expect(marketplaceOwnRecipeRules([paid, free, other], { ...unread, ownershipOf: ownership({ 'seller-1': 'owner' }) })).toBe('');
+    expect(marketplaceOwnRecipeRules([paid], NO_VIEWER_STATE)).toBe('');
   });
 });

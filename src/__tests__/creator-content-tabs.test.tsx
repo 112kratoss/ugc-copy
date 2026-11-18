@@ -102,6 +102,7 @@ vi.mock('@/app/showcase/ShowcaseReelViewer', () => ({
         {openItem && onBlockUser ? <button type="button" onClick={() => void onBlockUser(openItem)}>Block user</button> : null}
         {openItem && onToggleSave ? <button type="button" onClick={() => void onToggleSave(openItem.id)}>Save post</button> : null}
         <span data-testid="reel-credit">{openItem?.remixCredit ? JSON.stringify(openItem.remixCredit) : ''}</span>
+        <span data-testid="reel-recipe-theirs">{String(Boolean(openItem?.asset?.viewerHasUnlocked))}</span>
       </div>
     ) : null;
   },
@@ -1165,6 +1166,48 @@ describe("CreatorContentTabs: the creator's own recipes", () => {
       hydrated?.unmount();
     });
     container.remove();
+  });
+
+  it('asks nothing of a signed-in reader on the page of a creator with no recipe', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      authState.session = { access_token: 'reader-token' };
+      authState.user = { id: 'reader-on-recipe-free-page' };
+      render(
+        <CreatorContentTabs
+          initialData={{ ...pageData, items: [items[0]], stats: { ...pageData.stats, unlocks: 0 } }}
+          profilePath="/creators/creator-name"
+        />
+      );
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain('/api/me/unlocked-recipes');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // The first posts are the server's, drawn once for everyone: a buyer's recipe there read its
+  // price, or "Free recipe", for as long as the page was open (sweep of 2026-11-17).
+  it('reads a recipe the signed-in reader has as theirs once their recipes are read, among the first posts too', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => (
+      String(input) === '/api/me/unlocked-recipes'
+        ? { ok: true, json: async () => ({ success: true, bundleIds: ['bundle-3'] }) }
+        : { ok: false, json: async () => ({}) }
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      authState.session = { access_token: 'buyer-token' };
+      authState.user = { id: 'buyer-on-creator-page' };
+      render(tabs);
+      await waitFor(() => expect(chips()).toEqual(['900 credits', 'Unlocked']));
+      expect(fetchMock).toHaveBeenCalledWith('/api/me/unlocked-recipes', { headers: { Authorization: 'Bearer buyer-token' } });
+      expect(document.body.textContent).not.toContain('Your recipe');
+      // The reel opened on it is told the recipe is theirs, and holds it rather than offering it (#863).
+      fireEvent.click(screen.getAllByRole('button', { name: /free breakdown/i })[0]);
+      expect(await screen.findByTestId('reel-recipe-theirs')).toHaveTextContent('true');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("draws everyone's chips alone in the server's HTML for a creator a style rule cannot name", () => {

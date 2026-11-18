@@ -68,7 +68,13 @@ export function MarketplaceRecipeTile({
   // The chip prices it in credits, as every other chip does (audit B-F13), or
   // says "Free recipe", "Unlocked" or "Your recipe"; the unlock action names
   // every way to pay, as the post's panel does.
-  const { accessLabel, unlockLabel } = getMarketplaceCardAccess(asset, viewer);
+  const {
+    accessLabel,
+    unlockLabel,
+    ownRecipeMark,
+    ownerAccessLabel,
+    ownerUnlockLabel,
+  } = getMarketplaceCardAccess(asset, viewer);
   const postTitle = asset.post?.title?.trim() || asset.title;
   const isClip = Boolean(asset.post?.mediaUrl) && asset.post?.mediaKind === 'video';
   // "N opened" counts free unlocks, "N sold" paid ones (decision 6, 2026-10-17).
@@ -100,7 +106,9 @@ export function MarketplaceRecipeTile({
         <div className="showcase-card-actions pointer-events-none absolute inset-0 flex items-end justify-end bg-gradient-to-t from-black/70 via-transparent to-transparent p-3 transition-opacity duration-200">
           <span className="ml-12 inline-flex min-w-0 items-center gap-1.5 rounded-full bg-amber-400 px-3 py-2 text-xs font-bold leading-tight text-[#1a0d08] shadow-md">
             <ShoppingBag className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span>{unlockLabel}</span>
+            <span>
+              <SellerOrViewerWords mark={ownRecipeMark} viewers={unlockLabel} sellers={ownerUnlockLabel} />
+            </span>
           </span>
         </div>
       </div>
@@ -130,7 +138,7 @@ export function MarketplaceRecipeTile({
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           {/* Explore's recipe chip, in its words and its colour. */}
           <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/10 bg-emerald-500/[0.06] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-            {accessLabel}
+            <SellerOrViewerWords mark={ownRecipeMark} viewers={accessLabel} sellers={ownerAccessLabel} />
           </span>
           {(asset.resourceKinds ?? []).map((kind) => (
             <span
@@ -143,6 +151,21 @@ export function MarketplaceRecipeTile({
         </div>
       </div>
     </LinkComponent>
+  );
+}
+
+/**
+ * A tile's words for this viewer; or, where no one can be read yet (`mark`, the seller: the server's
+ * HTML and the render that hydrates it), the seller's words for their own recipe beside everyone
+ * else's, which the list's rules (`marketplaceOwnRecipeRules`) show to each before the first paint.
+ */
+function SellerOrViewerWords({ mark, viewers, sellers }: { mark?: string; viewers: string; sellers: string }) {
+  if (!mark || viewers === sellers) return viewers;
+  return (
+    <>
+      <span data-creator-recipe-pitch={mark}>{viewers}</span>
+      <span data-creator-recipe-owner={mark}>{sellers}</span>
+    </>
   );
 }
 

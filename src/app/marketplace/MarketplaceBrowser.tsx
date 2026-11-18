@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 
+import { marketplaceOwnRecipeRules } from '@/app/marketplace/marketplace-card-access';
 import MarketplaceFiltersButton, {
   MARKETPLACE_FILTERS_ID,
   MarketplaceFiltersSummary,
@@ -180,6 +181,7 @@ export default function MarketplaceBrowser({
   // the session came, went back to what it held before the press (review of #835).
   const awaitingViewer = pagesViewer !== null && !session?.access_token;
   const { items, pageInfo } = listing;
+  const ownRecipeRules = marketplaceOwnRecipeRules(items, viewer);
   // While the listing's own first page is on its way, what was kept of it stands in for it.
   const drawsKeptListing = listing.kept && listing.key === listingKey;
   const [searchInput, setSearchInput] = useState(initialFilters.q || shortQuery);
@@ -552,6 +554,8 @@ export default function MarketplaceBrowser({
         )
       ) : (
         <>
+          {/* As the shell draws them (MarketplaceBootstrap): only while the viewer cannot be read. */}
+          {ownRecipeRules ? <style>{ownRecipeRules}</style> : null}
           <div className={MARKETPLACE_RECIPE_GRID_CLASS}>
             {items.map((asset) => (
               <MarketplaceRecipeTile

@@ -134,4 +134,31 @@ describe('a recipe tile while its picture comes', () => {
     expect(coverOf(container).picture).toHaveAttribute('loading', 'eager');
     expect(coverOf(container).shimmer).toBeNull();
   });
+
+  // Where no one can be read yet (the server's HTML, the same for everyone, and the render that
+  // hydrates it), a seller's tile draws their words beside everyone else's, and the list's rules
+  // show each viewer their own before the first paint (sweep of 2026-11-17).
+  it("draws the seller's words beside everyone else's where no one can be read yet", () => {
+    const viewer = { viewerUserId: null, unlockedBundleIds: new Set<string>(), ownershipOf: () => 'unread' as const };
+    const html = renderToString(
+      <MarketplaceRecipeTile asset={recipe('https://cdn.example.com/mark.preview.0000eeee.webp')} viewer={viewer} href="/showcase/post-1" />,
+    );
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    const words = (attribute: string) => Array.from(container.querySelectorAll(`[${attribute}="creator-1"]`), (node) => node.textContent);
+    expect(words('data-creator-recipe-pitch')).toEqual(['View free recipe', 'Free recipe']);
+    expect(words('data-creator-recipe-owner')).toEqual(['View recipe', 'Your recipe']);
+  });
+
+  it("draws the viewer's words alone once the page knows whose the recipe is", () => {
+    const viewer = { viewerUserId: null, unlockedBundleIds: new Set<string>(), ownershipOf: () => 'owner-checking' as const };
+    const { container } = render(
+      <MarketplaceRecipeTile asset={recipe('https://cdn.example.com/own.preview.0000ffff.webp')} viewer={viewer} href="/showcase/post-1" />,
+    );
+    expect(container.querySelector('[data-creator-recipe-pitch], [data-creator-recipe-owner]')).toBeNull();
+    expect(container.textContent).toContain('Your recipe');
+    expect(container.textContent).toContain('View recipe');
+    expect(container.textContent).not.toMatch(/free recipe/i);
+    expect(container.querySelector('a')).toHaveAttribute('aria-label', 'View recipe: Night shift');
+  });
 });

@@ -71,6 +71,7 @@ import {
   type RecipeReadingGroup,
 } from '@/app/showcase/recipe-reading';
 import { forgetKeptSearchPages } from '@/lib/search-kept-pages';
+import { forgetViewerUnlockedRecipes } from '@/lib/viewer-unlocked-recipes';
 import RecipeMediaGallery from './RecipeMediaGallery';
 import {
   clearRazorpayCheckoutIntentKey,
@@ -585,7 +586,10 @@ export default function PostResourceBundlePanel({
     // The recipe has just become the viewer's: a search Back would redraw from
     // what it kept still prices it (search-kept-pages.ts). A refresh that
     // changes nothing keeps them.
-    if (nowHasAccess && !hasAccess) forgetKeptSearchPages();
+    if (nowHasAccess && !hasAccess) {
+      forgetKeptSearchPages();
+      forgetViewerUnlockedRecipes();
+    }
     setHasAccess(nowHasAccess);
     setResources(bundle.resources);
 
@@ -695,6 +699,9 @@ export default function PostResourceBundlePanel({
         throw new Error(data.error || 'Failed to get the free recipe.');
       }
 
+      // The server has said it is theirs: lists of cards read their recipes again, whatever the
+      // recipe's own read below does (viewer-unlocked-recipes.ts).
+      forgetViewerUnlockedRecipes();
       await fetchLatestBundle();
       setUnlockNotice('unlocked');
       trackProductEvent('recipe_unlock_succeeded', { method: 'free', post_id: postId });
@@ -749,6 +756,7 @@ export default function PostResourceBundlePanel({
 
       if (orderData.alreadyPurchased) {
         clearRazorpayCheckoutIntentKey(checkoutIntentScope);
+        forgetViewerUnlockedRecipes();
         await fetchLatestBundle();
         setUnlockNotice('already');
         return;
@@ -894,6 +902,7 @@ export default function PostResourceBundlePanel({
 
       applyServerBalance(data.credits, data.marketplaceSpendableCredits);
 
+      forgetViewerUnlockedRecipes();
       await fetchLatestBundle();
       setUnlockNotice(data.alreadyProcessed ? 'already' : 'unlocked');
       trackProductEvent('recipe_unlock_succeeded', { method: 'credits', post_id: postId });
