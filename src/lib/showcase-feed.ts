@@ -617,18 +617,25 @@ export async function addCreationReferenceCountsToFeedItems(
 
 type CreationReferenceCounts = Awaited<ReturnType<typeof countGenerationRecipeReferenceItemsByPostId>>;
 
+/**
+ * The posts `readCreationReferenceCounts` asks about: only a creation recipe
+ * can gain any, and the read asks only of one whose creator shares the inputs
+ * (the stored switch). Not the summary's `allowRemix`, which a post whose
+ * "Allow remixes" is off reports false while its unlock still hands those
+ * inputs over.
+ */
+function creationReferenceCountPostIds(items: ShowcaseFeedItem[]): string[] {
+  return items.flatMap((item) => (
+    item.generationId && item.asset?.lockedPreview ? [item.id] : []
+  ));
+}
+
 /** The read behind `addCreationReferenceCountsToFeedItems`, of these items alone. */
 async function readCreationReferenceCounts(
   items: ShowcaseFeedItem[],
   adminSupabase: ReturnType<typeof createServiceClient>,
 ): Promise<CreationReferenceCounts> {
-  // Only a creation recipe can gain any, and the read asks only of one whose
-  // creator shares the inputs (the stored switch). Not the summary's
-  // `allowRemix`, which a post whose "Allow remixes" is off reports false while
-  // its unlock still hands those inputs over.
-  const postIds = items.flatMap((item) => (
-    item.generationId && item.asset?.lockedPreview ? [item.id] : []
-  ));
+  const postIds = creationReferenceCountPostIds(items);
   if (postIds.length === 0) {
     return new Map();
   }
@@ -1411,13 +1418,15 @@ function createForYouCandidateSources(
  * A read a page makes of its own items once they are cut, needing nothing but
  * the items. A page ranked afresh knows them before its session is written, so
  * `start` begins the read there, beside the write (`onRankedPageItems`), and
- * `take` hands it back for the same posts in the same order; for any others,
- * or when nothing was started, `take` reads then, as before. A started read
- * never rejects unobserved: `take` rethrows its failure where reading then
- * would have thrown. The phase is the read's own time, whenever it ran.
+ * `take` hands it back when the page's items ask the same of the database
+ * (`inputsOf`: every field the read reads, in order); for any others, or when
+ * nothing was started, `take` reads then, as before. A started read never
+ * rejects unobserved: `take` rethrows its failure where reading then would
+ * have thrown. The phase is the read's own time, whenever it ran.
  */
 function createPageItemsRead<T>(
   read: (items: ShowcaseFeedItem[]) => Promise<T>,
+  inputsOf: (items: ShowcaseFeedItem[]) => string,
   phase: string,
   onPhaseTiming?: (phase: string, durationMs: number) => void,
 ) {
@@ -1429,19 +1438,17 @@ function createPageItemsRead<T>(
       (error: unknown): Settled => ({ ok: false, error, durationMs: performance.now() - startedAt }),
     );
   };
-  const readsTheSamePosts = (postIds: string[], items: ShowcaseFeedItem[]) => (
-    postIds.length === items.length && postIds.every((postId, index) => postId === items[index]?.id)
-  );
-  let started: { postIds: string[]; settled: Promise<Settled> } | null = null;
+  let started: { inputs: string; settled: Promise<Settled> } | null = null;
 
   return {
     start: (items: ShowcaseFeedItem[]) => {
-      if (started && readsTheSamePosts(started.postIds, items)) return;
-      started = { postIds: items.map((item) => item.id), settled: begin(items) };
+      const inputs = inputsOf(items);
+      if (started?.inputs === inputs) return;
+      started = { inputs, settled: begin(items) };
     },
     take: async (items: ShowcaseFeedItem[]): Promise<T> => {
       const early = started;
-      const settled = await (early && readsTheSamePosts(early.postIds, items) ? early.settled : begin(items));
+      const settled = await (early?.inputs === inputsOf(items) ? early.settled : begin(items));
       onPhaseTiming?.(phase, settled.durationMs);
       if (!settled.ok) throw settled.error;
       return settled.value;
@@ -1472,6 +1479,7 @@ async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
   // hydrated pool holds what recipes store, which is what its filters read.
   const referenceCounts = createPageItemsRead(
     (items) => readCreationReferenceCounts(items, adminSupabase),
+    (items) => creationReferenceCountPostIds(items).join(','),
     'recipe_reference_counts',
     params.onPhaseTiming,
   );
@@ -1669,6 +1677,7 @@ export async function getShowcaseFeedPage(options: {
   // session write when it is ranked afresh); any other page reads it below.
   const viewerState = createPageItemsRead(
     (items) => readFeedViewerState(items, viewerUserId, adminSupabase),
+    feedViewerStateInputs,
     'viewer_state',
     options.onPhaseTiming,
   );
@@ -1790,6 +1799,21 @@ type FeedViewerState = {
   /** Null when the purchases could not be read: then nothing is claimed either way. */
   purchasedBundleIds: Set<string> | null;
 };
+
+/**
+ * Every field of the items `readFeedViewerState` reads, in order: a read
+ * started for items that differ in any of them is never used for the page's
+ * own (a blocks read built for other creators would let a blocked one through).
+ */
+function feedViewerStateInputs(items: ShowcaseFeedItem[]): string {
+  return items.map((item) => [
+    item.id,
+    item.generationId ?? item.id,
+    item.asset?.id ?? '',
+    item.creator.id ?? '',
+    ...remixCreditUserIds(item.remixCredit),
+  ].join(' ')).join('\n');
+}
 
 /** Null when there is nothing to read: no viewer, or no items. */
 async function readFeedViewerState(

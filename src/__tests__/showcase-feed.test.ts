@@ -3147,5 +3147,43 @@ describe('showcase feed', () => {
 
       expect(page.items.map((item) => item.id)).toEqual(['post-y']);
     });
+
+    it('never reuses a read begun for the same posts under other creators', async () => {
+      postsState = [
+        createPostRow({ id: 'post-blocked', created_at: '2026-03-21T10:00:00.000Z', user_id: 'user-blocked', output_url: 'generated_images/user-blocked/x.jpg' }),
+        createPostRow({ id: 'post-y', created_at: '2026-03-20T10:00:00.000Z' }),
+      ];
+      resourceBundlesState = [];
+      userBlocksState = [{ blocker_user_id: 'viewer-1', blocked_user_id: 'user-blocked' }];
+      const personalization = await import('@/lib/showcase-feed-personalization');
+      vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+        const items = await options.hydratePostIds(['post-blocked', 'post-y']);
+        // The viewer's state is begun for the same posts, in the same order,
+        // with another creator on the first (a page re-hydrated after the
+        // hand-over would look like this)…
+        options.onRankedPageItems?.(items.map((item) => (
+          item.id === 'post-blocked' ? { ...item, creator: { ...item.creator, id: 'someone-else' } } : item
+        )));
+        // …and the page served holds the blocked creator's post.
+        return {
+          items,
+          feedSessionId: null,
+          algorithmVersion: 'test-v1',
+          pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 2, offset: 0 },
+        };
+      });
+      const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+      const page = await getShowcaseFeedPage({
+        category: 'all',
+        sort: 'for-you',
+        offset: 0,
+        limit: 2,
+        viewerUserId: 'viewer-1',
+        bypassCache: true,
+      });
+
+      expect(page.items.map((item) => item.id)).toEqual(['post-y']);
+    });
   });
 });
