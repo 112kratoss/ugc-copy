@@ -32,7 +32,7 @@ import { loadReferralProgramTerms } from '@/lib/referral-route-service';
 import { createServiceClient } from '@/lib/server-helpers';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { getShowcaseFeedItemsByPostIds } from '@/lib/showcase-feed';
-import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
+import { SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG } from '@/lib/showcase-feed-cache';
 import { loadViewerRelations } from '@/lib/showcase-feed-personalization';
 import { loadWelcomeCreditAmount } from '@/lib/welcome-credit-program-server';
 import { itemWithoutBlockedRemixCredit, remixCreditUserIds } from '../../ugc-mobile/lib/remix-credit/remix-credit';
@@ -264,7 +264,7 @@ export async function buildHomeShelfCreations(
 const loadCachedHomeShelfCreations = unstable_cache(
   async (pinsKey: string) => buildHomeShelfCreations(JSON.parse(pinsKey) as HomeShelfPin[]),
   [HOME_SHELF_BUILD_VERSION],
-  { revalidate: HOME_SHELF_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] },
+  { revalidate: HOME_SHELF_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG] },
 );
 
 /**

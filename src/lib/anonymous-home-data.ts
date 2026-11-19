@@ -8,7 +8,7 @@ import type { HomeShelfItem } from '@/lib/home-shelf';
 import { loadHomeShelfForApi, withoutPost } from '@/lib/home-shelf-server';
 import { getFeedChip } from '@/lib/post-feed-chips';
 import type { ShowcaseFeedPage } from '@/lib/showcase';
-import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
+import { SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG } from '@/lib/showcase-feed-cache';
 
 /**
  * The reads of the signed-out `/` (`AnonymousHome`), cached for as long as the
@@ -24,9 +24,11 @@ import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
  * its own window.
  *
  * Both carry the feed's tag, which also puts it on the page: a publish, edit,
- * delete, take-down, profile edit or repaired poster (`invalidateShowcaseFeedCache`),
- * and the hourly feed maintenance, rebuild `/` at its next visit rather than
- * at the end of the window. What no tag covers waits for the window: likes,
+ * delete, take-down, profile edit or repaired poster (`invalidateShowcaseFeedCache`)
+ * rebuilds `/` at its next visit rather than at the end of the window. They
+ * carry the feeds' refresh tag too, so the hourly feed maintenance has `/`
+ * drawn again in the background, the next visitor answered from the cache
+ * (`refreshShowcaseFeedsInBackground`). What no tag covers waits for the window: likes,
  * comment counts and the For you order between those events, and what a
  * catalog release or the welcome-credit amount changes (the "What's new"
  * models card, a shelf card's credit price and its "Free to try").
@@ -74,7 +76,7 @@ async function built<T>(read: Promise<T>): Promise<BuiltRead<T>> {
 const readCachedAnonymousHomeFeed = unstable_cache(
   () => built(readHomeFeed({ viewerUserId: null, chip: getFeedChip(undefined) })),
   ['anonymous-home-feed-v2', currentDeployment()],
-  { revalidate: ANONYMOUS_HOME_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] },
+  { revalidate: ANONYMOUS_HOME_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG] },
 );
 
 const readCachedAnonymousHomeShelf = unstable_cache(
@@ -84,7 +86,7 @@ const readCachedAnonymousHomeShelf = unstable_cache(
     items.map((item) => (item.kind === 'creation' ? withoutPost(item) : item))
   ))),
   ['anonymous-home-shelf-v2', currentDeployment()],
-  { revalidate: ANONYMOUS_HOME_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] },
+  { revalidate: ANONYMOUS_HOME_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG] },
 );
 
 /**

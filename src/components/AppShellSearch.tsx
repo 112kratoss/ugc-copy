@@ -62,6 +62,15 @@ export function AppShellSearch() {
   // on every page, and a page that is never searched from asks nothing.
   const [reachedFor, setReachedFor] = useState(false);
   const starter = useSearchStarter({ enabled: reachedFor, kept: true });
+  // The search page is prefetched as a person reaches for the field too (a mouse
+  // over it, or the focus in it), not as the bar comes into view: the bar is on
+  // every page and `/search` is dynamic, so a prefetch on sight ran a function on
+  // most page views for a search few of them make (speed baseline, 2026-11-19:
+  // two per desktop page). Asked at each reach, as the shell's nav does
+  // (`useNavIntentPrefetch`): Next skips one it holds fresh or is still fetching.
+  // The shell's other ways in already wait (`prefetch={false}` on
+  // `AppShellSearchButton` and `SearchEntryLink`).
+  const prefetchSearch = () => router.prefetch('/search');
   const start = useMemo(() => searchStartPanelSections({ recents, starter }), [recents, starter]);
   const typeahead = useSearchTypeahead<SearchStartPanelRow>({ text, focused, recents, start });
   // Whether the focus now arriving was put there by a pointer or a finger.
@@ -76,6 +85,7 @@ export function AppShellSearch() {
     }
     setFocused(true);
     setReachedFor(true);
+    prefetchSearch();
   };
   // A click that landed before the page's script ran left the focus in the
   // field with nobody told: taken up as the field mounts, so the panel the
@@ -157,6 +167,7 @@ export function AppShellSearch() {
     // part travels by itself and only the plain skin is ever stretched.
     <Form
       action="/search"
+      prefetch={false}
       // Not a link, so a page's leave guard is asked here: a page with
       // unsaved work asks first, and a leave submits the search again.
       onSubmit={(event) => {
@@ -177,7 +188,10 @@ export function AppShellSearch() {
         pointerDown.current = false;
         takeFocus(byPointer);
       }}
-      onPointerEnter={() => setReachedFor(true)}
+      onPointerEnter={(event) => {
+        setReachedFor(true);
+        if (event.pointerType === 'mouse') prefetchSearch();
+      }}
       onKeyDown={(event) => {
         // Escape with the focus on a button of the panel (Tab reaches "Clear all" and each remove
         // button): the panel closes and the focus goes back to the field, as Escape in the field

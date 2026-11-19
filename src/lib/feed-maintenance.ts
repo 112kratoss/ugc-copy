@@ -5,7 +5,7 @@ import {
   refreshAccountSafetyLabels,
   type AccountSafetyLabelSummary,
 } from '@/lib/feed-safety-labels';
-import { invalidateShowcaseFeedCacheOnly } from '@/lib/showcase-feed-cache';
+import { refreshShowcaseFeedsInBackground } from '@/lib/showcase-feed-cache';
 
 const POST_STATS_REFRESH_LIMIT = 1000;
 const CREATOR_STATS_REFRESH_LIMIT = 1000;
@@ -225,7 +225,7 @@ export async function maintainFeedPersonalization(
   client: SupabaseClient,
   options: {
     now?: Date;
-    invalidateShowcaseFeedCacheOnly?: typeof invalidateShowcaseFeedCacheOnly;
+    refreshShowcaseFeedsInBackground?: typeof refreshShowcaseFeedsInBackground;
     refreshAccountLabels?: typeof refreshAccountSafetyLabels;
     /** Wall clock in ms, for the prune's time budget. */
     clock?: () => number;
@@ -268,12 +268,15 @@ export async function maintainFeedPersonalization(
   if (creatorStatsResult.error) {
     throw rpcError('refresh_creator_feed_stats', creatorStatsResult.error);
   }
-  // The feeds only: these totals, and the account labels below, are read by
-  // the feeds' ranking alone (post_feed_stats, creator_feed_stats,
-  // account_labels). No cached public page draws them: a post page's and a
-  // creator page's counts are the posts' own columns, which move with no event
-  // and wait for the pages' five-minute backstop as before.
-  (options.invalidateShowcaseFeedCacheOnly ?? invalidateShowcaseFeedCacheOnly)();
+  // The feeds only, and in the background: these totals, and the account
+  // labels below, are read by the feeds' ranking alone (post_feed_stats,
+  // creator_feed_stats, account_labels) and reorder them; nothing is removed
+  // here, so the next visitor is answered from the cache while the feeds are
+  // drawn again (`refreshShowcaseFeedsInBackground`). No cached public page
+  // draws them: a post page's and a creator page's counts are the posts' own
+  // columns, which move with no event and wait for the pages' five-minute
+  // backstop as before.
+  (options.refreshShowcaseFeedsInBackground ?? refreshShowcaseFeedsInBackground)();
 
   const deferredFailures: string[] = [];
   let accountLabels: AccountSafetyLabelSummary = {

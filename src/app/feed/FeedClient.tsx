@@ -63,6 +63,15 @@ const FEED_SNAPSHOT_IDLE_TIMEOUT_MS = 1_000;
 // A lane left and come back to within this long shows what it showed, as the
 // app's per-lane query cache does; after it the lane loads afresh.
 const LANE_CACHE_TTL_MS = 5 * 60_000;
+/**
+ * How long Load more waits before asking again after a page failed: the first
+ * wait, then the second, then only the Retry button asks. Without a wait the
+ * sentinel, still in view, made a fresh observer fire at once after every
+ * failure, and a phone sent 225 failing requests in 5.5 s (speed baseline,
+ * 2026-11-19), each a function call and a rate-limit write when it reached
+ * the server.
+ */
+const LOAD_MORE_RETRY_DELAYS_MS = [2_000, 8_000] as const;
 
 /**
  * How a request for a lane's posts lands:
@@ -330,6 +339,8 @@ export default function FeedClient({
     // gap in which an old IntersectionObserver callback can otherwise abort a
     // lane-replacement request before `switching` reaches the observer effect.
     const pagingBlockedRef = useRef(false);
+    // Load more pages that failed in a row; any page that loads resets it.
+    const loadMoreFailuresRef = useRef(0);
     const sentinelRef = useRef<HTMLDivElement | null>(null);
     // Lanes left this visit, restored on return instead of refetched.
     const laneCacheRef = useRef(new Map<FeedChipId, LaneCacheEntry>());
@@ -470,6 +481,7 @@ export default function FeedClient({
 
             const page = await response.json() as ShowcaseFeedPage;
             if (requestId !== requestIdRef.current) return;
+            loadMoreFailuresRef.current = 0;
 
             const visibleItems = page.items.filter((item) => !isHiddenFromLane(removedForViewer, item));
             if (!append) {
@@ -516,6 +528,7 @@ export default function FeedClient({
                 setNextSeedBucket(null);
                 setLoadError('Could not load this lane.');
             } else {
+                loadMoreFailuresRef.current += 1;
                 setLoadError('Could not load more posts. What you already loaded is still here.');
             }
         } finally {
@@ -602,6 +615,29 @@ export default function FeedClient({
 
     useEffect(() => flushFeedSnapshot, [flushFeedSnapshot]);
 
+    // A page that failed to load more: a lane that failed has no continuation left.
+    const pageFailed = Boolean(loadError) && (nextOffset !== null || nextCursor !== null);
+    const retryLoad = () => void fetchPage(
+        chipId,
+        nextOffset ?? 0,
+        // Nothing left to continue from means retrying has to restart the lane
+        // rather than page on.
+        nextOffset === null && nextCursor === null ? 'replace' : 'append',
+        nextCursor,
+        nextSeedBucket,
+    );
+
+    // The network coming back asks for the failed page again, its retries anew.
+    useEffect(() => {
+        if (!pageFailed) return undefined;
+        const onOnline = () => {
+            loadMoreFailuresRef.current = 0;
+            setLoadError(null);
+        };
+        window.addEventListener('online', onOnline);
+        return () => window.removeEventListener('online', onOnline);
+    }, [pageFailed]);
+
     useEffect(() => {
         const sentinel = sentinelRef.current;
         // A ranked lane can hand back a cursor and no offset, so either
@@ -613,18 +649,32 @@ export default function FeedClient({
             || (nextOffset === null && nextCursor === null)
         ) return;
 
-        const observer = new IntersectionObserver((entries) => {
-            if (
-                !pagingBlockedRef.current
-                && entries.some((entry) => entry.isIntersecting)
-            ) {
-                void fetchPage(chipId, nextOffset ?? 0, 'append', nextCursor, nextSeedBucket);
-            }
-        }, { rootMargin: '600px 0px' });
+        // After a failed page the observer is made again only once a wait has
+        // passed, longer each time, and after the last wait not at all: the
+        // alert's Retry asks then (LOAD_MORE_RETRY_DELAYS_MS).
+        const failures = loadError ? loadMoreFailuresRef.current : 0;
+        if (failures > LOAD_MORE_RETRY_DELAYS_MS.length) return;
+        const delay = failures > 0 ? LOAD_MORE_RETRY_DELAYS_MS[failures - 1] : 0;
 
-        observer.observe(sentinel);
-        return () => observer.disconnect();
-    }, [chipId, fetchPage, loadingMore, nextCursor, nextOffset, nextSeedBucket, switching]);
+        let observer: IntersectionObserver | null = null;
+        const observe = () => {
+            observer = new IntersectionObserver((entries) => {
+                if (
+                    !pagingBlockedRef.current
+                    && entries.some((entry) => entry.isIntersecting)
+                ) {
+                    void fetchPage(chipId, nextOffset ?? 0, 'append', nextCursor, nextSeedBucket);
+                }
+            }, { rootMargin: '600px 0px' });
+            observer.observe(sentinel);
+        };
+        const timer = delay > 0 ? window.setTimeout(observe, delay) : null;
+        if (timer === null) observe();
+        return () => {
+            if (timer !== null) window.clearTimeout(timer);
+            observer?.disconnect();
+        };
+    }, [chipId, fetchPage, loadError, loadingMore, nextCursor, nextOffset, nextSeedBucket, switching]);
 
     // `snapshot`: the lane as an earlier mount of the feed left it, shown when
     // this mount has no fresher copy of its own.
@@ -665,6 +715,7 @@ export default function FeedClient({
             setSwitching(false);
             setLoadingMore(false);
             setLoadError(null);
+            loadMoreFailuresRef.current = 0;
             // A post removed from another lane since this one was left stays
             // gone. Its saves need no adding back: the saved set is shared by
             // every lane and already holds what this lane's pages brought,
@@ -1150,7 +1201,9 @@ export default function FeedClient({
         <div ref={rootRef} className={HOME_FEED_COLUMN_CLASS}>
             {chipRow}
 
-            {loadError ? (
+            {/* A lane that failed to load, under the chips. A page that failed to load
+                more is told at the end of the list, where the reader is (below). */}
+            {loadError && !pageFailed ? (
                 <div
                     role="alert"
                     className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[rgba(255,124,139,0.34)] bg-[rgba(255,124,139,0.10)] px-4 py-3 text-sm text-[#ff7c8b]"
@@ -1158,15 +1211,7 @@ export default function FeedClient({
                     <span>{loadError}</span>
                     <button
                         type="button"
-                        onClick={() => void fetchPage(
-                            chipId,
-                            nextOffset ?? 0,
-                            // Nothing left to continue from means retrying has
-                            // to restart the lane rather than page on.
-                            nextOffset === null && nextCursor === null ? 'replace' : 'append',
-                            nextCursor,
-                            nextSeedBucket,
-                        )}
+                        onClick={retryLoad}
                         className="ui-focus-ring min-h-11 rounded-full border border-current px-4 text-xs font-bold"
                     >
                         Retry
@@ -1308,6 +1353,24 @@ export default function FeedClient({
                     <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                     Loading more posts…
                 </p>
+            ) : null}
+
+            {pageFailed && !loadingMore ? (
+                // After its automatic retries a failed page waits for this Retry, here
+                // at the end, or for the network to come back (`online`).
+                <div
+                    role="alert"
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[rgba(255,124,139,0.34)] bg-[rgba(255,124,139,0.10)] px-4 py-3 text-sm text-[#ff7c8b]"
+                >
+                    <span>{loadError}</span>
+                    <button
+                        type="button"
+                        onClick={retryLoad}
+                        className="ui-focus-ring min-h-11 rounded-full border border-current px-4 text-xs font-bold"
+                    >
+                        Retry
+                    </button>
+                </div>
             ) : null}
 
             {lightbox ? (

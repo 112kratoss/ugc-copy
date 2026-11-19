@@ -1,17 +1,12 @@
 import 'server-only';
 import { logBackendError } from '@/lib/backend-logger';
 
-import { cache } from 'react';
 
 import {
   convertFromUsd,
   formatMoney,
-  hasPlausibleUsdInrRate,
 } from '@/lib/currency';
-import {
-  EXTERNAL_API_REQUEST_TIMEOUT_MS,
-  fetchWithProviderTimeout,
-} from '@/lib/provider-fetch';
+import { getInrFxRates } from '@/lib/inr-fx-rates-server';
 import type {
   MarketplacePriceQuote,
   MarketplaceSort,
@@ -149,56 +144,6 @@ export interface MarketplaceAssetListPage {
   };
 }
 
-type ExchangeRateApiResponse = {
-  result?: string;
-  base_code?: string;
-  rates?: Record<string, unknown>;
-};
-
-const FX_UPSTREAM_URL = 'https://open.er-api.com/v6/latest/INR';
-
-const getInrFxRates = cache(async (): Promise<Record<string, number> | null> => {
-  try {
-    const response = await fetchWithProviderTimeout(FX_UPSTREAM_URL, {
-      headers: {
-        Accept: 'application/json',
-      },
-      next: {
-        revalidate: 3600,
-      },
-    }, EXTERNAL_API_REQUEST_TIMEOUT_MS, fetch, 'FX rates');
-
-    if (!response.ok) {
-      throw new Error(`FX upstream error: ${response.status}`);
-    }
-
-    const payload = (await response.json()) as ExchangeRateApiResponse;
-    if (
-      payload?.result !== 'success' ||
-      payload?.base_code !== 'INR' ||
-      !payload?.rates ||
-      typeof payload.rates !== 'object'
-    ) {
-      throw new Error('FX upstream returned unexpected payload');
-    }
-
-    const rates: Record<string, number> = {};
-    for (const [currency, value] of Object.entries(payload.rates)) {
-      if (typeof value === 'number' && Number.isFinite(value)) {
-        rates[currency] = value;
-      }
-    }
-    if (!hasPlausibleUsdInrRate(rates)) {
-      throw new Error('FX upstream USD/INR rate is outside the accepted safety band');
-    }
-
-    return rates;
-  } catch (error) {
-    logBackendError('marketplace_fx_rates_load_failed', { error });
-    return null;
-  }
-});
-
 function toSellerSummary(
   userId: string,
   profilesMap: Map<string, ProfileRow>
@@ -221,7 +166,7 @@ async function buildPriceQuote(
   countryCode?: string | null
 ): Promise<MarketplacePriceQuote> {
   if (countryCode?.toUpperCase() === 'IN') {
-    const rates = await getInrFxRates();
+    const rates = await getInrFxRates('marketplace_fx_rates_load_failed');
     if (rates) {
       const amountInr = convertFromUsd(priceUsdCents / 100, 'INR', rates);
       if (Number.isFinite(amountInr)) {

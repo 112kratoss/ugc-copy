@@ -66,7 +66,7 @@ import {
   storePreparedShowcaseFeedSession,
   takePreparedShowcaseFeedSession,
 } from '@/lib/showcase-feed-read-ahead';
-import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
+import { SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG } from '@/lib/showcase-feed-cache';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { loadBlockedCreatorIds } from '@/lib/moderation-service';
 import {
@@ -1297,7 +1297,7 @@ async function getLegacyShowcaseFeedPageBase(
 const getCachedShowcaseFeedPageBase = unstable_cache(
   getShowcaseFeedPageBase,
   ['showcase-feed-base-v3'],
-  { revalidate: SHOWCASE_FEED_BASE_PAGE_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] }
+  { revalidate: SHOWCASE_FEED_BASE_PAGE_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG] }
 );
 
 /**
@@ -1487,7 +1487,7 @@ const getCachedIdentitylessShowcaseForYouBootstrap = unstable_cache(
     }
   },
   ['showcase-for-you-bootstrap-v3'],
-  { revalidate: SHOWCASE_FOR_YOU_BOOTSTRAP_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] }
+  { revalidate: SHOWCASE_FOR_YOU_BOOTSTRAP_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG] }
 );
 
 async function loadIdentitylessShowcaseForYouBootstrap(
