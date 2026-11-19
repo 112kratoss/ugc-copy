@@ -81,8 +81,8 @@ describe('showcase feed cache', () => {
     ]);
   });
 
-  // A block or a report, and the hourly feed maintenance: the pages draw
-  // none of it, so every cached page stays.
+  // A block or a report: the pages draw none of it, so every cached page stays.
+  // (The hourly maintenance refreshes in the background, below.)
   it('expires the feed tag alone for a change only the feeds show', () => {
     invalidateShowcaseFeedCacheOnly();
 

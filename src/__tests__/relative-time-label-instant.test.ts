@@ -23,12 +23,14 @@ describe('the moment a post page draws its age at', () => {
       0, 5 * SECOND, 59 * SECOND, MINUTE, 61 * SECOND, 59 * MINUTE + 59 * SECOND,
       HOUR, HOUR + 1, 23 * HOUR + 59 * MINUTE, DAY, DAY + HOUR, 6 * DAY + 23 * HOUR,
       7 * DAY, 13 * DAY, 29 * DAY, 30 * DAY, 34 * DAY + 23 * HOUR, 35 * DAY, 59 * DAY + 3 * HOUR,
-      200 * DAY, 364 * DAY, 365 * DAY, 800 * DAY + 5 * HOUR,
+      200 * DAY, 359 * DAY, 362 * DAY, 364 * DAY, 365 * DAY, 800 * DAY + 5 * HOUR,
+      // The half second before each band, which the label already rounds up.
+      59_500, 59_600, HOUR - 400, DAY - 300, 7 * DAY - 499, 35 * DAY - 400, 360 * DAY - 300,
     ];
     for (const age of ages) {
       const now = created + age;
       const instant = relativeTimeLabelInstant(CREATED, now);
-      expect(instant, `age ${age}`).toBeLessThanOrEqual(now);
+      expect(instant, `age ${age}`).toBeLessThanOrEqual(now + 500);
       expect(label(instant), `age ${age}`).toBe(label(now));
     }
   });
@@ -43,6 +45,13 @@ describe('the moment a post page draws its age at', () => {
     // 9 and 13 days both read "1w".
     expect(relativeTimeLabelInstant(CREATED, created + 9 * DAY))
       .toBe(relativeTimeLabelInstant(CREATED, created + 13 * DAY));
+    // 40 and 59 days both read "1mo"; 181 and 209 days both "6mo"; 400 and 700 days both "1y".
+    expect(relativeTimeLabelInstant(CREATED, created + 40 * DAY))
+      .toBe(relativeTimeLabelInstant(CREATED, created + 59 * DAY));
+    expect(relativeTimeLabelInstant(CREATED, created + 181 * DAY))
+      .toBe(relativeTimeLabelInstant(CREATED, created + 209 * DAY + 5 * HOUR));
+    expect(relativeTimeLabelInstant(CREATED, created + 400 * DAY))
+      .toBe(relativeTimeLabelInstant(CREATED, created + 700 * DAY));
     // And it moves with the label.
     expect(relativeTimeLabelInstant(CREATED, created + 4 * HOUR))
       .not.toBe(relativeTimeLabelInstant(CREATED, created + 3 * HOUR + 58 * MINUTE));

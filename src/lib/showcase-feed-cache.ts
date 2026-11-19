@@ -18,15 +18,18 @@ export const SHOWCASE_FEED_CACHE_TAG = 'showcase-feed:v3';
 
 /**
  * The feeds' cached reads again, refreshed in the background (`'max'` only):
- * for the hourly maintenance, whose rankings and totals change what the feeds
- * order, never what they may show. Each cached feed read carries it beside
- * `SHOWCASE_FEED_CACHE_TAG`, which removals keep expiring at once; a tag is
- * only ever invalidated one way (`PUBLIC_PAGE_CACHE_TAG` says why).
+ * for the hourly maintenance, whose totals reorder the feeds and whose account
+ * labels and negative-feedback rates can drop a post from recommendations
+ * (they already take the hour to be computed). Nothing it does is a removal:
+ * take-downs and a post's own cover go through `invalidateShowcaseFeedCache`.
+ * Each cached feed read carries it beside `SHOWCASE_FEED_CACHE_TAG`, which
+ * removals keep expiring at once; a tag is only ever invalidated one way
+ * (`PUBLIC_PAGE_CACHE_TAG` says why).
  */
 export const SHOWCASE_FEED_REFRESH_TAG = 'showcase-feed:refresh:v1';
 
 /**
- * What a write does to the cached feeds and public pages comes in four kinds,
+ * What a write does to the cached feeds and public pages comes in five kinds,
  * one helper each, and `public-page-invalidation-classes.test.ts` lists every
  * file that uses one:
  *
@@ -63,19 +66,20 @@ export function invalidateShowcaseFeedCache() {
 }
 
 /**
- * A change only the feeds show: a block or a report, and the hourly feed
- * maintenance (its rankings, totals and account labels are read by the feeds
- * alone). The public pages are drawn for no one (a block is applied in the
- * browser), and a report hides nothing until a moderator decides, so every
- * cached page is left as it is.
+ * A change only the feeds show: a block or a report. The public pages are
+ * drawn for no one (a block is applied in the browser), and a report hides
+ * nothing until a moderator decides, so every cached page is left as it is.
+ * The hourly maintenance refreshes the feeds in the background instead
+ * (`refreshShowcaseFeedsInBackground`).
  */
 export function invalidateShowcaseFeedCacheOnly() {
   revalidateTag(SHOWCASE_FEED_CACHE_TAG, { expire: 0 });
 }
 
 /**
- * The hourly feed maintenance: its totals and account labels only reorder the
- * feeds. Expiring them at once made the next visitor of `/` and Explore wait
+ * The hourly feed maintenance: its totals reorder the feeds, and its labels and
+ * negative-feedback rates can drop a post from recommendations, which they
+ * already take the hour to compute; none of it is a removal. Expiring them at once made the next visitor of `/` and Explore wait
  * for a cold render every hour, about 3 s on a phone (speed baseline,
  * 2026-11-19: HTML at 3,354 ms, LCP 3,976 ms, against 493 / 934 ms warm). In
  * the background, that visitor is answered from the cache while the feeds are

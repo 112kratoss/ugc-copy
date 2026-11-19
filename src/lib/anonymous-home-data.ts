@@ -24,9 +24,11 @@ import { SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG } from '@/lib/showca
  * its own window.
  *
  * Both carry the feed's tag, which also puts it on the page: a publish, edit,
- * delete, take-down, profile edit or repaired poster (`invalidateShowcaseFeedCache`),
- * and the hourly feed maintenance, rebuild `/` at its next visit rather than
- * at the end of the window. What no tag covers waits for the window: likes,
+ * delete, take-down, profile edit or repaired poster (`invalidateShowcaseFeedCache`)
+ * rebuilds `/` at its next visit rather than at the end of the window. They
+ * carry the feeds' refresh tag too, so the hourly feed maintenance has `/`
+ * drawn again in the background, the next visitor answered from the cache
+ * (`refreshShowcaseFeedsInBackground`). What no tag covers waits for the window: likes,
  * comment counts and the For you order between those events, and what a
  * catalog release or the welcome-credit amount changes (the "What's new"
  * models card, a shelf card's credit price and its "Free to try").

@@ -259,7 +259,7 @@ describe('maintainFeedPersonalization', () => {
 
   // Its totals and account labels are read by the feeds' ranking alone: no
   // cached public page draws them, so none is refreshed.
-  it('expires the feeds alone, never a cached public page', async () => {
+  it('refreshes the feeds alone, in the background, never a cached public page', async () => {
     const db = createRpcClient({
       refresh_post_feed_stats: { data: 4, error: null },
       refresh_post_feed_engagement_stats: { data: 2, error: null },
