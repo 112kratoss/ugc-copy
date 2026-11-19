@@ -220,15 +220,30 @@ describe('mobile notifications helper', () => {
     });
 
     it('writes the Expo token and sets the Android channel once a process, not at every check', async () => {
-      grantedWithToken();
-      const { registerForMobilePushNotifications, api } = await load();
-      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
-      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
-      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
-      const tokenWrites = secureStoreMocks.setItemAsync.mock.calls
-        .filter(([key]) => key === 'magicbooklet.mobileNotifications.expoPushToken');
-      expect(tokenWrites).toHaveLength(1);
-      expect(notificationsMocks.setNotificationChannelAsync.mock.calls.length).toBeLessThanOrEqual(1);
+      const { Platform } = await import('react-native') as unknown as { Platform: { OS: string } };
+      Platform.OS = 'android';
+      try {
+        grantedWithToken();
+        // A failed channel set is tried again at the next check.
+        notificationsMocks.setNotificationChannelAsync.mockRejectedValueOnce(new Error('channel busy'));
+        const { registerForMobilePushNotifications, clearLocalMobilePushRegistration, api } = await load();
+        await expect(registerForMobilePushNotifications(api as never, { userId: 'user-1' })).rejects.toThrow('channel busy');
+        await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+        await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+        await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+        const tokenWrites = () => secureStoreMocks.setItemAsync.mock.calls
+          .filter(([key]) => key === 'magicbooklet.mobileNotifications.expoPushToken');
+        expect(tokenWrites()).toHaveLength(1);
+        expect(notificationsMocks.setNotificationChannelAsync).toHaveBeenCalledTimes(2);
+
+        // The sign-out clean-up forgets both: the next check sets and writes again.
+        await clearLocalMobilePushRegistration();
+        await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+        expect(tokenWrites()).toHaveLength(2);
+        expect(notificationsMocks.setNotificationChannelAsync).toHaveBeenCalledTimes(3);
+      } finally {
+        Platform.OS = 'ios';
+      }
     });
 
     it('is sent again at once for another session, account, token or app version', async () => {

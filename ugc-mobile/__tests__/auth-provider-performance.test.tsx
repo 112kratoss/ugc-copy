@@ -150,7 +150,7 @@ vi.mock('../lib/supabase', () => ({
   },
 }));
 
-import { AuthProvider, useAuth } from '../lib/auth';
+import { AuthProvider, useAuth, useAuthSession } from '../lib/auth';
 import { registerForMobilePushNotifications } from '../lib/notifications';
 
 const session = {
@@ -579,6 +579,51 @@ describe('AuthProvider startup performance', () => {
     expect(latest.current?.credits).toBe(1400);
     expect(latest.current?.marketplaceSpendableCredits).toBe(1200);
     unmount();
+  });
+
+  it('hands media tiles the session through a context a balance change leaves alone, and a refreshed token reaches them', async () => {
+    state.readPersistedSession.mockResolvedValue(session);
+    const latest: { current: ReturnType<typeof useAuth> | null } = { current: null };
+    const tile = { renders: 0, session: undefined as unknown };
+    function Probe() {
+      latest.current = useAuth();
+      return null;
+    }
+    // What a media tile reads (use-media-source.ts).
+    function Tile() {
+      tile.renders += 1;
+      tile.session = useAuthSession();
+      return null;
+    }
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthProvider><Probe /><Tile /></AuthProvider>);
+    });
+    await settle();
+    await renderer.act(async () => {
+      state.sessionResolve?.({ data: { session }, error: null });
+    });
+    await settle();
+    expect(tile.session).toBe(latest.current?.session);
+    expect((tile.session as typeof session | null)?.access_token).toBe('access-token');
+
+    // A balance change draws auth's consumers again, not the tiles.
+    const rendersBefore = tile.renders;
+    renderer.act(() => {
+      latest.current?.updateCredits(30);
+    });
+    expect(latest.current?.credits).toBe(30);
+    expect(tile.renders).toBe(rendersBefore);
+
+    // A refreshed token does reach them, for the authenticated media route.
+    const refreshed = { ...session, access_token: 'refreshed-token', expires_at: session.expires_at + 3600 };
+    await renderer.act(async () => {
+      state.authCallback?.('TOKEN_REFRESHED', refreshed);
+    });
+    await settle();
+    expect((tile.session as typeof session | null)?.access_token).toBe('refreshed-token');
+    expect(tile.session).toBe(latest.current?.session);
+    renderer.act(() => tree?.unmount());
   });
 
   it('never lets a slow read of the saved copy replace what the server, or a spend, has said since', async () => {

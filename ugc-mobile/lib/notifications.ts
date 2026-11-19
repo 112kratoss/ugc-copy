@@ -169,7 +169,9 @@ function getProjectId() {
  * write, the channel, and a POST to exp.host for an exchange whose answer does
  * not change for the same device token), on the Expo thread the session reads
  * also wait on. A new device token is a new exchange; a sign-out's clean-up
- * forgets all of it (`clearLocalMobilePushRegistration`).
+ * forgets the exchanges, the stored token and the channel
+ * (`clearLocalMobilePushRegistration`), and keeps the device id, which the next
+ * sign-out names its rows by.
  */
 let stableDeviceIdThisProcess: string | null = null;
 const expoTokensByDeviceToken = new Map<string, Notifications.ExpoPushToken>();
@@ -218,7 +220,8 @@ const expoTokenExchanges = {};
  * `addPushTokenListener`, so each registration's own fetch reached the rotation
  * listener, which exchanged the same token again at the same moment: the first
  * visit to Alerts sent two simultaneous `getExpoPushToken` POSTs (device sweep,
- * Pixel 9a emulator, 2026-11-03). Nothing is kept once it settles.
+ * Pixel 9a emulator, 2026-11-03). A settled answer is kept for the process
+ * (`expoTokensByDeviceToken`).
  */
 function exchangeForExpoPushToken(projectId: string, devicePushToken: Notifications.DevicePushToken) {
   const deviceToken = typeof devicePushToken.data === 'string' ? devicePushToken.data : JSON.stringify(devicePushToken.data);
@@ -694,6 +697,11 @@ async function registerRotatedDevicePushToken(
   // hands back the token the backend already holds. Registering it again would
   // only spend the route's 20-per-10-minute allowance — and the listener fires
   // on every launch, not just on a real rotation (see below).
+  // The token this process stored needs no Keystore read to recognise: the
+  // listener fires on every device-token fetch, each foreground check included.
+  if (expoPushTokenStoredThisProcess === token.data) {
+    return;
+  }
   const storedExpoPushToken = await SecureStore.getItemAsync(EXPO_PUSH_TOKEN_KEY).catch(() => null);
   if (storedExpoPushToken === token.data) {
     return;
@@ -709,8 +717,8 @@ async function registerRotatedDevicePushToken(
 
 /**
  * Keep the backend current when the push service rolls the device token
- * mid-session. The listener also fires once per launch, because the cold-start
- * path's own token fetch is emitted through it; the exchange above turns that
+ * mid-session. The listener also fires on every device-token fetch, because
+ * each check's own fetch is emitted through it; the exchange above turns that
  * into a no-op unless Expo actually returned a different token.
  */
 export function subscribeToMobilePushTokenChanges(
