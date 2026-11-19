@@ -5,7 +5,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { BookText, Heart, MessageCircle, Play } from 'lucide-react';
 
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
-import { getPostMadeWithLabel } from '@/lib/post-feed-presentation';
+import { getPostMadeWithLabel } from '@/lib/post-model-labels';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 import { getUserInitials } from '@/lib/user-initials';

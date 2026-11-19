@@ -1,17 +1,13 @@
 'use client';
 
 import NsfwPostReveal from '@/components/NsfwPostReveal';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { Suspense, useRef } from 'react';
 import { BookText, ShoppingBag } from 'lucide-react';
 
-import { InviteHandoffBar } from '@/components/InviteHandoffBar';
 import PostCommentAvatar from '@/components/PostCommentAvatar';
-import {
-  getPostFeedTitle,
-  getPostMadeWithLabel,
-  type PostPreviewKind,
-} from '@/lib/post-feed-presentation';
+import { getPostFeedTitle, type PostPreviewKind } from '@/lib/post-feed-presentation';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import {
   formatPostResourcePriceLabel,
@@ -38,9 +34,25 @@ import {
   ShowcaseDetailCommentsPanel,
 } from './ShowcaseDetailCommentCount';
 import ShowcaseDetailEngagementRow from './ShowcaseDetailEngagementRow';
-import ShowcasePostUnavailable from './ShowcasePostUnavailable';
 import { usePostRailTop } from './usePostRailTop';
 import { ShowcaseSearchParamsReporter, useShowcasePostViewer } from './useShowcasePostViewer';
+
+/*
+ * Two parts of the page drawn only in the browser, for few readers, and loaded with import() when
+ * one is: neither is in the server's HTML, so nothing there waits for them (2026-11-19).
+ * - The not-found notice that replaces the post across a block, with the design system's
+ *   primitives it is drawn with (14 KB): for a signed-in reader blocked either way. The post is
+ *   gone at once, to the notice's own empty page, and its card follows when it has loaded.
+ * - The offer to carry a shared link's invite on to the app: for a visitor whose link brought one.
+ */
+const ShowcasePostUnavailable = dynamic(() => import('./ShowcasePostUnavailable'), {
+  ssr: false,
+  loading: () => <div className="ui-page ui-page-ambient" />,
+});
+const InviteHandoffBar = dynamic(
+  () => import('@/components/InviteHandoffBar').then((loaded) => loaded.InviteHandoffBar),
+  { ssr: false },
+);
 
 /**
  * The post detail page body: full-bleed background, ambient glow, the return
@@ -156,12 +168,20 @@ function getPostTypeLabel({
 export default function ShowcaseDetailBody({
   detail,
   shareDescription,
+  madeWithLabel,
   renderedAt,
 }: {
   /** The post as a signed-out visitor reads it: the page's cached read. */
   detail: PublicPostDetail;
   /** `getPublicPostMetaDescription(detail)`, which only the server can import. */
   shareDescription: string;
+  /**
+   * What the post was made with: its model by the name the feed card gives it (the slug,
+   * "nano-banana-2", was printed here), else an outside tool its creator named; null on a text post
+   * (`getPostMadeWithLabel`, which the search card's line reads too). Named on the server: the
+   * model tables behind it are 40 KB this page's browser code has no other use for.
+   */
+  madeWithLabel: string | null;
   /** When the server drew the page, for the post's age in the cached HTML. */
   renderedAt: number;
 }) {
@@ -237,11 +257,6 @@ export default function ShowcaseDetailBody({
     postFormat: detail.postFormat,
   });
   const isTextOnlyPost = (detail.postFormat === 'text' || detail.category === 'text') && !detail.mediaUrl;
-  // What the post was made with: its model by the name the feed card gives it
-  // (the slug, "nano-banana-2", was printed here), else an outside tool its
-  // creator named; nothing on a text post (`getPostMadeWithLabel`, which the
-  // search card's line reads too).
-  const madeWithLabel = getPostMadeWithLabel(detail);
   const detailMediaItems = detail.mediaItems?.length
     ? detail.mediaItems
     : detail.mediaUrl && detail.mediaKind
@@ -417,7 +432,7 @@ export default function ShowcaseDetailBody({
 
       {/* A visitor a shared link's invite came with: the way to keep it, here or in the app. */}
       <div className="relative z-10">
-        <InviteHandoffBar handoff={viewer.inviteHandoff} />
+        {viewer.inviteHandoff ? <InviteHandoffBar handoff={viewer.inviteHandoff} /> : null}
       </div>
 
       <div className="canonical-post-shell studio-shell-wide relative z-10 pt-4 sm:pt-6">

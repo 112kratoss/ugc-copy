@@ -90,7 +90,7 @@ import {
 import { formatRecipeMoneyLine } from '@/lib/recipe-money-line';
 import { displaySourceToolLabel, slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
 import { buildGenerationPostSourceTools } from '@/lib/generation-post-source-tools';
-import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
+import { getPostModelDisplayName } from '@/lib/post-model-labels';
 import {
   resolveSignedUploadUrl,
   uploadFileToSignedUrl,

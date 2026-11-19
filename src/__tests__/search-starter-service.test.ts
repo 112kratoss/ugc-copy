@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
-import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
+import { getPostModelDisplayName } from '@/lib/post-model-labels';
 import {
   SEARCH_STARTER_CREATOR_LIMIT,
   SEARCH_STARTER_ENTITY_LIMIT,

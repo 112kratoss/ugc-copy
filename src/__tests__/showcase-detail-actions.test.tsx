@@ -62,6 +62,16 @@ function renderOwnerTools(overrides: Partial<React.ComponentProps<typeof Showcas
   );
 }
 
+/**
+ * The creator's tools once the session check has named them: what they open onto loads with
+ * import() (`ShowcaseOwnerToolsMenu`), so a test acts on it once it is there.
+ */
+async function renderReadyOwnerTools(overrides: Partial<React.ComponentProps<typeof ShowcaseDetailActions>> = {}) {
+  const rendered = renderOwnerTools(overrides);
+  await screen.findByRole('link', { name: 'Edit post' });
+  return rendered;
+}
+
 describe('ShowcaseDetailActions owner tools', () => {
   beforeEach(() => {
     clientMocks.requestPostVisibilityChange.mockReset();
@@ -86,7 +96,7 @@ describe('ShowcaseDetailActions owner tools', () => {
       showcasePath: '/showcase/post-1',
       resourceBundleStatus: 'published',
     });
-    renderOwnerTools({ visibility: 'unlisted', bundle: { accessMode: 'paid', status: 'draft', salesCount: 0 } });
+    await renderReadyOwnerTools({ visibility: 'unlisted', bundle: { accessMode: 'paid', status: 'draft', salesCount: 0 } });
 
     const trigger = screen.getByRole('button', { name: 'Visibility of Sunset study: Private' });
     fireEvent.click(trigger);
@@ -120,7 +130,7 @@ describe('ShowcaseDetailActions owner tools', () => {
       showcasePath: null,
       resourceBundleStatus: 'draft',
     });
-    renderOwnerTools();
+    await renderReadyOwnerTools();
 
     fireEvent.click(screen.getByRole('button', { name: 'Visibility of Sunset study: Public' }));
     fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitemradio', { name: /private/i }));
@@ -141,7 +151,7 @@ describe('ShowcaseDetailActions owner tools', () => {
       showcasePath: null,
       resourceBundleStatus: null,
     });
-    renderOwnerTools({ bundle: null, hasResourceBundle: false });
+    await renderReadyOwnerTools({ bundle: null, hasResourceBundle: false });
 
     fireEvent.click(screen.getByRole('button', { name: 'Visibility of Sunset study: Public' }));
     fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitemradio', { name: /private/i }));
@@ -154,7 +164,7 @@ describe('ShowcaseDetailActions owner tools', () => {
 
   it('confirms in the shared dialog before archiving, then goes to the archived list', async () => {
     clientMocks.requestPostArchive.mockResolvedValue(undefined);
-    renderOwnerTools();
+    await renderReadyOwnerTools();
 
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
     const dialog = await screen.findByRole('alertdialog', { name: 'Archive this post?' });
@@ -171,7 +181,7 @@ describe('ShowcaseDetailActions owner tools', () => {
   });
 
   it('cancelling the delete confirmation makes no request', async () => {
-    renderOwnerTools();
+    await renderReadyOwnerTools();
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     const dialog = await screen.findByRole('alertdialog', { name: 'Delete this post permanently?' });
@@ -186,7 +196,7 @@ describe('ShowcaseDetailActions owner tools', () => {
 
   it('returns to Post Library after a delete', async () => {
     clientMocks.requestPostDelete.mockResolvedValue({ deleted: true, tombstoned: false });
-    renderOwnerTools({ bundle: null, hasResourceBundle: false });
+    await renderReadyOwnerTools({ bundle: null, hasResourceBundle: false });
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     const dialog = await screen.findByRole('alertdialog');
@@ -206,7 +216,7 @@ describe('ShowcaseDetailActions owner tools', () => {
 
   // Sweep of 2026-11-17: the creator's tools are drawn from the first frame of their own post, while
   // the session is still checked, and do nothing until it ends: closed, and they act with it.
-  it('draws the tools inert while the session is checked, and alive once it names the creator', () => {
+  it('draws the tools inert while the session is checked, and alive once it names the creator', async () => {
     const tools = (ownerTools: 'checking' | 'ready') => (
       <ShowcaseDetailActions
         postId="post-1"
@@ -233,7 +243,8 @@ describe('ShowcaseDetailActions owner tools', () => {
     rerender(tools('ready'));
     expect(container.querySelector('details')).toBe(details);
     expect(details).not.toHaveAttribute('inert');
-    expect(within(details).getByRole('link', { name: 'Edit post' })).toHaveAttribute('href', '/post/post-1/edit');
+    // What it opens onto loads with import() once the check names the creator.
+    expect(await within(details).findByRole('link', { name: 'Edit post' })).toHaveAttribute('href', '/post/post-1/edit');
     expect(within(details).getByRole('link', { name: 'Manage recipe' })).toHaveAttribute('href', '/post/post-1/edit#recipe');
     expect(within(details).getByRole('button', { name: /^Visibility of Sunset study/ })).toBeInTheDocument();
     expect(within(details).getByRole('button', { name: 'Archive' })).toBeInTheDocument();

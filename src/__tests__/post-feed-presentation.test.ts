@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { buildPostFeedCard, createPostFeedCardBuilder } from '@/lib/post-feed-card';
 import {
-    buildPostFeedCard,
-    createPostFeedCardBuilder,
     estimateWrappedLineCount,
     formatCompactCount,
     formatRelativeTime,

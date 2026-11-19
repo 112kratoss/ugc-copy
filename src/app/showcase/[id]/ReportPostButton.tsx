@@ -5,12 +5,8 @@ import { Ban, Flag, Loader2, ShieldAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 import { useAuth } from '@/components/AuthProvider';
+import { pushToast } from '@/components/feedback-state';
 import { APP_SHELL_AUTH_USER_ATTRIBUTE, canStyleRuleNameAuthUser } from '@/lib/app-shell-account-restore';
-import {
-  blockCreatorAfterConfirmation,
-  reportCreatorAfterConfirmation,
-  toastSafetyOutcome,
-} from '@/lib/feed-safety-actions';
 import type { ShowcaseCreator } from '@/lib/showcase';
 import { getCurrentInternalPath } from '@/lib/share';
 import { readSupabaseAuthCookieUserId } from '@/lib/supabase-auth-cookie';
@@ -28,6 +24,27 @@ export const REPORT_REASONS = [
 
 /** About a recipe and its purchase: offered only on a post that carries one. */
 const RECIPE_REPORT_REASONS = new Set(['misleading_unlock', 'payment_issue']);
+
+/**
+ * Report user and Block user, as the feed card's menus ask for and send them (`feed-safety-actions`),
+ * loaded with the first reach for either row: they and the moderation client, the feeds' copies they
+ * clear and the Marketplace pages they edit are 12 KB that a reader who never presses them never
+ * needed with the page (2026-11-19). Asked again after a failed load, which a deploy or a dropped
+ * connection can cause.
+ */
+let safetyActionsLoad: Promise<typeof import('@/lib/feed-safety-actions')> | null = null;
+function loadSafetyActions() {
+  safetyActionsLoad ??= import('@/lib/feed-safety-actions').catch((error: unknown) => {
+    safetyActionsLoad = null;
+    throw error;
+  });
+  return safetyActionsLoad;
+}
+
+/** Starts the load as a pointer or focus reaches a row, so a press seldom waits for it. */
+function warmSafetyActions() {
+  void loadSafetyActions().catch(() => undefined);
+}
 
 interface ReportPostButtonProps {
   postId: string;
@@ -151,7 +168,18 @@ export default function ReportPostButton({
   };
 
   // Report user and Block user, asked for and sent as the feed card's are
-  // (`lib/feed-safety-actions.ts`), filed from this page.
+  // (`lib/feed-safety-actions.ts`), filed from this page. The row stays dimmed
+  // while the actions load (`loadSafetyActions`); one that cannot load says so,
+  // as an action that fails does, and nothing is asked or sent.
+  const loadSafetyActionsOrSay = async (failure: string) => {
+    try {
+      return await loadSafetyActions();
+    } catch {
+      pushToast({ tone: 'error', message: `${failure} Please try again.` });
+      return null;
+    }
+  };
+
   const handleReportUser = async () => {
     if (!creatorId) return;
     if (!accessToken) {
@@ -159,13 +187,18 @@ export default function ReportPostButton({
       return;
     }
     setIsCreatorActionPending(true);
-    const outcome = await reportCreatorAfterConfirmation({
+    const actions = await loadSafetyActionsOrSay('Could not report this creator.');
+    if (!actions) {
+      setIsCreatorActionPending(false);
+      return;
+    }
+    const outcome = await actions.reportCreatorAfterConfirmation({
       userId: creatorId,
       accessToken,
       surface: 'post-page',
     });
     setIsCreatorActionPending(false);
-    toastSafetyOutcome(outcome);
+    actions.toastSafetyOutcome(outcome);
   };
 
   const handleBlockUser = async () => {
@@ -175,13 +208,18 @@ export default function ReportPostButton({
       return;
     }
     setIsCreatorActionPending(true);
-    const outcome = await blockCreatorAfterConfirmation({
+    const actions = await loadSafetyActionsOrSay('Could not block this creator.');
+    if (!actions) {
+      setIsCreatorActionPending(false);
+      return;
+    }
+    const outcome = await actions.blockCreatorAfterConfirmation({
       userId: creatorId,
       creatorName: creator.name,
       accessToken,
     });
     setIsCreatorActionPending(false);
-    toastSafetyOutcome(outcome);
+    actions.toastSafetyOutcome(outcome);
     if (outcome.status !== 'done') return;
     // The post goes, as the app's post page answers not-found across a block.
     if (onCreatorBlocked) {
@@ -261,6 +299,8 @@ export default function ReportPostButton({
           <button
             type="button"
             onClick={() => void handleReportUser()}
+            onPointerEnter={warmSafetyActions}
+            onFocus={warmSafetyActions}
             disabled={creatorRows !== 'ready' || isCreatorActionPending}
             className={`inline-flex items-center gap-2 text-sm font-medium text-zinc-400 transition hover:text-white${
               isCreatorActionPending ? ' opacity-60' : ''
@@ -272,6 +312,8 @@ export default function ReportPostButton({
           <button
             type="button"
             onClick={() => void handleBlockUser()}
+            onPointerEnter={warmSafetyActions}
+            onFocus={warmSafetyActions}
             disabled={creatorRows !== 'ready' || isCreatorActionPending}
             className={`inline-flex items-center gap-2 text-sm font-medium text-zinc-400 transition hover:text-white${
               isCreatorActionPending ? ' opacity-60' : ''

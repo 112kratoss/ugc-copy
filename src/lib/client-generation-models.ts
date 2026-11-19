@@ -871,19 +871,8 @@ export function clampVideoDuration(modelId: VideoModelId, durationSeconds: numbe
     : (VIDEO_MODELS[modelId]?.durations[0] ?? 5);
 }
 
-const AUDIO_MODEL_IDS = [
-  'text-to-speech-turbo-2-5',
-  'text-to-speech-multilingual-v2',
-  'text-to-dialogue-v3',
-  'sound-effect-v2',
-] as const;
-
-const AUDIO_PROVIDER_MODEL_IDS = [
-  'elevenlabs/text-to-speech-turbo-2-5',
-  'elevenlabs/text-to-speech-multilingual-v2',
-  'elevenlabs/text-to-dialogue-v3',
-  'elevenlabs/sound-effect-v2',
-] as const;
+// Its own module, which a share reads without these tables (`audio-model-ids.ts`).
+export { isAudioModel } from '@/lib/audio-model-ids';
 
 export function isImageModel(modelId: string): boolean {
   return modelId in IMAGE_MODELS;
@@ -895,11 +884,6 @@ export function isMotionModel(modelId: string): boolean {
 
 export function isVideoModel(modelId: string): boolean {
   return modelId in VIDEO_MODELS;
-}
-
-export function isAudioModel(modelId: string): boolean {
-  return (AUDIO_MODEL_IDS as readonly string[]).includes(modelId)
-    || (AUDIO_PROVIDER_MODEL_IDS as readonly string[]).includes(modelId);
 }
 
 /**

@@ -25,6 +25,7 @@ import {
 import { buildShowcaseDetailPath } from '@/lib/share';
 import ShowcaseDetailBody from './ShowcaseDetailBody';
 import { relativeTimeLabelInstant } from '@/lib/post-feed-presentation';
+import { getPostMadeWithLabel } from '@/lib/post-model-labels';
 
 type ShowcaseDetailPageProps = {
   params: Promise<{ id: string }>;
@@ -274,6 +275,7 @@ export default async function ShowcaseDetailPage({ params }: ShowcaseDetailPageP
       <ShowcaseDetailBody
         detail={detail}
         shareDescription={getPublicPostMetaDescription(detail)}
+        madeWithLabel={getPostMadeWithLabel(detail)}
         renderedAt={readAt}
       />
     </OptionalAuth>

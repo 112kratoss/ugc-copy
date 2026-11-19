@@ -1,4 +1,6 @@
-import { isAudioModel } from '@/lib/client-generation-models';
+// From its own module: every post page loads this one, and asked of client-generation-models it
+// brought the model tables along.
+import { isAudioModel } from '@/lib/audio-model-ids';
 import { INVITE_SHARE_QUERY_PARAM } from '../../ugc-mobile/lib/invite-share-link/invite-share-link';
 
 export const GENERATION_SHARE_SOURCE_SURFACES = [

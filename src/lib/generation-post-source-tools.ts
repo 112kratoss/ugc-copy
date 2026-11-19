@@ -1,4 +1,4 @@
-import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
+import { getPostModelDisplayName } from '@/lib/post-model-labels';
 import type { SourceToolSelection } from '@/lib/source-tools';
 
 /**
