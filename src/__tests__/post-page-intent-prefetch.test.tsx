@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import IntentLink from '@/components/IntentLink';
+import { useIntentPrefetch } from '@/components/useIntentPrefetch';
 import ShowcaseDetailActions from '@/app/showcase/[id]/ShowcaseDetailActions';
 
 // A post page prefetched its creator's page and /create (a redirect, so a function run) for every
@@ -61,11 +62,60 @@ describe('a link that prefetches on intent', () => {
 
   it("keeps the link's own handlers", () => {
     const onPointerEnter = vi.fn();
-    render(<IntentLink href="/create" onPointerEnter={onPointerEnter}>Create your own</IntentLink>);
+    const onFocus = vi.fn();
+    const onClick = vi.fn();
+    render(
+      <IntentLink href="/create" onPointerEnter={onPointerEnter} onFocus={onFocus} onClick={onClick}>
+        Create your own
+      </IntentLink>,
+    );
+    const link = screen.getByRole('link', { name: 'Create your own' });
 
-    fireEvent.pointerEnter(screen.getByRole('link', { name: 'Create your own' }), { pointerType: 'mouse' });
+    fireEvent.pointerEnter(link, { pointerType: 'mouse' });
+    fireEvent.focus(link);
+    fireEvent.click(link);
     expect(onPointerEnter).toHaveBeenCalledTimes(1);
+    expect(onFocus).toHaveBeenCalledTimes(1);
+    expect(onClick).toHaveBeenCalledTimes(1);
     expect(router.prefetch).toHaveBeenCalledWith('/create');
+  });
+
+  it("prefetches for the keyboard's focus, not for the focus a press gives", () => {
+    render(<IntentLink href="/creators/mira">@mira</IntentLink>);
+    const link = screen.getByRole('link', { name: '@mira' });
+    const realMatches = Element.prototype.matches;
+    const matches = vi.spyOn(Element.prototype, 'matches');
+    try {
+      // A press of a mouse or a finger focuses the link without `:focus-visible`.
+      matches.mockImplementation(function (this: Element, selector: string) {
+        return selector === ':focus-visible' ? false : realMatches.call(this, selector);
+      });
+      fireEvent.focus(link);
+      expect(router.prefetch).not.toHaveBeenCalled();
+
+      // Tab to it.
+      matches.mockImplementation(function (this: Element, selector: string) {
+        return selector === ':focus-visible' ? true : realMatches.call(this, selector);
+      });
+      fireEvent.focus(link);
+      expect(router.prefetch).toHaveBeenCalledWith('/creators/mira');
+    } finally {
+      matches.mockRestore();
+    }
+  });
+
+  it('never prefetches the place already open, as the side navigation asks', () => {
+    function NavPlace({ active }: { active: boolean }) {
+      const intent = useIntentPrefetch('/marketplace', active);
+      return <button type="button" onPointerEnter={intent.onPointerEnter}>Marketplace</button>;
+    }
+    const { rerender } = render(<NavPlace active />);
+    fireEvent.pointerEnter(screen.getByRole('button', { name: 'Marketplace' }), { pointerType: 'mouse' });
+    expect(router.prefetch).not.toHaveBeenCalled();
+
+    rerender(<NavPlace active={false} />);
+    fireEvent.pointerEnter(screen.getByRole('button', { name: 'Marketplace' }), { pointerType: 'mouse' });
+    expect(router.prefetch).toHaveBeenCalledWith('/marketplace');
   });
 });
 
