@@ -112,6 +112,17 @@ describe('INR exchange rates, read once per instance', () => {
     expect(mocks.fetchWithProviderTimeout).toHaveBeenCalledTimes(2);
   });
 
+  it('does not keep a read that rejected, and reads again', async () => {
+    mocks.fetchWithProviderTimeout
+      .mockImplementationOnce(() => answer({}, { status: 500 }))
+      .mockImplementation(() => answer({ result: 'success', base_code: 'INR', rates: RATES }));
+    // A logger that throws turns the failed read into a rejection.
+    mocks.logBackendError.mockImplementationOnce(() => { throw new Error('logger down'); });
+    await expect(getInrFxRates('caller_failed')).rejects.toThrow('logger down');
+    await expect(getInrFxRates('caller_failed')).resolves.toEqual(RATES);
+    expect(mocks.fetchWithProviderTimeout).toHaveBeenCalledTimes(2);
+  });
+
   it('refuses a USD/INR rate outside the safety band, and malformed answers', async () => {
     mocks.fetchWithProviderTimeout.mockImplementationOnce(() => answer({ result: 'success', base_code: 'INR', rates: { USD: 5 } }));
     await expect(getInrFxRates('caller_failed')).resolves.toBeNull();

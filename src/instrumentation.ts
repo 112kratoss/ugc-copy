@@ -36,7 +36,9 @@
  *     waits for it once per instance.
  *   - The SDK records breadcrumbs (console, http, fetch) only from its `init`,
  *     so the error that loads it is reported without any.
- *   - `init` runs inside the triggering request's async context.
+ *   - `init` runs inside the triggering request's async context. The SDK
+ *     snapshots that context for its random ids, which is harmless while
+ *     `cacheComponents` is off; turning it on means loading outside requests.
  *   - Middleware errors are not captured; server components, route handlers and
  *     the browser all are.
  *
@@ -69,7 +71,7 @@ type ProcessListener = ((...args: never[]) => void) & { [STAND_IN_MARK]?: true; 
  * nor leaves the first behind when it hands over.
  */
 const STAND_INS_KEY = Symbol.for('magicbooklet.sentry.serverStandIns');
-type StandIns = { rejection: ProcessListener; exception: ProcessListener };
+type StandIns = { rejection: ProcessListener; exception: ProcessListener } | 'handed-over';
 /**
  * Rejections the SDK's own `OnUnhandledRejection` drops before it logs or reports
  * them (`DEFAULT_IGNORES` in `@sentry/node-core`'s `onunhandledrejection.js`):
@@ -120,11 +122,14 @@ function loadSentry(): Promise<SentryModule | null> {
  * request, there is none and this does nothing; it never throws.
  */
 function keepAliveUntil(task: Promise<unknown>): void {
+  // Handled here, with or without a request to keep alive, so it can never be
+  // an unhandled rejection of its own.
+  const settled = task.catch(() => undefined);
   try {
     const requestContext = (globalThis as Record<symbol, unknown>)[Symbol.for('@vercel/request-context')] as
       | { get?: () => { waitUntil?: (promise: Promise<unknown>) => void } | undefined }
       | undefined;
-    requestContext?.get?.()?.waitUntil?.(task.catch(() => undefined));
+    requestContext?.get?.()?.waitUntil?.(settled);
   } catch {
     // Keeping the function alive is best effort; reporting must never throw.
   }
@@ -189,8 +194,9 @@ function installedStandIns(): StandIns | null {
 }
 
 function installStandInHandlers(): void {
+  // Installed once a process, and never again once the SDK has taken over.
   if (installedStandIns()) return;
-  const standIns: StandIns = { rejection: onUnhandledRejectionBeforeSentry, exception: onUncaughtExceptionBeforeSentry };
+  const standIns = { rejection: onUnhandledRejectionBeforeSentry, exception: onUncaughtExceptionBeforeSentry };
   (globalThis as Record<symbol, unknown>)[STAND_INS_KEY] = standIns;
   process.on('unhandledRejection', standIns.rejection as never);
   process.on('uncaughtException', standIns.exception as never);
@@ -198,8 +204,8 @@ function installStandInHandlers(): void {
 
 function removeStandInHandlers(): void {
   const standIns = installedStandIns();
-  if (!standIns) return;
-  (globalThis as Record<symbol, unknown>)[STAND_INS_KEY] = undefined;
+  (globalThis as Record<symbol, unknown>)[STAND_INS_KEY] = 'handed-over';
+  if (!standIns || standIns === 'handed-over') return;
   process.off('unhandledRejection', standIns.rejection as never);
   process.off('uncaughtException', standIns.exception as never);
 }
