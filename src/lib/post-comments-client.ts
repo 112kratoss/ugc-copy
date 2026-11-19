@@ -368,7 +368,7 @@ export function adjustReplyCount(comments: PostComment[], parentId: string, delt
  * (`post-comments-route-adapter-service.ts`). So a new comment, or a removal, can take up to about
  * two minutes to reach a signed-out reader. The server answers it so only to a request with no
  * Authorization header and no Supabase session cookie; any other gets the per-viewer read,
- * private, no-store. The app always sends a token and never asks for it.
+ * private, no-store. The app never sends `scope`, so it never asks for it.
  */
 export const POST_COMMENTS_SCOPE_PARAM = 'scope';
 export const POST_COMMENTS_PUBLIC_SCOPE = 'public';

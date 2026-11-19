@@ -3068,7 +3068,7 @@
       "cacheControl": "private, no-store",
       "vary": "Authorization",
       "publicScope": {
-        "coverage": "The web's read for a reader with no session: the answer every visitor gets, read for no viewer, which Vercel's CDN may keep for a minute and serve a minute stale while it refreshes (a new comment or a removal reaches such a reader within about two minutes). Answered so only to a request with no Authorization header and no Supabase session cookie, and only when it succeeds; any other request that asks for it gets the per-viewer read under cacheControl. The app always sends a token, so it never asks.",
+        "coverage": "The web's read for a reader with no session: the answer every visitor gets, read for no viewer, which Vercel's CDN may keep for a minute and serve a minute stale while it refreshes (a new comment or a removal reaches such a reader within about two minutes). The same window holds for the thread of a post that goes private, is archived, deleted or hidden by review, or whose creator's account is deleted (the post-detail API's own edge cache keeps a post up to about six minutes). Answered so only to a request with no Authorization header and no Supabase session cookie, and only when it succeeds; any other request that asks for it gets the per-viewer read under cacheControl. The app never sends scope, so it always gets the per-viewer read (a guest's token, or none when its guest session could not start).",
         "query": {
           "scope": "public"
         },

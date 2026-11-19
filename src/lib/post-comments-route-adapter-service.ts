@@ -123,9 +123,11 @@ function carriesSupabaseAuthCookie(request: Request) {
  * theirs, no blocks applied) and is the same for every visitor: Vercel's CDN may keep it for a
  * minute and serve it a minute stale while it refreshes, so a new comment, or a removal by its
  * author, the post's creator or moderation, reaches a signed-out reader within about two minutes
- * (the accepted trade-off). A request with any session that asks for it gets today's per-viewer read,
- * private, no-store, so a reader's own answer never enters a shared cache. The app always sends a
- * token, so it never gets this answer.
+ * (the accepted trade-off), and so does the thread of a post that goes private, is archived,
+ * deleted or hidden by review, or whose creator is deleted. A request with any session that asks
+ * for it gets today's per-viewer read, private, no-store, so a reader's own answer never enters a
+ * shared cache. The app never sends `scope`, so it never asks for this answer (it reads with a
+ * guest's token, or with none when its guest session could not start).
  */
 function isSharedPublicRead(request: Request) {
   return new URL(request.url).searchParams.get(POST_COMMENTS_SCOPE_PARAM) === POST_COMMENTS_PUBLIC_SCOPE

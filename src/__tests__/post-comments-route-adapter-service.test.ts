@@ -302,6 +302,8 @@ describe('getPostCommentsRouteResponse: the signed-out read the edge may keep (s
     ['a session cookie in chunks', { cookie: 'sb-project-ref-auth-token.0=base64-eyJ1; sb-project-ref-auth-token.1=c2VyIjp7fX0' }],
     // Read without the configured project, so any project's session keeps the answer private.
     ['another project\'s session cookie', { cookie: 'sb-127-auth-token=base64-eyJ1c2VyIjp7fX0' }],
+    // A sign-in left half done keeps its PKCE verifier cookie: still a session's, still private.
+    ['a sign-in verifier cookie', { cookie: 'sb-project-ref-auth-token-code-verifier=abc123' }],
   ])('answers a request with %s privately, as today\'s read, even when it asks for the shared one', async (_label, headers) => {
     const { response } = await read(headers);
 
