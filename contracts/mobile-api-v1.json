@@ -3066,6 +3066,14 @@
       "path": "/api/showcase/posts/:postId/comments",
       "auth": "optional",
       "cacheControl": "private, no-store",
+      "vary": "Authorization",
+      "publicScope": {
+        "coverage": "The web's read for a reader with no session: the answer every visitor gets, read for no viewer, which Vercel's CDN may keep for a minute and serve a minute stale while it refreshes (a new comment or a removal reaches such a reader within about two minutes). Answered so only to a request with no Authorization header and no Supabase session cookie, and only when it succeeds; any other request that asks for it gets the per-viewer read under cacheControl. The app always sends a token, so it never asks.",
+        "query": {
+          "scope": "public"
+        },
+        "cacheControl": "public, max-age=0, s-maxage=60, stale-while-revalidate=60"
+      },
       "response": {
         "postId": "post-1",
         "postCreatorId": "creator-1",

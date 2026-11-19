@@ -1,7 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
-import { BackendRateLimitError } from '@/lib/backend-rate-limit';
+import { API_CACHE_CONTROL } from '@/lib/api-cache';
+import { BackendRateLimitError, POST_COMMENTS_READ_RATE_LIMIT } from '@/lib/backend-rate-limit';
+import { buildCommentsQuery } from '@/lib/post-comments-client';
 import {
   createPostCommentRouteResponse,
   deletePostCommentRouteResponse,
@@ -12,6 +14,10 @@ import type {
   listPostCommentsForRoute as ListPostCommentsForRoute,
   removePostCommentForRoute as RemovePostCommentForRoute,
 } from '@/lib/post-comments-service';
+
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+
+const contract = mobileApiContract.endpoints.listPostComments;
 
 const POST_ID = 'post-1';
 const COMMENT_ID = 'comment-1';
@@ -181,6 +187,160 @@ describe('getPostCommentsRouteResponse', () => {
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: 'Post not found.' });
+  });
+});
+
+// Every signed-out view of a post page asked for its thread, and each request ran the function, the
+// thread's reads and a rate-limit row, for an answer that is the same for every visitor. The web now
+// asks a signed-out reader's read as `scope=public`, which the route lets Vercel's CDN keep for a
+// minute and serve a minute stale while it refreshes; any request with a session gets the per-viewer
+// read, private, no-store, as before.
+describe('getPostCommentsRouteResponse: the signed-out read the edge may keep (scope=public)', () => {
+  const PUBLIC_QUERY = 'limit=20&offset=0&sort=top&scope=public';
+  const PUBLIC_READ = `http://localhost/api/showcase/posts/${POST_ID}/comments?${PUBLIC_QUERY}`;
+
+  /** The service as the route reaches it: a reader's own reaction only for a reader it names. */
+  function viewerAwareList() {
+    return vi.fn<typeof ListPostCommentsForRoute>(async ({ viewerUserId }) => ({
+      ok: true as const,
+      status: 200 as const,
+      body: {
+        ...emptyPage().body,
+        commentCount: 1,
+        comments: [{
+          id: COMMENT_ID,
+          parentId: null,
+          body: 'hello',
+          status: 'active' as const,
+          createdAt: '2026-11-20T00:00:00.000Z',
+          replyCount: 0,
+          author: { id: 'author-1', username: 'author', displayName: 'Author', avatarUrl: null },
+          likeCount: 3,
+          viewerReaction: viewerUserId ? 'like' as const : null,
+          editedAt: null,
+          hearted: false,
+          pinned: false,
+        }],
+      },
+    }));
+  }
+
+  async function read(
+    headers: Record<string, string> = {},
+    {
+      url = PUBLIC_READ,
+      list = viewerAwareList(),
+      enforceBackendRateLimit = vi.fn(),
+    }: {
+      url?: string;
+      list?: ReturnType<typeof viewerAwareList>;
+      enforceBackendRateLimit?: ReturnType<typeof vi.fn>;
+    } = {},
+  ) {
+    const userClient = vi.fn(() => createUserClient('viewer-1'));
+    const response = await getPostCommentsRouteResponse({
+      context: commentsContext(),
+      request: new Request(url, { headers }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        createUserClient: userClient,
+        enforceBackendRateLimit: enforceBackendRateLimit as never,
+        getFeedNetworkKeyHash: () => 'network-hash',
+        listPostCommentsForRoute: list,
+      },
+    });
+    return { response, userClient, list, enforceBackendRateLimit };
+  }
+
+  it('answers a visitor with no session the shared answer: kept at the edge, nobody resolved, the network counted on a miss', async () => {
+    const { response, userClient, list, enforceBackendRateLimit } = await read({ 'x-request-id': 'comments-public-1' });
+
+    expect(response.status).toBe(200);
+    // Fresh at the edge for a minute, served a minute stale while it refreshes, never kept by a browser.
+    expect(response.headers.get('Cache-Control')).toBe('public, max-age=0, s-maxage=60, stale-while-revalidate=60');
+    expect(response.headers.get('Cache-Control')).toBe(API_CACHE_CONTROL.publicMinuteEdge);
+    expect(response.headers.get('Cache-Control')).toBe(contract.publicScope.cacheControl);
+    expect(response.headers.get('Vary')).toBe(contract.vary);
+    // Vercel's CDN keeps no answer that sets a cookie.
+    expect(response.headers.get('Set-Cookie')).toBeNull();
+    expect(response.headers.get('x-request-id')).toBe('comments-public-1');
+    expect(userClient).not.toHaveBeenCalled();
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(list.mock.calls[0][0]).toMatchObject({
+      postId: POST_ID, viewerUserId: null, parentId: null, sort: 'top', limit: 20, offset: 0,
+    });
+    // The function runs only on a miss, and then it still counts the visitor's network.
+    expect(enforceBackendRateLimit).toHaveBeenCalledTimes(1);
+    expect(enforceBackendRateLimit.mock.calls[0][1]).toEqual({ ...POST_COMMENTS_READ_RATE_LIMIT, key: 'network-hash' });
+    // Nothing in it is a reader's own.
+    const body = await response.json() as { comments: Array<{ viewerReaction: unknown }> };
+    expect(body.comments.map((item) => item.viewerReaction)).toEqual([null]);
+  });
+
+  it('is the read the web asks for a reader with no session', () => {
+    expect(buildCommentsQuery({ offset: 0, limit: 20, sort: 'top', scope: 'public' })).toBe(PUBLIC_QUERY);
+    expect(new URL(PUBLIC_READ).searchParams.get('scope')).toBe(contract.publicScope.query.scope);
+  });
+
+  it('answers a token on the same address privately, with that reader\'s own answer', async () => {
+    const { response, userClient, list, enforceBackendRateLimit } = await read({ authorization: 'Bearer token' });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('Cache-Control')).toBe(contract.cacheControl);
+    expect(response.headers.get('Vary')).toBe('Authorization');
+    expect(userClient).toHaveBeenCalledTimes(1);
+    expect(list.mock.calls[0][0]).toMatchObject({ viewerUserId: 'viewer-1' });
+    expect(enforceBackendRateLimit.mock.calls[0][1]).toMatchObject({ key: 'viewer-1' });
+    const body = await response.json() as { comments: Array<{ viewerReaction: unknown }> };
+    expect(body.comments.map((item) => item.viewerReaction)).toEqual(['like']);
+  });
+
+  it.each([
+    ['an empty Authorization header', { authorization: '' }],
+    ['a Supabase session cookie', { cookie: 'theme=dark; sb-project-ref-auth-token=base64-eyJ1c2VyIjp7fX0' }],
+    ['a session cookie in chunks', { cookie: 'sb-project-ref-auth-token.0=base64-eyJ1; sb-project-ref-auth-token.1=c2VyIjp7fX0' }],
+    // Read without the configured project, so any project's session keeps the answer private.
+    ['another project\'s session cookie', { cookie: 'sb-127-auth-token=base64-eyJ1c2VyIjp7fX0' }],
+  ])('answers a request with %s privately, as today\'s read, even when it asks for the shared one', async (_label, headers) => {
+    const { response } = await read(headers);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(response.headers.get('Vary')).toBe('Authorization');
+  });
+
+  it('keeps the read without the scope, and any other scope, private for a visitor too', async () => {
+    for (const url of [
+      `http://localhost/api/showcase/posts/${POST_ID}/comments?limit=20&offset=0&sort=top`,
+      `http://localhost/api/showcase/posts/${POST_ID}/comments?limit=20&offset=0&sort=top&scope=everyone`,
+    ]) {
+      const { response } = await read({}, { url });
+      expect(response.headers.get('Cache-Control'), url).toBe('private, no-store');
+    }
+  });
+
+  it('keeps every refusal of the shared read out of shared caches', async () => {
+    const missing = await read({}, {
+      list: vi.fn<typeof ListPostCommentsForRoute>(async () => ({
+        ok: false as const, status: 404 as const, body: { error: 'Post not found.' },
+      })) as unknown as ReturnType<typeof viewerAwareList>,
+    });
+    expect(missing.response.status).toBe(404);
+    expect(missing.response.headers.get('Cache-Control')).toBe('private, no-store');
+
+    const limited = await read({}, {
+      enforceBackendRateLimit: vi.fn(async () => {
+        throw new BackendRateLimitError({
+          allowed: false, limit: 300, remaining: 0, retryAfterSeconds: 90, resetAt: '2026-11-20T12:10:00.000Z',
+        });
+      }),
+    });
+    expect(limited.response.status).toBe(429);
+    expect(limited.response.headers.get('Retry-After')).toBe('90');
+    // One network's refusal must never be served to every visitor.
+    expect(limited.response.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(limited.list).not.toHaveBeenCalled();
   });
 });
 

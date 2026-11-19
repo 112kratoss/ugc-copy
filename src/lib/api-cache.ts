@@ -1,6 +1,10 @@
 export const API_CACHE_CONTROL = {
   publicCatalog: 'public, max-age=300, s-maxage=300, stale-while-revalidate=3600',
   publicShortEdge: 'public, s-maxage=60, stale-while-revalidate=300',
+  // Fresh at Vercel's CDN for a minute and served stale for one more while it refreshes, so an
+  // answer is at most about two minutes old; `max-age=0` keeps a browser from reusing it itself.
+  // Vercel strips `s-maxage` and `stale-while-revalidate` from what it sends the browser.
+  publicMinuteEdge: 'public, max-age=0, s-maxage=60, stale-while-revalidate=60',
   publicHourlyEdge: 'public, s-maxage=3600, stale-while-revalidate=86400',
   privateNoStore: 'private, no-store',
   noStore: 'no-store',

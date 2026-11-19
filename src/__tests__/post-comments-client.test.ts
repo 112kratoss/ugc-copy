@@ -21,6 +21,8 @@ import {
     markCommentRemoved,
     mergeCommentPage,
     nextCommentReaction,
+    POST_COMMENTS_PUBLIC_SCOPE,
+    postCommentsReadScope,
     prependComment,
     replaceComment,
     withPendingComments,
@@ -385,6 +387,28 @@ describe('post comments client', () => {
         it('carries the requested page and sort', () => {
             expect(buildCommentsQuery({ offset: 40, sort: 'newest', limit: 5 }))
                 .toBe('limit=5&offset=40&sort=newest');
+        });
+
+        // The shared read's address is its cache key at the CDN: one spelling, the scope last.
+        it('asks for the shared read last, and only when told to', () => {
+            expect(buildCommentsQuery({ scope: 'public' })).toBe('limit=20&offset=0&sort=top&scope=public');
+            expect(buildCommentsQuery({ parentId: 'a', offset: 20, scope: 'public' }))
+                .toBe('limit=20&offset=20&sort=top&parentId=a&scope=public');
+            expect(buildCommentsQuery({ scope: null })).toBe('limit=20&offset=0&sort=top');
+        });
+    });
+
+    describe('which read a request asks for', () => {
+        it('asks for the shared read only with neither a token nor a session cookie', () => {
+            expect(postCommentsReadScope({ accessToken: null, hasSessionCookie: false })).toBe(POST_COMMENTS_PUBLIC_SCOPE);
+            expect(POST_COMMENTS_PUBLIC_SCOPE).toBe('public');
+        });
+
+        it('keeps a signed-in reader, and a session still being checked, on their own read', () => {
+            expect(postCommentsReadScope({ accessToken: 'token-1', hasSessionCookie: true })).toBeNull();
+            expect(postCommentsReadScope({ accessToken: 'token-1', hasSessionCookie: false })).toBeNull();
+            // A cookie with no token yet: the check has not named the reader, or outlasted its deadline.
+            expect(postCommentsReadScope({ accessToken: null, hasSessionCookie: true })).toBeNull();
         });
     });
 });
