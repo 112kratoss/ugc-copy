@@ -5,16 +5,20 @@
 // repository, beside the server they drive, where `mcp-distribution-manifests.test.ts` holds them
 // to it. People install from a public repository of their own, named by the plugin manifest's
 // `repository`, so installs do not depend on this repository being public. That repository is
-// output only: the tracked files of the two folders at the same paths, and the plugin's README
-// again at the root.
+// output only: the files of the two folders at the same paths, and the plugin's README again at
+// the root. Anything else found there stops a push.
 //
 //   npm run ops:plugin-mirror -- check            # exit 1 when the public repository differs
 //   npm run ops:plugin-mirror -- push             # show what a push would change, and stop
 //   npm run ops:plugin-mirror -- push --confirm   # commit and push it
 //
+// What is published is a commit, never the working tree: `origin/main` as a fetch just found it,
+// or the commit `--ref <ref>` names (a change that must be public before it is merged). So a
+// stale checkout, another branch or an uncommitted edit cannot reach the public repository.
+//
 // A push is publication: run it with --confirm only on the owner's word. It refuses a tree that
-// holds anything that reads as a secret or a private identifier, and a tree whose two folders
-// have uncommitted changes, so what is published is what a commit here holds.
+// holds anything that reads as a secret or a private identifier, a plugin whose files changed
+// while its version did not, and a manifest that names this repository itself.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -25,59 +29,96 @@ import { fileURLToPath } from 'node:url';
 export const MIRROR_FOLDERS = ['.claude-plugin', 'plugins'];
 const PLUGIN_MANIFEST = 'plugins/magicbooklet/.claude-plugin/plugin.json';
 /** The plugin's README, which the public repository also shows at its root. */
+const ROOT_README = 'README.md';
 const ROOT_README_SOURCE = 'plugins/magicbooklet/README.md';
 const MIRROR_BRANCH = 'main';
-/** The public repository's commits carry the product's public address, never the operator's own. */
-const COMMIT_IDENTITY = ['-c', 'user.name=Magic Booklet', '-c', 'user.email=info@magicbooklet.com'];
+const DEFAULT_REF = 'origin/main';
+/**
+ * The public repository's commits carry the product's public address, never the operator's own.
+ * Git reads these variables before any configuration, so an identity exported in the operator's
+ * shell cannot replace them; signing and hooks are off so no key or hook of theirs takes part.
+ */
+const COMMIT_ENVIRONMENT = {
+  GIT_AUTHOR_NAME: 'Magic Booklet',
+  GIT_AUTHOR_EMAIL: 'info@magicbooklet.com',
+  GIT_COMMITTER_NAME: 'Magic Booklet',
+  GIT_COMMITTER_EMAIL: 'info@magicbooklet.com',
+};
+const COMMIT_CONFIGURATION = ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null'];
 const PUBLIC_EMAILS = new Set(['info@magicbooklet.com']);
 
 /** What must never be published. Each is checked against every file's text. */
 const PRIVATE_CONTENT = [
   ['a private key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
   ['a signed token', /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}/],
-  ['a provider key', /\b(?:sk_(?:live|test)_|rzp_(?:live|test)_|sb_secret_|ghp_|github_pat_|xox[abprs]-|AKIA[0-9A-Z]{16})/],
+  ['a provider key', /\b(?:sk[-_][A-Za-z0-9_-]{12,}|rzp_(?:live|test)_|sb_secret_|gh[opsur]_[A-Za-z0-9]{20,}|github_pat_|xox[abprs]-|AKIA[0-9A-Z]{16})/],
+  ['a long hex key', /\b[0-9a-f]{32,}\b/i],
   ['the service role', /service_role/i],
-  ['a Supabase project host', /\b[a-z0-9]{20}\.supabase\.co\b/],
+  ['a Supabase project host', /\b[a-z0-9]{20}\.supabase\.co\b|pooler\.supabase\.com/],
   ['a path on someone’s machine', /(?:\/Users\/|\/home\/)[A-Za-z0-9._-]+/],
 ];
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
 
-function git(args, cwd, { allowFailure = false } = {}) {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+function git(args, cwd, { env, encoding = 'utf8' } = {}) {
+  const result = spawnSync('git', args, { cwd, encoding, env: env ? { ...process.env, ...env } : process.env, maxBuffer: 64 * 1024 * 1024 });
   if (result.error) throw result.error;
-  if (result.status !== 0 && !allowFailure) {
-    throw new Error(`git ${args.join(' ')} failed:\n${result.stderr.trim()}`);
-  }
-  return result;
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed:\n${String(result.stderr).trim()}`);
+  return result.stdout;
 }
 
 function trackedFiles(cwd, paths = []) {
-  return git(['ls-files', '-z', '--', ...paths], cwd).stdout.split('\0').filter(Boolean).sort();
+  return git(['ls-files', '-z', '--', ...paths], cwd).split('\0').filter(Boolean).sort();
 }
 
 /**
- * The public repository's whole tree as this checkout would publish it: path → bytes. Only files
- * git tracks are read, so nothing a tool left in the folders (a `.DS_Store`, a note) is published.
+ * The public repository's whole tree, path → bytes, as a commit holds it (`ref`) or, with no
+ * `ref`, as this checkout's tracked files do (what the tests read). Only files git tracks are
+ * read, so nothing a tool left in the folders is published, and only plain files: a link could
+ * point anywhere, and an executable would be published without its mode, so both stop here until
+ * the script learns to carry them.
  */
-export function mirrorFiles(root) {
+export function mirrorFiles(root, ref) {
   const files = new Map();
-  for (const file of trackedFiles(root, MIRROR_FOLDERS)) {
-    const stat = fs.lstatSync(path.join(root, file));
-    // A link could point anywhere in the checkout; only plain files are published.
-    if (!stat.isFile()) throw new Error(`${file} is not a plain file, so it cannot be published.`);
-    files.set(file, fs.readFileSync(path.join(root, file)));
+  if (ref) {
+    const entries = git(['ls-tree', '-r', '-z', ref, '--', ...MIRROR_FOLDERS], root).split('\0').filter(Boolean);
+    for (const entry of entries) {
+      const [meta, file] = entry.split('\t');
+      const [mode, type, object] = meta.split(' ');
+      if (type !== 'blob' || mode !== '100644') throw new Error(`${file} is not a plain file (mode ${mode}), so it cannot be published.`);
+      files.set(file, git(['cat-file', 'blob', object], root, { encoding: 'buffer' }));
+    }
+  } else {
+    for (const file of trackedFiles(root, MIRROR_FOLDERS)) {
+      const stat = fs.lstatSync(path.join(root, file));
+      if (!stat.isFile() || (stat.mode & 0o111) !== 0) throw new Error(`${file} is not a plain file, so it cannot be published.`);
+      files.set(file, fs.readFileSync(path.join(root, file)));
+    }
   }
   if (!files.has(ROOT_README_SOURCE)) throw new Error(`${ROOT_README_SOURCE} is missing.`);
-  files.set('README.md', files.get(ROOT_README_SOURCE));
+  files.set(ROOT_README, files.get(ROOT_README_SOURCE));
   return new Map([...files].sort(([left], [right]) => (left < right ? -1 : 1)));
 }
 
-/** `owner/name` of the public repository, as the plugin manifest names it. */
-export function mirrorRepository(root) {
-  const manifest = JSON.parse(fs.readFileSync(path.join(root, PLUGIN_MANIFEST), 'utf8'));
-  const match = /^https:\/\/github\.com\/([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)$/.exec(manifest.repository ?? '');
+function pluginManifest(files) {
+  const bytes = files.get(PLUGIN_MANIFEST);
+  return bytes ? JSON.parse(bytes.toString('utf8')) : null;
+}
+
+/** `owner/name` of the public repository, as the tree's plugin manifest names it. */
+export function mirrorRepository(files) {
+  const match = /^https:\/\/github\.com\/([A-Za-z0-9-]+\/[A-Za-z0-9._-]+)$/.exec(pluginManifest(files)?.repository ?? '');
   if (!match) throw new Error(`${PLUGIN_MANIFEST} names no GitHub repository.`);
   return match[1];
+}
+
+/** `owner/name` from a GitHub remote's URL, in either form git writes it. */
+export function repositoryOfRemote(url) {
+  return /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(url.trim())?.[1] ?? null;
+}
+
+/** Whether a path belongs in the public repository at all. */
+export function isMirrorPath(file) {
+  return file === ROOT_README || MIRROR_FOLDERS.some((folder) => file.startsWith(`${folder}/`));
 }
 
 /** Why a tree must not be published, one line per finding; empty when it may be. */
@@ -111,6 +152,20 @@ export function mirrorDifference(published, wanted) {
   return { added, changed, removed, same: added.length + changed.length + removed.length === 0 };
 }
 
+/**
+ * An installed copy updates only when the plugin's version changes, so a plugin whose files
+ * differ from the published ones under the same version would reach nobody who has it. The
+ * marketplace's own file is read fresh on every update and needs no version.
+ */
+export function versionProblem(published, wanted) {
+  const publishedVersion = pluginManifest(published)?.version;
+  if (!publishedVersion || publishedVersion !== pluginManifest(wanted)?.version) return null;
+  const { added, changed, removed } = mirrorDifference(published, wanted);
+  const pluginFiles = [...added, ...changed, ...removed].filter((file) => file.startsWith('plugins/'));
+  if (pluginFiles.length === 0) return null;
+  return `The plugin's files changed (${pluginFiles.join(', ')}) and its version is still ${publishedVersion}: raise "version" in ${PLUGIN_MANIFEST}.`;
+}
+
 function clonePublished(repository, directory) {
   git(['clone', '--quiet', '--depth', '1', `https://github.com/${repository}.git`, directory], process.cwd());
   const files = new Map();
@@ -124,44 +179,85 @@ function printDifference(difference) {
   }
 }
 
+function parseArguments(argv) {
+  const [mode, ...rest] = argv;
+  const options = { mode, confirm: false, ref: null };
+  if (mode !== 'check' && mode !== 'push') return null;
+  for (let index = 0; index < rest.length; index += 1) {
+    if (rest[index] === '--confirm' && mode === 'push') options.confirm = true;
+    else if (rest[index] === '--ref' && rest[index + 1]) options.ref = rest[(index += 1)];
+    else return null;
+  }
+  return options;
+}
+
+function refuse(message) {
+  console.error(`Not published. ${message}`);
+  process.exitCode = 1;
+}
+
 function main() {
-  const [mode, ...flags] = process.argv.slice(2);
-  if ((mode !== 'check' && mode !== 'push') || flags.some((flag) => flag !== '--confirm') || (mode === 'check' && flags.length > 0)) {
-    console.error('usage: plugin-mirror.mjs check | push [--confirm]');
+  const options = parseArguments(process.argv.slice(2));
+  if (!options) {
+    console.error('usage: plugin-mirror.mjs check [--ref <ref>] | push [--ref <ref>] [--confirm]');
     process.exit(2);
   }
-  const root = git(['rev-parse', '--show-toplevel'], path.dirname(fileURLToPath(import.meta.url))).stdout.trim();
-  const repository = mirrorRepository(root);
-  const wanted = mirrorFiles(root);
-  const version = JSON.parse(wanted.get(PLUGIN_MANIFEST).toString('utf8')).version;
+  const root = git(['rev-parse', '--show-toplevel'], path.dirname(fileURLToPath(import.meta.url))).trim();
+  if (!options.ref) git(['fetch', '--quiet', 'origin', MIRROR_BRANCH], root);
+  const ref = options.ref ?? DEFAULT_REF;
+  const commit = git(['rev-parse', '--verify', `${ref}^{commit}`], root).trim();
+  const wanted = mirrorFiles(root, commit);
+  const repository = mirrorRepository(wanted);
+  const version = pluginManifest(wanted).version;
+  console.log(`${ref} (${commit.slice(0, 9)}) holds plugin ${version} for ${repository}.`);
+
+  // A commit from before the marketplace moved names this repository: publishing it would
+  // replace this repository's own main with the plugin's few files.
+  if (repository === repositoryOfRemote(git(['remote', 'get-url', 'origin'], root))) {
+    refuse(`${ref} names this repository itself as the public one.`);
+    return;
+  }
+  const problems = findPrivateContent(wanted);
+  if (problems.length > 0) {
+    refuse(`The tree holds what must stay private:\n  ${problems.join('\n  ')}`);
+    return;
+  }
 
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-mirror-'));
   try {
-    const difference = mirrorDifference(clonePublished(repository, directory), wanted);
-    if (difference.same) {
-      console.log(`${repository} holds plugin ${version} as this checkout has it.`);
+    const published = clonePublished(repository, directory);
+    const strays = [...published.keys()].filter((file) => !isMirrorPath(file));
+    if (strays.length > 0) {
+      refuse(`${repository} holds files that are no part of the marketplace (${strays.slice(0, 5).join(', ')}${strays.length > 5 ? ', …' : ''}): it is not the mirror, or someone added to it.`);
       return;
     }
-    console.log(`${repository} differs from this checkout (plugin ${version}):`);
+    // Installs read the default branch, so that is the branch a push must land on.
+    if (published.size > 0) {
+      const branch = git(['symbolic-ref', '--short', 'HEAD'], directory).trim();
+      if (branch !== MIRROR_BRANCH) {
+        refuse(`${repository}'s default branch is ${branch}, not ${MIRROR_BRANCH}.`);
+        return;
+      }
+    }
+
+    const difference = mirrorDifference(published, wanted);
+    if (difference.same) {
+      console.log(`${repository} holds it as ${ref} has it.`);
+      return;
+    }
+    console.log(`${repository} differs:`);
     printDifference(difference);
-    if (mode === 'check') {
+    if (options.mode === 'check') {
       process.exitCode = 1;
       return;
     }
 
-    const problems = findPrivateContent(wanted);
-    if (problems.length > 0) {
-      console.error(`Not published. The tree holds what must stay private:\n  ${problems.join('\n  ')}`);
-      process.exitCode = 1;
+    const stale = versionProblem(published, wanted);
+    if (stale) {
+      refuse(stale);
       return;
     }
-    const uncommitted = git(['status', '--porcelain', '--', ...MIRROR_FOLDERS], root).stdout.trim();
-    if (uncommitted) {
-      console.error(`Not published. Commit or drop these first, so what is published is what a commit holds:\n${uncommitted}`);
-      process.exitCode = 1;
-      return;
-    }
-    if (!flags.includes('--confirm')) {
+    if (!options.confirm) {
       console.log('Nothing was pushed. A push is publication: run it again with --confirm on the owner’s word.');
       return;
     }
@@ -174,14 +270,15 @@ function main() {
       fs.writeFileSync(path.join(directory, file), wanted.get(file));
     }
     git(['add', '--all'], directory);
-    git([...COMMIT_IDENTITY, 'commit', '--quiet', '-m', `Magic Booklet plugin ${version}`], directory);
+    git([...COMMIT_CONFIGURATION, 'commit', '--quiet', '-m', `Magic Booklet plugin ${version}`], directory, { env: COMMIT_ENVIRONMENT });
     git(['push', '--quiet', 'origin', MIRROR_BRANCH], directory);
-    console.log(`Published plugin ${version} to ${repository} at ${git(['rev-parse', 'HEAD'], directory).stdout.trim()}.`);
+    console.log(`Published plugin ${version} to ${repository} at ${git(['rev-parse', 'HEAD'], directory).trim()}.`);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Node runs the script from its real path, so the path it was called by is resolved the same way.
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main();
 }

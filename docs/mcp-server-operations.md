@@ -936,20 +936,33 @@ and signs in with `/mcp`.
 
 The two folders stay in this repository, beside the server, so the manifest test can hold the
 skills to the server's tools and limits and a plugin change lands in the PR of the server change
-it describes. The public repository is output only: the tracked files of `.claude-plugin/` and
+it describes. The public repository is output only: the files of `.claude-plugin/` and
 `plugins/` at the same paths, the plugin's README again at the root, a history of its own and no
 workflows. `scripts/ops/plugin-mirror.mjs` writes it, and reads the repository's name from the
 plugin manifest's `repository`, which the test holds to `MCP_PLUGIN_REPOSITORY`.
 
+What it publishes is a commit, never the working tree: `origin/main` as a fetch just found it,
+so a stale checkout, another branch or an uncommitted edit cannot reach the public repository.
+`--ref <ref>` names another commit, for a change that has to be public before it is merged (the
+move itself was one: the public repository had to hold the plugin before the release that names
+it).
+
 1. Change the plugin and raise `version` in `plugin.json`, in a PR like any other. A file added
    under either folder is named in the test's list of published files first.
-2. Once it is merged, from a checkout of `main`: `npm run ops:plugin-mirror -- check` says what
-   the public repository lacks (exit 1 when it differs), and `npm run ops:plugin-mirror -- push`
-   shows the same and stops.
+2. Once it is merged: `npm run ops:plugin-mirror -- check` says what the public repository
+   lacks (exit 1 when it differs), and `npm run ops:plugin-mirror -- push` shows the same and
+   stops.
 3. `npm run ops:plugin-mirror -- push --confirm` commits and pushes it, as `Magic Booklet
-   <info@magicbooklet.com>`. A push is publication: only on the owner's word. It refuses a tree
-   that holds anything that reads as a secret, a secrets file, an address other than the public
-   one or a path on someone's machine, and one whose two folders have uncommitted changes.
+   <info@magicbooklet.com>` whatever identity, signing key or hooks the operator's git has. A
+   push is publication: only on the owner's word. It refuses:
+   - a tree that holds anything that reads as a secret, a secrets file, an address other than
+     the public one or a path on someone's machine (`check` refuses the same);
+   - a plugin whose files differ from the published ones under the same `version`, which no
+     installed copy would ever receive;
+   - a file that is not a plain one (a link, an executable: the script does not carry modes);
+   - a commit whose manifest names this repository itself (any commit from before the move),
+     and a public repository that holds anything besides the marketplace's files or whose
+     default branch is not `main`.
 4. Prove an install from it with a config of its own, which leaves the operator's untouched:
 
    ```bash
@@ -969,7 +982,7 @@ on Claude Code 2.1.302 says what earlier installs do:
   declared in their settings from the old source. They run `claude plugin marketplace remove
   magicbooklet`, which also uninstalls the plugin and deletes what it saved where it can, then
   the two commands above: the marketplace then reads from the new repository and the plugin is
-  1.1.1. Signing in again after that was not tried. The plugin's README says the same. (A
+  the current one. Signing in again after that was not tried. The plugin's README says the same. (A
   marketplace added from a folder on disk does take over an existing name; a second GitHub
   source does not.)
 - Someone who does nothing keeps a working plugin. While this repository is public their

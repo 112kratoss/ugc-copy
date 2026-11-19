@@ -24,7 +24,15 @@ import {
   isPendingClientId,
 } from '@/lib/mcp-client-directory';
 import { MCP_TOOLS } from '@/lib/mcp-server-service';
-import { findPrivateContent, mirrorDifference, mirrorFiles, mirrorRepository } from '../../scripts/ops/plugin-mirror.mjs';
+import {
+  findPrivateContent,
+  isMirrorPath,
+  mirrorDifference,
+  mirrorFiles,
+  mirrorRepository,
+  repositoryOfRemote,
+  versionProblem,
+} from '../../scripts/ops/plugin-mirror.mjs';
 import {
   POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH,
   POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
@@ -279,10 +287,15 @@ describe('the Claude Code plugin marketplace', () => {
 describe('the plugin marketplace’s public repository', () => {
   const files: Map<string, Buffer> = mirrorFiles(ROOT);
 
-  it('is published to the repository the setup page’s command adds', () => {
-    expect(mirrorRepository(ROOT)).toBe(MCP_PLUGIN_REPOSITORY);
+  it('is published to the repository the setup page’s command adds, never to this one', () => {
+    expect(mirrorRepository(files)).toBe(MCP_PLUGIN_REPOSITORY);
     // A marketplace of its own, not the app's repository: an install must not need that one public.
     expect(MCP_PLUGIN_REPOSITORY).not.toBe('112kratoss/ugc-copy');
+    // The script refuses a manifest that names the checkout's own origin, in either form git writes it.
+    expect(repositoryOfRemote('https://github.com/112kratoss/ugc-copy.git\n')).toBe('112kratoss/ugc-copy');
+    expect(repositoryOfRemote('git@github.com:112kratoss/ugc-copy.git')).toBe('112kratoss/ugc-copy');
+    expect(repositoryOfRemote('https://github.com/112kratoss/ugc-copy')).toBe('112kratoss/ugc-copy');
+    expect(repositoryOfRemote('/somewhere/on/disk')).toBeNull();
   });
 
   it('publishes these files and no others', () => {
@@ -299,6 +312,18 @@ describe('the plugin marketplace’s public repository', () => {
     ]);
     // The public repository's front page is the plugin's own README.
     expect(files.get('README.md')?.equals(files.get('plugins/magicbooklet/README.md') as Buffer)).toBe(true);
+    for (const file of files.keys()) expect(isMirrorPath(file), file).toBe(true);
+    // Anything else in the public repository stops a push.
+    expect(['LICENSE', 'src/lib/x.ts', '.github/workflows/x.yml', 'pluginsx/y'].filter(isMirrorPath)).toEqual([]);
+  });
+
+  it('reads a commit the way it reads the checkout', () => {
+    // A push publishes a commit, never the working tree; the same reader takes both.
+    const committed: Map<string, Buffer> = mirrorFiles(ROOT, 'HEAD');
+    expect(committed.size).toBeGreaterThanOrEqual(8);
+    expect(committed.get('README.md')?.equals(committed.get('plugins/magicbooklet/README.md') as Buffer)).toBe(true);
+    expect(mirrorRepository(committed)).toMatch(/^[\w-]+\/[\w.-]+$/);
+    for (const file of committed.keys()) expect(isMirrorPath(file), file).toBe(true);
   });
 
   it('holds nothing private, and nothing that names the app’s repository or its files', () => {
@@ -306,21 +331,30 @@ describe('the plugin marketplace’s public repository', () => {
     for (const [file, bytes] of files) {
       const text = bytes.toString('utf8');
       expect(text, file).not.toMatch(/ugc-copy/);
-      // A reader of the public repository has no `src/`, `docs/` or `scripts/` to open.
-      expect(text, file).not.toMatch(/\b(?:src|docs|scripts)\/[\w.-]/);
+      // A reader of the public repository has none of the app's folders to open. A path inside a
+      // URL (`…/docs/…`) is not one of them.
+      expect(text, file).not.toMatch(/(?<![\w/.-])(?:src|docs|scripts|supabase|contracts|ugc-mobile|tests|\.claude|\.agents)\/[\w.-]/);
+      expect(text, file).not.toMatch(/AGENTS\.md/);
     }
   });
 
   it('refuses a tree that holds a secret, a secrets file, a private address or a machine’s path', () => {
     const tree = (file: string, text: string) => new Map([[file, Buffer.from(text)]]);
+    const readme = 'plugins/magicbooklet/README.md';
+    // Each value is built from parts so that this file holds nothing a scanner reads as a secret.
     const refused: Array<[string, Map<string, Buffer>]> = [
-      ['a private key', tree('plugins/magicbooklet/skills/x/SKILL.md', '-----BEGIN PRIVATE KEY-----')],
-      ['a signed token', tree('plugins/magicbooklet/README.md', `${'eyJ'}hbGciOiJIUzI1NiJ9.${'eyJ'}zdWIiOiIxMjM0NTY3ODkwIn0.sig`)],
-      ['a provider key', tree('plugins/magicbooklet/README.md', `key ${'sk_'}live_abc123`)],
-      ['the service role', tree('plugins/magicbooklet/README.md', 'the service_role key')],
-      ['a Supabase project host', tree('plugins/magicbooklet/README.md', 'https://abcdefghijklmnopqrst.supabase.co')],
-      ['a path on someone’s machine', tree('plugins/magicbooklet/README.md', 'see /Users/someone/notes.md')],
-      ['an email address that is not the public one', tree('plugins/magicbooklet/README.md', 'write to someone@example.com')],
+      ['a private key', tree('plugins/magicbooklet/skills/x/SKILL.md', `-----BEGIN ${'PRIVATE'} KEY-----`)],
+      ['a signed token', tree(readme, `${'eyJ'}hbGciOiJIUzI1NiJ9.${'eyJ'}zdWIiOiIxMjM0NTY3ODkwIn0.sig`)],
+      ['a provider key', tree(readme, `key ${'sk_'}live_abcdefghijkl`)],
+      ['a provider key', tree(readme, `key ${'sk_'}AbCdEfGhIjKlMnOp`)],
+      ['a provider key', tree(readme, `key ${'sk-'}abcdefghijklmnop`)],
+      ['a provider key', tree(readme, `key ${'gho_'}abcdefghijklmnopqrstuvwx`)],
+      ['a long hex key', tree(readme, `key ${'deadbeef'.repeat(4)}`)],
+      ['the service role', tree(readme, `the ${'service'}_role key`)],
+      ['a Supabase project host', tree(readme, 'https://abcdefghijklmnopqrst.supabase.co')],
+      ['a Supabase project host', tree(readme, 'aws-0-ap-south-1.pooler.supabase.com:6543')],
+      ['a path on someone’s machine', tree(readme, 'see /Users/someone/notes.md')],
+      ['an email address that is not the public one', tree(readme, 'write to someone@example.com')],
       ['a secrets file', tree('plugins/magicbooklet/.env.local', 'NAME=value')],
       ['a secrets file', tree('plugins/magicbooklet/.mcp.json', '{}')],
     ];
@@ -328,8 +362,8 @@ describe('the plugin marketplace’s public repository', () => {
       const [file] = files.keys();
       expect(findPrivateContent(files), label).toEqual([`${file}: ${label}`]);
     }
-    // The public address and the install command's `name@marketplace` are not findings.
-    expect(findPrivateContent(tree('README.md', `info@magicbooklet.com, ${MCP_PLUGIN_INSTALL_COMMAND}.`))).toEqual([]);
+    // The public address, the install command's `name@marketplace` and the public client id are not findings.
+    expect(findPrivateContent(tree('README.md', `info@magicbooklet.com, ${MCP_PLUGIN_INSTALL_COMMAND}. ${MCP_CLIENT_IDS.claudeCode}`))).toEqual([]);
   });
 
   it('says what a push would add, change and remove', () => {
@@ -337,5 +371,21 @@ describe('the plugin marketplace’s public repository', () => {
     const wanted = new Map([['README.md', Buffer.from('new')], ['same.md', Buffer.from('y')], ['added.md', Buffer.from('z')]]);
     expect(mirrorDifference(published, wanted)).toEqual({ added: ['added.md'], changed: ['README.md'], removed: ['gone.md'], same: false });
     expect(mirrorDifference(wanted, wanted)).toMatchObject({ same: true });
+  });
+
+  it('refuses a plugin whose files changed under the version already published', () => {
+    // An installed copy updates only when the version changes.
+    const manifest = 'plugins/magicbooklet/.claude-plugin/plugin.json';
+    const skill = 'plugins/magicbooklet/skills/create-ugc-ad/SKILL.md';
+    const treeAt = (version: string, skillText: string, marketplace = '{}') => new Map([
+      ['.claude-plugin/marketplace.json', Buffer.from(marketplace)],
+      [manifest, Buffer.from(JSON.stringify({ version }))],
+      [skill, Buffer.from(skillText)],
+    ]);
+    expect(versionProblem(treeAt('1.1.2', 'old'), treeAt('1.1.2', 'new'))).toContain(`${skill}) and its version is still 1.1.2`);
+    expect(versionProblem(treeAt('1.1.2', 'old'), treeAt('1.1.3', 'new'))).toBeNull();
+    // The marketplace's own file needs no plugin version, and a first publish has none to compare.
+    expect(versionProblem(treeAt('1.1.2', 'same'), treeAt('1.1.2', 'same', '{"plugins":[]}'))).toBeNull();
+    expect(versionProblem(new Map(), treeAt('1.1.2', 'new'))).toBeNull();
   });
 });

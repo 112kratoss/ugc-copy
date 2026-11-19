@@ -24,7 +24,7 @@ claude plugin install magicbooklet@magicbooklet
 
 Then, in Claude Code, run `/mcp`, pick the magicbooklet server and choose **Authenticate**. Your browser opens on Magic Booklet; sign in if you need to and allow Claude Code. Signing in listens on port 8976, so keep that port free while you do it.
 
-Added the marketplace earlier, from another repository? Claude Code keeps a marketplace under the source it was first added from, so remove it, which also removes the plugin:
+Added the marketplace earlier, from another repository? Claude Code keeps a marketplace under the source it was first added from, so remove it, which also removes the plugin and what it saved:
 
 ```bash
 claude plugin marketplace remove magicbooklet
@@ -42,7 +42,7 @@ Then run the two commands above, and sign in with `/mcp` again if Claude Code as
 
 ## Maintainers
 
-This repository is published from Magic Booklet's app repository, where the plugin is kept beside the server it drives and tests hold the two together. Changes are made there and copied here, so a change made here would be overwritten: write to info@magicbooklet.com with a problem or a suggestion.
+The plugin is kept in Magic Booklet's app repository, beside the server it drives, where tests hold the two together. It is published from there to [github.com/112kratoss/magicbooklet-claude-plugin](https://github.com/112kratoss/magicbooklet-claude-plugin), the repository people install from, so a change made in that one would be overwritten: write to info@magicbooklet.com with a problem or a suggestion.
 
 - The plugin's MCP server is declared in `plugins/magicbooklet/.claude-plugin/plugin.json` (`mcpServers`), not in a `.mcp.json`.
 - `version` in that file rises with every change to the plugin: an installed copy updates only when the version changes.
