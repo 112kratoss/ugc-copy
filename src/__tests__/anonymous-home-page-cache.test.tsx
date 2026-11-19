@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { HomeShelfItem } from '@/lib/home-shelf';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
-import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
+import { SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG } from '@/lib/showcase-feed-cache';
 
 const getServerAuthStateMock = vi.fn();
 const headersMock = vi.fn();
@@ -267,8 +267,10 @@ describe('Anonymous home cacheability', () => {
     expect(pageModule.revalidate).toBe(ANONYMOUS_HOME_REVALIDATE_SECONDS);
     expect(renderedWindow(pageModule.revalidate)).toBe(900);
     // The feed's tag is on the page, so a publish, an edit, a delete or a
-    // take-down rebuilds it at its next visit rather than within the window.
-    expect([...renderCache.tags]).toEqual([SHOWCASE_FEED_CACHE_TAG]);
+    // take-down rebuilds it at its next visit rather than within the window;
+    // and the feeds' refresh tag, so their hourly maintenance has it drawn
+    // again in the background.
+    expect([...renderCache.tags]).toEqual([SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG]);
   });
 
   it('is rebuilt a minute later when it had to go without its feed', async () => {
