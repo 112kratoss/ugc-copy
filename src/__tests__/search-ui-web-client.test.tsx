@@ -24,7 +24,7 @@ import { SEARCH_FOLLOW_FAILED, SEARCH_RELATED_SEARCHES_HEADING } from '../../ugc
 
 const { pushMock, routerMock, pushToastMock } = vi.hoisted(() => {
   const push = vi.fn();
-  return { pushMock: push, routerMock: { push, replace: vi.fn() }, pushToastMock: vi.fn() };
+  return { pushMock: push, routerMock: { push, replace: vi.fn(), prefetch: vi.fn() }, pushToastMock: vi.fn() };
 });
 const getSessionMock = vi.fn();
 const searchFetchMock = vi.fn();

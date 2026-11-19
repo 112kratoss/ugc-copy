@@ -62,6 +62,17 @@ export function AppShellSearch() {
   // on every page, and a page that is never searched from asks nothing.
   const [reachedFor, setReachedFor] = useState(false);
   const starter = useSearchStarter({ enabled: reachedFor, kept: true });
+  // The search page is prefetched then too, not as the bar comes into view: the
+  // bar is on every page and `/search` is dynamic, so a prefetch on sight ran a
+  // function on most page views for a search few of them make (speed baseline,
+  // 2026-11-19: two per desktop page). The shell's other ways in already wait
+  // (`prefetch={false}` on `AppShellSearchButton` and `SearchEntryLink`).
+  const searchPrefetched = useRef(false);
+  useEffect(() => {
+    if (!reachedFor || searchPrefetched.current) return;
+    searchPrefetched.current = true;
+    router.prefetch('/search');
+  }, [reachedFor, router]);
   const start = useMemo(() => searchStartPanelSections({ recents, starter }), [recents, starter]);
   const typeahead = useSearchTypeahead<SearchStartPanelRow>({ text, focused, recents, start });
   // Whether the focus now arriving was put there by a pointer or a finger.
@@ -157,6 +168,7 @@ export function AppShellSearch() {
     // part travels by itself and only the plain skin is ever stretched.
     <Form
       action="/search"
+      prefetch={false}
       // Not a link, so a page's leave guard is asked here: a page with
       // unsaved work asks first, and a leave submits the search again.
       onSubmit={(event) => {
