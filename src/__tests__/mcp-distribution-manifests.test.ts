@@ -342,7 +342,7 @@ describe('the plugin marketplace’s public repository', () => {
     const repository = mkdtempSync(path.join(os.tmpdir(), 'plugin-mirror-test-'));
     const git = (...args: string[]) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], {
       cwd: repository,
-      env: { PATH: process.env.PATH, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+      env: { PATH: process.env.PATH, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', NODE_ENV: 'test' },
       stdio: 'pipe',
     });
     const write = (file: string, text: string) => {
@@ -448,7 +448,7 @@ describe('the plugin marketplace’s public repository', () => {
       [manifest, Buffer.from(JSON.stringify({ version }))],
       [readme, Buffer.from(text)],
     ]);
-    const quiet = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', PATH: process.env.PATH };
+    const quiet: NodeJS.ProcessEnv = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', PATH: process.env.PATH, NODE_ENV: 'test' };
     const inRemote = (...args: string[]) => execFileSync('git', args, { cwd: remote, env: quiet, encoding: 'utf8' });
     const operator = { GIT_AUTHOR_NAME: 'Operator', GIT_AUTHOR_EMAIL: 'operator@example.invalid', GIT_COMMITTER_NAME: 'Operator', GIT_COMMITTER_EMAIL: 'operator@example.invalid', GIT_DIR: '/nonexistent' };
     const before = Object.fromEntries(Object.keys(operator).map((name) => [name, process.env[name]]));
