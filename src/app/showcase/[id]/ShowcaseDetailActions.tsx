@@ -3,10 +3,12 @@
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useCallback, useState } from 'react';
-import { Sparkles } from 'lucide-react';
+import { RefreshCw, Sparkles } from 'lucide-react';
 
 import type { PostLifecyclePatch, PostLifecycleTarget } from '@/components/usePostLifecycle';
 import type { PostVisibility } from '@/lib/post-lifecycle-client';
+
+import { PostPagePartBoundary } from './PostPagePartBoundary';
 
 /**
  * What the tools open onto, loaded with import() once the session check names the creator: never
@@ -16,6 +18,26 @@ import type { PostVisibility } from '@/lib/post-lifecycle-client';
  * chunks holding the same modules, so a second, plain preload would fetch them twice.
  */
 const ShowcaseOwnerToolsMenu = dynamic(() => import('./ShowcaseOwnerToolsMenu'), { ssr: false });
+
+/**
+ * In the tools' place when their load failed (`PostPagePartBoundary`): the lazy keeps the failure
+ * until a reload, which fetches the chunk names of the deployment live now.
+ */
+function OwnerToolsDidNotLoad() {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-white/8 px-5 pb-4 pt-3 sm:px-6">
+      <p className="text-sm text-rose-200">The Owner tools did not load.</p>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="ui-focus-ring inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+      >
+        <RefreshCw className="h-4 w-4" aria-hidden="true" />
+        Reload page
+      </button>
+    </div>
+  );
+}
 
 /**
  * The creator's Owner tools, by what the page knows of who is looking (`ownership` in
@@ -113,15 +135,17 @@ export default function ShowcaseDetailActions({
             * the edit links, the menu and the actions on every post (review of #838).
             */}
           {ownerTools === 'ready' ? (
-            <ShowcaseOwnerToolsMenu
-              postId={postId}
-              generationId={generationId}
-              title={title}
-              hasResourceBundle={hasResourceBundle}
-              bundle={bundle && ownerBundleStatus ? { ...bundle, status: ownerBundleStatus } : bundle}
-              ownerVisibility={ownerVisibility}
-              onPatch={handleLifecyclePatch}
-            />
+            <PostPagePartBoundary part="the Owner tools" fallback={<OwnerToolsDidNotLoad />}>
+              <ShowcaseOwnerToolsMenu
+                postId={postId}
+                generationId={generationId}
+                title={title}
+                hasResourceBundle={hasResourceBundle}
+                bundle={bundle && ownerBundleStatus ? { ...bundle, status: ownerBundleStatus } : bundle}
+                ownerVisibility={ownerVisibility}
+                onPatch={handleLifecyclePatch}
+              />
+            </PostPagePartBoundary>
           ) : null}
         </details>
       ) : null}

@@ -145,7 +145,8 @@ describe("what a post's page brings to the browser with its first load", () => {
     expect(body).toContain("import('./ShowcasePostUnavailable')");
     expect(body).toContain("import('@/components/InviteHandoffBar')");
     expect(read('app/showcase/[id]/ShowcaseDetailActions.tsx')).toContain("import('./ShowcaseOwnerToolsMenu')");
-    expect(read('app/showcase/[id]/ReportPostButton.tsx')).toContain("import('@/lib/feed-safety-actions')");
+    expect(read('app/showcase/[id]/ReportPostButton.tsx')).toContain("from './safety-actions-loader'");
+    expect(read('app/showcase/[id]/safety-actions-loader.ts')).toContain("import('@/lib/feed-safety-actions')");
   });
 
   it('names what the post was made with on the server', () => {

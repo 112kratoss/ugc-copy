@@ -34,20 +34,29 @@ import {
   ShowcaseDetailCommentsPanel,
 } from './ShowcaseDetailCommentCount';
 import ShowcaseDetailEngagementRow from './ShowcaseDetailEngagementRow';
+import { PostPagePartBoundary } from './PostPagePartBoundary';
 import { usePostRailTop } from './usePostRailTop';
 import { ShowcaseSearchParamsReporter, useShowcasePostViewer } from './useShowcasePostViewer';
 
+/** The not-found notice's own page, empty: in its place while it loads, and if it never does. */
+function UnavailablePageShell() {
+  return <div className="ui-page ui-page-ambient" />;
+}
+
 /*
  * Two parts of the page drawn only in the browser, for few readers, and loaded with import() when
- * one is: neither is in the server's HTML, so nothing there waits for them (2026-11-19).
+ * one is: neither is in the server's HTML, so nothing there waits for them (2026-11-19). Each is
+ * drawn in a `PostPagePartBoundary`, which keeps a failed load to the part.
  * - The not-found notice that replaces the post across a block, with the design system's
  *   primitives it is drawn with (14 KB): for a signed-in reader blocked either way. The post is
- *   gone at once, to the notice's own empty page, and its card follows when it has loaded.
+ *   gone at once, to the notice's own empty page, and its card follows when it has loaded. A load
+ *   that fails leaves the empty page: the post stays hidden.
  * - The offer to carry a shared link's invite on to the app: for a visitor whose link brought one.
+ *   A load that fails draws nothing, and the post stays.
  */
 const ShowcasePostUnavailable = dynamic(() => import('./ShowcasePostUnavailable'), {
   ssr: false,
-  loading: () => <div className="ui-page ui-page-ambient" />,
+  loading: UnavailablePageShell,
 });
 const InviteHandoffBar = dynamic(
   () => import('@/components/InviteHandoffBar').then((loaded) => loaded.InviteHandoffBar),
@@ -412,7 +421,11 @@ export default function ShowcaseDetailBody({
   );
 
   if (viewer.blocked) {
-    return <ShowcasePostUnavailable />;
+    return (
+      <PostPagePartBoundary part="the not-found notice of a blocked post" fallback={<UnavailablePageShell />}>
+        <ShowcasePostUnavailable />
+      </PostPagePartBoundary>
+    );
   }
 
   return (
@@ -432,7 +445,11 @@ export default function ShowcaseDetailBody({
 
       {/* A visitor a shared link's invite came with: the way to keep it, here or in the app. */}
       <div className="relative z-10">
-        {viewer.inviteHandoff ? <InviteHandoffBar handoff={viewer.inviteHandoff} /> : null}
+        {viewer.inviteHandoff ? (
+          <PostPagePartBoundary part="the invite hand-off bar" fallback={null}>
+            <InviteHandoffBar handoff={viewer.inviteHandoff} />
+          </PostPagePartBoundary>
+        ) : null}
       </div>
 
       <div className="canonical-post-shell studio-shell-wide relative z-10 pt-4 sm:pt-6">
