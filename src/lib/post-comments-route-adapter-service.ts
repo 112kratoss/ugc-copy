@@ -4,7 +4,11 @@ import 'server-only';
 
 import { after, NextResponse } from 'next/server';
 
-import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
+import {
+  API_CACHE_CONTROL,
+  applyApiResponseHeaders,
+  applyPrivateNoStoreApiResponseHeaders,
+} from '@/lib/api-cache';
 import {
   BackendRateLimitError,
   POST_COMMENTS_READ_RATE_LIMIT,
@@ -12,6 +16,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
+import { POST_COMMENTS_PUBLIC_SCOPE, POST_COMMENTS_SCOPE_PARAM } from '@/lib/post-comments-client';
 import { getFeedNetworkKeyHash } from '@/lib/showcase-feed-identity';
 import {
   createPostCommentForRoute,
@@ -97,19 +102,56 @@ async function requireViewerUserId(
   return error || !user || isGuestUser(user) ? null : user.id;
 }
 
+/**
+ * A Supabase session cookie of any project, whole or in chunks (`sb-<ref>-auth-token`,
+ * `sb-<ref>-auth-token.0`, …), or the sign-in verifier beside it. Matched without the configured
+ * project (which `hasSupabaseAuthCookie` reads), so the check fails closed: any such cookie keeps an
+ * answer out of shared caches.
+ */
+function carriesSupabaseAuthCookie(request: Request) {
+  return (request.headers.get('cookie') ?? '').split(';').some((part) => {
+    const name = part.trim().split('=', 1)[0] ?? '';
+    return name.startsWith('sb-') && name.includes('-auth-token');
+  });
+}
+
+/**
+ * The signed-out read the edge may keep: a request that asks for the public scope
+ * (`POST_COMMENTS_PUBLIC_SCOPE`, what the web asks for a reader with no session) and carries no
+ * session at all, neither an Authorization header (an empty one included) nor a Supabase session
+ * cookie. Its answer is read for no viewer, so it holds nothing of a reader's own (no reaction of
+ * theirs, no blocks applied) and is the same for every visitor: Vercel's CDN may keep it for a
+ * minute and serve it a minute stale while it refreshes, so a new comment, or a removal by its
+ * author, the post's creator or moderation, reaches a signed-out reader within about two minutes
+ * (the accepted trade-off), and so does the thread of a post that goes private, is archived,
+ * deleted or hidden by review, or whose creator is deleted. A request with any session that asks
+ * for it gets today's per-viewer read, private, no-store, so a reader's own answer never enters a
+ * shared cache. The app never sends `scope`, so it never asks for this answer (it reads with a
+ * guest's token, or with none when its guest session could not start).
+ */
+function isSharedPublicRead(request: Request) {
+  return new URL(request.url).searchParams.get(POST_COMMENTS_SCOPE_PARAM) === POST_COMMENTS_PUBLIC_SCOPE
+    && !request.headers.has('authorization')
+    && !carriesSupabaseAuthCookie(request);
+}
+
 async function handlePostCommentsGET(
   request: Request,
   context: PostCommentsRouteContext,
   dependencies: ReturnType<typeof resolveDependencies>,
+  sharedPublicRead: boolean,
 ) {
   const { postId } = await context.params;
-  const viewerUserId = await getViewerUserId(request, dependencies);
+  // The shared read never resolves anyone: what it answers is every visitor's.
+  const viewerUserId = sharedPublicRead ? null : await getViewerUserId(request, dependencies);
   const searchParams = new URL(request.url).searchParams;
 
   // Comment writes were limited while the read beside them was open, even
   // though listing is the more expensive half: it range-reads in a loop until
   // enough visible rows accumulate, issuing two user_blocks queries per pass.
   // Keyed on the viewer when signed in, otherwise on a salted network hash.
+  // The shared read is counted too: its answer is served from the edge, so
+  // only a miss or a refresh reaches here, and a refusal is never kept there.
   try {
     await dependencies.enforceBackendRateLimit(dependencies.createServiceClient(), {
       ...POST_COMMENTS_READ_RATE_LIMIT,
@@ -221,11 +263,20 @@ export async function getPostCommentsRouteResponse({
   dependencies?: PostCommentsRouteDependencies;
   request: Request;
 }) {
-  return applyPrivateNoStoreApiResponseHeaders(
-    await handlePostCommentsGET(request, context, resolveDependencies(dependencies)),
+  const sharedPublicRead = isSharedPublicRead(request);
+  const response = await handlePostCommentsGET(
     request,
-    { vary: ['Authorization'] },
+    context,
+    resolveDependencies(dependencies),
+    sharedPublicRead,
   );
+  // Only the thread itself is shared: a refusal (a missing post, one network's rate limit) is
+  // answered to its own request alone. `Vary` names Authorization alone: Vercel's CDN keeps no
+  // answer whose `Vary` names Cookie, and a cookie changes nothing in this read, which resolves a
+  // reader only from a token.
+  return sharedPublicRead && response.status === 200
+    ? applyApiResponseHeaders(response, request, API_CACHE_CONTROL.publicMinuteEdge, { vary: ['Authorization'] })
+    : applyPrivateNoStoreApiResponseHeaders(response, request, { vary: ['Authorization'] });
 }
 
 export async function createPostCommentRouteResponse({

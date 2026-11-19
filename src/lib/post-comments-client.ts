@@ -362,16 +362,45 @@ export function adjustReplyCount(comments: PostComment[], parentId: string, delt
         : comment));
 }
 
+/**
+ * The read a reader with no session asks for: `scope=public`, the answer every visitor gets, which
+ * the route lets Vercel's CDN keep for a minute and serve a minute stale while it refreshes
+ * (`post-comments-route-adapter-service.ts`). So a new comment, or a removal, can take up to about
+ * two minutes to reach a signed-out reader. The server answers it so only to a request with no
+ * Authorization header and no Supabase session cookie; any other gets the per-viewer read,
+ * private, no-store. The app never sends `scope`, so it never asks for it.
+ */
+export const POST_COMMENTS_SCOPE_PARAM = 'scope';
+export const POST_COMMENTS_PUBLIC_SCOPE = 'public';
+export type PostCommentsReadScope = typeof POST_COMMENTS_PUBLIC_SCOPE;
+
+/**
+ * Which read a request asks for, at the moment it is sent: the shared one only with neither a token
+ * nor a session cookie in this browser. A cookie without a token is a session still being checked
+ * (or one whose check outlasted its deadline), whose reader may turn out to be signed in.
+ */
+export function postCommentsReadScope({
+    accessToken,
+    hasSessionCookie,
+}: {
+    accessToken: string | null;
+    hasSessionCookie: boolean;
+}): PostCommentsReadScope | null {
+    return !accessToken && !hasSessionCookie ? POST_COMMENTS_PUBLIC_SCOPE : null;
+}
+
 export function buildCommentsQuery({
     offset = 0,
     parentId,
     sort = 'top',
     limit = POST_COMMENTS_PAGE_SIZE,
+    scope = null,
 }: {
     offset?: number;
     parentId?: string | null;
     sort?: PostCommentSort;
     limit?: number;
+    scope?: PostCommentsReadScope | null;
 } = {}) {
     const params = new URLSearchParams({
         limit: String(limit),
@@ -379,6 +408,8 @@ export function buildCommentsQuery({
         sort,
     });
     if (parentId) params.set('parentId', parentId);
+    // Last, and always in the same order: the address is the shared answer's cache key.
+    if (scope) params.set(POST_COMMENTS_SCOPE_PARAM, scope);
     return params.toString();
 }
 

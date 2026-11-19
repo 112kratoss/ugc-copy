@@ -402,6 +402,86 @@ describe('PostComments', () => {
         });
     });
 
+    // Every signed-out view of a post asked for its thread, and each read ran a function, the thread's
+    // reads and a rate-limit row for an answer that is every visitor's. A reader with no session asks
+    // for that shared read (`scope=public`), which the server lets the CDN keep; anyone with a session
+    // asks for their own, as before.
+    describe('which read of the thread a reader asks for', () => {
+        const SUPABASE_URL = 'https://project-ref.supabase.co';
+        const AUTH_COOKIE = 'sb-project-ref-auth-token';
+        const root = comment({ id: 'root-1', body: 'Root comment', replyCount: 1 });
+        const reply = comment({ id: 'reply-1', parentId: 'root-1', body: 'The reply', replyCount: 0 });
+
+        function serveReads() {
+            const reads: Array<{ query: Record<string, string>; authorization: string | null }> = [];
+            const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+                const url = new URL(String(input), 'http://localhost');
+                reads.push({
+                    query: Object.fromEntries(url.searchParams),
+                    authorization: new Headers(init?.headers).get('Authorization'),
+                });
+                return jsonResponse(url.searchParams.get('parentId') ? page([reply]) : page([root]));
+            });
+            vi.stubGlobal('fetch', fetchMock);
+            return { fetchMock, reads };
+        }
+
+        async function readThreadAndReplies() {
+            render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={2} />);
+            fireEvent.click(await screen.findByRole('button', { name: 'View 1 reply' }));
+            expect(await screen.findByText('The reply')).toBeInTheDocument();
+        }
+
+        beforeEach(() => {
+            vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPABASE_URL);
+        });
+
+        afterEach(() => {
+            document.cookie = `${AUTH_COOKIE}=; Max-Age=0; Path=/`;
+            vi.unstubAllEnvs();
+        });
+
+        it('asks for the shared read, with no token, for a reader with no session', async () => {
+            const server = serveReads();
+
+            await readThreadAndReplies();
+
+            expect(server.reads).toEqual([
+                { query: { limit: '20', offset: '0', sort: 'top', scope: 'public' }, authorization: null },
+                { query: { limit: '20', offset: '0', sort: 'top', parentId: 'root-1', scope: 'public' }, authorization: null },
+            ]);
+            // The address the server keeps it under, exactly as its tests read it.
+            expect(String(server.fetchMock.mock.calls[0][0]))
+                .toBe('/api/showcase/posts/post-1/comments?limit=20&offset=0&sort=top&scope=public');
+        });
+
+        it('asks for a signed-in reader\'s own read, with their token', async () => {
+            signIn('token-1');
+            const server = serveReads();
+
+            await readThreadAndReplies();
+
+            expect(server.reads).toEqual([
+                { query: { limit: '20', offset: '0', sort: 'top' }, authorization: 'Bearer token-1' },
+                { query: { limit: '20', offset: '0', sort: 'top', parentId: 'root-1' }, authorization: 'Bearer token-1' },
+            ]);
+        });
+
+        // A session cookie with no token: a check that found nothing, or one that outlasted its
+        // deadline. The reader may be signed in, so the read stays theirs, as the server would answer it.
+        it('never asks for the shared read while the browser holds a session cookie', async () => {
+            document.cookie = `${AUTH_COOKIE}=session; Path=/`;
+            const server = serveReads();
+
+            await readThreadAndReplies();
+
+            expect(server.reads).toEqual([
+                { query: { limit: '20', offset: '0', sort: 'top' }, authorization: null },
+                { query: { limit: '20', offset: '0', sort: 'top', parentId: 'root-1' }, authorization: null },
+            ]);
+        });
+    });
+
     // A page drawn ahead of time is drawn for every reader, and no cookie can be read on the server.
     it("draws both of the composer's places in the server's HTML, for the root element's mark to choose", () => {
         const container = document.createElement('div');

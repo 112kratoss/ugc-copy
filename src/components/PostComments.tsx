@@ -47,6 +47,7 @@ import {
     markCommentRemoved,
     mergeCommentPage,
     nextCommentReaction,
+    postCommentsReadScope,
     prependComment,
     withPendingComments,
     type CommentRequestFailure,
@@ -60,6 +61,7 @@ import { accountAvatar, useAccountProfile } from '@/lib/account-avatar';
 import { formatCompactCount, formatRelativeTime } from '@/lib/post-feed-presentation';
 import { getCurrentInternalPath } from '@/lib/share';
 import { readPostCommentSort, usePostCommentSort } from '@/lib/post-comment-sort-memory';
+import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
 import { useViewerSessionCheck } from '@/lib/viewer-session-check';
 
 const SORT_OPTIONS: Array<{ value: PostCommentSort; label: string; description: string }> = [
@@ -286,10 +288,17 @@ export default function PostComments({
     ): Promise<{ page: PostCommentsPage; comments: PostComment[] }> => {
         const kind: CommentRequestKind = parentId ? 'replies' : 'load';
         const fetchPage = async (offset: number, limit: number) => {
+            // A reader with no session, neither a token nor a session cookie being checked, asks for
+            // the answer every visitor gets, which the server lets the CDN keep for a minute
+            // (`scope=public`); anyone else asks for their own, sent with their token as before.
+            const scope = postCommentsReadScope({
+                accessToken: authRef.current.accessToken,
+                hasSessionCookie: hasSupabaseAuthCookie(),
+            });
             // Replies are always oldest first; only the top level has a sort.
             const query = buildCommentsQuery(parentId
-                ? { parentId, offset, limit }
-                : { offset, limit, sort });
+                ? { parentId, offset, limit, scope }
+                : { offset, limit, sort, scope });
             const response = await fetch(
                 `/api/showcase/posts/${encodeURIComponent(postId)}/comments?${query}`,
                 { headers: authHeaders(), signal }
