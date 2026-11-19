@@ -943,9 +943,9 @@ plugin manifest's `repository`, which the test holds to `MCP_PLUGIN_REPOSITORY`.
 
 What it publishes is a commit, never the working tree: `origin/main` as a fetch just found it,
 so a stale checkout, another branch or an uncommitted edit cannot reach the public repository.
-`--ref <ref>` names another commit, for a change that has to be public before it is merged (the
-move itself was one: the public repository had to hold the plugin before the release that names
-it).
+`--ref <ref>` names any other commit this checkout has, pushed or not, for a change that has to
+be public before it is merged (the move itself was one: the public repository had to hold the
+plugin before the release that names it).
 
 1. Change the plugin and raise `version` in `plugin.json`, in a PR like any other. A file added
    under either folder is named in the test's list of published files first.
@@ -953,21 +953,31 @@ it).
    lacks (exit 1 when it differs), and `npm run ops:plugin-mirror -- push` shows the same and
    stops.
 3. `npm run ops:plugin-mirror -- push --confirm` commits and pushes it, as `Magic Booklet
-   <info@magicbooklet.com>` whatever identity, signing key or hooks the operator's git has. A
-   push is publication: only on the owner's word. It refuses:
-   - a tree that holds anything that reads as a secret, a secrets file, an address other than
-     the public one or a path on someone's machine (`check` refuses the same);
-   - a plugin whose files differ from the published ones under the same `version`, which no
-     installed copy would ever receive;
-   - a file that is not a plain one (a link, an executable: the script does not carry modes);
-   - a commit whose manifest names this repository itself (any commit from before the move),
-     and a public repository that holds anything besides the marketplace's files or whose
-     default branch is not `main`.
+   <info@magicbooklet.com>` at a UTC time: the operator's git identity, `GIT_*` variables,
+   signing key and hooks take no part in the clone, the commit or the push. A push is
+   publication: only on the owner's word.
 4. Prove an install from it with a config of its own, which leaves the operator's untouched:
 
    ```bash
    export CLAUDE_CONFIG_DIR="$(mktemp -d)"; claude plugin marketplace add 112kratoss/magicbooklet-claude-plugin && claude plugin install magicbooklet@magicbooklet && claude plugin list
    ```
+
+Both `check` and `push` stop, with "Not published." and exit 1, on:
+
+- a tree that holds anything that reads as a secret, a secrets file, an address other than the
+  public one or a path on someone's machine;
+- a file that is not a plain one, in the commit or in the public repository (a link, an
+  executable: the script carries no modes, and reads both sides from git's objects so that a
+  link someone planted in the public repository is seen and never followed);
+- a commit whose manifest names this repository itself, which is any commit from before the
+  move: until the PR that moved it is merged, the default `origin/main` is one;
+- a public repository that holds anything besides the marketplace's files, or whose default
+  branch is not `main`.
+
+A `push` also refuses a plugin whose files differ from the published ones under the same
+`version`, which no installed copy would ever receive, and a plugin older than the published
+one, which is what `origin/main` is while a newer plugin published with `--ref` waits to be
+merged.
 
 Until a push, an installed copy stays at the version the public repository holds: merging here
 reaches nobody.

@@ -1,4 +1,6 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -291,11 +293,18 @@ describe('the plugin marketplace’s public repository', () => {
     expect(mirrorRepository(files)).toBe(MCP_PLUGIN_REPOSITORY);
     // A marketplace of its own, not the app's repository: an install must not need that one public.
     expect(MCP_PLUGIN_REPOSITORY).not.toBe('112kratoss/ugc-copy');
-    // The script refuses a manifest that names the checkout's own origin, in either form git writes it.
-    expect(repositoryOfRemote('https://github.com/112kratoss/ugc-copy.git\n')).toBe('112kratoss/ugc-copy');
-    expect(repositoryOfRemote('git@github.com:112kratoss/ugc-copy.git')).toBe('112kratoss/ugc-copy');
-    expect(repositoryOfRemote('https://github.com/112kratoss/ugc-copy')).toBe('112kratoss/ugc-copy');
-    expect(repositoryOfRemote('/somewhere/on/disk')).toBeNull();
+    // The script refuses a manifest that names the checkout's own origin, however git writes it:
+    // https or SSH, an SSH host alias, any letter case (GitHub's names ignore it), a trailing slash.
+    for (const url of [
+      'https://github.com/112kratoss/ugc-copy.git\n',
+      'https://github.com/112kratoss/ugc-copy/',
+      'git@github.com:112kratoss/ugc-copy.git',
+      'git@github-work:112kratoss/ugc-copy.git',
+      'ssh://git@github.com/112Kratoss/UGC-Copy.git',
+    ]) {
+      expect(repositoryOfRemote(url), url).toBe('112kratoss/ugc-copy');
+    }
+    expect(repositoryOfRemote('nowhere')).toBeNull();
   });
 
   it('publishes these files and no others', () => {
@@ -324,6 +333,58 @@ describe('the plugin marketplace’s public repository', () => {
     expect(committed.get('README.md')?.equals(committed.get('plugins/magicbooklet/README.md') as Buffer)).toBe(true);
     expect(mirrorRepository(committed)).toMatch(/^[\w-]+\/[\w.-]+$/);
     for (const file of committed.keys()) expect(isMirrorPath(file), file).toBe(true);
+  });
+
+  it('reads a commit from git’s objects, and takes no link and no executable from one', () => {
+    // The same reader reads the public repository's clone, where a link planted by someone with
+    // access could point at a file on the operator's machine: it must be seen, never followed.
+    const repository = mkdtempSync(path.join(os.tmpdir(), 'plugin-mirror-test-'));
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], {
+      cwd: repository,
+      env: { PATH: process.env.PATH, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+      stdio: 'pipe',
+    });
+    const write = (file: string, text: string) => {
+      mkdirSync(path.dirname(path.join(repository, file)), { recursive: true });
+      writeFileSync(path.join(repository, file), text);
+    };
+    try {
+      git('init', '--quiet');
+      write('plugins/magicbooklet/README.md', 'readme');
+      write('plugins/magicbooklet/skills/a skill/with\ttab.md', 'spaced');
+      write('.claude-plugin/marketplace.json', '{}');
+      write('outside.md', 'not published');
+      git('add', '--all');
+      git('commit', '--quiet', '-m', 'plain');
+      // A change left in the working tree is not what a commit holds.
+      write('plugins/magicbooklet/README.md', 'uncommitted');
+      const plain: Map<string, Buffer> = mirrorFiles(repository, 'HEAD');
+      expect([...plain.keys()]).toEqual([
+        '.claude-plugin/marketplace.json',
+        'README.md',
+        'plugins/magicbooklet/README.md',
+        'plugins/magicbooklet/skills/a skill/with\ttab.md',
+      ]);
+      expect(plain.get('README.md')?.toString()).toBe('readme');
+      expect(plain.get('plugins/magicbooklet/skills/a skill/with\ttab.md')?.toString()).toBe('spaced');
+
+      const secret = path.join(repository, 'outside.md');
+      symlinkSync(secret, path.join(repository, 'plugins/magicbooklet/link.md'));
+      git('add', '--all');
+      git('commit', '--quiet', '-m', 'link');
+      expect(() => mirrorFiles(repository, 'HEAD')).toThrow('plugins/magicbooklet/link.md is not a plain file (mode 120000)');
+      expect(() => mirrorFiles(repository)).toThrow('plugins/magicbooklet/link.md is not a plain file');
+
+      git('rm', '--quiet', 'plugins/magicbooklet/link.md');
+      write('plugins/magicbooklet/run.sh', '#!/bin/sh\n');
+      chmodSync(path.join(repository, 'plugins/magicbooklet/run.sh'), 0o755);
+      git('add', '--all');
+      git('commit', '--quiet', '-m', 'executable');
+      expect(() => mirrorFiles(repository, 'HEAD')).toThrow('plugins/magicbooklet/run.sh is not a plain file (mode 100755)');
+      expect(() => mirrorFiles(repository)).toThrow('plugins/magicbooklet/run.sh is not a plain file');
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
   });
 
   it('holds nothing private, and nothing that names the app’s repository or its files', () => {
@@ -384,6 +445,10 @@ describe('the plugin marketplace’s public repository', () => {
     ]);
     expect(versionProblem(treeAt('1.1.2', 'old'), treeAt('1.1.2', 'new'))).toContain(`${skill}) and its version is still 1.1.2`);
     expect(versionProblem(treeAt('1.1.2', 'old'), treeAt('1.1.3', 'new'))).toBeNull();
+    expect(versionProblem(treeAt('1.1.9', 'old'), treeAt('1.1.10', 'new'))).toBeNull();
+    // An older plugin never replaces a newer one: main, while a newer one published ahead of its merge waits.
+    expect(versionProblem(treeAt('1.1.3', 'new'), treeAt('1.1.2', 'old'))).toContain('This is plugin 1.1.2 and 1.1.3 is published');
+    expect(versionProblem(treeAt('1.1.10', 'same'), treeAt('1.1.9', 'same'))).toContain('an older plugin is never published over a newer one');
     // The marketplace's own file needs no plugin version, and a first publish has none to compare.
     expect(versionProblem(treeAt('1.1.2', 'same'), treeAt('1.1.2', 'same', '{"plugins":[]}'))).toBeNull();
     expect(versionProblem(new Map(), treeAt('1.1.2', 'new'))).toBeNull();

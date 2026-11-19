@@ -18,7 +18,7 @@
 //
 // A push is publication: run it with --confirm only on the owner's word. It refuses a tree that
 // holds anything that reads as a secret or a private identifier, a plugin whose files changed
-// while its version did not, and a manifest that names this repository itself.
+// while its version did not rise, and a manifest that names this repository itself.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -36,15 +36,23 @@ const DEFAULT_REF = 'origin/main';
 /**
  * The public repository's commits carry the product's public address, never the operator's own.
  * Git reads these variables before any configuration, so an identity exported in the operator's
- * shell cannot replace them; signing and hooks are off so no key or hook of theirs takes part.
+ * shell cannot replace them, and the commit's time is written in UTC, not the operator's zone.
  */
-const COMMIT_ENVIRONMENT = {
-  GIT_AUTHOR_NAME: 'Magic Booklet',
-  GIT_AUTHOR_EMAIL: 'info@magicbooklet.com',
-  GIT_COMMITTER_NAME: 'Magic Booklet',
-  GIT_COMMITTER_EMAIL: 'info@magicbooklet.com',
-};
-const COMMIT_CONFIGURATION = ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null'];
+function commitEnvironment(now = new Date()) {
+  const when = `${Math.floor(now.getTime() / 1_000)} +0000`;
+  return {
+    GIT_AUTHOR_NAME: 'Magic Booklet',
+    GIT_AUTHOR_EMAIL: 'info@magicbooklet.com',
+    GIT_AUTHOR_DATE: when,
+    GIT_COMMITTER_NAME: 'Magic Booklet',
+    GIT_COMMITTER_EMAIL: 'info@magicbooklet.com',
+    GIT_COMMITTER_DATE: when,
+  };
+}
+/** On every git call in the public repository's clone: no hook and no signing key of the operator's takes part. */
+const CLONE_CONFIGURATION = ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'push.gpgSign=false'];
+/** The only `GIT_*` variables of the operator's shell that a git call here keeps (how a password prompt is answered). */
+const GIT_ENVIRONMENT_KEPT = new Set(['GIT_ASKPASS', 'GIT_TERMINAL_PROMPT']);
 const PUBLIC_EMAILS = new Set(['info@magicbooklet.com']);
 
 /** What must never be published. Each is checked against every file's text. */
@@ -59,8 +67,14 @@ const PRIVATE_CONTENT = [
 ];
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
 
-function git(args, cwd, { env, encoding = 'utf8' } = {}) {
-  const result = spawnSync('git', args, { cwd, encoding, env: env ? { ...process.env, ...env } : process.env, maxBuffer: 64 * 1024 * 1024 });
+/**
+ * Git, told where to work by `cwd` alone: a `GIT_DIR`, `GIT_INDEX_FILE` or identity exported
+ * around the script (git sets the first two itself when it runs a hook) would point a call at
+ * another repository or name another author.
+ */
+function git(args, cwd, { env = {}, encoding = 'utf8' } = {}) {
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_') || GIT_ENVIRONMENT_KEPT.has(name)));
+  const result = spawnSync('git', args, { cwd, encoding, env: { ...inherited, ...env }, maxBuffer: 64 * 1024 * 1024 });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed:\n${String(result.stderr).trim()}`);
   return result.stdout;
@@ -71,26 +85,38 @@ function trackedFiles(cwd, paths = []) {
 }
 
 /**
+ * A commit's files under `paths` (all of them when empty), path → bytes, read from git's own
+ * objects and never through the file system, so a link is seen as a link and not followed.
+ * Only plain files are taken: a link could point anywhere, and an executable would be published
+ * without its mode.
+ */
+function committedFiles(cwd, ref, paths = []) {
+  const files = new Map();
+  for (const entry of git(['ls-tree', '-r', '-z', ref, '--', ...paths], cwd).split('\0').filter(Boolean)) {
+    // "<mode> <type> <object>\t<path>": the path is everything after the first tab.
+    const tab = entry.indexOf('\t');
+    const [mode, type, object] = entry.slice(0, tab).split(' ');
+    const file = entry.slice(tab + 1);
+    if (type !== 'blob' || mode !== '100644') throw new Error(`${file} is not a plain file (mode ${mode}).`);
+    files.set(file, git(['cat-file', 'blob', object], cwd, { encoding: 'buffer' }));
+  }
+  return files;
+}
+
+/**
  * The public repository's whole tree, path → bytes, as a commit holds it (`ref`) or, with no
  * `ref`, as this checkout's tracked files do (what the tests read). Only files git tracks are
- * read, so nothing a tool left in the folders is published, and only plain files: a link could
- * point anywhere, and an executable would be published without its mode, so both stop here until
- * the script learns to carry them.
+ * read, so nothing a tool left in the folders is published, and only plain ones.
  */
 export function mirrorFiles(root, ref) {
-  const files = new Map();
+  let files;
   if (ref) {
-    const entries = git(['ls-tree', '-r', '-z', ref, '--', ...MIRROR_FOLDERS], root).split('\0').filter(Boolean);
-    for (const entry of entries) {
-      const [meta, file] = entry.split('\t');
-      const [mode, type, object] = meta.split(' ');
-      if (type !== 'blob' || mode !== '100644') throw new Error(`${file} is not a plain file (mode ${mode}), so it cannot be published.`);
-      files.set(file, git(['cat-file', 'blob', object], root, { encoding: 'buffer' }));
-    }
+    files = committedFiles(root, ref, MIRROR_FOLDERS);
   } else {
+    files = new Map();
     for (const file of trackedFiles(root, MIRROR_FOLDERS)) {
       const stat = fs.lstatSync(path.join(root, file));
-      if (!stat.isFile() || (stat.mode & 0o111) !== 0) throw new Error(`${file} is not a plain file, so it cannot be published.`);
+      if (!stat.isFile() || (stat.mode & 0o111) !== 0) throw new Error(`${file} is not a plain file.`);
       files.set(file, fs.readFileSync(path.join(root, file)));
     }
   }
@@ -111,9 +137,12 @@ export function mirrorRepository(files) {
   return match[1];
 }
 
-/** `owner/name` from a GitHub remote's URL, in either form git writes it. */
+/**
+ * `owner/name` from a remote's URL, lower-cased as GitHub compares names: its last two
+ * segments, whatever the host is written as (an SSH alias stands for github.com in some setups).
+ */
 export function repositoryOfRemote(url) {
-  return /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(url.trim())?.[1] ?? null;
+  return /[:/]([^/:\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(url.trim())?.[1].toLowerCase() ?? null;
 }
 
 /** Whether a path belongs in the public repository at all. */
@@ -152,25 +181,49 @@ export function mirrorDifference(published, wanted) {
   return { added, changed, removed, same: added.length + changed.length + removed.length === 0 };
 }
 
+/** -1, 0 or 1 as version `left` is older than, the same as or newer than `right` (`x.y.z`). */
+function compareVersions(left, right) {
+  const [a, b] = [left, right].map((version) => String(version).split('.').map(Number));
+  for (let index = 0; index < 3; index += 1) {
+    if ((a[index] || 0) !== (b[index] || 0)) return (a[index] || 0) < (b[index] || 0) ? -1 : 1;
+  }
+  return 0;
+}
+
 /**
  * An installed copy updates only when the plugin's version changes, so a plugin whose files
- * differ from the published ones under the same version would reach nobody who has it. The
- * marketplace's own file is read fresh on every update and needs no version.
+ * differ from the published ones under the same version would reach nobody who has it, and one
+ * under an older version (`origin/main`, while a newer one published with `--ref` waits to be
+ * merged) would take the public repository back. The marketplace's own file is read fresh on
+ * every update and needs no version.
  */
 export function versionProblem(published, wanted) {
   const publishedVersion = pluginManifest(published)?.version;
-  if (!publishedVersion || publishedVersion !== pluginManifest(wanted)?.version) return null;
+  const wantedVersion = pluginManifest(wanted)?.version;
+  if (!publishedVersion) return null;
+  const order = compareVersions(wantedVersion, publishedVersion);
+  if (order < 0) return `This is plugin ${wantedVersion} and ${publishedVersion} is published: an older plugin is never published over a newer one.`;
+  if (order > 0) return null;
   const { added, changed, removed } = mirrorDifference(published, wanted);
   const pluginFiles = [...added, ...changed, ...removed].filter((file) => file.startsWith('plugins/'));
   if (pluginFiles.length === 0) return null;
   return `The plugin's files changed (${pluginFiles.join(', ')}) and its version is still ${publishedVersion}: raise "version" in ${PLUGIN_MANIFEST}.`;
 }
 
+/** Git in the public repository's clone. */
+function cloneGit(args, directory, options) {
+  return git([...CLONE_CONFIGURATION, ...args], directory, options);
+}
+
+/** Clones the public repository and reads what it holds; nothing, for one with no commit yet. */
 function clonePublished(repository, directory) {
-  git(['clone', '--quiet', '--depth', '1', `https://github.com/${repository}.git`, directory], process.cwd());
-  const files = new Map();
-  for (const file of trackedFiles(directory)) files.set(file, fs.readFileSync(path.join(directory, file)));
-  return files;
+  cloneGit(['clone', '--quiet', '--depth', '1', `https://github.com/${repository}.git`, directory], os.tmpdir());
+  try {
+    cloneGit(['rev-parse', '--verify', '--quiet', 'HEAD'], directory);
+  } catch {
+    return new Map();
+  }
+  return committedFiles(directory, 'HEAD');
 }
 
 function printDifference(difference) {
@@ -203,17 +256,24 @@ function main() {
     process.exit(2);
   }
   const root = git(['rev-parse', '--show-toplevel'], path.dirname(fileURLToPath(import.meta.url))).trim();
-  if (!options.ref) git(['fetch', '--quiet', 'origin', MIRROR_BRANCH], root);
+  // Into origin/main by name, whatever this checkout's own fetch rules cover.
+  git(['fetch', '--quiet', 'origin', `+refs/heads/${MIRROR_BRANCH}:refs/remotes/${DEFAULT_REF}`], root);
   const ref = options.ref ?? DEFAULT_REF;
   const commit = git(['rev-parse', '--verify', `${ref}^{commit}`], root).trim();
-  const wanted = mirrorFiles(root, commit);
+  let wanted;
+  try {
+    wanted = mirrorFiles(root, commit);
+  } catch (error) {
+    refuse(`${ref} cannot be published: ${error.message}`);
+    return;
+  }
   const repository = mirrorRepository(wanted);
   const version = pluginManifest(wanted).version;
   console.log(`${ref} (${commit.slice(0, 9)}) holds plugin ${version} for ${repository}.`);
 
   // A commit from before the marketplace moved names this repository: publishing it would
   // replace this repository's own main with the plugin's few files.
-  if (repository === repositoryOfRemote(git(['remote', 'get-url', 'origin'], root))) {
+  if (repository.toLowerCase() === repositoryOfRemote(git(['remote', 'get-url', 'origin'], root))) {
     refuse(`${ref} names this repository itself as the public one.`);
     return;
   }
@@ -225,7 +285,13 @@ function main() {
 
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-mirror-'));
   try {
-    const published = clonePublished(repository, directory);
+    let published;
+    try {
+      published = clonePublished(repository, directory);
+    } catch (error) {
+      refuse(`${repository} could not be read: ${error.message}`);
+      return;
+    }
     const strays = [...published.keys()].filter((file) => !isMirrorPath(file));
     if (strays.length > 0) {
       refuse(`${repository} holds files that are no part of the marketplace (${strays.slice(0, 5).join(', ')}${strays.length > 5 ? ', …' : ''}): it is not the mirror, or someone added to it.`);
@@ -233,7 +299,7 @@ function main() {
     }
     // Installs read the default branch, so that is the branch a push must land on.
     if (published.size > 0) {
-      const branch = git(['symbolic-ref', '--short', 'HEAD'], directory).trim();
+      const branch = cloneGit(['symbolic-ref', '--short', 'HEAD'], directory).trim();
       if (branch !== MIRROR_BRANCH) {
         refuse(`${repository}'s default branch is ${branch}, not ${MIRROR_BRANCH}.`);
         return;
@@ -263,16 +329,18 @@ function main() {
     }
 
     // A repository with no commit yet clones with no branch; either way the commit lands on main.
-    git(['checkout', '--quiet', '-B', MIRROR_BRANCH], directory);
-    for (const file of difference.removed) fs.rmSync(path.join(directory, file));
+    cloneGit(['checkout', '--quiet', '-B', MIRROR_BRANCH], directory);
+    // Every published file is a plain one (anything else was refused above), and a changed file
+    // is removed before it is written, so no write goes through a link to somewhere else.
+    for (const file of [...difference.removed, ...difference.changed]) fs.rmSync(path.join(directory, file));
     for (const file of [...difference.added, ...difference.changed]) {
       fs.mkdirSync(path.dirname(path.join(directory, file)), { recursive: true });
-      fs.writeFileSync(path.join(directory, file), wanted.get(file));
+      fs.writeFileSync(path.join(directory, file), wanted.get(file), { flag: 'wx' });
     }
-    git(['add', '--all'], directory);
-    git([...COMMIT_CONFIGURATION, 'commit', '--quiet', '-m', `Magic Booklet plugin ${version}`], directory, { env: COMMIT_ENVIRONMENT });
-    git(['push', '--quiet', 'origin', MIRROR_BRANCH], directory);
-    console.log(`Published plugin ${version} to ${repository} at ${git(['rev-parse', 'HEAD'], directory).trim()}.`);
+    cloneGit(['add', '--all'], directory);
+    cloneGit(['commit', '--quiet', '-m', `Magic Booklet plugin ${version}`], directory, { env: commitEnvironment() });
+    cloneGit(['push', '--quiet', 'origin', MIRROR_BRANCH], directory);
+    console.log(`Published plugin ${version} to ${repository} at ${cloneGit(['rev-parse', 'HEAD'], directory).trim()}.`);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
