@@ -3,14 +3,17 @@
 import { useEffect, useState } from 'react';
 
 import {
+  loadBrowserSupabase,
+  whenBrowserSessionCookie,
+  type BrowserSupabaseClient,
+} from '@/lib/browser-session';
+import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
+
+import {
   isSearchStarterEmpty,
   parseSearchStarterResponse,
   type SearchStarterResponse,
 } from '../../../ugc-mobile/lib/public-search-policy/search-starter';
-
-// The browser's Supabase client, loaded when the request needs the session, as
-// the typeahead loads it.
-const loadSupabase = () => import('@/lib/supabase').then((module) => module.supabase);
 
 /**
  * How long the top bar draws an answer it has without asking again. Its panel
@@ -52,7 +55,8 @@ export function forgetKeptSearchStarter(): void {
  *
  * `enabled`: nothing is asked, and the Supabase client is not loaded, until it
  * is true (the top bar's field is on every page, and asks only once a person
- * reaches for it). `kept`: an answer this tab already has for the same
+ * reaches for it); then only in a browser with a session cookie, which a
+ * visitor's has not (`browser-session.ts`). `kept`: an answer this tab already has for the same
  * account, no older than SEARCH_STARTER_KEPT_MS, is drawn without a request.
  * The search page asks each time it opens, as before: it draws creators with
  * Follow, which a kept answer could show a followed creator among.
@@ -83,15 +87,18 @@ export function useSearchStarterState({ enabled = true, kept = false }: { enable
     const settle = () => { if (!disposed) setSettled(true); };
     let giveUp = window.setTimeout(settle, SEARCH_STARTER_SETTLE_MS);
     let stopWatching: (() => void) | null = null;
+    let stopLookingForCookie: (() => void) | null = null;
     let request: AbortController | null = null;
     // The account the answer on hand was asked for; undefined while none has been asked.
     let askedFor: string | null | undefined;
-    const ask = async (supabase: Awaited<ReturnType<typeof loadSupabase>>) => {
+    // `supabase`: the client, in a browser with a session cookie. Without one (null) there is no
+    // session to read: the question is a visitor's.
+    const ask = async (supabase: BrowserSupabaseClient | null) => {
       request?.abort();
       const controller = new AbortController();
       request = controller;
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const session = supabase ? (await supabase.auth.getSession()).data.session : null;
         if (controller.signal.aborted) return;
         const viewerId = session?.user?.id ?? null;
         askedFor = viewerId;
@@ -120,30 +127,62 @@ export function useSearchStarterState({ enabled = true, kept = false }: { enable
         if (!controller.signal.aborted) settle();
       }
     };
-    void loadSupabase().then((supabase) => {
-      if (disposed) return;
-      const { data } = supabase.auth.onAuthStateChange((event, session) => {
-        if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT') return;
-        const next = event === 'SIGNED_OUT' ? null : session?.user?.id ?? null;
-        if (askedFor === undefined || next === askedFor) return;
-        // Another account: what was offered to the one before is not this one's.
-        askedFor = undefined;
-        keptAnswer = null;
-        setAnswer(null);
-        // A new question, to be waited for as the first was (review of #830: the invitation
-        // stood in for the moment the new account's answer took, and was then replaced).
-        setSettled(false);
-        window.clearTimeout(giveUp);
-        giveUp = window.setTimeout(settle, SEARCH_STARTER_SETTLE_MS);
-        void ask(supabase);
-      });
-      stopWatching = () => data.subscription.unsubscribe();
+    // Another account: what was offered to the one before is not this one's.
+    const askForAnotherAccount = (supabase: BrowserSupabaseClient) => {
+      askedFor = undefined;
+      keptAnswer = null;
+      setAnswer(null);
+      // A new question, to be waited for as the first was (review of #830: the invitation
+      // stood in for the moment the new account's answer took, and was then replaced).
+      setSettled(false);
+      window.clearTimeout(giveUp);
+      giveUp = window.setTimeout(settle, SEARCH_STARTER_SETTLE_MS);
       void ask(supabase);
-    }).catch(settle);
+    };
+    // The session and its changes, from the client. `askedAsVisitor`: the question was asked
+    // without one, before a session cookie was written (a sign-in in another tab).
+    const watchSession = (askedAsVisitor: boolean) => {
+      void loadBrowserSupabase().then(async (supabase) => {
+        if (disposed) return;
+        const { data } = supabase.auth.onAuthStateChange((event, session) => {
+          if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT') return;
+          const next = event === 'SIGNED_OUT' ? null : session?.user?.id ?? null;
+          if (askedFor === undefined || next === askedFor) return;
+          askForAnotherAccount(supabase);
+        });
+        stopWatching = () => data.subscription.unsubscribe();
+        if (!askedAsVisitor) {
+          void ask(supabase);
+          return;
+        }
+        // Asked again only for a cookie that names an account.
+        const { data: { session } } = await supabase.auth.getSession();
+        const next = session?.user?.id ?? null;
+        if (!disposed && next !== null && next !== askedFor) askForAnotherAccount(supabase);
+      }).catch(() => {
+        // The client did not load (in a build it stays unloaded until a reload: browser-session.ts).
+        // The question is a visitor's then, as the search page's own then are.
+        if (!disposed && !askedAsVisitor) void ask(null);
+      });
+    };
+    if (hasSupabaseAuthCookie()) {
+      watchSession(false);
+    } else {
+      // No session cookie, so no session (@supabase/ssr keeps it there): asked as a visitor,
+      // without loading the client. One written later is looked for as supabase-js looked.
+      // Asked a moment later, as the client's load made it wait: development's StrictMode runs
+      // this effect twice, and the run it takes down at once must ask nothing (the E2E server's
+      // route counted two questions where the page drew one answer).
+      void Promise.resolve().then(() => {
+        if (!disposed) void ask(null);
+      });
+      stopLookingForCookie = whenBrowserSessionCookie(() => watchSession(true));
+    }
     return () => {
       disposed = true;
       window.clearTimeout(giveUp);
       stopWatching?.();
+      stopLookingForCookie?.();
       request?.abort();
     };
   }, [enabled, kept]);

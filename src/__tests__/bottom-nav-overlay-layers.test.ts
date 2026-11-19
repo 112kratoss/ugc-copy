@@ -150,7 +150,7 @@ describe('overlays and the bottom navigation', () => {
     expect(verdictOf('src/components/StudioModelPicker.tsx', "'fixed inset-x-4")).toBe('above the nav');
     expect(verdictOf('src/app/create-workflow/WorkflowCanvasPanels.tsx', 'fixed bottom-[calc(var(--app-shell-bottom-nav-space')).toBe('above the nav');
     expect(verdictOf('src/app/showcase/ShowcaseFeedInteraction.tsx', "'fixed z-[90]'")).toBe('over the nav');
-    expect(verdictOf('src/app/creators/[username]/ProfileActions.tsx', 'fixed inset-0 z-[80]')).toBe('over the nav');
+    expect(verdictOf('src/app/creators/[username]/CreatorProfileEditSheet.tsx', 'fixed inset-0 z-[80]')).toBe('over the nav');
     expect(verdictOf('src/components/GenerationNotifications.tsx', 'pointer-events-none fixed')).toBe('over the nav');
     expect(verdictOf('src/app/showcase/[id]/ShowcaseDetailBody.tsx', 'fixed inset-0 z-0 pointer-events-none')).toBe('takes no pointer');
     expect(verdictOf('src/components/NavigationProgress.tsx', 'fixed inset-x-0 top-0')).toBe('over the nav');

@@ -1,7 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
 
+import { loadBrowserSupabase } from '@/lib/browser-session';
+import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
 
 import {
   SEARCH_TYPEAHEAD_ANNOUNCE_PAUSE_MS,
@@ -33,11 +36,11 @@ import {
 } from '../../../ugc-mobile/lib/public-search-policy/search-typeahead';
 import type { SearchEntity } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
 
-// The browser's Supabase client, loaded when a request first needs the
-// session, as the shell's other readers load it (AuthProvider,
+// The browser's Supabase client (`loadBrowserSupabase`) is loaded when a request
+// first needs the session, as the shell's other readers load it (AuthProvider,
 // useUnreadAlertsCount): the top bar's search field is on every page, and a
-// static import would put the client in every page's first bundle.
-const loadSupabase = () => import('@/lib/supabase').then((module) => module.supabase);
+// static import would put the client in every page's first bundle. A browser
+// with no session cookie never loads it here.
 
 // An answer kept so that deleting a letter redraws the list it had without
 // asking again. Only real answers are kept (a failure is asked about again the
@@ -165,20 +168,27 @@ export function useSearchTypeahead<Row extends SearchTypeaheadRow = SearchTypeah
       let response: SearchSuggestResponse | null = null;
       const epoch = viewerEpoch.current;
       try {
-        const supabase = await loadSupabase();
+        // A browser with no session cookie has no session (@supabase/ssr keeps it there): a
+        // visitor's request is sent bare, and the client is not loaded for it. What it keeps is
+        // kept for this focus of the box alone (above), which a sign-in elsewhere ends.
+        let session: Session | null = null;
+        // A client that did not load asks as a visitor, as the search page then does.
+        const supabase = hasSupabaseAuthCookie() ? await loadBrowserSupabase().catch(() => null) : null;
         if (unmounted.current) return;
-        if (!stopWatchingSession.current) {
-          // An answer is one account's, and goes when the account does.
-          // Watched from the first request on; before it nothing is kept.
-          const { data } = supabase.auth.onAuthStateChange((event) => {
-            if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT' && event !== 'USER_UPDATED') return;
-            viewerEpoch.current += 1;
-            kept.current.clear();
-            setAnswer(null);
-          });
-          stopWatchingSession.current = () => data.subscription.unsubscribe();
+        if (supabase) {
+          if (!stopWatchingSession.current) {
+            // An answer is one account's, and goes when the account does.
+            // Watched from the first request on; before it nothing is kept.
+            const { data } = supabase.auth.onAuthStateChange((event) => {
+              if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT' && event !== 'USER_UPDATED') return;
+              viewerEpoch.current += 1;
+              kept.current.clear();
+              setAnswer(null);
+            });
+            stopWatchingSession.current = () => data.subscription.unsubscribe();
+          }
+          ({ data: { session } } = await supabase.auth.getSession());
         }
-        const { data: { session } } = await supabase.auth.getSession();
         if (controller.signal.aborted) return;
         // Asked for every name the product keeps (`catalog=1`): this box opens the creator for a
         // catalog model nobody has posted with, and searches the query a row carries.

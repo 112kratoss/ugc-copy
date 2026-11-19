@@ -1,13 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { Activity, type HTMLAttributes, type ReactNode, type Ref } from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { Activity, StrictMode, type HTMLAttributes, type ReactNode, type Ref } from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProfileActions } from '@/app/creators/[username]/ProfileActions';
+import {
+  forgetCreatorProfileEditSheetForTests,
+  useLoadedCreatorProfileEditSheet,
+} from '@/app/creators/[username]/creator-profile-edit-sheet-loader';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
+import { setBrowserSupabaseImportForTests } from '@/lib/browser-session';
 import { clearOwnerPageEditsForTests, useOwnerCreatorProfile } from '@/lib/owner-page-edits';
 import type { EditableCreatorProfile } from '@/lib/profile';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
@@ -29,6 +34,31 @@ const mockReplace = routerMock.replace;
 const supabaseMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
 }));
+type ViewerSession = { access_token: string; user: { id: string } };
+// Who is looking, as the page's auth provider says (`useAuth`), and whether the browser holds a
+// session cookie: the provider is still checking one while `isLoading`.
+const authMocks = vi.hoisted(() => ({
+  state: { session: null, isLoading: false, cookie: false } as {
+    session: ViewerSession | null;
+    isLoading: boolean;
+    cookie: boolean;
+  },
+}));
+
+/**
+ * The viewer: the provider's session, and the session the client reads at a press, which is the
+ * same one unless a test says otherwise.
+ */
+function viewAs(result: { data: { session: ViewerSession | null } }) {
+  authMocks.state = { session: result.data.session, isLoading: false, cookie: result.data.session !== null };
+  supabaseMocks.getSession.mockResolvedValue(result);
+}
+
+/** A session cookie the provider has not finished checking. */
+function stillChecking() {
+  authMocks.state = { session: null, isLoading: true, cookie: true };
+  supabaseMocks.getSession.mockReturnValue(new Promise(() => undefined));
+}
 
 let followState = false;
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -58,22 +88,27 @@ vi.mock('framer-motion', () => ({
 }));
 
 // The editor, as far as the dialog meets it: the profile it was handed, one
-// field, and a save.
+// field, and a save. A case can have it fail to draw, which its boundary meets as it meets a
+// rejected import of its code (a module mock whose factory throws is not steady under vitest).
+const editorDraw = vi.hoisted(() => ({ fails: false }));
 vi.mock('@/app/creations/CreatorProfileCard', () => ({
   default: ({ initialProfile, onProfileSaved }: {
     initialProfile: EditableCreatorProfile;
     onProfileSaved?: (profile: EditableCreatorProfile) => void;
-  }) => (
-    <form data-testid="creator-profile-card" data-display-name={initialProfile.displayName}>
-      <label>
-        Bio
-        <input name="bio" defaultValue={initialProfile.bio} />
-      </label>
-      <button type="button" onClick={() => onProfileSaved?.({ ...initialProfile, bio: 'Saved bio' })}>
-        Save changes
-      </button>
-    </form>
-  ),
+  }) => {
+    if (editorDraw.fails) throw new Error('Loading chunk app_creators_username_CreatorProfileEditSheet_tsx failed.');
+    return (
+      <form data-testid="creator-profile-card" data-display-name={initialProfile.displayName}>
+        <label>
+          Bio
+          <input name="bio" defaultValue={initialProfile.bio} />
+        </label>
+        <button type="button" onClick={() => onProfileSaved?.({ ...initialProfile, bio: 'Saved bio' })}>
+          Save changes
+        </button>
+      </form>
+    );
+  },
 }));
 
 vi.mock('@/lib/supabase', () => ({
@@ -82,6 +117,19 @@ vi.mock('@/lib/supabase', () => ({
       getSession: supabaseMocks.getSession,
     },
   },
+}));
+
+vi.mock('@/components/AuthProvider', () => ({
+  useAuth: () => ({
+    session: authMocks.state.session,
+    user: authMocks.state.session?.user ?? null,
+    isLoading: authMocks.state.isLoading,
+  }),
+}));
+
+vi.mock('@/components/useSupabaseAuthCookieHint', () => ({
+  useSupabaseAuthCookieHint: () => authMocks.state.cookie,
+  useHasHydratedSupabaseAuthCookieHint: () => true,
 }));
 
 const profile: EditableCreatorProfile = {
@@ -106,6 +154,11 @@ describe('ProfileActions', () => {
     routerMock.refresh.mockReset();
     resetFeedbackState();
     clearShowcaseClientCacheForTests();
+    // A visitor, until a case says who is looking; and no editor or client loaded yet.
+    authMocks.state = { session: null, isLoading: false, cookie: false };
+    supabaseMocks.getSession.mockReset();
+    forgetCreatorProfileEditSheetForTests();
+    setBrowserSupabaseImportForTests(null);
     followState = false;
     fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.startsWith('/api/profile/follow?')) {
@@ -137,7 +190,7 @@ describe('ProfileActions', () => {
   });
 
   it('toggles follow state for a logged-in non-owner', async () => {
-    supabaseMocks.getSession.mockResolvedValue({
+    viewAs({
       data: {
         session: {
           access_token: 'viewer-token',
@@ -166,7 +219,7 @@ describe('ProfileActions', () => {
 
   it('toggles from following to follow for a logged-in non-owner', async () => {
     followState = true;
-    supabaseMocks.getSession.mockResolvedValue({
+    viewAs({
       data: {
         session: {
           access_token: 'viewer-token',
@@ -208,7 +261,7 @@ describe('ProfileActions', () => {
 
       throw new Error(`Unexpected fetch: ${url}`);
     });
-    supabaseMocks.getSession.mockResolvedValue({
+    viewAs({
       data: {
         session: {
           access_token: 'viewer-token',
@@ -247,7 +300,7 @@ describe('ProfileActions', () => {
         json: async () => ({ error: 'Insert failed' }),
       };
     });
-    supabaseMocks.getSession.mockResolvedValue({
+    viewAs({
       data: {
         session: {
           access_token: 'viewer-token',
@@ -285,7 +338,7 @@ describe('ProfileActions', () => {
         credits: profile.credits,
       }),
     })));
-    supabaseMocks.getSession.mockResolvedValue({
+    viewAs({
       data: {
         session: {
           access_token: 'owner-token',
@@ -301,7 +354,7 @@ describe('ProfileActions', () => {
   });
 
   it('redirects signed-out visitors to login when they click follow', async () => {
-    supabaseMocks.getSession.mockResolvedValue({
+    viewAs({
       data: {
         session: null,
       },
@@ -318,6 +371,52 @@ describe('ProfileActions', () => {
       );
     });
     expect(fetchMock).not.toHaveBeenCalledWith('/api/profile/follow', expect.anything());
+  });
+
+  // Who is looking is the page's auth provider's to say: it loads the Supabase client only for a
+  // browser with a session cookie, so a visitor's creator page never fetched it to ask.
+  it('knows a visitor from the page auth, and never loads the client for them', async () => {
+    render(<ProfileActions profile={profile} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^follow$/i }));
+
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith(`/login?returnUrl=${encodeURIComponent('/creators/creator-name')}`);
+    });
+    expect(supabaseMocks.getSession).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Development's StrictMode runs the read's effect twice: the run it takes down at once asks
+  // nothing, as when the page's own session read made it wait.
+  it('reads whether the viewer follows once under StrictMode', async () => {
+    viewAs({ data: { session: { access_token: 'viewer-token', user: { id: 'viewer-1' } } } });
+    render(<StrictMode><ProfileActions profile={profile} /></StrictMode>);
+
+    await screen.findByRole('button', { name: /^follow$/i });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/profile/follow?'))).toHaveLength(1);
+  });
+
+  it('reads whether the viewer follows once, and not again for a renewed token', async () => {
+    viewAs({ data: { session: { access_token: 'viewer-token', user: { id: 'viewer-1' } } } });
+    const followReads = () => fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/profile/follow?'));
+    const { rerender } = render(<ProfileActions profile={profile} />);
+
+    await screen.findByRole('button', { name: /^follow$/i });
+    await waitFor(() => expect(followReads()).toHaveLength(1));
+
+    // Supabase renews the token about hourly; the provider hands the page the new one.
+    authMocks.state = { ...authMocks.state, session: { access_token: 'renewed-token', user: { id: 'viewer-1' } } };
+    rerender(<ProfileActions profile={profile} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(followReads()).toHaveLength(1);
   });
 
   // Report user and Block user, behind a ⋯ as on the app's creator screen. The
@@ -364,7 +463,7 @@ describe('ProfileActions', () => {
     const keptExplorePosts = () => readShowcaseClientSnapshot(exploreKey)?.feed.items.map((item) => item.id);
 
     it('offers a visitor Report user and Block user, and nothing about a feed', async () => {
-      supabaseMocks.getSession.mockResolvedValue(viewerSession);
+      viewAs(viewerSession);
       render(<ProfileActions profile={profile} />);
 
       await openMenu();
@@ -383,7 +482,7 @@ describe('ProfileActions', () => {
 
     it('is not on your own page', async () => {
       vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, json: async () => ({}) })));
-      supabaseMocks.getSession.mockResolvedValue({
+      viewAs({
         data: { session: { access_token: 'owner-token', user: { id: profile.id } } },
       });
       render(<ProfileActions profile={profile} />);
@@ -393,7 +492,7 @@ describe('ProfileActions', () => {
     });
 
     it('waits to know whose page it is before it shows', () => {
-      supabaseMocks.getSession.mockReturnValue(new Promise(() => undefined));
+      stillChecking();
       render(<ProfileActions profile={profile} />);
 
       expect(screen.getByRole('button', { name: /share/i })).toBeInTheDocument();
@@ -402,7 +501,7 @@ describe('ProfileActions', () => {
 
     it('sends a signed-out visitor to sign in, and asks and sends nothing', async () => {
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-      supabaseMocks.getSession.mockResolvedValue({ data: { session: null } });
+      viewAs({ data: { session: null } });
       render(<ProfileActions profile={profile} />);
 
       await openMenu();
@@ -418,7 +517,7 @@ describe('ProfileActions', () => {
 
     it("reports the creator as the app's creator screen files it, and stays on the page", async () => {
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-      supabaseMocks.getSession.mockResolvedValue(viewerSession);
+      viewAs(viewerSession);
       answerModeration();
       render(<ProfileActions profile={profile} />);
 
@@ -445,7 +544,7 @@ describe('ProfileActions', () => {
 
     it('blocks the creator, says so, and leaves for Explore', async () => {
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-      supabaseMocks.getSession.mockResolvedValue(viewerSession);
+      viewAs(viewerSession);
       answerModeration();
       keepExploreSnapshot();
       render(<ProfileActions profile={profile} />);
@@ -467,7 +566,7 @@ describe('ProfileActions', () => {
 
     it('sends nothing and stays when the question is declined', async () => {
       vi.spyOn(window, 'confirm').mockReturnValue(false);
-      supabaseMocks.getSession.mockResolvedValue(viewerSession);
+      viewAs(viewerSession);
       answerModeration();
       keepExploreSnapshot();
       render(<ProfileActions profile={profile} />);
@@ -484,7 +583,7 @@ describe('ProfileActions', () => {
 
     it('stays on the page and says why when the block fails', async () => {
       vi.spyOn(window, 'confirm').mockReturnValue(true);
-      supabaseMocks.getSession.mockResolvedValue(viewerSession);
+      viewAs(viewerSession);
       answerModeration(false);
       keepExploreSnapshot();
       render(<ProfileActions profile={profile} />);
@@ -509,7 +608,7 @@ describe('ProfileActions', () => {
     };
 
     it('offers Report user alone: no Follow, no Share, no Block, and reads no follow state', async () => {
-      supabaseMocks.getSession.mockResolvedValue(viewerSession);
+      viewAs(viewerSession);
       render(<ProfileActions profile={profile} blockedByViewer />);
 
       fireEvent.click(screen.getByRole('button', { name: 'More actions for @creator-name' }));
@@ -525,7 +624,7 @@ describe('ProfileActions', () => {
 
     it('still reports them', async () => {
       vi.spyOn(window, 'confirm').mockReturnValue(true);
-      supabaseMocks.getSession.mockResolvedValue(viewerSession);
+      viewAs(viewerSession);
       fetchMock.mockImplementation(async () => ({ ok: true, status: 200, json: async () => ({ success: true }) }));
       render(<ProfileActions profile={profile} blockedByViewer />);
 
@@ -573,7 +672,56 @@ describe('ProfileActions', () => {
     };
 
     beforeEach(() => {
-      supabaseMocks.getSession.mockResolvedValue(ownerSession);
+      viewAs(ownerSession);
+    });
+
+    // The editor and framer-motion are code a visitor never needs: the owner's page loads them
+    // in its first idle moment, so the first press draws the dialog at once.
+    it("loads the editor's code ahead of the owner's press, and no one else's page asks for it", async () => {
+      function EditorCode() {
+        return <span data-testid="editor-code" data-loaded={String(useLoadedCreatorProfileEditSheet() !== null)} />;
+      }
+      answerProfileRead();
+      viewAs({ data: { session: { access_token: 'viewer-token', user: { id: 'viewer-1' } } } });
+      fetchMock.mockImplementation(async () => ({ ok: true, json: async () => ({ following: false }) }));
+      render(<><ProfileActions profile={profile} /><EditorCode /></>);
+      await screen.findByRole('button', { name: /^follow$/i });
+      // Past the idle wait (80 ms where the browser has no requestIdleCallback, as jsdom).
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      });
+      expect(screen.getByTestId('editor-code')).toHaveAttribute('data-loaded', 'false');
+      cleanup();
+
+      viewAs(ownerSession);
+      answerProfileRead();
+      render(<><ProfileActions profile={profile} /><EditorCode /></>);
+      expect(screen.getByTestId('editor-code')).toHaveAttribute('data-loaded', 'false');
+      await waitFor(() => expect(screen.getByTestId('editor-code')).toHaveAttribute('data-loaded', 'true'));
+
+      // Drawn in the render the press makes.
+      fireEvent.click(screen.getByRole('button', { name: 'Edit profile' }));
+      expect(screen.getByRole('dialog', { name: 'Edit profile' })).toBeInTheDocument();
+    });
+
+    it('draws the dialog once its code lands, for a press made before it had, and mounts it once', async () => {
+      answerProfileRead();
+      render(<ProfileActions profile={profile} />);
+      // The owner is known in the first render, before the idle moment that loads the editor.
+      const edit = screen.getByRole('button', { name: 'Edit profile' });
+
+      fireEvent.click(edit);
+
+      // On its way: the button says so, and nothing is drawn over the page yet.
+      expect(edit).toHaveAttribute('aria-busy', 'true');
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      const dialog = await screen.findByRole('dialog', { name: 'Edit profile' });
+      expect(edit).not.toHaveAttribute('aria-busy');
+      await waitFor(() => expect(dialog).toHaveFocus());
+      expect(await within(dialog).findByTestId('creator-profile-card')).toHaveAttribute('data-display-name', 'Private Name');
+      // The dialog the focus went to is still the one on the page: never drawn a second time.
+      expect(screen.getByRole('dialog', { name: 'Edit profile' })).toBe(dialog);
+      expect(dialog).toHaveFocus();
     });
 
     it('reads the private profile when Edit profile is pressed, not on the visit', async () => {
@@ -840,6 +988,167 @@ describe('ProfileActions', () => {
       expect(Number(/(?:^|\s)z-\[(\d+)\]/.exec(backdrop.className)?.[1])).toBeGreaterThan(bottomNavLayer);
       // h-12 and w-12: 3rem, 48px at the default text size.
       expect(within(dialog).getByRole('button', { name: 'Close' })).toHaveClass('h-12', 'w-12');
+    });
+
+    // Its code is loaded apart from the page's (a deploy can rotate the chunk names while the tab
+    // is open): a load that fails is kept from the page, which would otherwise give way to the
+    // creator page's error screen.
+    describe('when the editor does not load', () => {
+      const reload = vi.fn();
+      // Where Sentry's global handler hears an error (jsdom has no reportError of its own).
+      const reportError = vi.fn();
+
+      beforeEach(() => {
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        reload.mockReset();
+        reportError.mockReset();
+        vi.stubGlobal('reportError', reportError);
+        editorDraw.fails = true;
+      });
+
+      afterEach(() => {
+        editorDraw.fails = false;
+      });
+
+      it('closes it, says so under the buttons, and Try again reloads the page', async () => {
+        answerProfileRead();
+        render(<ProfileActions profile={profile} />);
+        const edit = screen.getByRole('button', { name: 'Edit profile' });
+
+        fireEvent.click(edit);
+
+        const said = await screen.findByRole('alert');
+        expect(said).toHaveTextContent('The profile editor did not load.');
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(edit).not.toHaveAttribute('aria-busy');
+        expect(edit).toHaveFocus();
+        expect(reportError).toHaveBeenCalledWith(expect.objectContaining({
+          message: 'Loading chunk app_creators_username_CreatorProfileEditSheet_tsx failed.',
+        }));
+
+        vi.stubGlobal('location', { reload });
+        fireEvent.click(within(said).getByRole('button', { name: 'Try again' }));
+        expect(reload).toHaveBeenCalledTimes(1);
+      });
+
+      // The way it fails in a browser: the import() of its chunk rejects, and React.lazy throws
+      // that to the boundary. In a production build no retry fetches the chunk again.
+      it('says so, with the reload, when the import() of its code rejects', async () => {
+        editorDraw.fails = false;
+        const chunkError = new Error('Loading chunk app_creators_username_CreatorProfileEditSheet_tsx failed.');
+        forgetCreatorProfileEditSheetForTests(() => Promise.reject(chunkError));
+        answerProfileRead();
+        render(<ProfileActions profile={profile} />);
+        const edit = screen.getByRole('button', { name: 'Edit profile' });
+
+        fireEvent.click(edit);
+
+        const said = await screen.findByRole('alert');
+        expect(said).toHaveTextContent('The profile editor did not load.');
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(edit).not.toHaveAttribute('aria-busy');
+        expect(reportError).toHaveBeenCalledWith(chunkError);
+        vi.stubGlobal('location', { reload });
+        fireEvent.click(within(said).getByRole('button', { name: 'Try again' }));
+        expect(reload).toHaveBeenCalledTimes(1);
+      });
+
+      // Its code arrived, but the client the private profile is read with did not: asked again in
+      // place the read would fail again, so the dialog closes rather than offer a Try again of its own.
+      it('closes, and offers the reload, when the client its read needs did not load', async () => {
+        editorDraw.fails = false;
+        setBrowserSupabaseImportForTests(() => Promise.reject(new Error('Loading chunk 1p-ooj54jv0t9 failed.')));
+        function EditorCode() {
+          return <span data-testid="editor-code" data-loaded={String(useLoadedCreatorProfileEditSheet() !== null)} />;
+        }
+        answerProfileRead();
+        render(<><ProfileActions profile={profile} /><EditorCode /></>);
+        const edit = screen.getByRole('button', { name: 'Edit profile' });
+        // The editor's code is in before the press, so the press draws the dialog at once.
+        await waitFor(() => expect(screen.getByTestId('editor-code')).toHaveAttribute('data-loaded', 'true'));
+
+        fireEvent.click(edit);
+        expect(screen.getByRole('dialog', { name: 'Edit profile' })).toBeInTheDocument();
+
+        const said = await screen.findByRole('alert');
+        expect(said).toHaveTextContent('This page did not finish loading.');
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(edit).toHaveFocus();
+        expect(profileReads()).toHaveLength(0);
+        expect(reportError).not.toHaveBeenCalled();
+        vi.stubGlobal('location', { reload });
+        fireEvent.click(within(said).getByRole('button', { name: 'Try again' }));
+        expect(reload).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  // The client a press reads the session with can fail to load, and a production build fetches it
+  // again only after a reload: the press does nothing it cannot finish, asks no sign-in of a viewer
+  // whose session is only unreadable, leaves nothing unhandled, and offers the reload.
+  describe('a press whose session cannot be read', () => {
+    const viewerSession = { data: { session: { access_token: 'viewer-token', user: { id: 'viewer-1' } } } };
+    let unhandled = vi.fn();
+
+    beforeEach(() => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+      viewAs(viewerSession);
+      setBrowserSupabaseImportForTests(() => Promise.reject(new Error('Loading chunk 1p-ooj54jv0t9 failed.')));
+    });
+
+    afterEach(() => {
+      process.off('unhandledRejection', unhandled);
+    });
+
+    it('is a Follow that changes nothing and offers the reload', async () => {
+      render(<ProfileActions profile={profile} />);
+      const follow = await screen.findByRole('button', { name: /^follow$/i });
+
+      fireEvent.click(follow);
+
+      const said = await screen.findByRole('alert');
+      expect(said).toHaveTextContent('This page did not finish loading.');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(mockPush).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalledWith('/api/profile/follow', expect.anything());
+      expect(screen.getByRole('button', { name: /^follow$/i })).toHaveAttribute('aria-pressed', 'false');
+      expect(unhandled).not.toHaveBeenCalled();
+
+      const reload = vi.fn();
+      vi.stubGlobal('location', { reload });
+      fireEvent.click(within(said).getByRole('button', { name: 'Try again' }));
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([['Report user'], ['Block user']])('is a %s that asks and sends nothing, and offers the reload', async (item) => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      render(<ProfileActions profile={profile} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'More actions for @creator-name' }));
+
+      fireEvent.click(screen.getByRole('menuitem', { name: new RegExp(item, 'i') }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('This page did not finish loading.');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/moderation/'))).toHaveLength(0);
+      expect(mockPush).not.toHaveBeenCalled();
+      expect(unhandled).not.toHaveBeenCalled();
+    });
+
+    it('offers the reload on the panel of a creator the viewer blocked too', async () => {
+      render(<ProfileActions profile={profile} blockedByViewer />);
+      fireEvent.click(screen.getByRole('button', { name: 'More actions for @creator-name' }));
+
+      fireEvent.click(screen.getByRole('menuitem', { name: /report user/i }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('This page did not finish loading.');
+      expect(unhandled).not.toHaveBeenCalled();
     });
   });
 });

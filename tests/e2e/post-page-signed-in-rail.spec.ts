@@ -207,8 +207,15 @@ async function answerApi(page: Page, reads: Array<string | null> = [], post: Dra
 
 type Frame = {
   path: string;
+  /** When the frame was drawn, in ms since the navigation began (not what tells it from the last). */
+  at: number;
   /** Comments' top from the rail's own top: what a row drawn late above it moves. */
   commentsOffset: number | null;
+  /**
+   * The HTML parser had not left the Comments panel when the frame was drawn: its header and first
+   * rows are in, its end, where the composer or the sign-in offer goes, is not yet (`RECORDER`).
+   */
+  commentsParsing: boolean;
   signInShown: boolean;
   reportUserShown: boolean;
   /** "Report post or recipe", which is everyone's but the post's creator's. */
@@ -254,6 +261,19 @@ const RECORDER = `(() => {
   let lastRemix = '';
   let lastRecipe = '';
   const shown = (element) => Boolean(element && element.getClientRects().length > 0);
+  // Chrome's HTML parser stops to let the page be drawn on a time budget, whether or not the whole
+  // document is in, so a frame can be drawn from a part it has not finished: #883's CI run of
+  // 2026-11-19 drew the Comments panel with its header and its loading row and not yet its end,
+  // where the composer or the sign-in offer goes, and the next frame with the offer. Nothing follows
+  // a part in the document until the parser has left it (.claude/rules/e2e.md), so such a frame is
+  // marked, and the rail's checks leave it out of what a frame must show.
+  const unfinished = (element) => {
+    if (!element || document.readyState !== 'loading') return false;
+    for (let node = element; node && node !== document.documentElement; node = node.parentNode) {
+      if (node.nextSibling) return false;
+    }
+    return true;
+  };
   // What a shown element reads: the text of what is shown of it, as one line.
   const reads = (element) => (shown(element) ? element.innerText.replace(/\\s+/g, ' ').trim() : null);
   function sample() {
@@ -306,6 +326,7 @@ const RECORDER = `(() => {
         commentsOffset: comments
           ? Math.round(comments.getBoundingClientRect().top - rail.getBoundingClientRect().top)
           : null,
+        commentsParsing: unfinished(comments),
         signInShown: shown(signIn),
         reportUserShown: shown(reportUser),
         reportPostShown: shown(reportPost),
@@ -321,6 +342,7 @@ const RECORDER = `(() => {
       const key = JSON.stringify(frame);
       if (key !== last) {
         last = key;
+        frame.at = Math.round(performance.now());
         frames.push(frame);
       }
     }
@@ -443,6 +465,18 @@ function expectOwnRecipeInEveryFrame(frames: RecipeFrame[]) {
   expect(frames.filter((frame) => RECIPE_OFFER.test(frame.text ?? '')), all).toEqual([]);
 }
 
+/** A frame at 60 Hz: how long the last frame recorded is taken to stay. */
+const FRAME_MS = 17;
+/** How long, in all, the Comments panel may be drawn with the parser inside it (`commentsParsing`). */
+const PARSER_INSIDE_COMMENTS_MS = 500;
+
+/** How long the frames drawn with the parser inside the Comments panel stayed on screen, in all. */
+function parserInsideComments(frames: Frame[]): number {
+  return frames.reduce((total, frame, index) => (
+    frame.commentsParsing ? total + (frames[index + 1]?.at ?? frame.at + FRAME_MS) - frame.at : total
+  ), 0);
+}
+
 /** Lets two frames pass, so what the page has committed has been drawn, and recorded. */
 async function twoFrames(page: Page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -480,10 +514,16 @@ function expectSteadyRail(frames: Frame[], reader: 'signed in' | 'signed out', r
   expect(frames.length, 'frames of the rail').toBeGreaterThan(0);
   // A frame painted from part of the page's HTML, before the rail's rows have streamed in, has no
   // Comments yet and shows none of the rows: CI's dev server sends the page in pieces and Chrome
-  // paints what it has (CI run of 2026-11-17, #838). What a frame must show is asked of the frames
-  // with Comments drawn; what no frame may show is asked of every frame.
-  const drawn = frames.filter((frame) => frame.commentsOffset !== null);
+  // paints what it has (CI run of 2026-11-17, #838). One painted with the parser inside the Comments
+  // panel has its header and not yet the composer's place at its end (`commentsParsing`, #883's CI
+  // run of 2026-11-19). What a frame must show is asked of the frames with Comments drawn whole;
+  // what no frame may show is asked of every frame.
+  const drawn = frames.filter((frame) => frame.commentsOffset !== null && !frame.commentsParsing);
   expect(drawn.length, all).toBeGreaterThan(0);
+  // The parser's stops are each on screen until the next frame: together they stay short, or the
+  // page held the panel half-drawn, a fault of its own this must not hide.
+  expect.soft(parserInsideComments(frames), `the Comments panel drawn with the parser inside it: ${all}`)
+    .toBeLessThan(PARSER_INSIDE_COMMENTS_MS);
   // A signed-in reader is never offered sign-in, and a signed-out one always is.
   expect(frames.filter((frame) => reader === 'signed in' && frame.signInShown), all).toEqual([]);
   expect(drawn.filter((frame) => reader === 'signed out' && !frame.signInShown), all).toEqual([]);

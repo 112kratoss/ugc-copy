@@ -43,6 +43,13 @@ vi.mock('next/form', () => ({
   ),
 }));
 vi.mock('@/lib/use-leave-guard', () => ({ holdForLeaveGuard: () => false }));
+// Whether the browser holds a session cookie: the Supabase client is loaded to read the session
+// only with one (browser-session.ts). There unless a case says it is a visitor's browser.
+const sessionCookie = vi.hoisted(() => ({ present: true }));
+vi.mock('@/lib/supabase-auth-cookie', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase-auth-cookie')>()),
+  hasSupabaseAuthCookie: () => sessionCookie.present,
+}));
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
@@ -154,6 +161,7 @@ describe('search page typeahead', () => {
     window.sessionStorage.clear();
     window.history.replaceState(null, '', '/search');
     pushMock.mockReset();
+    sessionCookie.present = true;
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
     sessionListeners.length = 0;
@@ -222,6 +230,19 @@ describe('search page typeahead', () => {
     expect((suggestFetchMock.mock.calls[0][1] as RequestInit).headers).toEqual({ Authorization: 'Bearer token-1' });
     // A handle on Top is not asked about: the list there offers no creator
     // (below, "asks nothing for a handle on Top"); on Posts it keeps its @.
+  });
+
+  // A visitor's browser holds no session cookie, so it has no session: asked bare, without the
+  // Supabase client, which neither this box nor the search page brings with it.
+  it('asks for a visitor without loading the Supabase client, and keeps no watch on a session', async () => {
+    sessionCookie.present = false;
+    render(<SearchClient initialQuery="" initialType="top" />);
+    type('Lum');
+    await list();
+    expect(suggestRequests()).toEqual(['/api/search/suggest?q=Lum&catalog=1']);
+    expect((suggestFetchMock.mock.calls[0][1] as RequestInit).headers).toBeUndefined();
+    expect(getSessionMock).not.toHaveBeenCalled();
+    expect(sessionListeners).toHaveLength(0);
   });
 
   it('asks nothing while the box does not have the focus, as on arrival from a shared link', async () => {

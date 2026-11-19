@@ -57,9 +57,13 @@ type AuthListener = (event: string, session?: { user?: { id: string; is_anonymou
 const authListeners: AuthListener[] = [];
 // The account the session cookie names (a hint the kept searches and the recent ones read).
 const { cookieUserMock } = vi.hoisted(() => ({ cookieUserMock: vi.fn<() => string | null>(() => null) }));
+// Whether the browser holds a session cookie: the page loads the Supabase client to read the
+// session only with one (browser-session.ts). There unless a case says it is a visitor's browser.
+const sessionCookie = vi.hoisted(() => ({ present: true }));
 vi.mock('@/lib/supabase-auth-cookie', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase-auth-cookie')>()),
   readSupabaseAuthCookieUserId: () => cookieUserMock(),
+  hasSupabaseAuthCookie: () => sessionCookie.present,
 }));
 const KEPT_KEY = 'magicbooklet:search-kept-pages:v2';
 
@@ -199,6 +203,7 @@ describe('SearchClient', () => {
   beforeEach(() => {
     // What a search left behind for Back (search-kept-pages.ts): each test starts with none.
     window.sessionStorage.clear();
+    sessionCookie.present = true;
     cookieUserMock.mockReset();
     cookieUserMock.mockReturnValue(null);
     replaceMock.mockReset();
@@ -401,6 +406,46 @@ describe('SearchClient', () => {
     act(() => { for (const listener of [...authListeners]) listener('SIGNED_IN', { user: { id: 'account-a', is_anonymous: false } }); });
     expect(window.sessionStorage.getItem(KEPT_KEY)).toContain('Kept lantern');
     act(() => { for (const listener of [...authListeners]) listener('SIGNED_IN', { user: { id: 'account-c', is_anonymous: false } }); });
+    expect(window.sessionStorage.getItem(KEPT_KEY)).toBeNull();
+  });
+
+  // A visitor's browser holds no session cookie, so it has no session (@supabase/ssr keeps it
+  // there): the page searches at once, bare, and loads no Supabase client to say so. Until
+  // 2026-11-19 it came with the page, 53 KB on the wire, and every search waited on its read.
+  it('searches for a visitor without loading the Supabase client or watching a session', async () => {
+    sessionCookie.present = false;
+    render(<SearchClient initialQuery="luna" initialType="top" />);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    expect((fetchMock.mock.calls[0] as [string, RequestInit])[1].headers).toBeUndefined();
+    // The starter, asked once the answer is in, is asked bare too.
+    await waitFor(() => expect(starterFetchMock).toHaveBeenCalledTimes(1));
+    expect((starterFetchMock.mock.calls[0] as [string, RequestInit])[1].headers).toBeUndefined();
+    expect(getSessionMock).not.toHaveBeenCalled();
+    expect(authListeners).toHaveLength(0);
+  });
+
+  it('watches the session from a sign-in in another tab, and forgets what it kept for the visitor', async () => {
+    sessionCookie.present = false;
+    fetchMock.mockResolvedValue(jsonResponse(searchResponse({ type: 'posts', posts: { items: [post('post-1', 'Visitor lantern', 1)], nextCursor: null } })));
+    window.history.replaceState({ __NA: true }, '', '/search?q=lantern&type=posts');
+    render(<SearchClient initialQuery="lantern" initialType="posts" />);
+    await screen.findByText('Visitor lantern');
+    fireEvent.click(screen.getByRole('link', { name: /Open post Visitor lantern/ }));
+    expect(window.sessionStorage.getItem(KEPT_KEY)).toContain('Visitor lantern');
+    expect(authListeners).toHaveLength(0);
+
+    // The cookie is there when this tab takes the focus again; supabase-js names the session it
+    // finds as the watch's first word (it said SIGNED_IN to a page that had loaded it all along).
+    sessionCookie.present = true;
+    cookieUserMock.mockReturnValue('account-b');
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-b', user: { id: 'account-b', is_anonymous: false } } } });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(authListeners.length).toBeGreaterThan(0));
+    act(() => { for (const listener of [...authListeners]) listener('INITIAL_SESSION', { user: { id: 'account-b', is_anonymous: false } }); });
+
     expect(window.sessionStorage.getItem(KEPT_KEY)).toBeNull();
   });
 
@@ -1641,6 +1686,7 @@ describe('SearchClient and the search log (search-open-log.ts)', () => {
   beforeEach(() => {
     window.sessionStorage.clear();
     window.localStorage.clear();
+    sessionCookie.present = true;
     cookieUserMock.mockReset();
     cookieUserMock.mockReturnValue(null);
     getSessionMock.mockReset();

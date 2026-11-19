@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import creditPacksContract from '../../contracts/credit-packs-v1.json';
@@ -32,6 +32,24 @@ vi.mock('next/headers', () => ({
 vi.mock('@/lib/referral-route-service', () => ({
   loadReferralProgramTerms: () => pageMocks.loadReferralProgramTerms(),
 }));
+
+// The browser's session cookie, which @supabase/ssr keeps the session in: there whenever a session
+// is, unless a case says otherwise. Read with no argument in the browser (the page loads the
+// Supabase client only with one); the server's read of a request's header is the real one.
+const cookieState = vi.hoisted(() => ({ present: null as boolean | null }));
+vi.mock('@/lib/supabase-auth-cookie', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/lib/supabase-auth-cookie')>();
+  return {
+    ...original,
+    hasSupabaseAuthCookie: (...args: Parameters<typeof original.hasSupabaseAuthCookie>) => (
+      args.length > 0 ? original.hasSupabaseAuthCookie(...args) : cookieState.present ?? sessionState.session !== null
+    ),
+  };
+});
+
+beforeEach(() => {
+  cookieState.present = null;
+});
 
 vi.mock('@/lib/supabase', () => ({
   supabase: {
@@ -359,12 +377,28 @@ describe('pricing page balance and credit history link', () => {
 
     it('takes the card away when the cookie held no session', async () => {
       sessionState.session = null;
+      cookieState.present = true;
       const { PricingClient } = await import('@/app/pricing/PricingClient');
       render(<PricingClient initialCountryCode="IN" sessionCookieHint />);
       expect(screen.getByText('Available balance')).toBeInTheDocument();
 
       await waitFor(() => expect(screen.queryByText('Available balance')).toBeNull());
       expect(screen.queryByRole('link', { name: 'Credit history' })).toBeNull();
+      expect(profileState.reads).toEqual([]);
+    });
+
+    // The client the session is read with did not load (browser-session.ts): that is no sign of
+    // being signed out, so the card stays, saying the balance did not load; a press says why.
+    it('keeps the card, saying the balance did not load, when the client did not load', async () => {
+      const { PricingClient } = await import('@/app/pricing/PricingClient');
+      const { setBrowserSupabaseImportForTests } = await import('@/lib/browser-session');
+      setBrowserSupabaseImportForTests(() => Promise.reject(new Error('Loading chunk 1p-ooj54jv0t9 failed.')));
+      render(<PricingClient initialCountryCode="IN" sessionCookieHint />);
+
+      expect(await screen.findByText('Balance did not load')).toBeInTheDocument();
+      expect(screen.getByText('Available balance')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Credit history' })).toHaveAttribute('href', '/credits');
+      expect(screen.queryByText('Balance loading…')).toBeNull();
       expect(profileState.reads).toEqual([]);
     });
   });
@@ -717,6 +751,186 @@ describe('pricing page checkout', () => {
       expect(routerMock.push).toHaveBeenCalledWith('/login?redirect=/pricing');
     });
     expect(requestsTo('/api/razorpay/order')).toHaveLength(0);
+  });
+
+  it('sends a buyer whose cookie holds no session any more to sign in, reading it with the client', async () => {
+    sessionState.session = null;
+    cookieState.present = true;
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    const { supabase } = await import('@/lib/supabase');
+    vi.mocked(supabase.auth.getSession).mockClear();
+    render(<PricingClient initialCountryCode="IN" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get 500 Credits' }));
+
+    await waitFor(() => {
+      expect(routerMock.push).toHaveBeenCalledWith('/login?redirect=/pricing');
+    });
+    expect(supabase.auth.getSession).toHaveBeenCalled();
+    expect(requestsTo('/api/razorpay/order')).toHaveLength(0);
+  });
+
+  // The client that reads the buyer's session no longer comes with the page. Its code can fail to
+  // load (offline, a deploy that rotated the chunk names), and in a production build no retry
+  // fetches it again: the press orders nothing and offers the reload that can.
+  it('orders nothing when the client did not load, says so, and offers a reload, press after press', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    const { setBrowserSupabaseImportForTests } = await import('@/lib/browser-session');
+    const load = vi.fn(() => Promise.reject(new Error('Loading chunk 1p-ooj54jv0t9 failed.')));
+    setBrowserSupabaseImportForTests(load);
+    routerMock.push.mockClear();
+    render(<PricingClient initialCountryCode="IN" />);
+    const pack = screen.getByRole('button', { name: 'Get 500 Credits' });
+
+    fireEvent.click(pack);
+
+    const said = await screen.findByRole('alert');
+    expect(said).toHaveTextContent('Checkout did not load. Try again reloads the page.');
+    expect(requestsTo('/api/razorpay/order')).toHaveLength(0);
+    expect(sheet.opened).toBe(0);
+    expect(routerMock.push).not.toHaveBeenCalled();
+    await waitFor(() => expect(pack).toBeEnabled());
+
+    // The next press asks again and, the client still missing, says the same and orders nothing.
+    const loadsBefore = load.mock.calls.length;
+    fireEvent.click(pack);
+    await waitFor(() => expect(load.mock.calls.length).toBeGreaterThan(loadsBefore));
+    await waitFor(() => expect(pack).toBeEnabled());
+    expect(screen.getByRole('alert')).toHaveTextContent('Checkout did not load. Try again reloads the page.');
+    expect(requestsTo('/api/razorpay/order')).toHaveLength(0);
+
+    const reload = vi.fn();
+    vi.stubGlobal('location', { reload });
+    fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Try again' }));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  // While the client's code is on its way the press is under way: the pack says so, and a second
+  // press, on it or on another pack, is the same press (review of #883).
+  it('makes one order and opens one sheet for presses made while the client is still loading', async () => {
+    const { PricingClient } = await import('@/app/pricing/PricingClient');
+    const browserSession = await import('@/lib/browser-session');
+    const client = await import('@/lib/supabase');
+    let deliver: () => void = () => undefined;
+    browserSession.setBrowserSupabaseImportForTests(() => new Promise((resolve) => {
+      deliver = () => resolve(client);
+    }));
+    render(<PricingClient initialCountryCode="IN" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get 500 Credits' }));
+
+    // Under way from the press on, before the session has been read.
+    expect(screen.getByRole('button', { name: /Processing/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /Processing/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Get 2,000 Credits' }));
+
+    await act(async () => {
+      deliver();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(sheet.opened).toBe(1));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(requestsTo('/api/razorpay/order')).toHaveLength(1);
+    expect(JSON.parse(String((requestsTo('/api/razorpay/order')[0][1] as RequestInit).body))).toMatchObject({ planId: 'starter' });
+    expect(sheet.opened).toBe(1);
+  });
+
+  // checkout.js, with the hidden Razorpay frame it opens (about 790 KB in 55 requests), was
+  // fetched on every view of the page, a visitor's too (2026-11-19): now when a buyer reaches for
+  // a pack, and in any case by the press, which waits for it before it orders.
+  describe('checkout.js', () => {
+    const checkoutTags = () => document.querySelectorAll('script#razorpay-checkout-js');
+
+    beforeEach(() => {
+      vi.stubGlobal('Razorpay', undefined);
+    });
+
+    afterEach(() => {
+      checkoutTags().forEach((tag) => tag.remove());
+    });
+
+    it('is not fetched as the page shows, and is once a buyer reaches for a pack', async () => {
+      const { PricingClient } = await import('@/app/pricing/PricingClient');
+      render(<PricingClient initialCountryCode="IN" />);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(checkoutTags()).toHaveLength(0);
+
+      fireEvent.pointerEnter(screen.getByRole('button', { name: 'Get 500 Credits' }));
+      expect(checkoutTags()).toHaveLength(1);
+      // Another pack, from the keyboard: the fetch already under way serves it.
+      fireEvent.focus(screen.getByRole('button', { name: 'Get 2,000 Credits' }));
+      expect(checkoutTags()).toHaveLength(1);
+      expect(sheet.opened).toBe(0);
+      expect(requestsTo('/api/razorpay/order')).toHaveLength(0);
+    });
+
+    it('is fetched by a press nothing announced, which orders only once it has arrived', async () => {
+      const { PricingClient } = await import('@/app/pricing/PricingClient');
+      render(<PricingClient initialCountryCode="IN" />);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Get 500 Credits' }));
+
+      const tag = await waitFor(() => {
+        const element = document.getElementById('razorpay-checkout-js');
+        expect(element).not.toBeNull();
+        return element!;
+      });
+      expect(screen.getByRole('button', { name: /Processing/ })).toBeDisabled();
+      expect(requestsTo('/api/razorpay/order')).toHaveLength(0);
+
+      vi.stubGlobal('Razorpay', RazorpayStub);
+      act(() => {
+        tag.dispatchEvent(new Event('load'));
+      });
+      await waitFor(() => expect(sheet.opened).toBe(1));
+      expect(requestsTo('/api/razorpay/order')).toHaveLength(1);
+      expect(checkoutTags()).toHaveLength(1);
+    });
+
+    it('serves a press from the fetch the pointer started, with no second one', async () => {
+      const { PricingClient } = await import('@/app/pricing/PricingClient');
+      render(<PricingClient initialCountryCode="IN" />);
+      const pack = screen.getByRole('button', { name: 'Get 500 Credits' });
+
+      fireEvent.pointerEnter(pack);
+      const tag = document.getElementById('razorpay-checkout-js');
+      expect(tag).not.toBeNull();
+      fireEvent.click(pack);
+      await waitFor(() => expect(screen.getByRole('button', { name: /Processing/ })).toBeDisabled());
+      expect(checkoutTags()).toHaveLength(1);
+      expect(document.getElementById('razorpay-checkout-js')).toBe(tag);
+
+      vi.stubGlobal('Razorpay', RazorpayStub);
+      act(() => {
+        tag!.dispatchEvent(new Event('load'));
+      });
+      await waitFor(() => expect(sheet.opened).toBe(1));
+      expect(requestsTo('/api/razorpay/order')).toHaveLength(1);
+    });
+
+    it('is never fetched for a visitor, whose press goes to sign in without loading the Supabase client', async () => {
+      sessionState.session = null;
+      const { PricingClient } = await import('@/app/pricing/PricingClient');
+      const { supabase } = await import('@/lib/supabase');
+      vi.mocked(supabase.auth.getSession).mockClear();
+      render(<PricingClient initialCountryCode="IN" />);
+      const pack = screen.getByRole('button', { name: 'Get 500 Credits' });
+
+      fireEvent.pointerEnter(pack);
+      fireEvent.focus(pack);
+      fireEvent.click(pack);
+
+      await waitFor(() => {
+        expect(routerMock.push).toHaveBeenCalledWith('/login?redirect=/pricing');
+      });
+      expect(checkoutTags()).toHaveLength(0);
+      expect(supabase.auth.getSession).not.toHaveBeenCalled();
+    });
   });
 });
 

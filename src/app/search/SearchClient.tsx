@@ -49,7 +49,13 @@ import { formatRecipeCreditPrice } from '@/lib/showcase-asset-labels';
 import { readFollowChanges } from '@/lib/follow-changes';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
-import { supabase } from '@/lib/supabase';
+import {
+  loadBrowserSupabase,
+  preloadBrowserSupabaseForSession,
+  readBrowserSession,
+  whenBrowserSessionCookie,
+} from '@/lib/browser-session';
+import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
 
 import {
   SEARCH_CORRECTED_AGAIN_LABEL,
@@ -152,6 +158,12 @@ import { forgetKeptSearchPages, keepSearchPage, readKeptSearchPage, type KeptSea
 import type { Session } from '@supabase/supabase-js';
 
 const SEARCH_DEBOUNCE_MS = 300;
+
+// The page reads the session with the Supabase client, which it no longer brings with it for every
+// visitor (`browser-session.ts`): asked for as this code loads in a browser with a session cookie,
+// so a signed-in search waits for it no longer than before. A visitor's browser fetches nothing,
+// and its searches go out without asking anything first.
+preloadBrowserSupabaseForSession();
 
 const NO_FOLLOW_CHANGES: Readonly<Record<string, boolean>> = {};
 
@@ -730,7 +742,9 @@ export default function SearchClient({
       if (searchRelatedSearchesApply({ type: request.type, firstPage: !cursor })) params.set(SEARCH_RELATED_SEARCHES_PARAM, '1');
       for (const [name, value] of Object.entries(searchBlendParams(askBlend))) params.set(name, value);
       for (const [name, value] of Object.entries(searchEntryParams(searchEntry.current))) params.set(name, value);
-      const { data: { session } } = await supabase.auth.getSession();
+      // A client that did not load (in a build it stays unloaded until a reload: browser-session.ts)
+      // leaves the search a visitor's: still answered, without the account's own blocks and follows.
+      const session = await readBrowserSession().catch(() => null);
       const registered = Boolean(session?.user) && session?.user?.is_anonymous !== true;
       setCanFollow(registered);
       const viewerId = session?.user?.id ?? null;
@@ -890,30 +904,47 @@ export default function SearchClient({
     // Whose session this is: read once as the page mounts (a page Back has
     // restored makes no request that would read it), then kept by the events.
     let disposed = false;
+    let stopWatching: (() => void) | null = null;
     const learnViewer = (session: Session | null) => {
       viewer.current = session?.user?.id ?? null;
       setViewerId(viewer.current);
       setCanFollow(Boolean(session?.user) && session?.user?.is_anonymous !== true);
     };
-    void supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!disposed && viewer.current === undefined) learnViewer(session);
-    }).catch(() => {});
-    const { data } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') setHistory(clearSearchHistory());
-      // What another account's searches showed is not drawn for this one.
-      // supabase-js says SIGNED_IN again each time the tab comes back into
-      // view: only a change of account forgets them.
-      const next = session?.user?.id ?? null;
-      if (event === 'SIGNED_OUT' || (event === 'SIGNED_IN' && viewer.current !== undefined && next !== viewer.current)) {
-        forgetKeptSearchPages();
-      }
-      if (event === 'SIGNED_OUT' || event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') {
-        learnViewer(event === 'SIGNED_OUT' ? null : session ?? null);
-      }
-    });
+    const watchSession = () => {
+      void loadBrowserSupabase().then((supabase) => {
+        if (disposed) return;
+        void supabase.auth.getSession().then(({ data: { session } }) => {
+          if (!disposed && viewer.current === undefined) learnViewer(session);
+        }).catch(() => {});
+        const { data } = supabase.auth.onAuthStateChange((event, session) => {
+          if (event === 'SIGNED_OUT') setHistory(clearSearchHistory());
+          // What another account's searches showed is not drawn for this one.
+          // supabase-js says SIGNED_IN again each time the tab comes back into
+          // view: only a change of account forgets them. A session first
+          // watched after the page knew it had none (a sign-in in another tab,
+          // below) is named as INITIAL_SESSION, and is a change all the same.
+          const next = session?.user?.id ?? null;
+          const namesAccount = event === 'SIGNED_IN' || event === 'INITIAL_SESSION';
+          if (event === 'SIGNED_OUT' || (namesAccount && viewer.current !== undefined && next !== viewer.current)) {
+            forgetKeptSearchPages();
+          }
+          if (event === 'SIGNED_OUT' || event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') {
+            learnViewer(event === 'SIGNED_OUT' ? null : session ?? null);
+          }
+        });
+        stopWatching = () => data.subscription.unsubscribe();
+      }).catch(() => {});
+    };
+    // No session cookie, so no session (@supabase/ssr keeps it there): nobody
+    // is signed in, and the client is not loaded to say so. A sign-in in
+    // another tab writes one, looked for as this tab comes back into view, as
+    // supabase-js looked; the session is watched from then on.
+    if (!hasSupabaseAuthCookie()) learnViewer(null);
+    const stopLookingForCookie = whenBrowserSessionCookie(watchSession);
     return () => {
       disposed = true;
-      data.subscription.unsubscribe();
+      stopWatching?.();
+      stopLookingForCookie();
     };
   }, []);
 
@@ -1363,7 +1394,7 @@ export default function SearchClient({
         // search, left out of the search log (PUBLIC_SEARCH_PROBE_PARAM).
         const params = new URLSearchParams({ q: normalizedQuery, type: 'top', [PUBLIC_SEARCH_PROBE_PARAM]: '1' });
         for (const [name, value] of Object.entries(publicSearchFilterParams(NO_PUBLIC_SEARCH_FILTERS, readExact))) params.set(name, value);
-        const { data: { session } } = await supabase.auth.getSession();
+        const session = await readBrowserSession().catch(() => null);
         const response = await fetch(`/api/search?${params.toString()}`, {
           cache: 'no-store',
           headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,

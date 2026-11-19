@@ -55,6 +55,13 @@ vi.mock('next/form', () => ({
   },
 }));
 vi.mock('@/lib/use-leave-guard', () => ({ holdForLeaveGuard: (navigate: () => void) => holdMock(navigate) }));
+// Whether the browser holds a session cookie: the Supabase client is loaded to read the session
+// only with one (browser-session.ts). There unless a case says it is a visitor's browser.
+const sessionCookie = vi.hoisted(() => ({ present: true }));
+vi.mock('@/lib/supabase-auth-cookie', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase-auth-cookie')>()),
+  hasSupabaseAuthCookie: () => sessionCookie.present,
+}));
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
@@ -87,6 +94,7 @@ describe('top bar search', () => {
     pushMock.mockReset();
     holdMock.mockReset();
     holdMock.mockReturnValue(false);
+    sessionCookie.present = true;
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
     suggestFetchMock.mockReset();
@@ -296,8 +304,12 @@ describe('top bar search', () => {
       const source = readFileSync(join(process.cwd(), 'src', file), 'utf8');
       expect(source, file).not.toMatch(/^import [^;]*from '@\/lib\/supabase';/m);
     }
-    expect(readFileSync(join(process.cwd(), 'src/components/search/use-search-typeahead.ts'), 'utf8'))
-      .toContain("import('@/lib/supabase')");
+    // Loaded with import() at the first request that needs the session (browser-session.ts), and
+    // in a browser with no session cookie, never.
+    for (const file of ['components/search/use-search-typeahead.ts', 'components/search/use-search-starter.ts']) {
+      expect(readFileSync(join(process.cwd(), 'src', file), 'utf8'), file).toContain("from '@/lib/browser-session'");
+    }
+    expect(readFileSync(join(process.cwd(), 'src/lib/browser-session.ts'), 'utf8')).toContain("import('@/lib/supabase')");
     // Nor the search page's start screen with its cards and Follow buttons: the bar reads the answer alone.
     expect(readFileSync(join(process.cwd(), 'src/components/AppShellSearch.tsx'), 'utf8')).not.toContain('/SearchStarter');
   });
@@ -330,6 +342,7 @@ describe('top bar search: the panel on an empty box', () => {
     pushMock.mockReset();
     holdMock.mockReset();
     holdMock.mockReturnValue(false);
+    sessionCookie.present = true;
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
     suggestFetchMock.mockReset();

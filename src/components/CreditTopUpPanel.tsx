@@ -2,13 +2,17 @@
 
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Check, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 
 import { getAccentClasses } from '@/components/DesignSystem';
 import { ModalSheet } from '@/components/ModalSheet';
-import { CREDIT_CHECKOUT_STATUS_COPY, useCreditPackCheckout } from '@/components/useCreditPackCheckout';
+import {
+  CREDIT_CHECKOUT_STATUS_COPY,
+  preloadCreditPackCheckout,
+  useCreditPackCheckout,
+} from '@/components/useCreditPackCheckout';
 import { packCoveringNeed, type CreditTopUpNeed } from '@/lib/credit-top-up';
 import { PRICING_PLANS } from '@/lib/pricing';
 
@@ -36,6 +40,10 @@ export function CreditTopUpPanel({ need, pricingHref, onClose }: { need: CreditT
   const { buy, loadingPlan, status } = useCreditPackCheckout({
     onSignedOut: () => router.push(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`),
   });
+  // The sheet is opened to buy: checkout.js is fetched as it opens, so a press seldom waits.
+  useEffect(() => {
+    preloadCreditPackCheckout();
+  }, []);
   // From the sheet's word that the money is taken, the checkout must be left to finish: nothing
   // closes the sheet or leads away from it until it says how the payment went.
   const confirming = status?.kind === 'confirming';
@@ -107,7 +115,21 @@ export function CreditTopUpPanel({ need, pricingHref, onClose }: { need: CreditT
         >
           {status.kind === 'confirming' ? <Loader2 aria-hidden className="mt-1 h-4 w-4 shrink-0 animate-spin" /> : null}
           {status.kind === 'settled' ? <Check aria-hidden className={clsx('mt-1 h-4 w-4 shrink-0', getAccentClasses('workflow').mark)} /> : null}
-          <span>{status.kind === 'failed' ? status.message : CREDIT_CHECKOUT_STATUS_COPY[status.kind]}</span>
+          <span>
+            {status.kind === 'failed' ? status.message : CREDIT_CHECKOUT_STATUS_COPY[status.kind]}
+            {status.kind === 'failed' && status.reload ? (
+              <>
+                {' '}
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="ui-focus-ring rounded-full font-bold underline underline-offset-2"
+                >
+                  Try again
+                </button>
+              </>
+            ) : null}
+          </span>
         </p>
       ) : null}
 

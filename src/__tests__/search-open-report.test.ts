@@ -1,13 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const getSession = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/supabase', () => ({ supabase: { auth: { getSession } } }));
+// Whether the browser holds a session cookie: the Supabase client is loaded to read the session
+// only with one (browser-session.ts). There unless a case says it is a visitor's browser.
+const sessionCookie = vi.hoisted(() => ({ present: true }));
+vi.mock('@/lib/supabase-auth-cookie', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase-auth-cookie')>()),
+  hasSupabaseAuthCookie: () => sessionCookie.present,
+}));
 
 import {
   isAgentAccessToken,
   pressedSearchResult,
   reportSearchOpen,
 } from '@/components/search/search-open-report';
+import { loadBrowserSupabase, setBrowserSupabaseImportForTests } from '@/lib/browser-session';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import type { SearchOpen } from '../../ugc-mobile/lib/public-search-policy/search-open-log';
 
@@ -25,7 +33,13 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 describe('reportSearchOpen (web)', () => {
   const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
 
+  // Loaded once, as a page loads it once: a read then takes no longer than the session itself.
+  beforeAll(async () => {
+    await loadBrowserSupabase();
+  });
+
   beforeEach(() => {
+    sessionCookie.present = true;
     fetchMock.mockClear();
     getSession.mockReset();
     vi.stubGlobal('fetch', fetchMock);
@@ -60,6 +74,18 @@ describe('reportSearchOpen (web)', () => {
     await settle();
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.headers).toMatchObject({ Authorization: `Bearer ${session}` });
+  });
+
+  // A visitor's browser has no session cookie, and so no session: the open goes out without a
+  // token and without the Supabase client, which the search page no longer loads for them.
+  it('sends a visitor’s open without reading a session it could not have', async () => {
+    sessionCookie.present = false;
+    reportSearchOpen(open);
+    await settle();
+    expect(getSession).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.headers).not.toHaveProperty('Authorization');
   });
 
   it('sends nothing for an agent’s token', async () => {
@@ -97,6 +123,26 @@ describe('reportSearchOpen (web)', () => {
       expect(unhandled).not.toHaveBeenCalled();
     } finally {
       process.off('unhandledRejection', unhandled);
+    }
+  });
+
+  // The client's code did not load (offline, or a deploy rotated its chunk), and in a production
+  // build it stays unloaded until a reload: the search itself then went without a token
+  // (SearchClient), and so does the open, which the server keys on the same viewer.
+  it('sends the open without a token when the client did not load, as the search went', async () => {
+    setBrowserSupabaseImportForTests(() => Promise.reject(new Error('Loading chunk 1p-ooj54jv0t9 failed.')));
+    try {
+      reportSearchOpen(open);
+      await settle();
+      expect(getSession).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe('/api/search/opened');
+      expect(init.headers).not.toHaveProperty('Authorization');
+    } finally {
+      setBrowserSupabaseImportForTests(null);
+      // Loaded again, as the cases above found it.
+      await loadBrowserSupabase();
     }
   });
 });
