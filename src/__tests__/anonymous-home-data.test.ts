@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getFeedChip } from '@/lib/post-feed-chips';
-import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
+import { SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG } from '@/lib/showcase-feed-cache';
 
 type CacheOptions = { revalidate?: number | false; tags?: string[] };
 
@@ -84,7 +84,7 @@ describe('the signed-out home reads', () => {
 
     expect(ANONYMOUS_HOME_REVALIDATE_SECONDS).toBe(900);
     for (const name of ['anonymous-home-feed-v2', 'anonymous-home-shelf-v2']) {
-      expect(cachedRead(name).options).toEqual({ revalidate: 900, tags: [SHOWCASE_FEED_CACHE_TAG] });
+      expect(cachedRead(name).options).toEqual({ revalidate: 900, tags: [SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG] });
     }
   });
 

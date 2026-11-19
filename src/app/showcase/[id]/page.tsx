@@ -24,6 +24,7 @@ import {
 } from '@/lib/showcase-seo';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import ShowcaseDetailBody from './ShowcaseDetailBody';
+import { relativeTimeLabelInstant } from '@/lib/post-feed-presentation';
 
 type ShowcaseDetailPageProps = {
   params: Promise<{ id: string }>;
@@ -85,7 +86,9 @@ type ShowcasePostPageRead =
 async function readShowcasePostPage(id: string): Promise<ShowcasePostPageRead> {
   const detail = await getPublicPostDetail(id);
   if (detail) {
-    return { kind: 'post', detail, readAt: Date.now() };
+    // The moment its age label was last right, not now: an unchanged post draws
+    // the same HTML at every refresh, so the cache is not written again.
+    return { kind: 'post', detail, readAt: relativeTimeLabelInstant(detail.createdAt, Date.now()) };
   }
 
   const reference = await getPostReferenceForShowcaseId(id);

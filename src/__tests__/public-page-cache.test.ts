@@ -50,7 +50,7 @@ import {
   publicPostArrivalTag,
   publicPostPageTag,
 } from '@/lib/public-page-cache';
-import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
+import { SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG } from '@/lib/showcase-feed-cache';
 
 function tagsOf(key: string): string[] | undefined {
   return cacheCalls.findLast(({ keyParts }) => keyParts[0] === key)?.options.tags;
@@ -110,8 +110,9 @@ describe('the cached public pages', () => {
     expect(publicCreatorHandleTag('  ')).toBeNull();
   });
 
-  // `invalidateShowcaseFeedCacheOnly` (a block, a report, the feed
-  // maintenance) expires the feed's tag alone, so it re-renders none of them.
+  // `invalidateShowcaseFeedCacheOnly` (a block, a report) expires the feed's
+  // tag alone and `refreshShowcaseFeedsInBackground` (the feed maintenance)
+  // refreshes the feeds' own tag, so neither re-renders any of them.
   describe('carry their own tags, never the feed\'s', () => {
     it('the post page: its address\'s post and arrival tags', async () => {
       const { generateMetadata } = await import('@/app/showcase/[id]/page');
@@ -162,6 +163,7 @@ describe('the cached public pages', () => {
 
       for (const { options } of cacheCalls) {
         expect(options.tags).not.toContain(SHOWCASE_FEED_CACHE_TAG);
+        expect(options.tags).not.toContain(SHOWCASE_FEED_REFRESH_TAG);
       }
     });
   });

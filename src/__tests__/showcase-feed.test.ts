@@ -814,7 +814,7 @@ describe('showcase feed', () => {
 
   it('tags and versions both shared feed cache definitions', async () => {
     await import('@/lib/showcase-feed');
-    const { SHOWCASE_FEED_CACHE_TAG } = await import('@/lib/showcase-feed-cache');
+    const { SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG } = await import('@/lib/showcase-feed-cache');
     const { MARKETPLACE_RESOURCE_LIST_CACHE_TAG } = await import('@/lib/marketplace-resource-list-cache');
 
     expect(nextCacheState.definitions).toEqual(expect.arrayContaining([
@@ -848,12 +848,12 @@ describe('showcase feed', () => {
         // Usage audit (2026-11-04): no sort lane decays with time and every
         // content change drops the tag, so the timer bounds only the counts.
         keyParts: ['showcase-feed-base-v3'],
-        options: { revalidate: 1800, tags: [SHOWCASE_FEED_CACHE_TAG] },
+        options: { revalidate: 1800, tags: [SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG] },
       },
       {
         // One turn of the identity-less ranking's ten-minute shared seed.
         keyParts: ['showcase-for-you-bootstrap-v3'],
-        options: { revalidate: 600, tags: [SHOWCASE_FEED_CACHE_TAG] },
+        options: { revalidate: 600, tags: [SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG] },
       },
     ]);
   });
