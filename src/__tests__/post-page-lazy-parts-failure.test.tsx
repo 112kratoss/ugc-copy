@@ -166,7 +166,7 @@ describe("a post page's parts loaded with import() when their load fails", () =>
     expect(screen.queryByText(/Could not load/)).not.toBeInTheDocument();
   });
 
-  it("keeps a blocked post hidden, on the notice's empty page, when the notice does not load", async () => {
+  it("keeps a blocked post hidden behind the notice's words when the notice does not load", async () => {
     viewer.current = aVisitor({ viewerUserId: 'reader-1', blocked: true });
     const { container } = renderPost();
 
@@ -175,13 +175,16 @@ describe("a post page's parts loaded with import() when their load fails", () =>
       'Failed to load the not-found notice of a blocked post:',
       expect.objectContaining({ message: CHUNK_ERROR }),
     );
-    // The post stays hidden: the notice's page, empty, is all there is.
+    // The post stays hidden, and the reader meets the not-found page's words, never a blank page.
     expect(screen.queryByRole('heading', { name: 'A note worth keeping' })).not.toBeInTheDocument();
     expect(screen.queryByText('The whole note, which a visitor came to read.')).not.toBeInTheDocument();
     expect(screen.queryByTestId('showcase-post-unavailable')).not.toBeInTheDocument();
     expect(container.children).toHaveLength(1);
     expect(container.firstElementChild).toHaveClass('ui-page', 'ui-page-ambient');
-    expect(container.firstElementChild).toBeEmptyDOMElement();
+    expect(screen.getByRole('heading', { level: 1, name: 'Page not found' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Go to Home' })).toHaveAttribute('href', '/');
+    // Nothing names the block.
+    expect(container.textContent).not.toMatch(/block/i);
   });
 
   it("says the creator's Owner tools did not load, with a reload, and keeps the rest of the rail", async () => {
