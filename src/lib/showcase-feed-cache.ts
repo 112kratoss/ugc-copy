@@ -17,6 +17,15 @@ import {
 export const SHOWCASE_FEED_CACHE_TAG = 'showcase-feed:v3';
 
 /**
+ * The feeds' cached reads again, refreshed in the background (`'max'` only):
+ * for the hourly maintenance, whose rankings and totals change what the feeds
+ * order, never what they may show. Each cached feed read carries it beside
+ * `SHOWCASE_FEED_CACHE_TAG`, which removals keep expiring at once; a tag is
+ * only ever invalidated one way (`PUBLIC_PAGE_CACHE_TAG` says why).
+ */
+export const SHOWCASE_FEED_REFRESH_TAG = 'showcase-feed:refresh:v1';
+
+/**
  * What a write does to the cached feeds and public pages comes in four kinds,
  * one helper each, and `public-page-invalidation-classes.test.ts` lists every
  * file that uses one:
@@ -29,7 +38,8 @@ export const SHOWCASE_FEED_CACHE_TAG = 'showcase-feed:v3';
  * - a change whose pages cannot be named (a profile, a repaired preview),
  *   `invalidateShowcaseFeedAndRefreshEveryPage`: the feeds at once, and every
  *   public page in the background;
- * - a change only the feeds show, `invalidateShowcaseFeedCacheOnly`.
+ * - a change only the feeds show, `invalidateShowcaseFeedCacheOnly`;
+ * - the feeds' hourly maintenance, `refreshShowcaseFeedsInBackground`.
  *
  * The feeds must show a new post at once, so their tag is always expired with
  * `{ expire: 0 }`. A page refreshed in the background (`'max'`) is answered
@@ -61,6 +71,18 @@ export function invalidateShowcaseFeedCache() {
  */
 export function invalidateShowcaseFeedCacheOnly() {
   revalidateTag(SHOWCASE_FEED_CACHE_TAG, { expire: 0 });
+}
+
+/**
+ * The hourly feed maintenance: its totals and account labels only reorder the
+ * feeds. Expiring them at once made the next visitor of `/` and Explore wait
+ * for a cold render every hour, about 3 s on a phone (speed baseline,
+ * 2026-11-19: HTML at 3,354 ms, LCP 3,976 ms, against 493 / 934 ms warm). In
+ * the background, that visitor is answered from the cache while the feeds are
+ * drawn again behind them.
+ */
+export function refreshShowcaseFeedsInBackground() {
+  revalidateTag(SHOWCASE_FEED_REFRESH_TAG, 'max');
 }
 
 export type PublicPostPageChange = {

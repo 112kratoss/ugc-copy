@@ -8,7 +8,7 @@ import type { HomeShelfItem } from '@/lib/home-shelf';
 import { loadHomeShelfForApi, withoutPost } from '@/lib/home-shelf-server';
 import { getFeedChip } from '@/lib/post-feed-chips';
 import type { ShowcaseFeedPage } from '@/lib/showcase';
-import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
+import { SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG } from '@/lib/showcase-feed-cache';
 
 /**
  * The reads of the signed-out `/` (`AnonymousHome`), cached for as long as the
@@ -74,7 +74,7 @@ async function built<T>(read: Promise<T>): Promise<BuiltRead<T>> {
 const readCachedAnonymousHomeFeed = unstable_cache(
   () => built(readHomeFeed({ viewerUserId: null, chip: getFeedChip(undefined) })),
   ['anonymous-home-feed-v2', currentDeployment()],
-  { revalidate: ANONYMOUS_HOME_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] },
+  { revalidate: ANONYMOUS_HOME_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG] },
 );
 
 const readCachedAnonymousHomeShelf = unstable_cache(
@@ -84,7 +84,7 @@ const readCachedAnonymousHomeShelf = unstable_cache(
     items.map((item) => (item.kind === 'creation' ? withoutPost(item) : item))
   ))),
   ['anonymous-home-shelf-v2', currentDeployment()],
-  { revalidate: ANONYMOUS_HOME_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] },
+  { revalidate: ANONYMOUS_HOME_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG] },
 );
 
 /**

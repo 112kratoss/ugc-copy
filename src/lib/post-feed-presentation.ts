@@ -100,6 +100,35 @@ function trimOneDecimal(value: number) {
     return value.toFixed(1).replace(/\.0$/, '');
 }
 
+/**
+ * The earliest moment that draws the same `formatRelativeTime` label as `now`,
+ * stepped from `value` by the label's own unit: a minute while it reads in
+ * minutes, an hour in hours, a day in days, a week in weeks, and a day beyond.
+ * A cached page that draws an age at "now" changed its HTML at every refresh,
+ * and Vercel writes the cache again for any change (a busy post page up to
+ * every five minutes); drawn at this moment, the page is the same until the
+ * label itself moves. The browser takes over with its own clock after
+ * hydration (`PostRelativeTime`).
+ */
+export function relativeTimeLabelInstant(value: string, now: number): number {
+    const timestamp = new Date(value).getTime();
+    if (!Number.isFinite(timestamp) || now <= timestamp) return now;
+    const MINUTE = 60_000;
+    const HOUR = 60 * MINUTE;
+    const DAY = 24 * HOUR;
+    const age = now - timestamp;
+    // Under a minute it reads "now", as it does at the post's own moment.
+    if (age < MINUTE) return timestamp;
+    // Mirrors formatRelativeTime's bands: m, h, d, w, then months and years counted
+    // in days (their 30- and 365-day steps could land in the weeks band, so a day).
+    const step = age < HOUR ? MINUTE
+        : age < DAY ? HOUR
+            : age < 7 * DAY ? DAY
+                : age < 35 * DAY ? 7 * DAY
+                    : DAY;
+    return timestamp + Math.floor(age / step) * step;
+}
+
 export function formatRelativeTime(value: string, now = new Date()) {
     const timestamp = new Date(value).getTime();
     if (!Number.isFinite(timestamp)) return '';
