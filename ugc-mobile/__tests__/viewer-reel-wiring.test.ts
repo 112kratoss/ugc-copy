@@ -146,8 +146,11 @@ describe("the reel's feed events", () => {
     expect(deps).toBe('}, [activeItem?.id, initialPositionReady, isFocused, onEndSlide, recordViewerFeedEvent, source]);');
     expect(attention).toContain('const leaveEvent = reelLeaveEventType(durationMs);');
     expect(attention).not.toContain("'quick_skip' : 'dwell'");
-    // The submitter reads the session as it sends, so its identity holds.
-    expect(slice('const submitViewerFeedEvent = useCallback((', ']);')).toMatch(/\}, \[api\]\);$/);
+    // The submitter reads the session as it sends, so its identity holds: the
+    // holder it reads from is one object for the life of the reel.
+    expect(slice('const submitViewerFeedEvent = useCallback((', ']);')).toMatch(/\}, \[api, feedEventContext\]\);$/);
+    expect(viewer).toContain('const [feedEventContext] = useState(() => createFeedEventContext({ feedSessionId, algorithmVersion }));');
+    expect(viewer).toContain('feedEventContext.write({ feedSessionId, algorithmVersion });');
   });
 
   it("reports a post's resources opened from its Details card and its unlock sheet", () => {

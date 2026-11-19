@@ -18,6 +18,19 @@ const SCREENS = [
   ['components/home-dashboard.tsx', 'HomeDashboard'],
   ['app/(tabs)/showcase.tsx', 'ShowcaseScreen'],
   ['app/viewer.tsx', 'ImmersivePreviewViewerScreen'],
+  // The reel under that wrapper, drawn again at every swipe (2026-11-19: a ref its feed-event
+  // callback read was held mutable to the end of its render, and the callback lost its memo).
+  ['app/viewer.tsx', 'ImmersivePreviewViewer'],
+  // Each slide of the reel (2026-11-19: refs read by the sideways swipe's Animated.event
+  // listener, a function handed to a call during render).
+  ['app/viewer.tsx', 'ImmersiveSlide'],
+  // Every slide's double-tap heart, and each button of its rail (2026-11-19: both read their
+  // Animated values out of refs during render).
+  ['app/viewer.tsx', 'useDoubleTapSaveHeartAnimation'],
+  ['components/reel-chrome.tsx', 'RailActionButton'],
+  // The player in every feed tile and reel neighbour (2026-11-19: an assignment to the player,
+  // a value held in its state).
+  ['components/feed-video-preview.tsx', 'FeedVideoPlayerLayer'],
   // Re-rendered on every keystroke of the prompt (2026-10-21: a rail's scroll ref read beside
   // its other fields during render knocked it back to uncompiled).
   ['components/media-creation-screen.tsx', 'ImagePromptComposer'],

@@ -76,6 +76,15 @@ function resumePlayer(player: VideoPlayer, pausedHere = false) {
 }
 
 /**
+ * How often a player reports its time; 0 stops the reports. Set here rather
+ * than by an assignment in the layer: the layer holds its player in state, and
+ * React Compiler skips a component that assigns to a value a hook gave it.
+ */
+function setTimeUpdateInterval(player: VideoPlayer, seconds: number) {
+  player.timeUpdateEventInterval = seconds;
+}
+
+/**
  * A feed video tile: poster while idle, muted looping preview while active.
  *
  * Both states share ONE tree whose shape does not change with `active`. The
@@ -662,7 +671,7 @@ function FeedVideoPlayerLayer({
   const reportsPlaybackTime = Boolean(onPlaybackTime);
   useEffect(() => {
     if (!reportsPlaybackTime || !playing || returning) return undefined;
-    player.timeUpdateEventInterval = FEED_PREVIEW_TIME_UPDATE_INTERVAL_SECONDS;
+    setTimeUpdateInterval(player, FEED_PREVIEW_TIME_UPDATE_INTERVAL_SECONDS);
     const subscription = player.addListener('timeUpdate', (event) => {
       playbackTimeRef.current?.(event.currentTime, player.duration);
     });
@@ -671,7 +680,7 @@ function FeedVideoPlayerLayer({
       // Out on loan, the player is the reel's now, and the reel reads its time.
       if (isVideoPlayerOnLoan(player)) return;
       try {
-        player.timeUpdateEventInterval = 0;
+        setTimeUpdateInterval(player, 0);
       } catch {
         // The native player may already be gone during a development reload.
       }

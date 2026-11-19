@@ -558,8 +558,8 @@ function RailActionButton({
   variant?: 'circle' | 'bare';
 }) {
   const theme = useAppTheme();
-  const tapProgress = useRef(new Animated.Value(0)).current;
-  const externalPopProgress = useRef(new Animated.Value(0)).current;
+  const [tapProgress] = useState(() => new Animated.Value(0));
+  const [externalPopProgress] = useState(() => new Animated.Value(0));
   const previousExternalPopTriggerRef = useRef(externalPopTrigger);
   const reducedMotion = useReducedMotion();
   const [activeTapAnimationSpec, setActiveTapAnimationSpec] = useState(tapAnimationSpec);

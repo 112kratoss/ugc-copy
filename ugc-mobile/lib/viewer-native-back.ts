@@ -74,3 +74,41 @@ export const LEAVES_MEDIA_AFTER = 8;
 export function leavesMediaPage(offset: number, detailsPageIndex: number, width: number) {
   return detailsPageIndex > 0 && offset > (detailsPageIndex - 1) * width + LEAVES_MEDIA_AFTER;
 }
+
+type LeavesMediaListener = (itemId: string | null) => void;
+
+/**
+ * Where one slide's swipe stands against Details, told to the reel
+ * (`onLeavesMedia`, the post's id or null) as the swipe crosses and when the
+ * slide becomes the one on screen. Scroll events tell it where the swipe is;
+ * the slide tells it, after each commit, whether it is the one on screen and
+ * whom to tell. Kept in the slide's state, not in refs: the swipe's listener is
+ * handed to `Animated.event` during render, and React Compiler skips a
+ * component whose function handed to a call during render reads a ref.
+ */
+export function createLeavesMediaReport(initial: {
+  leaving: boolean;
+  active: boolean;
+  onLeavesMedia?: LeavesMediaListener;
+}) {
+  let leaving = initial.leaving;
+  let active = initial.active;
+  let onLeavesMedia = initial.onLeavesMedia;
+  return {
+    /** The slide's props as of its last commit. */
+    update(next: { active: boolean; onLeavesMedia?: LeavesMediaListener }) {
+      active = next.active;
+      onLeavesMedia = next.onLeavesMedia;
+    },
+    /** A scroll event's reading; only a crossing is told, and only by the slide on screen. */
+    scrolled(nextLeaving: boolean, itemId: string) {
+      if (nextLeaving === leaving) return;
+      leaving = nextLeaving;
+      if (active) onLeavesMedia?.(leaving ? itemId : null);
+    },
+    /** A slide that becomes the one on screen says where its own swipe stands. */
+    announce(itemId: string) {
+      onLeavesMedia?.(leaving ? itemId : null);
+    },
+  };
+}

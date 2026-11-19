@@ -67,7 +67,7 @@ import {
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
 import { itemsWithoutBlockedRemixCredits } from '@/lib/remix-credit/remix-credit';
-import { leavesMediaPage, viewerNativeBackOptions } from '@/lib/viewer-native-back';
+import { createLeavesMediaReport, leavesMediaPage, viewerNativeBackOptions } from '@/lib/viewer-native-back';
 import { hydrateViewerAudioMuted, isViewerAudioMuted, toggleViewerAudioMuted, useViewerAudioMuted } from '@/lib/viewer-audio';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
 import { useViewerRefreshSpinner } from '@/lib/viewer-refresh-indicator';
@@ -228,6 +228,28 @@ type DoubleTapSavePosition = {
   x: number;
   y: number;
 };
+
+type FeedEventContext = {
+  feedSessionId: string | null;
+  algorithmVersion: string | null;
+};
+
+/**
+ * The feed session and ranking version the reel's events are filed under,
+ * written after each commit and read as each event is sent. A holder kept in
+ * state rather than a ref: React Compiler took a ref read by the event
+ * callback to be mutable to the end of the reel's render, and could not keep
+ * the callback's memo (`submitViewerFeedEvent`).
+ */
+function createFeedEventContext(initial: FeedEventContext) {
+  let current = initial;
+  return {
+    read: () => current,
+    write: (next: FeedEventContext) => {
+      current = next;
+    },
+  };
+}
 
 const DOUBLE_TAP_SAVE_HEART_SIZE = 90;
 const VIEWER_PLAY_BADGE_SIZE = 72;
@@ -794,10 +816,10 @@ function ImmersivePreviewViewer() {
   // Read as each event is sent rather than captured: a new session gave
   // `submitViewerFeedEvent` a new identity, which restarted the attention
   // effect and filed a skip or a dwell for the post on screen (audit 03-2).
-  const feedEventContextRef = useRef({ feedSessionId, algorithmVersion });
+  const [feedEventContext] = useState(() => createFeedEventContext({ feedSessionId, algorithmVersion }));
   useEffect(() => {
-    feedEventContextRef.current = { feedSessionId, algorithmVersion };
-  }, [algorithmVersion, feedSessionId]);
+    feedEventContext.write({ feedSessionId, algorithmVersion });
+  }, [algorithmVersion, feedEventContext, feedSessionId]);
   const submitViewerFeedEvent = useCallback((
     item: ImmersivePreviewItem,
     eventType: ShowcaseFeedEventType,
@@ -808,7 +830,7 @@ function ImmersivePreviewViewer() {
       postId: item.showcasePostId,
       recommendation: item.recommendation,
     }, eventType)) return Promise.resolve();
-    const context = feedEventContextRef.current;
+    const context = feedEventContext.read();
     const request = buildShowcaseFeedEventRequest({
       postId: item.showcasePostId,
       recommendation: item.recommendation,
@@ -820,7 +842,7 @@ function ImmersivePreviewViewer() {
     return isBatchedShowcaseFeedEventType(eventType)
       ? enqueueShowcaseFeedEvent(request).then(() => undefined)
       : api.recordShowcaseFeedEvent(request).then(() => undefined);
-  }, [api]);
+  }, [api, feedEventContext]);
   useEffect(() => {
     if (!isFocused) void flushShowcaseFeedEvents();
   }, [isFocused]);
@@ -905,7 +927,7 @@ function ImmersivePreviewViewer() {
     const impressionKey = getQualifiedImpressionKey({
       postId,
       recommendation: item.recommendation,
-    }, feedEventContextRef.current.feedSessionId);
+    }, feedEventContext.read().feedSessionId);
     const startedAt = Date.now();
     const recordQualifiedImpression = () => {
       if (qualifiedImpressionsRef.current.has(impressionKey)) return;
@@ -2262,12 +2284,13 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
     : null), [detailsPageIndex, horizontalScrollX, width]);
   // Where this slide's swipe stands against Details, for the navigation bar
   // (lib/viewer-native-back.ts); a slide opened on Details starts there.
-  const leavesMediaRef = useRef(leavesMediaPage(initialHorizontalOffset.x, detailsPageIndex, width));
-  const activeRef = useRef(active);
-  const onLeavesMediaRef = useRef(onLeavesMedia);
+  const [leavesMediaReport] = useState(() => createLeavesMediaReport({
+    leaving: leavesMediaPage(initialHorizontalOffset.x, detailsPageIndex, width),
+    active,
+    onLeavesMedia,
+  }));
   useEffect(() => {
-    activeRef.current = active;
-    onLeavesMediaRef.current = onLeavesMedia;
+    leavesMediaReport.update({ active, onLeavesMedia });
   });
   const onHorizontalScroll = useMemo(() => Animated.event(
     [{ nativeEvent: { contentOffset: { x: horizontalScrollX } } }],
@@ -2278,17 +2301,14 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
         const page = Math.round(offset / width);
         setDraggedPageIndex(Math.max(0, Math.min(pages.length - 1, page)));
         const leaving = leavesMediaPage(offset, detailsPageIndex, width);
-        if (leaving !== leavesMediaRef.current) {
-          leavesMediaRef.current = leaving;
-          if (activeRef.current) onLeavesMediaRef.current?.(leaving ? item.id : null);
-        }
+        leavesMediaReport.scrolled(leaving, item.id);
       },
     },
-  ), [detailsPageIndex, horizontalScrollX, item.id, pages.length, width]);
+  ), [detailsPageIndex, horizontalScrollX, item.id, leavesMediaReport, pages.length, width]);
   // A slide that becomes the active one says where its own swipe stands.
   useEffect(() => {
-    if (active) onLeavesMediaRef.current?.(leavesMediaRef.current ? item.id : null);
-  }, [active, item.id]);
+    if (active) leavesMediaReport.announce(item.id);
+  }, [active, item.id, leavesMediaReport]);
   useEffect(() => {
     if (!active) return;
     onActiveChromeShift?.(chromeShift);
@@ -2532,12 +2552,12 @@ function useDoubleTapSaveHeartAnimation({
   const reducedMotion = useReducedMotion();
   const [playCount, setPlayCount] = useState(0);
   const nextPlayCountRef = useRef(0);
-  const opacity = useRef(new Animated.Value(0)).current;
-  const position = useRef(new Animated.ValueXY({
+  const [opacity] = useState(() => new Animated.Value(0));
+  const [position] = useState(() => new Animated.ValueXY({
     x: width / 2,
     y: height / 2,
-  })).current;
-  const scale = useRef(new Animated.Value(1)).current;
+  }));
+  const [scale] = useState(() => new Animated.Value(1));
   const animationRef = useRef<ReturnType<typeof Animated.sequence> | null>(null);
 
   useEffect(() => () => {
