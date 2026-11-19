@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
 
+import { readBrowserSession } from '@/lib/browser-session';
 import type { PricingPlanId } from '@/lib/pricing';
 import {
   clearRazorpayCheckoutIntentKey,
@@ -10,10 +12,20 @@ import {
   verifyRazorpayCheckoutUntilSettled,
   type RazorpayCheckoutVerificationResult,
 } from '@/lib/razorpay-checkout-client';
-import { supabase } from '@/lib/supabase';
 
 /** The id checkout.js is loaded under where packs are sold (`loadRazorpayCheckout` owns the tag). */
 const CREDIT_CHECKOUT_SCRIPT_ID = 'razorpay-checkout-js';
+
+/**
+ * Starts fetching checkout.js ahead of a press, so the press seldom waits: as the creators' top-up
+ * sheet opens, and on the pricing page when a buyer reaches for a pack. Each view of a page that
+ * fetched it on arrival cost about 790 KB in 55 requests, a hidden Razorpay frame among them, for
+ * visitors who never bought. A press fetches it in any case, and waits on a fetch this started
+ * (`loadRazorpayCheckout` keeps one per tag); one that failed is fetched again by the press.
+ */
+export function preloadCreditPackCheckout(): void {
+  void loadRazorpayCheckout(CREDIT_CHECKOUT_SCRIPT_ID).catch(() => undefined);
+}
 
 /**
  * What a checkout says, under the pack that started it. After the sheet reports a payment the
@@ -46,7 +58,9 @@ function paymentFailureDescription(payload: unknown) {
  * the creators came to sell packs in place. The server prices the order from the pack's id and
  * settles it on verify, or by its webhook when this page cannot; the page only asks.
  *
- * checkout.js is fetched as the checkout mounts, and a press made before it has arrived waits for it.
+ * checkout.js is fetched ahead of the press by the page (`preloadCreditPackCheckout`) and by the
+ * press itself, which waits for it. The Supabase client is loaded at the press too, to read the
+ * buyer's session: a visitor without a session cookie is sent to sign in without either.
  */
 export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
   /** No session at the press: the caller sends the visitor to sign in. */
@@ -58,11 +72,6 @@ export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
   const [status, setStatus] = useState<CreditCheckoutStatus | null>(null);
   const stopBalanceRefreshRef = useRef<(() => void) | null>(null);
 
-  // Fetched as the packs show, so a press seldom waits; one that fails is fetched again by the press.
-  useEffect(() => {
-    void loadRazorpayCheckout(CREDIT_CHECKOUT_SCRIPT_ID).catch(() => undefined);
-  }, []);
-
   // The poll outlives whatever drew the checkout, and stops itself after its minute: it only
   // asks the page to read the balance again. The creators' sheet goes as soon as the buyer is
   // done with it ("Back to your run"), which is when a payment still capturing settles; stopped
@@ -73,7 +82,15 @@ export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
   };
 
   const buy = async (planId: PricingPlanId) => {
-    const { data: { session } } = await supabase.auth.getSession();
+    let session: Session | null;
+    try {
+      session = await readBrowserSession();
+    } catch (error) {
+      // The client's code did not load (offline, or a deploy rotated its chunk): nothing is ordered.
+      console.error('Payment initiation error:', error);
+      setStatus({ planId, kind: 'failed', message: 'Checkout could not start. Check your connection and try again.' });
+      return;
+    }
     if (!session?.user) {
       onSignedOut();
       return;

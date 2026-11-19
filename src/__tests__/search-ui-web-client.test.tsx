@@ -42,9 +42,13 @@ vi.mock('next/form', () => ({
 vi.mock('@/lib/use-leave-guard', () => ({ holdForLeaveGuard: () => false }));
 // The account the session cookie names: what a page kept for Back is drawn for.
 const { cookieUserMock } = vi.hoisted(() => ({ cookieUserMock: vi.fn<() => string | null>(() => null) }));
+// Whether the browser holds a session cookie: the page loads the Supabase client to read the
+// session only with one (browser-session.ts). There unless a case says it is a visitor's browser.
+const sessionCookie = vi.hoisted(() => ({ present: true }));
 vi.mock('@/lib/supabase-auth-cookie', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase-auth-cookie')>()),
   readSupabaseAuthCookieUserId: () => cookieUserMock(),
+  hasSupabaseAuthCookie: () => sessionCookie.present,
 }));
 vi.mock('@/components/feedback-state', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/components/feedback-state')>()),
@@ -129,6 +133,7 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/search');
   getSessionMock.mockReset();
   signedIn(null);
+  sessionCookie.present = true;
   cookieUserMock.mockReset();
   cookieUserMock.mockReturnValue(null);
   pushMock.mockReset();

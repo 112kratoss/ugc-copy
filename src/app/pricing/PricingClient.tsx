@@ -9,8 +9,17 @@ import { Button, Surface, Text, getAccentClasses } from "@/components/DesignSyst
 import { JsonLd } from "@/components/JsonLd";
 import { PRICING_CURRENCY, PRICING_PLANS, type PricingPlanId } from "@/lib/pricing";
 import { pricingReturnLabel } from "@/lib/pricing-return";
-import { CREDIT_CHECKOUT_STATUS_COPY, useCreditPackCheckout } from "@/components/useCreditPackCheckout";
-import { supabase } from "@/lib/supabase";
+import {
+    CREDIT_CHECKOUT_STATUS_COPY,
+    preloadCreditPackCheckout,
+    useCreditPackCheckout,
+} from "@/components/useCreditPackCheckout";
+import {
+    loadBrowserSupabase,
+    preloadBrowserSupabaseForSession,
+    readBrowserSession,
+} from "@/lib/browser-session";
+import { hasSupabaseAuthCookie } from "@/lib/supabase-auth-cookie";
 import { useFieldValueBeforeHydration } from "@/lib/use-field-value-before-hydration";
 import { buildSoftwareApplicationSchema, siteConfig } from "@/lib/seo";
 import { formatFxRatesUpdatedAt } from "./fx-rates-updated";
@@ -153,6 +162,21 @@ const relatedLinks = [
     },
 ];
 
+// A signed-in buyer's balance is read with the Supabase client, which this page no longer brings
+// with it for every visitor: asked for as this code loads in a browser with a session cookie, so
+// the balance comes as soon as it did. A visitor's browser fetches nothing (`browser-session.ts`).
+preloadBrowserSupabaseForSession();
+
+/**
+ * checkout.js, about 790 KB with the Razorpay frame it opens, fetched when a buyer reaches for a
+ * pack (a pointer over its button, or the focus on it) rather than on every view; the press
+ * fetches it in any case. A visitor without a session cookie is sent to sign in by the press, so
+ * nothing is fetched for them.
+ */
+function prepareCheckout() {
+    if (hasSupabaseAuthCookie()) preloadCreditPackCheckout();
+}
+
 const CURRENCY_STORAGE_KEY = 'magicbooklet_currency';
 const LEGACY_CURRENCY_STORAGE_KEYS = ['emptybooklet_currency', 'ugc_currency'];
 
@@ -243,10 +267,11 @@ export function PricingClient({
 
     useEffect(() => {
         // The session is local; getUser() went to the network, and a click
-        // before it returned sent a signed-in buyer to /login.
-        void supabase.auth.getSession().then(({ data: { session } }) => {
+        // before it returned sent a signed-in buyer to /login. With no session
+        // cookie there is none, and the client is not loaded to say so.
+        void readBrowserSession().then((session) => {
             if (session?.user) setUserId(session.user.id);
-        }).finally(() => setSessionRead(true));
+        }).finally(() => setSessionRead(true)).catch(() => undefined);
     }, []);
 
     // A cookie whose session is gone (expired, signed out elsewhere) takes the card away once read.
@@ -256,11 +281,12 @@ export function PricingClient({
         if (!userId) return;
         let active = true;
         const readBalance = () => {
-            void supabase
-                .from('profiles')
-                .select('credits')
-                .eq('id', userId)
-                .maybeSingle()
+            void loadBrowserSupabase()
+                .then((supabase) => supabase
+                    .from('profiles')
+                    .select('credits')
+                    .eq('id', userId)
+                    .maybeSingle())
                 .then(({ data }) => {
                     if (active && typeof data?.credits === 'number') setBalance(data.credits);
                 }, () => {
@@ -529,6 +555,8 @@ export function PricingClient({
 
                             <button
                                 onClick={() => handlePayment(plan.id)}
+                                onPointerEnter={prepareCheckout}
+                                onFocus={prepareCheckout}
                                 disabled={loadingPlan === plan.id || checkoutConfirming}
                                 className="ui-focus-ring group relative flex min-h-12 w-full items-center justify-center gap-2 overflow-hidden rounded-full bg-[var(--ui-primary)] px-6 py-3 font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
                             >

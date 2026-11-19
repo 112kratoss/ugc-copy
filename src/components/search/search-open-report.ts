@@ -1,5 +1,5 @@
 import { agentTokenClientId } from '@/lib/agent-token';
-import { supabase } from '@/lib/supabase';
+import { readBrowserSession } from '@/lib/browser-session';
 
 import {
   SEARCH_OPENED_PATH,
@@ -16,14 +16,15 @@ import {
  * with (the session's token, or none): the server keys both on the same viewer, which is what
  * ties an open to its search. That header is why this is `fetch` and not `sendBeacon`, which
  * cannot carry one. An agent's token is never sent: the route refuses one, as every route but
- * the MCP server's does.
+ * the MCP server's does. A visitor's session is none, read without loading the Supabase client
+ * (`readBrowserSession`), as the search itself reads it.
  */
 export function reportSearchOpen(open: SearchOpen): void {
   try {
     const body = searchOpenBody(open);
     if (!body) return;
-    void supabase.auth.getSession()
-      .then(({ data: { session } }) => {
+    void readBrowserSession()
+      .then((session) => {
         const token = session?.access_token ?? null;
         if (token && isAgentAccessToken(token)) return undefined;
         return fetch(SEARCH_OPENED_PATH, {

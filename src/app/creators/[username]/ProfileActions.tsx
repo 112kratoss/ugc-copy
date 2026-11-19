@@ -1,15 +1,19 @@
 'use client';
 
-import { startTransition, useEffect, useEffectEvent, useId, useRef, useState } from 'react';
-import { Edit2, Loader2, RefreshCw, X } from 'lucide-react';
+import { Component, startTransition, Suspense, useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react';
+import { Edit2, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { AnimatePresence, motion } from 'framer-motion';
 
-import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/components/AuthProvider';
+import {
+  useHasHydratedSupabaseAuthCookieHint,
+  useSupabaseAuthCookieHint,
+} from '@/components/useSupabaseAuthCookieHint';
+import { loadBrowserSupabase } from '@/lib/browser-session';
 import { rememberOwnerCreatorProfile } from '@/lib/owner-page-edits';
 import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
 import { toEditableCreatorProfile } from '@/lib/profile';
-import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
+import { scheduleIdleWork } from '@/lib/schedule-idle-work';
 import { ShowcaseFeedbackMenu } from '@/app/showcase/ShowcaseFeedInteraction';
 import ProfileShareButton from '@/components/ProfileShareButton';
 import type { ConfirmationRequest } from '@/components/feedback-state';
@@ -21,6 +25,13 @@ import {
 } from '@/lib/feed-safety-actions';
 import { noteFollowChange } from '@/lib/follow-changes';
 
+import {
+  CREATOR_PROFILE_EDIT_SHEET_WARM_IDLE_TIMEOUT_MS,
+  CreatorProfileEditSheetOnItsWay,
+  useLoadedCreatorProfileEditSheet,
+  warmCreatorProfileEditSheet,
+} from './creator-profile-edit-sheet-loader';
+
 interface ProfileActionsProps {
   profile: EditableCreatorProfile;
   /**
@@ -31,15 +42,6 @@ interface ProfileActionsProps {
   blockedByViewer?: boolean;
 }
 
-const EDITOR_FOCUSABLE_SELECTOR = [
-  'a[href]',
-  'button:not([disabled])',
-  'input:not([disabled]):not([type="hidden"])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(', ');
-
 const DISCARD_PROFILE_CHANGES: ConfirmationRequest = {
   title: 'Discard your profile changes?',
   message: 'Your edits haven’t been saved and will be lost.',
@@ -48,30 +50,81 @@ const DISCARD_PROFILE_CHANGES: ConfirmationRequest = {
   tone: 'danger',
 };
 
+/**
+ * The editor's code can fail to load: a deploy rotated the chunk names while the tab was open, or
+ * the connection was down as it was asked for. React.lazy throws that to the nearest error
+ * boundary, which would be the creator page's own error page: kept to this boundary instead, with
+ * an editor that throws as it draws, and the page says so under the owner's buttons (`onFailed`).
+ * Its Try again reloads the page, as the editor's other host does (`DeferredCreatorProfileCard`):
+ * an in-place retry asks Turbopack's runtime for the same failed chunk.
+ */
+class EditSheetLoadBoundary extends Component<{ onFailed: () => void; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('Failed to load the profile editor:', error);
+    // Caught here, it never reaches Next's own reportError, which is what Sentry hears: hand it
+    // on as an uncaught one would be.
+    window.reportError?.(error);
+    this.props.onFailed();
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
+/**
+ * Follow, Share and the ⋯ menu, or Edit profile on the creator's own page. Who is looking comes
+ * from the page's auth provider (`useAuth`), which loads the Supabase client only for a browser
+ * with a session cookie: a visitor's page loads neither it nor the owner's editor. A press that
+ * acts for the viewer reads the session at that moment, as before (a token held since the page
+ * loaded can have expired), and only once the provider has said there is one.
+ */
 export function ProfileActions({ profile, blockedByViewer = false }: ProfileActionsProps) {
   const router = useRouter();
-  const [isOwner, setIsOwner] = useState<boolean | null>(null);
-  // Captured alongside ownership so a share can be attributed to the viewer
-  // without a second getSession() round trip.
-  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const { session, user, isLoading } = useAuth();
+  const hasAuthCookie = useSupabaseAuthCookieHint();
+  const hydrated = useHasHydratedSupabaseAuthCookieHint();
+  // Also handed to Share, so a share is attributed to the viewer.
+  const accessToken = session?.access_token ?? null;
+  const viewerUserId = accessToken ? user?.id ?? null : null;
+  // As CreatorPageViewer reads its viewer: unknown until it is known whether anyone is signed in.
+  // A blocked creator offers no Follow and no Edit profile: there is nothing to know.
+  const viewerKnown = viewerUserId !== null || (hydrated && !(hasAuthCookie && isLoading));
+  const isOwner: boolean | null = blockedByViewer || !viewerKnown ? null : viewerUserId === profile.id;
   const [isFollowing, setIsFollowing] = useState(false);
   const [isFollowLoading, setIsFollowLoading] = useState(false);
   const [followError, setFollowError] = useState<string | null>(null);
   const [followStatusMessage, setFollowStatusMessage] = useState<string | null>(null);
   const [pendingFollowIntent, setPendingFollowIntent] = useState<boolean | null>(null);
+  // Whose follow state is drawn: another viewer (a sign-in or a sign-out the provider heard) starts
+  // from not following, until their own read lands.
+  const [followStateViewer, setFollowStateViewer] = useState(viewerUserId);
+  if (followStateViewer !== viewerUserId) {
+    setFollowStateViewer(viewerUserId);
+    setIsFollowing(false);
+    setFollowError(null);
+    setFollowStatusMessage(null);
+  }
   const [isEditing, setIsEditing] = useState(false);
   // The owner's own copy of the profile, read when Edit profile is pressed: a
   // read on every visit could land after the owner had started typing and
   // reset the form. The editor is drawn once it lands.
   const [editorProfile, setEditorProfile] = useState<EditableCreatorProfile | null>(null);
   const [editorLoadError, setEditorLoadError] = useState<string | null>(null);
+  // The editor's code did not load (`EditSheetLoadBoundary`).
+  const [editorCodeFailed, setEditorCodeFailed] = useState(false);
+  const loadedEditSheet = useLoadedCreatorProfileEditSheet();
   const editorReadRef = useRef(0);
   // Set by the first edit in the open editor: closing it then asks before the
   // changes are thrown away.
   const editorChangedRef = useRef(false);
   const editButtonRef = useRef<HTMLButtonElement | null>(null);
-  const editorDialogRef = useRef<HTMLDivElement | null>(null);
-  const editorTitleId = useId();
   const followStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Its one question is about the open editor.
   const askToConfirm = useConfirmation(isEditing);
@@ -94,42 +147,23 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
 
   useEffect(() => clearFollowStatusTimer, []);
 
+  // Read with the token current when the read is sent, never again for a renewed token alone.
+  const followStateToken = useEffectEvent(() => accessToken);
+
+  // Whether a signed-in viewer who is not the creator follows them: read once the viewer is known.
   useEffect(() => {
-    // A blocked creator offers no Follow: there is no state to read.
-    if (blockedByViewer) {
+    if (isOwner !== false || viewerUserId === null) {
       return;
     }
 
     let isActive = true;
+    const token = followStateToken();
 
-    const checkOwnership = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!isActive) {
-        return;
-      }
-
-      const ownsProfile = session?.user?.id === profile.id;
-      setIsOwner(ownsProfile);
-      setAccessToken(session?.access_token ?? null);
-      setFollowError(null);
-      setFollowStatusMessage(null);
-
-      if (ownsProfile) {
-        return;
-      }
-
-      if (!session?.access_token) {
-        setIsFollowing(false);
-        return;
-      }
-
+    const readFollowState = async () => {
       try {
         const params = new URLSearchParams({ followingId: profile.id });
         const response = await fetch(`/api/profile/follow?${params.toString()}`, {
-          headers: { Authorization: `Bearer ${session.access_token}` },
+          headers: { Authorization: `Bearer ${token}` },
         });
 
         if (!isActive) {
@@ -141,18 +175,40 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
         }
 
         const data = await response.json();
-        setIsFollowing(Boolean(data.following));
+        if (isActive) setIsFollowing(Boolean(data.following));
       } catch (error) {
+        if (!isActive) return;
         console.error('Failed to load follow state', error);
         setFollowError('Failed to load follow state.');
       }
     };
 
-    checkOwnership();
+    void readFollowState();
     return () => {
       isActive = false;
     };
-  }, [blockedByViewer, profile.id]);
+  }, [isOwner, profile.id, viewerUserId]);
+
+  // The owner's editor, loaded in the first idle moment after the page knows it is theirs, so
+  // their first Edit press draws it at once. Nobody else's page asks for it.
+  useEffect(() => {
+    if (!isOwner) {
+      return;
+    }
+    return scheduleIdleWork(warmCreatorProfileEditSheet, CREATOR_PROFILE_EDIT_SHEET_WARM_IDLE_TIMEOUT_MS);
+  }, [isOwner]);
+
+  /**
+   * The session at a press, read fresh from the client: a token held since the page loaded can
+   * have expired. A viewer the provider knows as signed out has none, and the client is not loaded
+   * to say so; for anyone signed in the provider has loaded it already.
+   */
+  const readPressSession = async () => {
+    if (!viewerUserId) return null;
+    const supabase = await loadBrowserSupabase();
+    const { data: { session: current } } = await supabase.auth.getSession();
+    return current;
+  };
 
   const loadEditorProfile = async () => {
     const read = ++editorReadRef.current;
@@ -160,9 +216,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
     setEditorLoadError(null);
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const session = await readPressSession();
       if (!session?.access_token) {
         throw new Error('No session to read the profile with');
       }
@@ -209,50 +263,27 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
     closeEditor();
   };
 
-  const keepFocusInEditor = (event: KeyboardEvent) => {
-    const dialog = editorDialogRef.current;
-    if (!dialog) return;
-    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(EDITOR_FOCUSABLE_SELECTOR));
-    if (focusable.length === 0) {
-      event.preventDefault();
-      dialog.focus();
-      return;
-    }
+  const handleProfileSaved = (nextProfile: EditableCreatorProfile) => {
+    closeEditor();
+    // The cached page is invalidated only after the save's
+    // answer was sent, so the refresh below can still get the
+    // old one: the header shows the answer meanwhile.
+    rememberOwnerCreatorProfile(nextProfile);
 
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement;
-    const isOutside = active === dialog || !dialog.contains(active);
-    if (event.shiftKey && (active === first || isOutside)) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && (active === last || isOutside)) {
-      event.preventDefault();
-      first.focus();
-    }
+    startTransition(() => {
+      if (nextProfile.username !== profile.username) {
+        router.replace(`/creators/${nextProfile.username}`);
+        return;
+      }
+
+      router.refresh();
+    });
   };
 
-  const onEditorKeyDown = useEffectEvent((event: KeyboardEvent) => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      void requestCloseEditor();
-      return;
-    }
-    if (event.key === 'Tab') {
-      keepFocusInEditor(event);
-    }
-  });
-
-  useEffect(() => {
-    if (!isEditing) {
-      return;
-    }
-
-    editorDialogRef.current?.focus();
-    const handleKeyDown = (event: KeyboardEvent) => onEditorKeyDown(event);
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isEditing]);
+  const handleEditorCodeFailed = () => {
+    setEditorCodeFailed(true);
+    closeEditor();
+  };
 
   const returnUrl = profile.username
     ? `/creators/${profile.username}`
@@ -263,9 +294,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
   // takes both from registered accounts only, so a signed-out viewer is sent
   // to sign in and comes back here.
   const requireAccountToken = async (): Promise<string | null> => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    const session = await readPressSession();
     if (session?.access_token) return session.access_token;
     router.push(`/login?returnUrl=${encodeURIComponent(returnUrl)}`);
     return null;
@@ -328,9 +357,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
     setFollowError(null);
     setFollowStatusMessage(null);
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    const session = await readPressSession();
 
     if (!session) {
       router.push(`/login?returnUrl=${encodeURIComponent(returnUrl)}`);
@@ -387,6 +414,33 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
       ? 'Following'
       : 'Follow';
 
+  const editSheetProps = {
+    open: isEditing,
+    profile: editorProfile,
+    loadError: editorLoadError,
+    onRetry: () => void loadEditorProfile(),
+    onRequestClose: () => void requestCloseEditor(),
+    onEdited: () => {
+      editorChangedRef.current = true;
+    },
+    onSaved: handleProfileSaved,
+  };
+  // Pressed before the editor's code had arrived: the button says it is on its way.
+  const editorOnItsWay = isEditing && !loadedEditSheet && !editorCodeFailed;
+  const LoadedEditSheet = loadedEditSheet?.CreatorProfileEditSheet ?? null;
+  const editSheet = isOwner && (LoadedEditSheet || isEditing) ? (
+    <EditSheetLoadBoundary onFailed={handleEditorCodeFailed}>
+      {LoadedEditSheet ? (
+        // Drawn whenever its code is in, closed or open, so it animates out as it closes.
+        <LoadedEditSheet {...editSheetProps} />
+      ) : (
+        <Suspense fallback={null}>
+          <CreatorProfileEditSheetOnItsWay {...editSheetProps} />
+        </Suspense>
+      )}
+    </EditSheetLoadBoundary>
+  ) : null;
+
   return (
     <>
       <div className="flex flex-wrap items-center gap-3">
@@ -395,9 +449,13 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
             ref={editButtonRef}
             type="button"
             onClick={openEditor}
+            // Its code is asked for again on intent, in case the idle moment has not come yet.
+            onPointerEnter={warmCreatorProfileEditSheet}
+            onFocus={warmCreatorProfileEditSheet}
+            aria-busy={editorOnItsWay || undefined}
             className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full bg-white px-5 text-sm font-bold text-black transition hover:bg-zinc-200"
           >
-            <Edit2 className="h-4 w-4" />
+            {editorOnItsWay ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Edit2 className="h-4 w-4" />}
             Edit profile
           </button>
         ) : (
@@ -445,97 +503,20 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
       {!followError && followStatusMessage ? (
         <p className="mt-2 text-sm text-emerald-300">{followStatusMessage}</p>
       ) : null}
-
-      <AnimatePresence>
-        {isEditing && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm sm:p-6"
+      {isOwner && editorCodeFailed ? (
+        <p role="alert" className="mt-2 text-sm text-rose-300">
+          The profile editor did not load.{' '}
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="ui-focus-ring rounded font-bold underline underline-offset-2"
           >
-            <motion.div
-              ref={editorDialogRef}
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby={editorTitleId}
-              tabIndex={-1}
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              className="relative flex h-full max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-zinc-950 shadow-2xl outline-none"
-            >
-              {/* Fixed Header */}
-              <div className="flex shrink-0 items-center justify-between border-b border-white/5 bg-zinc-900/50 px-6 py-4">
-                <h2 id={editorTitleId} className="text-xl font-semibold text-white">Edit profile</h2>
-                <button
-                  type="button"
-                  onClick={() => void requestCloseEditor()}
-                  aria-label="Close"
-                  className="ui-focus-ring -my-1.5 inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white/5 text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
-                >
-                  <X className="h-5 w-5" aria-hidden />
-                </button>
-              </div>
+            Try again
+          </button>
+        </p>
+      ) : null}
 
-              {/* Scrollable Content. Any field the editor changes reports here. */}
-              <div
-                className="flex-1 overflow-y-auto p-4 sm:p-6 custom-scrollbar"
-                onChange={() => {
-                  editorChangedRef.current = true;
-                }}
-              >
-                {editorProfile ? (
-                  <CreatorProfileCard
-                    initialProfile={editorProfile}
-                    loadError={null}
-                    isEmbedded={true}
-                    onProfileSaved={(nextProfile) => {
-                      closeEditor();
-                      // The cached page is invalidated only after the save's
-                      // answer was sent, so the refresh below can still get the
-                      // old one: the header shows the answer meanwhile.
-                      rememberOwnerCreatorProfile(nextProfile);
-
-                      startTransition(() => {
-                        if (nextProfile.username !== profile.username) {
-                          router.replace(`/creators/${nextProfile.username}`);
-                          return;
-                        }
-
-                        router.refresh();
-                      });
-                    }}
-                  />
-                ) : editorLoadError ? (
-                  <div role="alert" className="rounded-3xl border border-rose-300/20 bg-rose-500/5 p-6 text-sm text-rose-100">
-                    <p className="font-bold">{editorLoadError}</p>
-                    <button
-                      type="button"
-                      onClick={() => void loadEditorProfile()}
-                      className="ui-focus-ring mt-4 inline-flex min-h-11 items-center gap-2 rounded-full border border-rose-300/25 bg-rose-400/10 px-4 font-bold"
-                    >
-                      <RefreshCw className="h-4 w-4" aria-hidden />
-                      Try again
-                    </button>
-                  </div>
-                ) : (
-                  <div role="status" aria-label="Loading your profile" className="rounded-3xl border border-white/5 p-6">
-                    <div className="h-6 w-48 animate-pulse rounded-full bg-white/10" />
-                    <div className="mt-3 h-4 w-80 max-w-full animate-pulse rounded-full bg-white/5" />
-                    <div className="mt-6 grid gap-4 md:grid-cols-2">
-                      <div className="h-12 animate-pulse rounded-2xl bg-black/40" />
-                      <div className="h-12 animate-pulse rounded-2xl bg-black/40" />
-                      <div className="h-24 animate-pulse rounded-2xl bg-black/40 md:col-span-2" />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {editSheet}
     </>
   );
 }

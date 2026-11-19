@@ -2,13 +2,17 @@
 
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Check, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 
 import { getAccentClasses } from '@/components/DesignSystem';
 import { ModalSheet } from '@/components/ModalSheet';
-import { CREDIT_CHECKOUT_STATUS_COPY, useCreditPackCheckout } from '@/components/useCreditPackCheckout';
+import {
+  CREDIT_CHECKOUT_STATUS_COPY,
+  preloadCreditPackCheckout,
+  useCreditPackCheckout,
+} from '@/components/useCreditPackCheckout';
 import { packCoveringNeed, type CreditTopUpNeed } from '@/lib/credit-top-up';
 import { PRICING_PLANS } from '@/lib/pricing';
 
@@ -36,6 +40,10 @@ export function CreditTopUpPanel({ need, pricingHref, onClose }: { need: CreditT
   const { buy, loadingPlan, status } = useCreditPackCheckout({
     onSignedOut: () => router.push(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`),
   });
+  // The sheet is opened to buy: checkout.js is fetched as it opens, so a press seldom waits.
+  useEffect(() => {
+    preloadCreditPackCheckout();
+  }, []);
   // From the sheet's word that the money is taken, the checkout must be left to finish: nothing
   // closes the sheet or leads away from it until it says how the payment went.
   const confirming = status?.kind === 'confirming';

@@ -39,6 +39,13 @@ const sessionSays = (event: string, session: { user?: { id: string } } | null) =
 });
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: vi.fn(), push: pushMock }) }));
+// Whether the browser holds a session cookie: the Supabase client is loaded to read the session
+// only with one (browser-session.ts). There unless a case says it is a visitor's browser.
+const sessionCookie = vi.hoisted(() => ({ present: true }));
+vi.mock('@/lib/supabase-auth-cookie', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase-auth-cookie')>()),
+  hasSupabaseAuthCookie: () => sessionCookie.present,
+}));
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
@@ -107,6 +114,7 @@ describe('search starter', () => {
     window.sessionStorage.clear();
     window.history.replaceState(null, '', '/search');
     authListeners.length = 0;
+    sessionCookie.present = true;
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
     pushMock.mockReset();
@@ -174,6 +182,43 @@ describe('search starter', () => {
     getSessionMock.mockResolvedValue({ data: { session: null } });
     sessionSays('SIGNED_OUT', null);
     await waitFor(() => expect(starterFetchMock).toHaveBeenCalledTimes(3));
+  });
+
+  // A visitor's browser holds no session cookie, so it has no session: the starter is asked bare,
+  // and the Supabase client, which the page no longer brings with it, is not loaded to say so.
+  it("asks a visitor's starter without the Supabase client, and the account's once a sign-in elsewhere writes the cookie", async () => {
+    sessionCookie.present = false;
+    render(<SearchClient initialQuery="" initialType="top" />);
+    await screen.findByRole('region', { name: SEARCH_STARTER_LABEL });
+    expect(starterFetchMock).toHaveBeenCalledTimes(1);
+    expect((starterFetchMock.mock.calls[0][1] as RequestInit).headers).toBeUndefined();
+    expect(getSessionMock).not.toHaveBeenCalled();
+    expect(authListeners).toHaveLength(0);
+
+    // Signed in in another tab: the cookie is there when this tab takes the focus again.
+    sessionCookie.present = true;
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-b', user: { id: 'account-b' } } } });
+    starterFetchMock.mockResolvedValue(ok({ ...STARTER, creators: [] }));
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(starterFetchMock).toHaveBeenCalledTimes(2));
+    expect((starterFetchMock.mock.calls[1][1] as RequestInit).headers).toEqual({ Authorization: 'Bearer token-b' });
+    await waitFor(() => expect(screen.queryByText('Luna Studio')).toBeNull());
+  });
+
+  it('asks a visitor nothing again for a cookie that names no account', async () => {
+    sessionCookie.present = false;
+    render(<SearchClient initialQuery="" initialType="top" />);
+    await screen.findByRole('region', { name: SEARCH_STARTER_LABEL });
+    sessionCookie.present = true;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(getSessionMock).toHaveBeenCalled());
+    await settle();
+    expect(starterFetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Luna Studio')).toBeTruthy();
   });
 
   it('starts a suggested search afresh on Top, whatever the last one narrowed', async () => {
@@ -342,6 +387,7 @@ describe('an empty tab', () => {
     window.sessionStorage.clear();
     window.history.replaceState(null, '', '/search');
     authListeners.length = 0;
+    sessionCookie.present = true;
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
     starterFetchMock.mockReset();

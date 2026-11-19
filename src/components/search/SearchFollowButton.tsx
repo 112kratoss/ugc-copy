@@ -2,9 +2,10 @@
 
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
 
 import { pushToast } from '@/components/feedback-state';
-import { supabase } from '@/lib/supabase';
+import { readBrowserSession } from '@/lib/browser-session';
 
 import {
   SEARCH_FOLLOWING_LABEL,
@@ -61,9 +62,10 @@ export function SearchFollowButton({
     pressing.current = true;
     setPending(true);
     try {
-      let session: Awaited<ReturnType<typeof supabase.auth.getSession>>['data']['session'];
+      let session: Session | null;
       try {
-        ({ data: { session } } = await supabase.auth.getSession());
+        // A visitor has none, read without loading the Supabase client.
+        session = await readBrowserSession();
       } catch {
         // The session could not be read: that is no sign of being signed out, so nothing changes
         // and the creator page's sentence says so.

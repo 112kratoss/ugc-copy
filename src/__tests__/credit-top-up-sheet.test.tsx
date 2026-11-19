@@ -31,6 +31,13 @@ vi.mock('@/lib/supabase', () => ({
   },
 }));
 
+// The browser's session cookie, which @supabase/ssr keeps the session in: there whenever the
+// session is. The press loads the Supabase client to read the buyer only with one.
+vi.mock('@/lib/supabase-auth-cookie', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supabase-auth-cookie')>()),
+  hasSupabaseAuthCookie: () => sessionState.session !== null,
+}));
+
 type RazorpayHandler = (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) => Promise<void>;
 
 describe('the top-up sheet', () => {
