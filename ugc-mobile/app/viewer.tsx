@@ -924,6 +924,8 @@ function ImmersivePreviewViewer() {
     if (!initialPositionReady || !isFocused || onEndSlide || source !== 'showcase-feed' || !activeItem?.showcasePostId) return;
     const item = activeItem;
     const postId = activeItem.showcasePostId;
+    // `feedEventContext` is one holder for the reel's whole life, read here as
+    // the ref was: left out of this effect's dependencies on purpose.
     const impressionKey = getQualifiedImpressionKey({
       postId,
       recommendation: item.recommendation,
