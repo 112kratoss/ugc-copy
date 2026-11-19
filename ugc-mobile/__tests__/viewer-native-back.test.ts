@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-import { LEAVES_MEDIA_AFTER, leavesMediaPage, viewerNativeBackOptions } from '../lib/viewer-native-back';
+import { createLeavesMediaReport, LEAVES_MEDIA_AFTER, leavesMediaPage, viewerNativeBackOptions } from '../lib/viewer-native-back';
 
 const viewer = readFileSync(join(__dirname, '..', 'app', 'viewer.tsx'), 'utf8');
 
@@ -59,9 +59,53 @@ describe('the reel\'s Back on iOS is the navigation bar\'s own', () => {
   it('hears from the active slide as its swipe leaves the media page, on iOS only', () => {
     expect(viewer).toContain('onLeavesMedia={barBack ? setLeavingMediaItemId : undefined}');
     expect(viewer).toContain('const leaving = leavesMediaPage(offset, detailsPageIndex, width);');
-    expect(viewer).toContain('if (activeRef.current) onLeavesMediaRef.current?.(leaving ? item.id : null);');
+    expect(viewer).toContain('leavesMediaReport.scrolled(leaving, item.id);');
     // A slide opened on Details starts out as having left the media.
-    expect(viewer).toContain('useRef(leavesMediaPage(initialHorizontalOffset.x, detailsPageIndex, width))');
+    expect(viewer).toContain('leaving: leavesMediaPage(initialHorizontalOffset.x, detailsPageIndex, width),');
+    // The slide's latest props after every commit, and its say as it becomes the one on screen.
+    expect(viewer).toContain('leavesMediaReport.update({ active, onLeavesMedia });');
+    expect(viewer).toContain('if (active) leavesMediaReport.announce(item.id);');
+  });
+
+  describe('createLeavesMediaReport', () => {
+    it('tells the reel only of a crossing, and only from the slide on screen', () => {
+      const onLeavesMedia = vi.fn();
+      const report = createLeavesMediaReport({ leaving: false, active: true, onLeavesMedia });
+      report.scrolled(false, 'post-1');
+      expect(onLeavesMedia).not.toHaveBeenCalled();
+      report.scrolled(true, 'post-1');
+      report.scrolled(true, 'post-1');
+      expect(onLeavesMedia.mock.calls).toEqual([['post-1']]);
+      report.scrolled(false, 'post-1');
+      expect(onLeavesMedia.mock.calls).toEqual([['post-1'], [null]]);
+    });
+
+    it('keeps a neighbour quiet but follows where its swipe stands', () => {
+      const onLeavesMedia = vi.fn();
+      const report = createLeavesMediaReport({ leaving: false, active: false, onLeavesMedia });
+      report.scrolled(true, 'post-2');
+      expect(onLeavesMedia).not.toHaveBeenCalled();
+      // On screen, it says where it stands: past the media.
+      report.update({ active: true, onLeavesMedia });
+      report.announce('post-2');
+      expect(onLeavesMedia.mock.calls).toEqual([['post-2']]);
+    });
+
+    it('starts where the slide opened, and tells the listener it was last given', () => {
+      const first = vi.fn();
+      const later = vi.fn();
+      const report = createLeavesMediaReport({ leaving: true, active: true, onLeavesMedia: first });
+      report.announce('post-3');
+      expect(first.mock.calls).toEqual([['post-3']]);
+      report.update({ active: true, onLeavesMedia: later });
+      report.scrolled(false, 'post-3');
+      expect(later.mock.calls).toEqual([[null]]);
+      expect(first).toHaveBeenCalledTimes(1);
+      // A bar with no Back of its own hears nothing.
+      report.update({ active: true, onLeavesMedia: undefined });
+      expect(() => report.scrolled(true, 'post-3')).not.toThrow();
+      expect(later).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('gives the bar back to the states drawn instead of the reel', () => {
