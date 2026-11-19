@@ -160,6 +160,10 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
     const token = followStateToken();
 
     const readFollowState = async () => {
+      // Read a moment later, as the session read made it wait: development's StrictMode runs this
+      // effect twice, and the run it takes down at once asks nothing.
+      await Promise.resolve();
+      if (!isActive) return;
       try {
         const params = new URLSearchParams({ followingId: profile.id });
         const response = await fetch(`/api/profile/follow?${params.toString()}`, {

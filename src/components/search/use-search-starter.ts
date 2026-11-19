@@ -168,7 +168,12 @@ export function useSearchStarterState({ enabled = true, kept = false }: { enable
     } else {
       // No session cookie, so no session (@supabase/ssr keeps it there): asked as a visitor,
       // without loading the client. One written later is looked for as supabase-js looked.
-      void ask(null);
+      // Asked a moment later, as the client's load made it wait: development's StrictMode runs
+      // this effect twice, and the run it takes down at once must ask nothing (the E2E server's
+      // route counted two questions where the page drew one answer).
+      void Promise.resolve().then(() => {
+        if (!disposed) void ask(null);
+      });
       stopLookingForCookie = whenBrowserSessionCookie(() => watchSession(true));
     }
     return () => {

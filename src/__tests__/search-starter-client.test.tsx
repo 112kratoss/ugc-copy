@@ -207,6 +207,16 @@ describe('search starter', () => {
     await waitFor(() => expect(screen.queryByText('Luna Studio')).toBeNull());
   });
 
+  // Development's StrictMode runs the effect twice; the run it takes down at once must ask
+  // nothing. Asked at once, the visitor's question went out twice on the E2E server.
+  it("asks a visitor's starter once under StrictMode's re-run", async () => {
+    sessionCookie.present = false;
+    render(<StrictMode><SearchClient initialQuery="" initialType="top" /></StrictMode>);
+    await screen.findByRole('region', { name: SEARCH_STARTER_LABEL });
+    await settle();
+    expect(starterFetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('asks a visitor nothing again for a cookie that names no account', async () => {
     sessionCookie.present = false;
     render(<SearchClient initialQuery="" initialType="top" />);

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { Activity, type HTMLAttributes, type ReactNode, type Ref } from 'react';
+import { Activity, StrictMode, type HTMLAttributes, type ReactNode, type Ref } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -383,6 +383,20 @@ describe('ProfileActions', () => {
     });
     expect(supabaseMocks.getSession).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // Development's StrictMode runs the read's effect twice: the run it takes down at once asks
+  // nothing, as when the page's own session read made it wait.
+  it('reads whether the viewer follows once under StrictMode', async () => {
+    viewAs({ data: { session: { access_token: 'viewer-token', user: { id: 'viewer-1' } } } });
+    render(<StrictMode><ProfileActions profile={profile} /></StrictMode>);
+
+    await screen.findByRole('button', { name: /^follow$/i });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/profile/follow?'))).toHaveLength(1);
   });
 
   it('reads whether the viewer follows once, and not again for a renewed token', async () => {
