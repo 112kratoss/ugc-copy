@@ -1466,6 +1466,12 @@ async function rankFreshCandidates({
 }
 
 /**
+ * Handed the items of a page served from a ranking the request writes, before
+ * the write; see `onRankedPageItems` on `getPersonalizedShowcaseFeedPage`.
+ */
+type RankedPageItemsListener = (items: ShowcaseFeedItem[]) => void;
+
+/**
  * Persists a new session's ranking with the slice this request returns marked
  * served, and builds that page. A fresh ranking and a prepared one are served
  * by this same write.
@@ -1481,6 +1487,7 @@ async function persistAndBuildRankedPage({
   filters,
   limit,
   offset,
+  onRankedPageItems,
   randomSeed,
   ranked,
   seedBucket = null,
@@ -1498,6 +1505,7 @@ async function persistAndBuildRankedPage({
   filters: RankedFeedFilters;
   limit: number;
   offset: number;
+  onRankedPageItems?: RankedPageItemsListener;
   randomSeed: number;
   ranked: RankedShowcaseItem[];
   /** The shared seed's bucket `ranked` was ranked with, if the shared seed was used. */
@@ -1506,6 +1514,11 @@ async function persistAndBuildRankedPage({
   timed: PhaseTimer;
   viewerUserId: string | null;
 }): Promise<ShowcaseFeedPage> {
+  const pageEntries = ranked.slice(offset, offset + limit);
+  // The page's posts are settled before the session is written: the write
+  // only adds each one's delivery. Reads that need just the posts start now,
+  // beside the write rather than after it.
+  onRankedPageItems?.(pageEntries.map((entry) => entry.item));
   const persisted = await timed('persistence', () => persistRankedSession({
     algorithmVersionId: algorithmId,
     anonymousKeyHash,
@@ -1521,7 +1534,6 @@ async function persistAndBuildRankedPage({
     serviceClient,
     viewerUserId,
   }));
-  const pageEntries = ranked.slice(offset, offset + limit);
   // Whether more content exists is a fact about the ranked pool, not about whether
   // we managed to persist a session. Only `nextCursor` needs a session, because only
   // a cursor promises to resume *this* ranking; `nextOffset` paging does not.
@@ -1656,6 +1668,7 @@ const PREPARED_PAGE_LOOKAHEAD = 4;
 async function servePreparedSession({
   hydratePostIds,
   limit,
+  onRankedPageItems,
   prepared,
   serviceClient,
   timed,
@@ -1663,6 +1676,7 @@ async function servePreparedSession({
 }: {
   hydratePostIds: (postIds: string[]) => Promise<ShowcaseFeedItem[]>;
   limit: number;
+  onRankedPageItems?: RankedPageItemsListener;
   prepared: PreparedRankedFeedSession;
   serviceClient: SupabaseClient;
   timed: PhaseTimer;
@@ -1725,6 +1739,7 @@ async function servePreparedSession({
     filters: prepared.filters,
     limit,
     offset: 0,
+    onRankedPageItems,
     randomSeed: prepared.randomSeed,
     ranked,
     serviceClient,
@@ -1741,6 +1756,7 @@ export async function getPersonalizedShowcaseFeedPage({
   hydratePostIds,
   limit,
   offset,
+  onRankedPageItems,
   prepared = null,
   seedBucket = null,
   serviceClient,
@@ -1754,6 +1770,16 @@ export async function getPersonalizedShowcaseFeedPage({
   hydratePostIds: (postIds: string[]) => Promise<ShowcaseFeedItem[]>;
   limit: number;
   offset: number;
+  /**
+   * Handed the page's items once they are settled and before its session is
+   * written, when the page is served from a ranking this request writes (a
+   * fresh one or a prepared one), so reads that need only the items can run
+   * beside the write. The page returned holds exactly these items, in this
+   * order, each with its delivery attached. Never called for a page served
+   * from a session already written (a cursor page, a reused session) or for
+   * the unranked fallback. It must not throw: it runs ahead of the write.
+   */
+  onRankedPageItems?: RankedPageItemsListener;
   /**
    * A first page ranked ahead for this viewer and these filters
    * (`prepareRankedShowcaseFeedSession`), to be persisted and served now in
@@ -1879,6 +1905,7 @@ export async function getPersonalizedShowcaseFeedPage({
       const served = await timed('prepared_page', () => servePreparedSession({
         hydratePostIds,
         limit,
+        onRankedPageItems,
         prepared,
         serviceClient,
         timed,
@@ -1912,6 +1939,7 @@ export async function getPersonalizedShowcaseFeedPage({
     filters,
     limit,
     offset,
+    onRankedPageItems,
     randomSeed: ranking.randomSeed,
     ranked: ranking.ranked,
     seedBucket: ranking.seedBucket,

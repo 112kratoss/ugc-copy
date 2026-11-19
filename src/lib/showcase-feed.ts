@@ -612,22 +612,49 @@ export async function addCreationReferenceCountsToFeedItems(
   items: ShowcaseFeedItem[],
   adminSupabase: ReturnType<typeof createServiceClient>,
 ): Promise<ShowcaseFeedItem[]> {
-  // Only a creation recipe can gain any, and the read asks only of one whose
-  // creator shares the inputs (the stored switch). Not the summary's
-  // `allowRemix`, which a post whose "Allow remixes" is off reports false while
-  // its unlock still hands those inputs over.
-  const postIds = items.flatMap((item) => (
+  return applyCreationReferenceCounts(items, await readCreationReferenceCounts(items, adminSupabase));
+}
+
+type CreationReferenceCounts = Awaited<ReturnType<typeof countGenerationRecipeReferenceItemsByPostId>>;
+
+/**
+ * The posts `readCreationReferenceCounts` asks about: only a creation recipe
+ * can gain any, and the read asks only of one whose creator shares the inputs
+ * (the stored switch). Not the summary's `allowRemix`, which a post whose
+ * "Allow remixes" is off reports false while its unlock still hands those
+ * inputs over.
+ */
+function creationReferenceCountPostIds(items: ShowcaseFeedItem[]): string[] {
+  return items.flatMap((item) => (
     item.generationId && item.asset?.lockedPreview ? [item.id] : []
   ));
+}
+
+/** The read behind `addCreationReferenceCountsToFeedItems`, of these items alone. */
+async function readCreationReferenceCounts(
+  items: ShowcaseFeedItem[],
+  adminSupabase: ReturnType<typeof createServiceClient>,
+): Promise<CreationReferenceCounts> {
+  const postIds = creationReferenceCountPostIds(items);
   if (postIds.length === 0) {
-    return items;
+    return new Map();
   }
 
-  const creationReferenceCounts = await countGenerationRecipeReferenceItemsByPostId({
+  return countGenerationRecipeReferenceItemsByPostId({
     adminSupabase,
     postIds,
     ownerUserId: null,
   });
+}
+
+function applyCreationReferenceCounts(
+  items: ShowcaseFeedItem[],
+  creationReferenceCounts: CreationReferenceCounts,
+): ShowcaseFeedItem[] {
+  if (creationReferenceCounts.size === 0) {
+    return items;
+  }
+
   return items.map((item) => {
     const counts = creationReferenceCounts.get(item.id);
     if (!counts || !item.asset?.lockedPreview) {
@@ -1387,6 +1414,48 @@ function createForYouCandidateSources(
   };
 }
 
+/**
+ * A read a page makes of its own items once they are cut, needing nothing but
+ * the items. A page ranked afresh knows them before its session is written, so
+ * `start` begins the read there, beside the write (`onRankedPageItems`), and
+ * `take` hands it back when the page's items ask the same of the database
+ * (`inputsOf`: every field the read reads, in order); for any others, or when
+ * nothing was started, `take` reads then, as before. A started read never
+ * rejects unobserved: `take` rethrows its failure where reading then would
+ * have thrown. The phase is the read's own time, whenever it ran.
+ */
+function createPageItemsRead<T>(
+  read: (items: ShowcaseFeedItem[]) => Promise<T>,
+  inputsOf: (items: ShowcaseFeedItem[]) => string,
+  phase: string,
+  onPhaseTiming?: (phase: string, durationMs: number) => void,
+) {
+  type Settled = { durationMs: number } & ({ ok: true; value: T } | { ok: false; error: unknown });
+  const begin = (items: ShowcaseFeedItem[]): Promise<Settled> => {
+    const startedAt = performance.now();
+    return (async () => read(items))().then(
+      (value): Settled => ({ ok: true, value, durationMs: performance.now() - startedAt }),
+      (error: unknown): Settled => ({ ok: false, error, durationMs: performance.now() - startedAt }),
+    );
+  };
+  let started: { inputs: string; settled: Promise<Settled> } | null = null;
+
+  return {
+    start: (items: ShowcaseFeedItem[]) => {
+      const inputs = inputsOf(items);
+      if (started?.inputs === inputs) return;
+      started = { inputs, settled: begin(items) };
+    },
+    take: async (items: ShowcaseFeedItem[]): Promise<T> => {
+      const early = started;
+      const settled = await (early?.inputs === inputsOf(items) ? early.settled : begin(items));
+      onPhaseTiming?.(phase, settled.durationMs);
+      if (!settled.ok) throw settled.error;
+      return settled.value;
+    },
+  };
+}
+
 async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
   offset: number;
   limit: number;
@@ -1397,12 +1466,28 @@ async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
   /** The previous page's `pageInfo.seedBucket`, for a ranking the shared seed drives. */
   seedBucket?: number | null;
   adminSupabase?: ReturnType<typeof createServiceClient>;
+  /**
+   * Handed the page's items as soon as they are known, for the caller to start
+   * the reads it makes of them (`createPageItemsRead`): before the session is
+   * written for a page ranked afresh, else once the page is read.
+   */
+  onPageItems?: (items: ShowcaseFeedItem[]) => void;
 }): Promise<ShowcaseFeedPage> {
   const adminSupabase = params.adminSupabase ?? createServiceClient();
   const { filters, hydratePostIds, fallbackItems } = createForYouCandidateSources(params, adminSupabase);
-
   // Ranked and cut first, then its recipe teasers counted once (B3): the
   // hydrated pool holds what recipes store, which is what its filters read.
+  const referenceCounts = createPageItemsRead(
+    (items) => readCreationReferenceCounts(items, adminSupabase),
+    (items) => creationReferenceCountPostIds(items).join(','),
+    'recipe_reference_counts',
+    params.onPhaseTiming,
+  );
+  const startPageReads = (items: ShowcaseFeedItem[]) => {
+    referenceCounts.start(items);
+    params.onPageItems?.(items);
+  };
+
   const page = await getPersonalizedShowcaseFeedPage({
     anonymousKeyHash: params.anonymousKeyHash,
     cursor: params.cursor,
@@ -1411,18 +1496,18 @@ async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
     fallbackItems,
     limit: params.limit,
     offset: params.offset,
+    onRankedPageItems: startPageReads,
     prepared: params.prepared ?? null,
     seedBucket: params.seedBucket ?? null,
     serviceClient: adminSupabase,
     viewerUserId: params.viewerUserId,
     onPhaseTiming: params.onPhaseTiming,
   });
-  const startedAt = performance.now();
-  try {
-    return await withCreationReferenceCounts(page, adminSupabase);
-  } finally {
-    params.onPhaseTiming?.('recipe_reference_counts', performance.now() - startedAt);
-  }
+  // Already under way for a page ranked afresh. A page served from a session
+  // written before (a cursor page, a reused session) is known only now, and
+  // its reads start here, together.
+  startPageReads(page.items);
+  return { ...page, items: applyCreationReferenceCounts(page.items, await referenceCounts.take(page.items)) };
 }
 
 /**
@@ -1588,6 +1673,14 @@ export async function getShowcaseFeedPage(options: {
   const toolSlug = slugifySourceTool(options.tool);
   const unlockFilter = options.unlock ?? 'all';
   const resourceFilter = options.resource ?? 'all';
+  // Started from a For you page's items as soon as they are known (beside its
+  // session write when it is ranked afresh); any other page reads it below.
+  const viewerState = createPageItemsRead(
+    (items) => readFeedViewerState(items, viewerUserId, adminSupabase),
+    feedViewerStateInputs,
+    'viewer_state',
+    options.onPhaseTiming,
+  );
   const baseFeed = sort === 'for-you'
     ? shouldCacheIdentitylessForYouBootstrap({
       sort,
@@ -1623,6 +1716,7 @@ export async function getShowcaseFeedPage(options: {
           }), options.onPhaseTiming)
           : null,
         adminSupabase,
+        onPageItems: viewerState.start,
         onPhaseTiming: options.onPhaseTiming,
       })
     : shouldCacheViewerNeutralShowcaseBasePage({
@@ -1646,7 +1740,7 @@ export async function getShowcaseFeedPage(options: {
   // after both finish instead of paying for their database calls in series.
   const [pricedFeed, viewerFeed] = await Promise.all([
     measurePhase('pricing', () => attachLocalizedAssetPrices(baseFeed, options.countryCode)),
-    measurePhase('viewer_state', () => attachViewerStateToFeed(baseFeed, viewerUserId, adminSupabase)),
+    viewerState.take(baseFeed.items).then((state) => applyFeedViewerState(baseFeed, viewerUserId, state)),
   ]);
   return sanitizeShowcaseFeedPage(mergePricedAndViewerFeed(pricedFeed, viewerFeed));
 }
@@ -1694,16 +1788,49 @@ export async function attachViewerStateToFeed(
   viewerUserId: string | null,
   adminSupabase: ReturnType<typeof createServiceClient>
 ): Promise<ShowcaseFeedPage> {
-  if (!viewerUserId || feed.items.length === 0) {
-    return feed;
+  return applyFeedViewerState(feed, viewerUserId, await readFeedViewerState(feed.items, viewerUserId, adminSupabase));
+}
+
+/** What `attachViewerStateToFeed` reads about the viewer and a page's items. */
+type FeedViewerState = {
+  /** Null when the blocks could not be read: the page then shows nothing. */
+  blockedCreatorIds: Set<string> | null;
+  savedIds: Set<string>;
+  /** Null when the purchases could not be read: then nothing is claimed either way. */
+  purchasedBundleIds: Set<string> | null;
+};
+
+/**
+ * Every field of the items `readFeedViewerState` reads, in order: a read
+ * started for items that differ in any of them is never used for the page's
+ * own (a blocks read built for other creators would let a blocked one through).
+ */
+function feedViewerStateInputs(items: ShowcaseFeedItem[]): string {
+  return items.map((item) => [
+    item.id,
+    item.generationId ?? item.id,
+    item.asset?.id ?? '',
+    item.creator.id ?? '',
+    ...remixCreditUserIds(item.remixCredit),
+  ].join(' ')).join('\n');
+}
+
+/** Null when there is nothing to read: no viewer, or no items. */
+async function readFeedViewerState(
+  items: ShowcaseFeedItem[],
+  viewerUserId: string | null,
+  adminSupabase: ReturnType<typeof createServiceClient>
+): Promise<FeedViewerState | null> {
+  if (!viewerUserId || items.length === 0) {
+    return null;
   }
 
-  const feedItemIds = feed.items.map((item) => item.id);
+  const feedItemIds = items.map((item) => item.id);
   // Every recipe on the page, not only those that sell the remix: a card says
   // "Unlocked" in place of the price of one the viewer has (audit B-F2).
   const bundleIds = Array.from(
     new Set(
-      feed.items
+      items
         .map((item) => item.asset?.id)
         .filter((bundleId): bundleId is string => Boolean(bundleId))
     )
@@ -1721,7 +1848,7 @@ export async function attachViewerStateToFeed(
         .from('showcase_saves')
         .select('generation_id')
         .eq('user_id', viewerUserId)
-        .in('generation_id', feed.items.map((item) => item.generationId ?? item.id));
+        .in('generation_id', items.map((item) => item.generationId ?? item.id));
 
       if (legacySavedResult.error) {
         logBackendError('error_fetching_legacy_showcase_saved_state_for_feed_page', { error: legacySavedResult.error });
@@ -1768,7 +1895,7 @@ export async function attachViewerStateToFeed(
       return await loadBlockedCreatorIds({
         adminSupabase,
         // The people a remix credit names are asked about in the same read.
-        creatorIds: feed.items
+        creatorIds: items
           .flatMap((item) => [item.creator.id, ...remixCreditUserIds(item.remixCredit)])
           .filter((id): id is string => Boolean(id)),
         viewerUserId,
@@ -1783,15 +1910,34 @@ export async function attachViewerStateToFeed(
 
   // These viewer-state reads are independent. Running them together removes a
   // full PostgREST round trip from every authenticated feed response.
-  const [blockedCreatorIds, savedIdSet, purchasedBundleIds] = await Promise.all([
+  const [blockedCreatorIds, savedIds, purchasedBundleIds] = await Promise.all([
     loadBlockedIds(),
     loadSavedIds(),
     loadPurchasedBundleIds(),
   ]);
-  const purchasedBundleIdSet = purchasedBundleIds ?? new Set<string>();
-  if (!blockedCreatorIds) {
+  return { blockedCreatorIds, savedIds, purchasedBundleIds };
+}
+
+/**
+ * The viewer's state on a page, from `readFeedViewerState` of its items. A
+ * viewer's page with no state read for it shows nothing, as with blocks that
+ * could not be read.
+ */
+function applyFeedViewerState(
+  feed: ShowcaseFeedPage,
+  viewerUserId: string | null,
+  state: FeedViewerState | null,
+): ShowcaseFeedPage {
+  if (!viewerUserId || feed.items.length === 0) {
+    return feed;
+  }
+
+  const blockedCreatorIds = state?.blockedCreatorIds;
+  if (!state || !blockedCreatorIds) {
     return { ...feed, items: [] };
   }
+  const { savedIds: savedIdSet, purchasedBundleIds } = state;
+  const purchasedBundleIdSet = purchasedBundleIds ?? new Set<string>();
   const viewerSafeItems = feed.items.filter((item) => (
     !item.creator.id || !blockedCreatorIds.has(item.creator.id)
   ));

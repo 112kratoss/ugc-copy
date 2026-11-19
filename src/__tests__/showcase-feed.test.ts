@@ -176,6 +176,76 @@ let postsRangeReads: Array<{
   filters: Record<string, unknown>;
   notEqual: Record<string, unknown>;
 }> = [];
+// While set, the fake answers what the real For you ranking reads and writes:
+// the active algorithm (v1 retrieval), the candidate rows its RPC returns, no
+// experiment, no session to reuse and no hides or reports; and the session
+// write waits on `writeGate`.
+let rankedFeedState: {
+  candidatePostIds: string[];
+  writeGate: Promise<void>;
+  onWriteStarted: () => void;
+  writes: Array<Record<string, unknown>>;
+} | null = null;
+// While set, every read and RPC of the fake, as `<table or function> start`
+// when it is sent and `<table or function> end` when it is answered.
+let queryTimeline: string[] | null = null;
+
+const RANKED_FEED_TABLES = new Set([
+  'feed_experiments',
+  'feed_algorithm_versions',
+  'feed_sessions',
+  'feed_user_post_feedback',
+  'feed_user_creator_feedback',
+  'post_reports',
+]);
+
+/**
+ * Records when each query of a fake client is sent and answered: a builder is
+ * sent by the call that returns a promise (`maybeSingle`, `range`, a fake's
+ * async `in` or `order`) or by being awaited (`then`).
+ */
+function recordQueries<T extends object>(client: T, timeline: string[]): T {
+  const settle = <R>(label: string, pending: PromiseLike<R>) => {
+    timeline.push(`${label} start`);
+    return Promise.resolve(pending).then((result) => {
+      timeline.push(`${label} end`);
+      return result;
+    });
+  };
+  const wrapBuilder = (label: string, builder: object): object => {
+    const proxy: object = new Proxy(builder, {
+      get(target, property, receiver) {
+        const value: unknown = Reflect.get(target, property, receiver);
+        if (typeof value !== 'function') return value;
+        if (property === 'then') {
+          return (resolve?: (result: unknown) => unknown, reject?: (reason: unknown) => unknown) => settle(
+            label,
+            new Promise((sent, failed) => { value.call(target, sent, failed); }),
+          ).then(resolve, reject);
+        }
+        return (...args: unknown[]) => {
+          const result: unknown = value.apply(target, args);
+          if (result === target) return proxy;
+          if (result instanceof Promise) return settle(label, result);
+          return result && typeof result === 'object' ? wrapBuilder(label, result) : result;
+        };
+      },
+    });
+    return proxy;
+  };
+  return new Proxy(client, {
+    get(target, property, receiver) {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (property === 'from' && typeof value === 'function') {
+        return (table: string) => wrapBuilder(table, value.call(target, table));
+      }
+      if (property === 'rpc' && typeof value === 'function') {
+        return (name: string, args?: Record<string, unknown>) => settle(name, value.call(target, name, args));
+      }
+      return value;
+    },
+  });
+}
 
 // What the database fills in for a column a fixture row leaves out.
 const POSTS_COLUMN_DEFAULTS: Record<string, unknown> = { review_status: 'visible', is_nsfw: false };
@@ -258,9 +328,39 @@ function compareValues(left: string | number | null | undefined, right: string |
 }
 
 function createServiceClientMock() {
-  return {
+  const client = {
     async rpc(name: string, args?: Record<string, unknown>) {
       rpcAccesses.push(name);
+      if (rankedFeedState && name === 'get_ranked_feed_candidates') {
+        return {
+          data: rankedFeedState.candidatePostIds.map((postId, index) => ({
+            post_id: postId,
+            interest_match: 1 - index / 10,
+            freshness: 0.5,
+            candidate_source: 'interest',
+          })),
+          error: null,
+        };
+      }
+      if (rankedFeedState && name === 'persist_ranked_feed_session') {
+        const state = rankedFeedState;
+        state.writes.push(args ?? {});
+        state.onWriteStarted();
+        await state.writeGate;
+        const offset = Number(args?.p_offset);
+        const limit = Number(args?.p_limit);
+        const items = (args?.p_items ?? []) as unknown[];
+        return {
+          data: {
+            session_id: 'session-ranked',
+            deliveries: items.slice(offset, offset + limit).map((_, index) => ({
+              id: `delivery-${offset + index}`,
+              position: offset + index,
+            })),
+          },
+          error: null,
+        };
+      }
       if (name === 'has_nsfw_reveal') {
         return {
           data: nsfwRevealsState.some((reveal) => reveal.postId === args?.p_post_id && reveal.viewerId === args?.p_viewer_id),
@@ -344,6 +444,31 @@ function createServiceClientMock() {
     },
     from(table: string) {
       tableAccesses.push(table);
+      if (rankedFeedState && RANKED_FEED_TABLES.has(table)) {
+        const answer = {
+          data: table === 'feed_algorithm_versions'
+            ? {
+                id: 'algorithm-1',
+                algorithm_key: 'for-you-rules',
+                version: 1,
+                weights: {},
+                retrieval_config: { candidate_limit: 300, session_item_limit: 60 },
+                diversity_config: {},
+              }
+            : table === 'feed_experiments' || table === 'feed_sessions' ? null : [],
+          error: null,
+        };
+        const query: Record<string, unknown> = {
+          maybeSingle: async () => answer,
+          then: (resolve: (value: typeof answer) => unknown, reject: (reason: unknown) => unknown) => (
+            Promise.resolve(answer).then(resolve, reject)
+          ),
+        };
+        for (const method of ['select', 'eq', 'neq', 'in', 'is', 'or', 'gt', 'gte', 'contains', 'order', 'limit']) {
+          query[method] = () => query;
+        }
+        return query;
+      }
       if (table === 'posts') {
         const filters: Record<string, unknown> = {};
         const notEqual: Record<string, unknown> = {};
@@ -729,6 +854,7 @@ function createServiceClientMock() {
       throw new Error(`Unexpected table access: ${table}`);
     },
   };
+  return queryTimeline ? recordQueries(client, queryTimeline) : client;
 }
 
 vi.mock('@/lib/server-helpers', () => ({
@@ -805,6 +931,8 @@ describe('showcase feed', () => {
     bundleTableReads = [];
     topSalesRpcMissingState = false;
     postsRangeReads = [];
+    rankedFeedState = null;
+    queryTimeline = null;
     nextCacheState.invocations = [];
   });
 
@@ -2852,6 +2980,210 @@ describe('showcase feed', () => {
         ['post-00', { prompt: 1, reference_image: 2 }],
       ]);
       expect(inputReads()).toHaveLength(2);
+    });
+  });
+
+  // Speed loop, 2026-11-19: a For you page ranked afresh waited for its session
+  // write (`persist_ranked_feed_session`, 218 ms cold in production) before it
+  // read anything more about the posts on it, then read its recipes' counts,
+  // and only then the viewer's blocks, saves and purchases. The write adds
+  // each post's delivery and nothing else, so those reads run beside it.
+  describe('a For you page ranked afresh', () => {
+    beforeEach(() => {
+      profilesState = ['user-1', 'user-2', 'user-3'].map((id) => ({
+        id,
+        username: id,
+        display_name: null,
+        avatar_url: null,
+      }));
+      postsState = ['a', 'b', 'c'].map((name, index) => createPostRow({
+        id: `post-${name}`,
+        created_at: new Date(Date.UTC(2026, 2, 20) - index * 60_000).toISOString(),
+        user_id: `user-${index + 1}`,
+        output_url: `generated_images/user-${index + 1}/${name}.jpg`,
+        ...(name === 'a' ? { generation_id: 'gen-a', source_kind: 'magicbooklet' as const } : {}),
+      }));
+      generationModelsState = [{
+        id: 'gen-a',
+        model: 'nano-banana-2',
+        user_id: 'user-1',
+        is_public: true,
+        category: 'image',
+        workflow_settings: { model: 'nano-banana-2' },
+      }];
+      generationInputMediaState = [{
+        id: 'gen-a-input',
+        generation_id: 'gen-a',
+        user_id: 'user-1',
+        media_type: 'image',
+        role: 'reference_image',
+        label: null,
+        storage_path: 'generation_inputs/user-1/gen-a/input.png',
+        source_generation_id: null,
+        sort_order: 0,
+        metadata: {},
+      }];
+      resourceBundlesState = [
+        {
+          id: 'bundle-a',
+          post_id: 'post-a',
+          title: 'Launch hook recipe',
+          access_mode: 'free',
+          price_usd_cents: 0,
+          preview_text: 'The prompt behind it.',
+          allow_remix: true,
+          resource_items: [{ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'The prompt behind it.' }],
+          status: 'published',
+        },
+        {
+          id: 'bundle-b',
+          post_id: 'post-b',
+          title: 'Colour grade',
+          access_mode: 'paid',
+          price_usd_cents: 900,
+          preview_text: 'The grade behind it.',
+          allow_remix: false,
+          status: 'published',
+        },
+      ];
+      postSavesState = [{ user_id: 'viewer-1', post_id: 'post-b' }];
+      postResourceBundlePurchasesState = [{ bundle_id: 'bundle-b', buyer_user_id: 'viewer-1' }];
+    });
+
+    /** Ranks post-a, post-b and post-c, holding the session write open until released. */
+    function rankWithTheWriteHeld() {
+      let release!: () => void;
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => { markStarted = resolve; });
+      rankedFeedState = {
+        candidatePostIds: ['post-a', 'post-b', 'post-c'],
+        writeGate: new Promise<void>((resolve) => { release = resolve; }),
+        onWriteStarted: () => markStarted(),
+        writes: [],
+      };
+      return { started, release: () => release() };
+    }
+
+    it("reads its recipes' counts and the viewer's state on its posts while the session is written", async () => {
+      const write = rankWithTheWriteHeld();
+      const timeline: string[] = [];
+      queryTimeline = timeline;
+      const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+      const pending = getShowcaseFeedPage({
+        category: 'all',
+        sort: 'for-you',
+        offset: 0,
+        limit: 2,
+        viewerUserId: 'viewer-1',
+        bypassCache: true,
+      });
+      await write.started;
+      // Whatever does not wait on the write is under way within a few turns.
+      for (let turn = 0; turn < 10; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      const sentWhileWriting = [...timeline];
+      write.release();
+      const page = await pending;
+
+      const sequence = `\n${timeline.join('\n')}`;
+      const sends = (entries: string[], label: string) => entries.filter((entry) => entry === `${label} start`).length;
+      // The visibility stage's two block reads went before the ranking; the
+      // page's own two, its saves, its purchases and its recipes' inputs went
+      // while the session was being written, and nothing waited for the write.
+      expect(sends(sentWhileWriting, 'user_blocks'), sequence).toBe(4);
+      expect(sends(sentWhileWriting, 'post_saves'), sequence).toBe(1);
+      expect(sends(sentWhileWriting, 'post_resource_bundle_purchases'), sequence).toBe(1);
+      expect(sends(sentWhileWriting, 'post_resource_bundles'), sequence).toBe(1);
+      const afterTheWrite = timeline.slice(timeline.indexOf('persist_ranked_feed_session end') + 1);
+      expect(afterTheWrite.filter((entry) => entry.endsWith(' start')), sequence).toEqual([]);
+
+      // The same one write, and the page it always made.
+      expect(rankedFeedState?.writes).toHaveLength(1);
+      expect(rankedFeedState?.writes[0]).toMatchObject({ p_offset: 0, p_limit: 2 });
+      expect((rankedFeedState?.writes[0]?.p_items as Array<{ post_id: string }>).map((entry) => entry.post_id))
+        .toEqual(['post-a', 'post-b', 'post-c']);
+      expect(page.feedSessionId).toBe('session-ranked');
+      expect(page.pageInfo).toMatchObject({ hasMore: true, nextOffset: 2, limit: 2, offset: 0 });
+      expect(page.pageInfo.nextCursor).toEqual(expect.any(String));
+      expect(page.items.map((item) => [item.id, item.recommendation?.deliveryId, item.recommendation?.position]))
+        .toEqual([['post-a', 'delivery-0', 0], ['post-b', 'delivery-1', 1]]);
+      expect(page.items.map((item) => [item.id, item.isSaved, item.asset?.viewerHasUnlocked])).toEqual([
+        ['post-a', false, false],
+        ['post-b', true, true],
+      ]);
+      expect(page.items[0]?.asset?.itemCounts).toEqual({ prompt: 1, reference_image: 1 });
+    });
+
+    it('never lets a read started for other posts stand in for the page’s own', async () => {
+      postsState = [
+        createPostRow({ id: 'post-blocked', created_at: '2026-03-21T10:00:00.000Z', user_id: 'user-blocked', output_url: 'generated_images/user-blocked/x.jpg' }),
+        createPostRow({ id: 'post-y', created_at: '2026-03-20T10:00:00.000Z' }),
+      ];
+      resourceBundlesState = [];
+      userBlocksState = [{ blocker_user_id: 'viewer-1', blocked_user_id: 'user-blocked' }];
+      const personalization = await import('@/lib/showcase-feed-personalization');
+      vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+        // The viewer's state is begun for a page without the blocked creator…
+        options.onRankedPageItems?.(await options.hydratePostIds(['post-y']));
+        // …and the page served holds their post.
+        const items = await options.hydratePostIds(['post-blocked', 'post-y']);
+        return {
+          items,
+          feedSessionId: null,
+          algorithmVersion: 'test-v1',
+          pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 2, offset: 0 },
+        };
+      });
+      const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+      const page = await getShowcaseFeedPage({
+        category: 'all',
+        sort: 'for-you',
+        offset: 0,
+        limit: 2,
+        viewerUserId: 'viewer-1',
+        bypassCache: true,
+      });
+
+      expect(page.items.map((item) => item.id)).toEqual(['post-y']);
+    });
+
+    it('never reuses a read begun for the same posts under other creators', async () => {
+      postsState = [
+        createPostRow({ id: 'post-blocked', created_at: '2026-03-21T10:00:00.000Z', user_id: 'user-blocked', output_url: 'generated_images/user-blocked/x.jpg' }),
+        createPostRow({ id: 'post-y', created_at: '2026-03-20T10:00:00.000Z' }),
+      ];
+      resourceBundlesState = [];
+      userBlocksState = [{ blocker_user_id: 'viewer-1', blocked_user_id: 'user-blocked' }];
+      const personalization = await import('@/lib/showcase-feed-personalization');
+      vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+        const items = await options.hydratePostIds(['post-blocked', 'post-y']);
+        // The viewer's state is begun for the same posts, in the same order,
+        // with another creator on the first (a page re-hydrated after the
+        // hand-over would look like this)…
+        options.onRankedPageItems?.(items.map((item) => (
+          item.id === 'post-blocked' ? { ...item, creator: { ...item.creator, id: 'someone-else' } } : item
+        )));
+        // …and the page served holds the blocked creator's post.
+        return {
+          items,
+          feedSessionId: null,
+          algorithmVersion: 'test-v1',
+          pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 2, offset: 0 },
+        };
+      });
+      const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+      const page = await getShowcaseFeedPage({
+        category: 'all',
+        sort: 'for-you',
+        offset: 0,
+        limit: 2,
+        viewerUserId: 'viewer-1',
+        bypassCache: true,
+      });
+
+      expect(page.items.map((item) => item.id)).toEqual(['post-y']);
     });
   });
 });
