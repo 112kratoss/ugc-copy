@@ -216,14 +216,63 @@ function cloneGit(args, directory, options) {
 }
 
 /** Clones the public repository and reads what it holds; nothing, for one with no commit yet. */
-function clonePublished(repository, directory) {
-  cloneGit(['clone', '--quiet', '--depth', '1', `https://github.com/${repository}.git`, directory], os.tmpdir());
+function clonePublished(url, directory) {
+  cloneGit(['clone', '--quiet', '--depth', '1', url, directory], os.tmpdir());
   try {
     cloneGit(['rev-parse', '--verify', '--quiet', 'HEAD'], directory);
   } catch {
     return new Map();
   }
   return committedFiles(directory, 'HEAD');
+}
+
+/**
+ * Compares the repository at `url` with `wanted` and, for a confirmed push, commits and pushes
+ * the difference to its main. The outcome is one of: `refused` (with why), `same`, `differs`
+ * (a check), `unconfirmed` (a push without the confirmation) or `published` (with the commit).
+ */
+export function publishMirror({ url, wanted, push = false, confirm = false, now = new Date() }) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-mirror-'));
+  try {
+    let published;
+    try {
+      published = clonePublished(url, directory);
+    } catch (error) {
+      return { outcome: 'refused', message: `The public repository could not be read: ${error.message}` };
+    }
+    const strays = [...published.keys()].filter((file) => !isMirrorPath(file));
+    if (strays.length > 0) {
+      return { outcome: 'refused', message: `The public repository holds files that are no part of the marketplace (${strays.slice(0, 5).join(', ')}${strays.length > 5 ? ', …' : ''}): it is not the mirror, or someone added to it.` };
+    }
+    // Installs read the default branch, so that is the branch a push must land on.
+    if (published.size > 0) {
+      const branch = cloneGit(['symbolic-ref', '--short', 'HEAD'], directory).trim();
+      if (branch !== MIRROR_BRANCH) return { outcome: 'refused', message: `The public repository's default branch is ${branch}, not ${MIRROR_BRANCH}.` };
+    }
+
+    const difference = mirrorDifference(published, wanted);
+    if (difference.same) return { outcome: 'same' };
+    if (!push) return { outcome: 'differs', difference };
+    const stale = versionProblem(published, wanted);
+    if (stale) return { outcome: 'refused', message: stale, difference };
+    if (!confirm) return { outcome: 'unconfirmed', difference };
+
+    // A repository with no commit yet clones with no branch; either way the commit lands on main.
+    cloneGit(['checkout', '--quiet', '-B', MIRROR_BRANCH], directory);
+    // Every published file is a plain one (anything else was refused above), and a changed file
+    // is removed before it is written, so no write goes through a link to somewhere else.
+    for (const file of [...difference.removed, ...difference.changed]) fs.rmSync(path.join(directory, file));
+    for (const file of [...difference.added, ...difference.changed]) {
+      fs.mkdirSync(path.dirname(path.join(directory, file)), { recursive: true });
+      fs.writeFileSync(path.join(directory, file), wanted.get(file), { flag: 'wx' });
+    }
+    cloneGit(['add', '--all'], directory);
+    cloneGit(['commit', '--quiet', '-m', `Magic Booklet plugin ${pluginManifest(wanted)?.version}`], directory, { env: commitEnvironment(now) });
+    cloneGit(['push', '--quiet', 'origin', MIRROR_BRANCH], directory);
+    return { outcome: 'published', difference, commit: cloneGit(['rev-parse', 'HEAD'], directory).trim() };
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 function printDifference(difference) {
@@ -283,67 +332,16 @@ function main() {
     return;
   }
 
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-mirror-'));
-  try {
-    let published;
-    try {
-      published = clonePublished(repository, directory);
-    } catch (error) {
-      refuse(`${repository} could not be read: ${error.message}`);
-      return;
-    }
-    const strays = [...published.keys()].filter((file) => !isMirrorPath(file));
-    if (strays.length > 0) {
-      refuse(`${repository} holds files that are no part of the marketplace (${strays.slice(0, 5).join(', ')}${strays.length > 5 ? ', …' : ''}): it is not the mirror, or someone added to it.`);
-      return;
-    }
-    // Installs read the default branch, so that is the branch a push must land on.
-    if (published.size > 0) {
-      const branch = cloneGit(['symbolic-ref', '--short', 'HEAD'], directory).trim();
-      if (branch !== MIRROR_BRANCH) {
-        refuse(`${repository}'s default branch is ${branch}, not ${MIRROR_BRANCH}.`);
-        return;
-      }
-    }
-
-    const difference = mirrorDifference(published, wanted);
-    if (difference.same) {
-      console.log(`${repository} holds it as ${ref} has it.`);
-      return;
-    }
+  const result = publishMirror({ url: `https://github.com/${repository}.git`, wanted, push: options.mode === 'push', confirm: options.confirm });
+  if (result.difference) {
     console.log(`${repository} differs:`);
-    printDifference(difference);
-    if (options.mode === 'check') {
-      process.exitCode = 1;
-      return;
-    }
-
-    const stale = versionProblem(published, wanted);
-    if (stale) {
-      refuse(stale);
-      return;
-    }
-    if (!options.confirm) {
-      console.log('Nothing was pushed. A push is publication: run it again with --confirm on the owner’s word.');
-      return;
-    }
-
-    // A repository with no commit yet clones with no branch; either way the commit lands on main.
-    cloneGit(['checkout', '--quiet', '-B', MIRROR_BRANCH], directory);
-    // Every published file is a plain one (anything else was refused above), and a changed file
-    // is removed before it is written, so no write goes through a link to somewhere else.
-    for (const file of [...difference.removed, ...difference.changed]) fs.rmSync(path.join(directory, file));
-    for (const file of [...difference.added, ...difference.changed]) {
-      fs.mkdirSync(path.dirname(path.join(directory, file)), { recursive: true });
-      fs.writeFileSync(path.join(directory, file), wanted.get(file), { flag: 'wx' });
-    }
-    cloneGit(['add', '--all'], directory);
-    cloneGit(['commit', '--quiet', '-m', `Magic Booklet plugin ${version}`], directory, { env: commitEnvironment() });
-    cloneGit(['push', '--quiet', 'origin', MIRROR_BRANCH], directory);
-    console.log(`Published plugin ${version} to ${repository} at ${cloneGit(['rev-parse', 'HEAD'], directory).trim()}.`);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
+    printDifference(result.difference);
   }
+  if (result.outcome === 'refused') refuse(result.message);
+  else if (result.outcome === 'same') console.log(`${repository} holds it as ${ref} has it.`);
+  else if (result.outcome === 'differs') process.exitCode = 1;
+  else if (result.outcome === 'unconfirmed') console.log('Nothing was pushed. A push is publication: run it again with --confirm on the owner’s word.');
+  else console.log(`Published plugin ${version} to ${repository} at ${result.commit}.`);
 }
 
 // Node runs the script from its real path, so the path it was called by is resolved the same way.

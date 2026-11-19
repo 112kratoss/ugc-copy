@@ -32,6 +32,7 @@ import {
   mirrorDifference,
   mirrorFiles,
   mirrorRepository,
+  publishMirror,
   repositoryOfRemote,
   versionProblem,
 } from '../../scripts/ops/plugin-mirror.mjs';
@@ -432,6 +433,84 @@ describe('the plugin marketplace’s public repository', () => {
     const wanted = new Map([['README.md', Buffer.from('new')], ['same.md', Buffer.from('y')], ['added.md', Buffer.from('z')]]);
     expect(mirrorDifference(published, wanted)).toEqual({ added: ['added.md'], changed: ['README.md'], removed: ['gone.md'], same: false });
     expect(mirrorDifference(wanted, wanted)).toMatchObject({ same: true });
+  });
+
+  it('pushes a commit of its own making to the public repository’s main, and refuses what is not the mirror', () => {
+    // A bare repository on disk stands for the public one: the whole path a push takes, with
+    // an operator's identity exported around it.
+    const home = mkdtempSync(path.join(os.tmpdir(), 'plugin-mirror-push-'));
+    const remote = path.join(home, 'public.git');
+    const manifest = 'plugins/magicbooklet/.claude-plugin/plugin.json';
+    const readme = 'plugins/magicbooklet/README.md';
+    const treeAt = (version: string, text: string) => new Map([
+      ['.claude-plugin/marketplace.json', Buffer.from('{}')],
+      ['README.md', Buffer.from(text)],
+      [manifest, Buffer.from(JSON.stringify({ version }))],
+      [readme, Buffer.from(text)],
+    ]);
+    const quiet = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', PATH: process.env.PATH };
+    const inRemote = (...args: string[]) => execFileSync('git', args, { cwd: remote, env: quiet, encoding: 'utf8' });
+    const operator = { GIT_AUTHOR_NAME: 'Operator', GIT_AUTHOR_EMAIL: 'operator@example.invalid', GIT_COMMITTER_NAME: 'Operator', GIT_COMMITTER_EMAIL: 'operator@example.invalid', GIT_DIR: '/nonexistent' };
+    const before = Object.fromEntries(Object.keys(operator).map((name) => [name, process.env[name]]));
+    try {
+      mkdirSync(remote);
+      inRemote('init', '--quiet', '--bare', '--initial-branch=main');
+      Object.assign(process.env, operator);
+
+      // A repository with no commit yet: a check says what it lacks, an unconfirmed push stops.
+      expect(publishMirror({ url: remote, wanted: treeAt('1.0.0', 'one') })).toMatchObject({ outcome: 'differs', difference: { added: expect.arrayContaining([manifest]) } });
+      expect(publishMirror({ url: remote, wanted: treeAt('1.0.0', 'one'), push: true })).toMatchObject({ outcome: 'unconfirmed' });
+      expect(() => inRemote('rev-parse', '--verify', '--quiet', 'main')).toThrow();
+
+      const first = publishMirror({ url: remote, wanted: treeAt('1.0.0', 'one'), push: true, confirm: true, now: new Date('2026-11-19T12:00:00Z') });
+      expect(first).toMatchObject({ outcome: 'published' });
+      expect(inRemote('rev-parse', 'main').trim()).toBe(first.commit);
+      // The public identity and a UTC time, whatever the operator's shell exports.
+      expect(inRemote('log', '-1', '--format=%an <%ae> | %cn <%ce> | %ad | %cd | %s', '--date=raw', 'main').trim())
+        .toBe(`Magic Booklet <info@magicbooklet.com> | Magic Booklet <info@magicbooklet.com> | ${Date.UTC(2026, 10, 19, 12) / 1_000} +0000 | ${Date.UTC(2026, 10, 19, 12) / 1_000} +0000 | Magic Booklet plugin 1.0.0`);
+      expect(inRemote('ls-tree', '-r', '--name-only', 'main').trim().split('\n')).toEqual(['.claude-plugin/marketplace.json', 'README.md', manifest, readme]);
+      expect(publishMirror({ url: remote, wanted: treeAt('1.0.0', 'one'), push: true, confirm: true })).toEqual({ outcome: 'same' });
+
+      // A change under the same version, or an older plugin, is not pushed; a newer one is.
+      expect(publishMirror({ url: remote, wanted: treeAt('1.0.0', 'two'), push: true, confirm: true })).toMatchObject({ outcome: 'refused', message: expect.stringContaining('its version is still 1.0.0') });
+      expect(publishMirror({ url: remote, wanted: treeAt('0.9.0', 'two'), push: true, confirm: true })).toMatchObject({ outcome: 'refused', message: expect.stringContaining('1.0.0 is published') });
+      expect(inRemote('rev-parse', 'main').trim()).toBe(first.commit);
+      const second = publishMirror({ url: remote, wanted: treeAt('1.0.1', 'two'), push: true, confirm: true });
+      expect(second).toMatchObject({ outcome: 'published', difference: { added: [], changed: ['README.md', manifest, readme], removed: [] } });
+      expect(inRemote('show', `main:${readme}`)).toBe('two');
+      expect(inRemote('rev-list', '--count', 'main').trim()).toBe('2');
+
+      // Someone adds to the public repository: a link at a published path, then a file of their own.
+      const visitor = path.join(home, 'visitor');
+      const victim = path.join(home, 'victim.txt');
+      writeFileSync(victim, 'the operator’s own file');
+      execFileSync('git', ['clone', '--quiet', remote, visitor], { env: quiet });
+      const asVisitor = (...args: string[]) => execFileSync('git', ['-c', 'user.name=v', '-c', 'user.email=v@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd: visitor, env: quiet });
+      rmSync(path.join(visitor, readme));
+      symlinkSync(victim, path.join(visitor, readme));
+      asVisitor('commit', '--quiet', '--all', '-m', 'a link');
+      asVisitor('push', '--quiet', 'origin', 'main');
+      for (const push of [false, true]) {
+        expect(publishMirror({ url: remote, wanted: treeAt('1.0.2', 'three'), push, confirm: push }), `push: ${push}`)
+          .toMatchObject({ outcome: 'refused', message: expect.stringContaining(`${readme} is not a plain file (mode 120000)`) });
+      }
+      expect(readFileSync(victim, 'utf8')).toBe('the operator’s own file');
+
+      asVisitor('rm', '--quiet', readme);
+      writeFileSync(path.join(visitor, readme), 'two');
+      writeFileSync(path.join(visitor, 'LICENSE'), 'theirs');
+      asVisitor('add', '--all');
+      asVisitor('commit', '--quiet', '-m', 'a stray');
+      asVisitor('push', '--quiet', 'origin', 'main');
+      expect(publishMirror({ url: remote, wanted: treeAt('1.0.2', 'three'), push: true, confirm: true }))
+        .toMatchObject({ outcome: 'refused', message: expect.stringContaining('no part of the marketplace (LICENSE)') });
+    } finally {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('refuses a plugin whose files changed under the version already published', () => {
