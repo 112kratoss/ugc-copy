@@ -40,7 +40,10 @@ export function useReaderScrolled(listingKey: string, scrolledAtStart = false): 
       if (scrollsThePage(event)) markScrolled();
     };
     // The window's scrollbar stands outside the page's own width (or height); a press there starts a drag.
+    // Not a finger's: a touch screen has no scrollbar to press, and a phone's clientHeight can stay at the
+    // height with its toolbar shown, so a tap on "Load more" at the bottom edge would read as one.
     const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') return;
       const root = document.documentElement;
       if (root.clientWidth > 0 && (event.clientX >= root.clientWidth || event.clientY >= root.clientHeight)) markScrolled();
     };

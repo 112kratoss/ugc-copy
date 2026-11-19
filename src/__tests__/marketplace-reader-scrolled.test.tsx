@@ -28,9 +28,11 @@ function Probe({ listingKey, scrolledAtStart = false }: { listingKey: string; sc
 
 const readerScrolled = () => screen.getByLabelText('Reader scrolled').textContent;
 
-function pressAt(target: EventTarget, clientX: number, clientY: number) {
+function pressAt(target: EventTarget, clientX: number, clientY: number, pointerType?: string) {
   act(() => {
-    target.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX, clientY }));
+    const event = new MouseEvent('pointerdown', { bubbles: true, clientX, clientY });
+    if (pointerType) Object.defineProperty(event, 'pointerType', { value: pointerType });
+    target.dispatchEvent(event);
   });
 }
 
@@ -96,6 +98,20 @@ describe('useReaderScrolled', () => {
     expect(readerScrolled()).toBe('no');
 
     pressAt(document.documentElement, 1_272, 400);
+    expect(readerScrolled()).toBe('yes');
+  });
+
+  // A phone's clientHeight can stay at the height with its toolbar shown, so a tap in the strip the
+  // toolbar uncovers (a press of Load more at the bottom edge) sits past clientHeight; a finger has no scrollbar.
+  it('takes no finger\'s press for a press on the scrollbar', () => {
+    Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: 412 });
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 780 });
+    render(<Probe listingKey="all" />);
+
+    pressAt(screen.getByRole('button', { name: 'Load more recipes' }), 206, 830, 'touch');
+    expect(readerScrolled()).toBe('no');
+
+    pressAt(document.documentElement, 206, 830, 'mouse');
     expect(readerScrolled()).toBe('yes');
   });
 
