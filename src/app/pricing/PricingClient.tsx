@@ -265,17 +265,24 @@ export function PricingClient({
         },
     });
 
+    // The session could not be read: the client's code did not load (browser-session.ts).
+    const [sessionUnreadable, setSessionUnreadable] = useState(false);
+
     useEffect(() => {
         // The session is local; getUser() went to the network, and a click
         // before it returned sent a signed-in buyer to /login. With no session
         // cookie there is none, and the client is not loaded to say so.
         void readBrowserSession().then((session) => {
             if (session?.user) setUserId(session.user.id);
-        }).finally(() => setSessionRead(true)).catch(() => undefined);
+        }, () => {
+            setSessionUnreadable(true);
+        }).finally(() => setSessionRead(true));
     }, []);
 
     // A cookie whose session is gone (expired, signed out elsewhere) takes the card away once read.
-    const showBalance = userId !== null || (sessionCookieHint && !sessionRead);
+    // One whose session could not be read keeps it, saying the balance did not load: the press says
+    // why and offers the reload.
+    const showBalance = userId !== null || (sessionCookieHint && (!sessionRead || sessionUnreadable));
 
     useEffect(() => {
         if (!userId) return;
@@ -457,7 +464,7 @@ export function PricingClient({
                             <div className="min-w-0">
                                 <Text variant="caption">Available balance</Text>
                                 <Text as="p" variant="cardTitle" className="mt-0.5">
-                                    {formatAvailableBalance(balance)}
+                                    {sessionUnreadable ? 'Balance did not load' : formatAvailableBalance(balance)}
                                 </Text>
                             </div>
                         </div>
@@ -587,6 +594,18 @@ export function PricingClient({
                                         {checkoutStatus.kind === 'failed'
                                             ? checkoutStatus.message
                                             : CREDIT_CHECKOUT_STATUS_COPY[checkoutStatus.kind]}
+                                        {checkoutStatus.kind === 'failed' && checkoutStatus.reload ? (
+                                            <>
+                                                {' '}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => window.location.reload()}
+                                                    className="ui-focus-ring rounded-full font-bold underline underline-offset-2"
+                                                >
+                                                    Try again
+                                                </button>
+                                            </>
+                                        ) : null}
                                         {checkoutStatus.kind === 'settled' ? (
                                             // The buyer now stays on this page, so the way on to spending the
                                             // credits is offered here: the recipe or the remix they came from, if any.

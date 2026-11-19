@@ -4,8 +4,8 @@ import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 
-import { pushToast } from '@/components/feedback-state';
-import { readBrowserSession } from '@/lib/browser-session';
+import { pushToast, requestConfirmation, type ConfirmationRequest } from '@/components/feedback-state';
+import { BrowserSupabaseLoadError, readBrowserSession } from '@/lib/browser-session';
 
 import {
   SEARCH_FOLLOWING_LABEL,
@@ -20,6 +20,14 @@ export type SearchFollowCreator = {
   username: string;
   displayName: string;
   isFollowing: boolean;
+};
+
+/** A press whose session could not be read because the client's code did not load. */
+export const FOLLOW_UNLOADED: ConfirmationRequest = {
+  title: 'Follow did not load',
+  message: 'Part of this page did not load. Reload it to follow from here.',
+  confirmLabel: 'Reload page',
+  cancelLabel: 'Not now',
 };
 
 /**
@@ -66,9 +74,15 @@ export function SearchFollowButton({
       try {
         // A visitor has none, read without loading the Supabase client.
         session = await readBrowserSession();
-      } catch {
-        // The session could not be read: that is no sign of being signed out, so nothing changes
-        // and the creator page's sentence says so.
+      } catch (error) {
+        // The session could not be read: that is no sign of being signed out, so nothing changes.
+        // The client's code that did not load stays unloaded until a reload in a build
+        // (browser-session.ts), so that is what the person is offered; any other failure says the
+        // creator page's sentence.
+        if (error instanceof BrowserSupabaseLoadError) {
+          if (await requestConfirmation(FOLLOW_UNLOADED)) window.location.reload();
+          return;
+        }
         pushToast({ tone: 'error', message: SEARCH_FOLLOW_FAILED });
         return;
       }

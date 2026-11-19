@@ -160,7 +160,9 @@ export function useSearchStarterState({ enabled = true, kept = false }: { enable
         const next = session?.user?.id ?? null;
         if (!disposed && next !== null && next !== askedFor) askForAnotherAccount(supabase);
       }).catch(() => {
-        if (!askedAsVisitor) settle();
+        // The client did not load (in a build it stays unloaded until a reload: browser-session.ts).
+        // The question is a visitor's then, as the search page's own then are.
+        if (!disposed && !askedAsVisitor) void ask(null);
       });
     };
     if (hasSupabaseAuthCookie()) {

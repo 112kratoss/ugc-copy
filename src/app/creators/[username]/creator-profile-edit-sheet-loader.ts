@@ -5,6 +5,8 @@ type CreatorProfileEditSheetModule = typeof import('./CreatorProfileEditSheet');
 /** How long the owner's page waits for an idle moment before it loads the editor's code. */
 export const CREATOR_PROFILE_EDIT_SHEET_WARM_IDLE_TIMEOUT_MS = 2_000;
 
+const importEditSheetModule = () => import('./CreatorProfileEditSheet');
+let importEditSheet: () => Promise<CreatorProfileEditSheetModule> = importEditSheetModule;
 let editSheetPromise: Promise<CreatorProfileEditSheetModule> | null = null;
 // The module once it has arrived in this document (`useLoadedCreatorProfileEditSheet`).
 let loadedEditSheet: CreatorProfileEditSheetModule | null = null;
@@ -12,11 +14,12 @@ const loadedEditSheetListeners = new Set<() => void>();
 
 /**
  * The owner's Edit profile dialog, loaded once per document, as the reel's code is
- * (`showcase-reel-loader.ts`): one promise for the warm-up and the press, and a load that failed
- * is asked for again by the next one.
+ * (`showcase-reel-loader.ts`): one promise for the warm-up and the press. A load that failed is
+ * asked for again by the next call, which in a production build gets the same failure
+ * (`DeferredCreatorProfileCard` says why): the press's boundary offers a reload instead.
  */
 export function loadCreatorProfileEditSheet(): Promise<CreatorProfileEditSheetModule> {
-  editSheetPromise ??= import('./CreatorProfileEditSheet')
+  editSheetPromise ??= importEditSheet()
     .then((module) => {
       loadedEditSheet = module;
       loadedEditSheetListeners.forEach((listener) => listener());
@@ -68,8 +71,14 @@ export function useLoadedCreatorProfileEditSheet(): CreatorProfileEditSheetModul
   );
 }
 
-/** For tests: each case starts with no editor loaded, as a page does. */
-export function forgetCreatorProfileEditSheetForTests(): void {
+/**
+ * For tests: each case starts with no editor loaded, as a page does, and with the real import, or
+ * with `load` for how the code arrives (an import that rejects, as a missing chunk's does).
+ */
+export function forgetCreatorProfileEditSheetForTests(
+  load: (() => Promise<CreatorProfileEditSheetModule>) | null = null,
+): void {
+  importEditSheet = load ?? importEditSheetModule;
   editSheetPromise = null;
   loadedEditSheet = null;
   CreatorProfileEditSheetOnItsWay = lazyCreatorProfileEditSheet();

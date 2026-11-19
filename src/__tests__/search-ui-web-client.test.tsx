@@ -4,13 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SearchClient from '@/app/search/SearchClient';
 import { AppShellSearch } from '@/components/AppShellSearch';
+import { FOLLOW_UNLOADED } from '@/components/search/SearchFollowButton';
 import { markSearchFieldHandoff } from '@/components/search/search-field-handoff';
+import { setBrowserSupabaseImportForTests } from '@/lib/browser-session';
 import type { PublicSearchResponse } from '@/lib/public-search';
 import { noteFollowChange, readFollowChanges } from '@/lib/follow-changes';
 import { keepSearchPage } from '@/lib/search-kept-pages';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
-import { SEARCH_RELATED_SEARCHES_MAX, SEARCH_RELATED_THIN_POSTS } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
+import { SEARCH_FAILED_TITLE, SEARCH_RELATED_SEARCHES_MAX, SEARCH_RELATED_THIN_POSTS } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
 import { searchStarterHeading, type SearchStarterResponse } from '../../ugc-mobile/lib/public-search-policy/search-starter';
 import { SEARCH_TYPEAHEAD_DEBOUNCE_MS, type SearchSuggestResponse } from '../../ugc-mobile/lib/public-search-policy/search-typeahead';
 import { SEARCH_FOLLOW_FAILED, SEARCH_RELATED_SEARCHES_HEADING } from '../../ugc-mobile/lib/public-search-policy/search-ui-words';
@@ -870,5 +872,96 @@ describe('the typeahead’s catalog rows', () => {
       fireEvent.click(screen.getByRole('option', { name: /^Kling 2\.6, model/ }));
       expect(pushMock).toHaveBeenLastCalledWith('/search?q=kl');
     });
+  });
+});
+
+// The browser's Supabase client is loaded with its first use, apart from the page's own code, and
+// that load can fail (offline, a deploy that rotated the chunk names while the tab was open). In a
+// production build it stays unloaded until a reload (browser-session.ts): the page goes on as a
+// visitor's, and a press that needs the account offers the reload (review of #883).
+describe('when the browser’s Supabase client did not load', () => {
+  const authorizationOf = (init: unknown) => ((init as RequestInit | undefined)?.headers as Record<string, string> | undefined)?.Authorization;
+
+  beforeEach(() => {
+    signedIn(VIEWER);
+    setBrowserSupabaseImportForTests(() => Promise.reject(new Error('Loading chunk 1p-ooj54jv0t9 failed.')));
+  });
+
+  afterEach(() => {
+    setBrowserSupabaseImportForTests(null);
+    vi.restoreAllMocks();
+  });
+
+  it('still searches, as a visitor: the answer is drawn, asked with no token, and nothing says it failed', async () => {
+    searchFetchMock.mockResolvedValue(ok(answer('luna', 'top', {
+      creators: { items: [creator('c1', 'Luna Studio')], nextCursor: null },
+    })));
+    render(<SearchClient initialQuery="luna" initialType="top" />);
+
+    expect(await screen.findByRole('link', { name: /Luna Studio's profile/ })).toBeTruthy();
+    expect(searchFetchMock).toHaveBeenCalled();
+    for (const [, init] of searchFetchMock.mock.calls) expect(authorizationOf(init)).toBeUndefined();
+    expect(screen.queryByText(SEARCH_FAILED_TITLE)).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('asks for the start screen as a visitor', async () => {
+    starterFetchMock.mockResolvedValue(ok(STARTER));
+    render(<SearchClient initialQuery="" initialType="top" />);
+
+    expect(await screen.findByRole('region', { name: 'Ideas to start a search' })).toBeTruthy();
+    expect(starterFetchMock).toHaveBeenCalledTimes(1);
+    expect(authorizationOf(starterFetchMock.mock.calls[0][1])).toBeUndefined();
+  });
+
+  it('asks the typeahead as a visitor', async () => {
+    suggestFetchMock.mockResolvedValue(ok({
+      query: 'sdx', normalizedQuery: 'sdx', creators: [], entities: [], completions: [{ text: 'sdxl portraits' }],
+    }));
+    render(<AppShellSearch />);
+    fireEvent.focus(box());
+    type('sdx');
+
+    expect(await screen.findByRole('option', { name: 'Search for sdxl portraits' })).toBeTruthy();
+    const asked = suggestFetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/search/suggest?q=sdx'));
+    expect(asked).toHaveLength(1);
+    expect(authorizationOf(asked[0][1])).toBeUndefined();
+  });
+
+  it('offers the reload at a Follow press, follows nobody, and sends no one to sign in', async () => {
+    starterFetchMock.mockResolvedValue(ok(STARTER));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<SearchClient initialQuery="" initialType="top" />);
+    const follow = await screen.findByRole('button', { name: 'Follow Luna Studio' });
+    const page = window.location;
+    const reload = vi.fn();
+
+    fireEvent.click(follow);
+    // In place before the press reads the session, which it does once this task is done.
+    vi.stubGlobal('location', { reload });
+
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    vi.stubGlobal('location', page);
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining(FOLLOW_UNLOADED.title));
+    expect(pushToastMock).not.toHaveBeenCalled();
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(followFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('changes nothing when the reload is declined', async () => {
+    starterFetchMock.mockResolvedValue(ok(STARTER));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    render(<SearchClient initialQuery="" initialType="top" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Follow Luna Studio' }));
+
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(pushToastMock).not.toHaveBeenCalled();
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(followFetchMock).not.toHaveBeenCalled();
+    const follow = screen.getByRole('button', { name: 'Follow Luna Studio' });
+    expect(follow.getAttribute('aria-pressed')).toBe('false');
+    expect(follow.hasAttribute('aria-busy')).toBe(false);
   });
 });

@@ -12,6 +12,7 @@ import {
 } from '@/app/creators/[username]/creator-profile-edit-sheet-loader';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
+import { setBrowserSupabaseImportForTests } from '@/lib/browser-session';
 import { clearOwnerPageEditsForTests, useOwnerCreatorProfile } from '@/lib/owner-page-edits';
 import type { EditableCreatorProfile } from '@/lib/profile';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
@@ -153,10 +154,11 @@ describe('ProfileActions', () => {
     routerMock.refresh.mockReset();
     resetFeedbackState();
     clearShowcaseClientCacheForTests();
-    // A visitor, until a case says who is looking; and no editor loaded yet.
+    // A visitor, until a case says who is looking; and no editor or client loaded yet.
     authMocks.state = { session: null, isLoading: false, cookie: false };
     supabaseMocks.getSession.mockReset();
     forgetCreatorProfileEditSheetForTests();
+    setBrowserSupabaseImportForTests(null);
     followState = false;
     fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.startsWith('/api/profile/follow?')) {
@@ -1028,6 +1030,125 @@ describe('ProfileActions', () => {
         fireEvent.click(within(said).getByRole('button', { name: 'Try again' }));
         expect(reload).toHaveBeenCalledTimes(1);
       });
+
+      // The way it fails in a browser: the import() of its chunk rejects, and React.lazy throws
+      // that to the boundary. In a production build no retry fetches the chunk again.
+      it('says so, with the reload, when the import() of its code rejects', async () => {
+        editorDraw.fails = false;
+        const chunkError = new Error('Loading chunk app_creators_username_CreatorProfileEditSheet_tsx failed.');
+        forgetCreatorProfileEditSheetForTests(() => Promise.reject(chunkError));
+        answerProfileRead();
+        render(<ProfileActions profile={profile} />);
+        const edit = screen.getByRole('button', { name: 'Edit profile' });
+
+        fireEvent.click(edit);
+
+        const said = await screen.findByRole('alert');
+        expect(said).toHaveTextContent('The profile editor did not load.');
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(edit).not.toHaveAttribute('aria-busy');
+        expect(reportError).toHaveBeenCalledWith(chunkError);
+        vi.stubGlobal('location', { reload });
+        fireEvent.click(within(said).getByRole('button', { name: 'Try again' }));
+        expect(reload).toHaveBeenCalledTimes(1);
+      });
+
+      // Its code arrived, but the client the private profile is read with did not: asked again in
+      // place the read would fail again, so the dialog closes rather than offer a Try again of its own.
+      it('closes, and offers the reload, when the client its read needs did not load', async () => {
+        editorDraw.fails = false;
+        setBrowserSupabaseImportForTests(() => Promise.reject(new Error('Loading chunk 1p-ooj54jv0t9 failed.')));
+        function EditorCode() {
+          return <span data-testid="editor-code" data-loaded={String(useLoadedCreatorProfileEditSheet() !== null)} />;
+        }
+        answerProfileRead();
+        render(<><ProfileActions profile={profile} /><EditorCode /></>);
+        const edit = screen.getByRole('button', { name: 'Edit profile' });
+        // The editor's code is in before the press, so the press draws the dialog at once.
+        await waitFor(() => expect(screen.getByTestId('editor-code')).toHaveAttribute('data-loaded', 'true'));
+
+        fireEvent.click(edit);
+        expect(screen.getByRole('dialog', { name: 'Edit profile' })).toBeInTheDocument();
+
+        const said = await screen.findByRole('alert');
+        expect(said).toHaveTextContent('This page did not finish loading.');
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(edit).toHaveFocus();
+        expect(profileReads()).toHaveLength(0);
+        expect(reportError).not.toHaveBeenCalled();
+        vi.stubGlobal('location', { reload });
+        fireEvent.click(within(said).getByRole('button', { name: 'Try again' }));
+        expect(reload).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  // The client a press reads the session with can fail to load, and a production build fetches it
+  // again only after a reload: the press does nothing it cannot finish, asks no sign-in of a viewer
+  // whose session is only unreadable, leaves nothing unhandled, and offers the reload.
+  describe('a press whose session cannot be read', () => {
+    const viewerSession = { data: { session: { access_token: 'viewer-token', user: { id: 'viewer-1' } } } };
+    let unhandled = vi.fn();
+
+    beforeEach(() => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+      viewAs(viewerSession);
+      setBrowserSupabaseImportForTests(() => Promise.reject(new Error('Loading chunk 1p-ooj54jv0t9 failed.')));
+    });
+
+    afterEach(() => {
+      process.off('unhandledRejection', unhandled);
+    });
+
+    it('is a Follow that changes nothing and offers the reload', async () => {
+      render(<ProfileActions profile={profile} />);
+      const follow = await screen.findByRole('button', { name: /^follow$/i });
+
+      fireEvent.click(follow);
+
+      const said = await screen.findByRole('alert');
+      expect(said).toHaveTextContent('This page did not finish loading.');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(mockPush).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalledWith('/api/profile/follow', expect.anything());
+      expect(screen.getByRole('button', { name: /^follow$/i })).toHaveAttribute('aria-pressed', 'false');
+      expect(unhandled).not.toHaveBeenCalled();
+
+      const reload = vi.fn();
+      vi.stubGlobal('location', { reload });
+      fireEvent.click(within(said).getByRole('button', { name: 'Try again' }));
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([['Report user'], ['Block user']])('is a %s that asks and sends nothing, and offers the reload', async (item) => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      render(<ProfileActions profile={profile} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'More actions for @creator-name' }));
+
+      fireEvent.click(screen.getByRole('menuitem', { name: new RegExp(item, 'i') }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('This page did not finish loading.');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/moderation/'))).toHaveLength(0);
+      expect(mockPush).not.toHaveBeenCalled();
+      expect(unhandled).not.toHaveBeenCalled();
+    });
+
+    it('offers the reload on the panel of a creator the viewer blocked too', async () => {
+      render(<ProfileActions profile={profile} blockedByViewer />);
+      fireEvent.click(screen.getByRole('button', { name: 'More actions for @creator-name' }));
+
+      fireEvent.click(screen.getByRole('menuitem', { name: /report user/i }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('This page did not finish loading.');
+      expect(unhandled).not.toHaveBeenCalled();
     });
   });
 });

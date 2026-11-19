@@ -9,7 +9,7 @@ import {
   useHasHydratedSupabaseAuthCookieHint,
   useSupabaseAuthCookieHint,
 } from '@/components/useSupabaseAuthCookieHint';
-import { loadBrowserSupabase } from '@/lib/browser-session';
+import { BrowserSupabaseLoadError, loadBrowserSupabase } from '@/lib/browser-session';
 import { rememberOwnerCreatorProfile } from '@/lib/owner-page-edits';
 import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
 import { toEditableCreatorProfile } from '@/lib/profile';
@@ -117,8 +117,11 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
   // reset the form. The editor is drawn once it lands.
   const [editorProfile, setEditorProfile] = useState<EditableCreatorProfile | null>(null);
   const [editorLoadError, setEditorLoadError] = useState<string | null>(null);
-  // The editor's code did not load (`EditSheetLoadBoundary`).
-  const [editorCodeFailed, setEditorCodeFailed] = useState(false);
+  // Code the page loads on demand did not load: the editor's (`EditSheetLoadBoundary`), or the
+  // client a press reads the session with (browser-session.ts). In a production build neither is
+  // fetched again until a reload, so a line under the buttons says so and Try again reloads.
+  const [loadFailure, setLoadFailure] = useState<'editor' | 'session' | null>(null);
+  const editorCodeFailed = loadFailure === 'editor';
   const loadedEditSheet = useLoadedCreatorProfileEditSheet();
   const editorReadRef = useRef(0);
   // Set by the first edit in the open editor: closing it then asks before the
@@ -214,6 +217,21 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
     return current;
   };
 
+  /**
+   * As `readPressSession`, for a press that does nothing more when the session cannot be read
+   * (`undefined`): the line under the buttons says so, and its Try again reloads the page. No
+   * sign-in is asked of a viewer whose session is only unreadable.
+   */
+  const readPressSessionOrSay = async () => {
+    try {
+      return await readPressSession();
+    } catch (error) {
+      console.error('Failed to read the session at a press', error);
+      setLoadFailure('session');
+      return undefined;
+    }
+  };
+
   const loadEditorProfile = async () => {
     const read = ++editorReadRef.current;
     setEditorProfile(null);
@@ -239,6 +257,13 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
     } catch (error) {
       if (read !== editorReadRef.current) return;
       console.error('Failed to fetch private profile', error);
+      if (error instanceof BrowserSupabaseLoadError) {
+        // Asked again in place, it would fail again (browser-session.ts): the editor closes, and
+        // the line under the buttons offers the reload, as for the editor's own code.
+        setLoadFailure('session');
+        closeEditor();
+        return;
+      }
       setEditorLoadError('Could not load your profile.');
     }
   };
@@ -285,7 +310,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
   };
 
   const handleEditorCodeFailed = () => {
-    setEditorCodeFailed(true);
+    setLoadFailure('editor');
     closeEditor();
   };
 
@@ -298,11 +323,26 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
   // takes both from registered accounts only, so a signed-out viewer is sent
   // to sign in and comes back here.
   const requireAccountToken = async (): Promise<string | null> => {
-    const session = await readPressSession();
+    const session = await readPressSessionOrSay();
+    if (session === undefined) return null;
     if (session?.access_token) return session.access_token;
     router.push(`/login?returnUrl=${encodeURIComponent(returnUrl)}`);
     return null;
   };
+
+  // The line a load failure puts under the buttons (`loadFailure`), on every branch that offers a press.
+  const loadFailureLine = loadFailure ? (
+    <p role="alert" className="mt-2 text-sm text-rose-300">
+      {loadFailure === 'editor' ? 'The profile editor did not load.' : 'This page did not finish loading.'}{' '}
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="ui-focus-ring rounded-full font-bold underline underline-offset-2"
+      >
+        Try again
+      </button>
+    </p>
+  ) : null;
 
   const handleReportUser = async () => {
     const token = await requireAccountToken();
@@ -330,15 +370,18 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
 
   if (blockedByViewer) {
     return (
-      <div className="flex flex-wrap items-center gap-3">
-        <ShowcaseFeedbackMenu
-          itemTitle={`@${profile.username}`}
-          creator={{ username: profile.username, name: profile.displayName }}
-          variant="outline"
-          portal
-          onReportUser={() => void handleReportUser()}
-        />
-      </div>
+      <>
+        <div className="flex flex-wrap items-center gap-3">
+          <ShowcaseFeedbackMenu
+            itemTitle={`@${profile.username}`}
+            creator={{ username: profile.username, name: profile.displayName }}
+            variant="outline"
+            portal
+            onReportUser={() => void handleReportUser()}
+          />
+        </div>
+        {loadFailureLine}
+      </>
     );
   }
 
@@ -361,7 +404,10 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
     setFollowError(null);
     setFollowStatusMessage(null);
 
-    const session = await readPressSession();
+    const session = await readPressSessionOrSay();
+    if (session === undefined) {
+      return;
+    }
 
     if (!session) {
       router.push(`/login?returnUrl=${encodeURIComponent(returnUrl)}`);
@@ -507,18 +553,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
       {!followError && followStatusMessage ? (
         <p className="mt-2 text-sm text-emerald-300">{followStatusMessage}</p>
       ) : null}
-      {isOwner && editorCodeFailed ? (
-        <p role="alert" className="mt-2 text-sm text-rose-300">
-          The profile editor did not load.{' '}
-          <button
-            type="button"
-            onClick={() => window.location.reload()}
-            className="ui-focus-ring rounded-full font-bold underline underline-offset-2"
-          >
-            Try again
-          </button>
-        </p>
-      ) : null}
+      {loadFailureLine}
 
       {editSheet}
     </>

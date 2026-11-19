@@ -742,7 +742,9 @@ export default function SearchClient({
       if (searchRelatedSearchesApply({ type: request.type, firstPage: !cursor })) params.set(SEARCH_RELATED_SEARCHES_PARAM, '1');
       for (const [name, value] of Object.entries(searchBlendParams(askBlend))) params.set(name, value);
       for (const [name, value] of Object.entries(searchEntryParams(searchEntry.current))) params.set(name, value);
-      const session = await readBrowserSession();
+      // A client that did not load (in a build it stays unloaded until a reload: browser-session.ts)
+      // leaves the search a visitor's: still answered, without the account's own blocks and follows.
+      const session = await readBrowserSession().catch(() => null);
       const registered = Boolean(session?.user) && session?.user?.is_anonymous !== true;
       setCanFollow(registered);
       const viewerId = session?.user?.id ?? null;
@@ -1392,7 +1394,7 @@ export default function SearchClient({
         // search, left out of the search log (PUBLIC_SEARCH_PROBE_PARAM).
         const params = new URLSearchParams({ q: normalizedQuery, type: 'top', [PUBLIC_SEARCH_PROBE_PARAM]: '1' });
         for (const [name, value] of Object.entries(publicSearchFilterParams(NO_PUBLIC_SEARCH_FILTERS, readExact))) params.set(name, value);
-        const session = await readBrowserSession();
+        const session = await readBrowserSession().catch(() => null);
         const response = await fetch(`/api/search?${params.toString()}`, {
           cache: 'no-store',
           headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,

@@ -15,7 +15,7 @@ import {
   pressedSearchResult,
   reportSearchOpen,
 } from '@/components/search/search-open-report';
-import { loadBrowserSupabase } from '@/lib/browser-session';
+import { loadBrowserSupabase, setBrowserSupabaseImportForTests } from '@/lib/browser-session';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import type { SearchOpen } from '../../ugc-mobile/lib/public-search-policy/search-open-log';
 
@@ -123,6 +123,26 @@ describe('reportSearchOpen (web)', () => {
       expect(unhandled).not.toHaveBeenCalled();
     } finally {
       process.off('unhandledRejection', unhandled);
+    }
+  });
+
+  // The client's code did not load (offline, or a deploy rotated its chunk), and in a production
+  // build it stays unloaded until a reload: the search itself then went without a token
+  // (SearchClient), and so does the open, which the server keys on the same viewer.
+  it('sends the open without a token when the client did not load, as the search went', async () => {
+    setBrowserSupabaseImportForTests(() => Promise.reject(new Error('Loading chunk 1p-ooj54jv0t9 failed.')));
+    try {
+      reportSearchOpen(open);
+      await settle();
+      expect(getSession).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe('/api/search/opened');
+      expect(init.headers).not.toHaveProperty('Authorization');
+    } finally {
+      setBrowserSupabaseImportForTests(null);
+      // Loaded again, as the cases above found it.
+      await loadBrowserSupabase();
     }
   });
 });

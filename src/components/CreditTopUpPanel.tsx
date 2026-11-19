@@ -115,7 +115,21 @@ export function CreditTopUpPanel({ need, pricingHref, onClose }: { need: CreditT
         >
           {status.kind === 'confirming' ? <Loader2 aria-hidden className="mt-1 h-4 w-4 shrink-0 animate-spin" /> : null}
           {status.kind === 'settled' ? <Check aria-hidden className={clsx('mt-1 h-4 w-4 shrink-0', getAccentClasses('workflow').mark)} /> : null}
-          <span>{status.kind === 'failed' ? status.message : CREDIT_CHECKOUT_STATUS_COPY[status.kind]}</span>
+          <span>
+            {status.kind === 'failed' ? status.message : CREDIT_CHECKOUT_STATUS_COPY[status.kind]}
+            {status.kind === 'failed' && status.reload ? (
+              <>
+                {' '}
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="ui-focus-ring rounded-full font-bold underline underline-offset-2"
+                >
+                  Try again
+                </button>
+              </>
+            ) : null}
+          </span>
         </p>
       ) : null}
 

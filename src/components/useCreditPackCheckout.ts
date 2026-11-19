@@ -34,7 +34,20 @@ export function preloadCreditPackCheckout(): void {
  */
 export type CreditCheckoutStatus =
   | { planId: PricingPlanId; kind: 'confirming' | 'settled' | 'pending' | 'paid' }
-  | { planId: PricingPlanId; kind: 'failed'; message: string };
+  | {
+    planId: PricingPlanId;
+    kind: 'failed';
+    message: string;
+    /** Only a reload can help (the page's code for checkout did not load): the page offers one. */
+    reload?: true;
+  };
+
+/**
+ * What a press says when the client that reads the buyer's session did not load. No retry in place
+ * fetches it in a production build (`loadBrowserSupabase`), so Try again reloads the page, as the
+ * profile editor's card does (`DeferredCreatorProfileCard`). Nothing was ordered.
+ */
+export const CREDIT_CHECKOUT_UNLOADED_MESSAGE = 'Checkout did not load. Try again reloads the page.';
 
 export const CREDIT_CHECKOUT_STATUS_COPY = {
   confirming: 'Confirming your payment…',
@@ -71,6 +84,10 @@ export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
   const [loadingPlan, setLoadingPlan] = useState<PricingPlanId | null>(null);
   const [status, setStatus] = useState<CreditCheckoutStatus | null>(null);
   const stopBalanceRefreshRef = useRef<(() => void) | null>(null);
+  // A press under way, from its first moment: a second press while it reads the buyer's session
+  // (the client's code can still be on its way) is the same press, never a second order, whichever
+  // pack it is on.
+  const pressing = useRef(false);
 
   // The poll outlives whatever drew the checkout, and stops itself after its minute: it only
   // asks the page to read the balance again. The creators' sheet goes as soon as the buyer is
@@ -81,14 +98,15 @@ export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
     stopBalanceRefreshRef.current = pollCreditBalanceAfterPayment();
   };
 
-  const buy = async (planId: PricingPlanId) => {
+  const buyWithSession = async (planId: PricingPlanId) => {
     let session: Session | null;
     try {
       session = await readBrowserSession();
     } catch (error) {
-      // The client's code did not load (offline, or a deploy rotated its chunk): nothing is ordered.
+      // The client's code did not load (offline, or a deploy rotated its chunk), and in a build no
+      // retry fetches it again: nothing is ordered, and Try again reloads the page.
       console.error('Payment initiation error:', error);
-      setStatus({ planId, kind: 'failed', message: 'Checkout could not start. Check your connection and try again.' });
+      setStatus({ planId, kind: 'failed', message: CREDIT_CHECKOUT_UNLOADED_MESSAGE, reload: true });
       return;
     }
     if (!session?.user) {
@@ -101,7 +119,6 @@ export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
     const checkoutIntentScope = `credits:${planId}`;
 
     try {
-      setLoadingPlan(planId);
       // Before the order, so a script that cannot load leaves no order behind.
       await loadRazorpayCheckout(CREDIT_CHECKOUT_SCRIPT_ID);
 
@@ -211,7 +228,18 @@ export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
         kind: 'failed',
         message: error instanceof Error ? error.message : 'An error occurred while initiating payment.',
       });
+    }
+  };
+
+  const buy = async (planId: PricingPlanId) => {
+    if (pressing.current) return;
+    pressing.current = true;
+    // "Processing…" from the press on, the session read included.
+    setLoadingPlan(planId);
+    try {
+      await buyWithSession(planId);
     } finally {
+      pressing.current = false;
       setLoadingPlan(null);
     }
   };

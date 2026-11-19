@@ -23,7 +23,9 @@ export function reportSearchOpen(open: SearchOpen): void {
   try {
     const body = searchOpenBody(open);
     if (!body) return;
+    // A client that did not load sends the open without a token, as the search itself then went.
     void readBrowserSession()
+      .catch(() => null)
       .then((session) => {
         const token = session?.access_token ?? null;
         if (token && isAgentAccessToken(token)) return undefined;

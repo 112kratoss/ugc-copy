@@ -32,10 +32,12 @@ vi.mock('@/lib/supabase', () => ({
 }));
 
 // The browser's session cookie, which @supabase/ssr keeps the session in: there whenever the
-// session is. The press loads the Supabase client to read the buyer only with one.
+// session is, unless a case says otherwise. The press loads the Supabase client to read the buyer
+// only with one.
+const cookieState = vi.hoisted(() => ({ present: null as boolean | null }));
 vi.mock('@/lib/supabase-auth-cookie', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase-auth-cookie')>()),
-  hasSupabaseAuthCookie: () => sessionState.session !== null,
+  hasSupabaseAuthCookie: () => cookieState.present ?? sessionState.session !== null,
 }));
 
 type RazorpayHandler = (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) => Promise<void>;
@@ -71,6 +73,7 @@ describe('the top-up sheet', () => {
     routerMock.push.mockReset();
     window.sessionStorage.clear();
     sessionState.session = { access_token: 'click-token', user: { id: 'buyer-1' } };
+    cookieState.present = null;
     sheet = { options: null, failed: null, opened: 0 };
     fetchMock.mockImplementation(async (url: string) => {
       if (url === '/api/razorpay/order') return json({ orderId: 'order_123', amount: 41500, currency: 'INR' });
@@ -314,6 +317,45 @@ describe('the top-up sheet', () => {
     act(() => openCreditTopUp(null));
     const plain = await screen.findByRole('dialog', { name: 'Top up credits' });
     expect(within(plain).getByRole('link', { name: 'See every pack' })).toHaveAttribute('href', '/pricing');
+  });
+
+  it('sends a buyer whose cookie holds no session any more to sign in, reading it with the client', async () => {
+    sessionState.session = null;
+    cookieState.present = true;
+    const { supabase } = await import('@/lib/supabase');
+    vi.mocked(supabase.auth.getSession).mockClear();
+    window.history.replaceState(null, '', '/create-image');
+    const dialog = await openSheet();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Buy 500 credits/ }));
+
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith(`/login?returnUrl=${encodeURIComponent('/create-image')}`));
+    expect(supabase.auth.getSession).toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // The client that reads the buyer's session can fail to load, and a production build fetches it
+  // again only after a reload: the press orders nothing, and the sheet offers that reload.
+  it('orders nothing when the client did not load, and offers a reload in the sheet', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { setBrowserSupabaseImportForTests } = await import('@/lib/browser-session');
+    setBrowserSupabaseImportForTests(() => Promise.reject(new Error('Loading chunk 1p-ooj54jv0t9 failed.')));
+    try {
+      const dialog = await openSheet();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: /^Buy 500 credits/ }));
+
+      const said = await within(dialog).findByRole('alert');
+      expect(said).toHaveTextContent('Checkout did not load. Try again reloads the page.');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(sheet.opened).toBe(0);
+      const reload = vi.fn();
+      vi.stubGlobal('location', { reload });
+      fireEvent.click(within(said).getByRole('button', { name: 'Try again' }));
+      expect(reload).toHaveBeenCalledTimes(1);
+    } finally {
+      setBrowserSupabaseImportForTests(null);
+    }
   });
 
   it('sends a buyer whose session has ended to sign in, and back to this page', async () => {

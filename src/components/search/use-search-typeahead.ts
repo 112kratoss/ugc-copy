@@ -172,9 +172,10 @@ export function useSearchTypeahead<Row extends SearchTypeaheadRow = SearchTypeah
         // visitor's request is sent bare, and the client is not loaded for it. What it keeps is
         // kept for this focus of the box alone (above), which a sign-in elsewhere ends.
         let session: Session | null = null;
-        if (hasSupabaseAuthCookie()) {
-          const supabase = await loadBrowserSupabase();
-          if (unmounted.current) return;
+        // A client that did not load asks as a visitor, as the search page then does.
+        const supabase = hasSupabaseAuthCookie() ? await loadBrowserSupabase().catch(() => null) : null;
+        if (unmounted.current) return;
+        if (supabase) {
           if (!stopWatchingSession.current) {
             // An answer is one account's, and goes when the account does.
             // Watched from the first request on; before it nothing is kept.
