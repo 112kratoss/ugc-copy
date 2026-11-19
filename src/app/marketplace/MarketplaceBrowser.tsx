@@ -32,6 +32,7 @@ import {
   type MarketplaceResourceSort,
 } from '@/lib/post-resource-bundles';
 import { useViewerRecipeState } from '@/app/marketplace/useViewerRecipeState';
+import { LOAD_MORE_ROOT_MARGIN, loadMoreRetryDelayMs } from '@/lib/load-more-policy';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { SourceToolFilterOption } from '@/lib/source-tools';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
@@ -50,6 +51,13 @@ import {
 import { MarketplaceListingFailed, MarketplaceListingSkeleton } from './MarketplaceListingStates';
 import { countMarketplaceFiltersSet, isPlainLinkClick, marketplaceFiltersKey } from './marketplace-address';
 import type { MarketplaceListingStatus } from './useMarketplaceListing';
+
+/**
+ * How far the page moves from where it stood when a listing was drawn before the list takes it for
+ * the reader's own scroll, as Explore's first-paint shell reads one (`ShowcaseBootstrapClient`): the
+ * place Back restores, where the browser puts the reader before the list's first frame, is never one.
+ */
+const READER_SCROLL_MIN_PX = 24;
 
 interface MarketplacePageInfo {
   hasMore: boolean;
@@ -123,6 +131,14 @@ interface MarketplaceBrowserProps {
    * so the one press both opens the list and loads more (live sweep, 2026-11-17).
    */
   loadMoreOnOpen?: string | null;
+  /**
+   * The reader scrolled the first-paint shell towards its end, which brought this list in and asked
+   * for its next page (`loadMoreOnOpen`): the list asks for each page after it as its end comes near,
+   * from the start. Otherwise it waits for the reader to scroll first, so a first screen whose
+   * recipes end above the fold, a press (which asks for one page) and the place Back restores ask for
+   * nothing more by themselves.
+   */
+  scrolledOnOpen?: boolean;
   /** The filters as the shell left them, open or folded behind Filters, so the hand-over moves nothing. */
   initialFiltersOpen?: boolean;
   /**
@@ -157,6 +173,7 @@ export default function MarketplaceBrowser({
   listingStatus = 'ready',
   listingSettled = true,
   loadMoreOnOpen = null,
+  scrolledOnOpen = false,
   initialFiltersOpen = false,
   onNavigate,
   onRetry,
@@ -188,6 +205,15 @@ export default function MarketplaceBrowser({
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(initialFiltersOpen);
+  // Whether the reader has scrolled this listing since it was drawn: until then the list asks for no
+  // page by itself (`scrolledOnOpen`).
+  const [readerScrolled, setReaderScrolled] = useState(scrolledOnOpen);
+  // The row of "Load more recipes", which stands for the list's end: once the reader has scrolled,
+  // the next page is asked for as it comes within LOAD_MORE_ROOT_MARGIN of the window. Held as state,
+  // so the observer follows the row as it is drawn and taken away.
+  const [listEnd, setListEnd] = useState<HTMLDivElement | null>(null);
+  // Pages that failed in a row, pressed for or not; any page that loads starts the count over.
+  const loadMoreFailuresRef = useRef(0);
   // A Load more pressed and not yet brought: the shell's, handed over with this list, or this list's
   // own pressed while the listing's own first page was still read. Cleared once that page is drawn,
   // or has failed; a list started again meanwhile (its own first page landing, another viewer) asks
@@ -228,6 +254,8 @@ export default function MarketplaceBrowser({
     if (filtersListingKeyRef.current !== listingKey) {
       filtersListingKeyRef.current = listingKey;
       setFiltersOpen(false);
+      // Another listing is a first screen of its own: its pages wait for the reader to scroll it.
+      setReaderScrolled(false);
     }
   });
 
@@ -240,6 +268,7 @@ export default function MarketplaceBrowser({
     setSearchInput(initialFilters.q || shortQuery);
     setIsLoadingMore(false);
     setLoadError(null);
+    loadMoreFailuresRef.current = 0;
 
     return () => {
       cutShortRef.current = stopLoadMore();
@@ -346,6 +375,7 @@ export default function MarketplaceBrowser({
       if (controller.signal.aborted || loadMoreAbortControllerRef.current !== controller) {
         return;
       }
+      loadMoreFailuresRef.current = 0;
 
       // From the list as drawn: one Load more runs at a time, and nothing else adds to it meanwhile.
       const nextItems = [...items];
@@ -368,6 +398,7 @@ export default function MarketplaceBrowser({
       );
     } catch (error) {
       if (!controller.signal.aborted && loadMoreAbortControllerRef.current === controller) {
+        loadMoreFailuresRef.current += 1;
         setLoadError(error instanceof Error ? error.message : 'Could not load more recipes.');
         // Said in the error: the button is offered again.
         setPressedListingKey(null);
@@ -403,6 +434,63 @@ export default function MarketplaceBrowser({
     const timer = window.setTimeout(() => loadPressedPage(), 0);
     return () => window.clearTimeout(timer);
   }, [readsOnForPress]);
+
+  // The reader's own scroll: the page moved from where it stood when the listing was drawn. Read
+  // from there, the place Back restores, and the browser's scroll event for it, never count.
+  useEffect(() => {
+    if (readerScrolled) return;
+    const drawnAt = window.scrollY;
+    const readScroll = () => {
+      if (Math.abs(window.scrollY - drawnAt) >= READER_SCROLL_MIN_PX) setReaderScrolled(true);
+    };
+    window.addEventListener('scroll', readScroll, { passive: true });
+    return () => window.removeEventListener('scroll', readScroll);
+  }, [readerScrolled, listingKey]);
+
+  // The next page, asked for by itself once the reader has scrolled and the list's end comes within
+  // LOAD_MORE_ROOT_MARGIN of the window, as Home's feed asks (owner's report, 2026-11-20: every page
+  // needed a press). Never beside a press waiting or a page on its way. After a failed page, only
+  // once a wait has passed, longer each time, and after the last wait not at all: the button asks
+  // then (load-more-policy: a fresh observer fired at once after every failure, and Home sent 225
+  // failing requests in 5.5 s).
+  const asksNearTheEnd = readerScrolled && pageInfo.hasMore && readyToReadOn && !awaitingViewer && !isLoadingMore && !pressPending;
+  const loadNextPage = useEffectEvent(() => {
+    void loadMore();
+  });
+  useEffect(() => {
+    if (!asksNearTheEnd || !listEnd || typeof IntersectionObserver === 'undefined') return;
+    const delay = loadMoreRetryDelayMs(loadError ? loadMoreFailuresRef.current : 0);
+    if (delay === null) return;
+    let live = true;
+    let observer: IntersectionObserver | null = null;
+    const observe = () => {
+      observer = new IntersectionObserver((entries) => {
+        // Not for a notice queued before this effect let the observer go, which a browser may still
+        // deliver: the listing it watched may be one the reader has left for another, unscrolled.
+        if (live && entries.some((entry) => entry.isIntersecting)) loadNextPage();
+      }, { rootMargin: LOAD_MORE_ROOT_MARGIN });
+      observer.observe(listEnd);
+    };
+    const timer = delay > 0 ? window.setTimeout(observe, delay) : null;
+    if (timer === null) observe();
+    return () => {
+      live = false;
+      if (timer !== null) window.clearTimeout(timer);
+      observer?.disconnect();
+    };
+  }, [asksNearTheEnd, listEnd, loadError]);
+
+  // The network coming back asks for the failed page again, its waits anew, as Home's feed does.
+  const pageFailed = loadError !== null && pageInfo.hasMore;
+  useEffect(() => {
+    if (!pageFailed) return undefined;
+    const askAgain = () => {
+      loadMoreFailuresRef.current = 0;
+      setLoadError(null);
+    };
+    window.addEventListener('online', askAgain);
+    return () => window.removeEventListener('online', askAgain);
+  }, [pageFailed]);
 
   return (
     <>
@@ -575,7 +663,9 @@ export default function MarketplaceBrowser({
           </div>
 
           {pageInfo.hasMore ? (
-            <div className="mt-8 flex justify-center">
+            // The list's end: once the reader has scrolled, the next page is asked for as it comes
+            // near. The button stays, for a keyboard and for a page that failed.
+            <div ref={setListEnd} className="mt-8 flex justify-center">
               <button
                 type="button"
                 onClick={pressLoadMore}

@@ -19,6 +19,10 @@ import imagePost from './fixtures/creation-post-free-recipe.json';
 //   interactive list in ("Opening buyer tools…"), which drew the same four recipes, and the reader
 //   had to press again.
 // - On a phone the first screen held no recipe: the hero and the open filter panel filled it.
+// And as the owner reported it on 2026-11-20:
+// - Every page after the first needed a press of "Load more recipes". A reader who scrolls towards
+//   the end now gets the next page by itself, as Home's feed loads, from 600 px away; the button
+//   stays, for a keyboard and for a page that failed.
 //
 // The dev server draws the storefront's first page from fixtures/marketplace-recipes.json
 // (support/supabase-server-stub.cjs); the list API's pages and the covers are answered here, and
@@ -31,9 +35,13 @@ const COLD_PAGE = { timeout: 45_000 };
 const USER_ID = 'e2e-market-reader';
 const FIRST_PAGE = market.bundles.length - 1;
 const MORE_PAGE = 12;
-const TOTAL = 40;
-/** After the shell's press hands over and two Load mores: 28 recipes, seven rows of four. */
+/** Two more pages, each brought by a scroll to the end: 28 recipes, seven rows of four. */
 const LOADED = FIRST_PAGE + 2 * MORE_PAGE;
+/**
+ * The listing ends there. A reader near the end of a listing with more gets its next page by itself,
+ * so one that went on would grow under the recipe opened six rows down before it was opened.
+ */
+const TOTAL = LOADED;
 /** The recipe opened: the second of the sixth row. */
 const OPENED = 22;
 
@@ -194,8 +202,22 @@ const tiles = (page: Page) => page.getByRole('main').getByRole('link', { name: /
 const tile = (page: Page, index: number) => page.getByRole('link', { name: `View free recipe: Recipe ${index}`, exact: true });
 
 /**
- * Opens Marketplace and scrolls to its end, as the owner did, which hands the list over from the
- * first-paint shell to the interactive one.
+ * Scrolls the first-paint shell to its end until it hands the list over to the interactive one (its
+ * module comes in, compiled on its first request), and never further: checked and scrolled in one
+ * step of the page's own script, so a page the list has drawn meanwhile is never scrolled down.
+ */
+async function scrollShellToItsEnd(page: Page) {
+  await expect(async () => {
+    await page.evaluate(() => {
+      if (document.querySelector('[data-marketplace-bootstrap-shell]')) window.scrollTo(0, document.documentElement.scrollHeight);
+    });
+    await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0, { timeout: 1000 });
+  }).toPass(COLD_PAGE);
+}
+
+/**
+ * Opens Marketplace and scrolls to its end, as the owner did: the shell hands the list over to the
+ * interactive one, which brings the next twelve recipes without a press.
  */
 async function openAndHandOver(page: Page) {
   const firstRead = page.waitForRequest((request) => request.url().includes('/api/marketplace/resources?sort=recent&offset=0&limit=4'), COLD_PAGE);
@@ -204,26 +226,21 @@ async function openAndHandOver(page: Page) {
   await firstRead;
   await expect(tiles(page)).toHaveCount(FIRST_PAGE, COLD_PAGE);
 
-  // Scrolled to its end, the shell hands the list over (its module comes in, compiled on its first request).
-  await page.mouse.move(640, 400);
-  await expect(async () => {
-    await page.mouse.wheel(0, 2000);
-    await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0, { timeout: 1000 });
-  }).toPass(COLD_PAGE);
+  await scrollShellToItsEnd(page);
+  await expect(tiles(page)).toHaveCount(FIRST_PAGE + MORE_PAGE, COLD_PAGE);
 }
 
-/** "Load more recipes", once: twelve more. */
-async function loadMore(page: Page) {
+/** A scroll to the end of the list: twelve more, without a press. */
+async function scrollToTheEnd(page: Page) {
   const count = await tiles(page).count();
-  await page.getByRole('button', { name: 'Load more recipes' }).click();
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   await expect(tiles(page)).toHaveCount(count + MORE_PAGE);
 }
 
-/** Marketplace, handed over, then "Load more recipes" twice: 28 recipes. */
+/** Marketplace, handed over on a scroll to its end, then scrolled to the end again: 28 recipes. */
 async function loadSevenRows(page: Page) {
   await openAndHandOver(page);
-  await loadMore(page);
-  await loadMore(page);
+  await scrollToTheEnd(page);
   await expect(tiles(page)).toHaveCount(LOADED);
 }
 
@@ -342,8 +359,8 @@ test.describe('a recipe tile while its picture loads', () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     // The first page's covers come at once; the ones "Load more" brings, after 2.5 seconds.
     await answerListing(page, { coverDelayMs: (index) => (index > FIRST_PAGE ? 2500 : 120) });
+    // The scroll that hands the list over brings them.
     await openAndHandOver(page);
-    await loadMore(page);
 
     const waiting = tile(page, FIRST_PAGE + 1);
     await waiting.scrollIntoViewIfNeeded();
@@ -437,9 +454,9 @@ const recipeTitles = (page: Page) => tiles(page).evaluateAll((links) => links.ma
 
 // Live sweep, 2026-11-17: on a fresh Marketplace the first screen's "Load more recipes" stood in
 // view without a scroll, and its first press only brought the interactive list in ("Opening buyer
-// tools…"), which drew the same four recipes: the reader had to press again. (The list is brought
-// in on its own once the page is scrolled towards its end, which a press made without a scroll never
-// does.) One press opens the list and brings the next twelve, asked for once.
+// tools…"), which drew the same four recipes: the reader had to press again. (A scroll towards the
+// end brings the list in and the next page with it, which a press made without a scroll never
+// sets off.) One press opens the list and brings the next twelve, asked for once.
 test.describe('one press of the first screen\'s "Load more recipes"', () => {
   for (const viewer of ['signed out', 'signed in'] as const) {
     test(`${viewer}, opens the list and brings the next recipes`, async ({ page }) => {
@@ -469,10 +486,10 @@ test.describe('one press of the first screen\'s "Load more recipes"', () => {
         ...Array.from({ length: MORE_PAGE }, (_, index) => `Recipe ${FIRST_PAGE + index + 1}`),
       ]);
       await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0);
-      // Asked for once, and the list goes on from where that page ended.
+      // Asked for once, and the list goes on from where that page ended, as the reader scrolls to it.
       expect(secondPage.finished).toEqual([`?offset=${FIRST_PAGE}&limit=${MORE_PAGE}`]);
       expect(secondPage.failed).toEqual([]);
-      await loadMore.click();
+      await scrollToTheEnd(page);
       await expect(tiles(page)).toHaveCount(FIRST_PAGE + 2 * MORE_PAGE);
     });
   }
@@ -481,18 +498,19 @@ test.describe('one press of the first screen\'s "Load more recipes"', () => {
   // the live site that read took 1.5 s. A press made before it lands waits for it, and reads on from
   // the reader's own page: the read starts the list again, which cut short, and asked again for, a
   // page asked before it, and a page appended to the cached page it replaces brought a blocked
-  // creator's recipe back (review of #837). The reader's page here leaves one recipe out.
+  // creator's recipe back (review of #837). A scroll to the end asks as a press does, and waits the
+  // same way. The reader's page here leaves one recipe out.
   const readersListing = [
     ...market.bundles.slice(0, FIRST_PAGE).map((bundle) => bundle.title).filter((title) => title !== BLOCKED_TITLE),
     ...Array.from({ length: MORE_PAGE }, (_, index) => `Recipe ${FIRST_PAGE + index + 1}`),
   ];
 
-  for (const press of ['the first screen\'s button', 'the list\'s own button, after a scroll brought the list in'] as const) {
-    test(`signed in, a press of ${press} made while the reader's first page is read waits for it, then reads on from it once`, async ({ page }) => {
-      const fromTheList = press !== 'the first screen\'s button';
-      // The list's own button is reached by a scroll, which brings the list in; the first screen's
-      // stands in view with no scroll.
-      await page.setViewportSize(fromTheList ? { width: 1280, height: 800 } : { width: 1440, height: 1200 });
+  for (const ask of ['a press of the first screen\'s button', 'a scroll to the end'] as const) {
+    test(`signed in, ${ask} made while the reader's first page is read waits for it, then reads on from it once`, async ({ page }) => {
+      const byScroll = ask === 'a scroll to the end';
+      // The first screen's button stands in view with no scroll; the scroll is made in a window the
+      // first page fills.
+      await page.setViewportSize(byScroll ? { width: 1280, height: 800 } : { width: 1440, height: 1200 });
       let settleFirstPage = () => undefined as void;
       const firstPageHeld = new Promise<void>((resolve) => {
         settleFirstPage = resolve;
@@ -512,14 +530,8 @@ test.describe('one press of the first screen\'s "Load more recipes"', () => {
       // The cached page, the blocked recipe on it, while the reader's own is read.
       await expect(tiles(page)).toHaveCount(FIRST_PAGE, COLD_PAGE);
 
-      if (fromTheList) {
-        await page.mouse.move(640, 400);
-        await expect(async () => {
-          await page.mouse.wheel(0, 2000);
-          await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0, { timeout: 1000 });
-        }).toPass(COLD_PAGE);
-      }
-      await page.getByRole('button', { name: 'Load more recipes' }).click();
+      if (byScroll) await scrollShellToItsEnd(page);
+      else await page.getByRole('button', { name: 'Load more recipes' }).click();
       // The list is in and says it is loading; nothing is asked for while the reader's page is read.
       await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0, COLD_PAGE);
       await expect(page.getByRole('button', { name: 'Loading' })).toBeVisible();
@@ -629,7 +641,8 @@ test.describe('the first screen', () => {
         await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0, { timeout: 1000 });
       }).toPass(COLD_PAGE);
       const after = await readFirstScreen(page);
-      expect(after.tiles).toEqual(before.tiles);
+      // The scroll asked for the next page too, which may have landed below them by now.
+      expect(after.tiles.slice(0, before.tiles.length)).toEqual(before.tiles);
       await expect(page.getByRole('button', { name: 'Filters' })).toHaveAttribute('aria-expanded', panel === 'open' ? 'true' : 'false');
     });
   }
@@ -683,7 +696,9 @@ test.describe('the first screen', () => {
     await firstRead;
     await expect(tiles(page)).toHaveCount(FIRST_PAGE, COLD_PAGE);
     await page.getByRole('button', { name: 'Filters' }).click();
-    await page.getByRole('button', { name: 'Load more recipes' }).click();
+    // Scrolled to the end, the next twelve come (the button sits a screen below, and a press would
+    // scroll there first, which asks by itself).
+    await scrollShellToItsEnd(page);
     await expect(tiles(page)).toHaveCount(FIRST_PAGE + MORE_PAGE, COLD_PAGE);
     await expect(page.getByRole('button', { name: 'Filters' })).toHaveAttribute('aria-expanded', 'true');
 
@@ -704,5 +719,131 @@ test.describe('the first screen', () => {
     await expect.poll(async () => Math.round((await tile(page, 9).boundingBox())!.y)).toBe(before.top);
     expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(before.scrollY);
     await page.screenshot({ path: test.info().outputPath('phone-back-filters-open.png') });
+  });
+});
+
+/** Every request the page makes for a page after the first: its offset, in the order asked, and those that failed. */
+function watchMorePageRequests(page: Page) {
+  const seen = { offsets: [] as number[], failed: [] as string[] };
+  const offsetOf = (url: string) => (url.includes('/api/marketplace/resources?') ? Number(new URL(url).searchParams.get('offset') ?? 0) : 0);
+  page.on('request', (request) => {
+    const offset = offsetOf(request.url());
+    if (offset > 0) seen.offsets.push(offset);
+  });
+  page.on('requestfailed', (request) => {
+    if (offsetOf(request.url()) > 0) seen.failed.push(new URL(request.url()).search);
+  });
+  return seen;
+}
+
+// Owner's report, 2026-11-20: every page after the first needed a press of "Load more recipes". A
+// reader who scrolls towards the end gets the next page by itself, from 600 px away as on Home, and
+// the recipes drawn stay where they are as it lands. Nothing is asked for before the reader scrolls,
+// and a page that fails is asked for again only after Home's waits.
+test.describe('scrolling to the end of the recipes', () => {
+  test('brings each next page without a press, and nothing before the reader scrolls', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await answerListing(page);
+    const asked = watchMorePageRequests(page);
+    const firstRead = page.waitForRequest(isFirstPageRead, COLD_PAGE);
+    await page.goto('/marketplace', COLD_PAGE);
+    await firstRead;
+    await expect(tiles(page)).toHaveCount(FIRST_PAGE, COLD_PAGE);
+
+    // The first page ends within reach of the first screen, and nothing is asked for unscrolled.
+    const listEnd = page.getByRole('button', { name: 'Load more recipes' });
+    expect((await listEnd.boundingBox())!.y, 'the first page ends within 600 px of the window').toBeLessThan(800 + 600);
+    await page.waitForTimeout(1500);
+    expect(asked.offsets).toEqual([]);
+
+    // A turn of the wheel: the list comes in and the next twelve with it.
+    await page.mouse.move(640, 400);
+    await page.mouse.wheel(0, 300);
+    await expect(tiles(page)).toHaveCount(FIRST_PAGE + MORE_PAGE, COLD_PAGE);
+    await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0);
+    const handedOver = await readFirstScreen(page);
+
+    // Scrolled to the end again: the next twelve, below the recipes drawn, which do not move.
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect(tiles(page)).toHaveCount(TOTAL);
+    const after = await readFirstScreen(page);
+    expect(after.tiles.slice(0, handedOver.tiles.length)).toEqual(handedOver.tiles);
+    await page.screenshot({ path: test.info().outputPath('after-scrolling-to-the-end-twice.png') });
+
+    // The listing has ended: no button, and nothing more is asked for.
+    await expect(page.getByRole('button', { name: /^(Load more recipes|Loading)$/ })).toHaveCount(0);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForTimeout(1000);
+    expect(asked.offsets).toEqual([FIRST_PAGE, FIRST_PAGE + MORE_PAGE]);
+    expect(asked.failed).toEqual([]);
+  });
+
+  // A press asks for one page; on a window tall enough that the list's end stays within reach, the
+  // next waits for the reader to scroll, and a turn of the wheel brings it.
+  test('after a press, the next page waits for the reader to scroll', async ({ page }) => {
+    const height = 2400;
+    await page.setViewportSize({ width: 1440, height });
+    await answerListing(page);
+    const asked = watchMorePageRequests(page);
+    const firstRead = page.waitForRequest(isFirstPageRead, COLD_PAGE);
+    await page.goto('/marketplace', COLD_PAGE);
+    await firstRead;
+    await expect(tiles(page)).toHaveCount(FIRST_PAGE, COLD_PAGE);
+    await page.getByRole('button', { name: 'Load more recipes' }).click();
+    await expect(tiles(page)).toHaveCount(FIRST_PAGE + MORE_PAGE, COLD_PAGE);
+
+    const listEnd = page.getByRole('button', { name: 'Load more recipes' });
+    await expect(listEnd).toBeEnabled();
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    expect((await listEnd.boundingBox())!.y, 'the list ends within 600 px of the window').toBeLessThan(height + 600);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight),
+      'the page scrolls further than a scroll of the reader\'s must move it (24 px)',
+    ).toBeGreaterThan(24);
+    await page.waitForTimeout(1500);
+    expect(asked.offsets).toEqual([FIRST_PAGE]);
+
+    await page.mouse.move(720, 600);
+    await page.mouse.wheel(0, 200);
+    await expect(tiles(page)).toHaveCount(TOTAL, COLD_PAGE);
+    expect(asked.offsets).toEqual([FIRST_PAGE, FIRST_PAGE + MORE_PAGE]);
+    expect(asked.failed).toEqual([]);
+  });
+
+  // Home's phone sent 225 failing requests in 5.5 s before #878 gave its Load more these waits.
+  test('asks for a failed page again after 2 s, then 8 s more, then leaves it to the button', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await answerListing(page);
+    const failing = { now: true };
+    const asks: number[] = [];
+    await page.context().route(
+      (url) => url.pathname === '/api/marketplace/resources' && url.searchParams.get('offset') === String(FIRST_PAGE + MORE_PAGE),
+      async (route) => {
+        asks.push(Date.now());
+        if (failing.now) return route.fulfill({ status: 503, json: { error: 'Could not load more recipes.' } });
+        return route.fallback();
+      },
+    );
+    await openAndHandOver(page);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect.poll(() => asks.length).toBe(1);
+    await expect(page.getByText('Could not load more recipes.')).toBeVisible();
+
+    // The list's end in reach the whole time: asked twice more by itself, then no more.
+    await expect.poll(() => asks.length, { timeout: 15_000 }).toBe(3);
+    const waits = [asks[1] - asks[0], asks[2] - asks[1]];
+    expect(waits[0]).toBeGreaterThanOrEqual(2_000);
+    expect(waits[0]).toBeLessThan(4_000);
+    expect(waits[1]).toBeGreaterThanOrEqual(8_000);
+    expect(waits[1]).toBeLessThan(11_000);
+    await page.waitForTimeout(5_000);
+    expect(asks).toHaveLength(3);
+
+    // The button asks, and brings the page.
+    failing.now = false;
+    await page.getByRole('button', { name: 'Load more recipes' }).click();
+    await expect(tiles(page)).toHaveCount(TOTAL);
+    expect(asks).toHaveLength(4);
+    await expect(page.getByText('Could not load more recipes.')).toHaveCount(0);
   });
 });

@@ -6,6 +6,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useEffectEvent,
   useRef,
   useState,
   type FormEvent,
@@ -25,6 +26,7 @@ import {
 } from '@/app/marketplace/MarketplaceRecipeTile';
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
 import { useAuth } from '@/components/AuthProvider';
+import { LOAD_MORE_ROOT_MARGIN } from '@/lib/load-more-policy';
 import {
   buildMarketplacePagesKey,
   marketplacePagesViewer,
@@ -146,10 +148,15 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
   // The signed-in viewer's own recipes, read apart from the cached catalog.
   const viewer = useViewerRecipeState();
   const [activationError, setActivationError] = useState(false);
-  // The listing whose "Load more recipes" was pressed here: the interactive list it brings in asks
-  // for the next page itself, so one press opens the list and loads more (live sweep, 2026-11-17:
-  // the press only opened the list, which drew the same four recipes, and a second press was needed).
+  // The listing whose next page was asked for here, by a press of "Load more recipes" or a scroll
+  // towards the first page's end: the interactive list it brings in asks for that page itself, so
+  // one press opens the list and loads more (live sweep, 2026-11-17: the press only opened the list,
+  // which drew the same four recipes, and a second press was needed), and so does the scroll (owner's
+  // report, 2026-11-20: every page needed the button).
   const [loadMorePressedFor, setLoadMorePressedFor] = useState<string | null>(null);
+  // The listing the reader scrolled to the end of here: the list goes on asking for each next page
+  // as its end comes near, where after a press alone it waits for the reader to scroll.
+  const [scrolledToEndOf, setScrolledToEndOf] = useState<string | null>(null);
   // Phones and tablets keep the filters behind Filters; the interactive list takes them over as left.
   const [filtersOpen, setFiltersOpen] = useState(false);
   // Back to a listing whose filters the reader left open draws them open again, so the page above
@@ -196,12 +203,21 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
       });
   }, []);
 
-  // Also while the list is already on its way after a scroll towards the end: the press is kept for it.
+  // Also while the list is on its way after a scroll towards the end, which asked for the same page.
   const pressLoadMore = () => {
     setLoadMorePressedFor(filtersListingKey);
     activateInteractiveBrowser();
   };
   const loadMorePressed = loadMorePressedFor !== null && loadMorePressedFor === filtersListingKey;
+
+  // The reader scrolling towards the first page's end asks for the next one: the interactive list
+  // comes in and asks for it, as a press does, from the distance it then asks for each page after
+  // (load-more-policy, Home's). Only once the reader has scrolled: a first screen whose recipes end
+  // above the fold asks for nothing by itself.
+  const loadMoreOnScroll = useEffectEvent(() => {
+    setScrolledToEndOf(filtersListingKey);
+    pressLoadMore();
+  });
 
   useEffect(() => {
     if (
@@ -215,6 +231,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
 
     const sentinel = sentinelRef.current;
     let observer: IntersectionObserver | null = null;
+    let live = true;
 
     const observeAfterScrollIntent = () => {
       if (window.scrollY <= 0 || observer) {
@@ -223,12 +240,13 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
 
       window.removeEventListener('scroll', observeAfterScrollIntent);
       observer = new IntersectionObserver((entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
+        // Not for a notice queued before this effect let the observer go: the listing it was of may be gone.
+        if (live && entries.some((entry) => entry.isIntersecting)) {
           observer?.disconnect();
-          activateInteractiveBrowser();
+          loadMoreOnScroll();
         }
       }, {
-        rootMargin: '160px 0px',
+        rootMargin: LOAD_MORE_ROOT_MARGIN,
       });
       observer.observe(sentinel);
     };
@@ -237,10 +255,11 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
     observeAfterScrollIntent();
 
     return () => {
+      live = false;
       window.removeEventListener('scroll', observeAfterScrollIntent);
       observer?.disconnect();
     };
-  }, [activateInteractiveBrowser, initialPage.pageInfo.hasMore]);
+  }, [initialPage.pageInfo.hasMore]);
 
   // The address, read once the page is live; mounted whichever browser draws the list.
   const addressReporter = (
@@ -261,6 +280,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
           listingStatus={listing.status}
           listingSettled={listing.settled}
           loadMoreOnOpen={loadMorePressedFor}
+          scrolledOnOpen={scrolledToEndOf !== null && scrolledToEndOf === filtersListingKey}
           initialFiltersOpen={filtersOpen}
           onNavigate={navigate}
           onRetry={listing.retry}
@@ -498,8 +518,9 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
               data-marketplace-bootstrap-sentinel
               className="mt-8 flex flex-col items-center gap-3"
             >
-              {/* The press opens the interactive list and asks it for the next page, so it reads as
-                  that list's own button does, from the press until the recipes come. */}
+              {/* A press, or the reader's scroll towards it, opens the interactive list and asks it for
+                  the next page, so the button reads as that list's own does, from then until the
+                  recipes come. */}
               <button
                 type="button"
                 onClick={pressLoadMore}

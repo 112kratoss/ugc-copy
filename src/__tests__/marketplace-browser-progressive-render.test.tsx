@@ -9,6 +9,8 @@ import { marketplaceFiltersKey } from '@/app/marketplace/marketplace-address';
 import { recallMarketplaceFiltersOpen } from '@/lib/marketplace-pages-memory';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
+import { createMarketplaceItem, createMarketplacePage as createPage } from './fixtures/marketplace-listing';
+
 // One router for every render, so the browser's effects never see a new one.
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
 const pushMock = routerMock.push;
@@ -1126,63 +1128,4 @@ function renderMarketplace(initialPage: ReturnType<typeof createPage>) {
       sourceToolOptions={[]}
     />
   );
-}
-
-function createPage(count: number, hasMore: boolean, startAt = 0, limit = 3) {
-  return {
-    items: Array.from({ length: count }, (_, index) => createMarketplaceItem(startAt + index + 1)),
-    pageInfo: {
-      hasMore,
-      nextOffset: hasMore ? startAt + count : null,
-      offset: startAt,
-      limit,
-    },
-  };
-}
-
-function createMarketplaceItem(index: number): MarketplaceResourceListItem {
-  const date = '2026-04-25T10:00:00.000Z';
-  return {
-    id: `bundle-${index}`,
-    postId: `post-${index}`,
-    legacyAssetId: null,
-    title: `Unlock ${index}`,
-    summary: 'A reusable creator prompt.',
-    previewText: 'Prompt included.',
-    accessMode: 'free',
-    priceUsdCents: 0,
-    salesCount: 0,
-    freeUnlockCount: 0,
-    earningsUsdCents: 0,
-    allowRemix: false,
-    resourceKinds: ['prompt'],
-    lockedPreview: {
-      resourceKinds: ['prompt'],
-      attachmentPreviews: [],
-      itemCounts: { prompt: 1 },
-      itemPreviews: [],
-      hasPrompt: true,
-      hasNotes: false,
-      hasWorkflow: false,
-      hasRemix: false,
-      updatedAt: date,
-    },
-    createdAt: date,
-    updatedAt: date,
-    seller: {
-      id: `creator-${index}`,
-      username: `creator-${index}`,
-      name: `Creator ${index}`,
-      avatar: null,
-    },
-    post: null,
-    priceQuote: {
-      currency: 'USD',
-      amountSubunits: 0,
-      formatted: '$0.00',
-      note: null,
-    },
-    remixCapability: 'none',
-    remixTarget: null,
-  };
 }
