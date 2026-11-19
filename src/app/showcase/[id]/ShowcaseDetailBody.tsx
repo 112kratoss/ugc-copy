@@ -7,6 +7,7 @@ import { Suspense, useRef } from 'react';
 import { BookText, ShoppingBag } from 'lucide-react';
 
 import PostCommentAvatar from '@/components/PostCommentAvatar';
+import IntentLink from '@/components/IntentLink';
 import { getPostFeedTitle, type PostPreviewKind } from '@/lib/post-feed-presentation';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import {
@@ -498,13 +499,13 @@ export default function ShowcaseDetailBody({
                 {/* One breath of attribution: who, when, what kind — a single line. */}
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-zinc-500">
                   {detail.creator.username ? (
-                    <Link
+                    <IntentLink
                       href={`/creators/${detail.creator.username}`}
                       className="ui-focus-ring flex min-w-0 items-center gap-2 rounded-full font-semibold text-zinc-200 transition hover:text-white"
                     >
                       <PostCommentAvatar avatarUrl={detail.creator.avatar} name={detail.creator.name} size={24} />
                       <span className="truncate">{`@${detail.creator.username}`}</span>
-                    </Link>
+                    </IntentLink>
                   ) : (
                     <div className="flex min-w-0 items-center gap-2 font-semibold text-zinc-200">
                       <PostCommentAvatar avatarUrl={detail.creator.avatar} name={detail.creator.name} size={24} />

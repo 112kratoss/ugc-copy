@@ -1,10 +1,10 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import Link from 'next/link';
 import { useCallback, useState } from 'react';
 import { RefreshCw, Sparkles } from 'lucide-react';
 
+import IntentLink from '@/components/IntentLink';
 import type { PostLifecyclePatch, PostLifecycleTarget } from '@/components/usePostLifecycle';
 import type { PostVisibility } from '@/lib/post-lifecycle-client';
 
@@ -94,21 +94,21 @@ export default function ShowcaseDetailActions({
     <div>
       <div className="grid gap-2 sm:grid-cols-2">
         {creatorUsername ? (
-          <Link
+          <IntentLink
             href={`/creators/${creatorUsername}`}
             className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/10 bg-black/30 px-4 py-2 text-sm font-semibold text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
           >
             View creator
-          </Link>
+          </IntentLink>
         ) : null}
 
-        <Link
+        <IntentLink
           href="/create"
           className="ui-focus-ring inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:border-emerald-400/45 hover:bg-emerald-500/15"
         >
           <Sparkles className="h-4 w-4" />
           Create your own
-        </Link>
+        </IntentLink>
       </div>
 
       {ownerTools ? (
