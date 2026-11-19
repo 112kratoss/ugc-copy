@@ -9,6 +9,8 @@ import { marketplaceFiltersKey } from '@/app/marketplace/marketplace-address';
 import { recallMarketplaceFiltersOpen } from '@/lib/marketplace-pages-memory';
 import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
 
+import { createMarketplaceItem, createMarketplacePage as createPage } from './fixtures/marketplace-listing';
+
 // One router for every render, so the browser's effects never see a new one.
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
 const pushMock = routerMock.push;
@@ -652,8 +654,9 @@ describe('MarketplaceBrowser drawn again after a recipe', () => {
       const view = renderMarketplace(createPage(4, true, 0, 4));
 
       expect(drawnTitles()).toHaveLength(16);
+      // Held with aria-disabled, so it keeps the keyboard's focus; a press asks nothing.
       const loadMore = screen.getByRole('button', { name: 'Load more recipes' });
-      expect(loadMore).toBeDisabled();
+      expect(loadMore).toHaveAttribute('aria-disabled', 'true');
       fireEvent.click(loadMore);
       await act(async () => Promise.resolve());
       expect(fetchMock).not.toHaveBeenCalled();
@@ -745,7 +748,7 @@ describe('MarketplaceBrowser opened by the shell\'s Load more', () => {
       </StrictMode>
     );
 
-    expect(screen.getByRole('button', { name: 'Loading' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Loading' })).toHaveAttribute('aria-disabled', 'true');
     await waitFor(() => expect(listRequests(fetchMock)).toEqual(['/api/marketplace/resources?offset=4&limit=12']));
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.signal?.aborted).toBe(false);
@@ -757,7 +760,7 @@ describe('MarketplaceBrowser opened by the shell\'s Load more', () => {
     expect(await screen.findByText('Unlock 16')).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: /: Unlock \d+$/ })).toHaveLength(16);
     // The press is spent: the button asks for the page after, and only when pressed.
-    expect(screen.getByRole('button', { name: 'Load more recipes' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Load more recipes' })).not.toHaveAttribute('aria-disabled');
     await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
     expect(listRequests(fetchMock)).toHaveLength(1);
   });
@@ -779,7 +782,7 @@ describe('MarketplaceBrowser opened by the shell\'s Load more', () => {
 
     await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
     expect(listRequests(fetchMock)).toEqual([]);
-    expect(screen.getByRole('button', { name: 'Loading' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Loading' })).toHaveAttribute('aria-disabled', 'true');
 
     // The reader's own first page lands.
     view.rerender(
@@ -845,7 +848,7 @@ describe('MarketplaceBrowser opened by the shell\'s Load more', () => {
 
     await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Load more recipes' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Load more recipes' })).not.toHaveAttribute('aria-disabled');
   });
 
   it('says a failed page, and offers the button again', async () => {
@@ -860,7 +863,7 @@ describe('MarketplaceBrowser opened by the shell\'s Load more', () => {
     );
 
     expect(await screen.findByText('Could not load more recipes.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Load more recipes' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Load more recipes' })).not.toHaveAttribute('aria-disabled');
   });
 
   // The shell keeps the filters behind Filters below 1024px; the list keeps them as the reader left
@@ -984,7 +987,7 @@ describe('MarketplaceBrowser when the listing\'s own first page lands', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load more recipes' }));
     await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
     expect(listRequests(fetchMock)).toEqual([]);
-    expect(screen.getByRole('button', { name: 'Loading' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Loading' })).toHaveAttribute('aria-disabled', 'true');
 
     view.rerender(
       <MarketplaceBrowser initialPage={readersPage()} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} listingSettled />
@@ -1126,63 +1129,4 @@ function renderMarketplace(initialPage: ReturnType<typeof createPage>) {
       sourceToolOptions={[]}
     />
   );
-}
-
-function createPage(count: number, hasMore: boolean, startAt = 0, limit = 3) {
-  return {
-    items: Array.from({ length: count }, (_, index) => createMarketplaceItem(startAt + index + 1)),
-    pageInfo: {
-      hasMore,
-      nextOffset: hasMore ? startAt + count : null,
-      offset: startAt,
-      limit,
-    },
-  };
-}
-
-function createMarketplaceItem(index: number): MarketplaceResourceListItem {
-  const date = '2026-04-25T10:00:00.000Z';
-  return {
-    id: `bundle-${index}`,
-    postId: `post-${index}`,
-    legacyAssetId: null,
-    title: `Unlock ${index}`,
-    summary: 'A reusable creator prompt.',
-    previewText: 'Prompt included.',
-    accessMode: 'free',
-    priceUsdCents: 0,
-    salesCount: 0,
-    freeUnlockCount: 0,
-    earningsUsdCents: 0,
-    allowRemix: false,
-    resourceKinds: ['prompt'],
-    lockedPreview: {
-      resourceKinds: ['prompt'],
-      attachmentPreviews: [],
-      itemCounts: { prompt: 1 },
-      itemPreviews: [],
-      hasPrompt: true,
-      hasNotes: false,
-      hasWorkflow: false,
-      hasRemix: false,
-      updatedAt: date,
-    },
-    createdAt: date,
-    updatedAt: date,
-    seller: {
-      id: `creator-${index}`,
-      username: `creator-${index}`,
-      name: `Creator ${index}`,
-      avatar: null,
-    },
-    post: null,
-    priceQuote: {
-      currency: 'USD',
-      amountSubunits: 0,
-      formatted: '$0.00',
-      note: null,
-    },
-    remixCapability: 'none',
-    remixTarget: null,
-  };
 }

@@ -10,7 +10,8 @@ import {
   rememberMarketplaceFiltersOpen,
   rememberMarketplacePages,
 } from '@/lib/marketplace-pages-memory';
-import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-server';
+
+import { createMarketplacePage } from './fixtures/marketplace-listing';
 
 const browserModuleLoaded = vi.hoisted(() => vi.fn());
 
@@ -401,6 +402,8 @@ describe('MarketplaceBootstrap', () => {
     expect(await screen.findByTestId('interactive-marketplace-browser')).toBeInTheDocument();
     expect(browserProps.last).toMatchObject({
       loadMoreOnOpen: marketplaceFiltersKey(INITIAL_FILTERS),
+      // A press asks for one page: the list waits for the reader to scroll before the next.
+      scrolledOnOpen: false,
       // Outside Next's router no read of the address's own first page is coming.
       listingSettled: true,
       initialFiltersOpen: false,
@@ -453,16 +456,23 @@ describe('MarketplaceBootstrap', () => {
     expect(screen.getByRole('button', { name: 'Filters, 2 set' })).toHaveAttribute('aria-expanded', 'false');
   });
 
-  it('activates near the continuation sentinel only after scroll intent', async () => {
+  // Owner's report, 2026-11-20: every page needed a press of "Load more recipes", and a scroll to the
+  // first page's end only brought the interactive list in, which drew the same four recipes. The
+  // scroll now asks for the next page as a press does, from Home's distance, and only once the reader
+  // has scrolled with a gesture of theirs: a first screen whose recipes end above the fold, and a
+  // shell drawn at a place the window was left or put back at (review of #888), ask for nothing.
+  it('brings the list in and asks it for the next page once the reader scrolls towards the end', async () => {
     let intersectionCallback: IntersectionObserverCallback | null = null;
+    const margins: Array<string | undefined> = [];
 
     class TestIntersectionObserver {
       readonly root = null;
-      readonly rootMargin = '160px 0px';
+      readonly rootMargin = '600px 0px';
       readonly thresholds = [0];
 
-      constructor(callback: IntersectionObserverCallback) {
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
         intersectionCallback = callback;
+        margins.push(options?.rootMargin);
       }
 
       observe = vi.fn();
@@ -483,25 +493,108 @@ describe('MarketplaceBootstrap', () => {
     expect(intersectionCallback).toBeNull();
     expect(screen.queryByTestId('interactive-marketplace-browser')).not.toBeInTheDocument();
 
+    // The window moving is no scroll of the reader's: Back's restored place, a navigation left scrolled.
     Object.defineProperty(window, 'scrollY', {
       configurable: true,
       value: 200,
     });
     fireEvent.scroll(window);
+    await act(async () => Promise.resolve());
+    expect(intersectionCallback).toBeNull();
 
+    // A turn of the wheel is.
+    fireEvent.wheel(window, { deltaY: 200 });
     await waitFor(() => {
       expect(intersectionCallback).not.toBeNull();
     });
+    expect(margins).toEqual(['600px 0px']);
     act(() => {
       const callback = intersectionCallback as IntersectionObserverCallback;
       callback([
         { isIntersecting: true } as IntersectionObserverEntry,
       ], {} as IntersectionObserver);
     });
+    // Asked for from here on, as a press is: the button says so until the list comes.
+    expect(screen.getByRole('button', { name: 'Loading' })).toBeDisabled();
 
     expect(await screen.findByTestId('interactive-marketplace-browser')).toBeInTheDocument();
-    // A scroll brings the list in with no press to carry out.
-    expect(browserProps.last).toMatchObject({ loadMoreOnOpen: null });
+    expect(browserProps.last).toMatchObject({
+      loadMoreOnOpen: marketplaceFiltersKey(INITIAL_FILTERS),
+      // The reader is scrolling: the list goes on asking as its end comes near.
+      scrolledOnOpen: true,
+    });
+  });
+
+  // A browser may still deliver a notice it queued before the shell let its observer go: one for a
+  // first page the shell no longer draws asks for nothing.
+  it('acts on no notice queued for a first page it no longer draws', async () => {
+    let intersectionCallback: IntersectionObserverCallback | null = null;
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(callback: IntersectionObserverCallback) {
+        intersectionCallback = callback;
+      }
+
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+      takeRecords = vi.fn(() => []);
+    });
+    const view = render(
+      <MarketplaceBootstrap initialPage={createPage(4, true)} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />
+    );
+    fireEvent.wheel(window, { deltaY: 200 });
+    await waitFor(() => {
+      expect(intersectionCallback).not.toBeNull();
+    });
+
+    // The first page is drawn again with nothing after it before the notice comes.
+    view.rerender(
+      <MarketplaceBootstrap initialPage={createPage(4, false)} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />
+    );
+    act(() => {
+      const callback = intersectionCallback as IntersectionObserverCallback;
+      callback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    });
+    await act(async () => Promise.resolve());
+
+    expect(screen.queryByTestId('interactive-marketplace-browser')).not.toBeInTheDocument();
+    expect(screen.getByText('Unlock 4')).toBeInTheDocument();
+  });
+
+  // A listing picked in place on a scrolled shell is a first screen of its own: its end is watched
+  // once the reader scrolls it.
+  it('waits for a listing picked in place to be scrolled itself', async () => {
+    let observersMade = 0;
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor() {
+        observersMade += 1;
+      }
+
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+      takeRecords = vi.fn(() => []);
+    });
+    const view = render(
+      <MarketplaceBootstrap initialPage={createPage(4, true)} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />
+    );
+    fireEvent.wheel(window, { deltaY: 200 });
+    await waitFor(() => {
+      expect(observersMade).toBe(1);
+    });
+
+    view.rerender(
+      <MarketplaceBootstrap initialPage={createPage(4, true)} initialFilters={{ ...INITIAL_FILTERS, access: 'paid' }} sourceToolOptions={[]} />
+    );
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 600 });
+    fireEvent.scroll(window);
+    await act(async () => Promise.resolve());
+    expect(observersMade).toBe(1);
+
+    fireEvent.wheel(window, { deltaY: 200 });
+    await waitFor(() => {
+      expect(observersMade).toBe(2);
+    });
   });
 
   // Back from a recipe drew this shell, the first page alone, though Load more had brought more
@@ -636,62 +729,7 @@ describe('MarketplaceBootstrap', () => {
   });
 });
 
+/** A first page as the server hands it to the shell, asked for four recipes. */
 function createPage(count: number, hasMore: boolean) {
-  return {
-    items: Array.from({ length: count }, (_, index) => createMarketplaceItem(index + 1)),
-    pageInfo: {
-      hasMore,
-      nextOffset: hasMore ? count : null,
-      offset: 0,
-      limit: 4,
-    },
-  };
-}
-
-function createMarketplaceItem(index: number): MarketplaceResourceListItem {
-  const date = '2026-04-25T10:00:00.000Z';
-
-  return {
-    id: `bundle-${index}`,
-    postId: `post-${index}`,
-    legacyAssetId: null,
-    title: `Unlock ${index}`,
-    summary: 'A reusable creator prompt.',
-    previewText: 'Prompt included.',
-    accessMode: 'free',
-    priceUsdCents: 0,
-    salesCount: 0,
-    freeUnlockCount: 0,
-    earningsUsdCents: 0,
-    allowRemix: false,
-    resourceKinds: ['prompt'],
-    lockedPreview: {
-      resourceKinds: ['prompt'],
-      attachmentPreviews: [],
-      itemCounts: { prompt: 1 },
-      itemPreviews: [],
-      hasPrompt: true,
-      hasNotes: false,
-      hasWorkflow: false,
-      hasRemix: false,
-      updatedAt: date,
-    },
-    createdAt: date,
-    updatedAt: date,
-    seller: {
-      id: `creator-${index}`,
-      username: `creator-${index}`,
-      name: `Creator ${index}`,
-      avatar: null,
-    },
-    post: null,
-    priceQuote: {
-      currency: 'USD',
-      amountSubunits: 0,
-      formatted: '$0.00',
-      note: null,
-    },
-    remixCapability: 'none',
-    remixTarget: null,
-  };
+  return createMarketplacePage(count, hasMore, 0, 4);
 }

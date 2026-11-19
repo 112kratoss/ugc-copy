@@ -15,6 +15,7 @@ import FeedPostCard, { type FeedDetailContext } from '@/app/feed/FeedPostCard';
 import WindowedFeedList from '@/app/feed/WindowedFeedList';
 import SkeletonLoader from '@/components/SkeletonLoader';
 import { FEED_CHIPS, FEED_PAGE_SIZE, getFeedChip, type FeedChipId } from '@/lib/post-feed-chips';
+import { LOAD_MORE_ROOT_MARGIN, loadMoreRetryDelayMs } from '@/lib/load-more-policy';
 import { HOME_CHIP_MARK } from '@/lib/address-first-paint';
 import { useFirstPaintMark } from '@/lib/use-first-paint-mark';
 import {
@@ -64,15 +65,6 @@ const FEED_SNAPSHOT_IDLE_TIMEOUT_MS = 1_000;
 // A lane left and come back to within this long shows what it showed, as the
 // app's per-lane query cache does; after it the lane loads afresh.
 const LANE_CACHE_TTL_MS = 5 * 60_000;
-/**
- * How long Load more waits before asking again after a page failed: the first
- * wait, then the second, then only the Retry button asks. Without a wait the
- * sentinel, still in view, made a fresh observer fire at once after every
- * failure, and a phone sent 225 failing requests in 5.5 s (speed baseline,
- * 2026-11-19), each a function call and a rate-limit write when it reached
- * the server.
- */
-const LOAD_MORE_RETRY_DELAYS_MS = [2_000, 8_000] as const;
 
 /**
  * How a request for a lane's posts lands:
@@ -652,10 +644,9 @@ export default function FeedClient({
 
         // After a failed page the observer is made again only once a wait has
         // passed, longer each time, and after the last wait not at all: the
-        // alert's Retry asks then (LOAD_MORE_RETRY_DELAYS_MS).
-        const failures = loadError ? loadMoreFailuresRef.current : 0;
-        if (failures > LOAD_MORE_RETRY_DELAYS_MS.length) return;
-        const delay = failures > 0 ? LOAD_MORE_RETRY_DELAYS_MS[failures - 1] : 0;
+        // alert's Retry asks then (load-more-policy, as Marketplace's list waits).
+        const delay = loadMoreRetryDelayMs(loadError ? loadMoreFailuresRef.current : 0);
+        if (delay === null) return;
 
         let observer: IntersectionObserver | null = null;
         const observe = () => {
@@ -666,7 +657,7 @@ export default function FeedClient({
                 ) {
                     void fetchPage(chipId, nextOffset ?? 0, 'append', nextCursor, nextSeedBucket);
                 }
-            }, { rootMargin: '600px 0px' });
+            }, { rootMargin: LOAD_MORE_ROOT_MARGIN });
             observer.observe(sentinel);
         };
         const timer = delay > 0 ? window.setTimeout(observe, delay) : null;
