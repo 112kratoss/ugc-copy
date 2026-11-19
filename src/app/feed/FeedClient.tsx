@@ -615,6 +615,29 @@ export default function FeedClient({
 
     useEffect(() => flushFeedSnapshot, [flushFeedSnapshot]);
 
+    // A page that failed to load more: a lane that failed has no continuation left.
+    const pageFailed = Boolean(loadError) && (nextOffset !== null || nextCursor !== null);
+    const retryLoad = () => void fetchPage(
+        chipId,
+        nextOffset ?? 0,
+        // Nothing left to continue from means retrying has to restart the lane
+        // rather than page on.
+        nextOffset === null && nextCursor === null ? 'replace' : 'append',
+        nextCursor,
+        nextSeedBucket,
+    );
+
+    // The network coming back asks for the failed page again, its retries anew.
+    useEffect(() => {
+        if (!pageFailed) return undefined;
+        const onOnline = () => {
+            loadMoreFailuresRef.current = 0;
+            setLoadError(null);
+        };
+        window.addEventListener('online', onOnline);
+        return () => window.removeEventListener('online', onOnline);
+    }, [pageFailed]);
+
     useEffect(() => {
         const sentinel = sentinelRef.current;
         // A ranked lane can hand back a cursor and no offset, so either
@@ -692,6 +715,7 @@ export default function FeedClient({
             setSwitching(false);
             setLoadingMore(false);
             setLoadError(null);
+            loadMoreFailuresRef.current = 0;
             // A post removed from another lane since this one was left stays
             // gone. Its saves need no adding back: the saved set is shared by
             // every lane and already holds what this lane's pages brought,
@@ -1177,7 +1201,9 @@ export default function FeedClient({
         <div ref={rootRef} className={HOME_FEED_COLUMN_CLASS}>
             {chipRow}
 
-            {loadError ? (
+            {/* A lane that failed to load, under the chips. A page that failed to load
+                more is told at the end of the list, where the reader is (below). */}
+            {loadError && !pageFailed ? (
                 <div
                     role="alert"
                     className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[rgba(255,124,139,0.34)] bg-[rgba(255,124,139,0.10)] px-4 py-3 text-sm text-[#ff7c8b]"
@@ -1185,15 +1211,7 @@ export default function FeedClient({
                     <span>{loadError}</span>
                     <button
                         type="button"
-                        onClick={() => void fetchPage(
-                            chipId,
-                            nextOffset ?? 0,
-                            // Nothing left to continue from means retrying has
-                            // to restart the lane rather than page on.
-                            nextOffset === null && nextCursor === null ? 'replace' : 'append',
-                            nextCursor,
-                            nextSeedBucket,
-                        )}
+                        onClick={retryLoad}
                         className="ui-focus-ring min-h-11 rounded-full border border-current px-4 text-xs font-bold"
                     >
                         Retry
@@ -1335,6 +1353,24 @@ export default function FeedClient({
                     <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                     Loading more posts…
                 </p>
+            ) : null}
+
+            {pageFailed && !loadingMore ? (
+                // After its automatic retries a failed page waits for this Retry, here
+                // at the end, or for the network to come back (`online`).
+                <div
+                    role="alert"
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[rgba(255,124,139,0.34)] bg-[rgba(255,124,139,0.10)] px-4 py-3 text-sm text-[#ff7c8b]"
+                >
+                    <span>{loadError}</span>
+                    <button
+                        type="button"
+                        onClick={retryLoad}
+                        className="ui-focus-ring min-h-11 rounded-full border border-current px-4 text-xs font-bold"
+                    >
+                        Retry
+                    </button>
+                </div>
             ) : null}
 
             {lightbox ? (

@@ -128,7 +128,11 @@ describe('FeedClient: a failed Load more does not ask again in a loop', () => {
 
         await advance(120_000);
         expect(fetchMock).toHaveBeenCalledTimes(3);
-        expect(screen.getByRole('alert')).toHaveTextContent('Could not load more posts.');
+        const alert = screen.getByRole('alert');
+        expect(alert).toHaveTextContent('Could not load more posts.');
+        // Told at the end of the list, where the reader is, not above the posts.
+        const lastCard = screen.getByText('card:post-2');
+        expect(lastCard.compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
         // The person can always ask again.
         fetchMock.mockImplementation(async () => new Response(
@@ -171,5 +175,21 @@ describe('FeedClient: a failed Load more does not ask again in a loop', () => {
         expect(fetchMock).toHaveBeenCalledTimes(3);
         await advance(800);
         expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
+
+    it('asks again when the network comes back after the retries ran out, with its retries anew', async () => {
+        const fetchMock = vi.fn(() => failedAfter());
+        vi.stubGlobal('fetch', fetchMock);
+
+        render(<FeedClient initialFeed={page([item('post-1'), item('post-2')], 2)} initialChipId="recent" />);
+        await advance(12_000);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+
+        await act(async () => { window.dispatchEvent(new Event('online')); });
+        await advance(100);
+        expect(fetchMock).toHaveBeenCalledTimes(4);
+        // And it waits 2 s again after that one fails, not Retry at once.
+        await advance(2_100);
+        expect(fetchMock).toHaveBeenCalledTimes(5);
     });
 });

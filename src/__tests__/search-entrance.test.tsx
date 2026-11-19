@@ -20,7 +20,7 @@ vi.mock('next/link', () => ({
 }));
 
 const { pushMock } = vi.hoisted(() => ({ pushMock: vi.fn() }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: pushMock }) }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: pushMock, prefetch: vi.fn() }) }));
 vi.mock('next/form', () => ({
   default: ({ action, children, ...props }: { action: string; children: React.ReactNode } & Record<string, unknown>) => (
     <form action={action} {...props}>{children}</form>

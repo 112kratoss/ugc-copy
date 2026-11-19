@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import path, { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -39,10 +39,50 @@ describe('prompt limits the browser reads', () => {
     expect(getEnhancerPromptLimit('no-such-model')).toBeNull();
   });
 
-  it('keep the playbooks out of what the browser loads', () => {
-    for (const file of ['src/lib/prompt-enhancer-model-limits.ts', 'src/lib/prompt-quality.ts']) {
-      const source = readFileSync(join(process.cwd(), file), 'utf8');
-      expect(source, file).not.toMatch(/from ['"]@\/lib\/prompt-enhancer-playbooks['"]/);
-    }
+  it('keep the playbooks out of what the creators load in the browser', () => {
+    // Followed import by import, value imports only (as browser-generation-reads.test.ts
+    // follows them), from the client components that warn about a prompt's length.
+    const reached = browserModulesFrom([
+      'src/app/create-video/CreateVideoClient.tsx',
+      'src/lib/prompt-quality.ts',
+    ]);
+    expect(reached.has(join(SRC_ROOT, 'lib/prompt-quality.ts'))).toBe(true);
+    expect([...reached].filter((file) => file.endsWith('prompt-enhancer-playbooks.ts'))).toEqual([]);
   });
 });
+
+const SRC_ROOT = join(process.cwd(), 'src');
+const SOURCE_EXTENSIONS = ['', '.ts', '.tsx', '.js', '.jsx'];
+// A value import or re-export, a bare import, an import(), a require(); `import type` loads nothing.
+const LOADING_IMPORT = /(?:^\s*import\s+(?!type\b)[^'"]*?from\s*|^\s*export\s+(?!type\b)[^'"]*?from\s*|^\s*import\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"]([^'"]+)['"]/gm;
+
+function resolveLocalImport(specifier: string, importer: string): string | null {
+  const unresolved = specifier.startsWith('@/')
+    ? join(SRC_ROOT, specifier.slice(2))
+    : specifier.startsWith('.') ? path.resolve(path.dirname(importer), specifier) : null;
+  if (!unresolved) return null;
+  for (const extension of SOURCE_EXTENSIONS) {
+    const candidate = `${unresolved}${extension}`;
+    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+  }
+  for (const extension of SOURCE_EXTENSIONS.slice(1)) {
+    const candidate = join(unresolved, `index${extension}`);
+    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+  }
+  return null;
+}
+
+function browserModulesFrom(entries: string[]): Set<string> {
+  const pending = entries.map((entry) => join(process.cwd(), entry));
+  const visited = new Set<string>();
+  while (pending.length > 0) {
+    const file = pending.pop();
+    if (!file || visited.has(file)) continue;
+    visited.add(file);
+    for (const match of readFileSync(file, 'utf8').matchAll(LOADING_IMPORT)) {
+      const imported = resolveLocalImport(match[1], file);
+      if (imported?.startsWith(SRC_ROOT) && !visited.has(imported)) pending.push(imported);
+    }
+  }
+  return visited;
+}

@@ -109,10 +109,12 @@ describe('top bar search', () => {
     expect(formProps.at(-1)).toEqual({ prefetch: false });
     expect(prefetchMock).not.toHaveBeenCalled();
 
-    fireEvent.pointerEnter(box().closest('form')!);
+    // A mouse over the field asks for it, and the focus asks again: Next skips
+    // a prefetch it holds fresh, so each reach can ask.
+    fireEvent.pointerEnter(box().closest('form')!, { pointerType: 'mouse' });
     expect(prefetchMock).toHaveBeenCalledWith('/search');
     fireEvent.focus(box());
-    expect(prefetchMock).toHaveBeenCalledTimes(1);
+    expect(prefetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('searches what is typed on Enter, on the search page, as before', async () => {
