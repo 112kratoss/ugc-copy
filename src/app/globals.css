@@ -65,6 +65,7 @@
 @source "../components/HoverVideo.tsx";
 @source "../components/InlineMediaAudio.tsx";
 @source "../components/InlineMediaVideo.tsx";
+@source "../components/IntentLink.tsx";
 @source "../components/InviteHandoffBar.tsx";
 @source "../components/JsonLd.tsx";
 @source "../components/ModalSheet.tsx";
@@ -125,6 +126,7 @@
 @source "../components/useHandleAvailability.ts";
 @source "../components/useInertPageBeneath.ts";
 @source "../components/useInlineMediaPlayback.ts";
+@source "../components/useIntentPrefetch.ts";
 @source "../components/useMediaLoadingPreferences.ts";
 @source "../components/useModalQuestion.ts";
 @source "../components/useOptimisticPostSave.ts";
