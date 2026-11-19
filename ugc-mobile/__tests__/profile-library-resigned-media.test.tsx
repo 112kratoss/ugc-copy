@@ -12,7 +12,7 @@ type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 vi.mock('@/lib/env', () => ({
   env: { apiBaseUrl: 'https://magicbooklet.com', supabaseUrl: 'https://project.supabase.co', siteUrl: 'https://magicbooklet.com' },
 }));
-vi.mock('@/lib/auth', () => ({ useAuth: () => ({ session: null, isGuest: false, identityUserId: 'user-1' }) }));
+vi.mock('@/lib/auth', () => ({ useAuth: () => ({ session: null, isGuest: false, identityUserId: 'user-1' }), useAuthSession: () => null }));
 vi.mock('@/components/recoverable-video-preview', () => ({
   RecoverableVideoPreview: (props: MockProps) => React.createElement('video-preview', props),
 }));

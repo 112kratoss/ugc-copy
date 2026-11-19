@@ -219,6 +219,18 @@ describe('mobile notifications helper', () => {
       expect(relaunched.api.registerMobilePushToken).toHaveBeenCalledTimes(1);
     });
 
+    it('writes the Expo token and sets the Android channel once a process, not at every check', async () => {
+      grantedWithToken();
+      const { registerForMobilePushNotifications, api } = await load();
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      const tokenWrites = secureStoreMocks.setItemAsync.mock.calls
+        .filter(([key]) => key === 'magicbooklet.mobileNotifications.expoPushToken');
+      expect(tokenWrites).toHaveLength(1);
+      expect(notificationsMocks.setNotificationChannelAsync.mock.calls.length).toBeLessThanOrEqual(1);
+    });
+
     it('is sent again at once for another session, account, token or app version', async () => {
       grantedWithToken();
       const { registerForMobilePushNotifications, setPushRegistrationSession, api } = await load();
@@ -232,6 +244,8 @@ describe('mobile notifications helper', () => {
       await registerForMobilePushNotifications(api as never, { userId: 'user-2' });
       expect(api.registerMobilePushToken).toHaveBeenCalledTimes(3);
 
+      // A token changes with the device token it is exchanged for.
+      notificationsMocks.getDevicePushTokenAsync.mockResolvedValue({ type: 'ios', data: 'apns-device-token-rotated' });
       grantedWithToken('ExponentPushToken[rotated]');
       await registerForMobilePushNotifications(api as never, { userId: 'user-2' });
       expect(api.registerMobilePushToken).toHaveBeenCalledTimes(4);
@@ -973,19 +987,26 @@ describe('mobile notifications helper', () => {
         await registration;
       });
 
-      it('exchanges again once the earlier exchange has settled', async () => {
+      it('keeps a device token\'s exchange for the process; a new device token or a clean-up exchanges again', async () => {
         notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: true, canAskAgain: true, status: 'granted' });
         storeHolds('ExponentPushToken[same]');
         notificationsMocks.getDevicePushTokenAsync.mockResolvedValue(apnsDeviceToken);
         notificationsMocks.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[same]' });
         const api = { registerMobilePushToken: vi.fn(async () => ({ success: true })) };
 
-        const { registerForMobilePushNotifications } = await import('../lib/notifications');
+        const { registerForMobilePushNotifications, clearLocalMobilePushRegistration } = await import('../lib/notifications');
         await registerForMobilePushNotifications(api as never, { requestPermission: false });
         await registerForMobilePushNotifications(api as never, { requestPermission: false });
+        // Every return to the app used to POST this exchange to exp.host again.
+        expect(notificationsMocks.getExpoPushTokenAsync).toHaveBeenCalledTimes(1);
 
-        // Nothing is kept: a later check asks Expo again, as it always has.
+        notificationsMocks.getDevicePushTokenAsync.mockResolvedValue({ type: 'ios', data: 'a-rotated-apns-device-token' });
+        await registerForMobilePushNotifications(api as never, { requestPermission: false });
         expect(notificationsMocks.getExpoPushTokenAsync).toHaveBeenCalledTimes(2);
+
+        await clearLocalMobilePushRegistration();
+        await registerForMobilePushNotifications(api as never, { requestPermission: false });
+        expect(notificationsMocks.getExpoPushTokenAsync).toHaveBeenCalledTimes(3);
       });
     });
   });

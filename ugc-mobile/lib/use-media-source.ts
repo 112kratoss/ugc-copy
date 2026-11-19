@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 
-import { useAuth } from './auth';
+import { useAuthSession } from './auth';
 import { env } from './env';
 import { buildMediaSource, isAuthenticatedMediaProxy } from './media-source';
 import {
@@ -24,7 +24,8 @@ import { whenClockReaches } from './wall-clock-timer';
  * mounted.
  */
 export function useMediaSource(url: string) {
-  const { session } = useAuth();
+  // The session alone: a balance or profile change elsewhere in auth leaves every tile as it is.
+  const session = useAuthSession();
   const expiry = useMemo(() => getPrivateMediaExpiry(url, env.supabaseUrl), [url]);
   // An address that arrives that close to its end goes to the route from its
   // first render, which reads the clock once for it, not on every render.

@@ -35,6 +35,8 @@ const SCREENS = [
   ['components/home-shelf.tsx', 'HomeShelf'],
   ['components/home-shelf.tsx', 'CreationCard'],
   ['components/feed-video-preview.tsx', 'FeedVideoPreview'],
+  // The frame every feed card's picture or clip sits in (2026-11-19: a default reading the theme skipped it).
+  ['components/feed-media-frame.tsx', 'FeedMediaFrame'],
   // Profile, and its scope chips, generic over each tab's own scopes since
   // 2026-11-01. Its media list stays uncompiled, as before: it reads a ref during render.
   ['components/profile-dashboard.tsx', 'ProfileDashboard'],

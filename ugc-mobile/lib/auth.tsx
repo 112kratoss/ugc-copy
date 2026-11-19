@@ -275,6 +275,16 @@ function creditBalanceAfterTotal(
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+/**
+ * The session alone, for what needs nothing else of auth: the image and video
+ * tiles, which read it only to load a private address through the authenticated
+ * route (`use-media-source.ts`). Through `useAuth()` every tile drew again
+ * whenever any of auth's thirty fields moved, a profile read's balance and its
+ * time included, and on a profile read (at launch, on each return to the app
+ * after 30 s, on a reel open) that was every mounted tile of every visited tab.
+ * This value changes only when the session does.
+ */
+const AuthSessionContext = createContext<Session | null>(null);
 const CACHED_ACCESS_TOKEN_MIN_TTL_MS = 30 * 1000;
 // Push unregistration is best-effort, so sign-out stops waiting for it well
 // before the API client's own 30 s request timeout.
@@ -1995,7 +2005,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         updateCredits,
       }}
     >
-      {children}
+      <AuthSessionContext.Provider value={session}>
+        {children}
+      </AuthSessionContext.Provider>
     </AuthContext.Provider>
   );
 }
@@ -2015,6 +2027,11 @@ async function recoverInvalidAuthSession(error: unknown) {
   await clearPersistedAccountState();
   clearVideoStills();
   return true;
+}
+
+/** The session alone; see `AuthSessionContext`. Null outside `AuthProvider`, as with no session. */
+export function useAuthSession(): Session | null {
+  return useContext(AuthSessionContext);
 }
 
 export function useAuth() {

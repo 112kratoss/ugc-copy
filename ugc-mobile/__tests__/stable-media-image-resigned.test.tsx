@@ -10,7 +10,7 @@ type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 vi.mock('@/lib/env', () => ({
   env: { apiBaseUrl: 'https://magicbooklet.com', supabaseUrl: 'https://project.supabase.co', siteUrl: 'https://magicbooklet.com' },
 }));
-vi.mock('@/lib/auth', () => ({ useAuth: () => ({ session: null }) }));
+vi.mock('@/lib/auth', () => ({ useAuth: () => ({ session: null }), useAuthSession: () => null }));
 // Counted: the file an address names is worked out once per address.
 vi.mock('@/lib/use-stable-signed-url', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/use-stable-signed-url')>();
