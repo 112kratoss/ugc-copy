@@ -161,8 +161,13 @@ export default async function ModelsIndexPage() {
                                     {group.entries.map(({ model, cost }) => (
                                         <tr key={model.id} className="border-b border-[var(--ui-border-subtle)]">
                                             <td className="py-3 pr-4 align-top">
+                                                {/* No prefetch: a phone scrolling this table prefetched every
+                                                    model page it passed, 39 of them and 1.5 MB, each carrying
+                                                    the inlined stylesheet (speed baseline, 2026-11-19). The
+                                                    pages are static, so a click still opens one from the CDN. */}
                                                 <Link
                                                     href={`/models/${toModelSlug(model.id)}`}
+                                                    prefetch={false}
                                                     className="ui-focus-ring rounded-lg text-sm font-semibold text-[var(--ui-text-primary)] hover:text-[var(--ui-primary)]"
                                                 >
                                                     {model.displayName}

@@ -3,6 +3,8 @@
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 
+import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
+
 /**
  * The unread alerts count the app shows on its Alerts tab, for the web shell's
  * bell and bottom tab. One read is shared by every badge on the page and kept
@@ -27,6 +29,13 @@ export function publishUnreadAlertsCount(count: number) {
 }
 
 async function readUnreadAlertsCount(): Promise<number> {
+  // A browser with no session cookie has no alerts to count, and asking would
+  // load the Supabase client (66 KB transferred, 245 KB of script) on every
+  // signed-out page the shell draws: 33 of 34 public pages did, for a badge
+  // that always read 0 (speed baseline, 2026-11-19). A sign-in sets the cookie,
+  // and the next read (a minute on, a page change or a return to the tab)
+  // counts as before.
+  if (!hasSupabaseAuthCookie()) return 0;
   // Loaded on first read, not at import: the shell renders in places with no
   // Supabase environment at all (tests), and the client is only needed here.
   const { supabase } = await import('@/lib/supabase');

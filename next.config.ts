@@ -322,8 +322,12 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
+      // The pages whose first picture comes from Supabase Storage open the
+      // connection to it with the document. A post's and a creator's page draw
+      // theirs below the 204 KB inlined stylesheet, which used to hold the
+      // connection back until it was parsed.
       ...(publicMediaPreconnectHeaders.length > 0
-        ? ["/", "/home", "/showcase", "/marketplace"].map((source) => ({
+        ? ["/", "/home", "/showcase", "/marketplace", "/showcase/:id", "/creators/:username"].map((source) => ({
             source,
             headers: publicMediaPreconnectHeaders,
           }))

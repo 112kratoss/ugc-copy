@@ -1,5 +1,5 @@
 import type { EnhancerContext, Medium } from '@/lib/prompt-enhancer';
-import { getEnhancerPlaybookById, normalizeEnhancerModelId } from '@/lib/prompt-enhancer-playbooks';
+import { getEnhancerPromptLimit, normalizeEnhancerModelId } from '@/lib/prompt-enhancer-model-limits';
 
 type PromptEnhancementWarningSeverity = 'info' | 'warning' | 'blocking';
 
@@ -81,13 +81,13 @@ export function inspectPromptQuality({
     return { warnings, qualityScore: 0 };
   }
 
-  const playbook = getEnhancerPlaybookById(selectedModel);
-  const maxChars = playbook?.budget.maxChars;
-  if (maxChars && trimmedPrompt.length > maxChars) {
+  const limit = getEnhancerPromptLimit(selectedModel);
+  const maxChars = limit?.maxChars;
+  if (limit && maxChars && trimmedPrompt.length > maxChars) {
     warnings.push({
       code: 'over_model_length_cap',
       severity: 'warning',
-      message: `This prompt exceeds the ${maxChars}-character limit for ${playbook.label}.`,
+      message: `This prompt exceeds the ${maxChars}-character limit for ${limit.label}.`,
       fixHint: 'Trim detail from the end — overflow is cut off or rejected by the provider.',
     });
   }
