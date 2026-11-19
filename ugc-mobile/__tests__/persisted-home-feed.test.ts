@@ -286,6 +286,18 @@ describe('restorePersistedHomeFeed', () => {
     expect(page?.items.map((item) => item.recommendation?.deliveryId)).toEqual(['delivery-a', 'delivery-b']);
   });
 
+  it('restores a page saved up to a week ago, so a weekly return lands on posts', async () => {
+    expect(PERSISTED_HOME_FEED_MAX_AGE_MS).toBe(7 * 24 * 60 * 60_000);
+    const storage = await storageHolding(lane(['a', 'b']));
+    const client = new QueryClient();
+    const sixDaysOn = FETCHED_AT + 6 * 24 * 60 * 60_000;
+
+    await expect(restorePersistedHomeFeed(client, environment(storage, sixDaysOn))).resolves.toBe(true);
+
+    const page = client.getQueryState<HomeFeedData>(createPersistedHomeFeedQueryKey('user-1'))?.data?.pages[0];
+    expect(page?.items.map((item) => item.id)).toEqual(['a', 'b']);
+  });
+
   it('restores an older page without them: it draws the same, and its events wait for the refetch', async () => {
     expect(PERSISTED_HOME_FEED_SESSION_MAX_AGE_MS).toBe(2 * 60 * 60_000);
     const storage = await storageHolding(lane(['a', 'b']));
