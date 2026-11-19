@@ -1140,12 +1140,14 @@ describe('for-you-rules v3 wiring', () => {
       cursor = null,
       fallback = [],
       offset = 0,
+      onRankedPageItems,
       viewerUserId = 'viewer-1',
     }: {
       anonymousKeyHash?: string | null;
       cursor?: string | null;
       fallback?: ShowcaseFeedItem[];
       offset?: number;
+      onRankedPageItems?: (items: ShowcaseFeedItem[]) => void;
       viewerUserId?: string | null;
     } = {},
   ) {
@@ -1157,6 +1159,7 @@ describe('for-you-rules v3 wiring', () => {
       hydratePostIds: async (ids) => ids.map(item),
       limit: 12,
       offset,
+      onRankedPageItems,
       serviceClient: client,
       viewerUserId,
     });
@@ -1564,6 +1567,55 @@ describe('for-you-rules v3 wiring', () => {
 
     expect(persistedIds(switchedOff.persisted[0])).toEqual(candidates.map((row) => row.post_id).sort());
     expect(switchedOff.reads.map((read) => read.table)).not.toContain('creator_feed_stats');
+  });
+
+  // The feed reads the viewer's state on a ranked page beside its session
+  // write (`getShowcaseFeedPage`), from the items handed over here.
+  it('hands over a page it writes before the write, as served, and a page read from a written session never', async () => {
+    const fresh = v3Client({ candidates: ['a', 'b', 'c'].map((id) => v3Candidate(id)) });
+    const handed: Array<{ postIds: string[]; writesBefore: number }> = [];
+
+    const page = await forYouPage(fresh.client, {
+      onRankedPageItems: (items) => handed.push({
+        postIds: items.map((entry) => entry.id),
+        writesBefore: fresh.persisted.length,
+      }),
+    });
+
+    expect(handed).toEqual([{ postIds: page.items.map((entry) => entry.id), writesBefore: 0 }]);
+    expect(fresh.persisted).toHaveLength(1);
+    expect(page.items.map((entry) => entry.recommendation?.deliveryId)).toEqual(['700', '701', '702']);
+
+    const continued = v3Client({
+      session: {
+        id: 'session-v3',
+        viewer_user_id: 'viewer-1',
+        anonymous_key_hash: null,
+        algorithm_version_id: 'algorithm-v3',
+        created_at: new Date().toISOString(),
+        expires_at: '2099-01-01T00:00:00.000Z',
+      },
+      rows: {
+        feed_session_items: [{
+          id: 912,
+          session_id: 'session-v3',
+          post_id: 'next',
+          position: 12,
+          candidate_source: 'fresh',
+          final_score: 0.5,
+          score_components: { negative_feedback_risk: 0.01, is_following: false },
+        }],
+      },
+    });
+    const onRankedPageItems = vi.fn();
+
+    const next = await forYouPage(continued.client, {
+      cursor: encodeRankedFeedCursor({ sessionId: 'session-v3', position: 12 }),
+      onRankedPageItems,
+    });
+
+    expect(next.items.map((entry) => entry.id)).toEqual(['next']);
+    expect(onRankedPageItems).not.toHaveBeenCalled();
   });
 
   it('re-applies visibility on a continuation page, at the level the session was ranked at', async () => {
