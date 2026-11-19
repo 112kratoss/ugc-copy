@@ -25,8 +25,13 @@ import type { ShowcaseFeedResponse } from './types';
 /** The lane a cold start lands on, and the only one saved. */
 export const PERSISTED_HOME_FEED_CHIP_ID: HomeFeedChipId = 'for-you';
 export const PERSISTED_HOME_FEED_STORAGE_KEY = 'magicbooklet.homeFeed.forYou.v2';
-/** Past this, a launch shows the skeleton rather than posts this old. */
-export const PERSISTED_HOME_FEED_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
+/**
+ * Past this, a launch shows the skeleton rather than posts this old. A week, so a person who opens
+ * the app weekly still lands on posts while the refetch runs (the speed loop measured ~7 s of
+ * skeletons on an S24 launch with no saved page, 2026-11-19); the page holds no link that expires.
+ * Was three days.
+ */
+export const PERSISTED_HOME_FEED_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /** Folds a fetch and the edits right after it (a save, a hidden post) into one write. */
 export const PERSIST_HOME_FEED_DEBOUNCE_MS = 1_000;
 /**
