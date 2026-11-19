@@ -509,7 +509,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="ui-focus-ring rounded font-bold underline underline-offset-2"
+            className="ui-focus-ring rounded-full font-bold underline underline-offset-2"
           >
             Try again
           </button>
