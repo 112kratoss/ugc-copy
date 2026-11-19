@@ -93,18 +93,20 @@ const BLOCKED_TITLE = market.bundles[1].title;
  * slow production read is. `blockedForReader`: that read, made with a session, leaves out
  * `BLOCKED_TITLE`, as the list API takes out the recipes of a creator the reader blocks (and the
  * next page still starts where the cached first page ended). `morePagesDelayMs`: each later page is
- * answered after it.
+ * answered after it. `total`: the recipes the listing holds in all.
  */
 async function answerListing(page: Page, {
   coverDelayMs = () => 120,
   firstPageHeld,
   blockedForReader = false,
   morePagesDelayMs = 0,
+  total = TOTAL,
 }: {
   coverDelayMs?: (index: number) => number;
   firstPageHeld?: Promise<void>;
   blockedForReader?: boolean;
   morePagesDelayMs?: number;
+  total?: number;
 } = {}) {
   const context = page.context();
   // Whatever else the page asks the API offline is answered as it fails there.
@@ -113,7 +115,7 @@ async function answerListing(page: Page, {
   expect(firstResponse.ok()).toBe(true);
   const firstPage = await firstResponse.json() as { items: ListItem[]; pageInfo: Record<string, unknown> };
   expect(firstPage.items.map((item) => item.title)).toEqual(market.bundles.slice(0, FIRST_PAGE).map((bundle) => bundle.title));
-  const more = Array.from({ length: TOTAL - FIRST_PAGE }, (_, offset) => moreRecipe(firstPage.items[0], FIRST_PAGE + offset + 1));
+  const more = Array.from({ length: total - FIRST_PAGE }, (_, offset) => moreRecipe(firstPage.items[0], FIRST_PAGE + offset + 1));
 
   const readersFirstPage = { ...firstPage, items: firstPage.items.filter((item) => item.title !== BLOCKED_TITLE) };
 
@@ -131,7 +133,7 @@ async function answerListing(page: Page, {
     if (morePagesDelayMs) await new Promise((resolve) => setTimeout(resolve, morePagesDelayMs));
     const items = more.slice(offset - FIRST_PAGE, offset - FIRST_PAGE + limit);
     const nextOffset = offset + items.length;
-    const hasMore = nextOffset < TOTAL;
+    const hasMore = nextOffset < total;
     // A page the list gave up on while it was on its way has nobody to answer.
     return route.fulfill({ json: { items, pageInfo: { hasMore, nextOffset: hasMore ? nextOffset : null, offset, limit } } })
       .catch(() => undefined);
@@ -202,16 +204,25 @@ const tiles = (page: Page) => page.getByRole('main').getByRole('link', { name: /
 const tile = (page: Page, index: number) => page.getByRole('link', { name: `View free recipe: Recipe ${index}`, exact: true });
 
 /**
- * Scrolls the first-paint shell to its end until it hands the list over to the interactive one (its
- * module comes in, compiled on its first request), and never further: checked and scrolled in one
- * step of the page's own script, so a page the list has drawn meanwhile is never scrolled down.
+ * Turns the wheel the way the reader does: the page asks for more only on a gesture of the reader's
+ * (`useReaderScrolled`), so a `window.scrollTo` from here would never bring a page.
+ */
+async function turnTheWheel(page: Page, deltaY: number) {
+  const { width, height } = page.viewportSize()!;
+  await page.mouse.move(width / 2, height / 2);
+  await page.mouse.wheel(0, deltaY);
+}
+
+/**
+ * Turns the wheel on the first-paint shell, as the owner did, until it hands the list over to the
+ * interactive one (its module comes in, compiled on its first request); never once the list is in,
+ * which would scroll the longer page it draws.
  */
 async function scrollShellToItsEnd(page: Page) {
+  const shell = page.locator('[data-marketplace-bootstrap-shell]');
   await expect(async () => {
-    await page.evaluate(() => {
-      if (document.querySelector('[data-marketplace-bootstrap-shell]')) window.scrollTo(0, document.documentElement.scrollHeight);
-    });
-    await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0, { timeout: 1000 });
+    if (await shell.count()) await turnTheWheel(page, 2000);
+    await expect(shell).toHaveCount(0, { timeout: 1000 });
   }).toPass(COLD_PAGE);
 }
 
@@ -230,10 +241,16 @@ async function openAndHandOver(page: Page) {
   await expect(tiles(page)).toHaveCount(FIRST_PAGE + MORE_PAGE, COLD_PAGE);
 }
 
+/** The wheel turned to the end of the page, as far as it goes. */
+async function wheelToTheEnd(page: Page) {
+  const left = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight - window.scrollY);
+  await turnTheWheel(page, Math.max(left, 0) + 200);
+}
+
 /** A scroll to the end of the list: twelve more, without a press. */
 async function scrollToTheEnd(page: Page) {
   const count = await tiles(page).count();
-  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await wheelToTheEnd(page);
   await expect(tiles(page)).toHaveCount(count + MORE_PAGE);
 }
 
@@ -757,14 +774,13 @@ test.describe('scrolling to the end of the recipes', () => {
     expect(asked.offsets).toEqual([]);
 
     // A turn of the wheel: the list comes in and the next twelve with it.
-    await page.mouse.move(640, 400);
-    await page.mouse.wheel(0, 300);
+    await turnTheWheel(page, 300);
     await expect(tiles(page)).toHaveCount(FIRST_PAGE + MORE_PAGE, COLD_PAGE);
     await expect(page.locator('[data-marketplace-bootstrap-shell]')).toHaveCount(0);
     const handedOver = await readFirstScreen(page);
 
     // Scrolled to the end again: the next twelve, below the recipes drawn, which do not move.
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await wheelToTheEnd(page);
     await expect(tiles(page)).toHaveCount(TOTAL);
     const after = await readFirstScreen(page);
     expect(after.tiles.slice(0, handedOver.tiles.length)).toEqual(handedOver.tiles);
@@ -772,7 +788,7 @@ test.describe('scrolling to the end of the recipes', () => {
 
     // The listing has ended: no button, and nothing more is asked for.
     await expect(page.getByRole('button', { name: /^(Load more recipes|Loading)$/ })).toHaveCount(0);
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await wheelToTheEnd(page);
     await page.waitForTimeout(1000);
     expect(asked.offsets).toEqual([FIRST_PAGE, FIRST_PAGE + MORE_PAGE]);
     expect(asked.failed).toEqual([]);
@@ -796,15 +812,10 @@ test.describe('scrolling to the end of the recipes', () => {
     await expect(listEnd).toBeEnabled();
     expect(await page.evaluate(() => window.scrollY)).toBe(0);
     expect((await listEnd.boundingBox())!.y, 'the list ends within 600 px of the window').toBeLessThan(height + 600);
-    expect(
-      await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight),
-      'the page scrolls further than a scroll of the reader\'s must move it (24 px)',
-    ).toBeGreaterThan(24);
     await page.waitForTimeout(1500);
     expect(asked.offsets).toEqual([FIRST_PAGE]);
 
-    await page.mouse.move(720, 600);
-    await page.mouse.wheel(0, 200);
+    await turnTheWheel(page, 200);
     await expect(tiles(page)).toHaveCount(TOTAL, COLD_PAGE);
     expect(asked.offsets).toEqual([FIRST_PAGE, FIRST_PAGE + MORE_PAGE]);
     expect(asked.failed).toEqual([]);
@@ -825,7 +836,7 @@ test.describe('scrolling to the end of the recipes', () => {
       },
     );
     await openAndHandOver(page);
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await wheelToTheEnd(page);
     await expect.poll(() => asks.length).toBe(1);
     await expect(page.getByText('Could not load more recipes.')).toBeVisible();
 
@@ -845,5 +856,44 @@ test.describe('scrolling to the end of the recipes', () => {
     await expect(tiles(page)).toHaveCount(TOTAL);
     expect(asks).toHaveLength(4);
     await expect(page.getByText('Could not load more recipes.')).toHaveCount(0);
+  });
+
+  // Review of #888: on Back, React draws the listing and runs its effects inside the browser's
+  // popstate, and only then does the browser put the reader back where they were. Read as the
+  // reader's scroll, that jump asked for the next page as soon as Back landed near the end of a
+  // listing with more to come. Here the page after the kept ones fails, so the end stays in reach.
+  test('on Back near the end of a listing with more to come, asks for the next page only once the reader scrolls', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await answerListing(page, { total: LOADED + MORE_PAGE });
+    const nextPageAsks: number[] = [];
+    await page.context().route(
+      (url) => url.pathname === '/api/marketplace/resources' && url.searchParams.get('offset') === String(LOADED),
+      async (route) => {
+        nextPageAsks.push(Date.now());
+        await route.fulfill({ status: 503, json: { error: 'Could not load more recipes.' } });
+      },
+    );
+    await loadSevenRows(page);
+    // A recipe of the last row: near the end, the page after is asked for, and fails.
+    const opened = tile(page, LOADED - 2);
+    await opened.scrollIntoViewIfNeeded();
+    await expect.poll(() => nextPageAsks.length).toBeGreaterThan(0);
+    await opened.click();
+    await page.waitForURL(`**/showcase/${imagePost.post.id}?**`, COLD_PAGE);
+    await expect(page.getByRole('link', { name: 'Back to Marketplace' })).toBeVisible(COLD_PAGE);
+    const askedBeforeBack = nextPageAsks.length;
+
+    await page.goBack();
+    await page.waitForURL('**/marketplace', COLD_PAGE);
+    await expect(tiles(page)).toHaveCount(LOADED);
+    await expect(tile(page, LOADED - 2)).toBeInViewport();
+    const listEnd = page.getByRole('button', { name: 'Load more recipes' });
+    expect((await listEnd.boundingBox())!.y, 'the list ends within 600 px of the window').toBeLessThan(800 + 600);
+    await page.waitForTimeout(2_500);
+    await page.screenshot({ path: test.info().outputPath('back-near-the-end.png') });
+    expect(nextPageAsks, 'asked for with no scroll of the reader\'s').toHaveLength(askedBeforeBack);
+
+    await turnTheWheel(page, 100);
+    await expect.poll(() => nextPageAsks.length).toBe(askedBeforeBack + 1);
   });
 });

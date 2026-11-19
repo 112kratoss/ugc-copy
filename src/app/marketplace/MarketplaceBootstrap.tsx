@@ -51,6 +51,7 @@ import {
   useMarketplaceListing,
   type MarketplaceListingPage,
 } from './useMarketplaceListing';
+import { useReaderScrolled } from './useReaderScrolled';
 
 export interface MarketplaceBootstrapProps {
   /**
@@ -154,9 +155,6 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
   // which drew the same four recipes, and a second press was needed), and so does the scroll (owner's
   // report, 2026-11-20: every page needed the button).
   const [loadMorePressedFor, setLoadMorePressedFor] = useState<string | null>(null);
-  // The listing the reader scrolled to the end of here: the list goes on asking for each next page
-  // as its end comes near, where after a press alone it waits for the reader to scroll.
-  const [scrolledToEndOf, setScrolledToEndOf] = useState<string | null>(null);
   // Phones and tablets keep the filters behind Filters; the interactive list takes them over as left.
   const [filtersOpen, setFiltersOpen] = useState(false);
   // Back to a listing whose filters the reader left open draws them open again, so the page above
@@ -210,56 +208,46 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
   };
   const loadMorePressed = loadMorePressedFor !== null && loadMorePressedFor === filtersListingKey;
 
+  // Whether the reader has scrolled this listing with a gesture of their own (`useReaderScrolled`).
+  // Where the window stands is no sign of it: Back lands on the place it restores, a listing picked
+  // in place keeps the window where it was, and neither is a scroll of the reader's (review of #888).
+  const readerScrolled = useReaderScrolled(filtersListingKey);
+  const loadMoreOnScroll = useEffectEvent(() => {
+    pressLoadMore();
+  });
+
   // The reader scrolling towards the first page's end asks for the next one: the interactive list
   // comes in and asks for it, as a press does, from the distance it then asks for each page after
   // (load-more-policy, Home's). Only once the reader has scrolled: a first screen whose recipes end
   // above the fold asks for nothing by itself.
-  const loadMoreOnScroll = useEffectEvent(() => {
-    setScrolledToEndOf(filtersListingKey);
-    pressLoadMore();
-  });
-
   useEffect(() => {
     if (
-      !initialPage.pageInfo.hasMore
+      !readerScrolled
+      || !initialPage.pageInfo.hasMore
       || !sentinelRef.current
-      || typeof window === 'undefined'
       || typeof IntersectionObserver === 'undefined'
     ) {
       return;
     }
 
     const sentinel = sentinelRef.current;
-    let observer: IntersectionObserver | null = null;
     let live = true;
-
-    const observeAfterScrollIntent = () => {
-      if (window.scrollY <= 0 || observer) {
-        return;
+    const observer = new IntersectionObserver((entries) => {
+      // Not for a notice queued before this effect let the observer go: the listing it was of may be gone.
+      if (live && entries.some((entry) => entry.isIntersecting)) {
+        observer.disconnect();
+        loadMoreOnScroll();
       }
-
-      window.removeEventListener('scroll', observeAfterScrollIntent);
-      observer = new IntersectionObserver((entries) => {
-        // Not for a notice queued before this effect let the observer go: the listing it was of may be gone.
-        if (live && entries.some((entry) => entry.isIntersecting)) {
-          observer?.disconnect();
-          loadMoreOnScroll();
-        }
-      }, {
-        rootMargin: LOAD_MORE_ROOT_MARGIN,
-      });
-      observer.observe(sentinel);
-    };
-
-    window.addEventListener('scroll', observeAfterScrollIntent, { passive: true });
-    observeAfterScrollIntent();
+    }, {
+      rootMargin: LOAD_MORE_ROOT_MARGIN,
+    });
+    observer.observe(sentinel);
 
     return () => {
       live = false;
-      window.removeEventListener('scroll', observeAfterScrollIntent);
-      observer?.disconnect();
+      observer.disconnect();
     };
-  }, [initialPage.pageInfo.hasMore]);
+  }, [initialPage.pageInfo.hasMore, readerScrolled]);
 
   // The address, read once the page is live; mounted whichever browser draws the list.
   const addressReporter = (
@@ -280,7 +268,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
           listingStatus={listing.status}
           listingSettled={listing.settled}
           loadMoreOnOpen={loadMorePressedFor}
-          scrolledOnOpen={scrolledToEndOf !== null && scrolledToEndOf === filtersListingKey}
+          scrolledOnOpen={readerScrolled}
           initialFiltersOpen={filtersOpen}
           onNavigate={navigate}
           onRetry={listing.retry}

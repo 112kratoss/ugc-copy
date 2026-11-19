@@ -36,6 +36,17 @@ export const MARKETPLACE_PAGES_MEMORY_TTL_MS = 10 * 60_000;
 export const MARKETPLACE_PAGES_MEMORY_MAX_LISTINGS = 4;
 /** The longest listing kept: its first page and ten more. A longer one is not kept. */
 export const MARKETPLACE_PAGES_MEMORY_MAX_ITEMS = 124;
+
+/**
+ * Whether a listing of `itemCount` recipes is short enough to be kept for Back. The list asks for
+ * its next page by itself only while the listing with it would still be kept: past the cap, Back
+ * would draw the first page alone and the browser would put the reader on that short page (owner's
+ * report, 2026-11-15; review of #888). A press of "Load more recipes" still goes on past it.
+ */
+export function fitsMarketplacePagesMemory(itemCount: number): boolean {
+  return itemCount <= MARKETPLACE_PAGES_MEMORY_MAX_ITEMS;
+}
+
 const STORAGE_PREFIX = 'marketplace-pages:';
 
 /**
@@ -124,10 +135,14 @@ export function rememberMarketplacePages(key: string, firstPageLength: number, l
   const store = sessionStore();
   if (!store) return;
   try {
+    // Kept already, the listing is written over in place and the tab keeps no more listings than it
+    // did, so the others are not read again: pages land as the reader scrolls, and each one parsed
+    // every listing kept (review of #888). Those too old to give back go when another is kept.
+    const keptAlready = keptKeys(store).includes(key);
     store.removeItem(key);
-    if (listing.items.length <= firstPageLength || listing.items.length > MARKETPLACE_PAGES_MEMORY_MAX_ITEMS) return;
+    if (listing.items.length <= firstPageLength || !fitsMarketplacePagesMemory(listing.items.length)) return;
     const now = Date.now();
-    makeRoom(store, now);
+    if (!keptAlready) makeRoom(store, now);
     writeEntry(store, key, { items: listing.items, pageInfo: listing.pageInfo, savedAt: now });
   } catch {
     // Storage refused: the listing comes back at its first page, as before.

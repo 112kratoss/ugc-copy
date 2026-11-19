@@ -459,7 +459,8 @@ describe('MarketplaceBootstrap', () => {
   // Owner's report, 2026-11-20: every page needed a press of "Load more recipes", and a scroll to the
   // first page's end only brought the interactive list in, which drew the same four recipes. The
   // scroll now asks for the next page as a press does, from Home's distance, and only once the reader
-  // has scrolled: a first screen whose recipes end above the fold asks for nothing by itself.
+  // has scrolled with a gesture of theirs: a first screen whose recipes end above the fold, and a
+  // shell drawn at a place the window was left or put back at (review of #888), ask for nothing.
   it('brings the list in and asks it for the next page once the reader scrolls towards the end', async () => {
     let intersectionCallback: IntersectionObserverCallback | null = null;
     const margins: Array<string | undefined> = [];
@@ -492,12 +493,17 @@ describe('MarketplaceBootstrap', () => {
     expect(intersectionCallback).toBeNull();
     expect(screen.queryByTestId('interactive-marketplace-browser')).not.toBeInTheDocument();
 
+    // The window moving is no scroll of the reader's: Back's restored place, a navigation left scrolled.
     Object.defineProperty(window, 'scrollY', {
       configurable: true,
       value: 200,
     });
     fireEvent.scroll(window);
+    await act(async () => Promise.resolve());
+    expect(intersectionCallback).toBeNull();
 
+    // A turn of the wheel is.
+    fireEvent.wheel(window, { deltaY: 200 });
     await waitFor(() => {
       expect(intersectionCallback).not.toBeNull();
     });
@@ -533,11 +539,10 @@ describe('MarketplaceBootstrap', () => {
       disconnect = vi.fn();
       takeRecords = vi.fn(() => []);
     });
-    // Scrolled already: the shell watches its end from the start.
-    Object.defineProperty(window, 'scrollY', { configurable: true, value: 200 });
     const view = render(
       <MarketplaceBootstrap initialPage={createPage(4, true)} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />
     );
+    fireEvent.wheel(window, { deltaY: 200 });
     await waitFor(() => {
       expect(intersectionCallback).not.toBeNull();
     });
@@ -554,6 +559,42 @@ describe('MarketplaceBootstrap', () => {
 
     expect(screen.queryByTestId('interactive-marketplace-browser')).not.toBeInTheDocument();
     expect(screen.getByText('Unlock 4')).toBeInTheDocument();
+  });
+
+  // A listing picked in place on a scrolled shell is a first screen of its own: its end is watched
+  // once the reader scrolls it.
+  it('waits for a listing picked in place to be scrolled itself', async () => {
+    let observersMade = 0;
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor() {
+        observersMade += 1;
+      }
+
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+      takeRecords = vi.fn(() => []);
+    });
+    const view = render(
+      <MarketplaceBootstrap initialPage={createPage(4, true)} initialFilters={INITIAL_FILTERS} sourceToolOptions={[]} />
+    );
+    fireEvent.wheel(window, { deltaY: 200 });
+    await waitFor(() => {
+      expect(observersMade).toBe(1);
+    });
+
+    view.rerender(
+      <MarketplaceBootstrap initialPage={createPage(4, true)} initialFilters={{ ...INITIAL_FILTERS, access: 'paid' }} sourceToolOptions={[]} />
+    );
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 600 });
+    fireEvent.scroll(window);
+    await act(async () => Promise.resolve());
+    expect(observersMade).toBe(1);
+
+    fireEvent.wheel(window, { deltaY: 200 });
+    await waitFor(() => {
+      expect(observersMade).toBe(2);
+    });
   });
 
   // Back from a recipe drew this shell, the first page alone, though Load more had brought more

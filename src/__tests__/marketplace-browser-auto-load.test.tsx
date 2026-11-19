@@ -4,17 +4,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
 import { marketplaceFiltersKey } from '@/app/marketplace/marketplace-address';
-import { buildMarketplacePagesKey, rememberMarketplacePages } from '@/lib/marketplace-pages-memory';
+import {
+  buildMarketplacePagesKey,
+  MARKETPLACE_PAGES_MEMORY_MAX_ITEMS,
+  recallMarketplacePages,
+  rememberMarketplacePages,
+} from '@/lib/marketplace-pages-memory';
 
 import { createMarketplacePage as createPage } from './fixtures/marketplace-listing';
 
 // Owner's report, 2026-11-20: on Marketplace every page after the first needed a press of "Load
-// more recipes". The list now asks for its next page by itself once the reader has scrolled and its
-// end comes within 600 px of the window, as Home's feed does, and with Home's waits after a failed
-// page (#878: a fresh observer fired at once after every failure, and a phone sent Home 225 failing
-// requests in 5.5 s). The button stays, for a keyboard and for a page that failed. The clock moves
-// in small acts and a page fails after a little while, as a network fails it: one act around a long
-// advance, or a failure in the same tick, hides a loop that needs a render between two asks.
+// more recipes". The list now asks for its next page by itself once the reader has scrolled (a
+// gesture of theirs, `useReaderScrolled`) and its end comes within 600 px of the window, as Home's
+// feed does, and with Home's waits after a failed page (#878: a fresh observer fired at once after
+// every failure, and a phone sent Home 225 failing requests in 5.5 s). The button stays, for a
+// keyboard and for a page that failed. The clock moves in small acts and a page fails after a little
+// while, as a network fails it: one act around a long advance, or a failure in the same tick, hides
+// a loop that needs a render between two asks.
+
+const LISTING = marketplaceFiltersKey({ access: 'all', resource: 'all', tool: '', sort: 'recent', q: '' });
 
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
 
@@ -116,10 +124,19 @@ function placeWindowAt(scrollY: number) {
   Object.defineProperty(window, 'scrollY', { configurable: true, value: scrollY });
 }
 
-/** The reader scrolls the page by `by` pixels. */
-async function scrollBy(by: number) {
+/** The reader turns the wheel, and the page moves `by` pixels. */
+async function readerScrolls(by: number) {
   await act(async () => {
+    window.dispatchEvent(new WheelEvent('wheel', { deltaY: by }));
     placeWindowAt(window.scrollY + by);
+    window.dispatchEvent(new Event('scroll'));
+  });
+}
+
+/** The window moves with no gesture of the reader's: the browser putting Back's place back. */
+async function windowMovesTo(scrollY: number) {
+  await act(async () => {
+    placeWindowAt(scrollY);
     window.dispatchEvent(new Event('scroll'));
   });
 }
@@ -199,17 +216,17 @@ describe('MarketplaceBrowser asks for its next page as the reader nears its end'
     await advance(1_000);
     expect(listRequests(fetchMock)).toEqual([]);
 
-    await scrollBy(200);
+    await readerScrolls(200);
     await advance(20);
     expect(listRequests(fetchMock)).toEqual(['/api/marketplace/resources?offset=4&limit=12']);
     // While it loads, the button, still there, says so.
-    expect(screen.getByRole('button', { name: 'Loading' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Loading' })).toHaveAttribute('aria-disabled', 'true');
 
     // The page lands below the reader and puts the end out of reach: nothing more is asked.
     await advance(200);
     expect(drawnTitles()).toHaveLength(16);
     expect(listRequests(fetchMock)).toHaveLength(1);
-    expect(screen.getByRole('button', { name: 'Load more recipes' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Load more recipes' })).not.toHaveAttribute('aria-disabled');
 
     // The reader nears the end again: the page after, from where the last one ended.
     await act(async () => end.moveEnd(true));
@@ -254,7 +271,7 @@ describe('MarketplaceBrowser asks for its next page as the reader nears its end'
     // The reader can always ask again.
     fetchMock.mockImplementation(async () => answer(createPage(12, false, 4, 12)));
     const button = screen.getByRole('button', { name: 'Load more recipes' });
-    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute('aria-disabled');
     await act(async () => {
       fireEvent.click(button);
       await vi.advanceTimersByTimeAsync(50);
@@ -339,12 +356,12 @@ describe('MarketplaceBrowser asks for its next page as the reader nears its end'
     renderList();
 
     fireEvent.click(screen.getByRole('button', { name: 'Load more recipes' }));
-    expect(screen.getByRole('button', { name: 'Loading' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Loading' })).toHaveAttribute('aria-disabled', 'true');
     await advance(1_000);
     expect(listRequests(fetchMock)).toEqual(['/api/marketplace/resources?offset=4&limit=12']);
     expect(drawnTitles()).toHaveLength(16);
 
-    await scrollBy(300);
+    await readerScrolls(300);
     await act(async () => end.moveEnd(true));
     await advance(100);
     expect(listRequests(fetchMock)).toEqual([
@@ -353,32 +370,24 @@ describe('MarketplaceBrowser asks for its next page as the reader nears its end'
     ]);
   });
 
-  // Back from a recipe draws the pages kept for the listing, and the browser puts the reader where
-  // they were: that is no scroll of theirs, and the next page waits for one.
+  // Back from a recipe draws the pages kept for the listing, in the browser's order (review of
+  // #888): React draws it and runs its effects inside the popstate, at the post page's place (its
+  // top), and only then does the browser put the reader back where they were. That jump is no scroll
+  // of theirs, and the next page waits for one.
   it('asks for nothing on Back to a kept listing until the reader scrolls it', async () => {
-    rememberMarketplacePages(
-      buildMarketplacePagesKey(marketplaceFiltersKey(INITIAL_FILTERS), null),
-      4,
-      createPage(16, true, 0, 12),
-    );
+    rememberMarketplacePages(buildMarketplacePagesKey(LISTING, null), 4, createPage(16, true, 0, 12));
     const end = stubListEnd({ inReach: true });
     const fetchMock = vi.fn(answerEachPage(end));
     vi.stubGlobal('fetch', fetchMock);
-    // Where the browser puts the reader back, before the list's first frame.
-    placeWindowAt(1_800);
 
     renderList();
     expect(drawnTitles()).toHaveLength(16);
-    await advance(500);
-    // The browser's scroll event for that place, delivered after the list is drawn.
-    await act(async () => {
-      window.dispatchEvent(new Event('scroll'));
-    });
+    await windowMovesTo(1_800);
     await advance(1_000);
     expect(listRequests(fetchMock)).toEqual([]);
     expect(drawnTitles()).toHaveLength(16);
 
-    await scrollBy(120);
+    await readerScrolls(120);
     await advance(200);
     expect(listRequests(fetchMock)).toEqual(['/api/marketplace/resources?offset=16&limit=12']);
     expect(drawnTitles()).toHaveLength(28);
@@ -403,16 +412,75 @@ describe('MarketplaceBrowser asks for its next page as the reader nears its end'
         onNavigate={vi.fn()}
       />,
     );
+    // Its own place, kept by the browser for that entry, put back as Back or Forward would.
+    await windowMovesTo(900);
     await act(async () => end.moveEnd(true));
     await advance(1_000);
     expect(listRequests(fetchMock)).toHaveLength(1);
 
-    await scrollBy(80);
+    await readerScrolls(80);
     await advance(200);
     expect(listRequests(fetchMock)).toEqual([
       '/api/marketplace/resources?offset=4&limit=12',
       '/api/marketplace/resources?access=paid&offset=4&limit=12',
     ]);
+  });
+
+  // Review of #888: Back keeps a listing of the first page and ten more; one longer came back at its
+  // first page alone, and the browser put the reader on that short page. By itself, the list asks
+  // only for pages Back will keep; the button goes on past them, as before.
+  it('asks by itself only for pages the listing can keep for Back, and leaves the rest to the button', async () => {
+    stubListEnd({ inReach: true });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const offset = Number(new URL(String(input), 'http://localhost').searchParams.get('offset'));
+      return answer(createPage(12, true, offset, 12));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const kept = MARKETPLACE_PAGES_MEMORY_MAX_ITEMS - 12;
+    renderList({ initialPage: createPage(kept, true, 0, kept), scrolledOnOpen: true });
+
+    await advance(200);
+    expect(listRequests(fetchMock)).toEqual([`/api/marketplace/resources?offset=${kept}&limit=12`]);
+    expect(drawnTitles()).toHaveLength(MARKETPLACE_PAGES_MEMORY_MAX_ITEMS);
+    expect(recallMarketplacePages(buildMarketplacePagesKey(LISTING, null))?.items).toHaveLength(MARKETPLACE_PAGES_MEMORY_MAX_ITEMS);
+
+    // The end still in reach, and nothing more is asked for by itself.
+    await advance(3_000);
+    expect(listRequests(fetchMock)).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more recipes' }));
+    await advance(200);
+    expect(listRequests(fetchMock)).toEqual([
+      `/api/marketplace/resources?offset=${kept}&limit=12`,
+      `/api/marketplace/resources?offset=${MARKETPLACE_PAGES_MEMORY_MAX_ITEMS}&limit=12`,
+    ]);
+    expect(drawnTitles()).toHaveLength(MARKETPLACE_PAGES_MEMORY_MAX_ITEMS + 12);
+  });
+
+  // Review of #888: a page asked for by itself set disabled on the button, which may hold the
+  // keyboard's focus. It says it is busy with aria-disabled, keeps the focus, and takes no press.
+  it('keeps the keyboard on the button while a page it did not ask for loads', async () => {
+    const end = stubListEnd({ inReach: false });
+    const fetchMock = vi.fn(answerEachPage(end));
+    vi.stubGlobal('fetch', fetchMock);
+    renderList({ scrolledOnOpen: true });
+    const button = screen.getByRole('button', { name: 'Load more recipes' });
+    act(() => button.focus());
+
+    await act(async () => end.moveEnd(true));
+    await advance(20);
+    expect(listRequests(fetchMock)).toHaveLength(1);
+    expect(button).toHaveAccessibleName('Loading');
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(button).not.toHaveAttribute('disabled');
+    expect(button).toHaveFocus();
+
+    fireEvent.click(button);
+    await advance(200);
+    expect(listRequests(fetchMock)).toHaveLength(1);
+    expect(button).toHaveAccessibleName('Load more recipes');
+    expect(button).not.toHaveAttribute('aria-disabled');
+    expect(button).toHaveFocus();
   });
 
   // The browser may still deliver a notice it queued before the observer was let go: one for a

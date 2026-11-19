@@ -40,6 +40,7 @@ import { MARKETPLACE_COMPACT_PAGE_SIZE } from '@/lib/marketplace-resource-list-c
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
 import {
   buildMarketplacePagesKey,
+  fitsMarketplacePagesMemory,
   marketplacePagesViewer,
   recallMarketplacePages,
   rememberMarketplaceFiltersOpen,
@@ -51,13 +52,7 @@ import {
 import { MarketplaceListingFailed, MarketplaceListingSkeleton } from './MarketplaceListingStates';
 import { countMarketplaceFiltersSet, isPlainLinkClick, marketplaceFiltersKey } from './marketplace-address';
 import type { MarketplaceListingStatus } from './useMarketplaceListing';
-
-/**
- * How far the page moves from where it stood when a listing was drawn before the list takes it for
- * the reader's own scroll, as Explore's first-paint shell reads one (`ShowcaseBootstrapClient`): the
- * place Back restores, where the browser puts the reader before the list's first frame, is never one.
- */
-const READER_SCROLL_MIN_PX = 24;
+import { useReaderScrolled } from './useReaderScrolled';
 
 interface MarketplacePageInfo {
   hasMore: boolean;
@@ -134,9 +129,9 @@ interface MarketplaceBrowserProps {
   /**
    * The reader scrolled the first-paint shell towards its end, which brought this list in and asked
    * for its next page (`loadMoreOnOpen`): the list asks for each page after it as its end comes near,
-   * from the start. Otherwise it waits for the reader to scroll first, so a first screen whose
-   * recipes end above the fold, a press (which asks for one page) and the place Back restores ask for
-   * nothing more by themselves.
+   * from the start. Otherwise it waits for the reader to scroll first (`useReaderScrolled`), so a
+   * first screen whose recipes end above the fold, a press (which asks for one page) and the place
+   * Back restores ask for nothing more by themselves.
    */
   scrolledOnOpen?: boolean;
   /** The filters as the shell left them, open or folded behind Filters, so the hand-over moves nothing. */
@@ -205,9 +200,9 @@ export default function MarketplaceBrowser({
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(initialFiltersOpen);
-  // Whether the reader has scrolled this listing since it was drawn: until then the list asks for no
-  // page by itself (`scrolledOnOpen`).
-  const [readerScrolled, setReaderScrolled] = useState(scrolledOnOpen);
+  // Whether the reader has scrolled this listing with a gesture of their own: until then the list
+  // asks for no page by itself. Another listing starts unscrolled.
+  const readerScrolled = useReaderScrolled(listingKey, scrolledOnOpen);
   // The row of "Load more recipes", which stands for the list's end: once the reader has scrolled,
   // the next page is asked for as it comes within LOAD_MORE_ROOT_MARGIN of the window. Held as state,
   // so the observer follows the row as it is drawn and taken away.
@@ -254,8 +249,6 @@ export default function MarketplaceBrowser({
     if (filtersListingKeyRef.current !== listingKey) {
       filtersListingKeyRef.current = listingKey;
       setFiltersOpen(false);
-      // Another listing is a first screen of its own: its pages wait for the reader to scroll it.
-      setReaderScrolled(false);
     }
   });
 
@@ -420,10 +413,15 @@ export default function MarketplaceBrowser({
     // Read again as the timer runs, from the latest render: a newer start may have come since.
     if (readsOnForPress) void loadMore();
   });
+  // The button says it cannot ask now with aria-disabled, not disabled: a page asked for by itself
+  // would otherwise take the keyboard's focus off it mid-scroll (review of #888). A press meanwhile
+  // asks nothing, as the disabled button took none.
+  const loadMoreUnavailable = isLoadingMore || awaitingViewer || pressPending;
   // This list's own Load more: asked at once from a list ready to read on; pressed while the
   // listing's own first page is still read (a signed-in reader's took about 1.5 s live), it waits
   // for it as the shell's press does (review of #837: that page's arrival cut it short).
   const pressLoadMore = () => {
+    if (loadMoreUnavailable) return;
     if (readyToReadOn) void loadMore();
     else setPressedListingKey(listingKey);
   };
@@ -435,25 +433,18 @@ export default function MarketplaceBrowser({
     return () => window.clearTimeout(timer);
   }, [readsOnForPress]);
 
-  // The reader's own scroll: the page moved from where it stood when the listing was drawn. Read
-  // from there, the place Back restores, and the browser's scroll event for it, never count.
-  useEffect(() => {
-    if (readerScrolled) return;
-    const drawnAt = window.scrollY;
-    const readScroll = () => {
-      if (Math.abs(window.scrollY - drawnAt) >= READER_SCROLL_MIN_PX) setReaderScrolled(true);
-    };
-    window.addEventListener('scroll', readScroll, { passive: true });
-    return () => window.removeEventListener('scroll', readScroll);
-  }, [readerScrolled, listingKey]);
-
   // The next page, asked for by itself once the reader has scrolled and the list's end comes within
   // LOAD_MORE_ROOT_MARGIN of the window, as Home's feed asks (owner's report, 2026-11-20: every page
-  // needed a press). Never beside a press waiting or a page on its way. After a failed page, only
-  // once a wait has passed, longer each time, and after the last wait not at all: the button asks
-  // then (load-more-policy: a fresh observer fired at once after every failure, and Home sent 225
-  // failing requests in 5.5 s).
-  const asksNearTheEnd = readerScrolled && pageInfo.hasMore && readyToReadOn && !awaitingViewer && !isLoadingMore && !pressPending;
+  // needed a press). Never beside a press waiting or a page on its way, and only while the listing
+  // with that page would still be kept for Back (`fitsMarketplacePagesMemory`): past it, the button
+  // goes on. After a failed page, only once a wait has passed, longer each time, and after the last
+  // wait not at all: the button asks then (load-more-policy: a fresh observer fired at once after
+  // every failure, and Home sent 225 failing requests in 5.5 s).
+  const asksNearTheEnd = readerScrolled
+    && pageInfo.hasMore
+    && fitsMarketplacePagesMemory(items.length + MARKETPLACE_COMPACT_PAGE_SIZE)
+    && readyToReadOn
+    && !loadMoreUnavailable;
   const loadNextPage = useEffectEvent(() => {
     void loadMore();
   });
@@ -669,8 +660,8 @@ export default function MarketplaceBrowser({
               <button
                 type="button"
                 onClick={pressLoadMore}
-                disabled={isLoadingMore || awaitingViewer || pressPending}
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-60"
+                aria-disabled={loadMoreUnavailable || undefined}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white px-5 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 aria-disabled:cursor-not-allowed aria-disabled:opacity-60"
               >
                 {isLoadingMore || pressPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
                 {isLoadingMore || pressPending ? 'Loading' : 'Load more recipes'}

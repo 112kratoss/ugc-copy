@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildMarketplacePagesKey,
+  fitsMarketplacePagesMemory,
   MARKETPLACE_PAGES_MEMORY_MAX_ITEMS,
   MARKETPLACE_PAGES_MEMORY_MAX_LISTINGS,
   MARKETPLACE_PAGES_MEMORY_TTL_MS,
@@ -221,6 +222,38 @@ describe('what the tab keeps', () => {
     rememberMarketplacePages(KEY, 4, pages(long, true));
 
     expect(recallMarketplacePages(KEY)).toBeNull();
+    // The rule the list asks for its next page by: only while the listing with it is kept.
+    expect(fitsMarketplacePagesMemory(MARKETPLACE_PAGES_MEMORY_MAX_ITEMS)).toBe(true);
+    expect(fitsMarketplacePagesMemory(MARKETPLACE_PAGES_MEMORY_MAX_ITEMS + 1)).toBe(false);
+  });
+
+  // Review of #888: pages land as the reader scrolls, and each one parsed every listing the tab kept
+  // to make room. A listing kept already is written over in place and reads none of the others.
+  it('writes a listing kept already over in place, reading none of the others', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(performance.timeOrigin + 60_000);
+    const others = Array.from({ length: MARKETPLACE_PAGES_MEMORY_MAX_LISTINGS - 1 }, (_, index) => (
+      buildMarketplacePagesKey(`all/all//recent/${index}`, null)
+    ));
+    for (const key of [...others, KEY]) {
+      rememberMarketplacePages(key, 1, pages(['a', 'b'], true));
+      vi.advanceTimersByTime(1_000);
+    }
+
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      rememberMarketplacePages(KEY, 1, pages(['a', 'b', 'c'], true));
+      expect(parse).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
+    expect(ids(recallMarketplacePages(KEY))).toEqual(['a', 'b', 'c']);
+    for (const key of others) expect(recallMarketplacePages(key)).not.toBeNull();
+
+    // A listing new to the tab still makes room, the one kept longest ago going first.
+    vi.advanceTimersByTime(1_000);
+    rememberMarketplacePages(buildMarketplacePagesKey('paid/all//recent/', null), 1, pages(['a', 'b'], false));
+    expect(recallMarketplacePages(others[0])).toBeNull();
   });
 });
 
