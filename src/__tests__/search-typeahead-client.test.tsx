@@ -26,7 +26,7 @@ import {
 
 const { pushMock, routerMock } = vi.hoisted(() => {
   const push = vi.fn();
-  return { pushMock: push, routerMock: { push, replace: vi.fn() } };
+  return { pushMock: push, routerMock: { push, replace: vi.fn(), prefetch: vi.fn() } };
 });
 const getSessionMock = vi.fn();
 // The session's listeners, as the typeahead registers them, and the ends of their watches.

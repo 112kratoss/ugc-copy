@@ -22,6 +22,8 @@ import { describe, expect, it } from 'vitest';
  * - `invalidateShowcaseFeedAndRefreshEveryPage`: a change whose pages cannot
  *   be named, the feeds at once and every public page in the background;
  * - `invalidateShowcaseFeedCacheOnly`: the feeds alone;
+ * - `refreshShowcaseFeedsInBackground`: the feeds alone, in the background
+ *   (their hourly maintenance, which reorders and removes nothing);
  * - `invalidateMarketplaceResourceListCache`: the storefront in the
  *   background (a sale, a free unlock).
  *
@@ -70,6 +72,7 @@ const HELPERS = [
   'invalidateShowcaseFeedAndRefreshPostPages',
   'invalidateShowcaseFeedAndRefreshEveryPage',
   'invalidateShowcaseFeedCacheOnly',
+  'refreshShowcaseFeedsInBackground',
   'invalidateMarketplaceResourceListCache',
 ] as const;
 const NEXT_INVALIDATORS = ['revalidateTag', 'revalidatePath', 'updateTag'] as const;
@@ -86,8 +89,8 @@ type Classified = {
 const CLASSIFIED: Record<string, Classified> = {
   // The helpers themselves.
   'src/lib/showcase-feed-cache.ts': {
-    uses: { revalidateTag: 15 },
-    why: 'the four kinds: a removal (the feed and the removal tag at once: 2), the feed alone (1), one post\'s pages (the feed at once; its own and its legacy address, its creator, the storefront, its remixes and their creators in the background; its own page at once on an arrival or deleted media; every page when its remixes cannot be named: 8), every page (the feed at once, the background tag, a post\'s or a handle\'s arrival at once: 4)',
+    uses: { revalidateTag: 16 },
+    why: 'the five kinds: a removal (the feed and the removal tag at once: 2), the feed alone (1), the feed in the background (its refresh tag: 1), one post\'s pages (the feed at once; its own and its legacy address, its creator, the storefront, its remixes and their creators in the background; its own page at once on an arrival or deleted media; every page when its remixes cannot be named: 8), every page (the feed at once, the background tag, a post\'s or a handle\'s arrival at once: 4)',
   },
   'src/lib/marketplace-resource-list-cache.ts': {
     uses: { revalidateTag: 1 },
@@ -152,8 +155,8 @@ const CLASSIFIED: Record<string, Classified> = {
 
   // The feeds alone.
   'src/lib/feed-maintenance.ts': {
-    uses: { invalidateShowcaseFeedCacheOnly: 2 },
-    why: 'feeds only: the hourly totals and account labels, which no public page draws (the option or its default, called)',
+    uses: { refreshShowcaseFeedsInBackground: 2 },
+    why: 'feeds only, in the background: the hourly totals and account labels, which reorder the feeds, remove nothing and no public page draws (the option or its default, called)',
   },
   'src/lib/moderation-service.ts': {
     uses: { invalidateShowcaseFeedCacheOnly: 3 },
@@ -231,6 +234,7 @@ const HELPER_MODULES: Record<Helper, string> = {
   invalidateShowcaseFeedAndRefreshPostPages: 'src/lib/showcase-feed-cache.ts',
   invalidateShowcaseFeedAndRefreshEveryPage: 'src/lib/showcase-feed-cache.ts',
   invalidateShowcaseFeedCacheOnly: 'src/lib/showcase-feed-cache.ts',
+  refreshShowcaseFeedsInBackground: 'src/lib/showcase-feed-cache.ts',
   invalidateMarketplaceResourceListCache: 'src/lib/marketplace-resource-list-cache.ts',
 };
 

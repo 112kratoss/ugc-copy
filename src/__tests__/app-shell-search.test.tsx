@@ -16,8 +16,10 @@ import { forgetKeptSearchStarter } from '@/components/search/use-search-starter'
 // holds where each row goes from here, and that the field costs a page
 // nothing until it is used.
 
-const { pushMock, holdMock, submitted } = vi.hoisted(() => ({
+const { pushMock, prefetchMock, formProps, holdMock, submitted } = vi.hoisted(() => ({
   pushMock: vi.fn(),
+  prefetchMock: vi.fn(),
+  formProps: [] as Array<{ prefetch?: unknown }>,
   holdMock: vi.fn((_navigate: () => void) => false),
   submitted: [] as string[],
 }));
@@ -29,10 +31,12 @@ const starterFetchMock = vi.fn();
 const fetchMock = (url: string) => (url.startsWith('/api/search/starter') ? starterFetchMock(url) : suggestFetchMock(url));
 const HISTORY_KEY = 'magicbooklet:public-search-history:v1';
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: pushMock }) }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: pushMock, prefetch: prefetchMock }) }));
 vi.mock('next/form', () => ({
   // A GET form, as next/form is: a submit that nothing prevented goes to its action with its fields.
-  default: ({ action, children, onSubmit, ...props }: React.ComponentProps<'form'> & { action: string }) => (
+  default: ({ action, children, onSubmit, prefetch, ...props }: React.ComponentProps<'form'> & { action: string; prefetch?: false | null }) => {
+    formProps.push({ prefetch });
+    return (
     <form
       {...props}
       action={action}
@@ -47,7 +51,8 @@ vi.mock('next/form', () => ({
     >
       {children}
     </form>
-  ),
+    );
+  },
 }));
 vi.mock('@/lib/use-leave-guard', () => ({ holdForLeaveGuard: (navigate: () => void) => holdMock(navigate) }));
 // Whether the browser holds a session cookie: the Supabase client is loaded to read the session
@@ -84,6 +89,8 @@ async function typeFocused(value: string) {
 describe('top bar search', () => {
   beforeEach(() => {
     submitted.length = 0;
+    formProps.length = 0;
+    prefetchMock.mockReset();
     pushMock.mockReset();
     holdMock.mockReset();
     holdMock.mockReturnValue(false);
@@ -101,6 +108,21 @@ describe('top bar search', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('prefetches the search page only once a person reaches for the field, not as the bar is drawn', () => {
+    // The bar is on every page and /search is dynamic: a prefetch on sight ran
+    // a function on most page views (speed baseline, 2026-11-19).
+    render(<AppShellSearch />);
+    expect(formProps.at(-1)).toEqual({ prefetch: false });
+    expect(prefetchMock).not.toHaveBeenCalled();
+
+    // A mouse over the field asks for it, and the focus asks again: Next skips
+    // a prefetch it holds fresh, so each reach can ask.
+    fireEvent.pointerEnter(box().closest('form')!, { pointerType: 'mouse' });
+    expect(prefetchMock).toHaveBeenCalledWith('/search');
+    fireEvent.focus(box());
+    expect(prefetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('searches what is typed on Enter, on the search page, as before', async () => {

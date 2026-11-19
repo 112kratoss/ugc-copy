@@ -26,8 +26,10 @@ import {
   invalidateShowcaseFeedAndRefreshPostPages,
   invalidateShowcaseFeedCache,
   invalidateShowcaseFeedCacheOnly,
+  refreshShowcaseFeedsInBackground,
   REMIX_PAGE_REFRESH_LIMIT,
   SHOWCASE_FEED_CACHE_TAG,
+  SHOWCASE_FEED_REFRESH_TAG,
 } from '@/lib/showcase-feed-cache';
 
 const AT_ONCE = { expire: 0 };
@@ -79,13 +81,22 @@ describe('showcase feed cache', () => {
     ]);
   });
 
-  // A block or a report, and the hourly feed maintenance: the pages draw
-  // none of it, so every cached page stays.
+  // A block or a report: the pages draw none of it, so every cached page stays.
+  // (The hourly maintenance refreshes in the background, below.)
   it('expires the feed tag alone for a change only the feeds show', () => {
     invalidateShowcaseFeedCacheOnly();
 
     expect(cacheMocks.revalidateTag.mock.calls).toEqual([
       [SHOWCASE_FEED_CACHE_TAG, AT_ONCE],
+    ]);
+  });
+
+  it('refreshes the feeds in the background for their hourly maintenance, through a tag of its own', () => {
+    refreshShowcaseFeedsInBackground();
+
+    // Never the feed tag removals expire at once: one tag, one profile.
+    expect(cacheMocks.revalidateTag.mock.calls).toEqual([
+      [SHOWCASE_FEED_REFRESH_TAG, IN_THE_BACKGROUND],
     ]);
   });
 
@@ -221,6 +232,7 @@ describe('showcase feed cache', () => {
     const { client } = remixesClient({ data: [{ id: 'remix-1', user_id: 'remixer-1' }] });
     invalidateShowcaseFeedCache();
     invalidateShowcaseFeedCacheOnly();
+    refreshShowcaseFeedsInBackground();
     await invalidateShowcaseFeedAndRefreshPostPages(client, { ...post, arrived: true });
     await invalidateShowcaseFeedAndRefreshPostPages(client, { ...post, arrived: false, mediaRemoved: true });
     await invalidateShowcaseFeedAndRefreshPostPages(remixesClient({ error: { message: 'boom' } }).client, { ...post, arrived: false });
@@ -236,6 +248,25 @@ describe('showcase feed cache', () => {
     }
     expect(profilesByTag.get(PUBLIC_PAGE_CACHE_TAG)).toEqual(new Set(['at once']));
     expect(profilesByTag.get(PUBLIC_PAGE_REFRESH_TAG)).toEqual(new Set(['background']));
+    expect(profilesByTag.get(SHOWCASE_FEED_CACHE_TAG)).toEqual(new Set(['at once']));
+    expect(profilesByTag.get(SHOWCASE_FEED_REFRESH_TAG)).toEqual(new Set(['background']));
     expect(profilesByTag.get(MARKETPLACE_RESOURCE_LIST_CACHE_TAG)).toEqual(new Set(['background']));
+  });
+});
+
+describe('the cached feed reads', () => {
+  it('each carry the background refresh tag beside the feed tag, so the hourly maintenance reaches them', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const reads: Array<[string, number]> = [
+      ['src/lib/anonymous-home-data.ts', 2],
+      ['src/lib/home-shelf-server.ts', 1],
+      ['src/lib/showcase-feed.ts', 2],
+    ];
+    for (const [file, count] of reads) {
+      const source = readFileSync(join(process.cwd(), file), 'utf8');
+      expect(source.split('tags: [SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG]').length - 1, file).toBe(count);
+      expect(source, file).not.toContain('tags: [SHOWCASE_FEED_CACHE_TAG]');
+    }
   });
 });

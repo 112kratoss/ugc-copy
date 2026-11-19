@@ -15,7 +15,8 @@ import {
   resolveSentryEnvironment,
 } from '@/lib/sentry-config';
 
-type SentryClient = typeof import('@sentry/nextjs');
+// The SDK's two parts used here, through a module that names them (`sentry-browser-sdk.ts`).
+type SentryClient = typeof import('@/lib/sentry-browser-sdk');
 
 const MAX_BUFFERED_EXCEPTIONS = 20;
 const BACKGROUND_INITIALIZATION_DELAY_MS = 30_000;
@@ -65,7 +66,7 @@ function initializeSentryClient(): Promise<SentryClient | null> {
   if (!sentryConfigured) return Promise.resolve(null);
   if (sentryClientPromise) return sentryClientPromise;
 
-  sentryClientPromise = import('@sentry/nextjs')
+  sentryClientPromise = import('@/lib/sentry-browser-sdk')
     .then((Sentry) => {
       // Event dispatch cannot interleave with this synchronous detach/init
       // sequence, so an exception is always owned by either the small early
@@ -119,7 +120,7 @@ function scheduleBackgroundInitialization() {
 
 if (sentryConfigured) {
   // Preserve errors that happen during startup without forcing every visitor
-  // to download and parse the 500 KB SDK before the page becomes interactive.
+  // to download and parse the SDK before the page becomes interactive.
   // A real error loads it immediately and flushes this bounded buffer. Healthy
   // sessions warm it only after the critical rendering window has passed.
   attachEarlyErrorListeners();

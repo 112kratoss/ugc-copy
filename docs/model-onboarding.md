@@ -103,7 +103,8 @@ The compiler and the tests below name anything left out. This is where each fact
 | Extra quote rules | `src/lib/generation-model-runtime.ts` | `validationConfigForModel` |
 | Video input slots and caps | `src/lib/generation-model-catalog.ts` | `VIDEO_INPUT_LIMITS` |
 | Progress bar estimate | `src/lib/generation-timing.ts` | `IMAGE_MODEL_BASE_ESTIMATE_MS`, `VIDEO_MODEL_BASE_ESTIMATE_MS` |
-| Prompt enhancer | `src/lib/prompt-enhancer-playbooks.ts` | `ENHANCER_PLAYBOOKS`, `MODEL_ALIASES` |
+| Prompt enhancer | `src/lib/prompt-enhancer-playbooks.ts` | `ENHANCER_PLAYBOOKS` |
+| Prompt enhancer aliases, and the prompt length limit the creators warn from (`prompt-enhancer-model-limits.test.ts` fails until each playbook's `budget.maxChars` and label match) | `src/lib/prompt-enhancer-model-limits.ts` | `MODEL_ALIASES`, `ENHANCER_PROMPT_LIMITS` |
 | "Made with" attribution | `src/lib/source-tools.ts` | `APP_SOURCE_TOOL` |
 | The model's name in the app: feed cards, Details, the composer's Made with (`src/__tests__/app-model-display-names.test.ts` fails until it matches the browser copy) | `ugc-mobile/lib/model-display-names.ts` | `MODEL_DISPLAY_NAMES` |
 | Who receives the prompt and media: the model's maker, named in the privacy policy | `src/lib/ai-data-recipients.ts` | `AI_MODEL_MAKER_BY_MODEL_ID` |

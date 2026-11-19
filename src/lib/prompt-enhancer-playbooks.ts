@@ -13,6 +13,8 @@
  * - every playbook carries a word budget and its own agent identity.
  */
 
+import { MODEL_ALIASES, normalizeEnhancerModelId } from '@/lib/prompt-enhancer-model-limits';
+
 export type Medium = 'image' | 'video' | 'motion' | 'audio';
 
 export type PromptPlannerMode = 'legacy-text' | 'structured-image' | 'structured-video';
@@ -80,60 +82,7 @@ const PRESERVE_INTENT_SAFEGUARD: AppliedPromptEnhancementSafeguard = {
   message: 'Preserve the user intent and exact required wording.',
 };
 
-/**
- * Aliases are the enhance endpoint's allowlist extension: SUPPORTED_ENHANCEMENT_MODELS
- * is built from playbook keys plus these. Only true grammar twins belong here —
- * a model whose provider, prompt dialect, and constraint set match the target.
- */
-export const MODEL_ALIASES: Record<string, string> = {
-  // Catalog id → provider id spelling of the same model.
-  'kling-3.0-video': 'kling-3.0/video',
-  // Identical request schema and official grammar; pro is the fidelity tier.
-  'qwen3-pro': 'qwen3',
-  // Same OpenAI image model family, request schema and prompting guide as GPT Image 2.
-  'gpt-image-2.5-flare': 'gpt-image-2',
-  'gpt-image-2.5-sunburst': 'gpt-image-2',
-  'wan-2.7-image-pro': 'wan-2.7-image',
-  // Same one-shot caption grammar; fast/ultra are speed/quality tiers.
-  'imagen-4-fast': 'imagen-4',
-  'imagen-4-ultra': 'imagen-4',
-  // Same schema and constraints as the fast tier; mini is the draft tier.
-  'seedance-2-mini': 'seedance-2-fast',
-  // docs/model-api-references/seedream-5-flash.md: the Seedream prompt grammar with Lite's
-  // budget; the request differs by one field name (`size` for `resolution`).
-  'seedream-5-flash': 'seedream-5-lite',
-  // docs/model-api-references/qwen-image-2-1.md: Qwen-Image's own prompting rules, the same
-  // family as Qwen 3; `aspect_ratio` where Qwen 3's body says `image_size`.
-  'qwen-image-2.1': 'qwen3',
-  // docs/model-api-references/gemini-omni-1-1-flash.md: Gemini Omni Video's prompt,
-  // image_urls, video_list, duration, aspect_ratio and resolution body plus a frame pair.
-  'gemini-omni-1.1-flash': 'gemini-omni-video',
-  // docs/model-api-references/wan-3-0.md: the Prime tier takes the identical body.
-  'wan-3.0-prime': 'wan-3.0',
-  // docs/model-api-references/kie-catalog-inputs-2026-10-29.md: Grok Imagine's prompt, image_urls,
-  // aspect_ratio, resolution and duration body without the mode field, plus a frame pair
-  // (first_frame_url, last_frame_url), as Gemini Omni 1.1 Flash's body adds one to its target's;
-  // the same prompt grammar and audio rule.
-  'grok-imagine-video-1.5': 'grok-imagine-video',
-  // docs/model-api-references/nano-banana-2-1.md: Nano Banana 2's body field for field under
-  // its own id, from the same Google model line.
-  'nano-banana-2.1': 'nano-banana-2',
-  // docs/model-api-references/pixverse-v6-max.md: PixVerse V6's text and image-to-video bodies
-  // (no multi-clip switch), the same prompt grammar and sound toggle; Max has no references.
-  'pixverse-v6-max': 'pixverse-v6',
-  // docs/model-api-references/seedream-5-5.md: Seedream 5 Flash's body field for field (plus an
-  // unsent `background`), so the Seedream grammar with Lite's budget, as Flash has.
-  'seedream-5.5': 'seedream-5-lite',
-  // docs/model-api-references/gpt-image-2-6.md: GPT Image 2's prompt and input_urls without a
-  // resolution field, from the same OpenAI model family, as 2.5's tiers are.
-  'gpt-image-2.6': 'gpt-image-2',
-  // docs/model-api-references/kling-4-0-flash.md: Kling 4.0's two bodies with fewer fields
-  // (720p, 3–20 s, no last frame or voices) and the same @image_N grammar and always-on audio.
-  'kling-4.0-flash': 'kling-4.0',
-  // docs/model-api-references/gemini-omni-1-2-flash.md: 1.1's prompt, image_urls, frame pair,
-  // aspect_ratio and resolution body with an integer duration, as 1.1 aliases Gemini Omni Video.
-  'gemini-omni-1.2-flash': 'gemini-omni-video',
-};
+export { MODEL_ALIASES, normalizeEnhancerModelId };
 
 // ─── Image playbooks ─────────────────────────────────────────────────────────
 
@@ -1523,10 +1472,6 @@ export const ENHANCER_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
   ...MOTION_PLAYBOOKS,
   ...AUDIO_PLAYBOOKS,
 };
-
-export function normalizeEnhancerModelId(selectedModel: string): string {
-  return MODEL_ALIASES[selectedModel] ?? selectedModel;
-}
 
 export function getEnhancerPlaybookById(selectedModel: string): EnhancerPlaybook | null {
   return ENHANCER_PLAYBOOKS[normalizeEnhancerModelId(selectedModel)] ?? null;

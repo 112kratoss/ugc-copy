@@ -114,7 +114,7 @@ describe('production performance readiness', () => {
     expect(showcasePage).toContain('sourceToolOptions={toSourceToolFilterOptions(sourceToolOptions)}');
     expect(marketplacePage).toContain('sourceToolOptions: toSourceToolFilterOptions(sourceToolOptions)');
     expect(nextConfig).toContain('value: `<${supabaseUrl.origin}>; rel=preconnect`');
-    expect(nextConfig).toContain('["/", "/home", "/showcase", "/marketplace"]');
+    expect(nextConfig).toContain('["/", "/home", "/showcase", "/marketplace", "/showcase/:id", "/creators/:username"]');
     expect(nextConfig).toContain('headers: publicMediaPreconnectHeaders');
     expect(marketplacePolicy).toContain('MARKETPLACE_INITIAL_PAGE_SIZE = 4');
     expect(marketplacePolicy).toContain('MARKETPLACE_COMPACT_PAGE_SIZE = 12');

@@ -100,6 +100,40 @@ function trimOneDecimal(value: number) {
     return value.toFixed(1).replace(/\.0$/, '');
 }
 
+/**
+ * The earliest moment that draws the same `formatRelativeTime` label as `now`:
+ * the start of the label's own unit counted from `value` (its minute, hour,
+ * day or week), or the first day of its month or year band. A cached page that
+ * drew an age at "now" changed its HTML at every refresh, and Vercel writes the
+ * cache again for any change (a busy post page up to every five minutes); drawn
+ * at this moment, the page is the same until the label itself moves. Ages are
+ * read in whole seconds, rounded, as the label reads them, so the moment can be
+ * up to half a second after `now`. The browser takes over with its own clock
+ * after hydration (`PostRelativeTime`).
+ */
+export function relativeTimeLabelInstant(value: string, now: number): number {
+    const timestamp = new Date(value).getTime();
+    if (!Number.isFinite(timestamp) || now <= timestamp) return now;
+    const MINUTE = 60_000;
+    const HOUR = 60 * MINUTE;
+    const DAY = 24 * HOUR;
+    // formatRelativeTime reads whole seconds, rounded: so does this.
+    const age = Math.round((now - timestamp) / 1000) * 1000;
+    // Under a minute it reads "now", as it does at the post's own moment.
+    if (age < MINUTE) return timestamp;
+    if (age < 35 * DAY) {
+        // Its m, h, d and w bands, each counted in its own unit.
+        const step = age < HOUR ? MINUTE : age < DAY ? HOUR : age < 7 * DAY ? DAY : 7 * DAY;
+        return timestamp + Math.floor(age / step) * step;
+    }
+    // Months (30 days) from 35 days, years (365 days) from 360: the first day of
+    // the band the label is in.
+    const days = Math.floor(age / DAY);
+    const months = Math.floor(days / 30);
+    const firstDay = months < 12 ? Math.max(35, months * 30) : Math.max(360, Math.floor(days / 365) * 365);
+    return timestamp + firstDay * DAY;
+}
+
 export function formatRelativeTime(value: string, now = new Date()) {
     const timestamp = new Date(value).getTime();
     if (!Number.isFinite(timestamp)) return '';
