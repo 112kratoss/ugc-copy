@@ -3,7 +3,7 @@ import renderer from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const auth = vi.hoisted(() => ({ session: { access_token: 'first-session', expires_at: 10, user: { id: 'owner' } } }));
-vi.mock('@/lib/auth', () => ({ useAuth: () => auth }));
+vi.mock('@/lib/auth', () => ({ useAuth: () => auth, useAuthSession: () => auth.session }));
 vi.mock('@/lib/env', () => ({ env: { apiBaseUrl: 'https://magicbooklet.com', supabaseUrl: 'https://project.supabase.co' } }));
 const appState = vi.hoisted(() => ({ current: 'active', listeners: new Set<(state: string) => void>() }));
 vi.mock('react-native', () => ({

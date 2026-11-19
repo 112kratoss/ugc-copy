@@ -72,14 +72,12 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
   const foregroundCacheKey = props.cacheKey ?? (props.recyclingKey
     ? `${props.recyclingKey}:${props.kind === 'image' ? 'foreground' : 'video-poster'}`
     : foregroundUrl);
-  const {
-    backgroundColor = theme.colors.app,
-    borderColor,
-    borderWidth = borderColor ? 1 : 0,
-    children,
-    radius = 0,
-    style,
-  } = props;
+  // Defaults worked out after the destructuring, not in it: a default that reads
+  // another value (`theme.colors.app`) made React Compiler skip the whole
+  // component, and every feed card draws one (compiler pass, 2026-11-19).
+  const { borderColor, children, radius = 0, style } = props;
+  const backgroundColor = props.backgroundColor === undefined ? theme.colors.app : props.backgroundColor;
+  const borderWidth = props.borderWidth === undefined ? (borderColor ? 1 : 0) : props.borderWidth;
 
   return (
     <View

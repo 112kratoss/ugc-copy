@@ -12,7 +12,7 @@ const loads = vi.hoisted(() => ({
   pending: [] as Array<(outcome: 'loaded' | 'failed') => void>,
 }));
 
-vi.mock('@/lib/auth', () => ({ useAuth: () => auth }));
+vi.mock('@/lib/auth', () => ({ useAuth: () => auth, useAuthSession: () => auth.session }));
 vi.mock('@/lib/env', () => ({ env: { apiBaseUrl: 'https://magicbooklet.com', supabaseUrl: 'https://project.supabase.co' } }));
 const platform = vi.hoisted(() => ({ OS: 'ios' }));
 vi.mock('react-native', () => ({
