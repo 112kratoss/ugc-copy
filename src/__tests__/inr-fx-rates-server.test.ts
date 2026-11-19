@@ -68,6 +68,50 @@ describe('INR exchange rates, read once per instance', () => {
     expect(mocks.fetchWithProviderTimeout).toHaveBeenCalledTimes(2);
   });
 
+  it('gives every quote sharing a failed read null, then reads again', async () => {
+    mocks.fetchWithProviderTimeout
+      .mockImplementationOnce(() => answer({}, { status: 502 }))
+      .mockImplementation(() => answer({ result: 'success', base_code: 'INR', rates: RATES }));
+    const shared = await Promise.all([getInrFxRates('caller_failed'), getInrFxRates('caller_failed'), getInrFxRates('caller_failed')]);
+    expect(shared).toEqual([null, null, null]);
+    expect(mocks.logBackendError).toHaveBeenCalledTimes(1);
+    await expect(getInrFxRates('caller_failed')).resolves.toEqual(RATES);
+    expect(mocks.fetchWithProviderTimeout).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves a newer read alone when an older one fails after being replaced', async () => {
+    let failOld: (response: Response) => void = () => {};
+    mocks.fetchWithProviderTimeout
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { failOld = resolve; }))
+      .mockImplementation(() => answer({ result: 'success', base_code: 'INR', rates: RATES }));
+    let clock = 0;
+    const now = () => clock;
+    const old = getInrFxRates('caller_failed', now);
+    // Unanswered past the in-flight limit: the next quote starts its own read.
+    clock += 10_001;
+    await expect(getInrFxRates('caller_failed', now)).resolves.toEqual(RATES);
+    failOld(new Response('{}', { status: 503 }));
+    await expect(old).resolves.toBeNull();
+    // The newer read is still the one kept.
+    await expect(getInrFxRates('caller_failed', now)).resolves.toEqual(RATES);
+    expect(mocks.fetchWithProviderTimeout).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not share a read that never answers past twice the request timeout', async () => {
+    mocks.fetchWithProviderTimeout
+      .mockImplementationOnce(() => new Promise<Response>(() => {}))
+      .mockImplementation(() => answer({ result: 'success', base_code: 'INR', rates: RATES }));
+    let clock = 0;
+    const now = () => clock;
+    void getInrFxRates('caller_failed', now);
+    clock += 9_999;
+    void getInrFxRates('caller_failed', now);
+    expect(mocks.fetchWithProviderTimeout).toHaveBeenCalledTimes(1);
+    clock += 2;
+    await expect(getInrFxRates('caller_failed', now)).resolves.toEqual(RATES);
+    expect(mocks.fetchWithProviderTimeout).toHaveBeenCalledTimes(2);
+  });
+
   it('refuses a USD/INR rate outside the safety band, and malformed answers', async () => {
     mocks.fetchWithProviderTimeout.mockImplementationOnce(() => answer({ result: 'success', base_code: 'INR', rates: { USD: 5 } }));
     await expect(getInrFxRates('caller_failed')).resolves.toBeNull();

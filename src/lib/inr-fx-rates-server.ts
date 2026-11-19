@@ -17,7 +17,15 @@ import { EXTERNAL_API_REQUEST_TIMEOUT_MS, fetchWithProviderTimeout } from '@/lib
  * 2026-11-19), although Next's data cache answered all but one. Now an instance
  * reads them once, shares the read while it is in flight, keeps the answer for
  * `INR_FX_RATES_INSTANCE_TTL_MS`, and reads again sooner only after a failure,
- * which is not kept.
+ * which is not kept, or a read that has not answered within twice the request
+ * timeout.
+ *
+ * Instances can now disagree for up to the TTL after Next's data cache picks up
+ * the upstream's daily change: a buyer may see one rupee amount on a card and be
+ * quoted another at checkout, a day's USD/INR move apart. Nobody is charged a
+ * figure they were not shown at checkout (the order records its own amount),
+ * and a retried checkout that lands on the other rate gets
+ * `CHECKOUT_PAYLOAD_MISMATCH`, which the panel recovers from.
  */
 
 type ExchangeRateApiResponse = {
@@ -33,9 +41,11 @@ const FX_UPSTREAM_URL = 'https://open.er-api.com/v6/latest/INR';
  * the fetch below is held in Next's data cache for an hour, so a quote here is at
  * most this much older than one read fresh.
  */
-export const INR_FX_RATES_INSTANCE_TTL_MS = 10 * 60 * 1000;
+export const INR_FX_RATES_INSTANCE_TTL_MS = 5 * 60 * 1000;
+/** A read still unanswered after this is not shared any more: the next quote reads again. */
+const INR_FX_RATES_IN_FLIGHT_REUSE_MS = 2 * EXTERNAL_API_REQUEST_TIMEOUT_MS;
 
-let held: { readAt: number; rates: Promise<Record<string, number> | null> } | null = null;
+let held: { readAt: number; settled: boolean; rates: Promise<Record<string, number> | null> } | null = null;
 
 async function readInrFxRates(failureEvent: string): Promise<Record<string, number> | null> {
   try {
@@ -82,21 +92,34 @@ async function readInrFxRates(failureEvent: string): Promise<Record<string, numb
 /**
  * INR-based rates (`rates.USD` is dollars per rupee), or null when they could not
  * be read; the caller then quotes in USD. `failureEvent` names the backend log
- * line of a failed read, so each caller keeps its own.
+ * line of a failed read: callers sharing one read share its one line, under the
+ * event of the caller that started it.
  */
 export function getInrFxRates(
   failureEvent: string,
   now: () => number = Date.now,
 ): Promise<Record<string, number> | null> {
   const at = now();
-  if (held && at - held.readAt < INR_FX_RATES_INSTANCE_TTL_MS) return held.rates;
+  if (held) {
+    const age = at - held.readAt;
+    const reusable = held.settled ? age < INR_FX_RATES_INSTANCE_TTL_MS : age < INR_FX_RATES_IN_FLIGHT_REUSE_MS;
+    if (reusable) return held.rates;
+  }
   const rates = readInrFxRates(failureEvent);
-  const entry = { readAt: at, rates };
+  const entry = { readAt: at, settled: false, rates };
   held = entry;
-  // A failed read is not kept: the next quote asks again.
-  void rates.then((value) => {
-    if (value === null && held === entry) held = null;
-  });
+  // A failed read is not kept, nor one that rejected: the next quote asks again.
+  // The guard leaves a newer read that replaced this one alone.
+  void rates.then(
+    (value) => {
+      entry.settled = true;
+      if (value === null && held === entry) held = null;
+    },
+    () => {
+      entry.settled = true;
+      if (held === entry) held = null;
+    },
+  );
   return rates;
 }
 

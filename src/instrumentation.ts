@@ -5,17 +5,11 @@
  * uncaught request errors to `onRequestError`. Without the latter, App Router
  * errors are swallowed by the framework's own boundary and never reach Sentry.
  *
- * NODE RUNTIME ONLY, AND THE IMPORTS ARE LAZY. `instrumentation.ts` is loaded by
- * the edge runtime too, because middleware lives there. Two reasons to keep the
- * SDK out of it:
- *
- *   1. Middleware runs on *every* request, so its bundle is the one place where
- *      weight is paid unconditionally. `src/proxy.ts` is thin by design — mobile
- *      CORS and client version gating — and an APM SDK is not a proportionate
- *      thing to add to that path.
- *   2. A top-level `import * as Sentry` also pulled the SDK's bundler-plugin
- *      machinery into the server chunks behind the package index, which is why
- *      the `@sentry/*` entries exist in `serverExternalPackages`.
+ * NODE RUNTIME ONLY, AND THE IMPORTS ARE LAZY. `instrumentation.ts` can be loaded
+ * by the edge runtime too, and a top-level `import * as Sentry` also pulled the
+ * SDK's bundler-plugin machinery into the server chunks behind the package index,
+ * which is why the `@sentry/*` entries exist in `serverExternalPackages`. Next 16
+ * runs `src/proxy.ts` on the Node runtime, so its function registers here as well.
  *
  * THE SDK LOADS WITH THE FIRST ERROR, NOT AT STARTUP. Next awaits `register()`
  * before an instance serves its first request, and importing `@sentry/nextjs`
@@ -31,15 +25,23 @@
  *     process handlers `register()` installs. They hand over to the SDK's own
  *     handlers (its default `OnUnhandledRejection` and `OnUncaughtException`
  *     integrations) once it is in, and behave as those do meanwhile: a
- *     rejection is reported and does not end the process, as the SDK's "warn"
- *     mode never let it; an exception is reported, flushed, and ends the
- *     process unless another handler is there to decide.
+ *     rejection the SDK would not ignore is reported and does not end the
+ *     process, as the SDK's "warn" mode never let it; an exception is reported
+ *     as fatal, flushed, and ends the process only when no other handler is
+ *     there to decide (Next installs one on its route functions).
+ *
+ * What that costs, stated plainly:
+ *   - The load (0.6–1.1 s, synchronous) now happens on the first error, while
+ *     the instance may be serving other requests, and a route handler's 500
+ *     waits for it once per instance.
+ *   - The SDK records breadcrumbs (console, http, fetch) only from its `init`,
+ *     so the error that loads it is reported without any.
+ *   - `init` runs inside the triggering request's async context.
+ *   - Middleware errors are not captured; server components, route handlers and
+ *     the browser all are.
  *
  * The type import below is erased at build time; the value import happens inside
  * the runtime guard.
- *
- * THE COST, STATED PLAINLY: middleware errors are not captured. Server
- * components, route handlers and the browser all are.
  */
 
 import type * as SentryTypes from '@sentry/nextjs';
@@ -58,13 +60,29 @@ function isNodeRuntime(): boolean {
   return process.env.NEXT_RUNTIME === 'nodejs';
 }
 
+/** Marks the stand-in listeners, so a count of the other `uncaughtException` handlers leaves them out. */
+const STAND_IN_MARK = '__magicbookletSentryStandIn';
+type ProcessListener = ((...args: never[]) => void) & { [STAND_IN_MARK]?: true; _errorHandler?: boolean };
+/**
+ * The installed stand-ins, kept on the process rather than in this module, so a
+ * second copy of the module in the same process neither installs a second pair
+ * nor leaves the first behind when it hands over.
+ */
+const STAND_INS_KEY = Symbol.for('magicbooklet.sentry.serverStandIns');
+type StandIns = { rejection: ProcessListener; exception: ProcessListener };
+/**
+ * Rejections the SDK's own `OnUnhandledRejection` drops before it logs or reports
+ * them (`DEFAULT_IGNORES` in `@sentry/node-core`'s `onunhandledrejection.js`):
+ * streams the Vercel AI SDK aborts.
+ */
+const SDK_IGNORED_REJECTION_NAMES = new Set(['AI_NoOutputGeneratedError', 'AbortError']);
+
 let sentryLoad: Promise<SentryModule | null> | null = null;
-let standInHandlersInstalled = false;
 
 /**
  * The SDK, imported and initialised once per instance, on first use. Settles to
  * null when no DSN is configured. A failed import or init is logged and not
- * kept, so the next error tries again.
+ * kept, and the stand-ins stay, so the next error tries again.
  */
 function loadSentry(): Promise<SentryModule | null> {
   sentryLoad ??= (async () => {
@@ -83,8 +101,8 @@ function loadSentry(): Promise<SentryModule | null> {
       // already false — stated so nobody flips it without deciding to.
       sendDefaultPii: false,
     });
-    // The SDK's own process handlers are in now; the stand-ins step aside so
-    // nothing is reported twice.
+    // The SDK's own process handlers went in with `init`, in this same
+    // synchronous step: the stand-ins step aside so nothing is reported twice.
     removeStandInHandlers();
     return Sentry;
   })().catch((error: unknown) => {
@@ -96,18 +114,30 @@ function loadSentry(): Promise<SentryModule | null> {
 }
 
 /**
- * Keeps a Vercel function alive until `task` settles, as the SDK's own
- * `vercelWaitUntil` does, without importing the SDK to get it. Outside Vercel
- * there is no request context and this does nothing.
+ * Keeps a Vercel function alive until `task` settles, through the request
+ * context Vercel puts on the global (what `@vercel/functions`' `waitUntil`
+ * reads), without importing anything to get it. Outside Vercel, or outside a
+ * request, there is none and this does nothing; it never throws.
  */
 function keepAliveUntil(task: Promise<unknown>): void {
-  const requestContext = (globalThis as Record<symbol, unknown>)[Symbol.for('@vercel/request-context')] as
-    | { get?: () => { waitUntil?: (promise: Promise<unknown>) => void } | undefined }
-    | undefined;
-  requestContext?.get?.()?.waitUntil?.(task);
+  try {
+    const requestContext = (globalThis as Record<symbol, unknown>)[Symbol.for('@vercel/request-context')] as
+      | { get?: () => { waitUntil?: (promise: Promise<unknown>) => void } | undefined }
+      | undefined;
+    requestContext?.get?.()?.waitUntil?.(task.catch(() => undefined));
+  } catch {
+    // Keeping the function alive is best effort; reporting must never throw.
+  }
 }
 
-function onUnhandledRejectionBeforeSentry(reason: unknown): void {
+function rejectionName(reason: unknown): string {
+  return reason !== null && typeof reason === 'object' && typeof (reason as { name?: unknown }).name === 'string'
+    ? (reason as { name: string }).name
+    : '';
+}
+
+const onUnhandledRejectionBeforeSentry: ProcessListener = (reason: unknown) => {
+  if (SDK_IGNORED_REJECTION_NAMES.has(rejectionName(reason))) return;
   // What the SDK's handler prints in its "warn" mode, so the log reads the same
   // whichever handler saw the rejection.
   console.warn(
@@ -123,18 +153,27 @@ function onUnhandledRejectionBeforeSentry(reason: unknown): void {
     });
     await Sentry.flush(2_000);
   }));
-}
+};
+onUnhandledRejectionBeforeSentry[STAND_IN_MARK] = true;
 
-function onUncaughtExceptionBeforeSentry(error: Error): void {
-  console.error(error);
-  // The SDK's default: report, flush, then end the process, but only when no
-  // other handler is there to decide what an uncaught exception means.
-  const othersDecide = process.listeners('uncaughtException')
-    .some((listener) => listener !== onUncaughtExceptionBeforeSentry);
+const onUncaughtExceptionBeforeSentry: ProcessListener = (error: Error) => {
+  // The SDK's default: report as fatal, flush, then end the process, but only
+  // when no other handler is there to decide what an uncaught exception means.
+  // Counted as the SDK counts: neither the stand-ins nor its own handler nor
+  // the one Node attaches for domains is another handler.
+  const othersDecide = (process.listeners('uncaughtException') as ProcessListener[]).some((listener) => (
+    !listener[STAND_IN_MARK]
+    && listener._errorHandler !== true
+    && listener.name !== 'domainUncaughtExceptionClear'
+  ));
+  // Printed only when this handler ends the process, as the SDK's does; a
+  // handler that decides otherwise prints it itself (Next's does).
+  if (!othersDecide) console.error(error);
   void loadSentry()
     .then(async (Sentry) => {
       if (!Sentry) return;
       Sentry.captureException(error, {
+        captureContext: { level: 'fatal' },
         mechanism: { type: 'auto.node.onuncaughtexception', handled: false },
       });
       await Sentry.flush(2_000);
@@ -142,20 +181,27 @@ function onUncaughtExceptionBeforeSentry(error: Error): void {
     .finally(() => {
       if (!othersDecide) process.exit(1);
     });
+};
+onUncaughtExceptionBeforeSentry[STAND_IN_MARK] = true;
+
+function installedStandIns(): StandIns | null {
+  return ((globalThis as Record<symbol, unknown>)[STAND_INS_KEY] as StandIns | undefined) ?? null;
 }
 
 function installStandInHandlers(): void {
-  if (standInHandlersInstalled) return;
-  standInHandlersInstalled = true;
-  process.on('unhandledRejection', onUnhandledRejectionBeforeSentry);
-  process.on('uncaughtException', onUncaughtExceptionBeforeSentry);
+  if (installedStandIns()) return;
+  const standIns: StandIns = { rejection: onUnhandledRejectionBeforeSentry, exception: onUncaughtExceptionBeforeSentry };
+  (globalThis as Record<symbol, unknown>)[STAND_INS_KEY] = standIns;
+  process.on('unhandledRejection', standIns.rejection as never);
+  process.on('uncaughtException', standIns.exception as never);
 }
 
 function removeStandInHandlers(): void {
-  if (!standInHandlersInstalled) return;
-  standInHandlersInstalled = false;
-  process.off('unhandledRejection', onUnhandledRejectionBeforeSentry);
-  process.off('uncaughtException', onUncaughtExceptionBeforeSentry);
+  const standIns = installedStandIns();
+  if (!standIns) return;
+  (globalThis as Record<symbol, unknown>)[STAND_INS_KEY] = undefined;
+  process.off('unhandledRejection', standIns.rejection as never);
+  process.off('uncaughtException', standIns.exception as never);
 }
 
 export async function register() {
@@ -185,9 +231,12 @@ export async function onRequestError(
   if (!isNodeRuntime()) return;
   const capture = loadSentry().then((Sentry) => {
     Sentry?.captureRequestError(...args);
+    return Sentry;
   });
-  // Next awaits this hook on most paths; the first error on an instance also
-  // waits for the SDK to load, so the function is kept alive for it either way.
-  keepAliveUntil(capture);
+  // Next does not wait for this hook on every path (render errors of server
+  // components are reported without waiting), and the SDK sends an event only
+  // after its own asynchronous processing: the function is kept alive until the
+  // event has been flushed, not just captured.
+  keepAliveUntil(capture.then((Sentry) => Sentry?.flush(2_000)));
   await capture;
 }
