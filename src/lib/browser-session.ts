@@ -27,11 +27,11 @@ let clientLoad: Promise<BrowserSupabaseClient> | null = null;
  * of script (66 KB on the wire, production 2026-11-19) that pages imported up front for every
  * visitor, signed in or not. One load for every caller.
  *
- * A load that failed rejects with `BrowserSupabaseLoadError`, and the next call asks again; only
- * `next dev --webpack` (the E2E server) fetches the chunk anew then. Turbopack's runtime, which
- * `next build` uses, keeps one loader per chunk URL and hands a retry the same failed load, and
- * after a deploy the old name is gone anyway (`DeferredCreatorProfileCard` says more): in
- * production the client stays unloaded until the page is reloaded.
+ * A load that failed rejects with `BrowserSupabaseLoadError`, and the next call asks again.
+ * Turbopack's runtime (`next build`, Next 16.3) has already retried a failed chunk once by then and
+ * forgets it after that second failure, so the next call does fetch anew and can recover from a
+ * dropped connection; but after a deploy the old chunk name is gone for good. So the callers offer
+ * a reload, the one fix that always works.
  */
 export function loadBrowserSupabase(): Promise<BrowserSupabaseClient> {
   clientLoad ??= importClient()
