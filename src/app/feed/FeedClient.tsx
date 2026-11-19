@@ -23,7 +23,8 @@ import {
     reportPostAfterConfirmation,
     type FeedSafetyOutcome,
 } from '@/lib/feed-safety-actions';
-import { createPostFeedCardBuilder, type PostFeedCard } from '@/lib/post-feed-presentation';
+import { createPostFeedCardBuilder } from '@/lib/post-feed-card';
+import type { PostFeedCard } from '@/lib/post-feed-presentation';
 import { claimFreeRecipe } from '@/lib/free-recipe-claim-client';
 import {
     FEED_REMOVAL_UNDO_MS,

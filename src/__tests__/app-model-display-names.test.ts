@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '../lib/client-generation-models';
-import { getPostModelDisplayName } from '../lib/post-feed-presentation';
+import { getPostModelDisplayName } from '../lib/post-model-labels';
 
 // The app names a model from its own list (`ugc-mobile/lib/model-display-names.ts`)
 // on feed cards, in Details and in the composer's Made with, and publishing

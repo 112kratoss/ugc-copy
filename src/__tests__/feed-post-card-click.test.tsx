@@ -7,7 +7,7 @@ import {
     QualifiedImpressionBoundary,
     resetShowcaseFeedEventQueueForTests,
 } from '@/app/showcase/ShowcaseFeedInteraction';
-import { buildPostFeedCard } from '@/lib/post-feed-presentation';
+import { buildPostFeedCard } from '@/lib/post-feed-card';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import type { ShowcaseAssetSummary, ShowcaseFeedItem, ShowcaseMediaItem } from '@/lib/showcase';
 

@@ -1,11 +1,8 @@
-import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
-import { isAppSourceToolLabel } from '@/lib/source-tools';
 import {
     OWN_RECIPE_LABEL,
     RECIPE_UNLOCKED_LABEL,
     getAssetAccessLabel,
-    getRecipeOfferLabel,
     isFreeRecipeAsset,
 } from '@/lib/showcase-asset-labels';
 
@@ -21,6 +18,11 @@ import {
  * unframed six-line clamp with no "Read more", because the whole card already
  * opens the post. Mobile keeps its framed eight-line body with in-place
  * expansion, where there is no equivalent whole-card affordance.
+ *
+ * Nothing here reads the model tables: the names a post gives its model and tool are in
+ * `post-model-labels.ts`, and the card built from these rules, whose metadata line names the
+ * model, is in `post-feed-card.ts` (2026-11-19: the tables were 40 KB of every post page's
+ * first load). `post-page-first-load-imports.test.ts` keeps them out.
  */
 export type PostPreviewKind = 'media' | 'text' | 'mixed';
 
@@ -278,117 +280,5 @@ export function getPostFeedRecipeChip(
     return remixAccess ? null : { label: getAssetAccessLabel(item.asset), tone: 'free', kind: 'free' };
 }
 
-/** Width the feed column gives body text, used only for the line estimate. */
+/** Width the feed column gives body text, used only for the line estimate (`post-feed-card.ts`). */
 export const FEED_BODY_WIDTH = 620;
-/** Every kind renders its body at the same size; only the estimate reads this. */
-const BODY_FONT_SIZE = 14;
-
-/**
- * Model ids are internal slugs (`gpt-image-2`); creators should read the
- * product name. Unknown or manual sources return null so the metadata line
- * simply omits the model instead of leaking a slug.
- */
-export function getPostModelDisplayName(model: string | null | undefined): string | null {
-    if (!model) return null;
-
-    const catalogEntry = (IMAGE_MODELS as Record<string, { displayName: string }>)[model]
-        ?? (VIDEO_MODELS as Record<string, { displayName: string }>)[model]
-        ?? (MOTION_MODELS as Record<string, { displayName: string }>)[model];
-
-    return catalogEntry?.displayName ?? null;
-}
-
-/**
- * What a post was made with, by the name a person reads: its model by the
- * name the feed card gives it (`getPostModelDisplayName`), else an outside
- * tool its creator named (never the app's own name, which says nothing on its
- * own page). Nothing on a text post, whose card names no model either. The
- * post page's "Made with" and the search card's line read it.
- */
-export function getPostMadeWithLabel(
-    item: Pick<ShowcaseFeedItem, 'model' | 'sourceTool' | 'postFormat' | 'category' | 'mediaUrl'>,
-): string | null {
-    if ((item.postFormat === 'text' || item.category === 'text') && !item.mediaUrl) return null;
-    // Posts made here record the app as their tool; the app's post Details
-    // leave it out the same way (`isAppSourceToolLabel` in ugc-mobile/lib/app-source-tool.ts).
-    const outsideTool = item.sourceTool?.trim();
-    return getPostModelDisplayName(item.model)
-        ?? (outsideTool && !isAppSourceToolLabel(outsideTool) ? outsideTool : null);
-}
-
-/**
- * The creation-context line for media posts. Text posts return null — their
- * type chip stays, and they carry no model. It does not say the post can be
- * remixed: the card's Remix pill says so.
- */
-export function getPostFeedMetadataLabel(item: ShowcaseFeedItem, kind: PostPreviewKind): string | null {
-    if (kind === 'text') return null;
-
-    const parts = [
-        getPostCategoryLabel(item),
-        getPostModelDisplayName(item.model),
-    ].filter((part): part is string => Boolean(part));
-
-    return parts.length > 0 ? parts.join(' · ') : null;
-}
-
-/**
- * Count labels read as verbs until there is real social proof: a young feed
- * full of zeros looks abandoned, while "Save" reads as an invitation.
- */
-function formatActionLabel(count: number | null | undefined, verb: string) {
-    return (count ?? 0) > 0 ? formatCompactCount(count) : verb;
-}
-
-export function buildPostFeedCard(item: ShowcaseFeedItem, now = new Date()): PostFeedCard {
-    const kind = resolvePostPreviewKind(item);
-    const body = getPostFeedBody(item, kind);
-    const clampLines = getPostBodyClampLines(kind);
-    const creatorName = item.creator.name || item.creator.username || 'Creator';
-    const remixAccess = getPostFeedRemixAccess(item);
-
-    return {
-        id: item.id,
-        item,
-        kind,
-        title: getPostFeedTitle(item, kind),
-        body,
-        clampLines,
-        categoryLabel: getPostCategoryLabel(item),
-        metadataLabel: getPostFeedMetadataLabel(item, kind),
-        creatorLabel: item.creator.username ? `@${item.creator.username}` : creatorName,
-        timeLabel: formatRelativeTime(item.createdAt, now),
-        saveLabel: formatActionLabel(item.saveCount, 'Save'),
-        commentLabel: formatActionLabel(item.commentCount, 'Comment'),
-        remixAccess,
-        // A remix sold with its recipe wears the recipe's price, as the app's
-        // locked Remix does: the lock says the rest.
-        remixLabel: remixAccess === 'paid-unlock' && item.asset
-            ? getRecipeOfferLabel(item.asset)
-            : item.remixCount > 0 ? `Remix · ${formatCompactCount(item.remixCount)}` : 'Remix',
-        recipeChip: getPostFeedRecipeChip(item),
-        // A text post never expands in place — the card itself opens the post,
-        // so a clamped body ends in an ellipsis that reads as "there is more".
-        canExpandBody: kind !== 'text'
-            && estimateWrappedLineCount(body, FEED_BODY_WIDTH, BODY_FONT_SIZE) > clampLines,
-    };
-}
-
-/**
- * Builds a lane's cards, keeping the card of an item it has built before. The
- * lane's array is new after every save, page and comment count while nearly
- * all of its items are the objects they were, and a new card for each of them
- * re-rendered every mounted card for the one that changed. The clock is a
- * card's one input besides its item, so a kept card whose time label has moved
- * on is built again (the app's Home cards are kept the same way).
- */
-export function createPostFeedCardBuilder() {
-    const cards = new WeakMap<ShowcaseFeedItem, PostFeedCard>();
-    return (items: ShowcaseFeedItem[], now = new Date()): PostFeedCard[] => items.map((item) => {
-        const kept = cards.get(item);
-        if (kept && kept.timeLabel === formatRelativeTime(item.createdAt, now)) return kept;
-        const card = buildPostFeedCard(item, now);
-        cards.set(item, card);
-        return card;
-    });
-}

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
-import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
+import { getPostModelDisplayName } from '@/lib/post-model-labels';
 import {
   SEARCH_SUGGEST_MAX_COMPLETIONS,
   SEARCH_SUGGEST_MAX_CREATORS,

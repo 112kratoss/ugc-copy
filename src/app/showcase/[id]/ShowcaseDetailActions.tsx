@@ -1,21 +1,43 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useCallback, useState } from 'react';
-import { Archive, Loader2, PencilLine, Sparkles, Trash2 } from 'lucide-react';
+import { RefreshCw, Sparkles } from 'lucide-react';
 
-import { useAuth } from '@/components/AuthProvider';
-import PostVisibilityMenu from '@/components/PostVisibilityMenu';
-import {
-  usePostLifecycle,
-  type PostLifecycleEvent,
-  type PostLifecyclePatch,
-  type PostLifecycleTarget,
-} from '@/components/usePostLifecycle';
-import { rememberOwnerPostVisibility } from '@/lib/owner-page-edits';
+import type { PostLifecyclePatch, PostLifecycleTarget } from '@/components/usePostLifecycle';
 import type { PostVisibility } from '@/lib/post-lifecycle-client';
-import { getCurrentInternalPath } from '@/lib/share';
+
+import { PostPagePartBoundary } from './PostPagePartBoundary';
+
+/**
+ * What the tools open onto, loaded with import() once the session check names the creator: never
+ * for anyone else, and never in the server's HTML, which holds the row alone (review of #838).
+ * Nothing stands in for it while it loads: the row is closed until the creator opens it. Loaded
+ * here alone: Turbopack builds a `dynamic()` import and a plain import() of the same file into two
+ * chunks holding the same modules, so a second, plain preload would fetch them twice.
+ */
+const ShowcaseOwnerToolsMenu = dynamic(() => import('./ShowcaseOwnerToolsMenu'), { ssr: false });
+
+/**
+ * In the tools' place when their load failed (`PostPagePartBoundary`): the lazy keeps the failure
+ * until a reload, which fetches the chunk names of the deployment live now.
+ */
+function OwnerToolsDidNotLoad() {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-white/8 px-5 pb-4 pt-3 sm:px-6">
+      <p className="text-sm text-rose-200">The Owner tools did not load.</p>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        className="ui-focus-ring inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
+      >
+        <RefreshCw className="h-4 w-4" aria-hidden="true" />
+        Reload page
+      </button>
+    </div>
+  );
+}
 
 /**
  * The creator's Owner tools, by what the page knows of who is looking (`ownership` in
@@ -54,16 +76,10 @@ export default function ShowcaseDetailActions({
   hasResourceBundle,
   bundle = null,
 }: ShowcaseDetailActionsProps) {
-  const router = useRouter();
-  const { session } = useAuth();
   // The page is server-rendered for the visibility it was opened at; this
   // mirror lets the menu move first and the refresh catch up.
   const [ownerVisibility, setOwnerVisibility] = useState<PostVisibility>(visibility);
   const [ownerBundleStatus, setOwnerBundleStatus] = useState(bundle?.status ?? null);
-
-  const handleLifecycleAuthRequired = useCallback(() => {
-    router.push(`/login?returnUrl=${encodeURIComponent(getCurrentInternalPath(`/showcase/${postId}`))}`);
-  }, [postId, router]);
 
   const handleLifecyclePatch = useCallback((_patchedPostId: string, patch: PostLifecyclePatch) => {
     if (patch.visibility !== undefined) {
@@ -73,47 +89,6 @@ export default function ShowcaseDetailActions({
       setOwnerBundleStatus(patch.bundleStatus);
     }
   }, []);
-
-  const handleLifecycleSettled = useCallback((event: PostLifecycleEvent) => {
-    // A private post has no public page to stay on; the others stay here.
-    if (event.type === 'visibility') {
-      if (event.visibility === 'private') {
-        router.push(event.ownerPath ?? `/post/${postId}/edit`);
-      } else {
-        // The page is cached for everyone and its tag is invalidated only
-        // after the change's answer was sent, so a refresh now can still get
-        // the old page: the owner's view takes the answer's visibility, and
-        // the refresh drops whatever else the router kept.
-        if (event.visibility) rememberOwnerPostVisibility(postId, event.visibility);
-        router.refresh();
-      }
-      return;
-    }
-    if (event.type === 'archive') {
-      router.push('/creations?view=posts&visibility=archived');
-      return;
-    }
-    if (event.type === 'delete') {
-      router.push('/creations?view=posts');
-    }
-  }, [postId, router]);
-
-  const postLifecycle = usePostLifecycle({
-    accessToken: session?.access_token ?? null,
-    signedInUser: session?.user ?? null,
-    onAuthRequired: handleLifecycleAuthRequired,
-    onPatch: handleLifecyclePatch,
-    onSettled: handleLifecycleSettled,
-  });
-
-  const lifecycleTarget: PostLifecycleTarget = {
-    id: postId,
-    generationId,
-    visibility: ownerVisibility,
-    archivedAt: null,
-    bundle: bundle && ownerBundleStatus ? { ...bundle, status: ownerBundleStatus } : bundle,
-  };
-  const lifecyclePending = postLifecycle.pendingAction(postId);
 
   return (
     <div>
@@ -160,52 +135,17 @@ export default function ShowcaseDetailActions({
             * the edit links, the menu and the actions on every post (review of #838).
             */}
           {ownerTools === 'ready' ? (
-            <div className="flex flex-wrap gap-2 border-t border-white/8 px-5 pb-4 pt-3 sm:px-6">
-              <Link
-                href={`/post/${postId}/edit`}
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
-              >
-                <PencilLine className="h-4 w-4" />
-                Edit post
-              </Link>
-
-              {hasResourceBundle ? (
-                <Link
-                  href={`/post/${postId}/edit#recipe`}
-                  className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3.5 py-2 text-sm font-medium text-emerald-50 transition hover:border-emerald-300/35 hover:bg-emerald-500/15"
-                >
-                  Manage recipe
-                </Link>
-              ) : null}
-
-              <PostVisibilityMenu
-                value={ownerVisibility}
-                onChange={(next) => void postLifecycle.setVisibility(lifecycleTarget, next)}
-                pending={lifecyclePending === 'visibility'}
-                disabled={Boolean(lifecyclePending)}
-                label={`Visibility of ${title}`}
+            <PostPagePartBoundary part="the Owner tools" fallback={<OwnerToolsDidNotLoad />}>
+              <ShowcaseOwnerToolsMenu
+                postId={postId}
+                generationId={generationId}
+                title={title}
+                hasResourceBundle={hasResourceBundle}
+                bundle={bundle && ownerBundleStatus ? { ...bundle, status: ownerBundleStatus } : bundle}
+                ownerVisibility={ownerVisibility}
+                onPatch={handleLifecyclePatch}
               />
-
-              <button
-                type="button"
-                disabled={Boolean(lifecyclePending)}
-                onClick={() => void postLifecycle.archive(lifecycleTarget)}
-                className="ui-focus-ring inline-flex items-center gap-2 rounded-full border border-amber-400/25 bg-amber-500/10 px-3.5 py-2 text-sm font-medium text-amber-50 transition hover:border-amber-300/35 hover:bg-amber-500/15 disabled:opacity-60"
-              >
-                {lifecyclePending === 'archive' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Archive className="h-4 w-4" />}
-                Archive
-              </button>
-
-              <button
-                type="button"
-                disabled={Boolean(lifecyclePending)}
-                onClick={() => void postLifecycle.remove(lifecycleTarget)}
-                className="ui-focus-ring inline-flex items-center gap-2 rounded-full border border-rose-400/25 bg-rose-500/10 px-3.5 py-2 text-sm font-medium text-rose-50 transition hover:border-rose-300/35 hover:bg-rose-500/15 disabled:opacity-60"
-              >
-                {lifecyclePending === 'delete' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                Delete
-              </button>
-            </div>
+            </PostPagePartBoundary>
           ) : null}
         </details>
       ) : null}

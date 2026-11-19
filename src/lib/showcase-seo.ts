@@ -1,4 +1,4 @@
-import { getPostMadeWithLabel } from '@/lib/post-feed-presentation';
+import { getPostMadeWithLabel } from '@/lib/post-model-labels';
 import type { PublicPostDetail } from '@/lib/public-posts';
 import { siteConfig } from '@/lib/seo';
 import { GENERIC_SUGGESTED_TITLES } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';

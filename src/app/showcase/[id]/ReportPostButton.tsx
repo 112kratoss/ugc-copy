@@ -1,20 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { Ban, Flag, Loader2, ShieldAlert } from 'lucide-react';
+import { Ban, Flag, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 import { useAuth } from '@/components/AuthProvider';
 import { APP_SHELL_AUTH_USER_ATTRIBUTE, canStyleRuleNameAuthUser } from '@/lib/app-shell-account-restore';
-import {
-  blockCreatorAfterConfirmation,
-  reportCreatorAfterConfirmation,
-  toastSafetyOutcome,
-} from '@/lib/feed-safety-actions';
 import type { ShowcaseCreator } from '@/lib/showcase';
 import { getCurrentInternalPath } from '@/lib/share';
 import { readSupabaseAuthCookieUserId } from '@/lib/supabase-auth-cookie';
 import { useViewerSessionCheck } from '@/lib/viewer-session-check';
+
+import { loadSafetyActions } from './safety-actions-loader';
 
 /** The reasons a post can be reported for. The Terms (section 8) name "Stolen content". */
 export const REPORT_REASONS = [
@@ -28,6 +25,15 @@ export const REPORT_REASONS = [
 
 /** About a recipe and its purchase: offered only on a post that carries one. */
 const RECIPE_REPORT_REASONS = new Set(['misleading_unlock', 'payment_issue']);
+
+/**
+ * Starts the load of Report user and Block user's actions (`safety-actions-loader.ts`) as a pointer
+ * or focus reaches either row, so a press seldom waits for it. A failure here says nothing: the
+ * press asks again, and says what its own failure means.
+ */
+function warmSafetyActions() {
+  void loadSafetyActions().catch(() => undefined);
+}
 
 interface ReportPostButtonProps {
   postId: string;
@@ -79,6 +85,8 @@ export default function ReportPostButton({
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isCreatorActionPending, setIsCreatorActionPending] = useState(false);
+  // Report user and Block user's actions did not load at the last press (`loadSafetyActionsOrSay`).
+  const [safetyActionsFailed, setSafetyActionsFailed] = useState(false);
 
   const reasons = bundleId
     ? REPORT_REASONS
@@ -151,7 +159,27 @@ export default function ReportPostButton({
   };
 
   // Report user and Block user, asked for and sent as the feed card's are
-  // (`lib/feed-safety-actions.ts`), filed from this page.
+  // (`lib/feed-safety-actions.ts`), filed from this page. The row stays dimmed
+  // while their actions load (`safety-actions-loader.ts`). Actions that did not
+  // load ask and send nothing: the row says so, with a reload, which fetches the
+  // chunk names of the deployment live now, the one way past a deploy that
+  // renamed them while the page was open. A later press asks again, which can
+  // answer a dropped connection.
+  const loadSafetyActionsOrSay = async () => {
+    try {
+      const actions = await loadSafetyActions();
+      setSafetyActionsFailed(false);
+      return actions;
+    } catch (loadError) {
+      console.error('Failed to load Report user and Block user:', loadError);
+      // Caught here, it never reaches Next's own reportError, which is what
+      // Sentry hears: hand it on, as an uncaught one would be.
+      window.reportError?.(loadError);
+      setSafetyActionsFailed(true);
+      return null;
+    }
+  };
+
   const handleReportUser = async () => {
     if (!creatorId) return;
     if (!accessToken) {
@@ -159,13 +187,18 @@ export default function ReportPostButton({
       return;
     }
     setIsCreatorActionPending(true);
-    const outcome = await reportCreatorAfterConfirmation({
+    const actions = await loadSafetyActionsOrSay();
+    if (!actions) {
+      setIsCreatorActionPending(false);
+      return;
+    }
+    const outcome = await actions.reportCreatorAfterConfirmation({
       userId: creatorId,
       accessToken,
       surface: 'post-page',
     });
     setIsCreatorActionPending(false);
-    toastSafetyOutcome(outcome);
+    actions.toastSafetyOutcome(outcome);
   };
 
   const handleBlockUser = async () => {
@@ -175,13 +208,18 @@ export default function ReportPostButton({
       return;
     }
     setIsCreatorActionPending(true);
-    const outcome = await blockCreatorAfterConfirmation({
+    const actions = await loadSafetyActionsOrSay();
+    if (!actions) {
+      setIsCreatorActionPending(false);
+      return;
+    }
+    const outcome = await actions.blockCreatorAfterConfirmation({
       userId: creatorId,
       creatorName: creator.name,
       accessToken,
     });
     setIsCreatorActionPending(false);
-    toastSafetyOutcome(outcome);
+    actions.toastSafetyOutcome(outcome);
     if (outcome.status !== 'done') return;
     // The post goes, as the app's post page answers not-found across a block.
     if (onCreatorBlocked) {
@@ -261,6 +299,8 @@ export default function ReportPostButton({
           <button
             type="button"
             onClick={() => void handleReportUser()}
+            onPointerEnter={warmSafetyActions}
+            onFocus={warmSafetyActions}
             disabled={creatorRows !== 'ready' || isCreatorActionPending}
             className={`inline-flex items-center gap-2 text-sm font-medium text-zinc-400 transition hover:text-white${
               isCreatorActionPending ? ' opacity-60' : ''
@@ -272,6 +312,8 @@ export default function ReportPostButton({
           <button
             type="button"
             onClick={() => void handleBlockUser()}
+            onPointerEnter={warmSafetyActions}
+            onFocus={warmSafetyActions}
             disabled={creatorRows !== 'ready' || isCreatorActionPending}
             className={`inline-flex items-center gap-2 text-sm font-medium text-zinc-400 transition hover:text-white${
               isCreatorActionPending ? ' opacity-60' : ''
@@ -280,6 +322,19 @@ export default function ReportPostButton({
             <Ban className="h-4 w-4" aria-hidden="true" />
             Block user
           </button>
+          {safetyActionsFailed ? (
+            <div role="alert" className="flex w-full flex-wrap items-center gap-x-4 gap-y-1">
+              <p className="text-sm text-rose-200">Report user and Block user did not load. Reload the page to try again.</p>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="inline-flex items-center gap-2 text-sm font-medium text-zinc-200 transition hover:text-white"
+              >
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                Reload page
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </>

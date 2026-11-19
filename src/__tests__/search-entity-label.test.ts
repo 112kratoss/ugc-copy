@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/models';
-import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
+import { getPostModelDisplayName } from '@/lib/post-model-labels';
 import { searchEntityLabel } from '@/lib/search-entity-label';
 
 // The name search gives a model or tool, in full search's entity results and
