@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { rememberAppShellCreditDigits } from '@/lib/app-shell-account-restore';
 import { isSessionRefusal } from '@/lib/auth-error-copy';
+import { checkSessionUser, forgetAccountReads, readOwnProfile } from '@/lib/browser-account-reads';
 import { markBrowserSignOut } from '@/lib/browser-sign-out';
 import {
   getAuthAvatarUrl,
@@ -193,6 +194,8 @@ export default function AppShellAccount({
       queuedUserUpdates.clear();
       deferredAuthSyncIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
       deferredAuthSyncIds.clear();
+      // Nothing checked or read for the session that ended answers anyone after it.
+      forgetAccountReads();
       publishAppShellAuthentication(false);
       if (mounted) {
         setSession(null);
@@ -200,7 +203,16 @@ export default function AppShellAccount({
       }
     }
 
-    async function loadProfile(nextSession: Session | null, isRecheck = false) {
+    /**
+     * Checks `nextSession` with Supabase Auth and reads the account's name, picture and balance.
+     * Both are the page's shared ones (`browser-account-reads.ts`): the page's provider and the
+     * comment composer ask for the same, once. `fresh` asks Supabase again whatever is held: a user
+     * Supabase says changed.
+     */
+    async function loadProfile(
+      nextSession: Session | null,
+      { isRecheck = false, fresh = false }: { isRecheck?: boolean; fresh?: boolean } = {},
+    ) {
       const sequence = ++authSequence;
       if (!nextSession?.user?.id) {
         clearAccountState();
@@ -211,13 +223,11 @@ export default function AppShellAccount({
       let verificationFailed = false;
       let verificationError: unknown = null;
       try {
-        const { data, error } = await supabase.auth.getUser(nextSession.access_token);
-        verifiedUser = data.user;
-        verificationFailed = Boolean(error);
-        verificationError = error;
-      } catch (error) {
-        verificationFailed = true;
-        verificationError = error;
+        // Supabase Auth's own answer about this token, whoever on the page asked first.
+        const check = await checkSessionUser(supabase, nextSession.access_token, { fresh });
+        verifiedUser = check.user;
+        verificationFailed = check.failed;
+        verificationError = check.error;
       } finally {
         pendingAccessTokens.delete(nextSession.access_token);
         const queuedUserUpdate = queuedUserUpdates.get(nextSession.access_token);
@@ -256,7 +266,7 @@ export default function AppShellAccount({
             deferredAuthSyncIds.delete(timeoutId);
             // A newer auth event checks the current session itself.
             if (mounted && sequence === authSequence) {
-              void loadProfile(nextSession, true);
+              void loadProfile(nextSession, { isRecheck: true, fresh });
             }
           }, SESSION_RECHECK_DELAY_MS);
           deferredAuthSyncIds.add(timeoutId);
@@ -283,11 +293,7 @@ export default function AppShellAccount({
         setSession(verifiedSession);
       }
 
-      const { data } = await supabase
-        .from('profiles')
-        .select('display_name, avatar_url, credits')
-        .eq('id', verifiedUser.id)
-        .maybeSingle();
+      const { row: data } = await readOwnProfile(supabase, verifiedUser.id, { fresh });
 
       if (mounted && sequence === authSequence) {
         setProfile({
@@ -327,9 +333,11 @@ export default function AppShellAccount({
 
       // Invalidate credit responses before deferred verification or effect cleanup.
       creditIdentityRef.current = null;
+      // Supabase says the user changed: a check from before the change would name the old one.
+      const fresh = event === 'USER_UPDATED';
       const timeoutId = window.setTimeout(() => {
         deferredAuthSyncIds.delete(timeoutId);
-        void loadProfile(nextSession);
+        void loadProfile(nextSession, { fresh });
       }, 0);
       deferredAuthSyncIds.add(timeoutId);
     }
@@ -387,20 +395,17 @@ export default function AppShellAccount({
         } : current);
       }
 
-      supabase
-        .from('profiles')
-        .select('credits')
-        .eq('id', userId)
-        .maybeSingle()
-        .then(({ data }) => {
-          if (isActive && creditIdentityRef.current === identity && typeof data?.credits === 'number') {
-            // React may apply this updater after a newer account state is queued.
-            setProfile((current) => creditIdentityRef.current === identity ? {
-              ...(current ?? { display_name: null, avatar_url: null }),
-              credits: data.credits,
-            } : current);
-          }
-        });
+      // Read anew: the balance moved. Whatever else on the page reads it meanwhile shares this read.
+      void readOwnProfile(supabase, userId, { fresh: true }).then(({ row }) => {
+        const nextCredits = row?.credits;
+        if (isActive && creditIdentityRef.current === identity && typeof nextCredits === 'number') {
+          // React may apply this updater after a newer account state is queued.
+          setProfile((current) => creditIdentityRef.current === identity ? {
+            ...(current ?? { display_name: null, avatar_url: null }),
+            credits: nextCredits,
+          } : current);
+        }
+      });
     }
 
     window.addEventListener('credits_updated', refreshCredits);
@@ -438,6 +443,7 @@ export default function AppShellAccount({
   // Where both sign-outs leave this browser once its session is gone.
   const leaveSignedOut = () => {
     creditIdentityRef.current = null;
+    forgetAccountReads();
     publishAppShellAuthentication(false);
     setSession(null);
     setProfile(null);

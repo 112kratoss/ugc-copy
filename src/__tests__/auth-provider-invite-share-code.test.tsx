@@ -23,7 +23,7 @@ vi.mock('@/lib/invite-share-code', () => ({
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: supabaseAuth,
-    from: () => ({ select: () => ({ eq: () => ({ single: async () => ({ data: { credits: 10 } }) }) }) }),
+    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { credits: 10 } }) }) }) }),
   },
 }));
 

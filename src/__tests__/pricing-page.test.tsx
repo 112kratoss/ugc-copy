@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { OWN_PROFILE_COLUMNS } from '@/lib/browser-account-reads';
+
 import creditPacksContract from '../../contracts/credit-packs-v1.json';
 
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
@@ -301,7 +303,8 @@ describe('pricing page balance and credit history link', () => {
     expect(await screen.findByText('1,50,000 credits')).toBeInTheDocument();
     expect(screen.getByText('Available balance')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Credit history' })).toHaveAttribute('href', '/credits');
-    expect(profileState.reads).toEqual([{ table: 'profiles', columns: 'credits', column: 'id', value: 'buyer-1' }]);
+    // The page's one read of the buyer's row, which the top bar's balance shares (browser-account-reads.ts).
+    expect(profileState.reads).toEqual([{ table: 'profiles', columns: OWN_PROFILE_COLUMNS, column: 'id', value: 'buyer-1' }]);
   });
 
   it('reads the balance again whenever the page is told it moved', async () => {

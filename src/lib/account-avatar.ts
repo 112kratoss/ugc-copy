@@ -3,6 +3,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import type { User } from '@supabase/supabase-js';
 
+import { forgetAccountReads, readOwnProfile } from '@/lib/browser-account-reads';
 import { getAuthAvatarUrl, getCreatorDisplayName } from '@/lib/profile';
 
 /**
@@ -59,11 +60,9 @@ async function readAccountProfile(userId: string): Promise<AccountProfileSummary
   // Loaded where the page's session check loaded it (AuthProvider), so a signed-in reader's page
   // fetches nothing more for it.
   const { supabase } = await import('@/lib/supabase');
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('display_name, avatar_url')
-    .eq('id', userId)
-    .maybeSingle();
+  // The page's one read of the account's row, which the top bar and the page's provider share: on
+  // a post page it is out, or just in, by the time the composer asks.
+  const { row: data, error } = await readOwnProfile(supabase, userId);
   if (error) throw error;
   const row = data as { display_name?: unknown; avatar_url?: unknown } | null;
   return {
@@ -115,6 +114,8 @@ export function accountAvatar(
   };
 }
 
+/** A new page for a test: neither these reads nor the shared one they come from are held. */
 export function forgetAccountProfilesForTests() {
   profileReads.clear();
+  forgetAccountReads();
 }

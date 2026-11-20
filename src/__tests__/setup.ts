@@ -3,6 +3,7 @@ import { configure } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
 
 import { resetFeedbackState } from '@/components/feedback-state';
+import { forgetAccountReads } from '@/lib/browser-account-reads';
 
 // The async queries' default wait is one second. A loaded runner (main's
 // Quality job, which shares capacity with the PR runs) took longer than that to
@@ -66,6 +67,11 @@ if (typeof Element !== 'undefined') {
 // Toasts and confirmations live in one module-level store that outlives a
 // test: a question one test left open would be drawn by the next test's
 // FeedbackViewport the moment it mounted. Every test starts with none.
+// The signed-in reader's session check and profile read are shared the same
+// way for a few seconds (`browser-account-reads.ts`): a test that drew a
+// session would answer the next test's check of the same token. Every test
+// starts with none, as a new page does.
 afterEach(() => {
   resetFeedbackState();
+  forgetAccountReads();
 });
