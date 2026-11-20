@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useRef, useState, useSyncExternal
 import type { Session, User } from '@supabase/supabase-js';
 
 import { isSessionRefusal } from '@/lib/auth-error-copy';
+import { checkSessionUser, forgetAccountReads, readOwnProfile } from '@/lib/browser-account-reads';
 import {
     accessTokenSessionId,
     browserSignOutSnapshot,
@@ -121,9 +122,6 @@ interface CreditBalance {
 
 const UNKNOWN_BALANCE: CreditBalance = { credits: null, marketplaceSpendableCredits: null };
 
-/** The profile columns the browser reads back for its own account. */
-const OWN_PROFILE_COLUMNS = 'credits, promotional_credits, saver_notice_seen_at';
-
 /** A profile row's record of its account being told that creators can see who saved. */
 function saverNoticeRecordFromProfile(
     userId: string,
@@ -227,6 +225,10 @@ export function AuthProvider({
     const clientE2EAuth = useSyncExternalStore(subscribeToNothing, readClientE2EAuth, () => null);
     const hasAuthCookieHint = useSupabaseAuthCookieHint();
     const hasHydratedAuthCookieHint = useHasHydratedSupabaseAuthCookieHint();
+    // Whether this provider was drawn with the document's own HTML (a full load: its first render is
+    // the hydration's) or made in the browser (a client navigation, Back and Forward included). See
+    // `askedSince` in the effect below.
+    const [cameWithDocument] = useState(!hasHydratedAuthCookieHint);
     const [session, setSession] = useState<Session | null>(initialSession ?? clientE2EAuth?.session ?? null);
     const [balance, setBalance] = useState<CreditBalance>(() => ({
         credits: initialCredits ?? clientE2EAuth?.credits ?? null,
@@ -274,6 +276,12 @@ export function AuthProvider({
         }
 
         let isActive = true;
+        // The checks and reads this page takes from the ones the page shares
+        // (`browser-account-reads.ts`): a page that came with the document began with it, and takes
+        // any asked for since, the top bar's included, which can go out before the page's part of
+        // the HTML has hydrated; a page made by a client navigation takes only what was asked for
+        // since it began, so it checks the session and reads the balance as each new page always did.
+        const askedSince = cameWithDocument ? undefined : performance.now();
         let unsubscribeAuthState: (() => void) | null = null;
         let cancelDeferredSubscription: (() => void) | undefined;
         let authSequence = 0;
@@ -293,17 +301,25 @@ export function AuthProvider({
             queuedUserUpdates.clear();
             deferredAuthSyncIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
             deferredAuthSyncIds.clear();
+            // Nothing checked or read for the session that ended answers anyone after it.
+            forgetAccountReads();
             setSession(null);
             setBalance(UNKNOWN_BALANCE);
             setReadSaverNoticeRecord(null);
             setIsLoading(false);
         };
 
+        /**
+         * Checks `candidateSession` with Supabase Auth and reads the account's balance. Both are the
+         * page's shared ones (`browser-account-reads.ts`): the top bar and the comment composer ask
+         * for the same, once. `fresh` asks Supabase again whatever is held: a re-read of the balance,
+         * a user Supabase says changed.
+         */
         const syncSessionState = async (
             candidateSession: Session | null,
             expectedAuthEpoch: number,
             expectedTokenEpoch: number,
-            isRecheck = false,
+            { isRecheck = false, fresh = false }: { isRecheck?: boolean; fresh?: boolean } = {},
         ) => {
             const sequence = ++authSequence;
             const supabase = await getBrowserSupabase();
@@ -325,13 +341,11 @@ export function AuthProvider({
             let verificationFailed = false;
             let verificationError: unknown = null;
             try {
-                const { data, error } = await supabase.auth.getUser(candidateSession.access_token);
-                verifiedUser = data.user;
-                verificationFailed = Boolean(error);
-                verificationError = error;
-            } catch (error) {
-                verificationFailed = true;
-                verificationError = error;
+                // Supabase Auth's own answer about this token, whoever on the page asked first.
+                const check = await checkSessionUser(supabase, candidateSession.access_token, { fresh, askedSince });
+                verifiedUser = check.user;
+                verificationFailed = check.failed;
+                verificationError = check.error;
             } finally {
                 pendingAccessTokens.delete(candidateSession.access_token);
                 const queuedUserUpdate = queuedUserUpdates.get(candidateSession.access_token);
@@ -375,7 +389,7 @@ export function AuthProvider({
                     deferredAuthSyncIds.delete(timeoutId);
                     // A newer auth event or re-read checks the current session itself.
                     if (isActive && expectedAuthEpoch === authEpochRef.current) {
-                        void syncSessionState(candidateSession, expectedAuthEpoch, expectedTokenEpoch, true);
+                        void syncSessionState(candidateSession, expectedAuthEpoch, expectedTokenEpoch, { isRecheck: true, fresh });
                     }
                 }, SESSION_RECHECK_DELAY_MS);
                 deferredAuthSyncIds.add(timeoutId);
@@ -400,11 +414,7 @@ export function AuthProvider({
                 ));
             }
 
-            const { data: profile } = await supabase
-                .from('profiles')
-                .select(OWN_PROFILE_COLUMNS)
-                .eq('id', verifiedUser.id)
-                .single();
+            const { row: profile } = await readOwnProfile(supabase, verifiedUser.id, { fresh, askedSince });
 
             if (
                 !isActive
@@ -449,10 +459,12 @@ export function AuthProvider({
 
             const expectedAuthEpoch = ++authEpochRef.current;
             const expectedTokenEpoch = ++tokenEpochRef.current;
+            // Supabase says the user changed: a check from before the change would name the old one.
+            const fresh = event === 'USER_UPDATED';
 
             const timeoutId = window.setTimeout(() => {
                 deferredAuthSyncIds.delete(timeoutId);
-                void syncSessionState(candidateSession, expectedAuthEpoch, expectedTokenEpoch);
+                void syncSessionState(candidateSession, expectedAuthEpoch, expectedTokenEpoch, { fresh });
             }, 0);
             deferredAuthSyncIds.add(timeoutId);
         };
@@ -510,10 +522,12 @@ export function AuthProvider({
                 if (expectedAuthEpoch !== authEpochRef.current) {
                     return;
                 }
+                // Asked anew, as a re-read of the balance always was.
                 await syncSessionState(
                     currentSession,
                     expectedAuthEpoch,
                     tokenEpochRef.current,
+                    { fresh: true },
                 );
             });
         };
@@ -530,6 +544,7 @@ export function AuthProvider({
             window.removeEventListener('credits_updated', handleCreditsUpdated);
         };
     }, [
+        cameWithDocument,
         clientE2EAuth,
         hasAuthCookieHint,
         hasHydratedAuthCookieHint,
@@ -550,14 +565,20 @@ export function AuthProvider({
             return;
         }
         if (!nextSession?.user?.id) {
+            forgetAccountReads();
             setSession(null);
             setBalance(UNKNOWN_BALANCE);
             setIsLoading(false);
             return;
         }
 
-        const { data: { user: verifiedUser }, error: verificationError } =
-            await supabase.auth.getUser(nextSession.access_token);
+        // Asked anew: the page wants Supabase Auth's answer now, not one it already had. Whatever
+        // else asks meanwhile is given this one.
+        const check = await checkSessionUser(supabase, nextSession.access_token, { fresh: true });
+        // A check that threw ends this re-check as it always did (the caller's reload, say).
+        if (check.threw) throw check.error;
+        const verifiedUser = check.user;
+        const verificationError = check.failed ? check.error : null;
         if (expectedAuthEpoch !== authEpochRef.current) {
             return;
         }
@@ -571,6 +592,7 @@ export function AuthProvider({
             return;
         }
         if (verificationError || !verifiedUser || verifiedUser.id !== nextSession.user.id) {
+            forgetAccountReads();
             setSession(null);
             setBalance(UNKNOWN_BALANCE);
             setIsLoading(false);
@@ -581,11 +603,7 @@ export function AuthProvider({
             setSession({ ...nextSession, user: verifiedUser });
         }
 
-        const { data: profile } = await supabase
-            .from('profiles')
-            .select(OWN_PROFILE_COLUMNS)
-            .eq('id', verifiedUser.id)
-            .single();
+        const { row: profile } = await readOwnProfile(supabase, verifiedUser.id, { fresh: true });
 
         if (expectedAuthEpoch !== authEpochRef.current) {
             return;

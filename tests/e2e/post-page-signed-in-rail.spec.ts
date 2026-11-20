@@ -1421,6 +1421,68 @@ test("the composer's avatar names the reader as the top bar does, from their pro
   expectComposerNamedByProfile(await recordedFrames(page), 'MB');
 });
 
+/** Counts the browser's checks of the session (`/auth/v1/user`) and reads of the reader's own row. */
+function countAccountReads(page: Page) {
+  const asked = { sessionChecks: 0, profileReads: 0 };
+  page.on('request', (request) => {
+    const { hostname, pathname } = new URL(request.url());
+    if (hostname !== 'example.supabase.co') return;
+    if (pathname === '/auth/v1/user') asked.sessionChecks += 1;
+    if (pathname === '/rest/v1/profiles') asked.profileReads += 1;
+  });
+  return {
+    /** What was asked since the last call. */
+    take() {
+      const taken = { ...asked };
+      asked.sessionChecks = 0;
+      asked.profileReads = 0;
+      return taken;
+    },
+  };
+}
+
+/** Long enough for a part that asks late (the composer's avatar, a top bar's slow chunk) to have asked. */
+const LATE_ASKER_MS = 1_500;
+
+// Production, 2026-11-20 (build 788a6edf2): a signed-in load of a post page asked Supabase Auth who
+// the reader was twice and read their own profile row three times, the page's provider, the top bar
+// and the comment composer each for itself. They share one of each now (browser-account-reads.ts). A
+// post opened by a client navigation still checks the session as its page opens, as it always did,
+// and its composer shares that page's read.
+test("a signed-in load of a post asks Supabase Auth about the session once and reads the reader's row once", async ({ page, context }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signIn(context);
+  await answerApi(page);
+  await page.addInitScript(RECORDER);
+  // Compiled first, so the load counted is a whole document of its own.
+  await warmSessionCheck(page, POST_PATH);
+  const reads = countAccountReads(page);
+  reads.take();
+
+  await page.goto(POST_PATH);
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect(page.getByRole('button', { name: 'Open account menu for Workflow User' })).toBeVisible();
+  await expect(page.getByRole('link', { name: /^22 credits/ })).toBeVisible();
+  await expect.poll(() => composerInitials(page)).toBe('WU');
+  await page.waitForTimeout(LATE_ASKER_MS);
+  // Main: two checks and three reads.
+  expect(reads.take()).toEqual({ sessionChecks: 1, profileReads: 1 });
+
+  // A page with a provider of its own, then a post opened from it by a client navigation.
+  await page.goto('/marketplace');
+  await expect(page.getByRole('button', { name: 'Open account menu for Workflow User' })).toBeVisible(COLD_PAGE);
+  await page.waitForTimeout(LATE_ASKER_MS);
+  // Main: two and two (the storefront's provider and the top bar).
+  expect(reads.take()).toEqual({ sessionChecks: 1, profileReads: 1 });
+
+  await openPostByClientNavigation(page);
+  await expect(composer(page)).toBeVisible(COLD_PAGE);
+  await expect.poll(() => composerInitials(page)).toBe('WU');
+  await page.waitForTimeout(LATE_ASKER_MS);
+  // The post's provider asks as its page opens; main read the row again for the composer.
+  expect(reads.take()).toEqual({ sessionChecks: 1, profileReads: 1 });
+});
+
 // Sweep of 2026-11-17 (build 941e2a55b): every post a signed-in reader opened that had no recipe
 // asked for theirs, which the server answered 404, and Chrome logged "Failed to load resource" for
 // it on every such post.

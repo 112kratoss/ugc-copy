@@ -14,6 +14,8 @@ import {
     preloadCreditPackCheckout,
     useCreditPackCheckout,
 } from "@/components/useCreditPackCheckout";
+import { useHasHydratedSupabaseAuthCookieHint } from "@/components/useSupabaseAuthCookieHint";
+import { readOwnProfile } from "@/lib/browser-account-reads";
 import {
     loadBrowserSupabase,
     preloadBrowserSupabaseForSession,
@@ -267,6 +269,10 @@ export function PricingClient({
 
     // The session could not be read: the client's code did not load (browser-session.ts).
     const [sessionUnreadable, setSessionUnreadable] = useState(false);
+    // Drawn with the document's own HTML (a full load), or made by a client navigation: see the
+    // balance's read below.
+    const hydrated = useHasHydratedSupabaseAuthCookieHint();
+    const [cameWithDocument] = useState(!hydrated);
 
     useEffect(() => {
         // The session is local; getUser() went to the network, and a click
@@ -287,28 +293,31 @@ export function PricingClient({
     useEffect(() => {
         if (!userId) return;
         let active = true;
-        const readBalance = () => {
+        // The page's read of the account's row, shared with the top bar's balance
+        // (`browser-account-reads.ts`): on a full load whichever of the two asks first, and after a
+        // client navigation one made as the page opens, as it always was. Read anew whenever the
+        // balance moved.
+        const askedSince = cameWithDocument ? undefined : performance.now();
+        const readBalance = (fresh: boolean) => {
             void loadBrowserSupabase()
-                .then((supabase) => supabase
-                    .from('profiles')
-                    .select('credits')
-                    .eq('id', userId)
-                    .maybeSingle())
-                .then(({ data }) => {
-                    if (active && typeof data?.credits === 'number') setBalance(data.credits);
+                .then((supabase) => readOwnProfile(supabase, userId, { fresh, askedSince }))
+                .then(({ row }) => {
+                    const credits = row?.credits;
+                    if (active && typeof credits === 'number') setBalance(credits);
                 }, () => {
                     // The figure stays as last read; the next `credits_updated` asks again.
                 });
         };
-        readBalance();
+        const readMovedBalance = () => readBalance(true);
+        readBalance(false);
         // Every balance on a page reads itself again on this: a settled
         // checkout, the minute of reads after a payment, the tab coming back.
-        window.addEventListener('credits_updated', readBalance);
+        window.addEventListener('credits_updated', readMovedBalance);
         return () => {
             active = false;
-            window.removeEventListener('credits_updated', readBalance);
+            window.removeEventListener('credits_updated', readMovedBalance);
         };
-    }, [userId]);
+    }, [cameWithDocument, userId]);
 
     useEffect(() => {
         // Browser storage and locale are available only after the server-safe first render. A

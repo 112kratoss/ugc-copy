@@ -4,6 +4,8 @@ import { Activity } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider, useAuth } from '@/components/AuthProvider';
+import { checkSessionUser, OWN_PROFILE_COLUMNS, readOwnProfile } from '@/lib/browser-account-reads';
+import { supabase } from '@/lib/supabase';
 import { BROWSER_SIGN_OUT_KEY, markBrowserSignOut } from '@/lib/browser-sign-out';
 import { unsignedJwt } from '@/__tests__/fixtures/unsigned-jwt';
 
@@ -14,7 +16,7 @@ const authProviderMocks = vi.hoisted(() => ({
   from: vi.fn(),
   select: vi.fn(),
   eq: vi.fn(),
-  single: vi.fn(),
+  maybeSingle: vi.fn(),
   unsubscribe: vi.fn(),
 }));
 
@@ -88,7 +90,7 @@ describe('AuthProvider', () => {
     authProviderMocks.from.mockReset();
     authProviderMocks.select.mockReset();
     authProviderMocks.eq.mockReset();
-    authProviderMocks.single.mockReset();
+    authProviderMocks.maybeSingle.mockReset();
     authProviderMocks.unsubscribe.mockReset();
 
     authProviderMocks.getSession.mockResolvedValue({ data: { session: authenticatedSession } });
@@ -108,8 +110,8 @@ describe('AuthProvider', () => {
     });
     authProviderMocks.from.mockReturnValue({ select: authProviderMocks.select });
     authProviderMocks.select.mockReturnValue({ eq: authProviderMocks.eq });
-    authProviderMocks.eq.mockReturnValue({ single: authProviderMocks.single });
-    authProviderMocks.single.mockResolvedValue({ data: { credits: 1295 } });
+    authProviderMocks.eq.mockReturnValue({ maybeSingle: authProviderMocks.maybeSingle });
+    authProviderMocks.maybeSingle.mockResolvedValue({ data: { credits: 1295 } });
   });
 
   afterEach(() => {
@@ -359,7 +361,7 @@ describe('AuthProvider', () => {
     expect(screen.getByTestId('credits')).toHaveTextContent('1295');
     expect(authProviderMocks.getUser).toHaveBeenCalledWith('verified-access-token');
     expect(authProviderMocks.getSession).not.toHaveBeenCalled();
-    expect(authProviderMocks.single).toHaveBeenCalledTimes(1);
+    expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(1);
   });
 
   it('clears authenticated state when the auth cookie disappears', async () => {
@@ -404,7 +406,7 @@ describe('AuthProvider', () => {
 
     it('reads the promotional credits with the balance and leaves them out', async () => {
       authCookieState.hasHint = true;
-      authProviderMocks.single.mockResolvedValue({ data: { credits: 1200, promotional_credits: 1200 } });
+      authProviderMocks.maybeSingle.mockResolvedValue({ data: { credits: 1200, promotional_credits: 1200 } });
 
       render(
         <AuthProvider>
@@ -414,18 +416,18 @@ describe('AuthProvider', () => {
 
       await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1200'));
       expect(screen.getByTestId('spendable')).toHaveTextContent('0');
-      expect(authProviderMocks.select).toHaveBeenCalledWith('credits, promotional_credits, saver_notice_seen_at');
+      expect(authProviderMocks.select).toHaveBeenCalledWith(OWN_PROFILE_COLUMNS);
 
-      authProviderMocks.single.mockResolvedValue({ data: { credits: 1500, promotional_credits: 300 } });
+      authProviderMocks.maybeSingle.mockResolvedValue({ data: { credits: 1500, promotional_credits: 300 } });
       fireEvent.click(screen.getByRole('button', { name: 'Refresh auth' }));
       await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1500'));
       expect(screen.getByTestId('spendable')).toHaveTextContent('1200');
-      expect(authProviderMocks.select).toHaveBeenLastCalledWith('credits, promotional_credits, saver_notice_seen_at');
+      expect(authProviderMocks.select).toHaveBeenLastCalledWith(OWN_PROFILE_COLUMNS);
     });
 
     it('keeps it in step with the total, and takes the figure an answer carries', async () => {
       authCookieState.hasHint = true;
-      authProviderMocks.single.mockResolvedValue({ data: { credits: 1500, promotional_credits: 300 } });
+      authProviderMocks.maybeSingle.mockResolvedValue({ data: { credits: 1500, promotional_credits: 300 } });
       render(
         <AuthProvider>
           <CreditProbe />
@@ -465,7 +467,7 @@ describe('AuthProvider', () => {
         window.dispatchEvent(new CustomEvent('credits_updated', { detail: { credits: 300 } }));
       });
       expect(screen.getByTestId('spendable')).toHaveTextContent('300');
-      expect(authProviderMocks.single).toHaveBeenCalledTimes(1);
+      expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(1);
     });
 
     it('starts from the figure the server resolved, without reading the profile again', () => {
@@ -525,7 +527,7 @@ describe('AuthProvider', () => {
 
     it.each([true, false])('hands the initial account the record it was drawn with (%s), and no other account', async (seen) => {
       // The other account's profile, read once it signs in, has no record.
-      authProviderMocks.single.mockResolvedValue({ data: { credits: 10, promotional_credits: 0, saver_notice_seen_at: null } });
+      authProviderMocks.maybeSingle.mockResolvedValue({ data: { credits: 10, promotional_credits: 0, saver_notice_seen_at: null } });
       render(
         <AuthProvider
           initialSession={authenticatedSession}
@@ -560,7 +562,7 @@ describe('AuthProvider', () => {
     // not asked of the server on its own.
     it('reads the record with the balance when the page could not know it, a new record at each read', async () => {
       authCookieState.hasHint = true;
-      authProviderMocks.single.mockResolvedValue({
+      authProviderMocks.maybeSingle.mockResolvedValue({
         data: { credits: 10, promotional_credits: 0, saver_notice_seen_at: null },
       });
       render(
@@ -572,7 +574,7 @@ describe('AuthProvider', () => {
       const first = records.at(-1);
 
       // Told on another device since; a balance refresh reads the profile again.
-      authProviderMocks.single.mockResolvedValue({
+      authProviderMocks.maybeSingle.mockResolvedValue({
         data: { credits: 10, promotional_credits: 0, saver_notice_seen_at: '2026-10-20T08:00:00.000Z' },
       });
       act(() => {
@@ -652,7 +654,7 @@ describe('AuthProvider', () => {
       resolveVerification({ data: { user: authenticatedSession.user }, error: null });
     });
     await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-in'));
-    expect(authProviderMocks.single).toHaveBeenCalledTimes(1);
+    expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes verified user metadata for a same-token USER_UPDATED event', async () => {
@@ -676,6 +678,106 @@ describe('AuthProvider', () => {
 
     await waitFor(() => expect(screen.getByTestId('user-name')).toHaveTextContent('Updated Creator'));
     expect(authProviderMocks.getUser).toHaveBeenCalledTimes(2);
+  });
+
+  // The page's check and read are shared with the top bar and the comment composer
+  // (`browser-account-reads.ts`), and an answer is given again for a few seconds. What the provider
+  // asks anew is still asked anew.
+  describe('what the page shares and what it asks anew', () => {
+    // A full load: the top bar's part of the HTML can hydrate, and ask, before the page's.
+    it('takes the check and the read the top bar asked for, on a page that came with the document', async () => {
+      authCookieState.hasHint = true;
+      // Drawn with the document's HTML: its first render is the hydration's.
+      authCookieState.hasHydrated = false;
+      await checkSessionUser(supabase, authenticatedSession.access_token);
+      await readOwnProfile(supabase, authenticatedSession.user.id);
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(1);
+      expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(1);
+
+      render(
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      );
+
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1295'));
+      expect(screen.getByTestId('session')).toHaveTextContent('signed-in');
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(1);
+      expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(1);
+    });
+
+    // A client navigation, Back and Forward included: the page knows its reader no sooner than before.
+    it('checks the session and reads the balance itself on a page made by a client navigation', async () => {
+      authCookieState.hasHint = true;
+      authCookieState.hasHydrated = true;
+      await checkSessionUser(supabase, authenticatedSession.access_token);
+      await readOwnProfile(supabase, authenticatedSession.user.id);
+
+      render(
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      );
+
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1295'));
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(2);
+      expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(2);
+    });
+
+    it('asks Supabase Auth again, and reads the balance again, when the balance moved without a figure', async () => {
+      authCookieState.hasHint = true;
+      render(
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      );
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1295'));
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(1);
+      expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(1);
+
+      authProviderMocks.maybeSingle.mockResolvedValue({ data: { credits: 1100 } });
+      act(() => {
+        window.dispatchEvent(new Event('credits_updated'));
+      });
+
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1100'));
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(2);
+      expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(2);
+    });
+
+    it('takes nothing from a session that ended: the same token signed in again is checked again', async () => {
+      authCookieState.hasHint = true;
+      render(
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      );
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1295'));
+
+      act(() => authStateCallback?.('SIGNED_OUT', null));
+      expect(screen.getByTestId('session')).toHaveTextContent('signed-out');
+
+      act(() => authStateCallback?.('SIGNED_IN', authenticatedSession));
+      await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-in'));
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(2);
+      expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(2);
+    });
+
+    it('asks again on a manual refresh while a check of the same token is still out', async () => {
+      authCookieState.hasHint = true;
+      authProviderMocks.getUser.mockImplementationOnce(() => new Promise(() => {}));
+      render(
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      );
+      await waitFor(() => expect(authProviderMocks.getUser).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh auth' }));
+      await waitFor(() => expect(authProviderMocks.getUser).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1295'));
+      expect(screen.getByTestId('session')).toHaveTextContent('signed-in');
+    });
   });
 
   it('does not let a late manual refresh restore auth after SIGNED_OUT', async () => {
@@ -708,7 +810,7 @@ describe('AuthProvider', () => {
   it('finishes the pending credits load when the token refreshes', async () => {
     authCookieState.hasHint = true;
     let resolveCredits!: (value: { data: { credits: number } }) => void;
-    authProviderMocks.single.mockImplementationOnce(() => new Promise((resolve) => {
+    authProviderMocks.maybeSingle.mockImplementationOnce(() => new Promise((resolve) => {
       resolveCredits = resolve;
     }));
 

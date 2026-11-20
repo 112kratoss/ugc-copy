@@ -7,6 +7,7 @@ import FeedbackViewport from '@/components/FeedbackViewport';
 import { APP_NAV_ITEMS } from '@/components/app-shell-nav';
 import { resetFeedbackState } from '@/components/feedback-state';
 import { APP_SHELL_CREDITS_DIGITS_STORAGE_KEY } from '@/lib/app-shell-account-restore';
+import { OWN_PROFILE_COLUMNS } from '@/lib/browser-account-reads';
 import { wasSignedOutInBrowser } from '@/lib/browser-sign-out';
 import { resetShowcaseFeedEventQueueForTests, sendShowcaseFeedEvent } from '@/app/showcase/ShowcaseFeedInteraction';
 import { FEED_EVENT_OUTBOX_STORAGE_KEY } from '@/app/showcase/feed-event-outbox';
@@ -144,7 +145,7 @@ describe('AppShellAccount', () => {
     render(<AppShellAccount />);
 
     expect(await screen.findByText('1295 credits')).toBeInTheDocument();
-    expect(mocks.select).toHaveBeenCalledWith('display_name, avatar_url, credits');
+    expect(mocks.select).toHaveBeenCalledWith(OWN_PROFILE_COLUMNS);
     await waitFor(() => expect(mocks.eq).toHaveBeenCalledWith('id', 'user-1'));
     expect(mocks.getUser).toHaveBeenCalledWith(authenticatedSession.access_token);
     expect(mocks.getSession).not.toHaveBeenCalled();
@@ -323,6 +324,22 @@ describe('AppShellAccount', () => {
     expect(mocks.select).not.toHaveBeenCalled();
     // Nor is it taken for an account that signed in here: the welcome promise stands.
     expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).toBeNull();
+  });
+
+  // The header's check is the page's shared one (`browser-account-reads.ts`), given again for a few
+  // seconds. A user Supabase says changed is checked anew: the shared answer names the old one.
+  it('asks Supabase Auth again when Supabase says the user changed, though the token did not', async () => {
+    render(<AppShellAccount />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
+    expect(screen.getByText('creator@example.com')).toBeInTheDocument();
+    expect(mocks.getUser).toHaveBeenCalledTimes(1);
+
+    const renamed = { ...authenticatedSession.user, email: 'renamed@example.com' };
+    mocks.getUser.mockResolvedValueOnce({ data: { user: renamed }, error: null });
+    act(() => appShellAuthCallback?.('USER_UPDATED', { ...authenticatedSession, user: renamed }));
+
+    expect(await screen.findByText('renamed@example.com')).toBeInTheDocument();
+    expect(mocks.getUser).toHaveBeenCalledTimes(2);
   });
 
   // Owner, 2026-11-09: an account made before the welcome program signed in, opened Home and
@@ -677,6 +694,24 @@ describe('AppShellAccount', () => {
 
       await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
       expect(mocks.signOut).toHaveBeenCalledTimes(1);
+    });
+
+    // The check and read the header shares with the page (`browser-account-reads.ts`) go with the
+    // session: the next account to sign in here, or the same one again, is checked and read anew.
+    it('leaves nothing it checked or read for the next session in this browser', async () => {
+      const view = render(<AppShellAccount />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Open account menu for Test Creator' }));
+      expect(mocks.getUser).toHaveBeenCalledTimes(1);
+      expect(mocks.maybeSingle).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+      view.unmount();
+
+      render(<AppShellAccount />);
+      expect(await screen.findByText('1295 credits')).toBeInTheDocument();
+      expect(mocks.getUser).toHaveBeenCalledTimes(2);
+      expect(mocks.maybeSingle).toHaveBeenCalledTimes(2);
     });
 
     it('clears the account\'s creator media and drafts before the session ends', async () => {
