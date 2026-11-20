@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CreatorSearchResult } from '@/components/search/CreatorSearchResult';
 import { SearchPostCard } from '@/components/search/SearchPostWall';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
@@ -82,6 +83,24 @@ describe("a search result's post card", () => {
 
     fireEvent.pointerEnter(link, { pointerType: 'mouse' });
     expect(router.prefetch).toHaveBeenCalledWith(href);
+  });
+});
+
+describe("a search result's creator row", () => {
+  it('fetches nothing as it paints, and prefetches the profile for a resting mouse pointer', () => {
+    render(
+      <CreatorSearchResult
+        creator={{ id: 'c1', username: 'mira', displayName: 'Mira', isFollowing: false, avatarUrl: null, publicPostCount: 3 }}
+      />,
+    );
+    const link = screen.getByRole('link');
+    expect(link).toHaveAttribute('href', '/creators/mira');
+    // Still counted when opened.
+    expect(link).toHaveAttribute('data-search-result', 'creator');
+    expect(linkProps).toEqual([{ href: '/creators/mira', prefetch: false }]);
+
+    fireEvent.pointerEnter(link, { pointerType: 'mouse' });
+    expect(router.prefetch).toHaveBeenCalledWith('/creators/mira');
   });
 });
 

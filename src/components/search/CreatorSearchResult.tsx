@@ -1,5 +1,4 @@
-import Link from 'next/link';
-
+import IntentLink from '@/components/IntentLink';
 import { getUserInitials } from '@/lib/profile';
 
 import { SearchFollowButton, type SearchFollowCreator } from './SearchFollowButton';
@@ -52,10 +51,12 @@ export function CreatorSearchResult({
     <div
       className={`search-row-card relative flex min-w-0 items-center rounded-2xl border border-white/8 bg-white/[0.035] transition-[background-color,border-color,scale] duration-150 ease-out hover:border-white/15 hover:bg-white/[0.065] motion-safe:has-[>a:active]:scale-[0.985] ${result ? 'min-h-20 gap-3 p-3 sm:gap-4' : 'min-h-16 gap-3 py-2 pl-3 pr-2'}`}
     >
-      <Link
+      <IntentLink
         href={`/creators/${encodeURIComponent(creator.username)}`}
         // A start-screen row is not a result: the search log counts results opened, never ideas.
-        {...(result ? { 'data-search-result': 'creator', 'data-search-result-id': creator.id } : { prefetch: false })}
+        // Neither kind fetches the profile as it paints (a whole page, 47 KB), only for a mouse
+        // pointer or the keyboard's focus (`IntentLink`).
+        {...(result ? { 'data-search-result': 'creator', 'data-search-result-id': creator.id } : {})}
         aria-label={label}
         className={`flex min-w-0 flex-1 items-center outline-none after:absolute after:inset-0 after:rounded-2xl ${result ? 'gap-3 sm:gap-4' : 'gap-3'}`}
       >
@@ -87,7 +88,7 @@ export function CreatorSearchResult({
           </span>
           {result && creator.bio ? <span className="mt-1 block truncate text-xs text-zinc-400">{creator.bio}</span> : null}
         </span>
-      </Link>
+      </IntentLink>
       {creator.id !== viewerId ? (
         <SearchFollowButton creator={creator} onChange={onFollowChange} className="relative z-10" />
       ) : null}
