@@ -78,6 +78,7 @@ import { SHARE_SOURCE_QUERY_PARAM, buildShowcaseDetailPath, supportsPublicCreati
 import { withSharersInvite } from '@/lib/share-client';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 import UnavailableMediaNote from '@/components/UnavailableMediaNote';
+import IntentLink from '@/components/IntentLink';
 
 interface Generation {
     id: string;
@@ -2189,13 +2190,13 @@ export default function CreationsPage() {
         ? 'Your creation and public proof are in place. Add the remaining identity details so visitors and buyers know who is behind the work.'
         : 'New creators have three jobs here: shape the profile, create proof, then publish the strongest result with an optional recipe.';
     const renderPortfolioLink = (className: string) => (
-        <Link
+        <IntentLink
             href={publicProfileUsername ? `/creators/${publicProfileUsername}` : '/profile'}
             className={`inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-zinc-100 transition hover:bg-white/[0.08] ${className}`}
         >
             <ExternalLink className="h-4 w-4" />
             {publicProfileUsername ? 'View portfolio' : 'Preview profile setup'}
-        </Link>
+        </IntentLink>
     );
 
     // One colour per meaning, shared with the visibility menu: sky is public,
@@ -2805,14 +2806,14 @@ export default function CreationsPage() {
                                                 )}
                                             >
                                                 {linkedPostHref ? (
-                                                    <Link
+                                                    <IntentLink
                                                         href={linkedPostHref}
                                                         aria-label={workspaceState.secondaryAction.label ?? 'Open post'}
                                                         className="ui-focus-ring flex items-center gap-1.5 rounded-lg text-sm font-semibold text-white transition hover:text-[var(--ui-primary)]"
                                                     >
                                                         <span className="truncate">{workspaceState.linkedPost.title}</span>
                                                         <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
-                                                    </Link>
+                                                    </IntentLink>
                                                 ) : (
                                                     <div className="truncate text-sm font-semibold text-white">{workspaceState.linkedPost.title}</div>
                                                 )}
@@ -3217,13 +3218,13 @@ export default function CreationsPage() {
                                                     Edit post
                                                 </Link>
                                                 {post.publicPath ? (
-                                                    <Link
+                                                    <IntentLink
                                                         href={buildStudioDetailPath(post.id)}
                                                         className={studioActionClass('secondary', { size: 'md' })}
                                                     >
                                                         <ExternalLink className="h-4 w-4" />
                                                         View live
-                                                    </Link>
+                                                    </IntentLink>
                                                 ) : null}
                                                 {!post.archivedAt ? (
                                                     <PostVisibilityMenu

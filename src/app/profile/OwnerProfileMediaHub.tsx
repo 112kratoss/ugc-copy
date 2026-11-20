@@ -56,6 +56,7 @@ import type {
   ShowcaseMediaItem,
 } from '@/lib/showcase';
 import MatureContentSetting from './MatureContentSetting';
+import IntentLink from '@/components/IntentLink';
 
 // Posts and Saved. The creations library is Studio's (/creations): the
 // profile used to draw it again as a third tab.
@@ -705,10 +706,10 @@ export default function OwnerProfileMediaHub({
 
             <div className="flex flex-wrap gap-2 sm:justify-end">
               {publicProfilePath ? (
-                <Link href={publicProfilePath} className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 text-sm font-bold text-zinc-100 transition hover:bg-white/10">
+                <IntentLink href={publicProfilePath} className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 text-sm font-bold text-zinc-100 transition hover:bg-white/10">
                   <ExternalLink className="h-4 w-4" aria-hidden />
                   View public
-                </Link>
+                </IntentLink>
               ) : null}
               {creator.username ? (
                 <ProfileShareButton
