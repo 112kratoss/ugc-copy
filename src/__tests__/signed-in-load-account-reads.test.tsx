@@ -407,19 +407,29 @@ describe('a signed-in load asks Supabase Auth about the session once and reads t
     });
 
     it('when the top bar asks first', async () => {
-      // The card's read of the stored session comes after the top bar's check and read.
+      // The card's read of the stored session (the top bar reads none as it loads: it is told the
+      // session) is held until the top bar has asked for the row, whatever the machine's speed. A
+      // timer here left the order to the runner (review of #891).
+      const topBarAsked = new Promise<void>((resolve) => {
+        const startedAt = Date.now();
+        const look = () => {
+          if (supabaseFake.profileReads.length > 0 || Date.now() - startedAt > 10_000) resolve();
+          else setTimeout(look, 5);
+        };
+        look();
+      });
       const getSession = supabase.auth.getSession.bind(supabase.auth);
-      const slowSession = vi.spyOn(supabase.auth, 'getSession').mockImplementation(async () => {
-        await new Promise((resolve) => {
-          setTimeout(resolve, (supabaseFake.authLatencyMs + supabaseFake.restLatencyMs) * 2);
-        });
+      const heldSession = vi.spyOn(supabase.auth, 'getSession').mockImplementation(async () => {
+        await topBarAsked;
         return getSession();
       });
       try {
         await fullLoadOfPricing();
+        // The card's read went through the hold, so the top bar's was first.
+        expect(heldSession).toHaveBeenCalled();
         expect(asked()).toEqual({ sessionChecks: 1, profileReads: 1 });
       } finally {
-        slowSession.mockRestore();
+        heldSession.mockRestore();
       }
     });
   });
