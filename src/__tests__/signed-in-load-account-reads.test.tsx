@@ -367,21 +367,61 @@ describe('a signed-in load asks Supabase Auth about the session once and reads t
     expect(asked()).toEqual({ sessionChecks: 1, profileReads: 2 });
   });
 
-  it('on Pricing: the top bar and the balance card share one of each', async () => {
-    navigation.pathname = '/pricing';
-    render(
-      <>
-        <TopBarAccount />
-        <PricingClient initialCountryCode="IN" sessionCookieHint />
-      </>,
-    );
+  // A full load of Pricing, as the browser makes it: the balance card is drawn with the document's
+  // HTML and hydrated, and the top bar only in the browser, beside it (`DeferredAppShellAccount`,
+  // `ssr: false`). Which of the two asks first depends on the machine: the top bar waits for Supabase
+  // Auth's check, the card for the stored session. A version of this case that drew the card by a
+  // client render (Pricing reads its own then, as after a client navigation) passed only when the
+  // card asked first, and failed main's Quality run on a slow runner (2026-11-20, `5b2aea1bf`), so
+  // it runs both orders.
+  describe('on a full load of Pricing, the top bar and the balance card share one of each', () => {
+    let root: Root | null = null;
 
-    expect(await screen.findByRole('link', { name: '22 credits' })).toBeInTheDocument();
-    // The card's figure, beside the top bar's own.
-    await waitFor(() => expect(screen.getByText('Available balance').parentElement).toHaveTextContent('22 credits'));
-    await settle();
-    // Main read it twice.
-    expect(asked()).toEqual({ sessionChecks: 1, profileReads: 1 });
+    afterEach(() => {
+      act(() => root?.unmount());
+      root = null;
+      document.body.innerHTML = '';
+    });
+
+    async function fullLoadOfPricing() {
+      navigation.pathname = '/pricing';
+      const card = <PricingClient initialCountryCode="IN" sessionCookieHint />;
+      const container = document.createElement('div');
+      container.innerHTML = renderToString(card);
+      document.body.appendChild(container);
+      await act(async () => {
+        root = hydrateRoot(container, card);
+      });
+      render(<TopBarAccount />);
+
+      expect(await screen.findByRole('link', { name: '22 credits' })).toBeInTheDocument();
+      // The card's figure, beside the top bar's own.
+      await waitFor(() => expect(screen.getByText('Available balance').parentElement).toHaveTextContent('22 credits'));
+      await settle();
+    }
+
+    it('when the card asks first', async () => {
+      await fullLoadOfPricing();
+      // Main read it twice.
+      expect(asked()).toEqual({ sessionChecks: 1, profileReads: 1 });
+    });
+
+    it('when the top bar asks first', async () => {
+      // The card's read of the stored session comes after the top bar's check and read.
+      const getSession = supabase.auth.getSession.bind(supabase.auth);
+      const slowSession = vi.spyOn(supabase.auth, 'getSession').mockImplementation(async () => {
+        await new Promise((resolve) => {
+          setTimeout(resolve, (supabaseFake.authLatencyMs + supabaseFake.restLatencyMs) * 2);
+        });
+        return getSession();
+      });
+      try {
+        await fullLoadOfPricing();
+        expect(asked()).toEqual({ sessionChecks: 1, profileReads: 1 });
+      } finally {
+        slowSession.mockRestore();
+      }
+    });
   });
 
   // Whichever asks first on a full load: the card drawn with the document's HTML takes the read the
