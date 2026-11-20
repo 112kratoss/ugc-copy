@@ -714,6 +714,23 @@ describe('AppShellAccount', () => {
       expect(mocks.maybeSingle).toHaveBeenCalledTimes(2);
     });
 
+    // A sign-out in another tab reaches this one as SIGNED_OUT (auth-js tells every tab of it). On
+    // a page with no provider of its own, Pricing's, the header is what forgets (review of #889).
+    it('forgets what it checked and read when the session ends in another tab', async () => {
+      render(<AppShellAccount />);
+      expect(await screen.findByText('1295 credits')).toBeInTheDocument();
+      expect(mocks.getUser).toHaveBeenCalledTimes(1);
+      expect(mocks.maybeSingle).toHaveBeenCalledTimes(1);
+
+      act(() => appShellAuthCallback?.('SIGNED_OUT', null));
+      await waitFor(() => expect(screen.queryByText('1295 credits')).toBeNull());
+
+      act(() => appShellAuthCallback?.('SIGNED_IN', authenticatedSession));
+      expect(await screen.findByText('1295 credits')).toBeInTheDocument();
+      expect(mocks.getUser).toHaveBeenCalledTimes(2);
+      expect(mocks.maybeSingle).toHaveBeenCalledTimes(2);
+    });
+
     it('clears the account\'s creator media and drafts before the session ends', async () => {
       const order: string[] = [];
       mocks.clearPersistedCreatorData.mockImplementation(async () => {

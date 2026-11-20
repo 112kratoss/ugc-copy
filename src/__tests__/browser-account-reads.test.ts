@@ -84,6 +84,32 @@ describe("the reader's session check, shared by everything on the page", () => {
     expect(supabase.raw.auth.getUser).toHaveBeenCalledTimes(3);
   });
 
+  // A request that hangs is not joined forever: the top bar's stuck check would otherwise answer a
+  // comment composer opened minutes later (review of #889).
+  it('lets nobody new join a check still out after the window: they ask on their own', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] });
+    const supabase = fakeSupabase();
+    const stuck = checkSessionUser(supabase.client, 'token-1');
+
+    vi.advanceTimersByTime(ACCOUNT_READ_KEPT_MS - 1);
+    const joined = checkSessionUser(supabase.client, 'token-1');
+    expect(supabase.raw.auth.getUser).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1);
+    const own = checkSessionUser(supabase.client, 'token-1');
+    expect(supabase.raw.auth.getUser).toHaveBeenCalledTimes(2);
+
+    supabase.userChecks[1].resolve({ data: { user }, error: null });
+    expect((await own).user).toBe(user);
+    // The stuck check's late answer goes to those who asked for it, and is kept for nobody.
+    const lateUser = { ...user };
+    supabase.userChecks[0].resolve({ data: { user: lateUser }, error: null });
+    expect((await stuck).user).toBe(lateUser);
+    expect((await joined).user).toBe(lateUser);
+    expect((await checkSessionUser(supabase.client, 'token-1')).user).toBe(user);
+    expect(supabase.raw.auth.getUser).toHaveBeenCalledTimes(2);
+  });
+
   it("goes by the browser's own clock, not the computer's, which can be set back", async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance'] });
     vi.setSystemTime(new Date('2026-11-20T08:00:00.000Z'));
@@ -223,6 +249,43 @@ describe("the reader's own profile row, shared by everything on the page", () =>
     vi.advanceTimersByTime(ACCOUNT_READ_KEPT_MS);
     void readOwnProfile(supabase.client, 'user-1');
     expect(supabase.profileReads).toHaveLength(2);
+  });
+
+  it('lets nobody new join a read still out after the window', () => {
+    vi.useFakeTimers({ toFake: ['performance'] });
+    const supabase = fakeSupabase();
+    void readOwnProfile(supabase.client, 'user-1');
+
+    vi.advanceTimersByTime(ACCOUNT_READ_KEPT_MS - 1);
+    void readOwnProfile(supabase.client, 'user-1');
+    expect(supabase.profileReads).toHaveLength(1);
+
+    vi.advanceTimersByTime(1);
+    void readOwnProfile(supabase.client, 'user-1');
+    expect(supabase.profileReads).toHaveLength(2);
+  });
+
+  // AuthProvider listens for the event from its mount, before anything is read: the count has to
+  // move ahead of it, or a part of the page that reads again on the event without asking anew is
+  // given the figure from before the change (review of #889).
+  it('moves the count on a balance change ahead of the parts of the page that listen for it', async () => {
+    vi.resetModules();
+    const reads = await import('@/lib/browser-account-reads');
+    const supabase = fakeSupabase();
+    const rereadOnChange = () => {
+      void reads.readOwnProfile(supabase.client, 'user-1');
+    };
+    window.addEventListener('credits_updated', rereadOnChange);
+    try {
+      const first = reads.readOwnProfile(supabase.client, 'user-1');
+      supabase.profileReads[0].resolve({ data: row, error: null });
+      await first;
+
+      window.dispatchEvent(new Event('credits_updated'));
+      expect(supabase.profileReads).toHaveLength(2);
+    } finally {
+      window.removeEventListener('credits_updated', rereadOnChange);
+    }
   });
 
   it('gives nobody who asks after the balance moved a figure read before it, even one still out', async () => {

@@ -18,7 +18,9 @@ import type { BrowserSupabaseClient } from '@/lib/browser-session';
  * - A check is of one access token: whoever asks about the same token while it is out, or for
  *   `ACCOUNT_READ_KEPT_MS` after it was answered, is given its answer. It is still Supabase Auth's
  *   own answer about that token, never the session's word for itself (`getSession`). A check that
- *   failed or was refused is not kept: the next caller asks again, as each did before.
+ *   failed or was refused is not kept: the next caller asks again, as each did before. Nor is one
+ *   still out `ACCOUNT_READ_KEPT_MS` after it was asked: a request that hangs is joined by nobody
+ *   after that, and whoever asks next asks on their own.
  * - A read of the row is of one account, with every column any of them draws
  *   (`OWN_PROFILE_COLUMNS`), shared the same way. A balance that moved (`credits_updated`, which
  *   every change made on the page announces) ends the reads made before it, so nothing asked
@@ -37,7 +39,10 @@ import type { BrowserSupabaseClient } from '@/lib/browser-session';
  * - A sign-out forgets everything (`forgetAccountReads`).
  */
 
-/** How long a check or a read that was answered answers whoever asks next. */
+/**
+ * How long a check or a read answers whoever asks next: from when it was answered, or, while it is
+ * still out, from when it was asked.
+ */
 export const ACCOUNT_READ_KEPT_MS = 10_000;
 
 /**
@@ -98,25 +103,28 @@ const sessionUserChecks = new Map<string, Kept<SessionUserCheck>>();
 const ownProfileReads = new Map<string, Kept<OwnProfileRead>>();
 /** Raised by every balance change: a read asked for under an earlier one answers nobody new. */
 let profileGeneration = 0;
-let listeningForBalanceChanges = false;
 
+// Every balance on the page reads itself again on this event (AuthProvider's `announceCredits`,
+// the creators, the checkout, the shell's return to the tab): a read from before it is stale.
+// Listened for from the moment this module loads, ahead of the providers and the top bar that
+// import it, so whatever they read on the same event is read under the new count.
+if (typeof window !== 'undefined') {
+  window.addEventListener('credits_updated', () => {
+    profileGeneration += 1;
+  });
+}
+
+/**
+ * Whether `kept` may be given to someone new: for `ACCOUNT_READ_KEPT_MS` after it was answered, or
+ * while it is out, for as long after it was asked (a request that hangs is not joined forever).
+ */
 function stillAnswers(kept: Kept<unknown>): boolean {
-  return kept.answeredAt === null || performance.now() - kept.answeredAt < ACCOUNT_READ_KEPT_MS;
+  return performance.now() - (kept.answeredAt ?? kept.askedAt) < ACCOUNT_READ_KEPT_MS;
 }
 
 /** Whether `kept` answers a caller who asks with `options`. */
 function answers(kept: Kept<unknown>, { fresh = false, askedSince = -Infinity }: AccountReadOptions): boolean {
   return !fresh && kept.askedAt >= askedSince && stillAnswers(kept);
-}
-
-function listenForBalanceChanges() {
-  if (listeningForBalanceChanges || typeof window === 'undefined') return;
-  listeningForBalanceChanges = true;
-  // Every balance on the page reads itself again on this event (AuthProvider's `announceCredits`,
-  // the creators, the checkout, the shell's return to the tab): a read from before it is stale.
-  window.addEventListener('credits_updated', () => {
-    profileGeneration += 1;
-  });
 }
 
 /**
@@ -184,7 +192,6 @@ export function readOwnProfile(
   userId: string,
   options: AccountReadOptions = {},
 ): Promise<OwnProfileRead> {
-  listenForBalanceChanges();
   const held = ownProfileReads.get(userId);
   if (held && held.generation === profileGeneration && answers(held, options)) return held.promise;
 

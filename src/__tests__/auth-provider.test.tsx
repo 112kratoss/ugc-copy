@@ -778,6 +778,47 @@ describe('AuthProvider', () => {
       await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1295'));
       expect(screen.getByTestId('session')).toHaveTextContent('signed-in');
     });
+
+    // A manual re-check that finds the session gone, or refused, ends it here: nothing checked or
+    // read for that session answers anyone after it (review of #889).
+    it('forgets what it checked and read when a manual refresh finds no session', async () => {
+      authCookieState.hasHint = true;
+      render(
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      );
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1295'));
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(1);
+      expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(1);
+
+      authProviderMocks.getSession.mockResolvedValue({ data: { session: null } });
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh auth' }));
+      await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-out'));
+
+      await checkSessionUser(supabase, authenticatedSession.access_token);
+      await readOwnProfile(supabase, authenticatedSession.user.id);
+      expect(authProviderMocks.getUser).toHaveBeenCalledTimes(2);
+      expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(2);
+    });
+
+    it('forgets what it read when a manual refresh is refused', async () => {
+      authCookieState.hasHint = true;
+      render(
+        <AuthProvider>
+          <AuthProbe />
+        </AuthProvider>
+      );
+      await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('1295'));
+      expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(1);
+
+      authProviderMocks.getUser.mockResolvedValueOnce({ data: { user: null }, error: refused });
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh auth' }));
+      await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-out'));
+
+      await readOwnProfile(supabase, authenticatedSession.user.id);
+      expect(authProviderMocks.maybeSingle).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('does not let a late manual refresh restore auth after SIGNED_OUT', async () => {
