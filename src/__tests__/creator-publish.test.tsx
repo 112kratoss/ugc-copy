@@ -42,7 +42,18 @@ vi.mock('@/components/useHandleAvailability', () => ({
 }));
 
 vi.mock('next/link', () => ({
-  default: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
+  default: ({ href, children, ...props }: { href: string; children: ReactNode; prefetch?: boolean }) => {
+    // `prefetch` is next/link's own, not the anchor's.
+    const anchorProps: Record<string, unknown> = { ...props };
+    delete anchorProps.prefetch;
+    return <a href={href} {...anchorProps}>{children}</a>;
+  },
+}));
+
+// The remix credit's link to the original creator prefetches on intent (`IntentLink`), which asks
+// the app router.
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ prefetch: vi.fn(), push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), back: vi.fn() }),
 }));
 
 const PROMPT = 'A harbour at dusk, lanterns on the water, slow push-in.';

@@ -60,7 +60,7 @@ function item(): ShowcaseFeedItem {
     commentCount: 4,
     createdAt: '2026-11-12T10:00:00.000Z',
     creator: { id: 'u1', username: 'batman', name: 'Sassy23b', avatar: null },
-    sourceKind: 'generation',
+    sourceKind: 'magicbooklet',
     generationId: 'g1',
     asset: null,
     canRemix: false,
