@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { BookText, Heart, MessageCircle, Play } from 'lucide-react';
 
@@ -16,6 +15,7 @@ import {
   searchPostCreatorName,
   searchPostMadeWithLine,
 } from '../../../ugc-mobile/lib/public-search-policy/public-search-policy';
+import IntentLink from '@/components/IntentLink';
 
 /**
  * Search's posts as Explore draws its posts: the picture over the post's
@@ -87,7 +87,7 @@ export function SearchPostCard({ item, returnTo, viewerId = null }: { item: Show
     ?? (!cover && item.mediaKind === 'image' ? item.mediaUrl : null);
   const textPost = !cover && !item.mediaUrl;
   return (
-    <Link
+    <IntentLink
       href={buildShowcaseDetailPath(item.id, { from: 'search', returnTo })}
       data-search-result="post"
       data-search-result-id={item.id}
@@ -168,7 +168,7 @@ export function SearchPostCard({ item, returnTo, viewerId = null }: { item: Show
           </span>
         ) : null}
       </span>
-    </Link>
+    </IntentLink>
   );
 }
 

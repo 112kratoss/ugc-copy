@@ -1,5 +1,10 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// A card's link prefetches its post on intent (`IntentLink`), which asks the app router.
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ prefetch: vi.fn(), push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), back: vi.fn() }),
+}));
 
 import {
   SearchPostCard,

@@ -31,6 +31,7 @@ import {
   type OwnSourceRecipe,
 } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 import { noteFollowChange } from '@/lib/follow-changes';
+import IntentLink from '@/components/IntentLink';
 
 /**
  * Publishing on the canvas (the artboards Result and Posted, owner 2026-10-28): when a run is
@@ -288,7 +289,7 @@ function CreatorRemixCredit({
       <div className="min-w-0 flex-1 text-xs leading-5 text-[var(--ui-text-muted)]">
         <p className="text-sm font-semibold leading-5 text-[var(--ui-text-primary)] [overflow-wrap:anywhere]">
           Remix of {original.title ? `“${original.title}”` : 'a post'} by{' '}
-          <Link href={profileHref} className="ui-focus-ring rounded-lg underline-offset-4 hover:underline">{handle}</Link>
+          <IntentLink href={profileHref} className="ui-focus-ring rounded-lg underline-offset-4 hover:underline">{handle}</IntentLink>
         </p>
         <p>
           {handle} was told when your remix finished.

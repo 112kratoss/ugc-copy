@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, Clock3, LoaderCircle, RefreshCcw, X } from 'lucide-react';
@@ -156,6 +155,7 @@ import { clearSearchHistory, forgetSearchQuery, readSearchHistory, rememberSearc
 import { pressedSearchResult, reportSearchOpen } from '@/components/search/search-open-report';
 import { forgetKeptSearchPages, keepSearchPage, readKeptSearchPage, type KeptSearchPage } from '@/lib/search-kept-pages';
 import type { Session } from '@supabase/supabase-js';
+import IntentLink from '@/components/IntentLink';
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -413,7 +413,7 @@ function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; re
   // In credits, as the app's search row and every recipe chip price it (decision 2).
   const price = recipe.accessMode === 'free' ? 'Free' : formatRecipeCreditPrice(recipe.priceUsdCents);
   return (
-    <Link
+    <IntentLink
       href={buildShowcaseDetailPath(recipe.postId, { from: 'search', returnTo, section: 'resources' })}
       data-search-result="recipe"
       data-search-result-id={recipe.id}
@@ -436,7 +436,7 @@ function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; re
           <span className="shrink-0 font-semibold text-emerald-300">{price}</span>
         </span>
       </span>
-    </Link>
+    </IntentLink>
   );
 }
 

@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
@@ -35,6 +34,7 @@ import { ModerationRequestError, reportTemplate, type TemplateReportReason } fro
 import { getTemplate } from './api';
 import { getTemplateCreatorLabel, TemplatePageShell } from './TemplatePrimitives';
 import type { MediaTemplate, TemplateStatus } from './types';
+import IntentLink from '@/components/IntentLink';
 
 /**
  * The creator's own template that is not live. The server shows it to them
@@ -294,12 +294,12 @@ export default function TemplateDetailClient({ slug }: { slug: string }) {
             <div className="mt-6 flex items-center gap-3 border-t border-white/8 pt-5">
               {/* The creator's page is where the viewer can see their other work, and report or block them. */}
               {creatorUsername ? (
-                <Link
+                <IntentLink
                   href={`/creators/${encodeURIComponent(creatorUsername)}`}
                   className="ui-focus-ring flex min-w-0 items-center gap-3 rounded-2xl transition-opacity hover:opacity-90"
                 >
                   {creatorIdentity}
-                </Link>
+                </IntentLink>
               ) : (
                 <div className="flex min-w-0 items-center gap-3">{creatorIdentity}</div>
               )}
