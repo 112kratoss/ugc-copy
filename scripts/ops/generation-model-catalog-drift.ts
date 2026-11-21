@@ -52,7 +52,11 @@ export function expectedProductionEntry(entry: CatalogManifestEntry): CatalogMan
 
 const PARTS = ['publicDescriptor', 'availability', 'adapter', 'pricing', 'validation'] as const;
 
-export type CatalogDriftPart = typeof PARTS[number];
+/**
+ * The release diff's parts, and the provider check's settings (`verificationConfig`), which the
+ * provider verification job reads from production and the release diff does not compare.
+ */
+export type CatalogDriftPart = typeof PARTS[number] | 'verification';
 
 export type CatalogDrift = {
   status: 'clean' | 'drift';
@@ -67,11 +71,14 @@ export type CatalogDrift = {
   defaultsDiffer: boolean;
   /** Exceptions the active release holds, as the table describes them. */
   excepted: Array<{ modelId: string; parts: CatalogDriftPart[]; reason: string }>;
-  /** Exceptions the active release no longer needs: it holds the code build's entry. */
+  /**
+   * Exceptions the code build no longer needs: its own entry is already the one the exception
+   * describes (a model in RETIRED_MODEL_IDS is offered nowhere), so the exception can go.
+   */
   staleExceptions: string[];
 };
 
-function partsOf(change: Record<CatalogDriftPart, boolean>): CatalogDriftPart[] {
+function partsOf(change: Record<typeof PARTS[number], boolean>): CatalogDriftPart[] {
   return PARTS.filter((part) => change[part]);
 }
 
@@ -95,21 +102,35 @@ export function buildCatalogDrift(active: ActiveCatalogSnapshot): CatalogDrift {
     expectedModelIds: activeIds,
   }));
   const asCode = buildCatalogDiff(active, materializeCatalogManifest(manifest, active));
-  const asExcepted = buildCatalogDiff(active, materializeCatalogManifest(
+  const expected = materializeCatalogManifest(
     { ...manifest, entries: manifest.entries.map(expectedProductionEntry) },
     active,
-  ));
-  const differsFromCode = new Set(asCode.changed.map((change) => change.modelId));
-  const differsFromExcepted = new Set(asExcepted.changed.map((change) => change.modelId));
-  // An excepted model may hold the entry its exception describes, or the code build's (then the
-  // exception is stale); anything else is drift, told against the entry the exception describes.
-  const changed = asExcepted.changed
-    .filter((change) => differsFromCode.has(change.modelId))
-    .map((change) => ({ modelId: change.modelId, parts: partsOf(change) }));
+  );
+  const asExpected = buildCatalogDiff(active, expected);
+  // The release diff has no part for the provider check's settings; production reads them too.
+  const activeById = new Map(active.entries.map((entry) => [entry.modelId, entry]));
+  const verificationDiffers = new Set(expected.entries
+    .filter((entry) => {
+      const held = activeById.get(entry.modelId);
+      return held !== undefined && !isDeepStrictEqual(held.verificationConfig, entry.verificationConfig);
+    })
+    .map((entry) => entry.modelId));
+  // Drift is any model production holds apart from the entry it should hold: the code build's,
+  // or, for an excepted model, the one its exception describes. A release that put an excepted
+  // model back to the code build's entry (Imagen offered again) is drift, not a stale exception.
+  const expectedParts = new Map(asExpected.changed.map((change) => [change.modelId, partsOf(change)]));
+  const changed = [...new Set([...expectedParts.keys(), ...verificationDiffers])].sort().map((modelId) => ({
+    modelId,
+    parts: [
+      ...(expectedParts.get(modelId) ?? []),
+      ...(verificationDiffers.has(modelId) ? ['verification' as const] : []),
+    ],
+  }));
   const notInCode = activeIds.filter((modelId) => !codeIds.has(modelId));
   const notInRelease = [...codeIds].filter((modelId) => !activeIds.includes(modelId)).sort();
   const defaultsDiffer = !isDeepStrictEqual(active.defaults, manifest.defaults);
   const exceptionIds = Object.keys(CATALOG_DRIFT_EXCEPTIONS).filter((modelId) => activeIds.includes(modelId));
+  const codeEntries = new Map(manifest.entries.map((entry) => [entry.modelId, entry]));
   return {
     status: changed.length || notInCode.length || notInRelease.length || defaultsDiffer ? 'drift' : 'clean',
     activeRevision: active.revision,
@@ -119,12 +140,17 @@ export function buildCatalogDrift(active: ActiveCatalogSnapshot): CatalogDrift {
     notInRelease,
     defaultsDiffer,
     excepted: asCode.changed
-      .filter((change) => exceptionIds.includes(change.modelId) && !differsFromExcepted.has(change.modelId))
+      .filter((change) => exceptionIds.includes(change.modelId)
+        && !expectedParts.has(change.modelId)
+        && !verificationDiffers.has(change.modelId))
       .map((change) => ({
         modelId: change.modelId,
         parts: partsOf(change),
         reason: CATALOG_DRIFT_EXCEPTIONS[change.modelId].reason,
       })),
-    staleExceptions: exceptionIds.filter((modelId) => !differsFromCode.has(modelId)),
+    staleExceptions: exceptionIds.filter((modelId) => {
+      const entry = codeEntries.get(modelId);
+      return entry !== undefined && isDeepStrictEqual(entry, expectedProductionEntry(entry));
+    }),
   };
 }

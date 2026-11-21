@@ -300,11 +300,50 @@ describe('the drift command', () => {
       .toEqual(EXCEPTED.filter((modelId) => modelId !== 'imagen-4'));
   });
 
-  it('calls an exception stale, not drift, when the release holds the code build\'s entry', async () => {
+  // A release that re-emits an excepted model from code puts it back where the code offers it:
+  // Imagen offered again, its runs failing at the provider. That is drift, never a stale exception
+  // (2026-11-22 review).
+  it('fails when a release puts an excepted model back to the code build\'s entry', async () => {
     const { failure, report } = await drift(withEntry(committedCatalog(), 'imagen-4', () => codeEntry('imagen-4')));
 
-    expect(failure).toBeNull();
-    expect(report).toMatchObject({ status: 'clean', changed: [], staleExceptions: ['imagen-4'] });
+    expect(failure).not.toBeNull();
+    expect(report).toMatchObject({
+      status: 'drift',
+      changed: [{ modelId: 'imagen-4', parts: ['publicDescriptor', 'availability'] }],
+      staleExceptions: [],
+    });
+    expect((report.excepted as Array<{ modelId: string }>).map((item) => item.modelId))
+      .toEqual(EXCEPTED.filter((modelId) => modelId !== 'imagen-4'));
+  });
+
+  it('calls an exception stale once the code build itself holds the entry it describes', async () => {
+    // seedance-1.5-pro is retired in code (RETIRED_MODEL_IDS), so the code build offers it nowhere,
+    // which is all an exception of { web: false, mobile: false } would say.
+    const exceptions = CATALOG_DRIFT_EXCEPTIONS as Record<string, (typeof CATALOG_DRIFT_EXCEPTIONS)[string]>;
+    expect(codeEntry('seedance-1.5-pro')).toMatchObject({ webEnabled: false, mobileEnabled: false });
+    exceptions['seedance-1.5-pro'] = {
+      offered: { web: false, mobile: false },
+      reason: 'A stand-in exception for a model the code build already offers nowhere (retired in code).',
+    };
+    try {
+      const { failure, report } = await drift(committedCatalog());
+
+      expect(failure).toBeNull();
+      expect(report).toMatchObject({ status: 'clean', changed: [], staleExceptions: ['seedance-1.5-pro'] });
+    } finally {
+      delete exceptions['seedance-1.5-pro'];
+    }
+  });
+
+  it('fails on the provider check\'s settings, which the release diff does not compare, naming no value', async () => {
+    const { failure, report } = await drift(withEntry(committedCatalog(), 'nano-banana-2', (entry) => ({
+      ...entry,
+      verificationConfig: { ...entry.verificationConfig, driftProbe: 'value-that-must-not-print' },
+    })));
+
+    expect(failure).not.toBeNull();
+    expect(report).toMatchObject({ status: 'drift', changed: [{ modelId: 'nano-banana-2', parts: ['verification'] }] });
+    expect(JSON.stringify(report)).not.toContain('value-that-must-not-print');
   });
 
   it('fails on models one side does not carry and on other default models', async () => {
