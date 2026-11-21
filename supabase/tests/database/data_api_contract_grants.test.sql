@@ -31,17 +31,19 @@ select ok(
   not has_table_privilege('anon', 'public.workflow_canvas_run_steps', 'SELECT, INSERT, UPDATE, DELETE'),
   'anonymous callers have no workflow-step table privileges'
 );
+-- Stage 3's workflow half (20261121214810): runs and steps are written by the
+-- service-only initializer and the worker; the owner-scoped read stays.
 select ok(
   has_table_privilege('authenticated', 'public.workflow_canvas_runs', 'SELECT')
-    and has_table_privilege('authenticated', 'public.workflow_canvas_runs', 'INSERT')
-    and has_table_privilege('authenticated', 'public.workflow_canvas_runs', 'UPDATE'),
-  'authenticated workflow-run compatibility privileges are explicit'
+    and not has_table_privilege('authenticated', 'public.workflow_canvas_runs', 'INSERT')
+    and not has_table_privilege('authenticated', 'public.workflow_canvas_runs', 'UPDATE'),
+  'authenticated reads workflow runs and writes none'
 );
 select ok(
   has_table_privilege('authenticated', 'public.workflow_canvas_run_steps', 'SELECT')
-    and has_table_privilege('authenticated', 'public.workflow_canvas_run_steps', 'INSERT')
-    and has_table_privilege('authenticated', 'public.workflow_canvas_run_steps', 'UPDATE'),
-  'authenticated workflow-step compatibility privileges are explicit'
+    and not has_table_privilege('authenticated', 'public.workflow_canvas_run_steps', 'INSERT')
+    and not has_table_privilege('authenticated', 'public.workflow_canvas_run_steps', 'UPDATE'),
+  'authenticated reads workflow steps and writes none'
 );
 select ok(
   not has_table_privilege('authenticated', 'public.workflow_canvas_runs', 'DELETE')
@@ -116,9 +118,9 @@ select throws_ok(
   $$,
   '42501',
   null,
-  'the explicit write grant cannot cross the owner RLS boundary'
+  'a client cannot create a run for another owner'
 );
-select lives_ok(
+select throws_ok(
   $$
     insert into public.workflow_canvas_runs (
       canvas_id, user_id, start_node_id, mode, status, graph_snapshot
@@ -128,7 +130,9 @@ select lives_ok(
       'own-start', 'node', 'processing', '{}'::jsonb
     )
   $$,
-  'the compatibility grant still permits an active owner to create their own run'
+  '42501',
+  null,
+  'an active owner cannot create their own run directly either'
 );
 
 reset role;

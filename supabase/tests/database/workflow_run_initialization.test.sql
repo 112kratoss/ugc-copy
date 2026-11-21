@@ -4,7 +4,7 @@
 -- database properties the compatibility release depends on: a required key,
 -- one run + complete skeleton + first ticket in one transaction, replay
 -- without graph/step/job duplication, and an internal limit on the legacy RPC.
--- Direct authenticated writes remain until the deferred stage-3 contraction.
+-- Direct authenticated writes ended with stage 3's workflow half (20261121214810).
 
 begin;
 
@@ -82,20 +82,20 @@ select ok(
   'authenticated callers retain owner-scoped step reads'
 );
 select ok(
-  has_table_privilege('authenticated', 'public.workflow_canvas_runs', 'INSERT'),
-  'the compatibility release preserves authenticated run inserts'
+  not has_table_privilege('authenticated', 'public.workflow_canvas_runs', 'INSERT'),
+  'stage 3 retires authenticated run inserts'
 );
 select ok(
-  has_table_privilege('authenticated', 'public.workflow_canvas_runs', 'UPDATE'),
-  'the compatibility release preserves authenticated run updates'
+  not has_table_privilege('authenticated', 'public.workflow_canvas_runs', 'UPDATE'),
+  'stage 3 retires authenticated run updates'
 );
 select ok(
-  has_table_privilege('authenticated', 'public.workflow_canvas_run_steps', 'INSERT'),
-  'the compatibility release preserves authenticated step inserts'
+  not has_table_privilege('authenticated', 'public.workflow_canvas_run_steps', 'INSERT'),
+  'stage 3 retires authenticated step inserts'
 );
 select ok(
-  has_table_privilege('authenticated', 'public.workflow_canvas_run_steps', 'UPDATE'),
-  'the compatibility release preserves authenticated step updates'
+  not has_table_privilege('authenticated', 'public.workflow_canvas_run_steps', 'UPDATE'),
+  'stage 3 retires authenticated step updates'
 );
 
 delete from public.backend_rate_limits
@@ -120,7 +120,7 @@ select lives_ok(
   'the previously deployed authenticated initializer call survives schema-first rollout'
 );
 
-select lives_ok(
+select throws_ok(
   $$
     insert into public.workflow_canvas_runs (
       canvas_id, user_id, start_node_id, mode, status, graph_snapshot
@@ -130,16 +130,20 @@ select lives_ok(
       'forged', 'node', 'processing', '{}'::jsonb
     )
   $$,
-  'the previous app direct-run compatibility grant remains until stage 3'
+  '42501',
+  null,
+  'a direct client run write is refused since stage 3'
 );
 
-select lives_ok(
+select throws_ok(
   $$
     update public.workflow_canvas_run_steps
     set status = 'failed'
     where false
   $$,
-  'the previous app direct-step compatibility grant remains until stage 3'
+  '42501',
+  null,
+  'a direct client step write is refused since stage 3'
 );
 
 -- The earlier compatibility initializer now shares the API/legacy quota.

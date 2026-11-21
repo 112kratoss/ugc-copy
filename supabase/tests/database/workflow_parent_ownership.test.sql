@@ -9,7 +9,8 @@ insert into auth.users (id,email,aud,role,raw_app_meta_data,raw_user_meta_data,c
 values ('e2100000-0000-4000-8000-000000000001','table-owner@example.invalid','authenticated','authenticated','{}','{}',now()),
        ('e2110000-0000-4000-8000-000000000002','table-other@example.invalid','authenticated','authenticated','{}','{}',now());
 insert into auth.sessions (id,user_id,created_at,updated_at) values
-('e2900000-0000-4000-8000-000000000001','e2100000-0000-4000-8000-000000000001',now(),now());
+('e2900000-0000-4000-8000-000000000001','e2100000-0000-4000-8000-000000000001',now(),now()),
+('e2900000-0000-4000-8000-000000000002','e2110000-0000-4000-8000-000000000002',now(),now());
 insert into public.workflow_canvases (id,user_id,title,graph) values
 ('e2200000-0000-4000-8000-000000000001','e2100000-0000-4000-8000-000000000001','Owner canvas','{}'),
 ('e2200000-0000-4000-8000-000000000002','e2110000-0000-4000-8000-000000000002','Other canvas','{}'),
@@ -35,9 +36,13 @@ values ('e2600000-0000-4000-8000-000000000003','e2200000-0000-4000-8000-00000000
 -- Deliberately inconsistent legacy data is invisible to client roles.
 insert into public.workflow_canvas_assistant_messages (id,canvas_id,user_id,role,content)
 values ('e2600000-0000-4000-8000-000000000004','e2200000-0000-4000-8000-000000000002','e2100000-0000-4000-8000-000000000001','user','Message');
--- Deliberately inconsistent legacy data is invisible to client roles.
+-- A legacy step of the owner's run that names another owner's generation. No
+-- client can write one since 20261121214810, and none exists in production.
 insert into public.workflow_canvas_run_steps (id,run_id,node_id,status,generation_id)
 values ('e2600000-0000-4000-8000-000000000005','e2500000-0000-4000-8000-000000000001','foreign-legacy','succeeded','e2400000-0000-4000-8000-000000000002');
+-- Runs and steps are written by the service-only initializer and the worker.
+insert into public.workflow_canvas_run_steps (id,run_id,node_id,status,generation_id)
+values ('e2800000-0000-4000-8000-000000000001','e2500000-0000-4000-8000-000000000001','own-generation','succeeded','e2400000-0000-4000-8000-000000000001');
 set local role authenticated;
 select set_config('request.jwt.claims','{"sub":"e2100000-0000-4000-8000-000000000001","role":"authenticated","session_id":"e2900000-0000-4000-8000-000000000001"}',true);
 select ok(public.current_identity_is_active(), 'fixture identity passes the active identity gate');
@@ -53,21 +58,22 @@ select is((select count(*) from public.workflow_canvas_history where id='e260000
 select is((select count(*) from public.workflow_canvas_history where id='e2700000-0000-4000-8000-000000000001'),1::bigint,
 'workflow_canvas_history: valid own child remains readable');
 
-select lives_ok($$ insert into public.workflow_canvas_runs (id,canvas_id,user_id,start_node_id,mode,status)
-values ('e2700000-0000-4000-8000-000000000002','e2200000-0000-4000-8000-000000000001','e2100000-0000-4000-8000-000000000001','node','node','processing') $$,
-'workflow_canvas_runs: owner can create a child on their own canvas');
+-- Runs are the service-only initializer's to write (20261121214810).
+select throws_ok($$ insert into public.workflow_canvas_runs (id,canvas_id,user_id,start_node_id,mode,status)
+values ('e2700000-0000-4000-8000-000000000002','e2200000-0000-4000-8000-000000000001','e2100000-0000-4000-8000-000000000001','node','node','processing') $$, '42501', null,
+'workflow_canvas_runs: the owner cannot create a run on their own canvas directly');
 select throws_ok($$ insert into public.workflow_canvas_runs (canvas_id,user_id,start_node_id,mode,status)
 values ('e2200000-0000-4000-8000-000000000002','e2100000-0000-4000-8000-000000000001','node','node','processing') $$, '42501', null,
 'workflow_canvas_runs: self-owned child cannot target another owner canvas');
 select is((select count(*) from public.workflow_canvas_runs where id='e2600000-0000-4000-8000-000000000002'),0::bigint,
 'workflow_canvas_runs: inconsistent legacy child is hidden');
-select is((select count(*) from public.workflow_canvas_runs where id='e2700000-0000-4000-8000-000000000002'),1::bigint,
+select is((select count(*) from public.workflow_canvas_runs where id='e2500000-0000-4000-8000-000000000001'),1::bigint,
 'workflow_canvas_runs: valid own child remains readable');
 
-select throws_ok($$ update public.workflow_canvas_runs set canvas_id='e2200000-0000-4000-8000-000000000002' where id='e2700000-0000-4000-8000-000000000002' $$,'42501',null,
+select throws_ok($$ update public.workflow_canvas_runs set canvas_id='e2200000-0000-4000-8000-000000000002' where id='e2500000-0000-4000-8000-000000000001' $$,'42501',null,
 'workflow_canvas_runs: cannot move an existing child onto a foreign canvas');
-select lives_ok($$ update public.workflow_canvas_runs set canvas_id='e2200000-0000-4000-8000-000000000003' where id='e2700000-0000-4000-8000-000000000002' $$,
-'workflow_canvas_runs: can move an unlinked child between own canvases');
+select throws_ok($$ update public.workflow_canvas_runs set canvas_id='e2200000-0000-4000-8000-000000000003' where id='e2500000-0000-4000-8000-000000000001' $$,'42501',null,
+'workflow_canvas_runs: the owner cannot move a run between own canvases directly either');
 
 select lives_ok($$ insert into public.workflow_canvas_assistant_proposals (id,canvas_id,user_id,summary,proposed_graph)
 values ('e2700000-0000-4000-8000-000000000003','e2200000-0000-4000-8000-000000000001','e2100000-0000-4000-8000-000000000001','Proposal','{}') $$,
@@ -113,25 +119,38 @@ values ('e2200000-0000-4000-8000-000000000001','e2100000-0000-4000-8000-00000000
 select throws_ok($$ update public.workflow_canvas_assistant_messages set proposal_id='e2300000-0000-4000-8000-000000000002'
 where id='e2700000-0000-4000-8000-000000000004' $$,'42501',null,
 'message updates cannot attach another owner proposal');
-select lives_ok($$ insert into public.workflow_canvas_run_steps (id,run_id,node_id,status,generation_id)
-values ('e2800000-0000-4000-8000-000000000001','e2500000-0000-4000-8000-000000000001','own-generation','succeeded','e2400000-0000-4000-8000-000000000001') $$,
-'run steps can link the owner generation');
-select lives_ok($$ insert into public.workflow_canvas_run_steps (run_id,node_id,status)
-values ('e2500000-0000-4000-8000-000000000001','no-generation','queued') $$,
-'queued steps can omit a generation');
+-- Run steps are the worker's to write (20261121214810), so no client can link
+-- a generation to one, its own or another owner's.
+select throws_ok($$ insert into public.workflow_canvas_run_steps (run_id,node_id,status,generation_id)
+values ('e2500000-0000-4000-8000-000000000001','own-generation','succeeded','e2400000-0000-4000-8000-000000000001') $$,'42501',null,
+'run steps: the owner cannot write a step, even one linking their own generation');
+select throws_ok($$ insert into public.workflow_canvas_run_steps (run_id,node_id,status)
+values ('e2500000-0000-4000-8000-000000000001','no-generation','queued') $$,'42501',null,
+'run steps: the owner cannot write a queued step');
 select throws_ok($$ insert into public.workflow_canvas_run_steps (run_id,node_id,status,generation_id)
 values ('e2500000-0000-4000-8000-000000000001','foreign-generation','succeeded','e2400000-0000-4000-8000-000000000002') $$,'42501',null,
 'run steps cannot link another owner generation');
 select throws_ok($$ update public.workflow_canvas_run_steps set generation_id='e2400000-0000-4000-8000-000000000002'
 where id='e2800000-0000-4000-8000-000000000001' $$,'42501',null,
 'step updates cannot attach another owner generation');
--- The run details and approval routes read a run's steps with the caller's
--- client, and authenticated has no SELECT on generations: the generation check
--- reads through current_identity_owns_generation (20261031033532).
+-- The owner reads their run's steps (the routes read them service-role). A
+-- step's generation_id is a reference, not a read: generations stays closed
+-- to clients, and the legacy step naming another owner's is read as the run's.
 select is((select count(*) from public.workflow_canvas_run_steps where id='e2800000-0000-4000-8000-000000000001'),1::bigint,
 'run steps: the owner reads a step that links their generation');
-select is((select count(*) from public.workflow_canvas_run_steps where id='e2600000-0000-4000-8000-000000000005'),0::bigint,
-'run steps: a step that links another owner generation stays hidden');
+select is((select count(*) from public.workflow_canvas_run_steps where id='e2600000-0000-4000-8000-000000000005'),1::bigint,
+'run steps: the owner reads a legacy step of their run whatever generation it names');
+select throws_ok($$ select id from public.generations where id='e2400000-0000-4000-8000-000000000002' $$,'42501',null,
+'run steps: the generation such a step names stays unreadable');
+-- Another owner, signed in with a live session, reads none of the run or its
+-- steps, the step naming their own generation included.
+select set_config('request.jwt.claims','{"sub":"e2110000-0000-4000-8000-000000000002","role":"authenticated","session_id":"e2900000-0000-4000-8000-000000000002"}',true);
+select ok(public.current_identity_is_active(), 'the other owner passes the active identity gate');
+select is((select count(*) from public.workflow_canvas_runs where id='e2500000-0000-4000-8000-000000000001'),0::bigint,
+'workflow_canvas_runs: another owner cannot read the run');
+select is((select count(*) from public.workflow_canvas_run_steps where run_id='e2500000-0000-4000-8000-000000000001'),0::bigint,
+'run steps: another owner reads none of the run''s steps');
+select set_config('request.jwt.claims','{"sub":"e2100000-0000-4000-8000-000000000001","role":"authenticated","session_id":"e2900000-0000-4000-8000-000000000001"}',true);
 -- The new policies must still compose with the active-session boundary.
 reset role;
 delete from auth.sessions where id='e2900000-0000-4000-8000-000000000001';
@@ -144,7 +163,7 @@ select is((select count(*) from public.workflow_canvas_assistant_messages),0::bi
 select is((select count(*) from public.workflow_canvas_run_steps),0::bigint,'workflow_canvas_run_steps: revoked session cannot read rows');
 select throws_ok($$ insert into public.workflow_canvas_runs (canvas_id,user_id,start_node_id,mode)
 values ('e2200000-0000-4000-8000-000000000001','e2100000-0000-4000-8000-000000000001','revoked','node') $$,'42501',null,
-'revoked session cannot create a run even with a matching parent');
+'revoked session cannot create a run either (no client writes runs since 20261121214810)');
 reset role;
 select set_config('request.jwt.claims','{}',true);
 set local role service_role;

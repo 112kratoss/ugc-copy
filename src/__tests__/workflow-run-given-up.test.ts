@@ -132,6 +132,8 @@ function createRunDatabase(options: { mode?: 'branch' | 'node'; runCreatedAt?: n
   const gateStep = queuedStep('step-gate', gate.id);
 
   const tables: Record<string, Row[]> = {
+    // The creator's read of a run finds it only on a canvas of theirs.
+    workflow_canvases: [{ id: 'canvas-1', user_id: 'user-1', graph }],
     workflow_canvas_runs: [{
       id: 'run-1',
       canvas_id: 'canvas-1',

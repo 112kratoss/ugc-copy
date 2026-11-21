@@ -25,7 +25,6 @@ import {
 import { processWorkflowRunStepJobs } from '@/lib/workflow-run-jobs-processor';
 
 type WorkflowRunScheduleWorker = (callback: () => Promise<void>) => void;
-type WorkflowRunDetailsSupabaseClient = Parameters<typeof getWorkflowRunDetails>[0]['supabase'];
 
 type WorkflowRunDetailsRouteContext = {
   params: Promise<{ id: string; runId: string }>;
@@ -141,11 +140,12 @@ async function handleWorkflowRunDetailsGET(
   if (auth instanceof Response) return auth;
 
   const { id, runId } = await context.params;
-  const workflowRunSupabase = auth.supabase as unknown as WorkflowRunDetailsSupabaseClient;
 
   try {
+    // Service-role, found only as the admitted caller's: no client role reads
+    // run steps.
     const run = await dependencies.getWorkflowRunDetails({
-      supabase: workflowRunSupabase,
+      supabase: dependencies.createServiceClient(),
       userId: auth.userId,
       canvasId: id,
       runId,
@@ -199,14 +199,15 @@ async function handleWorkflowRunApprovalPOST(
   const { id, runId, stepId } = await context.params;
   try {
     const run = await dependencies.approveWorkflowRunStep({
-      ownerSupabase: auth.supabase as unknown as WorkflowRunDetailsSupabaseClient,
-      mutationSupabase,
+      supabase: mutationSupabase,
       userId: auth.userId,
       canvasId: id,
       runId,
       stepId,
     });
-    if (run.status === 'processing') scheduleWorkflowFastPathWorker(dependencies);
+    // No run: approved, but not read back. An approved gate leaves its run
+    // processing, so it gets the worker as well.
+    if (!run || run.status === 'processing') scheduleWorkflowFastPathWorker(dependencies);
     return NextResponse.json({ run });
   } catch (error) {
     if (error instanceof WorkflowRunApprovalError) {

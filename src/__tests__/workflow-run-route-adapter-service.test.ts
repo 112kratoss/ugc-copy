@@ -183,8 +183,9 @@ describe('workflow run route adapter service', () => {
     });
   });
 
-  it('loads workflow run details after authentication and applies private headers', async () => {
+  it('loads workflow run details service-role after authentication and applies private headers', async () => {
     const supabase = { kind: 'user-client' } as unknown as SupabaseClient;
+    const adminSupabase = { kind: 'admin-client' };
     const getWorkflowRunDetails = vi.fn(async () => ({
       id: 'run-1',
       canvas_id: 'canvas-1',
@@ -203,6 +204,7 @@ describe('workflow run route adapter service', () => {
       context: { params: Promise.resolve({ id: 'canvas-1', runId: 'run-1' }) },
       dependencies: {
         authenticateRequest: vi.fn(async () => ({ userId: 'user-1', supabase })),
+        createServiceClient: vi.fn(() => adminSupabase as never),
         getWorkflowRunDetails,
       },
     });
@@ -222,8 +224,9 @@ describe('workflow run route adapter service', () => {
         steps: [],
       },
     });
+    // No client role reads run steps: the caller's client only admits them.
     expect(getWorkflowRunDetails).toHaveBeenCalledWith({
-      supabase,
+      supabase: adminSupabase,
       userId: 'user-1',
       canvasId: 'canvas-1',
       runId: 'run-1',
@@ -241,6 +244,7 @@ describe('workflow run route adapter service', () => {
           userId: 'user-1',
           supabase: { kind: 'user-client' } as unknown as SupabaseClient,
         })),
+        createServiceClient: vi.fn(() => ({ kind: 'admin-client' }) as never),
         getWorkflowRunDetails: vi.fn(async () => {
           throw new Error('Workflow run not found.');
         }),
@@ -262,6 +266,7 @@ describe('workflow run route adapter service', () => {
           userId: 'user-1',
           supabase: { kind: 'user-client' } as unknown as SupabaseClient,
         })),
+        createServiceClient: vi.fn(() => ({ kind: 'admin-client' }) as never),
         getWorkflowRunDetails: vi.fn(async () => {
           throw new Error('permission denied for table workflow_canvas_runs');
         }),
@@ -322,8 +327,7 @@ describe('workflow run route adapter service', () => {
       key: 'user-1',
     }));
     expect(approveWorkflowRunStep).toHaveBeenCalledWith({
-      ownerSupabase: supabase,
-      mutationSupabase: adminSupabase,
+      supabase: adminSupabase,
       userId: 'user-1',
       canvasId: 'canvas-1',
       runId: 'run-1',
@@ -334,6 +338,41 @@ describe('workflow run route adapter service', () => {
       limit: 1,
       concurrency: 1,
     }));
+  });
+
+  // A committed approval whose run could not be read again answers without a
+  // run: the creator's page polls on after any success, and the approved run
+  // still gets its fast-path worker.
+  it('answers a committed approval without a run and still schedules the worker', async () => {
+    const scheduleWorker = vi.fn();
+    const response = await postWorkflowRunApprovalRouteResponse({
+      request: new Request('http://localhost/api/workflow-canvases/canvas-1/runs/run-1/approval-steps/step-1/approve', {
+        method: 'POST',
+      }),
+      context: {
+        params: Promise.resolve({ id: 'canvas-1', runId: 'run-1', stepId: 'step-1' }),
+      },
+      dependencies: {
+        authenticateRequest: vi.fn(async () => ({
+          userId: 'user-1',
+          supabase: { kind: 'user-client' } as unknown as SupabaseClient,
+        })),
+        approveWorkflowRunStep: vi.fn(async () => null),
+        createServiceClient: vi.fn(() => ({ kind: 'admin-client' }) as never),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true,
+          limit: 60,
+          remaining: 59,
+          retryAfterSeconds: 0,
+          resetAt: '2026-06-23T10:10:00.000Z',
+        })),
+        scheduleWorker,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ run: null });
+    expect(scheduleWorker).toHaveBeenCalledTimes(1);
   });
 
   it('returns a conflict when a workflow checkpoint is no longer awaiting approval', async () => {
