@@ -162,6 +162,44 @@ describe('one press, one key', () => {
     expect(asks).toHaveLength(clientWait.timeoutMs / askAgain.delayMs + 1);
   });
 
+  // A press still on screen that gives up on an ask it never heard back from leaves that ask
+  // perhaps running on the server: it says when the server is done with it, as a stopped press
+  // does, for the balance to be read again then.
+  it('says when the server is done with a press it gave up on, with no signal aborted', async () => {
+    vi.useFakeTimers();
+    stubAsks(Array.from({ length: 40 }, () => refusal(errors.stillRunning)));
+
+    const pressed = requestPromptEnhancement(poster).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(clientWait.timeoutMs + askAgain.delayMs * 2);
+
+    const error = await pressed as PromptEnhancementError;
+    expect(error).toBeInstanceOf(PromptEnhancementError);
+    // The wait from the last ask, which went out at most one delay before the press ended.
+    expect(error.settlesBy).toBeGreaterThan(Date.now());
+    expect(error.settlesBy).toBeLessThanOrEqual(Date.now() + clientWait.timeoutMs);
+  });
+
+  it('says the same when its last ask lost its answer to a dropped connection', async () => {
+    vi.useFakeTimers();
+    stubAsks([dropped(), dropped(), dropped()]);
+
+    const lost = requestPromptEnhancement(poster).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(askAgain.delayMs * (askAgain.afterConnectionFailure + 1));
+
+    const error = await lost as PromptEnhancementError;
+    expect(error.message).toMatch(/connection/i);
+    expect(error.settlesBy).toBeGreaterThan(Date.now());
+  });
+
+  it('says nothing of the kind for a refusal the server gave its first ask', async () => {
+    stubAsks([refusal({ status: 402, response: { error: 'Insufficient credits', required: 2 } })]);
+
+    const error = await requestPromptEnhancement(poster).catch((caught: unknown) => caught) as PromptEnhancementError;
+
+    expect(error).toBeInstanceOf(PromptEnhancementError);
+    expect(error.settlesBy).toBeUndefined();
+  });
+
   it('asks once more after an ask that got no answer in the wait it states', async () => {
     vi.useFakeTimers();
     const asks = stubAsks(['hang', answer('Answer to the second ask')]);

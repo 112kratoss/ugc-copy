@@ -192,6 +192,11 @@ export default function EnhancePromptButton({
                 if (err.remainingCredits !== undefined) {
                     latest.current.onCreditsUpdate(err.remainingCredits);
                 }
+                // Given up on while the server may still be working on it: its charge or refund
+                // lands later, so the balance is read once more then, as for a press whose button went.
+                if (err.settlesBy !== undefined) {
+                    window.setTimeout(readBalanceAgain, Math.max(0, err.settlesBy - Date.now()));
+                }
                 setError(err.message);
             } else {
                 setError('Something went wrong. Please try again.');

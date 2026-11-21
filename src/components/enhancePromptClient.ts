@@ -138,6 +138,10 @@ export async function requestPromptEnhancement(
   // loop runs again, so the server may still be working on one, but on none past the wait from
   // when it was sent: a press stopped then says so, for its balance to be read again after.
   let lastAskAt: number | null = null;
+  // An ask under the key ended without its outcome (a timeout, a dropped connection, a
+  // still-running): it may still be running on the server, so a press that then ends says when
+  // the server is done with it, for the balance to be read again after, button there or not.
+  let unanswered = false;
   const stopIfAborted = () => {
     if (signal?.aborted && lastAskAt !== null) {
       throw new PromptEnhancementError(STOPPED_MESSAGE, { settlesBy: lastAskAt + PROMPT_ENHANCE_WAIT_MS });
@@ -162,6 +166,7 @@ export async function requestPromptEnhancement(
       lastAskAt = Date.now();
       const ask = await askOnce(request, key, session.access_token);
       if (ask.outcome === 'answered') return ask.result;
+      unanswered = true;
       if (ask.outcome === 'still-running') {
         if (Date.now() - firstAskAt >= PROMPT_ENHANCE_WAIT_MS) throw ask.error;
       } else if (ask.outcome === 'timed-out') {
@@ -174,7 +179,8 @@ export async function requestPromptEnhancement(
   } catch (error) {
     // Stopped while an ask was out, and ended by its outcome (a last dropped connection, a 429, a
     // still-running at the wait's end): an earlier ask may still be running on the server all the same.
-    if (signal?.aborted && lastAskAt !== null && error instanceof PromptEnhancementError) {
+    // So may one a press still on screen gave up on, or that a later ask's refusal ended.
+    if ((signal?.aborted || unanswered) && lastAskAt !== null && error instanceof PromptEnhancementError) {
       error.settlesBy ??= lastAskAt + PROMPT_ENHANCE_WAIT_MS;
     }
     throw error;
