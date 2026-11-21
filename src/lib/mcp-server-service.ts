@@ -123,7 +123,7 @@ import { RECIPE_TITLE_MIN_LENGTH } from '../../ugc-mobile/lib/post-publish-polic
  */
 
 export const MCP_SERVER_NAME = 'magicbooklet';
-export const MCP_SERVER_VERSION = '1.2.0';
+export const MCP_SERVER_VERSION = '1.2.1';
 
 /**
  * The route's own limit (`maxDuration` in `src/app/api/mcp/route.ts`, which Next reads as a

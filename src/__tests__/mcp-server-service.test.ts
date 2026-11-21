@@ -351,13 +351,14 @@ function rateLimit(retryAfterSeconds: number) {
 
 describe('MCP tool registry', () => {
   it('holds every tool to a title, a description written for an agent, annotations and a schema', () => {
-    // Twelve tools since phase 4 added request_upload, and the registry entry versions with them.
+    // Twelve tools since phase 4 added request_upload, and the registry entry versions with them
+    // (1.2.1 changed only the entry's repository, to the plugin's public one).
     expect(MCP_TOOLS.map((entry) => entry.name)).toEqual([
       'list_models', 'get_model', 'quote_generation', 'upload_input', 'request_upload', 'create_media', 'get_generation', 'list_creations',
       'publish_post', 'get_post', 'delete_post', 'enhance_prompt',
     ]);
     expect(MCP_TOOLS).toHaveLength(12);
-    expect(MCP_SERVER_VERSION).toBe('1.2.0');
+    expect(MCP_SERVER_VERSION).toBe('1.2.1');
     for (const entry of MCP_TOOLS) {
       expect(entry.title.length, entry.name).toBeGreaterThan(3);
       // A description says when to call the tool and what to do with the answer, so it names

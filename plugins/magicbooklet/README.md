@@ -15,7 +15,7 @@ Claude also uses the skills by itself when you ask for a UGC ad, to post a creat
 ## Install
 
 ```bash
-claude plugin marketplace add 112kratoss/ugc-copy
+claude plugin marketplace add 112kratoss/magicbooklet-claude-plugin
 ```
 
 ```bash
@@ -24,11 +24,13 @@ claude plugin install magicbooklet@magicbooklet
 
 Then, in Claude Code, run `/mcp`, pick the magicbooklet server and choose **Authenticate**. Your browser opens on Magic Booklet; sign in if you need to and allow Claude Code. Signing in listens on port 8976, so keep that port free while you do it.
 
-The marketplace lives in Magic Booklet's app repository. To check out only the plugin's folders, add it with `--sparse`:
+Added the marketplace earlier, from another repository? Claude Code keeps a marketplace under the source it was first added from, so remove it, which also removes the plugin and what it saved:
 
 ```bash
-claude plugin marketplace add 112kratoss/ugc-copy --sparse .claude-plugin plugins
+claude plugin marketplace remove magicbooklet
 ```
+
+Then run the two commands above, and sign in with `/mcp` again if Claude Code asks.
 
 [magicbooklet.com/developers/mcp](https://magicbooklet.com/developers/mcp#claude-code) sets the server up without the plugin, and in the other clients it supports. Use the plugin or a server you added yourself, not both.
 
@@ -40,7 +42,8 @@ claude plugin marketplace add 112kratoss/ugc-copy --sparse .claude-plugin plugin
 
 ## Maintainers
 
-- The plugin's MCP server is declared in `.claude-plugin/plugin.json` (`mcpServers`), not in a `.mcp.json`: this repository's agent guard refuses every `.mcp.json` to its agents, which would leave the file unreadable to a reviewer.
-- `src/__tests__/mcp-distribution-manifests.test.ts` holds the server URL, the client id and the callback port to `src/lib/mcp-client-directory.ts`, and these install commands to the setup page's.
-- Bump `version` in `.claude-plugin/plugin.json` with every change to the plugin: an installed copy updates only when the version changes. It stays `0.x` while the Claude Code client id is a placeholder, and the test requires `1.0.0` or later once the real id is in.
-- Check the manifests with `claude plugin validate .` from the repository root, and `claude plugin validate plugins/magicbooklet`.
+The plugin is kept in Magic Booklet's app repository, beside the server it drives, where tests hold the two together. It is published from there to [github.com/112kratoss/magicbooklet-claude-plugin](https://github.com/112kratoss/magicbooklet-claude-plugin), the repository people install from, so a change made in that one would be overwritten: write to info@magicbooklet.com with a problem or a suggestion.
+
+- The plugin's MCP server is declared in `plugins/magicbooklet/.claude-plugin/plugin.json` (`mcpServers`), not in a `.mcp.json`.
+- `version` in that file rises with every change to the plugin: an installed copy updates only when the version changes.
+- `claude plugin validate --strict .` from the repository root checks the marketplace, and `claude plugin validate --strict plugins/magicbooklet` the plugin and its skills.

@@ -1,4 +1,6 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -25,6 +27,16 @@ import {
 } from '@/lib/mcp-client-directory';
 import { MCP_TOOLS } from '@/lib/mcp-server-service';
 import {
+  findPrivateContent,
+  isMirrorPath,
+  mirrorDifference,
+  mirrorFiles,
+  mirrorRepository,
+  publishMirror,
+  repositoryOfRemote,
+  versionProblem,
+} from '../../scripts/ops/plugin-mirror.mjs';
+import {
   POST_RESOURCE_CARD_DESCRIPTION_MAX_LENGTH,
   POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS,
   POST_RESOURCE_PREVIEW_MAX_LENGTH,
@@ -32,9 +44,11 @@ import {
 } from '@/lib/post-resource-bundles';
 
 /**
- * The Claude Code plugin marketplace this repository serves: `.claude-plugin/marketplace.json`
- * and its one plugin, `plugins/magicbooklet/`. JSON and Markdown cannot import the client
- * directory, so this holds them to it; `claude plugin validate --strict` checks their shape.
+ * The Claude Code plugin marketplace: `.claude-plugin/marketplace.json` and its one plugin,
+ * `plugins/magicbooklet/`, kept here and published to a public repository of their own by
+ * `scripts/ops/plugin-mirror.mjs`. JSON and Markdown cannot import the client directory, so this
+ * holds them to it, and holds what is published to a list; `claude plugin validate --strict`
+ * checks their shape.
  */
 
 const ROOT = process.cwd();
@@ -270,5 +284,252 @@ describe('the Claude Code plugin marketplace', () => {
     expect(readme).toContain(MCP_SERVER_URL);
     expect(readme).toContain(`port ${CLAUDE_CODE_CALLBACK_PORT}`);
     expect(readme).toContain(MCP_DEVELOPERS_PAGE_URL.replace('https://', ''));
+  });
+});
+
+describe('the plugin marketplace’s public repository', () => {
+  const files: Map<string, Buffer> = mirrorFiles(ROOT);
+
+  it('is published to the repository the setup page’s command adds, never to this one', () => {
+    expect(mirrorRepository(files)).toBe(MCP_PLUGIN_REPOSITORY);
+    // A marketplace of its own, not the app's repository: an install must not need that one public.
+    expect(MCP_PLUGIN_REPOSITORY).not.toBe('112kratoss/ugc-copy');
+    // The script refuses a manifest that names the checkout's own origin, however git writes it:
+    // https or SSH, an SSH host alias, any letter case (GitHub's names ignore it), a trailing slash.
+    for (const url of [
+      'https://github.com/112kratoss/ugc-copy.git\n',
+      'https://github.com/112kratoss/ugc-copy/',
+      'git@github.com:112kratoss/ugc-copy.git',
+      'git@github-work:112kratoss/ugc-copy.git',
+      'ssh://git@github.com/112Kratoss/UGC-Copy.git',
+    ]) {
+      expect(repositoryOfRemote(url), url).toBe('112kratoss/ugc-copy');
+    }
+    expect(repositoryOfRemote('nowhere')).toBeNull();
+  });
+
+  it('publishes these files and no others', () => {
+    // A file added under either folder is published with the next push, so it is named here first.
+    expect([...files.keys()]).toEqual([
+      '.claude-plugin/marketplace.json',
+      'README.md',
+      'plugins/magicbooklet/.claude-plugin/plugin.json',
+      'plugins/magicbooklet/README.md',
+      'plugins/magicbooklet/skills/create-ugc-ad/SKILL.md',
+      'plugins/magicbooklet/skills/post-outside-media/SKILL.md',
+      'plugins/magicbooklet/skills/publish-creation/SKILL.md',
+      'plugins/magicbooklet/skills/share-a-skill/SKILL.md',
+    ]);
+    // The public repository's front page is the plugin's own README.
+    expect(files.get('README.md')?.equals(files.get('plugins/magicbooklet/README.md') as Buffer)).toBe(true);
+    for (const file of files.keys()) expect(isMirrorPath(file), file).toBe(true);
+    // Anything else in the public repository stops a push.
+    expect(['LICENSE', 'src/lib/x.ts', '.github/workflows/x.yml', 'pluginsx/y'].filter(isMirrorPath)).toEqual([]);
+  });
+
+  it('reads a commit the way it reads the checkout', () => {
+    // A push publishes a commit, never the working tree; the same reader takes both.
+    const committed: Map<string, Buffer> = mirrorFiles(ROOT, 'HEAD');
+    expect(committed.size).toBeGreaterThanOrEqual(8);
+    expect(committed.get('README.md')?.equals(committed.get('plugins/magicbooklet/README.md') as Buffer)).toBe(true);
+    expect(mirrorRepository(committed)).toMatch(/^[\w-]+\/[\w.-]+$/);
+    for (const file of committed.keys()) expect(isMirrorPath(file), file).toBe(true);
+  });
+
+  it('reads a commit from git’s objects, and takes no link and no executable from one', () => {
+    // The same reader reads the public repository's clone, where a link planted by someone with
+    // access could point at a file on the operator's machine: it must be seen, never followed.
+    const repository = mkdtempSync(path.join(os.tmpdir(), 'plugin-mirror-test-'));
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], {
+      cwd: repository,
+      env: { PATH: process.env.PATH, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', NODE_ENV: 'test' },
+      stdio: 'pipe',
+    });
+    const write = (file: string, text: string) => {
+      mkdirSync(path.dirname(path.join(repository, file)), { recursive: true });
+      writeFileSync(path.join(repository, file), text);
+    };
+    try {
+      git('init', '--quiet');
+      write('plugins/magicbooklet/README.md', 'readme');
+      write('plugins/magicbooklet/skills/a skill/with\ttab.md', 'spaced');
+      write('.claude-plugin/marketplace.json', '{}');
+      write('outside.md', 'not published');
+      git('add', '--all');
+      git('commit', '--quiet', '-m', 'plain');
+      // A change left in the working tree is not what a commit holds.
+      write('plugins/magicbooklet/README.md', 'uncommitted');
+      const plain: Map<string, Buffer> = mirrorFiles(repository, 'HEAD');
+      expect([...plain.keys()]).toEqual([
+        '.claude-plugin/marketplace.json',
+        'README.md',
+        'plugins/magicbooklet/README.md',
+        'plugins/magicbooklet/skills/a skill/with\ttab.md',
+      ]);
+      expect(plain.get('README.md')?.toString()).toBe('readme');
+      expect(plain.get('plugins/magicbooklet/skills/a skill/with\ttab.md')?.toString()).toBe('spaced');
+
+      const secret = path.join(repository, 'outside.md');
+      symlinkSync(secret, path.join(repository, 'plugins/magicbooklet/link.md'));
+      git('add', '--all');
+      git('commit', '--quiet', '-m', 'link');
+      expect(() => mirrorFiles(repository, 'HEAD')).toThrow('plugins/magicbooklet/link.md is not a plain file (mode 120000)');
+      expect(() => mirrorFiles(repository)).toThrow('plugins/magicbooklet/link.md is not a plain file');
+
+      git('rm', '--quiet', 'plugins/magicbooklet/link.md');
+      write('plugins/magicbooklet/run.sh', '#!/bin/sh\n');
+      chmodSync(path.join(repository, 'plugins/magicbooklet/run.sh'), 0o755);
+      git('add', '--all');
+      git('commit', '--quiet', '-m', 'executable');
+      expect(() => mirrorFiles(repository, 'HEAD')).toThrow('plugins/magicbooklet/run.sh is not a plain file (mode 100755)');
+      expect(() => mirrorFiles(repository)).toThrow('plugins/magicbooklet/run.sh is not a plain file');
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it('holds nothing private, and nothing that names the app’s repository or its files', () => {
+    expect(findPrivateContent(files)).toEqual([]);
+    for (const [file, bytes] of files) {
+      const text = bytes.toString('utf8');
+      expect(text, file).not.toMatch(/ugc-copy/);
+      // A reader of the public repository has none of the app's folders to open. A path inside a
+      // URL (`…/docs/…`) is not one of them.
+      expect(text, file).not.toMatch(/(?<![\w/.-])(?:src|docs|scripts|supabase|contracts|ugc-mobile|tests|\.claude|\.agents)\/[\w.-]/);
+      expect(text, file).not.toMatch(/AGENTS\.md/);
+    }
+  });
+
+  it('refuses a tree that holds a secret, a secrets file, a private address or a machine’s path', () => {
+    const tree = (file: string, text: string) => new Map([[file, Buffer.from(text)]]);
+    const readme = 'plugins/magicbooklet/README.md';
+    // Each value is built from parts so that this file holds nothing a scanner reads as a secret.
+    const refused: Array<[string, Map<string, Buffer>]> = [
+      ['a private key', tree('plugins/magicbooklet/skills/x/SKILL.md', `-----BEGIN ${'PRIVATE'} KEY-----`)],
+      ['a signed token', tree(readme, `${'eyJ'}hbGciOiJIUzI1NiJ9.${'eyJ'}zdWIiOiIxMjM0NTY3ODkwIn0.sig`)],
+      ['a provider key', tree(readme, `key ${'sk_'}live_abcdefghijkl`)],
+      ['a provider key', tree(readme, `key ${'sk_'}AbCdEfGhIjKlMnOp`)],
+      ['a provider key', tree(readme, `key ${'sk-'}abcdefghijklmnop`)],
+      ['a provider key', tree(readme, `key ${'gho_'}abcdefghijklmnopqrstuvwx`)],
+      ['a long hex key', tree(readme, `key ${'deadbeef'.repeat(4)}`)],
+      ['the service role', tree(readme, `the ${'service'}_role key`)],
+      ['a Supabase project host', tree(readme, 'https://abcdefghijklmnopqrst.supabase.co')],
+      ['a Supabase project host', tree(readme, 'aws-0-ap-south-1.pooler.supabase.com:6543')],
+      ['a path on someone’s machine', tree(readme, 'see /Users/someone/notes.md')],
+      ['an email address that is not the public one', tree(readme, 'write to someone@example.com')],
+      ['a secrets file', tree('plugins/magicbooklet/.env.local', 'NAME=value')],
+      ['a secrets file', tree('plugins/magicbooklet/.mcp.json', '{}')],
+    ];
+    for (const [label, files] of refused) {
+      const [file] = files.keys();
+      expect(findPrivateContent(files), label).toEqual([`${file}: ${label}`]);
+    }
+    // The public address, the install command's `name@marketplace` and the public client id are not findings.
+    expect(findPrivateContent(tree('README.md', `info@magicbooklet.com, ${MCP_PLUGIN_INSTALL_COMMAND}. ${MCP_CLIENT_IDS.claudeCode}`))).toEqual([]);
+  });
+
+  it('says what a push would add, change and remove', () => {
+    const published = new Map([['README.md', Buffer.from('old')], ['gone.md', Buffer.from('x')], ['same.md', Buffer.from('y')]]);
+    const wanted = new Map([['README.md', Buffer.from('new')], ['same.md', Buffer.from('y')], ['added.md', Buffer.from('z')]]);
+    expect(mirrorDifference(published, wanted)).toEqual({ added: ['added.md'], changed: ['README.md'], removed: ['gone.md'], same: false });
+    expect(mirrorDifference(wanted, wanted)).toMatchObject({ same: true });
+  });
+
+  it('pushes a commit of its own making to the public repository’s main, and refuses what is not the mirror', () => {
+    // A bare repository on disk stands for the public one: the whole path a push takes, with
+    // an operator's identity exported around it.
+    const home = mkdtempSync(path.join(os.tmpdir(), 'plugin-mirror-push-'));
+    const remote = path.join(home, 'public.git');
+    const manifest = 'plugins/magicbooklet/.claude-plugin/plugin.json';
+    const readme = 'plugins/magicbooklet/README.md';
+    const treeAt = (version: string, text: string) => new Map([
+      ['.claude-plugin/marketplace.json', Buffer.from('{}')],
+      ['README.md', Buffer.from(text)],
+      [manifest, Buffer.from(JSON.stringify({ version }))],
+      [readme, Buffer.from(text)],
+    ]);
+    const quiet: NodeJS.ProcessEnv = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', PATH: process.env.PATH, NODE_ENV: 'test' };
+    const inRemote = (...args: string[]) => execFileSync('git', args, { cwd: remote, env: quiet, encoding: 'utf8' });
+    const operator = { GIT_AUTHOR_NAME: 'Operator', GIT_AUTHOR_EMAIL: 'operator@example.invalid', GIT_COMMITTER_NAME: 'Operator', GIT_COMMITTER_EMAIL: 'operator@example.invalid', GIT_DIR: '/nonexistent' };
+    const before = Object.fromEntries(Object.keys(operator).map((name) => [name, process.env[name]]));
+    try {
+      mkdirSync(remote);
+      inRemote('init', '--quiet', '--bare', '--initial-branch=main');
+      Object.assign(process.env, operator);
+
+      // A repository with no commit yet: a check says what it lacks, an unconfirmed push stops.
+      expect(publishMirror({ url: remote, wanted: treeAt('1.0.0', 'one') })).toMatchObject({ outcome: 'differs', difference: { added: expect.arrayContaining([manifest]) } });
+      expect(publishMirror({ url: remote, wanted: treeAt('1.0.0', 'one'), push: true })).toMatchObject({ outcome: 'unconfirmed' });
+      expect(() => inRemote('rev-parse', '--verify', '--quiet', 'main')).toThrow();
+
+      const first = publishMirror({ url: remote, wanted: treeAt('1.0.0', 'one'), push: true, confirm: true, now: new Date('2026-11-19T12:00:00Z') });
+      expect(first).toMatchObject({ outcome: 'published' });
+      expect(inRemote('rev-parse', 'main').trim()).toBe(first.commit);
+      // The public identity and a UTC time, whatever the operator's shell exports.
+      expect(inRemote('log', '-1', '--format=%an <%ae> | %cn <%ce> | %ad | %cd | %s', '--date=raw', 'main').trim())
+        .toBe(`Magic Booklet <info@magicbooklet.com> | Magic Booklet <info@magicbooklet.com> | ${Date.UTC(2026, 10, 19, 12) / 1_000} +0000 | ${Date.UTC(2026, 10, 19, 12) / 1_000} +0000 | Magic Booklet plugin 1.0.0`);
+      expect(inRemote('ls-tree', '-r', '--name-only', 'main').trim().split('\n')).toEqual(['.claude-plugin/marketplace.json', 'README.md', manifest, readme]);
+      expect(publishMirror({ url: remote, wanted: treeAt('1.0.0', 'one'), push: true, confirm: true })).toEqual({ outcome: 'same' });
+
+      // A change under the same version, or an older plugin, is not pushed; a newer one is.
+      expect(publishMirror({ url: remote, wanted: treeAt('1.0.0', 'two'), push: true, confirm: true })).toMatchObject({ outcome: 'refused', message: expect.stringContaining('its version is still 1.0.0') });
+      expect(publishMirror({ url: remote, wanted: treeAt('0.9.0', 'two'), push: true, confirm: true })).toMatchObject({ outcome: 'refused', message: expect.stringContaining('1.0.0 is published') });
+      expect(inRemote('rev-parse', 'main').trim()).toBe(first.commit);
+      const second = publishMirror({ url: remote, wanted: treeAt('1.0.1', 'two'), push: true, confirm: true });
+      expect(second).toMatchObject({ outcome: 'published', difference: { added: [], changed: ['README.md', manifest, readme], removed: [] } });
+      expect(inRemote('show', `main:${readme}`)).toBe('two');
+      expect(inRemote('rev-list', '--count', 'main').trim()).toBe('2');
+
+      // Someone adds to the public repository: a link at a published path, then a file of their own.
+      const visitor = path.join(home, 'visitor');
+      const victim = path.join(home, 'victim.txt');
+      writeFileSync(victim, 'the operator’s own file');
+      execFileSync('git', ['clone', '--quiet', remote, visitor], { env: quiet });
+      const asVisitor = (...args: string[]) => execFileSync('git', ['-c', 'user.name=v', '-c', 'user.email=v@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd: visitor, env: quiet });
+      rmSync(path.join(visitor, readme));
+      symlinkSync(victim, path.join(visitor, readme));
+      asVisitor('commit', '--quiet', '--all', '-m', 'a link');
+      asVisitor('push', '--quiet', 'origin', 'main');
+      for (const push of [false, true]) {
+        expect(publishMirror({ url: remote, wanted: treeAt('1.0.2', 'three'), push, confirm: push }), `push: ${push}`)
+          .toMatchObject({ outcome: 'refused', message: expect.stringContaining(`${readme} is not a plain file (mode 120000)`) });
+      }
+      expect(readFileSync(victim, 'utf8')).toBe('the operator’s own file');
+
+      asVisitor('rm', '--quiet', readme);
+      writeFileSync(path.join(visitor, readme), 'two');
+      writeFileSync(path.join(visitor, 'LICENSE'), 'theirs');
+      asVisitor('add', '--all');
+      asVisitor('commit', '--quiet', '-m', 'a stray');
+      asVisitor('push', '--quiet', 'origin', 'main');
+      expect(publishMirror({ url: remote, wanted: treeAt('1.0.2', 'three'), push: true, confirm: true }))
+        .toMatchObject({ outcome: 'refused', message: expect.stringContaining('no part of the marketplace (LICENSE)') });
+    } finally {
+      for (const [name, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a plugin whose files changed under the version already published', () => {
+    // An installed copy updates only when the version changes.
+    const manifest = 'plugins/magicbooklet/.claude-plugin/plugin.json';
+    const skill = 'plugins/magicbooklet/skills/create-ugc-ad/SKILL.md';
+    const treeAt = (version: string, skillText: string, marketplace = '{}') => new Map([
+      ['.claude-plugin/marketplace.json', Buffer.from(marketplace)],
+      [manifest, Buffer.from(JSON.stringify({ version }))],
+      [skill, Buffer.from(skillText)],
+    ]);
+    expect(versionProblem(treeAt('1.1.2', 'old'), treeAt('1.1.2', 'new'))).toContain(`${skill}) and its version is still 1.1.2`);
+    expect(versionProblem(treeAt('1.1.2', 'old'), treeAt('1.1.3', 'new'))).toBeNull();
+    expect(versionProblem(treeAt('1.1.9', 'old'), treeAt('1.1.10', 'new'))).toBeNull();
+    // An older plugin never replaces a newer one: main, while a newer one published ahead of its merge waits.
+    expect(versionProblem(treeAt('1.1.3', 'new'), treeAt('1.1.2', 'old'))).toContain('This is plugin 1.1.2 and 1.1.3 is published');
+    expect(versionProblem(treeAt('1.1.10', 'same'), treeAt('1.1.9', 'same'))).toContain('an older plugin is never published over a newer one');
+    // The marketplace's own file needs no plugin version, and a first publish has none to compare.
+    expect(versionProblem(treeAt('1.1.2', 'same'), treeAt('1.1.2', 'same', '{"plugins":[]}'))).toBeNull();
+    expect(versionProblem(new Map(), treeAt('1.1.2', 'new'))).toBeNull();
   });
 });

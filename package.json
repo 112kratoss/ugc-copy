@@ -39,6 +39,7 @@
     "ops:generation-model-catalog": "tsx --env-file-if-exists=.env.local scripts/ops/generation-model-catalog.ts",
     "ops:moderation": "tsx --env-file-if-exists=.env.local scripts/ops/moderation-ops.ts",
     "ops:oauth-clients": "tsx --env-file-if-exists=.env.local scripts/ops/oauth-clients.ts",
+    "ops:plugin-mirror": "node scripts/ops/plugin-mirror.mjs",
     "ops:search-coverage": "tsx --env-file-if-exists=.env.local scripts/ops/search-coverage.ts",
     "ops:search-report": "tsx --env-file-if-exists=.env.local scripts/ops/search-report.ts",
     "search:relevance": "tsx --tsconfig tsconfig.scripts.json scripts/search/relevance-check.ts",
