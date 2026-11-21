@@ -84,6 +84,7 @@ Usage:
   tsx scripts/ops/generation-model-catalog.ts publish [--manifest <path>] --apply --expected-active <revision> --confirm-revision <new-revision>
   tsx scripts/ops/generation-model-catalog.ts rollback --target-revision <revision> [--json]
   tsx scripts/ops/generation-model-catalog.ts rollback --target-revision <revision> --expected-active <revision> --apply --confirm-revision <target-revision>
+  tsx scripts/ops/generation-model-catalog.ts drift [--json]
 
 Environment for commands that read or mutate Supabase:
   SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)
@@ -92,6 +93,8 @@ Environment for commands that read or mutate Supabase:
 Safety:
   - validate is local and does not need credentials.
   - diff, stage, publish, and rollback without --apply are read-only.
+  - drift is read-only: it compares the active release with a full code emit and exits non-zero
+    when they differ outside the exceptions in scripts/ops/generation-model-catalog-drift.ts.
   - stage, publish, and rollback only mutate with --apply plus exact revision guards.
   - output never includes provider mappings, adapter configuration, service keys, or prices.
 `.trim();
@@ -1805,6 +1808,19 @@ export async function runGenerationModelCatalogCli(
       status: isRecord(data) && typeof data.status === 'string' ? data.status : 'completed',
       templateReview: await runPostReleaseTemplateReview(client),
     });
+    return;
+  }
+
+  if (command === 'drift') {
+    const client = createAdminClient(environment);
+    // Loaded here rather than at the top: it builds the whole code catalog, which no other
+    // command needs, and it imports this module back.
+    const { buildCatalogDrift } = await import('./generation-model-catalog-drift');
+    const drift = buildCatalogDrift(await loadActiveCatalog(client));
+    print(output, json, { operation: 'drift', ...drift });
+    if (drift.status !== 'clean') {
+      throw new Error('The active catalog release differs from the code build outside the drift exceptions.');
+    }
     return;
   }
 
