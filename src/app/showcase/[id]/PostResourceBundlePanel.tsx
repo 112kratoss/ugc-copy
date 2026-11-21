@@ -432,6 +432,7 @@ export default function PostResourceBundlePanel({
     [readingGroups, selectedScopeMediaKey]
   );
   const groupHeadingId = useId();
+  const creditShortfallId = useId();
   const isRecipeVisible = hasAccess || viewerIsOwner;
   // The creator's own recipe before their read of it lands: theirs, held, never offered to them.
   const heldForCreator = !isRecipeVisible && creatorHold !== null;
@@ -549,7 +550,10 @@ export default function PostResourceBundlePanel({
   const hasKnownInsufficientCredits = spendableCredits !== null && spendableCredits < creditCost;
   // "You need 25 more credits. Welcome and referral credits can't be spent on
   // recipes.": the app's line under its held unlock, in the warning colour.
-  const creditShortfallMessage = formatRecipeCreditShortfall(spendableCredits, creditCost, { holdsUnspendableCredits });
+  // Not while a cash payment is being confirmed: that buyer has paid.
+  const creditShortfallMessage = awaitingPaymentConfirmation
+    ? null
+    : formatRecipeCreditShortfall(spendableCredits, creditCost, { holdsUnspendableCredits });
   const offersBuyCredits = hasKnownInsufficientCredits || creditsRefused;
   const isAnyActionWorking = workingAction !== null;
 
@@ -1443,6 +1447,7 @@ export default function PostResourceBundlePanel({
               type="button"
               onClick={() => void unlockWithCredits()}
               disabled={isAnyActionWorking || hasKnownInsufficientCredits || awaitingPaymentConfirmation}
+              aria-describedby={creditShortfallMessage ? creditShortfallId : undefined}
               className="inline-flex min-h-20 flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-white/[0.04] px-4 py-3 text-center text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-55"
             >
               <span className="inline-flex items-center gap-2">
@@ -1456,17 +1461,22 @@ export default function PostResourceBundlePanel({
           </div>
         ) : null}
 
-        {offered && !isFree && creditShortfallMessage ? (
-          // Why "Use credits" is held, said where the buyer looks next (the app's warning line).
-          <p data-post-recipe-pitch={offerMark} role="status" className="mt-3 text-sm font-medium leading-6 text-[var(--ui-accent-commerce)]">
-            {creditShortfallMessage}
-          </p>
+        {offered && !isFree ? (
+          // Why "Use credits" is held, said where the buyer looks next (the app's warning line). The
+          // live region stays mounted, so a line that arrives later (the server's 402) is announced.
+          <div data-post-recipe-pitch={offerMark} role="status">
+            {creditShortfallMessage ? (
+              <p id={creditShortfallId} className="mt-3 text-sm font-medium leading-6 text-[var(--ui-accent-commerce)]">
+                {creditShortfallMessage}
+              </p>
+            ) : null}
+          </div>
         ) : null}
 
         {offered && !isFree && (!session?.access_token || spendableCredits !== null || offersBuyCredits) ? (
           <div data-post-recipe-pitch={offerMark} className="mt-3 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
             {!session?.access_token ? <span>Sign in to see your credit balance</span> : null}
-            {spendableCredits !== null ? <span>{`${spendableCredits.toLocaleString()} credits available`}</span> : null}
+            {spendableCredits !== null ? <span>{`${spendableCredits.toLocaleString('en-US')} credits available`}</span> : null}
             {/* Short, the warning line above says it; otherwise it explains a balance smaller than the total. */}
             {holdsUnspendableCredits && !creditShortfallMessage ? <span>{RECIPE_UNSPENDABLE_CREDITS_NOTE}</span> : null}
             {offersBuyCredits ? (

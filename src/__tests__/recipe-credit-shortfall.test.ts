@@ -29,10 +29,11 @@ describe('formatRecipeCreditShortfall', () => {
   });
 
   // The web says what the app says under its held unlock. The app's hook loads
-  // expo-router and the app's own aliases, so its source is read instead.
+  // expo-router and the app's own aliases, so its source is read instead, by its
+  // words only: a renamed variable there is no reason to fail here.
   it("says it in the app's words", () => {
     const appHook = readFileSync(path.join(process.cwd(), 'ugc-mobile/lib/use-bundle-unlock.ts'), 'utf8');
-    expect(appHook).toContain(`export const PROMOTIONAL_CREDITS_NOTE = "${RECIPE_UNSPENDABLE_CREDITS_NOTE}";`);
-    expect(appHook).toContain("const message = `You need ${formatCreditAmount(amount)} more ${amount === 1 ? 'credit' : 'credits'}.`;");
+    expect(appHook).toContain(`"${RECIPE_UNSPENDABLE_CREDITS_NOTE}"`);
+    expect(appHook).toMatch(/`You need \$\{[^}]+\} more \$\{[^}]+=== 1 \? 'credit' : 'credits'\}\.`/);
   });
 });

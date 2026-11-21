@@ -1064,7 +1064,7 @@ describe('PostResourceBundlePanel', () => {
 
     expect(screen.getByText(/120 credits available/i)).toBeInTheDocument();
     // The shortfall alone: nothing in this balance is welcome or referral credits.
-    expect(screen.getByText('You need 780 more credits.')).toHaveAttribute('role', 'status');
+    expect(screen.getByText('You need 780 more credits.').parentElement).toHaveAttribute('role', 'status');
     expect(screen.queryByText(new RegExp(UNSPENDABLE_NOTE))).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
     // With the way back to this recipe (B-F8).
@@ -1085,10 +1085,12 @@ describe('PostResourceBundlePanel', () => {
     // The app's warning line, in the warning colour, and said once: the muted
     // note in the balance row gives way to it.
     const warning = screen.getByText(`You need 900 more credits. ${UNSPENDABLE_NOTE}`);
-    expect(warning).toHaveAttribute('role', 'status');
+    expect(warning.parentElement).toHaveAttribute('role', 'status');
     expect(warning.className).toContain('text-[var(--ui-accent-commerce)]');
     expect(screen.getAllByText(new RegExp(UNSPENDABLE_NOTE))).toHaveLength(1);
     expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
+    // The held button says why to a screen reader.
+    expect(screen.getByRole('button', { name: /use 900 credits/i })).toHaveAccessibleDescription(`You need 900 more credits. ${UNSPENDABLE_NOTE}`);
     // With the way back to this recipe (B-F8).
     expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/showcase/post-1#recipe')}`);
   });
@@ -1649,6 +1651,23 @@ describe('PostResourceBundlePanel', () => {
       } finally {
         funnel.stop();
       }
+    });
+
+    it('drops the credit warning while a cash payment is being confirmed: that buyer has paid', async () => {
+      authState.session = { access_token: 'token-at-click' };
+      authState.credits = 25;
+      authState.marketplaceSpendableCredits = 0;
+      stubPaidCheckoutFetch({ recipeOpens: false });
+      mockVerifyCheckout.mockResolvedValueOnce({ state: 'pending', body: { code: 'PAYMENT_PENDING' } });
+      stubSheetThatPays();
+      renderPanel({ isFree: false, priceLabel: '$9.00', priceUsdCents: 900 });
+      expect(screen.getByText(`You need 900 more credits. ${UNSPENDABLE_NOTE}`)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /^pay \$9\.00/i }));
+
+      expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
+      expect(screen.queryByText(/you need \d/i)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /use 900 credits/i })).not.toHaveAttribute('aria-describedby');
     });
 
     it('a verify that fails after the sheet took the money never shows the failure or invites another payment', async () => {
