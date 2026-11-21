@@ -56,6 +56,7 @@ import { FREE_RECIPE_LABEL, OWN_RECIPE_LABEL, RECIPE_CHECKING_LABEL, RECIPE_UNLO
 import { getCurrentInternalPath } from '@/lib/share';
 import { RECIPE_RETURN_ANCHOR } from '@/lib/pricing-return';
 import { trackProductEvent } from '@/lib/product-analytics';
+import { RECIPE_UNSPENDABLE_CREDITS_NOTE, formatRecipeCreditShortfall } from '@/lib/recipe-credit-shortfall';
 import {
   UNLOCKED_RECIPES_PATH,
   buildRecipeTopUpHref,
@@ -94,9 +95,6 @@ declare global {
 }
 
 const RAZORPAY_CHECKOUT_SCRIPT_ID = 'post-resource-bundle-razorpay-checkout';
-
-/** The credit unlock spends neither, though both count in the balance. */
-const UNSPENDABLE_CREDITS_NOTE = "Welcome and referral credits can't be spent on recipes.";
 
 /** One icon per kind of group, the app's set: a prompt, its references and a file no longer look alike. */
 const RECIPE_GROUP_ICONS: Record<RecipeGroupKind, LucideIcon> = {
@@ -549,6 +547,9 @@ export default function PostResourceBundlePanel({
     : null;
   const holdsUnspendableCredits = spendableCredits !== null && typeof credits === 'number' && credits > spendableCredits;
   const hasKnownInsufficientCredits = spendableCredits !== null && spendableCredits < creditCost;
+  // "You need 25 more credits. Welcome and referral credits can't be spent on
+  // recipes.": the app's line under its held unlock, in the warning colour.
+  const creditShortfallMessage = formatRecipeCreditShortfall(spendableCredits, creditCost, { holdsUnspendableCredits });
   const offersBuyCredits = hasKnownInsufficientCredits || creditsRefused;
   const isAnyActionWorking = workingAction !== null;
 
@@ -1455,16 +1456,24 @@ export default function PostResourceBundlePanel({
           </div>
         ) : null}
 
+        {offered && !isFree && creditShortfallMessage ? (
+          // Why "Use credits" is held, said where the buyer looks next (the app's warning line).
+          <p data-post-recipe-pitch={offerMark} role="status" className="mt-3 text-sm font-medium leading-6 text-[var(--ui-accent-commerce)]">
+            {creditShortfallMessage}
+          </p>
+        ) : null}
+
         {offered && !isFree && (!session?.access_token || spendableCredits !== null || offersBuyCredits) ? (
           <div data-post-recipe-pitch={offerMark} className="mt-3 flex flex-wrap items-center gap-3 text-xs text-zinc-400">
             {!session?.access_token ? <span>Sign in to see your credit balance</span> : null}
             {spendableCredits !== null ? <span>{`${spendableCredits.toLocaleString()} credits available`}</span> : null}
-            {holdsUnspendableCredits ? <span>{UNSPENDABLE_CREDITS_NOTE}</span> : null}
+            {/* Short, the warning line above says it; otherwise it explains a balance smaller than the total. */}
+            {holdsUnspendableCredits && !creditShortfallMessage ? <span>{RECIPE_UNSPENDABLE_CREDITS_NOTE}</span> : null}
             {offersBuyCredits ? (
               // With the way back: Pricing offers "Back to the recipe" (B-F8).
               <a
                 href={buildRecipeTopUpHref(returnPath ?? `/showcase/${postId}`)}
-                className="font-semibold text-emerald-200 underline-offset-4 transition hover:text-emerald-100 hover:underline"
+                className="ui-focus-ring inline-flex min-h-11 items-center justify-center rounded-full border border-emerald-300/40 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/60 hover:bg-emerald-500/20"
               >
                 Buy credits
               </a>

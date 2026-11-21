@@ -2622,7 +2622,11 @@ describe('ShowcaseReelViewer pagination', () => {
       fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
 
       expect(screen.getByText('0 credits available')).toBeInTheDocument();
-      expect(screen.getByText("Welcome and referral credits can't be spent on recipes.")).toBeInTheDocument();
+      // The post page's warning line, said once.
+      const warning = screen.getByText("You need 900 more credits. Welcome and referral credits can't be spent on recipes.");
+      expect(warning).toHaveAttribute('role', 'status');
+      expect(warning.className).toContain('text-[var(--ui-accent-commerce)]');
+      expect(screen.getAllByText(/Welcome and referral credits can't be spent on recipes\./)).toHaveLength(1);
       expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeDisabled();
       expect(screen.getByRole('link', { name: 'Buy credits' })).toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/showcase/post-1#recipe')}`);
     });
@@ -2637,7 +2641,8 @@ describe('ShowcaseReelViewer pagination', () => {
       fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
 
       expect(screen.getByText('1,200 credits available')).toBeInTheDocument();
-      expect(screen.queryByText("Welcome and referral credits can't be spent on recipes.")).not.toBeInTheDocument();
+      expect(screen.queryByText(/Welcome and referral credits can't be spent on recipes\./)).not.toBeInTheDocument();
+      expect(screen.queryByText(/you need \d/i)).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeEnabled();
       expect(screen.queryByRole('link', { name: 'Buy credits' })).not.toBeInTheDocument();
     });

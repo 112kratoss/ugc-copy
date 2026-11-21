@@ -1063,7 +1063,9 @@ describe('PostResourceBundlePanel', () => {
     });
 
     expect(screen.getByText(/120 credits available/i)).toBeInTheDocument();
-    expect(screen.queryByText(UNSPENDABLE_NOTE)).not.toBeInTheDocument();
+    // The shortfall alone: nothing in this balance is welcome or referral credits.
+    expect(screen.getByText('You need 780 more credits.')).toHaveAttribute('role', 'status');
+    expect(screen.queryByText(new RegExp(UNSPENDABLE_NOTE))).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
     // With the way back to this recipe (B-F8).
     expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/showcase/post-1#recipe')}`);
@@ -1080,7 +1082,12 @@ describe('PostResourceBundlePanel', () => {
 
     expect(screen.getByText('0 credits available')).toBeInTheDocument();
     expect(screen.queryByText(/1,200 credits available/)).not.toBeInTheDocument();
-    expect(screen.getByText(UNSPENDABLE_NOTE)).toBeInTheDocument();
+    // The app's warning line, in the warning colour, and said once: the muted
+    // note in the balance row gives way to it.
+    const warning = screen.getByText(`You need 900 more credits. ${UNSPENDABLE_NOTE}`);
+    expect(warning).toHaveAttribute('role', 'status');
+    expect(warning.className).toContain('text-[var(--ui-accent-commerce)]');
+    expect(screen.getAllByText(new RegExp(UNSPENDABLE_NOTE))).toHaveLength(1);
     expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeDisabled();
     // With the way back to this recipe (B-F8).
     expect(screen.getByRole('link', { name: /buy credits/i })).toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/showcase/post-1#recipe')}`);
@@ -1094,7 +1101,9 @@ describe('PostResourceBundlePanel', () => {
     renderPanel({ isFree: false, priceLabel: '₹189', priceUsdCents: 900 });
 
     expect(screen.getByText('1,200 credits available')).toBeInTheDocument();
+    // Not short: the note stays a muted line beside the balance, with no warning.
     expect(screen.getByText(UNSPENDABLE_NOTE)).toBeInTheDocument();
+    expect(screen.queryByText(/you need \d/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /use 900 credits/i })).toBeEnabled();
     expect(screen.queryByRole('link', { name: /buy credits/i })).not.toBeInTheDocument();
   });
