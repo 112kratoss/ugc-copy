@@ -30,7 +30,6 @@ import { changeGenerationArchive, type ViewerActionCallbacks } from '@/lib/use-v
 import { audioCreationPlayback } from '@/lib/audio-creation-native-player';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
-import { canRequestNextFeedPage } from '@/lib/feed-pagination';
 import { feedReadMoreSection } from '@/lib/feed-read-more';
 import {
   normalizeParam,
@@ -75,6 +74,7 @@ import {
   type PostLifecyclePost,
 } from '@/lib/post-lifecycle';
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
+import { useNextFeedPageRequest } from '@/lib/use-next-feed-page-request';
 import { useProfileLibrarySource } from '@/lib/use-profile-library-source';
 import { useProfileMediaRevalidation } from '@/lib/use-profile-media-revalidation';
 import { useScrollWithinContent } from '@/lib/use-scroll-within-content';
@@ -387,35 +387,21 @@ export function ProfileMediaFeedScreen() {
     keepScrollWithinContent(width, height);
   }, [acknowledgeListLayout, keepScrollWithinContent]);
 
-  const loadingMoreRef = useRef(false);
-  const lastLoadMoreAtRef = useRef(0);
-  const lastLoadMorePageCountRef = useRef<number | null>(null);
-  const requestNextPage = useCallback(() => {
-    const now = Date.now();
-    if (!canRequestNextFeedPage({
-      cooldownMs: PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
-      hasNextPage,
-      isBusy: libraryIsFetching,
-      isRequestInFlight: loadingMoreRef.current,
-      lastRequestedAt: lastLoadMoreAtRef.current,
-      lastRequestedPageCount: lastLoadMorePageCountRef.current,
-      now,
-      pageCount,
-    })) return;
-
-    loadingMoreRef.current = true;
-    lastLoadMoreAtRef.current = now;
-    lastLoadMorePageCountRef.current = pageCount;
-    void fetchNextPage().finally(() => {
-      loadingMoreRef.current = false;
-    });
-  }, [fetchNextPage, hasNextPage, libraryIsFetching, pageCount]);
-
-  const retryNextPage = useCallback(() => {
-    lastLoadMorePageCountRef.current = null;
-    lastLoadMoreAtRef.current = 0;
-    requestNextPage();
-  }, [requestNextPage]);
+  // The library's next page, asked for while the feed is in front. A short
+  // scope (Archived, or Active in a library of mostly archived or failed runs)
+  // is at its end again as a page lands, and the list's ask then is refused for
+  // the gate's cooldown; the hook asks again when it ends, though not while a
+  // landing seeks its card (below): one asked meanwhile waits for it to end.
+  const { requestNextPage, retryNextPage } = useNextFeedPageRequest({
+    list: `${source}:${postsScope}:${libraryOwnerId ?? ''}`,
+    enabled: isFocused && landing.phase !== 'seeking',
+    cooldownMs: PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
+    hasNextPage,
+    isBusy: libraryIsFetching,
+    isFetchNextPageError,
+    pageCount,
+    fetchNextPage,
+  });
 
   // The landing's own scroll to a card near the end of the list reaches its
   // end, and the page asked for then landed while the list was still seeking
