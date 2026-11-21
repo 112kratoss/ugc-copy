@@ -310,6 +310,54 @@ describe('useLeaveGuard', () => {
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 
+  // On a page that was the document's first load, the guard's popstate
+  // listener is added before Next's router adds its own: React runs a child's
+  // effects before its parent's. The router's listener restores the page for
+  // the guard's Back, and the last navigation or restore asked for wins: a way
+  // out started in the guard's listener was dropped for that restore, and the
+  // page stayed (archive/leave-guard-first-page-2026-11-03).
+  it("starts the page's own way out only once every listener of its Back has run", async () => {
+    render(<DraftPage />);
+    typeDraft('A first line');
+    // Next's router, its listener added after the guard's.
+    const restore = vi.fn();
+    window.addEventListener('popstate', restore);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save and go' }));
+
+    await waitFor(() => expect(routerMocks.replace).toHaveBeenCalledWith('/drafts/saved'));
+    window.removeEventListener('popstate', restore);
+    expect(restore).toHaveBeenCalledTimes(1);
+    expect(restore.mock.invocationCallOrder[0]).toBeLessThan(routerMocks.replace.mock.invocationCallOrder[0]);
+  });
+
+  // The same order for a Back that was asked about and answered Leave: the
+  // guard steps off its entry with one Back, and finishes the Back asked for
+  // with another only once every listener of the first has run.
+  it('finishes a Back answered Leave only once every listener of its own Back has run', async () => {
+    const back = vi.spyOn(window.history, 'back');
+    render(
+      <>
+        <DraftPage />
+        <FeedbackViewport />
+      </>
+    );
+    typeDraft('A first line');
+
+    await pressBack();
+    await guardEntryAgain();
+    // Next's router, its listener added after the guard's.
+    const restore = vi.fn();
+    window.addEventListener('popstate', restore);
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave' }));
+
+    await waitFor(() => expect(window.location.pathname).toBe('/drafts'));
+    window.removeEventListener('popstate', restore);
+    // Off the guard entry, then the Back that was asked for, after the router saw the first.
+    expect(back).toHaveBeenCalledTimes(2);
+    expect(restore.mock.invocationCallOrder[0]).toBeLessThan(back.mock.invocationCallOrder[1]);
+  });
+
   it('writes nothing into history with guardBack off, and still asks before a link', async () => {
     const replaceState = vi.spyOn(window.history, 'replaceState');
     const pushState = vi.spyOn(window.history, 'pushState');
