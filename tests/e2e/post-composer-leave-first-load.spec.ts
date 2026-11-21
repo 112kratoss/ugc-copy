@@ -51,7 +51,7 @@ async function openComposerWithWorkTyped(page: Page) {
   await page.goto('/post/new');
   await mounted;
 
-  await page.getByRole('button', { name: /^text$/i }).click();
+  await page.getByRole('radio', { name: /^text$/i }).click(COLD_PAGE);
   await page.getByRole('textbox', { name: /^post text/i }).fill('A note that stands on its own for the community.');
   await page.getByRole('textbox', { name: /^title/i }).fill('Soft window light on a first visit');
   // Unsaved: the guard's entry is on top of the composer's own.
