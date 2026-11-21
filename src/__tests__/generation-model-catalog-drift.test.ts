@@ -152,12 +152,34 @@ describe('the committed release chain', () => {
     }
   });
 
-  it.each(Object.entries(CATALOG_DRIFT_EXCEPTIONS))('%s: its exception is still needed', (modelId, exception) => {
-    expect(inventory).toContain(modelId);
-    expect(exception.reason.length).toBeGreaterThan(40);
-    expect(newest.get(modelId)!.entry).not.toEqual(codeEntry(modelId));
+  // A loop, not it.each: the table may be empty, as it is since the Imagen 4 family retired.
+  it('needs every exception it lists', () => {
+    for (const [modelId, exception] of Object.entries(CATALOG_DRIFT_EXCEPTIONS)) {
+      expect(inventory, modelId).toContain(modelId);
+      expect(exception.reason.length, modelId).toBeGreaterThan(40);
+      expect(newest.get(modelId)!.entry, modelId).not.toEqual(codeEntry(modelId));
+    }
   });
 });
+
+/**
+ * An exception for a test, with the committed catalog holding the entry it describes (or, with
+ * `hold`, any other entry for the model). The table is restored before the result is read.
+ */
+async function withException<T>(
+  modelId: string,
+  offered: { web: boolean; mobile: boolean },
+  run: (catalog: ActiveCatalogSnapshot, held: CatalogManifestEntry) => Promise<T>,
+): Promise<T> {
+  const exceptions = CATALOG_DRIFT_EXCEPTIONS as Record<string, (typeof CATALOG_DRIFT_EXCEPTIONS)[string]>;
+  exceptions[modelId] = { offered, reason: 'A stand-in exception for a test: production holds this model apart on purpose.' };
+  try {
+    const held = expectedProductionEntry(codeEntry(modelId));
+    return await run(withEntry(committedCatalog(), modelId, () => held), held);
+  } finally {
+    delete exceptions[modelId];
+  }
+}
 
 /** A read-only stand-in for the service-role client over a catalog: selects only. */
 function catalogClient(active: ActiveCatalogSnapshot) {
@@ -288,32 +310,48 @@ describe('the drift command', () => {
     }
   });
 
+  // flux-2-pro stands in for a model production holds off on purpose: the code build offers it on
+  // both platforms, and it is no platform's default model, which must stay offered.
+  const OFF = { web: false, mobile: false };
+
+  it('reports an exception production holds as it describes, and passes', async () => {
+    expect(codeEntry('flux-2-pro')).toMatchObject({ webEnabled: true, mobileEnabled: true });
+    const { failure, report } = await withException('flux-2-pro', OFF, (catalog) => drift(catalog));
+
+    expect(failure).toBeNull();
+    expect(report).toMatchObject({ status: 'clean', changed: [], staleExceptions: [] });
+    expect(report.excepted).toEqual([{
+      modelId: 'flux-2-pro',
+      parts: ['publicDescriptor', 'availability'],
+      reason: 'A stand-in exception for a test: production holds this model apart on purpose.',
+    }]);
+  });
+
   it('holds an excepted model to its exception in every other field', async () => {
-    const { failure, report } = await drift(withEntry(committedCatalog(), 'imagen-4', (entry) => ({
-      ...entry,
-      validationStrategy: 'image-v1',
-    })));
+    const { failure, report } = await withException('flux-2-pro', OFF, (catalog) => drift(
+      withEntry(catalog, 'flux-2-pro', (entry) => ({ ...entry, validationStrategy: 'image-v1-drift' })),
+    ));
 
     expect(failure).not.toBeNull();
-    expect(report.changed).toEqual([{ modelId: 'imagen-4', parts: ['validation'] }]);
-    expect((report.excepted as Array<{ modelId: string }>).map((item) => item.modelId))
-      .toEqual(EXCEPTED.filter((modelId) => modelId !== 'imagen-4'));
+    expect(report.changed).toEqual([{ modelId: 'flux-2-pro', parts: ['validation'] }]);
+    expect(report.excepted).toEqual([]);
   });
 
   // A release that re-emits an excepted model from code puts it back where the code offers it:
-  // Imagen offered again, its runs failing at the provider. That is drift, never a stale exception
-  // (2026-11-22 review).
+  // for the Imagen 4 family, which was the first exception, offered again with its runs failing
+  // at the provider. That is drift, never a stale exception (2026-11-22 review).
   it('fails when a release puts an excepted model back to the code build\'s entry', async () => {
-    const { failure, report } = await drift(withEntry(committedCatalog(), 'imagen-4', () => codeEntry('imagen-4')));
+    const { failure, report } = await withException('flux-2-pro', OFF, (catalog) => drift(
+      withEntry(catalog, 'flux-2-pro', () => codeEntry('flux-2-pro')),
+    ));
 
     expect(failure).not.toBeNull();
     expect(report).toMatchObject({
       status: 'drift',
-      changed: [{ modelId: 'imagen-4', parts: ['publicDescriptor', 'availability'] }],
+      changed: [{ modelId: 'flux-2-pro', parts: ['publicDescriptor', 'availability'] }],
+      excepted: [],
       staleExceptions: [],
     });
-    expect((report.excepted as Array<{ modelId: string }>).map((item) => item.modelId))
-      .toEqual(EXCEPTED.filter((modelId) => modelId !== 'imagen-4'));
   });
 
   it('calls an exception stale once the code build itself holds the entry it describes', async () => {

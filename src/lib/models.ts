@@ -190,11 +190,12 @@ export const IMAGE_MODELS = {
         outputFormats: ['jpg'] as const,
         pricing: { '1K': 12, '2K': 12, '4K': 12 },
     },
-    // Imagen 4 family: DISABLED in the production catalog since release
-    // imagen-family-disable-20260824 — Google sunset the upstream Imagen API on
-    // 2026-08-17 and live Kie probes fail with provider 500s (see the release
-    // manifest's changeNote for task ids). Kept here for code-source
-    // environments and a clean re-enable if Kie restores fulfillment.
+    // Imagen 4 family: retired (RETIRED_MODEL_IDS in generation-model-catalog.ts),
+    // so no catalog offers it and no start holds credits for it. Google sunset the
+    // upstream Imagen API on 2026-08-17 and live Kie probes failed with provider
+    // 500s (task ids in the changeNote of release imagen-family-disable-20260824,
+    // which published the three with both platforms off). Kept here for old runs,
+    // their prices and a clean re-enable if Kie restores fulfillment.
     'imagen-4-fast': {
         id: 'imagen-4-fast' as const,
         displayName: 'Imagen 4 Fast',

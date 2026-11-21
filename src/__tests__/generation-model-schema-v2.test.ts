@@ -54,7 +54,9 @@ describe('generation model catalog schema v2', () => {
       (model.inputModes?.length ?? 0) > 0
       && model.inputModes?.filter((mode) => mode.default).length === 1
     ))).toBe(true);
-    expect(catalog.models.find((model) => model.id === 'imagen-4')?.inputModes)
+    // Retired in code (RETIRED_MODEL_IDS), the Imagen 4 family is listed nowhere; z-image takes a prompt only.
+    expect(catalog.models.some((model) => model.id.startsWith('imagen-4'))).toBe(false);
+    expect(catalog.models.find((model) => model.id === 'z-image')?.inputModes)
       .toEqual([
         {
           key: 'prompt-only',

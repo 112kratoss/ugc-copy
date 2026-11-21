@@ -4351,11 +4351,38 @@ describe('generation services', () => {
       aspectRatio: '16:9',
       resolution: '480p',
       duration: 4,
-    })).rejects.toThrow('This model is no longer available.');
+    })).rejects.toMatchObject({
+      // The catalog's own refusal, so the routes answer MODEL_UNAVAILABLE and a run step ends.
+      name: 'CatalogError',
+      message: 'This model is no longer available.',
+      code: 'MODEL_UNAVAILABLE',
+      status: 409,
+    });
 
     expect(rpcCalls.filter((call) => call.fn === 'start_generation' || call.fn === 'start_template_generation')).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it.each(['imagen-4-fast', 'imagen-4', 'imagen-4-ultra'] as const)(
+    'refuses %s, retired with the Imagen API, before anything is held',
+    async (model) => {
+      // Google sunset the upstream Imagen API on 2026-08-17; a run that quotes at a revision
+      // from before release imagen-family-disable-20260824 still finds the family offered.
+      const { startImageGeneration } = await import('@/lib/generation-services');
+      const { supabase, rpcCalls } = createSupabaseMock();
+
+      await expect(startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'A lighthouse at dusk.',
+        model,
+      })).rejects.toMatchObject({ name: 'CatalogError', code: 'MODEL_UNAVAILABLE', status: 409 });
+
+      expect(rpcCalls.filter((call) => call.fn === 'start_generation' || call.fn === 'start_template_generation')).toHaveLength(0);
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ['kling-2.6', 'Kling 2.6'],

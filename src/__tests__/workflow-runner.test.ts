@@ -2955,6 +2955,25 @@ describe('workflow-runner: a step the provider keeps turning away', () => {
     expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
   });
 
+  // A model retired in code is refused at its start, before the hold, whatever revision the run
+  // quoted at: in the catalog's own class, so the step ends at once instead of waiting out the
+  // busy window under an outage note (2026-11-22 review).
+  it('ends a step whose start refuses its model as retired, without a wait', async () => {
+    const state = createQueuedWorkflowState();
+    const { CatalogError } = await import('@/lib/generation-model-catalog');
+    startVideoGenerationMock.mockRejectedValueOnce(new CatalogError('This model is no longer available.', 'MODEL_UNAVAILABLE', 409));
+    const { advance } = await loadRunner(state);
+
+    const run = await advance();
+
+    expect(run.status).toBe('failed');
+    expect(videoStep(state)).toMatchObject({
+      status: 'failed',
+      error_message: expect.stringMatching(/no longer available.*choose another model/i),
+    });
+    expect(startVideoGenerationMock).toHaveBeenCalledTimes(1);
+  });
+
   it('records that it gave the step up, with when the wait began and what the last refusal said', async () => {
     const state = createQueuedWorkflowState();
     startVideoGenerationMock.mockRejectedValue(BUSY);

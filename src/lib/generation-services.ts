@@ -146,6 +146,7 @@ import {
   type GenerationModelOperationalConfig,
 } from '@/lib/generation-model-runtime';
 import {
+  CatalogError,
   getVideoInputLimits,
   isRetiredGenerationModel,
   type CatalogPrimitive,
@@ -539,9 +540,13 @@ async function startGenerationRecord(
 }> {
   // Every start holds its credits here, so a model the provider retired is refused here, before
   // the hold. A template run quotes at the revision it was published with, where the model is
-  // still offered, and would otherwise reach Kie's 410 and a refund on every run.
+  // still offered, and would otherwise reach Kie's 410 and a refund on every run. The refusal is
+  // the catalog's own, in its class and words: the start routes answer MODEL_UNAVAILABLE as for
+  // a model the catalog no longer lists, and a run worker ends the step at once. A plain error
+  // that says "unavailable" reads as a provider outage, and a canvas step pinned to a revision
+  // that still offered the model waited out the busy window under that note (2026-11-22 review).
   if (typeof record.model === 'string' && isRetiredGenerationModel(record.model)) {
-    throw new GenerationServiceError('This model is no longer available.', 409);
+    throw new CatalogError('This model is no longer available.', 'MODEL_UNAVAILABLE', 409);
   }
   const rpcName = templateContext ? 'start_template_generation' : 'start_generation';
   const rpcArgs = templateContext
