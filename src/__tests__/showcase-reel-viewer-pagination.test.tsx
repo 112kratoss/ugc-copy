@@ -2622,8 +2622,14 @@ describe('ShowcaseReelViewer pagination', () => {
       fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
 
       expect(screen.getByText('0 credits available')).toBeInTheDocument();
-      expect(screen.getByText("Welcome and referral credits can't be spent on recipes.")).toBeInTheDocument();
+      // The post page's warning line, said once.
+      const warning = screen.getByText("You need 900 more credits. Welcome and referral credits can't be spent on recipes.");
+      expect(warning.parentElement).toHaveAttribute('role', 'status');
+      expect(warning.className).toContain('text-[var(--ui-accent-commerce)]');
+      expect(screen.getAllByText(/Welcome and referral credits can't be spent on recipes\./)).toHaveLength(1);
       expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Use 900 credits' }))
+        .toHaveAccessibleDescription("You need 900 more credits. Welcome and referral credits can't be spent on recipes.");
       expect(screen.getByRole('link', { name: 'Buy credits' })).toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/showcase/post-1#recipe')}`);
     });
 
@@ -2637,7 +2643,8 @@ describe('ShowcaseReelViewer pagination', () => {
       fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
 
       expect(screen.getByText('1,200 credits available')).toBeInTheDocument();
-      expect(screen.queryByText("Welcome and referral credits can't be spent on recipes.")).not.toBeInTheDocument();
+      expect(screen.queryByText(/Welcome and referral credits can't be spent on recipes\./)).not.toBeInTheDocument();
+      expect(screen.queryByText(/you need \d/i)).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Use 900 credits' })).toBeEnabled();
       expect(screen.queryByRole('link', { name: 'Buy credits' })).not.toBeInTheDocument();
     });
@@ -2828,6 +2835,24 @@ describe('ShowcaseReelViewer pagination', () => {
         } finally {
           funnel.stop();
         }
+      });
+
+      it('drops the credit warning while a cash payment is being confirmed: that reader has paid', async () => {
+        authState.session = { access_token: 'token-at-click' };
+        authState.credits = 25;
+        authState.marketplaceSpendableCredits = 0;
+        stubCashCheckout(null);
+        mockVerifyCheckout.mockResolvedValueOnce({ state: 'pending', body: { code: 'PAYMENT_PENDING' } });
+        stubSheetThatPays();
+        renderPaidReel();
+        fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+        expect(screen.getByText("You need 900 more credits. Welcome and referral credits can't be spent on recipes.")).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: /^pay [$₹]/i }));
+
+        expect(await screen.findByText(PAYMENT_RECEIVED)).toBeInTheDocument();
+        expect(screen.queryByText(/you need \d/i)).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Use 900 credits' })).not.toHaveAttribute('aria-describedby');
       });
 
       it('a verify that fails after the sheet took the money never shows the failure or invites another payment', async () => {

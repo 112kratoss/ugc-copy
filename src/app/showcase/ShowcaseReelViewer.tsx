@@ -60,6 +60,7 @@ import { readSupabaseAuthCookieUserId } from '@/lib/supabase-auth-cookie';
 import { formatCompactCount, getPostFeedRemixAccess } from '@/lib/post-feed-presentation';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import { trackProductEvent } from '@/lib/product-analytics';
+import { RECIPE_UNSPENDABLE_CREDITS_NOTE, formatRecipeCreditShortfall } from '@/lib/recipe-credit-shortfall';
 import {
   RECIPE_PAYMENT_RECEIVED_MESSAGE,
   clearRazorpayCheckoutIntentKey,
@@ -144,8 +145,6 @@ type ReelTransitionDirection = 'next' | 'previous' | 'neutral';
 type ReelUnlockAction = 'free' | 'cash' | 'tokens' | null;
 type ReelMediaLoadState = 'ready' | 'error';
 const QUALIFIED_REEL_VIEW_DURATION_MS = 1000;
-/** The credit unlock spends neither, though both count in the balance. */
-const UNSPENDABLE_CREDITS_NOTE = "Welcome and referral credits can't be spent on recipes.";
 
 /**
  * The recipe as `GET /api/posts/{id}/resource-bundle` answers it for this
@@ -1003,6 +1002,12 @@ export default function ShowcaseReelViewer({
   const hasKnownInsufficientTokens = spendableCredits !== null && spendableCredits < tokenCost;
   const offersBuyCredits = hasKnownInsufficientTokens || creditsRefusedItemId === item.id;
   const isAwaitingPayment = awaitingPaymentItemId === item.id;
+  // The post page's warning line, in the same words (the app's); not while a cash payment is being
+  // confirmed, since that reader has paid.
+  const creditShortfallMessage = isAwaitingPayment
+    ? null
+    : formatRecipeCreditShortfall(spendableCredits, tokenCost, { holdsUnspendableCredits });
+  const creditShortfallId = `reel-recipe-credit-shortfall-${item.id}`;
   const reelUnlockNotice = isAwaitingPayment && !hasReelUnlockAccess ? RECIPE_PAYMENT_RECEIVED_MESSAGE : unlockNotice;
   const includedKindLabels = resourceKinds.map(getPostResourceKindLabel);
   const bundleCountSummary = item.asset
@@ -1597,22 +1602,38 @@ export default function ShowcaseReelViewer({
               type="button"
               onClick={() => void unlockWithTokens()}
               disabled={unlockWorkingAction !== null || hasKnownInsufficientTokens || isAwaitingPayment}
+              aria-describedby={creditShortfallMessage ? creditShortfallId : undefined}
               className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-emerald-300/25 bg-white/[0.04] px-4 py-3 text-sm font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-55"
             >
               {unlockWorkingAction === 'tokens' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               {`Use ${formattedCreditCost} credits`}
             </button>
             {!session?.access_token || spendableCredits !== null || offersBuyCredits ? (
-              <div className="flex flex-wrap items-center gap-3 text-xs text-emerald-50/75">
-                {!session?.access_token ? <span>Sign in to see your credit balance</span> : null}
-                {spendableCredits !== null ? <span>{`${spendableCredits.toLocaleString()} credits available`}</span> : null}
-                {holdsUnspendableCredits ? <span>{UNSPENDABLE_CREDITS_NOTE}</span> : null}
-                {offersBuyCredits ? (
-                  // With the way back to the post's recipe (B-F8).
-                  <Link href={buildRecipeTopUpHref(buildDetailPath(item.id))} className="font-semibold text-emerald-200 transition hover:text-emerald-100">
-                    Buy credits
-                  </Link>
-                ) : null}
+              <div>
+                {/* Mounted with the balance row, so a line that arrives later (the server's 402) is
+                    announced; empty, it takes no room. */}
+                <div role="status">
+                  {creditShortfallMessage ? (
+                    <p id={creditShortfallId} className="mb-2 text-sm font-medium leading-6 text-[var(--ui-accent-commerce)]">
+                      {creditShortfallMessage}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex flex-wrap items-center gap-3 text-xs text-emerald-50/75">
+                  {!session?.access_token ? <span>Sign in to see your credit balance</span> : null}
+                  {spendableCredits !== null ? <span>{`${spendableCredits.toLocaleString('en-US')} credits available`}</span> : null}
+                  {/* Short, the warning line above says it; otherwise it explains a balance smaller than the total. */}
+                  {holdsUnspendableCredits && !creditShortfallMessage ? <span>{RECIPE_UNSPENDABLE_CREDITS_NOTE}</span> : null}
+                  {offersBuyCredits ? (
+                    // With the way back to the post's recipe (B-F8).
+                    <Link
+                      href={buildRecipeTopUpHref(buildDetailPath(item.id))}
+                      className="ui-focus-ring inline-flex min-h-11 items-center justify-center rounded-full border border-emerald-300/40 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300/60 hover:bg-emerald-500/20"
+                    >
+                      Buy credits
+                    </Link>
+                  ) : null}
+                </div>
               </div>
             ) : null}
           </div>
