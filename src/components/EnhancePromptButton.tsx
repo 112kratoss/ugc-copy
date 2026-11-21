@@ -5,6 +5,7 @@ import { Sparkles, Loader2, AlertCircle, Undo2 } from 'lucide-react';
 import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { EnhancerContext, Medium, PromptEnhancementLevel } from '@/lib/prompt-enhancer';
 import {
+    PROMPT_ENHANCE_FAILED_MESSAGE,
     PromptEnhancementError,
     type PromptEnhancementResult,
     requestPromptEnhancement,
@@ -199,7 +200,7 @@ export default function EnhancePromptButton({
                 }
                 setError(err.message);
             } else {
-                setError('Something went wrong. Please try again.');
+                setError(PROMPT_ENHANCE_FAILED_MESSAGE);
             }
         } finally {
             setIsEnhancing(false);

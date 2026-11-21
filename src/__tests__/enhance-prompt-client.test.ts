@@ -16,6 +16,7 @@ vi.mock('@/lib/supabase', () => ({
 import {
   PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS,
   PROMPT_ENHANCE_ASKS_AFTER_CONNECTION_FAILURE,
+  PROMPT_ENHANCE_FAILED_MESSAGE,
   PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT,
   PROMPT_ENHANCE_KEY_HEADER,
   PROMPT_ENHANCE_WAIT_HEADER,
@@ -188,6 +189,36 @@ describe('one press, one key', () => {
 
     const error = await lost as PromptEnhancementError;
     expect(error.message).toMatch(/connection/i);
+    expect(error.settlesBy).toBeGreaterThan(Date.now());
+  });
+
+  it('says the same for a refusal that ends the press after an ask that got no answer', async () => {
+    vi.useFakeTimers();
+    stubAsks([dropped(), refusal({ status: 429, response: { error: 'Too many prompt enhancements. Try again shortly.', code: 'RATE_LIMITED' } })]);
+
+    const ended = requestPromptEnhancement(poster).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(askAgain.delayMs);
+
+    const error = await ended as PromptEnhancementError;
+    expect(error.message).toMatch(/too many/i);
+    expect(error.settlesBy).toBeGreaterThan(Date.now());
+  });
+
+  // Review (2026-11-22): a failure that is not the client's own, after an ask that got no answer,
+  // carried no time, so the balance was never read again for that earlier ask.
+  it('says it for any other failure after an ask that got no answer, in the button\'s words', async () => {
+    vi.useFakeTimers();
+    stubAsks([dropped(), answer('Never asked for')]);
+    const { supabase } = await import('@/lib/supabase');
+    vi.mocked(supabase.auth.getSession).mockImplementationOnce(async () => ({ data: { session: browser.session } }) as never)
+      .mockRejectedValueOnce(new Error('session storage unavailable'));
+
+    const ended = requestPromptEnhancement(poster).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(askAgain.delayMs);
+
+    const error = await ended as PromptEnhancementError;
+    expect(error).toBeInstanceOf(PromptEnhancementError);
+    expect(error.message).toBe(PROMPT_ENHANCE_FAILED_MESSAGE);
     expect(error.settlesBy).toBeGreaterThan(Date.now());
   });
 

@@ -67,6 +67,8 @@ const STILL_RUNNING_CODE = 'AI_USAGE_IN_PROGRESS';
 const LOST_ANSWER_MESSAGE = 'Could not get the enhanced prompt. Check your connection and try again.';
 const OTHER_ACCOUNT_MESSAGE = 'Another account signed in, so Enhance stopped.';
 const STOPPED_MESSAGE = 'Enhance stopped before its answer came back.';
+/** What the button says for a failure with no words of its own. */
+export const PROMPT_ENHANCE_FAILED_MESSAGE = 'Something went wrong. Please try again.';
 
 export class PromptEnhancementError extends Error {
   remainingCredits?: number;
@@ -180,8 +182,13 @@ export async function requestPromptEnhancement(
     // Stopped while an ask was out, and ended by its outcome (a last dropped connection, a 429, a
     // still-running at the wait's end): an earlier ask may still be running on the server all the same.
     // So may one a press still on screen gave up on, or that a later ask's refusal ended.
-    if ((signal?.aborted || unanswered) && lastAskAt !== null && error instanceof PromptEnhancementError) {
-      error.settlesBy ??= lastAskAt + PROMPT_ENHANCE_WAIT_MS;
+    if ((signal?.aborted || unanswered) && lastAskAt !== null) {
+      // Any other failure on the way (the session read rejecting) is said as one, with the same time.
+      const ended = error instanceof PromptEnhancementError
+        ? error
+        : new PromptEnhancementError(PROMPT_ENHANCE_FAILED_MESSAGE);
+      ended.settlesBy ??= lastAskAt + PROMPT_ENHANCE_WAIT_MS;
+      throw ended;
     }
     throw error;
   }
