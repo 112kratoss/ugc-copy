@@ -16,6 +16,7 @@ vi.mock('@/lib/supabase', () => ({
 import {
   PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS,
   PROMPT_ENHANCE_ASKS_AFTER_CONNECTION_FAILURE,
+  PROMPT_ENHANCE_FAILED_MESSAGE,
   PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT,
   PROMPT_ENHANCE_KEY_HEADER,
   PROMPT_ENHANCE_WAIT_HEADER,
@@ -160,6 +161,74 @@ describe('one press, one key', () => {
     expect(error).toBeInstanceOf(PromptEnhancementError);
     expect((error as Error).message).toBe(errors.stillRunning.response.error);
     expect(asks).toHaveLength(clientWait.timeoutMs / askAgain.delayMs + 1);
+  });
+
+  // A press still on screen that gives up on an ask it never heard back from leaves that ask
+  // perhaps running on the server: it says when the server is done with it, as a stopped press
+  // does, for the balance to be read again then.
+  it('says when the server is done with a press it gave up on, with no signal aborted', async () => {
+    vi.useFakeTimers();
+    stubAsks(Array.from({ length: 40 }, () => refusal(errors.stillRunning)));
+
+    const pressed = requestPromptEnhancement(poster).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(clientWait.timeoutMs + askAgain.delayMs * 2);
+
+    const error = await pressed as PromptEnhancementError;
+    expect(error).toBeInstanceOf(PromptEnhancementError);
+    // The wait from the last ask, which went out at most one delay before the press ended.
+    expect(error.settlesBy).toBeGreaterThan(Date.now());
+    expect(error.settlesBy).toBeLessThanOrEqual(Date.now() + clientWait.timeoutMs);
+  });
+
+  it('says the same when its last ask lost its answer to a dropped connection', async () => {
+    vi.useFakeTimers();
+    stubAsks([dropped(), dropped(), dropped()]);
+
+    const lost = requestPromptEnhancement(poster).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(askAgain.delayMs * (askAgain.afterConnectionFailure + 1));
+
+    const error = await lost as PromptEnhancementError;
+    expect(error.message).toMatch(/connection/i);
+    expect(error.settlesBy).toBeGreaterThan(Date.now());
+  });
+
+  it('says the same for a refusal that ends the press after an ask that got no answer', async () => {
+    vi.useFakeTimers();
+    stubAsks([dropped(), refusal({ status: 429, response: { error: 'Too many prompt enhancements. Try again shortly.', code: 'RATE_LIMITED' } })]);
+
+    const ended = requestPromptEnhancement(poster).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(askAgain.delayMs);
+
+    const error = await ended as PromptEnhancementError;
+    expect(error.message).toMatch(/too many/i);
+    expect(error.settlesBy).toBeGreaterThan(Date.now());
+  });
+
+  // Review (2026-11-22): a failure that is not the client's own, after an ask that got no answer,
+  // carried no time, so the balance was never read again for that earlier ask.
+  it('says it for any other failure after an ask that got no answer, in the button\'s words', async () => {
+    vi.useFakeTimers();
+    stubAsks([dropped(), answer('Never asked for')]);
+    const { supabase } = await import('@/lib/supabase');
+    vi.mocked(supabase.auth.getSession).mockImplementationOnce(async () => ({ data: { session: browser.session } }) as never)
+      .mockRejectedValueOnce(new Error('session storage unavailable'));
+
+    const ended = requestPromptEnhancement(poster).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(askAgain.delayMs);
+
+    const error = await ended as PromptEnhancementError;
+    expect(error).toBeInstanceOf(PromptEnhancementError);
+    expect(error.message).toBe(PROMPT_ENHANCE_FAILED_MESSAGE);
+    expect(error.settlesBy).toBeGreaterThan(Date.now());
+  });
+
+  it('says nothing of the kind for a refusal the server gave its first ask', async () => {
+    stubAsks([refusal({ status: 402, response: { error: 'Insufficient credits', required: 2 } })]);
+
+    const error = await requestPromptEnhancement(poster).catch((caught: unknown) => caught) as PromptEnhancementError;
+
+    expect(error).toBeInstanceOf(PromptEnhancementError);
+    expect(error.settlesBy).toBeUndefined();
   });
 
   it('asks once more after an ask that got no answer in the wait it states', async () => {

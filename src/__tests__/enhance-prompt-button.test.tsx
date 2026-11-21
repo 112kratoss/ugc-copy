@@ -226,6 +226,40 @@ describe('EnhancePromptButton', () => {
       }
     });
 
+    // A press given up on while the server may still be working on it, its button still there:
+    // the error shows, and the balance is read again once the server is done with it.
+    it('has the balance read again once a press it gave up on is settled, its button still there', async () => {
+      vi.useFakeTimers();
+      const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        let stop: (error: Error) => void = () => undefined;
+        vi.mocked(requestPromptEnhancement).mockReturnValueOnce(new Promise((_resolve, reject) => { stop = reject; }));
+        const balanceReads: Event[] = [];
+        const listen = (event: Event) => balanceReads.push(event);
+        window.addEventListener('credits_updated', listen);
+        render(<EnhancePromptButton prompt="A red fox" onEnhanced={vi.fn()} {...shared} />);
+
+        fireEvent.click(screen.getByRole('button', { name: /^Enhance, / }));
+        const settlesBy = Date.now() + 60_000;
+        await act(async () => { stop(Object.assign(new PromptEnhancementError('Took too long to answer'), { settlesBy })); });
+        expect(screen.getByText('Took too long to answer')).toBeInTheDocument();
+        expect(balanceReads).toHaveLength(0);
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000 - 1); });
+        expect(balanceReads).toHaveLength(0);
+        await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+        expect(balanceReads).toHaveLength(1);
+        expect(balanceReads[0]).not.toBeInstanceOf(CustomEvent);
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+        window.removeEventListener('credits_updated', listen);
+        expect(balanceReads).toHaveLength(1);
+      } finally {
+        logError.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
     // The press goes out under the form's account only, and stops asking when the button goes.
     it('presses for its account, under a signal that ends with the button', async () => {
       answerLater();

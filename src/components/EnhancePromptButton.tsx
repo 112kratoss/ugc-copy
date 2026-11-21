@@ -5,6 +5,7 @@ import { Sparkles, Loader2, AlertCircle, Undo2 } from 'lucide-react';
 import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { EnhancerContext, Medium, PromptEnhancementLevel } from '@/lib/prompt-enhancer';
 import {
+    PROMPT_ENHANCE_FAILED_MESSAGE,
     PromptEnhancementError,
     type PromptEnhancementResult,
     requestPromptEnhancement,
@@ -192,9 +193,14 @@ export default function EnhancePromptButton({
                 if (err.remainingCredits !== undefined) {
                     latest.current.onCreditsUpdate(err.remainingCredits);
                 }
+                // Given up on while the server may still be working on it: its charge or refund
+                // lands later, so the balance is read once more then, as for a press whose button went.
+                if (err.settlesBy !== undefined) {
+                    window.setTimeout(readBalanceAgain, Math.max(0, err.settlesBy - Date.now()));
+                }
                 setError(err.message);
             } else {
-                setError('Something went wrong. Please try again.');
+                setError(PROMPT_ENHANCE_FAILED_MESSAGE);
             }
         } finally {
             setIsEnhancing(false);

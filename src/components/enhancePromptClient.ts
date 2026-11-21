@@ -67,6 +67,8 @@ const STILL_RUNNING_CODE = 'AI_USAGE_IN_PROGRESS';
 const LOST_ANSWER_MESSAGE = 'Could not get the enhanced prompt. Check your connection and try again.';
 const OTHER_ACCOUNT_MESSAGE = 'Another account signed in, so Enhance stopped.';
 const STOPPED_MESSAGE = 'Enhance stopped before its answer came back.';
+/** What the button says for a failure with no words of its own. */
+export const PROMPT_ENHANCE_FAILED_MESSAGE = 'Something went wrong. Please try again.';
 
 export class PromptEnhancementError extends Error {
   remainingCredits?: number;
@@ -138,6 +140,10 @@ export async function requestPromptEnhancement(
   // loop runs again, so the server may still be working on one, but on none past the wait from
   // when it was sent: a press stopped then says so, for its balance to be read again after.
   let lastAskAt: number | null = null;
+  // An ask under the key ended without its outcome (a timeout, a dropped connection, a
+  // still-running): it may still be running on the server, so a press that then ends says when
+  // the server is done with it, for the balance to be read again after, button there or not.
+  let unanswered = false;
   const stopIfAborted = () => {
     if (signal?.aborted && lastAskAt !== null) {
       throw new PromptEnhancementError(STOPPED_MESSAGE, { settlesBy: lastAskAt + PROMPT_ENHANCE_WAIT_MS });
@@ -162,6 +168,7 @@ export async function requestPromptEnhancement(
       lastAskAt = Date.now();
       const ask = await askOnce(request, key, session.access_token);
       if (ask.outcome === 'answered') return ask.result;
+      unanswered = true;
       if (ask.outcome === 'still-running') {
         if (Date.now() - firstAskAt >= PROMPT_ENHANCE_WAIT_MS) throw ask.error;
       } else if (ask.outcome === 'timed-out') {
@@ -174,8 +181,14 @@ export async function requestPromptEnhancement(
   } catch (error) {
     // Stopped while an ask was out, and ended by its outcome (a last dropped connection, a 429, a
     // still-running at the wait's end): an earlier ask may still be running on the server all the same.
-    if (signal?.aborted && lastAskAt !== null && error instanceof PromptEnhancementError) {
-      error.settlesBy ??= lastAskAt + PROMPT_ENHANCE_WAIT_MS;
+    // So may one a press still on screen gave up on, or that a later ask's refusal ended.
+    if ((signal?.aborted || unanswered) && lastAskAt !== null) {
+      // Any other failure on the way (the session read rejecting) is said as one, with the same time.
+      const ended = error instanceof PromptEnhancementError
+        ? error
+        : new PromptEnhancementError(PROMPT_ENHANCE_FAILED_MESSAGE);
+      ended.settlesBy ??= lastAskAt + PROMPT_ENHANCE_WAIT_MS;
+      throw ended;
     }
     throw error;
   }
