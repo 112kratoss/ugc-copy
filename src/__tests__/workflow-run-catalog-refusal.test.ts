@@ -56,11 +56,13 @@ vi.mock('@/lib/generation-status-sync', () => ({
 type Row = Record<string, unknown>;
 type Filter = { op: 'eq' | 'in'; column: string; value: unknown };
 
-const ACTIVE_REVISION = 'imagen-family-switched-off';
-const RETIRED_REVISION = 'before-imagen-family-switched-off';
-// What release `imagen-family-disable-20260824` did: the three models stay in
-// the release and in the bundled registry, and are offered on no platform.
-const SWITCHED_OFF = ['imagen-4', 'imagen-4-fast', 'imagen-4-ultra'];
+const ACTIVE_REVISION = 'models-switched-off';
+const RETIRED_REVISION = 'before-models-switched-off';
+// What a release that switches models off does, as `imagen-family-disable-20260824`
+// did for the Imagen 4 family before it retired in code: the models stay in the
+// release and in the bundled registry, and are offered on no platform. Two image
+// models the code still offers stand in for them.
+const SWITCHED_OFF = ['flux-2-pro', 'ideogram-v3'];
 
 const OUTAGE_NOTE = /temporarily unavailable/i;
 const REFUSED_BY_PROVIDER_NOTE = /provider could not accept|template inputs/i;
@@ -290,15 +292,15 @@ describe('a canvas run step whose model the catalog no longer offers', () => {
   it.each([
     [
       'on its model’s own execution path',
-      { model: 'imagen-4', catalogRevision: ACTIVE_REVISION },
+      { model: 'flux-2-pro', catalogRevision: ACTIVE_REVISION },
     ],
     [
       'when the run names no catalog revision',
-      { model: 'imagen-4', catalogRevision: null },
+      { model: 'flux-2-pro', catalogRevision: null },
     ],
     [
       'on the catalog’s execution path',
-      { model: 'imagen-4-ultra', catalogRevision: ACTIVE_REVISION, catalogSettings: { aspectRatio: '1:1' } },
+      { model: 'ideogram-v3', catalogRevision: ACTIVE_REVISION, catalogSettings: { aspectRatio: '1:1' } },
     ],
   ])('ends, and tells the creator to choose another model: %s', async (_path, saved) => {
     const db = createRunDatabase(saved);
@@ -319,17 +321,17 @@ describe('a canvas run step whose model the catalog no longer offers', () => {
   });
 
   it('is named by the catalog as its own refusal, not as a bare failure', async () => {
-    createRunDatabase({ model: 'imagen-4', catalogRevision: ACTIVE_REVISION });
+    createRunDatabase({ model: 'flux-2-pro', catalogRevision: ACTIVE_REVISION });
 
-    const lookup = loadGenerationModelOperationByRevision({ modelId: 'imagen-4', revision: ACTIVE_REVISION });
+    const lookup = loadGenerationModelOperationByRevision({ modelId: 'flux-2-pro', revision: ACTIVE_REVISION });
 
     // A bare error whose text says "unavailable" reads as a provider outage to
     // whoever classifies it; the run workers end a step on this class.
     await expect(lookup).rejects.toBeInstanceOf(CatalogError);
     await expect(lookup).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE', status: 409 });
     // The same model in the release that still offered it.
-    await expect(loadGenerationModelOperationByRevision({ modelId: 'imagen-4', revision: RETIRED_REVISION }))
-      .resolves.toMatchObject({ operation: { modelId: 'imagen-4' } });
+    await expect(loadGenerationModelOperationByRevision({ modelId: 'flux-2-pro', revision: RETIRED_REVISION }))
+      .resolves.toMatchObject({ operation: { modelId: 'flux-2-pro' } });
   });
 });
 

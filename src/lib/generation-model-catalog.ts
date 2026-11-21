@@ -206,12 +206,20 @@ type ModelStatus = 'active' | 'retired';
  * Models kept for their old runs, recipes and prices but offered on no platform, because the
  * provider no longer runs them. Kie retired Seedance 1.5 Pro upstream: its pages were gone by
  * 2026-10-20, and on 2026-10-29 every createTask answered code 410 "has been retired upstream"
- * (docs/model-api-references/kie-catalog-inputs-2026-10-29.md). A retired model's descriptor
- * publishes both platforms off, as release imagen-family-disable-20260824 published the
- * Imagen 4 family, so its price and routing stay ready for a provider that brings it back; no
- * catalog build lists it unless a release is being emitted, and no start holds credits for it.
+ * (docs/model-api-references/kie-catalog-inputs-2026-10-29.md). The Imagen 4 family stopped
+ * when Google sunset the upstream Imagen API on 2026-08-17: Kie still takes the ids, but their
+ * tasks failed with provider 500s on 2026-08-24, and release imagen-family-disable-20260824
+ * published all three with both platforms off. A retired model's descriptor publishes both
+ * platforms off the same way, so its price and routing stay ready for a provider that brings
+ * it back; no catalog build lists it unless a release is being emitted, and no start holds
+ * credits for it.
  */
-const RETIRED_MODEL_IDS: ReadonlySet<string> = new Set(['seedance-1.5-pro']);
+const RETIRED_MODEL_IDS: ReadonlySet<string> = new Set([
+  'seedance-1.5-pro',
+  'imagen-4-fast',
+  'imagen-4',
+  'imagen-4-ultra',
+]);
 
 const MODEL_STATUS: Record<string, ModelStatus> = Object.fromEntries([
   ...Object.keys(IMAGE_MODELS),

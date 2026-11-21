@@ -27,16 +27,15 @@ type CatalogDriftException = {
   reason: string;
 };
 
-const IMAGEN_OFF = 'Off in production on purpose: release imagen-family-disable-20260824 turned the Imagen 4 '
-  + 'family off after Google sunset the upstream Imagen API (Kie runs failed with provider 500s). The code build '
-  + 'still offers it until the family joins RETIRED_MODEL_IDS (src/lib/generation-model-catalog.ts).';
-
-/** Models production holds apart from the code build on purpose, each with its reason. */
-export const CATALOG_DRIFT_EXCEPTIONS: Readonly<Record<string, CatalogDriftException>> = {
-  'imagen-4': { offered: { web: false, mobile: false }, reason: IMAGEN_OFF },
-  'imagen-4-fast': { offered: { web: false, mobile: false }, reason: IMAGEN_OFF },
-  'imagen-4-ultra': { offered: { web: false, mobile: false }, reason: IMAGEN_OFF },
-};
+/**
+ * Models production holds apart from the code build on purpose, each with its reason: where it
+ * offers them, while the code build offers them elsewhere. None today. The Imagen 4 family was
+ * the first, off in production since release imagen-family-disable-20260824 while the code build
+ * still offered it, until it joined RETIRED_MODEL_IDS (2026-11-22); a retired model's entry is
+ * offered nowhere, so production and the code build agree on it without one. An exception the
+ * code build stops needing is reported stale, and the test asks for it to go.
+ */
+export const CATALOG_DRIFT_EXCEPTIONS: Readonly<Record<string, CatalogDriftException>> = {};
 
 /** The entry production should hold for a model: the code build's, offered where an exception says. */
 export function expectedProductionEntry(entry: CatalogManifestEntry): CatalogManifestEntry {
