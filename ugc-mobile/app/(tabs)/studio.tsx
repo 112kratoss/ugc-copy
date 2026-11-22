@@ -285,7 +285,7 @@ export default function StudioScreen() {
   };
 
   // The pull to refresh, the book coming down with it (components/refresh-book.tsx).
-  const pull = useBookPull({ refreshing: pullRefreshing, onRefresh: handlePullRefresh, enabled: Boolean(user) });
+  const pull = useBookPull({ refreshing: pullRefreshing, onRefresh: handlePullRefresh, enabled: Boolean(user), contentTop: topInset });
   const attachPullScroll = pull.attachScroll;
   const attachScroll = useCallback((scrollView: ScrollView | null) => {
     scrollRef.current = scrollView;

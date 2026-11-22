@@ -1,9 +1,11 @@
 /**
  * The refresh book: a book whose pages turn in a coral circle at the top of a
  * list while it refreshes (`components/refresh-book.tsx`). It stands in for the
- * system's refresh spinner on every pull-to-refresh screen, and it is what the
- * reader pulls down: the circle comes down with the finger and the top page
- * lifts as the pull nears the point where it refreshes.
+ * system's refresh spinner on the app's own lists (Home, Explore, Studio and
+ * Alerts, your profile, credit history, templates; another creator's profile
+ * and the comments sheet keep the system's), and it is what the reader pulls
+ * down: the circle comes down with the finger and the top page lifts as the
+ * pull nears the point where it refreshes.
  *
  * - iOS keeps the platform's pull (`UIRefreshControl`, its spinner drawn clear):
  *   it decides when the pull refreshes and holds the list's gap open while the
@@ -17,6 +19,12 @@
  *   own scroll would claim it, and the circle follows the finger. Let go past
  *   `ANDROID_PULL_TRIGGER` and the list refreshes; short of it the circle goes
  *   back up. The list does not move under the pull, as Android's never did.
+ *   A drag that comes down away from the top and runs on past it is the
+ *   platform's control's, kept under the pan for that: once the list's scroll
+ *   has claimed a touch, gesture-handler stands every handler down, so no pan
+ *   can take it over mid-drag. That control's circle is drawn coral, the
+ *   book's size, and comes to rest where the book's does
+ *   (`androidSystemPullOffset`), which takes its place at release.
  *
  * Pure: no React Native imports, so the rules and timing can be tested.
  * Functions marked `'worklet'` also run on the UI thread.
@@ -76,6 +84,19 @@ const ANDROID_OVERPULL_MAX = 36;
 export function refreshBookChipTop(platform: RefreshBookPlatform, contentTop: number, restTop?: number): number {
   if (platform === 'android') return restTop ?? contentTop + ANDROID_REST_GAP;
   return contentTop + (IOS_REFRESH_GAP - REFRESH_BOOK_CHIP.size) / 2;
+}
+
+/**
+ * Android's own control, as React Native sets it up (`ReactSwipeRefreshLayout`):
+ * its circle rests `offset + 64 - diameter` below the top of the list, and the
+ * large circle is 56dp across, the book's own circle.
+ */
+const ANDROID_SYSTEM_CIRCLE_TARGET = 64;
+export const ANDROID_SYSTEM_CIRCLE_LARGE = 56;
+
+/** The `progressViewOffset` that brings Android's own circle to rest at `restTop`, where the book's rests. */
+export function androidSystemPullOffset(restTop: number): number {
+  return restTop - (ANDROID_SYSTEM_CIRCLE_TARGET - ANDROID_SYSTEM_CIRCLE_LARGE);
 }
 
 export type PullDecision = 'wait' | 'pull' | 'pass';

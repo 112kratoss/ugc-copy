@@ -677,7 +677,13 @@ export default function ShowcaseScreen() {
 
   // The pull to refresh, the book coming down with it (components/refresh-book.tsx).
   // Not while a card's media is being swiped, which stops the grid scrolling too.
-  const pull = useBookPull({ refreshing: pullRefreshing, onRefresh: handleRefresh, enabled: !isSwipingMedia });
+  const pull = useBookPull({
+    refreshing: pullRefreshing,
+    onRefresh: handleRefresh,
+    enabled: !isSwipingMedia,
+    contentTop: topInset,
+    androidRestTop: newPostsPillTop,
+  });
   const attachPullScroll = pull.attachScroll;
   const attachFeed = useCallback((list: FlashListRef<ShowcaseMasonryCard> | null) => {
     feedRef.current = list;

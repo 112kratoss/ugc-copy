@@ -649,7 +649,7 @@ export function HomeDashboard() {
   };
 
   // The pull to refresh, the book coming down with it (components/refresh-book.tsx).
-  const pull = useBookPull({ refreshing: pullRefreshing, onRefresh: handleRefresh });
+  const pull = useBookPull({ refreshing: pullRefreshing, onRefresh: handleRefresh, contentTop: topInset, androidRestTop: newPostsPillTop });
   const attachPullScroll = pull.attachScroll;
   const attachFeed = useCallback((list: FlashListRef<HomeFeedCard> | null) => {
     feedRef.current = list;

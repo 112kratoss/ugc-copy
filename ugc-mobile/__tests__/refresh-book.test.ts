@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ANDROID_PULL_TRIGGER,
+  ANDROID_SYSTEM_CIRCLE_LARGE,
   PULL_ACTIVATE_DISTANCE,
   REFRESH_BOOK_CHIP,
   REFRESH_BOOK_LIFT_PHASE,
@@ -10,6 +11,7 @@ import {
   androidPullDecision,
   androidPullDistance,
   androidPullRefreshes,
+  androidSystemPullOffset,
   iosPulled,
   refreshBookChipTop,
   refreshBookHideDelayMs,
@@ -109,6 +111,14 @@ describe('Android pull', () => {
   it('rests the circle under the content inset, or below a first row of controls when told where', () => {
     expect(refreshBookChipTop('android', 47)).toBe(47 + 8);
     expect(refreshBookChipTop('android', 47, 120)).toBe(120);
+  });
+
+  it("brings the platform's own circle, the book's size, to rest where the book's rests", () => {
+    expect(ANDROID_SYSTEM_CIRCLE_LARGE).toBe(REFRESH_BOOK_CHIP.size);
+    for (const rest of [8, 55, 120]) {
+      // React Native rests that circle `offset + 64 - diameter` below the list's top.
+      expect(androidSystemPullOffset(rest) + 64 - ANDROID_SYSTEM_CIRCLE_LARGE).toBe(rest);
+    }
   });
 });
 

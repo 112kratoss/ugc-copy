@@ -2945,6 +2945,8 @@ function ImmersiveMedia({
         {mediaItem.previewUrl ? (
           <FeedMediaFrame
             kind="image"
+            // The clip's own spinner says it is loading; a pencil on its poster would draw under it.
+            loadingSketch={false}
             onImageDisplay={reportSlidePainted}
             url={mediaItem.previewUrl}
             backgroundColor={ground}

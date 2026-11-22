@@ -865,7 +865,12 @@ function ProfileMediaList({
   const pushOfferPostId = headerExtrasReady && activeTab === 'Posts' ? justPublishedPostId : null;
 
   // The pull to refresh, the book coming down with it (components/refresh-book.tsx).
-  const pull = useBookPull({ refreshing: Boolean(isRefreshing), onRefresh: onRefresh ?? noRefresh, enabled: Boolean(onRefresh) });
+  const pull = useBookPull({
+    refreshing: Boolean(isRefreshing),
+    onRefresh: onRefresh ?? noRefresh,
+    enabled: Boolean(onRefresh),
+    contentTop: topInset,
+  });
   const attachPullScroll = pull.attachScroll;
   const attachList = useCallback((list: FlashListRef<ProfileMediaCard> | null) => {
     listRef.current = list;

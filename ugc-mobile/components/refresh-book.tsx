@@ -33,6 +33,7 @@ import {
   androidPullDecision,
   androidPullDistance,
   androidPullRefreshes,
+  androidSystemPullOffset,
   iosPulled,
   refreshBookChipTop,
   refreshBookHideDelayMs,
@@ -76,7 +77,11 @@ export type BookPull = {
   released: SharedValue<boolean>;
   /** Android: the pull's pan, for `BookPullArea`. */
   gesture: PanGesture | null;
-  /** iOS: the list's `refreshControl`. Undefined on Android, where the pull is the app's own. */
+  /**
+   * The list's `refreshControl`. iOS: the platform's pull, while the pull is
+   * on. Android: the platform's control, always there, for a drag that runs
+   * on past the top (see `lib/refresh-book.ts`).
+   */
   refreshControl: ReactElement<RefreshControlProps> | undefined;
 };
 
@@ -84,19 +89,26 @@ export function useBookPull({
   refreshing,
   onRefresh,
   enabled = true,
+  contentTop = 0,
+  androidRestTop,
 }: {
   /** The screen's own pull state, as it gave `RefreshControl` before. */
   refreshing: boolean;
   onRefresh: () => void;
   /** Off where the screen has nothing to refresh (signed out). */
   enabled?: boolean;
+  /** As given to `RefreshBookChip`: Android's own circle comes to rest where the book's does. */
+  contentTop?: number;
+  androidRestTop?: number;
 }): BookPull {
   const os = platformOS();
+  const theme = useAppTheme();
   const scrollRef = useAnimatedRef();
   const offset = useScrollOffset(scrollRef);
   const distance = useSharedValue(0);
   const released = useSharedValue(false);
   const refreshingNow = useSharedValue(refreshing);
+  const enabledNow = useSharedValue(enabled);
   const startX = useSharedValue(0);
   const startY = useSharedValue(0);
   const decided = useSharedValue(false);
@@ -111,31 +123,53 @@ export function useBookPull({
     refreshingNow.value = refreshing;
     if (!refreshing) released.value = false;
   }, [refreshing, refreshingNow, released]);
+  // Read by the pan, never by what is drawn: switching the pull off or on must
+  // not change the tree around the list, or the list is built again from its top
+  // (Explore turns it off for every swipe through a card's pictures).
+  useEffect(() => {
+    enabledNow.value = enabled;
+  }, [enabled, enabledNow]);
 
-  // Called from the pull's release on the UI thread. A screen that turns the
-  // refresh down leaves the circle nothing to wait for.
+  // Called from the pull's release on the UI thread, or by the platform's
+  // control. A screen that turns the refresh down leaves the circle nothing to
+  // wait for.
   const fireRefresh = useCallback(() => {
     if (latest.current.refreshing) return;
+    // Android's own circle is at rest where the book's is: the book's is there at once, over it.
+    if (os === 'android') released.value = true;
     latest.current.onRefresh();
     setTimeout(() => {
       if (!latest.current.refreshing) released.value = false;
     }, 400);
-  }, [released]);
+  }, [os, released]);
 
+  const attachedScroll = useRef<unknown>(null);
   const attachScroll = useCallback(
     (scrollView: unknown) => {
-      if (scrollView) (scrollRef as unknown as (node: unknown) => void)(scrollView);
+      if (!scrollView || scrollView === attachedScroll.current) return;
+      attachedScroll.current = scrollView;
+      // A list built anew (each of Home's lanes is a list of its own) starts at
+      // its top and says nothing until it scrolls: the offset the last list
+      // left must not stand for it, or its first pull reads as not at the top.
+      offset.value = 0;
+      (scrollRef as unknown as (node: unknown) => void)(scrollView);
     },
-    [scrollRef],
+    [offset, scrollRef],
   );
 
   const gesture = useMemo(() => {
-    if (os !== 'android' || !enabled) return null;
+    if (os !== 'android') return null;
     return Gesture.Pan()
       .manualActivation(true)
       .maxPointers(1)
-      .onTouchesDown((event) => {
+      .onTouchesDown((event, manager) => {
         'worklet';
+        if (!enabledNow.value) {
+          // Nothing to refresh, or a card's pictures being swiped: the touch is the list's.
+          decided.value = true;
+          manager.fail();
+          return;
+        }
         const touch = event.allTouches[0];
         if (!touch) return;
         startX.value = touch.absoluteX;
@@ -150,7 +184,7 @@ export function useBookPull({
         const decision = androidPullDecision(
           touch.absoluteX - startX.value,
           touch.absoluteY - startY.value,
-          offset.value <= 0.5 && !refreshingNow.value,
+          offset.value <= 0.5 && !refreshingNow.value && enabledNow.value,
         );
         if (decision === 'pull') {
           decided.value = true;
@@ -164,9 +198,10 @@ export function useBookPull({
         'worklet';
         distance.value = androidPullDistance(event.translationY);
       })
-      .onEnd(() => {
+      .onEnd((_event, success) => {
         'worklet';
-        if (androidPullRefreshes(distance.value)) {
+        // A pull the system took back (a second finger, a call coming in) never refreshes.
+        if (success && enabledNow.value && androidPullRefreshes(distance.value)) {
           released.value = true;
           runOnJS(fireRefresh)();
         }
@@ -178,16 +213,35 @@ export function useBookPull({
           distance.value = withTiming(0, { duration: 200, easing: Easing.out(Easing.cubic) });
         }
       });
-  }, [decided, distance, enabled, fireRefresh, offset, os, refreshingNow, released, startX, startY]);
+  }, [decided, distance, enabledNow, fireRefresh, offset, os, refreshingNow, released, startX, startY]);
 
-  const refreshControl = os === 'ios' && enabled
-    ? <BookRefreshControl refreshing={refreshing} onRefresh={fireRefresh} />
-    : undefined;
+  let refreshControl: ReactElement<RefreshControlProps> | undefined;
+  if (os === 'android') {
+    // Always given, switched off rather than taken away: a list wraps itself in
+    // its control on Android, so taking it away builds the list again.
+    refreshControl = (
+      <RefreshControl
+        // Never told: it lets go at release and the book takes its place.
+        refreshing={false}
+        onRefresh={fireRefresh}
+        enabled={enabled && !refreshing}
+        size="large"
+        colors={[theme.colors.onPrimary]}
+        progressBackgroundColor={theme.colors.primaryFill}
+        progressViewOffset={androidSystemPullOffset(refreshBookChipTop('android', contentTop, androidRestTop))}
+      />
+    );
+  } else if (enabled) {
+    refreshControl = <BookRefreshControl refreshing={refreshing} onRefresh={fireRefresh} />;
+  }
 
   return { attachScroll, offset, distance, released, gesture, refreshControl };
 }
 
-/** The list, under the pull's pan on Android; as it is on iOS. */
+/**
+ * The list, under the pull's pan on Android; as it is on iOS. The pan is there
+ * whether or not the pull is on, so the list keeps its place in the tree.
+ */
 export function BookPullArea({ pull, children }: { pull: BookPull; children: ReactNode }) {
   if (!pull.gesture) return children;
   return (
@@ -266,7 +320,12 @@ export function RefreshBookChip({
   const reducedMotion = useReducedMotion();
   const os = platformOS();
   const held = useHeldWhile(refreshing);
-  const pinned = top !== undefined || !pull;
+  // The screen names `top` only while its refresh runs; the circle keeps that
+  // place through its linger and exit, then goes back to waiting for a pull.
+  const [lastTop, setLastTop] = useState(top);
+  if (top !== undefined && top !== lastTop) setLastTop(top);
+  const pinnedTop = top ?? lastTop;
+  const pinned = pinnedTop !== undefined || !pull;
   // A pull's circle is always there to be pulled down; a pinned one comes and goes.
   const [mounted, setMounted] = useState(held || !pinned);
   const hold = useSharedValue(0);
@@ -284,10 +343,13 @@ export function RefreshBookChip({
       setMounted(true);
       return undefined;
     }
-    // Stay mounted through the exit, then leave.
-    const timer = setTimeout(() => setMounted(false), EXIT_MS);
+    // Stay through the exit, then leave, or under a pull, wait for the next one.
+    const timer = setTimeout(() => {
+      if (pull && top === undefined) setLastTop(undefined);
+      else setMounted(false);
+    }, EXIT_MS);
     return () => clearTimeout(timer);
-  }, [held, pinned]);
+  }, [held, pinned, pull, top]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -362,7 +424,7 @@ export function RefreshBookChip({
       importantForAccessibility="no-hide-descendants"
       style={{
         position: 'absolute',
-        top: top ?? refreshBookChipTop(os, contentTop, androidRestTop),
+        top: pinnedTop ?? refreshBookChipTop(os, contentTop, androidRestTop),
         left: 0,
         right: 0,
         alignItems: 'center',

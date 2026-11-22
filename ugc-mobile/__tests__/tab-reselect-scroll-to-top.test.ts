@@ -6,6 +6,20 @@ function readSource(path: string) {
   return readFileSync(join(__dirname, '..', path), 'utf8');
 }
 
+/**
+ * The list takes the ref itself, or a callback ref that fills it first thing
+ * (the pull to refresh reads the same list's scroll view,
+ * components/refresh-book.tsx) and is given to the list.
+ */
+function expectListFillsRef(source: string, refName: string, param: string) {
+  if (source.includes(`ref={${refName}}`)) return;
+  const callback = new RegExp(
+    `const (\\w+) = useCallback\\(\\(${param}: [^)]*\\) => \\{\\s*${refName}\\.current = ${param};`,
+  ).exec(source);
+  expect(callback, `a callback ref that sets ${refName}.current`).not.toBeNull();
+  expect(source).toContain(`ref={${callback![1]}}`);
+}
+
 describe('bottom-tab reselect scroll-to-top wiring', () => {
   it.each([
     ['Home', 'components/home-dashboard.tsx', 'feedRef'],
@@ -15,16 +29,14 @@ describe('bottom-tab reselect scroll-to-top wiring', () => {
     const source = readSource(path);
 
     expect(source).toContain(`useScrollToTop(${refName})`);
-    // The list takes the ref itself, or a callback ref that fills it (the pull
-    // to refresh reads the same list's scroll view, components/refresh-book.tsx).
-    expect(source).toMatch(new RegExp(`ref=\\{${refName}\\}|${refName}\\.current = list;`));
+    expectListFillsRef(source, refName, 'list');
   });
 
   it('registers the Alerts ScrollView with the tab reselect hook', () => {
     const source = readSource('app/(tabs)/studio.tsx');
 
     expect(source).toContain('useScrollToTop(scrollRef)');
-    expect(source).toMatch(/ref=\{scrollRef\}|scrollRef\.current = scrollView;/);
+    expectListFillsRef(source, 'scrollRef', 'scrollView');
   });
 
   it('starts each Home feed lane from a fresh list origin', () => {

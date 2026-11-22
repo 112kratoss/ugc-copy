@@ -21,6 +21,7 @@ import {
   ANDROID_PULL_TRIGGER,
   PULL_ACTIVATE_DISTANCE,
   REFRESH_BOOK_MIN_VISIBLE_MS,
+  androidSystemPullOffset,
   refreshBookChipTop,
 } from '../lib/refresh-book';
 
@@ -31,20 +32,28 @@ const advance = (ms: number) => renderer.act(() => {
 type MockGesture = { kind: string; callbacks: Record<string, (...args: unknown[]) => void>; config: Record<string, unknown[]> };
 
 let pull!: BookPull;
-function PullHarness({ refreshing, onRefresh }: { refreshing: boolean; onRefresh: () => void }) {
-  const screenPull = useBookPull({ refreshing, onRefresh });
+let listMounts = 0;
+function List() {
+  React.useEffect(() => {
+    listMounts += 1;
+  }, []);
+  return React.createElement('list');
+}
+
+function PullHarness({ refreshing, onRefresh, enabled }: { refreshing: boolean; onRefresh: () => void; enabled?: boolean }) {
+  const screenPull = useBookPull({ refreshing, onRefresh, enabled });
   pull = screenPull;
   return (
     <BookPullArea pull={screenPull}>
-      {React.createElement('list')}
+      <List />
     </BookPullArea>
   );
 }
 
-function renderPull(refreshing: boolean, onRefresh: () => void) {
+function renderPull(refreshing: boolean, onRefresh: () => void, enabled?: boolean) {
   let tree!: renderer.ReactTestRenderer;
   renderer.act(() => {
-    tree = renderer.create(<PullHarness refreshing={refreshing} onRefresh={onRefresh} />);
+    tree = renderer.create(<PullHarness refreshing={refreshing} onRefresh={onRefresh} enabled={enabled} />);
   });
   return tree;
 }
@@ -77,6 +86,25 @@ describe('the pull on iOS', () => {
   });
 });
 
+describe('the list the pull reads', () => {
+  it('reads a list attached anew as at its top, and leaves a list attached again as it is', () => {
+    renderPull(false, () => {});
+    const firstList = {};
+    renderer.act(() => pull.attachScroll(firstList));
+    pull.offset.value = 800;
+
+    // Home builds a new list for each lane: no scroll event says the new one is at its top.
+    const laneList = {};
+    renderer.act(() => pull.attachScroll(laneList));
+    expect(pull.offset.value).toBe(0);
+
+    pull.offset.value = 300;
+    renderer.act(() => pull.attachScroll(laneList));
+    renderer.act(() => pull.attachScroll(null));
+    expect(pull.offset.value).toBe(300);
+  });
+});
+
 describe('the pull on Android', () => {
   beforeEach(() => {
     platform.OS = 'android';
@@ -92,25 +120,47 @@ describe('the pull on Android', () => {
     return tree.root.find((node) => String(node.type) === 'gesture-detector').props.gesture as MockGesture;
   }
 
-  function pullDown(gesture: MockGesture, by: number, atTop = true) {
+  function pullDown(gesture: MockGesture, by: number, { atTop = true, success = true } = {}) {
     pull.offset.value = atTop ? 0 : 300;
     const manager = { activate: vi.fn(), fail: vi.fn(), begin: vi.fn(), end: vi.fn() };
-    gesture.callbacks.onTouchesDown(touch(200, 300));
+    gesture.callbacks.onTouchesDown(touch(200, 300), manager);
     gesture.callbacks.onTouchesMove(touch(200, 300 + PULL_ACTIVATE_DISTANCE), manager);
     if (manager.activate.mock.calls.length > 0) {
       gesture.callbacks.onUpdate({ translationY: PULL_ACTIVATE_DISTANCE + by });
-      gesture.callbacks.onEnd({});
+      gesture.callbacks.onEnd({}, success);
     }
     return manager;
   }
 
-  it('replaces the platform pull with its own pan over the list, which waits for the finger to decide', () => {
+  it('puts its own pan over the list, which waits for the finger to decide', () => {
     const tree = renderPull(false, vi.fn());
-    expect(pull.refreshControl).toBeUndefined();
     const gesture = gestureOf(tree);
     expect(gesture.kind).toBe('pan');
     expect(gesture.config.manualActivation).toEqual([true]);
     expect(tree.root.findAll((node) => String(node.type) === 'list')).toHaveLength(1);
+  });
+
+  it('keeps the platform control under it for a drag that runs on past the top, its circle the book\'s', () => {
+    const onRefresh = vi.fn();
+    renderPull(false, onRefresh);
+    const control = pull.refreshControl!;
+    // Never told it refreshes, so it lets go at release; the book's circle, coral and the same size, takes its place.
+    expect(control.props.refreshing).toBe(false);
+    expect(control.props.enabled).toBe(true);
+    expect(control.props.size).toBe('large');
+    expect(control.props.progressViewOffset).toBe(androidSystemPullOffset(refreshBookChipTop('android', 0)));
+
+    renderer.act(() => control.props.onRefresh!());
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(pull.released.value).toBe(true);
+  });
+
+  it('switches the platform control off, never takes it away, while refreshing or switched off', () => {
+    renderPull(true, () => {});
+    expect(pull.refreshControl!.props.enabled).toBe(false);
+    renderPull(false, () => {}, false);
+    expect(pull.refreshControl).toBeDefined();
+    expect(pull.refreshControl!.props.enabled).toBe(false);
   });
 
   it('takes a pull down at the list top, and refreshes when let go past the trigger', () => {
@@ -134,10 +184,39 @@ describe('the pull on Android', () => {
   it('leaves a touch to the list once it is scrolled away from its top', () => {
     const onRefresh = vi.fn();
     const tree = renderPull(false, onRefresh);
-    const manager = pullDown(gestureOf(tree), 200, false);
+    const manager = pullDown(gestureOf(tree), 200, { atTop: false });
     expect(manager.fail).toHaveBeenCalledTimes(1);
     expect(manager.activate).not.toHaveBeenCalled();
     expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('never refreshes from a pull the system took back past the trigger', () => {
+    const onRefresh = vi.fn();
+    const tree = renderPull(false, onRefresh);
+    const manager = pullDown(gestureOf(tree), ANDROID_PULL_TRIGGER + 40, { success: false });
+    expect(manager.activate).toHaveBeenCalledTimes(1);
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(pull.released.value).toBe(false);
+  });
+
+  it('leaves every touch to the list while switched off', () => {
+    const onRefresh = vi.fn();
+    const tree = renderPull(false, onRefresh, false);
+    const manager = pullDown(gestureOf(tree), 200);
+    expect(manager.fail).toHaveBeenCalledTimes(1);
+    expect(manager.activate).not.toHaveBeenCalled();
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('keeps the list mounted where it is as the pull is switched off and on', () => {
+    listMounts = 0;
+    const onRefresh = vi.fn();
+    const tree = renderPull(false, onRefresh, true);
+    // Explore switches the pull off for each swipe through a card's pictures.
+    renderer.act(() => tree.update(<PullHarness refreshing={false} onRefresh={onRefresh} enabled={false} />));
+    renderer.act(() => tree.update(<PullHarness refreshing={false} onRefresh={onRefresh} enabled />));
+    expect(listMounts).toBe(1);
+    expect(tree.root.findAll((node) => String(node.type) === 'gesture-detector')).toHaveLength(1);
   });
 
   it('takes no second pull while a refresh runs', () => {
@@ -214,5 +293,28 @@ describe('RefreshBookChip', () => {
     });
     const placed = tree.root.findAll((node) => node.type === 'view' && node.props.style?.top === 140);
     expect(placed).toHaveLength(1);
+  });
+
+  it('keeps that place through its linger and exit after the screen stops naming it, then waits for a pull', () => {
+    renderPull(false, () => {});
+    const placedTop = (tree: renderer.ReactTestRenderer) =>
+      tree.root.findAll((node) => node.type === 'view' && node.props.style?.position === 'absolute' && node.props.style?.top !== undefined)[0]
+        ?.props.style.top;
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<RefreshBookChip refreshing pull={pull} contentTop={59} top={140} />);
+    });
+
+    // A "New posts" refresh answered at once: the screen drops `top` with `refreshing`.
+    advance(50);
+    renderer.act(() => tree.update(<RefreshBookChip refreshing={false} pull={pull} contentTop={59} />));
+    expect(placedTop(tree)).toBe(140);
+    advance(REFRESH_BOOK_MIN_VISIBLE_MS);
+    expect(placedTop(tree)).toBe(140);
+
+    // Out through the exit, then back under the pull, where the next pull finds it.
+    advance(400);
+    expect(placedTop(tree)).toBe(refreshBookChipTop('ios', 59));
+    expect(chipIn(tree)).toHaveLength(1);
   });
 });
